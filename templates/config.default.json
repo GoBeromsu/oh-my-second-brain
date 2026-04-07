@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "vault_path": "",
+  "vault_name": "",
+  "guidelines": {
+    "root": "",
+    "files": []
+  },
+  "rules": {
+    "raw_paths": [],
+    "frontmatter_required": [],
+    "frontmatter_values": {},
+    "naming_conventions": {}
+  },
+  "enforcement": {
+    "raw_boundary": "block",
+    "frontmatter": "deny",
+    "naming": "deny"
+  }
+}

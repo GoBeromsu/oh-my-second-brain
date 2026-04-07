@@ -1,0 +1,20 @@
+{
+  "name": "oh-my-second-brain",
+  "version": "0.1.0",
+  "description": "AI harness for second brain knowledge management — structurally enforce vault guidelines on AI behavior",
+  "author": {
+    "name": "GoBeromsu"
+  },
+  "repository": "https://github.com/GoBeromsu/oh-my-second-brain",
+  "homepage": "https://github.com/GoBeromsu/oh-my-second-brain",
+  "license": "MIT",
+  "keywords": [
+    "obsidian",
+    "second-brain",
+    "claude-code",
+    "knowledge-management",
+    "ai-harness"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}

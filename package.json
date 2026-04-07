@@ -1,0 +1,29 @@
+{
+  "name": "oh-my-second-brain",
+  "version": "0.1.0",
+  "description": "AI harness for second brain knowledge management — structurally enforce vault guidelines on AI behavior",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GoBeromsu/oh-my-second-brain.git"
+  },
+  "keywords": [
+    "obsidian",
+    "second-brain",
+    "claude-code",
+    "knowledge-management",
+    "ai-harness"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test dist/src/__tests__/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "typescript": "^6.0.2"
+  }
+}

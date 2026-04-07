@@ -1,0 +1,41 @@
+{
+  "description": "OMSB vault guideline enforcement hooks",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/run.cjs\" \"$CLAUDE_PLUGIN_ROOT/scripts/authorship-marker.mjs\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/run.cjs\" \"$CLAUDE_PLUGIN_ROOT/scripts/guideline-enforcer.mjs\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/run.cjs\" \"$CLAUDE_PLUGIN_ROOT/scripts/session-init.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
