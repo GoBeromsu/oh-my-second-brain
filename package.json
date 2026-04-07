@@ -20,7 +20,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test dist/src/__tests__/*.test.js"
+    "test": "npm run build && node --test dist/src/__tests__/*.test.js",
+    "postinstall": "node scripts/plugin-setup.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",

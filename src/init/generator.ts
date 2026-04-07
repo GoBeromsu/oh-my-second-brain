@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { OmsbConfig } from "../rules/types.js";
+import type { OmsbConfig, EnforcementRule, RuleManifest } from "../rules/types.js";
 import { validateConfig } from "../config/schema.js";
-import { compileRules, writeRuleManifest } from "../rules/compiler.js";
+import { compileRules, writeRuleManifest, readRuleManifest } from "../rules/compiler.js";
 
 export interface InitOptions {
   vaultPath: string;
@@ -74,7 +74,36 @@ export async function generateRules(vaultPath: string): Promise<void> {
 }
 
 /**
- * Generate .omsb/CLAUDE.md with guideline @file references.
+ * Format a single enforcement rule into a human-readable summary line.
+ */
+export function formatRuleSummary(rule: EnforcementRule): string {
+  const severity = rule.severity.toUpperCase();
+  const cfg = rule.config;
+
+  switch (rule.type) {
+    case "path-boundary":
+      return `- [${severity}] ${rule.id}: ${String(cfg.path ?? "")} is read-only`;
+    case "path-boundary-exception":
+      return `- [${severity}] ${rule.id}: Exception — allowed fields: ${
+        Array.isArray(cfg.allowed_fields) ? cfg.allowed_fields.join(", ") : "none"
+      }, allowed ops: ${
+        Array.isArray(cfg.allowed_ops) ? cfg.allowed_ops.join(", ") : "none"
+      }`;
+    case "frontmatter-required":
+      return `- [${severity}] ${rule.id}: Field "${String(cfg.field ?? "")}" required in frontmatter`;
+    case "frontmatter-value":
+      return `- [${severity}] ${rule.id}: Field "${String(cfg.field ?? "")}" must match constraint${
+        cfg.enum ? ` (enum: ${String(cfg.enum)})` : ""
+      }${cfg.format ? ` (format: ${String(cfg.format)})` : ""}`;
+    case "naming-convention":
+      return `- [${severity}] ${rule.id}: Files matching "${String(cfg.glob ?? "")}" must follow pattern "${String(cfg.pattern ?? "")}"`;
+    default:
+      return `- [${severity}] ${rule.id}: ${rule.type}`;
+  }
+}
+
+/**
+ * Generate .omsb/CLAUDE.md with dynamic rule summaries and guideline @file references.
  * Creates/updates .claude/CLAUDE.md to include an @file reference to .omsb/CLAUDE.md.
  *
  * Both operations are idempotent — safe to run multiple times.
@@ -82,7 +111,8 @@ export async function generateRules(vaultPath: string): Promise<void> {
 export async function generateClaudeMd(
   vaultPath: string,
   guidelineRoot: string,
-  guidelineFiles: string[]
+  guidelineFiles: string[],
+  manifest?: RuleManifest | null
 ): Promise<void> {
   const omsbDir = path.join(vaultPath, ".omsb");
   const claudeDir = path.join(vaultPath, ".claude");
@@ -96,10 +126,51 @@ export async function generateClaudeMd(
     throw new Error(`omsb: failed to create directories: ${msg}`);
   }
 
-  // Build .omsb/CLAUDE.md content using simple string template
-  const rawPathsNote = "(see omsb.config.json for raw_paths)";
-  const fieldsNote = "(see omsb.config.json for frontmatter_required)";
+  // Read config for vault context
+  let config: OmsbConfig | null = null;
+  try {
+    const raw = fs.readFileSync(path.join(vaultPath, "omsb.config.json"), "utf-8");
+    config = JSON.parse(raw) as OmsbConfig;
+  } catch {
+    // Config not available yet — use fallback
+  }
 
+  // Read rules.json if not provided
+  const rules = manifest ?? readRuleManifest(vaultPath);
+
+  // Build vault context section
+  const vaultName = config?.vault_name ?? path.basename(vaultPath);
+  const rawPaths = config?.rules?.raw_paths ?? [];
+
+  const vaultContext = [
+    `**Vault:** ${vaultName}`,
+    rawPaths.length > 0
+      ? `**Read-only paths:** ${rawPaths.join(", ")}`
+      : null,
+  ].filter(Boolean);
+
+  // Build rule summaries sorted by severity (block → deny → advisory)
+  let ruleSummaries: string;
+  if (rules && rules.rules.length > 0) {
+    const order: Record<string, number> = { block: 0, deny: 1, advisory: 2 };
+    const sorted = [...rules.rules].sort(
+      (a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3)
+    );
+    ruleSummaries = sorted.map(formatRuleSummary).join("\n");
+  } else {
+    // Fallback to config-based summaries
+    const lines: string[] = [];
+    if (rawPaths.length > 0) {
+      lines.push(`- [${(config?.enforcement?.raw_boundary ?? "deny").toUpperCase()}] Raw sources (${rawPaths.join(", ")}) are read-only`);
+    }
+    const reqFields = config?.rules?.frontmatter_required ?? [];
+    if (reqFields.length > 0) {
+      lines.push(`- [${(config?.enforcement?.frontmatter ?? "advisory").toUpperCase()}] Frontmatter fields ${reqFields.join(", ")} are required`);
+    }
+    ruleSummaries = lines.length > 0 ? lines.join("\n") : "- No rules compiled yet. Run /omsb init to generate rules.";
+  }
+
+  // Build guideline references
   const fileRefs = guidelineFiles
     .map((f) => `@${guidelineRoot}/${f}`)
     .join("\n");
@@ -109,10 +180,10 @@ export async function generateClaudeMd(
     "",
     "This vault is managed by oh-my-second-brain. AI operations are structurally enforced.",
     "",
+    ...vaultContext,
+    "",
     "## Enforcement Rules",
-    `- Raw sources (${rawPathsNote}) are read-only`,
-    `- Frontmatter fields ${fieldsNote} are required`,
-    "- See guidelines below for full rules",
+    ruleSummaries,
     "",
     "## Guidelines",
     fileRefs,
