@@ -191,6 +191,27 @@ OMSB can help manage selected Obsidian plugins, but with a hard boundary:
 
 ---
 
+## Screenshots and demo GIFs
+
+If you add screenshots or demo GIFs, use a **sanitized demo vault only**.
+
+**Never include personal information** in demo assets. That includes:
+- real note titles
+- real folder names
+- usernames in paths
+- email addresses
+- private vault structure
+- secrets or plugin data with personal values
+
+Recommended asset names:
+- `docs/assets/quick-start-init.png`
+- `docs/assets/terminology-routing.gif`
+- `docs/assets/plugin-settings.png`
+
+See [docs/demo-guide.md](docs/demo-guide.md) for the capture checklist and a safe demo flow.
+
+---
+
 ## Example config
 
 `omsb.config.json`
@@ -220,7 +241,7 @@ OMSB can help manage selected Obsidian plugins, but with a hard boundary:
       "date": { "format": "date" }
     },
     "naming_conventions": {
-      "20. Terminology/**": { "pattern": "^[가-힣a-zA-Z0-9 ()-]+$" }
+      "20. Terminology/**": { "pattern": "^[a-zA-Z0-9 ()-]+$" }
     }
   },
   "enforcement": {
