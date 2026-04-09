@@ -1,48 +1,46 @@
 # oh-my-second-brain
 
-AI harness for second brain knowledge management — structurally enforce your vault guidelines on AI behavior.
+**Guide your Obsidian vault the way you intended.**  
+OMSB is a Claude Code plugin that turns your vault guidelines into **vault-local, mechanically enforced behavior**.
 
-## Philosophy
+Instead of hoping an AI agent remembers your folder rules, frontmatter rules, note destinations, and plugin-setting conventions, OMSB gives Claude Code a structured contract for how to work inside a specific knowledge-management vault.
 
-> "사용자가 세운 규칙에 따라 AI가 구조적으로 강제된다"
-> — User guidelines become structural enforcement on AI.
+```text
+DISCOVER → MAP → ENFORCE → ROUTE → VERIFY
+┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+│Guidelines│ → │Vault Init │ → │Rule Layer │ → │Note/Plugin│ → │Freshness │
+│  Folder  │   │ /omsb init│   │.omsb/rules│   │ Operations│   │  Checks   │
+└──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘
+```
 
-oh-my-second-brain (OMSB) is a Claude Code plugin that translates your Obsidian vault guidelines into hard enforcement. Instead of hoping AI follows your rules, OMSB makes violation structurally impossible.
+---
 
-## How It Works
+## What OMSB does
 
-### Three-Tier Enforcement
+OMSB is built for one narrow job:
 
-| Tier | Source | Enforcement | Example |
-|------|--------|-------------|---------|
-| **1. Config Rules** | `omsb.config.json` | Deterministic | Raw paths, frontmatter schema, naming patterns |
-| **2. Annotations** | `<!-- omsb: ... -->` in guidelines | Deterministic | Rule markers extracted at init time |
-| **3. CLAUDE.md** | Generated from guidelines | Advisory (LLM follows) | Full guideline text for soft compliance |
+> **Manage an Obsidian second-brain vault according to the vault's own guidelines.**
 
-### Source Hierarchy
+That means:
+- keeping **folder** and **frontmatter** conventions aligned with your vault rules
+- detecting and fixing violations when the rule is explicit
+- turning ambiguity into a **proposal**, not a silent mutation
+- routing notes like terminology notes without hard-coded vault paths
+- helping manage selected Obsidian plugin settings through plugin-owned `data.json`
 
-1. **Guideline folder** — human-written source of truth
-2. **`omsb.config.json`** — vault-scoped mapping, routing fallback, and managed plugin registry
-3. **`.omsb/rules.json`** — mechanically generated operational rules
+What OMSB is **not**:
+- a general-purpose OMC-style orchestration framework
+- a global, always-on Claude Code behavior layer across every repo
+- a system that edits plugin source, CSS, or JS
 
-OMSB only activates inside a vault/repo when:
-- `omsb.config.json` exists
-- `.omsb/rules.json` exists
-- the guideline source snapshot is still fresh
+---
 
-### Hook Architecture
+## Quick Start
 
-- **PreToolUse** (`Write|Edit|Bash`): Blocks raw source modifications, enforces naming/frontmatter rules
-- **PostToolUse** (`Write|Edit`): Auto-marks AI authorship on generated files
-- **SessionStart**: Checks rule staleness, injects vault context
+### 1) Add the marketplace to Claude Code
 
-## Installation
+In `~/.claude/settings.json`:
 
-OMSB is distributed as a Claude Code marketplace plugin.
-
-### 1. Add the marketplace
-
-In your Claude Code settings (`~/.claude/settings.json`):
 ```json
 {
   "extraKnownMarketplaces": [
@@ -51,44 +49,151 @@ In your Claude Code settings (`~/.claude/settings.json`):
 }
 ```
 
-### 2. Install the plugin
+### 2) Install the plugin
 
-In Claude Code, run:
-```
+Inside Claude Code:
+
+```text
 /install oh-my-second-brain
 ```
 
-### 3. Initialize your vault
+### 3) Move into the vault you want to manage
 
-Navigate to your vault directory and run:
+```bash
+cd ~/Obsidian/MyKnowledgeVault
 ```
+
+### 4) Initialize OMSB for that vault
+
+```text
 /omsb init
 ```
 
-This will:
-1. Scan your vault for guideline files
-2. Detect raw source directories
-3. Generate `omsb.config.json`
-4. Compile rules to `.omsb/rules.json`
-5. Generate `.omsb/CLAUDE.md` with guideline references
+OMSB then helps you:
+- choose the **guideline folder**
+- confirm which files represent the **folder** and **frontmatter** guidelines
+- define an `Inbox` fallback for ambiguous routing
+- register managed Obsidian plugins
+- generate vault-local config and rules
 
-## Skills
+### 5) Use OMSB inside that vault only
 
-### `/omsb init`
-Interactive vault setup. Discovers guidelines, configures enforcement boundaries, registers managed plugins, and generates config + rules + CLAUDE references.
+Example commands:
 
-### `/omsb compile`
-Process raw source notes through the compile pipeline. Reads sources (status: todo), applies type-specific adapters, generates compiled output with authorship and wikilinks.
+```text
+/omsb compile
+/omsb terminology
+/omsb plugin-settings
+```
 
-### `/omsb terminology`
-Create or route terminology notes using the guideline-derived routing contract. Uses one of: explicit destination, `Inbox` fallback, or proposal-required.
+---
 
-### `/omsb plugin-settings`
-Inspect managed Obsidian plugin settings, compare them against vault guidelines, and update plugin `data.json` when the change is explicitly grounded in guideline. Optimization-only suggestions still require user approval.
+## Commands
 
-## Config Schema
+| What you're doing | Command | What OMSB does |
+|---|---|---|
+| Initialize a vault | `/omsb init` | discovers guideline sources, maps folder/frontmatter guideline files, registers managed plugins, generates config + rules |
+| Compile source notes | `/omsb compile` | processes configured source notes into structured output using the compile pipeline |
+| Create or route terminology notes | `/omsb terminology` | resolves destination as `explicit`, `inbox`, or `propose` |
+| Inspect or adjust managed plugin settings | `/omsb plugin-settings` | reads guideline-informed settings intent, compares against plugin `data.json`, and applies or proposes changes |
 
-`omsb.config.json` at your vault root:
+---
+
+## Why this is vault-scoped, not global
+
+OMSB is intentionally **repo/vault scoped**.
+
+You may install the plugin once in Claude Code, but OMSB only becomes active for a vault when that vault has:
+
+- a readable `omsb.config.json`
+- a readable `.omsb/rules.json`
+- a freshness-clean guideline snapshot
+
+So marketplace install is broad, but enforcement is local.
+
+---
+
+## Source hierarchy
+
+OMSB uses a strict hierarchy:
+
+1. **Guideline folder**  
+   Human-written source of truth.
+2. **`omsb.config.json`**  
+   Vault-scoped mapping, managed plugin registry, routing fallback, compile settings.
+3. **`.omsb/rules.json`**  
+   Mechanically generated operational rules and source snapshot.
+
+In short:
+- humans write intent in guideline docs
+- OMSB stores vault-local mapping in config
+- OMSB generates machine-readable rules from that intent
+
+Generated files help enforcement. They do **not** outrank the guideline docs.
+
+---
+
+## How OMSB works
+
+### 1) Three-tier enforcement
+
+| Tier | Source | Purpose |
+|---|---|---|
+| Tier 1 | `omsb.config.json` | vault-local mapping and deterministic config |
+| Tier 2 | guideline annotations (`<!-- omsb: ... -->`) | machine-readable rules embedded in guideline docs |
+| Tier 3 | generated `.omsb/CLAUDE.md` | advisory context for the LLM |
+
+### 2) Freshness checks
+
+OMSB records a guideline source snapshot in `.omsb/rules.json` and can detect:
+- file edits
+- file additions
+- file removals
+- file renames
+- missing/unreadable configured guideline folders
+
+If the source snapshot is stale, OMSB does **not** keep silently enforcing old assumptions. It asks you to refresh via `/omsb init`.
+
+### 3) Routing contract
+
+Every note-routing decision resolves to one of exactly three outcomes:
+
+- **`explicit`** — guideline says exactly where it goes
+- **`inbox`** — no explicit destination, so use configured fallback
+- **`propose`** — ambiguous or missing rule, so OMSB creates a proposal instead of guessing
+
+### 4) Obsidian-native operational boundary
+
+For **user-visible vault mutations** such as note creation, move, rename, or routing, OMSB prefers an Obsidian-native path (for example Obsidian CLI / plugin integration).
+
+For **non-user-visible generated artifacts**, direct filesystem writes are still acceptable, including:
+- `omsb.config.json`
+- `.omsb/rules.json`
+- generated docs / proposal artifacts
+- compile outputs
+- managed plugin `data.json`
+
+### 5) Managed plugin settings
+
+OMSB can help manage selected Obsidian plugins, but with a hard boundary:
+
+✅ allowed:
+- read plugin-owned `data.json`
+- apply **guideline-explicit** setting changes
+- propose optimization-only changes for approval
+- consult upstream/GitHub docs to learn what settings exist
+
+❌ not allowed:
+- edit plugin source code
+- edit plugin CSS
+- edit plugin JS bundles
+- create a shadow persistent settings authority outside the plugin's own data
+
+---
+
+## Example config
+
+`omsb.config.json`
 
 ```json
 {
@@ -96,23 +201,26 @@ Inspect managed Obsidian plugin settings, compare them against vault guidelines,
   "vault_path": "/path/to/vault",
   "vault_name": "My Vault",
   "guidelines": {
-    "root": "Settings/Guidelines",
-    "files": ["Core Guideline.md", "Frontmatter Guideline.md"],
+    "root": "90. Guidelines",
+    "files": [
+      "Folder Guideline.md",
+      "Frontmatter Guideline.md"
+    ],
     "required": ["folder", "frontmatter"],
     "domains": {
-      "folder": "Core Guideline.md",
+      "folder": "Folder Guideline.md",
       "frontmatter": "Frontmatter Guideline.md"
     }
   },
   "rules": {
-    "raw_paths": ["References/**"],
+    "raw_paths": ["80. References/**"],
     "frontmatter_required": ["title", "type", "date"],
     "frontmatter_values": {
-      "type": { "enum": ["article", "video", "book"] },
+      "type": { "enum": ["article", "video", "book", "terminology"] },
       "date": { "format": "date" }
     },
     "naming_conventions": {
-      "Terminologies/**": { "pattern": "^[가-힣a-zA-Z0-9 ()-]+$" }
+      "20. Terminology/**": { "pattern": "^[가-힣a-zA-Z0-9 ()-]+$" }
     }
   },
   "enforcement": {
@@ -127,8 +235,18 @@ Inspect managed Obsidian plugin settings, compare them against vault guidelines,
     }
   },
   "managed_plugins": [
-    { "id": "some-obsidian-plugin" }
+    {
+      "id": "example-plugin",
+      "data_json_path": ".obsidian/plugins/example-plugin/data.json"
+    }
   ],
+  "compile": {
+    "sources": ["10. Sources"],
+    "terminology_dir": "20. Terminology",
+    "outputs": {
+      "wiki": "30. Wiki"
+    }
+  },
   "authorship": {
     "enabled": true,
     "agent_name": "claude",
@@ -138,38 +256,158 @@ Inspect managed Obsidian plugin settings, compare them against vault guidelines,
 }
 ```
 
-## Recovery and freshness
+---
 
-- If guideline files change, OMSB can mechanically detect staleness and ask you to rerun `/omsb init`.
-- If the configured guideline folder is missing or unreadable, OMSB should explore likely folders, propose candidates, ask you, and create the folder if needed.
-- Ambiguous write decisions should produce a proposal rather than silently mutating the vault.
+## Common flows
 
-## Managed plugin settings
+### Refresh after guideline changes
 
-- OMSB can manage plugin settings only through plugin-owned `data.json`
-- OMSB must **not** edit plugin source, CSS, or JS
-- Guideline-explicit setting changes can be applied automatically
-- Optimization or newly possible settings require approval
+If you update guideline docs:
 
-## Tier 2 Annotations
-
-Add machine-readable markers to your guideline files:
-
-```markdown
-## Raw Sources
-<!-- omsb: rule-type="path-boundary" severity="block" paths="References/**" -->
-Raw sources are read-only. AI must not modify source content.
+```text
+/omsb init
 ```
+
+Use this whenever you:
+- change folder rules
+- change frontmatter rules
+- add/remove guideline files
+- move the guideline folder
+
+### Route a new terminology note
+
+```text
+/omsb terminology
+```
+
+Expected behavior:
+- explicit destination → route there
+- no explicit target → send to `Inbox`
+- ambiguous target → create proposal artifact and ask
+
+### Review plugin settings
+
+```text
+/omsb plugin-settings
+```
+
+Expected behavior:
+- if the guideline explicitly requires a setting, OMSB may apply it
+- if it is merely an optimization or a new possibility, OMSB asks first
+- OMSB only modifies plugin `data.json`, never the plugin code itself
+
+---
+
+## What happens when something is missing?
+
+If OMSB can't find or read the configured guideline folder, it should:
+
+1. explore likely candidates
+2. propose them to you
+3. ask for confirmation
+4. create the folder if needed
+
+It should **not** continue silently with stale enforcement assumptions.
+
+---
+
+## Project structure
+
+```text
+oh-my-second-brain/
+├── skills/
+│   ├── init/
+│   ├── compile/
+│   ├── terminology/
+│   └── plugin-settings/
+├── agents/
+│   ├── guideline-scanner.md
+│   └── compile-worker.md
+├── docs/
+│   ├── philosophy.md
+│   ├── architecture.md
+│   └── managed-plugins.md
+├── scripts/
+│   ├── guideline-enforcer.mjs
+│   ├── session-init.mjs
+│   └── authorship-marker.mjs
+├── src/
+│   ├── config/
+│   ├── init/
+│   ├── rules/
+│   ├── routing/
+│   ├── obsidian/
+│   ├── proposals/
+│   ├── terminology/
+│   └── __tests__/
+└── .claude-plugin/
+```
+
+---
+
+## Documentation
+
+- [docs/philosophy.md](docs/philosophy.md)
+- [docs/architecture.md](docs/architecture.md)
+- [docs/managed-plugins.md](docs/managed-plugins.md)
+
+---
 
 ## Development
 
 ```bash
-# Build TypeScript
 npm run build
-
-# Run tests
 npm test
 ```
+
+---
+
+## Release / deployment
+
+This project is distributed as a Claude Code marketplace plugin.
+
+### Releasing a new version
+
+1. Bump versions in:
+   - `package.json`
+   - `.claude-plugin/plugin.json`
+2. Verify locally:
+
+```bash
+npm run build
+npm test
+```
+
+3. Commit with a Lore-format commit message
+4. Push to GitHub
+5. Create a GitHub release tag, for example:
+
+```bash
+gh release create v0.1.0 --target <commit-sha> --title "v0.1.0"
+```
+
+### Current release
+
+See the GitHub Releases page for the latest published version:
+
+- [Releases](https://github.com/GoBeromsu/oh-my-second-brain/releases)
+
+---
+
+## Why this README is opinionated
+
+Like the best agent-skill repos, OMSB is not trying to be a generic “AI helper.”
+It encodes a specific worldview:
+
+- **the vault owns the rules**
+- **generated artifacts must stay subordinate to those rules**
+- **explicit rules can be enforced automatically**
+- **ambiguous cases must become proposals**
+- **user-visible vault behavior should feel like using Obsidian, not raw file surgery**
+
+If that matches how you want to run a second-brain vault, OMSB is for you.
+
+---
 
 ## License
 
