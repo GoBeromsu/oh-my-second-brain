@@ -1,7 +1,20 @@
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatRuleSummary } from "../init/generator.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { formatRuleSummary, generateConfig } from "../init/generator.js";
 import type { EnforcementRule } from "../rules/types.js";
+
+let tmpDir: string;
+
+before(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omsb-generator-"));
+});
+
+after(() => {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
 
 function makeRule(
   overrides: Partial<EnforcementRule> & Pick<EnforcementRule, "type" | "config">
@@ -116,5 +129,34 @@ describe("formatRuleSummary", () => {
     });
     const result = formatRuleSummary(rule);
     assert.match(result, /Field ""/);
+  });
+});
+
+describe("generateConfig", () => {
+  it("persists explicit guideline domain mappings when provided", async () => {
+    await generateConfig({
+      vaultPath: tmpDir,
+      vaultName: "Vault",
+      guidelineRoot: "Guidelines",
+      guidelineFiles: ["Folder Guideline.md", "Frontmatter Guide.md"],
+      guidelineRequirements: ["folder", "frontmatter"],
+      guidelineDomains: {
+        folder: "Folder Guideline.md",
+        frontmatter: "Frontmatter Guide.md",
+      },
+      rawPaths: ["References/**"],
+      frontmatterRequired: ["title"],
+      inboxFallback: "Inbox",
+      managedPlugins: [{ id: "calendar" }],
+    });
+
+    const written = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "omsb.config.json"), "utf-8"),
+    );
+
+    assert.deepEqual(written.guidelines.domains, {
+      folder: "Folder Guideline.md",
+      frontmatter: "Frontmatter Guide.md",
+    });
   });
 });

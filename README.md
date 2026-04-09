@@ -19,6 +19,17 @@ oh-my-second-brain (OMSB) is a Claude Code plugin that translates your Obsidian 
 | **2. Annotations** | `<!-- omsb: ... -->` in guidelines | Deterministic | Rule markers extracted at init time |
 | **3. CLAUDE.md** | Generated from guidelines | Advisory (LLM follows) | Full guideline text for soft compliance |
 
+### Source Hierarchy
+
+1. **Guideline folder** — human-written source of truth
+2. **`omsb.config.json`** — vault-scoped mapping, routing fallback, and managed plugin registry
+3. **`.omsb/rules.json`** — mechanically generated operational rules
+
+OMSB only activates inside a vault/repo when:
+- `omsb.config.json` exists
+- `.omsb/rules.json` exists
+- the guideline source snapshot is still fresh
+
 ### Hook Architecture
 
 - **PreToolUse** (`Write|Edit|Bash`): Blocks raw source modifications, enforces naming/frontmatter rules
@@ -64,10 +75,16 @@ This will:
 ## Skills
 
 ### `/omsb init`
-Interactive vault setup. Discovers guidelines, configures enforcement boundaries, generates config and CLAUDE.md.
+Interactive vault setup. Discovers guidelines, configures enforcement boundaries, registers managed plugins, and generates config + rules + CLAUDE references.
 
 ### `/omsb compile`
 Process raw source notes through the compile pipeline. Reads sources (status: todo), applies type-specific adapters, generates compiled output with authorship and wikilinks.
+
+### `/omsb terminology`
+Create or route terminology notes using the guideline-derived routing contract. Uses one of: explicit destination, `Inbox` fallback, or proposal-required.
+
+### `/omsb plugin-settings`
+Inspect managed Obsidian plugin settings, compare them against vault guidelines, and update plugin `data.json` when the change is explicitly grounded in guideline. Optimization-only suggestions still require user approval.
 
 ## Config Schema
 
@@ -80,7 +97,12 @@ Process raw source notes through the compile pipeline. Reads sources (status: to
   "vault_name": "My Vault",
   "guidelines": {
     "root": "Settings/Guidelines",
-    "files": ["Core Guideline.md", "Frontmatter Guideline.md"]
+    "files": ["Core Guideline.md", "Frontmatter Guideline.md"],
+    "required": ["folder", "frontmatter"],
+    "domains": {
+      "folder": "Core Guideline.md",
+      "frontmatter": "Frontmatter Guideline.md"
+    }
   },
   "rules": {
     "raw_paths": ["References/**"],
@@ -98,6 +120,15 @@ Process raw source notes through the compile pipeline. Reads sources (status: to
     "frontmatter": "deny",
     "naming": "deny"
   },
+  "routing": {
+    "inbox_fallback": "Inbox",
+    "note_targets": {
+      "terminology": ["20. Terminology"]
+    }
+  },
+  "managed_plugins": [
+    { "id": "some-obsidian-plugin" }
+  ],
   "authorship": {
     "enabled": true,
     "agent_name": "claude",
@@ -106,6 +137,19 @@ Process raw source notes through the compile pipeline. Reads sources (status: to
   }
 }
 ```
+
+## Recovery and freshness
+
+- If guideline files change, OMSB can mechanically detect staleness and ask you to rerun `/omsb init`.
+- If the configured guideline folder is missing or unreadable, OMSB should explore likely folders, propose candidates, ask you, and create the folder if needed.
+- Ambiguous write decisions should produce a proposal rather than silently mutating the vault.
+
+## Managed plugin settings
+
+- OMSB can manage plugin settings only through plugin-owned `data.json`
+- OMSB must **not** edit plugin source, CSS, or JS
+- Guideline-explicit setting changes can be applied automatically
+- Optimization or newly possible settings require approval
 
 ## Tier 2 Annotations
 

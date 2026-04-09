@@ -1,3 +1,17 @@
+export type GuidelineRequirement = "folder" | "frontmatter";
+
+export interface ManagedPluginConfig {
+  id: string;
+  data_json_path?: string;
+}
+
+export interface RoutingConfig {
+  inbox_fallback?: string;
+  note_targets?: Record<string, string[]>;
+}
+
+export type GuidelineDomainMap = Partial<Record<GuidelineRequirement, string>>;
+
 export interface EnforcementRule {
   id: string;
   type: "path-boundary" | "path-boundary-exception" | "frontmatter-required" | "frontmatter-value" | "naming-convention";
@@ -14,6 +28,16 @@ export interface RuleManifest {
   version: 1;
   generated_at: string;
   source_mtimes: Record<string, number>;
+  source_snapshot: {
+    config_path: string;
+    guidelines_root: string;
+    listed_guideline_files: string[];
+    discovered_guideline_files: string[];
+  };
+  routing: {
+    inbox_fallback: string;
+    note_targets: Record<string, string[]>;
+  };
   rules: EnforcementRule[];
 }
 
@@ -24,6 +48,8 @@ export interface OmsbConfig {
   guidelines: {
     root: string;
     files: string[];
+    required?: GuidelineRequirement[];
+    domains?: GuidelineDomainMap;
   };
   rules: {
     raw_paths: string[];
@@ -40,6 +66,8 @@ export interface OmsbConfig {
     frontmatter: "block" | "deny" | "advisory";
     naming: "block" | "deny" | "advisory";
   };
+  routing?: RoutingConfig;
+  managed_plugins?: ManagedPluginConfig[];
   authorship?: {
     enabled: boolean;
     agent_name: string;

@@ -6,6 +6,7 @@ export interface VaultScanResult {
   guidelineDir: string | null;
   guidelineFiles: string[];
   rawCandidates: string[];
+  managedPluginCandidates: string[];
   frontmatterPatterns: string[];
   noteCount: number;
 }
@@ -110,10 +111,7 @@ function findGuidelineDir(vaultPath: string): string | null {
   return search(vaultPath, 0);
 }
 
-/**
- * List .md files directly inside a given directory (non-recursive).
- */
-function listMdFilesInDir(dirPath: string): string[] {
+function listMdFilesInDir(dirPath: string, root = dirPath): string[] {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dirPath, { withFileTypes: true });
@@ -121,9 +119,20 @@ function listMdFilesInDir(dirPath: string): string[] {
     return [];
   }
 
-  return entries
-    .filter((e) => e.isFile() && e.name.endsWith(".md"))
-    .map((e) => e.name);
+  const results: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...listMdFilesInDir(fullPath, root));
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".md")) {
+      results.push(path.relative(root, fullPath));
+    }
+  }
+
+  return results.sort();
 }
 
 /**
@@ -135,7 +144,6 @@ function findRawCandidates(vaultPath: string): string[] {
     /^reference/i,
     /^source/i,
     /^resource/i,
-    /^inbox/i,
     /^clipping/i,
     /^archive/i,
   ];
@@ -183,6 +191,26 @@ function findRawCandidates(vaultPath: string): string[] {
   return candidates;
 }
 
+function findManagedPluginCandidates(vaultPath: string): string[] {
+  const pluginsDir = path.join(vaultPath, ".obsidian", "plugins");
+  if (!fs.existsSync(pluginsDir)) return [];
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(pluginsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .filter((entry) =>
+      fs.existsSync(path.join(pluginsDir, entry.name, "data.json"))
+    )
+    .map((entry) => entry.name)
+    .sort();
+}
+
 /**
  * Sample up to N random elements from an array.
  */
@@ -227,6 +255,7 @@ export async function scanVault(vaultPath: string): Promise<VaultScanResult> {
 
   // Find raw candidates
   const rawCandidates = findRawCandidates(absVaultPath);
+  const managedPluginCandidates = findManagedPluginCandidates(absVaultPath);
 
   // Sample frontmatter patterns from up to 20 random notes
   const sample = sampleN(allMdFiles, 20);
@@ -258,6 +287,7 @@ export async function scanVault(vaultPath: string): Promise<VaultScanResult> {
     guidelineDir,
     guidelineFiles,
     rawCandidates,
+    managedPluginCandidates,
     frontmatterPatterns,
     noteCount,
   };

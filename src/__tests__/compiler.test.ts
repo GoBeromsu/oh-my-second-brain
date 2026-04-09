@@ -16,17 +16,38 @@ after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function makeConfig(vaultPath: string, guidelineFiles: string[] = []): OmsbConfig {
+function makeConfig(
+  vaultPath: string,
+  guidelineFiles: string[] = [],
+  required?: Array<"folder" | "frontmatter">,
+): OmsbConfig {
+  let domains: OmsbConfig["guidelines"]["domains"];
+  if (required !== undefined) {
+    domains = {};
+    const folderFile = guidelineFiles.find((file) => file.toLowerCase().includes("folder"));
+    const frontmatterFile = guidelineFiles.find((file) =>
+      file.toLowerCase().includes("frontmatter"),
+    );
+    if (folderFile !== undefined) domains.folder = folderFile;
+    if (frontmatterFile !== undefined) domains.frontmatter = frontmatterFile;
+  }
+
   return {
     version: 1,
     vault_path: vaultPath,
     vault_name: "TestVault",
-    guidelines: { root: "", files: guidelineFiles },
+    guidelines: { root: "", files: guidelineFiles, required, domains },
     rules: {
       raw_paths: ["raw/**"],
       frontmatter_required: ["title"],
     },
     enforcement: { raw_boundary: "block", frontmatter: "deny", naming: "advisory" },
+    routing: {
+      inbox_fallback: "Inbox",
+      note_targets: {
+        terminology: ["20. Terminology"],
+      },
+    },
   };
 }
 
@@ -71,6 +92,51 @@ describe("compileRules", () => {
     const pathRules = manifest.rules.filter((r) => r.type === "path-boundary");
     assert.equal(pathRules.length, 1);
     assert.equal(pathRules[0].config["path"], "raw/**");
+  });
+
+  it("records a source snapshot and routing manifest", () => {
+    fs.writeFileSync(path.join(tmpDir, "folder-guideline.md"), "# Folder", "utf-8");
+    fs.mkdirSync(path.join(tmpDir, "Nested"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "Nested", "deep-guideline.md"), "# Deep", "utf-8");
+    const config = makeConfig(tmpDir, ["folder-guideline.md"]);
+    const manifest = compileRules(config, tmpDir);
+    assert.equal(manifest.source_snapshot.guidelines_root, tmpDir);
+    assert.deepEqual(manifest.routing.note_targets.terminology, ["20. Terminology"]);
+    assert.equal(manifest.routing.inbox_fallback, "Inbox");
+    assert.ok(
+      manifest.source_snapshot.discovered_guideline_files.includes("folder-guideline.md"),
+    );
+    assert.ok(
+      manifest.source_snapshot.discovered_guideline_files.includes(
+        path.join("Nested", "deep-guideline.md"),
+      ),
+    );
+  });
+
+  it("throws when required guideline coverage is missing", () => {
+    const config = makeConfig(tmpDir, ["folder-guideline.md"], [
+      "folder",
+      "frontmatter",
+    ]);
+    assert.throws(
+      () => compileRules(config, tmpDir),
+      /missing required frontmatter guideline/i,
+    );
+  });
+
+  it("throws when required guideline mapping is outside guidelines.files", () => {
+    const config = makeConfig(tmpDir, ["folder-guideline.md", "frontmatter-guideline.md"], [
+      "folder",
+      "frontmatter",
+    ]);
+    config.guidelines.domains = {
+      folder: "folder-guideline.md",
+      frontmatter: "missing.md",
+    };
+    assert.throws(
+      () => compileRules(config, tmpDir),
+      /must reference a file in guidelines\.files/i,
+    );
   });
 });
 

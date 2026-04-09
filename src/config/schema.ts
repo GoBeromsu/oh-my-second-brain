@@ -1,6 +1,14 @@
-import type { OmsbConfig } from "../rules/types.js";
+import * as path from "node:path";
+import type {
+  GuidelineDomainMap,
+  GuidelineRequirement,
+  ManagedPluginConfig,
+  OmsbConfig,
+  RoutingConfig,
+} from "../rules/types.js";
 
 const VALID_SEVERITIES = ["block", "deny", "advisory"] as const;
+const VALID_GUIDELINE_REQUIREMENTS = ["folder", "frontmatter"] as const;
 type Severity = (typeof VALID_SEVERITIES)[number];
 
 function isString(v: unknown): v is string {
@@ -32,6 +40,25 @@ function assertSeverity(v: unknown, path: string): Severity {
   return v as Severity;
 }
 
+function assertGuidelineRequirementArray(
+  v: unknown,
+  path: string,
+): GuidelineRequirement[] {
+  if (
+    !Array.isArray(v) ||
+    !v.every(
+      (item) =>
+        typeof item === "string" &&
+        VALID_GUIDELINE_REQUIREMENTS.includes(item as GuidelineRequirement),
+    )
+  ) {
+    throw new Error(
+      `omsb config: "${path}" must be an array containing only ${VALID_GUIDELINE_REQUIREMENTS.join(", ")}`,
+    );
+  }
+  return v as GuidelineRequirement[];
+}
+
 function validateEnforcement(
   raw: unknown
 ): OmsbConfig["enforcement"] {
@@ -45,10 +72,35 @@ function validateEnforcement(
 
 function validateGuidelines(raw: unknown): OmsbConfig["guidelines"] {
   if (!isObject(raw)) throw new Error(`omsb config: "guidelines" must be an object`);
-  return {
+  const guidelines: OmsbConfig["guidelines"] = {
     root: assertString(raw["root"], "guidelines.root"),
     files: assertStringArray(raw["files"], "guidelines.files"),
   };
+  if (raw["required"] !== undefined) {
+    guidelines.required = assertGuidelineRequirementArray(
+      raw["required"],
+      "guidelines.required",
+    );
+  }
+  if (raw["domains"] !== undefined) {
+    if (!isObject(raw["domains"])) {
+      throw new Error(`omsb config: "guidelines.domains" must be an object`);
+    }
+    const domains: GuidelineDomainMap = {};
+    for (const [key, value] of Object.entries(raw["domains"])) {
+      if (!VALID_GUIDELINE_REQUIREMENTS.includes(key as GuidelineRequirement)) {
+        throw new Error(
+          `omsb config: "guidelines.domains.${key}" must be one of ${VALID_GUIDELINE_REQUIREMENTS.join(", ")}`,
+        );
+      }
+      domains[key as GuidelineRequirement] = assertString(
+        value,
+        `guidelines.domains.${key}`,
+      );
+    }
+    guidelines.domains = domains;
+  }
+  return guidelines;
 }
 
 function validateRules(raw: unknown): OmsbConfig["rules"] {
@@ -152,6 +204,102 @@ function validateAuthorship(raw: unknown): OmsbConfig["authorship"] {
   };
 }
 
+function validateRouting(raw: unknown): RoutingConfig {
+  if (!isObject(raw)) throw new Error(`omsb config: "routing" must be an object`);
+
+  const routing: RoutingConfig = {};
+  if (raw["inbox_fallback"] !== undefined) {
+    routing.inbox_fallback = assertString(
+      raw["inbox_fallback"],
+      "routing.inbox_fallback",
+    );
+  }
+
+  if (raw["note_targets"] !== undefined) {
+    if (!isObject(raw["note_targets"])) {
+      throw new Error(`omsb config: "routing.note_targets" must be an object`);
+    }
+    const noteTargets: Record<string, string[]> = {};
+    for (const [kind, value] of Object.entries(raw["note_targets"])) {
+      noteTargets[kind] = assertStringArray(
+        value,
+        `routing.note_targets.${kind}`,
+      );
+    }
+    routing.note_targets = noteTargets;
+  }
+
+  return routing;
+}
+
+function validateManagedPlugins(raw: unknown): ManagedPluginConfig[] {
+  if (!Array.isArray(raw)) {
+    throw new Error(`omsb config: "managed_plugins" must be an array`);
+  }
+  return raw.map((entry, index) => {
+    if (!isObject(entry)) {
+      throw new Error(`omsb config: "managed_plugins[${index}]" must be an object`);
+    }
+    const id = assertString(entry["id"], `managed_plugins[${index}].id`);
+    const dataJsonPath =
+      entry["data_json_path"] === undefined
+        ? undefined
+        : assertString(
+            entry["data_json_path"],
+            `managed_plugins[${index}].data_json_path`,
+          );
+
+    if (dataJsonPath !== undefined) {
+      if (path.isAbsolute(dataJsonPath)) {
+        throw new Error(
+          `omsb config: "managed_plugins[${index}].data_json_path" must be vault-relative`,
+        );
+      }
+
+      const normalized = dataJsonPath.replace(/\\/g, "/");
+      const expectedPrefix = `.obsidian/plugins/${id}/`;
+      if (!normalized.startsWith(expectedPrefix) || !normalized.endsWith("/data.json")) {
+        throw new Error(
+          `omsb config: "managed_plugins[${index}].data_json_path" must point to ${expectedPrefix}data.json`,
+        );
+      }
+    }
+
+    return {
+      id,
+      data_json_path: dataJsonPath,
+    };
+  });
+}
+
+function validateCompile(raw: unknown): NonNullable<OmsbConfig["compile"]> {
+  if (!isObject(raw)) throw new Error(`omsb config: "compile" must be an object`);
+
+  if (!isObject(raw["outputs"])) {
+    throw new Error(`omsb config: "compile.outputs" must be an object`);
+  }
+
+  const outputsRaw = raw["outputs"];
+  const outputs: NonNullable<OmsbConfig["compile"]>["outputs"] = {};
+
+  if (outputsRaw["wiki"] !== undefined) {
+    outputs.wiki = assertString(outputsRaw["wiki"], "compile.outputs.wiki");
+  }
+
+  if (outputsRaw["article"] !== undefined) {
+    outputs.article = assertString(outputsRaw["article"], "compile.outputs.article");
+  }
+
+  return {
+    sources: assertStringArray(raw["sources"], "compile.sources"),
+    terminology_dir:
+      raw["terminology_dir"] === undefined
+        ? undefined
+        : assertString(raw["terminology_dir"], "compile.terminology_dir"),
+    outputs,
+  };
+}
+
 /**
  * Validate raw parsed JSON against the OmsbConfig shape.
  * Throws a descriptive error if any required field is missing or has the wrong type.
@@ -176,6 +324,18 @@ export function validateConfig(data: unknown): OmsbConfig {
 
   if (data["authorship"] !== undefined) {
     config.authorship = validateAuthorship(data["authorship"]);
+  }
+
+  if (data["routing"] !== undefined) {
+    config.routing = validateRouting(data["routing"]);
+  }
+
+  if (data["managed_plugins"] !== undefined) {
+    config.managed_plugins = validateManagedPlugins(data["managed_plugins"]);
+  }
+
+  if (data["compile"] !== undefined) {
+    config.compile = validateCompile(data["compile"]);
   }
 
   return config;

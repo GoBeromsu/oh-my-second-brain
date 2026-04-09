@@ -82,6 +82,77 @@ describe("validateConfig", () => {
     assert.deepEqual(result.rules.frontmatter_values?.type?.enum, ["note", "article"]);
   });
 
+  it("accepts optional guideline requirements, routing, and managed plugins", () => {
+    const data = {
+      ...MINIMAL_VALID as Record<string, unknown>,
+      guidelines: {
+        root: "guidelines",
+        files: ["rules.md"],
+        required: ["folder", "frontmatter"],
+        domains: {
+          folder: "rules.md",
+          frontmatter: "rules.md",
+        },
+      },
+      routing: {
+        inbox_fallback: "Inbox",
+        note_targets: {
+          terminology: ["20. Terminology"],
+        },
+      },
+      managed_plugins: [
+        { id: "calendar", data_json_path: ".obsidian/plugins/calendar/data.json" },
+      ],
+      compile: {
+        sources: ["10. Sources"],
+        terminology_dir: "20. Terminology",
+        outputs: {
+          wiki: "30. Wiki",
+        },
+      },
+    };
+    const result = validateConfig(data);
+    assert.deepEqual(result.guidelines.required, ["folder", "frontmatter"]);
+    assert.equal(result.guidelines.domains?.folder, "rules.md");
+    assert.equal(result.routing?.inbox_fallback, "Inbox");
+    assert.deepEqual(result.routing?.note_targets?.terminology, ["20. Terminology"]);
+    assert.equal(result.managed_plugins?.[0]?.id, "calendar");
+    assert.equal(
+      result.managed_plugins?.[0]?.data_json_path,
+      ".obsidian/plugins/calendar/data.json",
+    );
+    assert.deepEqual(result.compile?.sources, ["10. Sources"]);
+    assert.equal(result.compile?.terminology_dir, "20. Terminology");
+    assert.equal(result.compile?.outputs.wiki, "30. Wiki");
+  });
+
+  it("rejects managed plugin paths outside plugin-owned data.json", () => {
+    const data = {
+      ...MINIMAL_VALID as Record<string, unknown>,
+      managed_plugins: [
+        { id: "calendar", data_json_path: "../calendar/data.json" },
+      ],
+    };
+    assert.throws(
+      () => validateConfig(data),
+      /must point to \.obsidian\/plugins\/calendar\/data\.json/,
+    );
+  });
+
+  it("rejects unknown guideline domain keys", () => {
+    const data = {
+      ...MINIMAL_VALID as Record<string, unknown>,
+      guidelines: {
+        root: "guidelines",
+        files: ["rules.md"],
+        domains: {
+          terminology: "rules.md",
+        },
+      },
+    };
+    assert.throws(() => validateConfig(data), /guidelines\.domains\.terminology/);
+  });
+
   it("throws when root value is not an object", () => {
     assert.throws(() => validateConfig("not-an-object"), /root value must be a JSON object/);
   });

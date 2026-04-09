@@ -24,6 +24,69 @@ function collectMtimes(filePaths: string[]): Record<string, number> {
   return mtimes;
 }
 
+function collectGuidelineMarkdownFiles(root: string): string[] {
+  if (!fs.existsSync(root)) return [];
+
+  const results: string[] = [];
+  const stack = [root];
+
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        results.push(path.relative(root, fullPath));
+      }
+    }
+  }
+
+  return results.sort();
+}
+
+function normalizeRouting(config: OmsbConfig): RuleManifest["routing"] {
+  const inboxFallback = config.routing?.inbox_fallback ?? "Inbox";
+  const noteTargets: Record<string, string[]> = {};
+
+  for (const [kind, targets] of Object.entries(config.routing?.note_targets ?? {})) {
+    noteTargets[kind] = [...targets];
+  }
+
+  return {
+    inbox_fallback: inboxFallback,
+    note_targets: noteTargets,
+  };
+}
+
+function assertRequiredGuidelineCoverage(config: OmsbConfig): void {
+  const required = config.guidelines.required ?? [];
+  if (required.length === 0) return;
+
+  for (const requirement of required) {
+    const mappedFile = config.guidelines.domains?.[requirement];
+    if (mappedFile === undefined || mappedFile.length === 0) {
+      throw new Error(
+        `omsb: missing required ${requirement} guideline mapping in guidelines.domains`,
+      );
+    }
+
+    if (!config.guidelines.files.includes(mappedFile)) {
+      throw new Error(
+        `omsb: required ${requirement} guideline mapping must reference a file in guidelines.files`,
+      );
+    }
+  }
+}
+
 /**
  * Compile all rules from Tier 1 (omsb.config.json) and Tier 2 (guideline files)
  * into a single RuleManifest.
@@ -32,6 +95,7 @@ function collectMtimes(filePaths: string[]): Record<string, number> {
  * @param vaultPath - Absolute path to the vault root (used to resolve guideline paths)
  */
 export function compileRules(config: OmsbConfig, vaultPath: string): RuleManifest {
+  assertRequiredGuidelineCoverage(config);
   const tier1Rules = extractTier1Rules(config);
 
   const guidelinesRoot = config.guidelines.root
@@ -45,13 +109,28 @@ export function compileRules(config: OmsbConfig, vaultPath: string): RuleManifes
   const guidelineAbsPaths = config.guidelines.files.map((f) =>
     path.resolve(guidelinesRoot, f)
   );
+  const discoveredGuidelineFiles = collectGuidelineMarkdownFiles(guidelinesRoot);
+  const discoveredGuidelineAbsPaths = discoveredGuidelineFiles.map((f) =>
+    path.resolve(guidelinesRoot, f)
+  );
 
-  const source_mtimes = collectMtimes([configPath, ...guidelineAbsPaths]);
+  const source_mtimes = collectMtimes([
+    configPath,
+    ...guidelineAbsPaths,
+    ...discoveredGuidelineAbsPaths,
+  ]);
 
   return {
     version: 1,
     generated_at: new Date().toISOString(),
     source_mtimes,
+    source_snapshot: {
+      config_path: configPath,
+      guidelines_root: guidelinesRoot,
+      listed_guideline_files: [...config.guidelines.files],
+      discovered_guideline_files: discoveredGuidelineFiles,
+    },
+    routing: normalizeRouting(config),
     rules: [...tier1Rules, ...tier2Rules],
   };
 }
@@ -95,7 +174,12 @@ export function readRuleManifest(vaultPath: string): RuleManifest | null {
   try {
     const parsed = JSON.parse(raw) as RuleManifest;
     // Basic sanity check
-    if (parsed.version !== 1 || !Array.isArray(parsed.rules)) {
+    if (
+      parsed.version !== 1 ||
+      !Array.isArray(parsed.rules) ||
+      parsed.source_snapshot === undefined ||
+      parsed.routing === undefined
+    ) {
       return null;
     }
     return parsed;

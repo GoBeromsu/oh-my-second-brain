@@ -9,8 +9,30 @@ export interface InitOptions {
   vaultName: string;
   guidelineRoot: string;
   guidelineFiles: string[];
+  guidelineRequirements?: Array<"folder" | "frontmatter">;
+  guidelineDomains?: Partial<Record<"folder" | "frontmatter", string>>;
   rawPaths: string[];
   frontmatterRequired: string[];
+  inboxFallback?: string;
+  managedPlugins?: Array<{ id: string; data_json_path?: string }>;
+}
+
+function inferGuidelineDomains(
+  guidelineFiles: string[],
+): Partial<Record<"folder" | "frontmatter", string>> {
+  const domains: Partial<Record<"folder" | "frontmatter", string>> = {};
+
+  for (const file of guidelineFiles) {
+    const lower = path.basename(file).toLowerCase();
+    if (domains.folder === undefined && lower.includes("folder")) {
+      domains.folder = file;
+    }
+    if (domains.frontmatter === undefined && lower.includes("frontmatter")) {
+      domains.frontmatter = file;
+    }
+  }
+
+  return domains;
 }
 
 /**
@@ -24,6 +46,8 @@ export async function generateConfig(opts: InitOptions): Promise<void> {
     guidelines: {
       root: opts.guidelineRoot,
       files: opts.guidelineFiles,
+      required: opts.guidelineRequirements ?? ["folder", "frontmatter"],
+      domains: opts.guidelineDomains ?? inferGuidelineDomains(opts.guidelineFiles),
     },
     rules: {
       raw_paths: opts.rawPaths,
@@ -36,6 +60,10 @@ export async function generateConfig(opts: InitOptions): Promise<void> {
       frontmatter: "advisory",
       naming: "advisory",
     },
+    routing: {
+      inbox_fallback: opts.inboxFallback ?? "Inbox",
+    },
+    managed_plugins: opts.managedPlugins,
   };
 
   const configPath = path.join(opts.vaultPath, "omsb.config.json");

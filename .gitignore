@@ -3,3 +3,4 @@ dist/
 .omsb/
 *.log
 .omc/
+.omx/

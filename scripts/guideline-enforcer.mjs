@@ -158,6 +158,83 @@ function loadRules(vaultRoot) {
   }
 }
 
+function hasStaleSource(manifest) {
+  const mtimes = manifest?.source_mtimes;
+  if (!mtimes || typeof mtimes !== 'object') return false;
+
+  for (const [filePath, recordedMtime] of Object.entries(mtimes)) {
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.mtimeMs > recordedMtime) return true;
+    } catch {
+      if (recordedMtime > 0) return true;
+    }
+  }
+
+  return false;
+}
+
+function collectGuidelineMarkdownFiles(rootDir) {
+  if (!rootDir) return [];
+  try {
+    fs.accessSync(rootDir, fs.constants.R_OK);
+  } catch {
+    return null;
+  }
+
+  const results = [];
+  const stack = [rootDir];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
+        results.push(path.relative(rootDir, fullPath));
+      }
+    }
+  }
+
+  return results.sort();
+}
+
+function hasGuidelineSnapshotDrift(manifest) {
+  const snapshot = manifest?.source_snapshot;
+  if (!snapshot || typeof snapshot !== 'object') return false;
+
+  const rootDir = snapshot.guidelines_root;
+  if (typeof rootDir !== 'string' || rootDir.length === 0) return false;
+
+  const currentFiles = collectGuidelineMarkdownFiles(rootDir);
+  if (currentFiles === null) return true;
+
+  const recorded = Array.isArray(snapshot.discovered_guideline_files)
+    ? [...snapshot.discovered_guideline_files].sort()
+    : [];
+
+  if (recorded.length !== currentFiles.length) return true;
+  return recorded.some((file, index) => file !== currentFiles[index]);
+}
+
+function buildRecoveryOutput(message) {
+  return JSON.stringify({
+    continue: true,
+    hookSpecificOutput: {
+      additionalContext: `[OMSB] ${message}`,
+    },
+  });
+}
+
 // ─── Bash path extraction ─────────────────────────────────────────────────────
 
 /**
@@ -565,6 +642,20 @@ async function main() {
     if (!manifest) {
       // No rules compiled yet — pass through
       process.stdout.write(SAFE_OUTPUT);
+      return;
+    }
+
+    const configPath = path.join(vaultRoot, CONFIG_FILE);
+    if (
+      !fs.existsSync(configPath) ||
+      hasStaleSource(manifest) ||
+      hasGuidelineSnapshotDrift(manifest)
+    ) {
+      process.stdout.write(
+        buildRecoveryOutput(
+          'OMSB enforcement is inactive until /omsb init refreshes the vault-local config and rules snapshot.'
+        )
+      );
       return;
     }
 
