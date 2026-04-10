@@ -1,5 +1,8 @@
 # oh-my-second-brain
 
+[![CI](https://github.com/GoBeromsu/oh-my-second-brain/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GoBeromsu/oh-my-second-brain/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/GoBeromsu/oh-my-second-brain?display_name=tag)](https://github.com/GoBeromsu/oh-my-second-brain/releases/latest)
+
 **Guide your Obsidian vault the way you intended.**  
 OMSB is a Claude Code plugin that turns your vault guidelines into **vault-local, mechanically enforced behavior**.
 
@@ -208,7 +211,10 @@ Recommended asset names:
 - `docs/assets/terminology-routing.gif`
 - `docs/assets/plugin-settings.png`
 
-See [docs/demo-guide.md](docs/demo-guide.md) for the capture checklist and a safe demo flow.
+Use these supporting docs when preparing demo assets:
+- [docs/demo-guide.md](docs/demo-guide.md)
+- [docs/shot-list.md](docs/shot-list.md)
+- [docs/demo-vault-template/README.md](docs/demo-vault-template/README.md)
 
 ---
 
@@ -371,6 +377,10 @@ oh-my-second-brain/
 - [docs/philosophy.md](docs/philosophy.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/managed-plugins.md](docs/managed-plugins.md)
+- [docs/demo-guide.md](docs/demo-guide.md)
+- [docs/shot-list.md](docs/shot-list.md)
+- [docs/releasing.md](docs/releasing.md)
+- [docs/demo-vault-template/README.md](docs/demo-vault-template/README.md)
 
 ---
 
@@ -385,33 +395,12 @@ npm test
 
 ## Release / deployment
 
-This project is distributed as a Claude Code marketplace plugin.
+OMSB is distributed as a Claude Code marketplace plugin.
 
-### Releasing a new version
+For the full maintainer workflow, see [docs/releasing.md](docs/releasing.md).
 
-1. Bump versions in:
-   - `package.json`
-   - `.claude-plugin/plugin.json`
-2. Verify locally:
-
-```bash
-npm run build
-npm test
-```
-
-3. Commit with a Lore-format commit message
-4. Push to GitHub
-5. Create a GitHub release tag, for example:
-
-```bash
-gh release create v0.1.0 --target <commit-sha> --title "v0.1.0"
-```
-
-### Current release
-
-See the GitHub Releases page for the latest published version:
-
-- [Releases](https://github.com/GoBeromsu/oh-my-second-brain/releases)
+Current release:
+- [Latest release](https://github.com/GoBeromsu/oh-my-second-brain/releases/latest)
 
 ---
 

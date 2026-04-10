@@ -17,7 +17,7 @@ If any of the above appears on screen, do **not** ship the screenshot or GIF.
 
 ## Recommended demo vault setup
 
-Use a throwaway vault such as:
+Start from [docs/demo-vault-template/README.md](demo-vault-template/README.md) or build an equivalent sanitized vault such as:
 
 - `DemoVault`
 - `90. Guidelines/`
