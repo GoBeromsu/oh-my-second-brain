@@ -89,6 +89,8 @@ Example commands:
 /omsb plugin-settings
 ```
 
+Try the sanitized demo flow: [docs/smoke-test.md](docs/smoke-test.md)
+
 ---
 
 ## Commands
@@ -215,6 +217,7 @@ Use these supporting docs when preparing demo assets:
 - [docs/demo-guide.md](docs/demo-guide.md)
 - [docs/shot-list.md](docs/shot-list.md)
 - [docs/demo-vault-template/README.md](docs/demo-vault-template/README.md)
+- [docs/smoke-test.md](docs/smoke-test.md)
 
 ---
 
@@ -381,6 +384,7 @@ oh-my-second-brain/
 - [docs/shot-list.md](docs/shot-list.md)
 - [docs/releasing.md](docs/releasing.md)
 - [docs/demo-vault-template/README.md](docs/demo-vault-template/README.md)
+- [docs/smoke-test.md](docs/smoke-test.md)
 
 ---
 
