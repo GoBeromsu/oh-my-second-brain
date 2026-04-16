@@ -5,8 +5,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   classifyPluginSettingsChange,
+  diffManagedPluginData,
   readManagedPluginData,
   resolveManagedPluginDataPath,
+  syncManagedPluginData,
   writeManagedPluginData,
 } from "../obsidian/plugin-settings.js";
 
@@ -71,5 +73,76 @@ describe("plugin settings helpers", () => {
       classifyPluginSettingsChange({ guidelineExplicit: false }),
       "approval-required",
     );
+  });
+
+  it("diffs changed plugin setting keys", () => {
+    const changed = diffManagedPluginData(
+      { enabled: true, nested: { theme: "light" } },
+      { enabled: false, nested: { theme: "light" }, extra: 1 },
+    );
+    assert.deepEqual(changed, ["enabled", "extra"]);
+  });
+
+  it("auto-applies guideline-explicit plugin changes", () => {
+    const plugin = { id: "calendar" };
+    writeManagedPluginData(tmpDir, plugin, { enabled: false, view: "month" });
+
+    const result = syncManagedPluginData(
+      tmpDir,
+      plugin,
+      { enabled: true, view: "month" },
+      { guidelineExplicit: true },
+    );
+
+    assert.equal(result.mode, "auto-apply");
+    assert.deepEqual(result.changedKeys, ["enabled"]);
+    assert.equal(result.proposalPath, undefined);
+    assert.deepEqual(readManagedPluginData(tmpDir, plugin), {
+      enabled: true,
+      view: "month",
+    });
+  });
+
+  it("creates a proposal instead of writing optimization-only changes", () => {
+    const plugin = { id: "calendar" };
+    writeManagedPluginData(tmpDir, plugin, { enabled: false, view: "month" });
+
+    const result = syncManagedPluginData(
+      tmpDir,
+      plugin,
+      { enabled: false, view: "week" },
+      { guidelineExplicit: false },
+      "calendar-optimization",
+    );
+
+    assert.equal(result.mode, "approval-required");
+    assert.deepEqual(result.changedKeys, ["view"]);
+    assert.ok(result.proposalPath);
+    assert.ok(fs.existsSync(result.proposalPath!));
+    assert.deepEqual(readManagedPluginData(tmpDir, plugin), {
+      enabled: false,
+      view: "month",
+    });
+
+    const proposal = fs.readFileSync(result.proposalPath!, "utf-8");
+    assert.match(proposal, /Plugin Settings Proposal: calendar/);
+    assert.match(proposal, /Changed keys: view/);
+    assert.match(proposal, /"view": "week"/);
+  });
+
+  it("returns no-op when desired settings already match current data", () => {
+    const plugin = { id: "calendar" };
+    writeManagedPluginData(tmpDir, plugin, { enabled: true });
+
+    const result = syncManagedPluginData(
+      tmpDir,
+      plugin,
+      { enabled: true },
+      { guidelineExplicit: true },
+    );
+
+    assert.equal(result.mode, "no-op");
+    assert.deepEqual(result.changedKeys, []);
+    assert.equal(result.proposalPath, undefined);
   });
 });
