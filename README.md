@@ -136,6 +136,15 @@ In short:
 
 Generated files help enforcement. They do **not** outrank the guideline docs.
 
+### Planning/process SSOT vs runtime enforcement SSOT
+
+OMSB now uses an explicit split:
+
+- **`docs/`** is the product, planning, and development-process SSOT
+- **`guideline folder -> omsb.config.json -> .omsb/rules.json`** is the runtime enforcement SSOT
+
+That means roadmap, implementation sequencing, and contributor workflow belong in docs/process material, while hook enforcement still derives from the configured guideline sources and generated operational artifacts.
+
 ---
 
 ## How OMSB works
@@ -377,14 +386,11 @@ oh-my-second-brain/
 
 ## Documentation
 
-- [docs/philosophy.md](docs/philosophy.md)
-- [docs/architecture.md](docs/architecture.md)
-- [docs/managed-plugins.md](docs/managed-plugins.md)
-- [docs/demo-guide.md](docs/demo-guide.md)
-- [docs/shot-list.md](docs/shot-list.md)
-- [docs/releasing.md](docs/releasing.md)
-- [docs/demo-vault-template/README.md](docs/demo-vault-template/README.md)
-- [docs/smoke-test.md](docs/smoke-test.md)
+`docs/` in this repository points to the Ataraxia project folder and is treated as the product / planning / development-process SSOT.
+
+- [docs/Oh my second brain.md](docs/Oh%20my%20second%20brain.md)
+- [docs/learn-from-omc.md](docs/learn-from-omc.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
 
@@ -394,6 +400,17 @@ oh-my-second-brain/
 npm run build
 npm test
 ```
+
+## Development workflow
+
+The default implementation flow is:
+
+1. create or refine an issue
+2. create a focused branch
+3. open a PR with verification evidence
+4. merge only after build/test checks pass
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the working agreement and PR checklist.
 
 ---
 
@@ -423,6 +440,19 @@ If that matches how you want to run a second-brain vault, OMSB is for you.
 
 ---
 
+## Reference
+
+OMSB is developed with explicit reference to [yeachan-heo/oh-my-claudecode](https://github.com/yeachan-heo/oh-my-claudecode).
+
+We specifically reference OMC for ideas around:
+- Claude Code skill / agent surface design
+- hook lifecycle organization
+- operating-contract style documentation
+
+OMSB remains a narrower, Obsidian-focused harness and does **not** aim to copy OMC's orchestration scope wholesale.
+
+The reference repository is MIT-licensed, and OMSB keeps that attribution explicit in project docs.
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

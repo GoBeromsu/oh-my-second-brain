@@ -17,6 +17,11 @@ describe("validateConfig", () => {
     assert.equal(result.version, 1);
     assert.equal(result.vault_path, "/vault");
     assert.equal(result.vault_name, "MyVault");
+    assert.equal(result.governance?.runtime_enforcement.docs_are_runtime_authority, false);
+    assert.equal(
+      result.governance?.runtime_enforcement.human_guidelines,
+      "authoritative",
+    );
     assert.deepEqual(result.rules.raw_paths, ["raw/**"]);
   });
 
@@ -151,6 +156,23 @@ describe("validateConfig", () => {
       },
     };
     assert.throws(() => validateConfig(data), /guidelines\.domains\.terminology/);
+  });
+
+  it("rejects governance that treats docs as runtime authority", () => {
+    const data = {
+      ...MINIMAL_VALID as Record<string, unknown>,
+      governance: {
+        runtime_enforcement: {
+          docs_are_runtime_authority: true,
+          human_guidelines: "authoritative",
+          config_rules: "tier1-operational-input",
+        },
+      },
+    };
+    assert.throws(
+      () => validateConfig(data),
+      /docs_are_runtime_authority/,
+    );
   });
 
   it("throws when root value is not an object", () => {

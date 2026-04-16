@@ -75,6 +75,14 @@ describe("compileRules", () => {
     assert.equal(manifest.version, 1);
     assert.ok(typeof manifest.generated_at === "string");
     assert.ok(manifest.generated_at.length > 0);
+    assert.deepEqual(manifest.governance, {
+      runtime_enforcement: {
+        docs_are_runtime_authority: false,
+        human_guidelines: "authoritative",
+        config_rules: "tier1-operational-input",
+        rules_manifest: "generated-runtime-artifact",
+      },
+    });
     // generated_at should parse as a valid ISO date
     assert.ok(!isNaN(Date.parse(manifest.generated_at)));
   });
