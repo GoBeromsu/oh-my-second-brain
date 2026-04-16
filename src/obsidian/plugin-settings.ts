@@ -1,9 +1,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ManagedPluginConfig } from "../rules/types.js";
+import { writeProposal } from "../proposals/writer.js";
 
 export interface PluginSettingsChangePolicy {
   guidelineExplicit: boolean;
+}
+
+export interface ManagedPluginSettingsResult {
+  mode: "auto-apply" | "approval-required" | "no-op";
+  pluginId: string;
+  dataPath: string;
+  changedKeys: string[];
+  proposalPath?: string;
 }
 
 export function resolveManagedPluginDataPath(
@@ -59,4 +68,90 @@ export function classifyPluginSettingsChange(
   policy: PluginSettingsChangePolicy,
 ): "auto-apply" | "approval-required" {
   return policy.guidelineExplicit ? "auto-apply" : "approval-required";
+}
+
+export function diffManagedPluginData(
+  current: Record<string, unknown>,
+  desired: Record<string, unknown>,
+): string[] {
+  const keys = new Set<string>([
+    ...Object.keys(current),
+    ...Object.keys(desired),
+  ]);
+
+  return [...keys]
+    .filter((key) => JSON.stringify(current[key]) !== JSON.stringify(desired[key]))
+    .sort();
+}
+
+function buildPluginSettingsProposal(
+  plugin: ManagedPluginConfig,
+  changedKeys: string[],
+  current: Record<string, unknown>,
+  desired: Record<string, unknown>,
+): string {
+  return [
+    `# Plugin Settings Proposal: ${plugin.id}`,
+    "",
+    "These setting changes require approval before OMSB updates the plugin-owned `data.json`.",
+    "",
+    `Changed keys: ${changedKeys.join(", ") || "none"}`,
+    "",
+    "## Current",
+    "```json",
+    JSON.stringify(current, null, 2),
+    "```",
+    "",
+    "## Desired",
+    "```json",
+    JSON.stringify(desired, null, 2),
+    "```",
+    "",
+  ].join("\n");
+}
+
+export function syncManagedPluginData(
+  vaultPath: string,
+  plugin: ManagedPluginConfig,
+  desired: Record<string, unknown>,
+  policy: PluginSettingsChangePolicy,
+  slug = plugin.id,
+): ManagedPluginSettingsResult {
+  const dataPath = resolveManagedPluginDataPath(vaultPath, plugin);
+  const current = readManagedPluginData(vaultPath, plugin);
+  const changedKeys = diffManagedPluginData(current, desired);
+
+  if (changedKeys.length === 0) {
+    return {
+      mode: "no-op",
+      pluginId: plugin.id,
+      dataPath,
+      changedKeys: [],
+    };
+  }
+
+  const mode = classifyPluginSettingsChange(policy);
+  if (mode === "auto-apply") {
+    writeManagedPluginData(vaultPath, plugin, desired);
+    return {
+      mode,
+      pluginId: plugin.id,
+      dataPath,
+      changedKeys,
+    };
+  }
+
+  const proposalPath = writeProposal(
+    vaultPath,
+    `${slug}-plugin-settings`,
+    buildPluginSettingsProposal(plugin, changedKeys, current, desired),
+  );
+
+  return {
+    mode,
+    pluginId: plugin.id,
+    dataPath,
+    changedKeys,
+    proposalPath,
+  };
 }
