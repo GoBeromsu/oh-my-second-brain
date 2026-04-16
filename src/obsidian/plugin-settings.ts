@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ManagedPluginConfig } from "../rules/types.js";
+import type { ManagedPluginConfig, OmsbConfig } from "../rules/types.js";
 import { writeProposal } from "../proposals/writer.js";
 
 export interface PluginSettingsChangePolicy {
@@ -13,6 +13,23 @@ export interface ManagedPluginSettingsResult {
   dataPath: string;
   changedKeys: string[];
   proposalPath?: string;
+}
+
+export function listManagedPlugins(config: OmsbConfig): ManagedPluginConfig[] {
+  return config.managed_plugins ?? [];
+}
+
+export function getManagedPlugin(
+  config: OmsbConfig,
+  pluginId: string,
+): ManagedPluginConfig {
+  const plugin = listManagedPlugins(config).find((entry) => entry.id === pluginId);
+  if (!plugin) {
+    throw new Error(
+      `omsb plugin-settings: plugin "${pluginId}" is not registered in managed_plugins`,
+    );
+  }
+  return plugin;
 }
 
 export function resolveManagedPluginDataPath(
@@ -154,4 +171,16 @@ export function syncManagedPluginData(
     changedKeys,
     proposalPath,
   };
+}
+
+export function syncManagedPluginDataFromConfig(
+  vaultPath: string,
+  config: OmsbConfig,
+  pluginId: string,
+  desired: Record<string, unknown>,
+  policy: PluginSettingsChangePolicy,
+  slug = pluginId,
+): ManagedPluginSettingsResult {
+  const plugin = getManagedPlugin(config, pluginId);
+  return syncManagedPluginData(vaultPath, plugin, desired, policy, slug);
 }

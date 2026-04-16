@@ -6,11 +6,15 @@ import * as path from "node:path";
 import {
   classifyPluginSettingsChange,
   diffManagedPluginData,
+  getManagedPlugin,
+  listManagedPlugins,
   readManagedPluginData,
   resolveManagedPluginDataPath,
   syncManagedPluginData,
+  syncManagedPluginDataFromConfig,
   writeManagedPluginData,
 } from "../obsidian/plugin-settings.js";
+import type { OmsbConfig } from "../rules/types.js";
 
 let tmpDir: string;
 
@@ -21,6 +25,37 @@ before(() => {
 after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+function makeConfig(): OmsbConfig {
+  return {
+    version: 1,
+    vault_path: tmpDir,
+    vault_name: "Vault",
+    governance: {
+      runtime_enforcement: {
+        docs_are_runtime_authority: false,
+        human_guidelines: "authoritative",
+        config_rules: "tier1-operational-input",
+      },
+    },
+    guidelines: {
+      root: "Guidelines",
+      files: ["Folder Guideline.md"],
+    },
+    rules: {
+      raw_paths: ["References/**"],
+    },
+    enforcement: {
+      raw_boundary: "deny",
+      frontmatter: "advisory",
+      naming: "advisory",
+    },
+    managed_plugins: [
+      { id: "calendar" },
+      { id: "tasks", data_json_path: ".obsidian/plugins/tasks/data.json" },
+    ],
+  };
+}
 
 describe("plugin settings helpers", () => {
   it("resolves default data.json path inside .obsidian/plugins", () => {
@@ -144,5 +179,46 @@ describe("plugin settings helpers", () => {
     assert.equal(result.mode, "no-op");
     assert.deepEqual(result.changedKeys, []);
     assert.equal(result.proposalPath, undefined);
+  });
+
+  it("lists and resolves managed plugins from config", () => {
+    const config = makeConfig();
+    assert.deepEqual(
+      listManagedPlugins(config).map((plugin) => plugin.id),
+      ["calendar", "tasks"],
+    );
+    assert.equal(getManagedPlugin(config, "tasks").id, "tasks");
+  });
+
+  it("throws when syncing an unregistered managed plugin", () => {
+    const config = makeConfig();
+    assert.throws(
+      () =>
+        syncManagedPluginDataFromConfig(
+          tmpDir,
+          config,
+          "missing-plugin",
+          { enabled: true },
+          { guidelineExplicit: true },
+        ),
+      /not registered in managed_plugins/,
+    );
+  });
+
+  it("syncs plugin settings through config-managed plugin lookup", () => {
+    const config = makeConfig();
+    const plugin = getManagedPlugin(config, "calendar");
+    writeManagedPluginData(tmpDir, plugin, { enabled: false });
+
+    const result = syncManagedPluginDataFromConfig(
+      tmpDir,
+      config,
+      "calendar",
+      { enabled: true },
+      { guidelineExplicit: true },
+    );
+
+    assert.equal(result.mode, "auto-apply");
+    assert.deepEqual(readManagedPluginData(tmpDir, plugin), { enabled: true });
   });
 });
