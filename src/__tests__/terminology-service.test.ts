@@ -45,7 +45,8 @@ describe("planTerminologyPlacement", () => {
   it("uses obsidian-native mode when routing is explicit and native support is available", () => {
     const result = planTerminologyPlacement(tmpDir, "term", makeConfig(), true);
     assert.equal(result.routing.kind, "explicit");
-    assert.equal(result.operationMode, "obsidian-native");
+    assert.equal(result.operation.mode, "obsidian-native");
+    assert.equal(result.operation.destination, "20. Terminology");
   });
 
   it("falls back to proposal-only mode for ambiguous routing", () => {
@@ -59,7 +60,17 @@ describe("planTerminologyPlacement", () => {
 
     const result = planTerminologyPlacement(tmpDir, "term", config, true);
     assert.equal(result.routing.kind, "propose");
-    assert.equal(result.operationMode, "proposal-only");
+    assert.equal(result.operation.mode, "proposal-only");
     assert.ok(result.routing.proposalPath);
+    assert.equal(result.operation.proposalPath, result.routing.proposalPath);
+  });
+
+  it("creates an operation proposal when native support is unavailable for an explicit route", () => {
+    const result = planTerminologyPlacement(tmpDir, "term", makeConfig(), false);
+    assert.equal(result.routing.kind, "explicit");
+    assert.equal(result.operation.mode, "proposal-only");
+    assert.equal(result.operation.reason, "native-unavailable");
+    assert.ok(result.operation.proposalPath);
+    assert.ok(fs.existsSync(result.operation.proposalPath!));
   });
 });

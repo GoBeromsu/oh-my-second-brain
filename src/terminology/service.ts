@@ -4,13 +4,13 @@ import {
   type RoutingDecision,
 } from "../routing/resolver.js";
 import {
-  resolveVaultOperationMode,
-  type VaultOperationMode,
+  planUserVisibleVaultOperation,
+  type UserVisibleVaultOperationPlan,
 } from "../obsidian/operations.js";
 
 export interface TerminologyPlacementPlan {
   routing: RoutingDecision & { proposalPath?: string };
-  operationMode: VaultOperationMode;
+  operation: UserVisibleVaultOperationPlan;
 }
 
 export function planTerminologyPlacement(
@@ -26,13 +26,17 @@ export function planTerminologyPlacement(
     config.routing,
   );
 
-  const operationMode =
-    routing.kind === "propose"
-      ? "proposal-only"
-      : resolveVaultOperationMode("note-route", nativeAvailable);
+  const operation = planUserVisibleVaultOperation(
+    vaultPath,
+    slug,
+    "note-route",
+    "terminology",
+    routing,
+    nativeAvailable,
+  );
 
   return {
     routing,
-    operationMode,
+    operation,
   };
 }
