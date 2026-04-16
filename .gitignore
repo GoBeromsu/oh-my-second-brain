@@ -4,3 +4,13 @@ dist/
 *.log
 .omc/
 .omx/
+.openchrome/
+.claude-plugin/
+.clawhip/
+.DS_Store
+
+# Reference repos (cloned for study)
+oh-my-claudecode/
+
+# Backup of old docs before symlink
+docs-reference-backup/
