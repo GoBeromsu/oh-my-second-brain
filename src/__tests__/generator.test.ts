@@ -158,5 +158,12 @@ describe("generateConfig", () => {
       folder: "Folder Guideline.md",
       frontmatter: "Frontmatter Guide.md",
     });
+    assert.deepEqual(written.governance, {
+      runtime_enforcement: {
+        docs_are_runtime_authority: false,
+        human_guidelines: "authoritative",
+        config_rules: "tier1-operational-input",
+      },
+    });
   });
 });

@@ -54,30 +54,28 @@ function advisory(message) {
   });
 }
 
-/**
- * Check whether any source file tracked in the manifest is newer than its
- * recorded mtime.
- *
- * @param {{ source_mtimes: Record<string, number> }} manifest
- * @returns {boolean} true if any source is stale
- */
-function hasStaleSource(manifest) {
+function collectStaleSourceDetails(manifest) {
   const mtimes = manifest.source_mtimes;
-  if (!mtimes || typeof mtimes !== 'object') return false;
+  const details = {
+    modified: [],
+    missing: [],
+  };
+
+  if (!mtimes || typeof mtimes !== 'object') return details;
 
   for (const [filePath, recordedMtime] of Object.entries(mtimes)) {
     try {
       const stat = fs.statSync(filePath);
       if (stat.mtimeMs > recordedMtime) {
-        return true;
+        details.modified.push(filePath);
       }
     } catch {
       // File missing — treat as stale
-      if (recordedMtime > 0) return true;
+      if (recordedMtime > 0) details.missing.push(filePath);
     }
   }
 
-  return false;
+  return details;
 }
 
 function collectGuidelineMarkdownFiles(rootDir) {
@@ -143,42 +141,98 @@ function findLikelyGuidelineDirs(startDir) {
   return [...new Set(results)].sort();
 }
 
-function hasGuidelineSnapshotDrift(manifest) {
+function collectGuidelineSnapshotDrift(manifest) {
   const snapshot = manifest?.source_snapshot;
-  if (!snapshot || typeof snapshot !== 'object') return false;
+  if (!snapshot || typeof snapshot !== 'object') {
+    return {
+      missingRoot: false,
+      added: [],
+      removed: [],
+    };
+  }
 
   const rootDir = snapshot.guidelines_root;
-  if (typeof rootDir !== 'string' || rootDir.length === 0) return false;
+  if (typeof rootDir !== 'string' || rootDir.length === 0) {
+    return {
+      missingRoot: false,
+      added: [],
+      removed: [],
+    };
+  }
 
   const currentFiles = collectGuidelineMarkdownFiles(rootDir);
-  if (currentFiles === null) return true;
+  if (currentFiles === null) {
+    return {
+      missingRoot: true,
+      added: [],
+      removed: [],
+    };
+  }
 
   const recorded = Array.isArray(snapshot.discovered_guideline_files)
     ? [...snapshot.discovered_guideline_files].sort()
     : [];
 
-  if (recorded.length !== currentFiles.length) return true;
-  return recorded.some((file, index) => file !== currentFiles[index]);
+  const recordedSet = new Set(recorded);
+  const currentSet = new Set(currentFiles);
+
+  return {
+    missingRoot: false,
+    added: currentFiles.filter((file) => !recordedSet.has(file)),
+    removed: recorded.filter((file) => !currentSet.has(file)),
+  };
 }
 
-function buildRecoveryMessage(manifest, cwd) {
-  const rootDir = manifest?.source_snapshot?.guidelines_root;
-  const missingRoot =
-    typeof rootDir === 'string' &&
-    rootDir.length > 0 &&
-    collectGuidelineMarkdownFiles(rootDir) === null;
+function hasStaleSource(details) {
+  return details.modified.length > 0 || details.missing.length > 0;
+}
 
+function hasGuidelineSnapshotDrift(details) {
+  return details.missingRoot || details.added.length > 0 || details.removed.length > 0;
+}
+
+function summarizePaths(filePaths, cwd, maxItems = 3) {
+  const pretty = filePaths
+    .map((filePath) => path.relative(cwd, filePath) || filePath)
+    .slice(0, maxItems);
+  const suffix = filePaths.length > maxItems ? ` (+${filePaths.length - maxItems} more)` : '';
+  return pretty.join(', ') + suffix;
+}
+
+function buildRecoveryMessage(manifest, cwd, staleDetails, snapshotDrift) {
   const candidates = findLikelyGuidelineDirs(cwd);
   const candidateText =
     candidates.length > 0
       ? ` Likely guideline folders: ${candidates.join(', ')}.`
       : '';
 
-  if (missingRoot) {
+  if (snapshotDrift.missingRoot) {
     return `Configured guideline folder is missing or unreadable.${candidateText} Run /omsb init to confirm or recreate it.`;
   }
 
-  return `OMSB rules may be outdated. Guideline files changed since last init.${candidateText} Run /omsb init to refresh.`;
+  const reasons = [];
+  if (staleDetails.modified.length > 0) {
+    reasons.push(
+      `modified tracked sources: ${summarizePaths(staleDetails.modified, cwd)}`,
+    );
+  }
+  if (staleDetails.missing.length > 0) {
+    reasons.push(
+      `missing tracked sources: ${summarizePaths(staleDetails.missing, cwd)}`,
+    );
+  }
+  if (snapshotDrift.added.length > 0) {
+    reasons.push(`added guideline files: ${snapshotDrift.added.slice(0, 3).join(', ')}`);
+  }
+  if (snapshotDrift.removed.length > 0) {
+    reasons.push(`removed or renamed guideline files: ${snapshotDrift.removed.slice(0, 3).join(', ')}`);
+  }
+
+  const reasonText = reasons.length > 0
+    ? ` Detected ${reasons.join('; ')}.`
+    : ' Guideline files changed since last init.';
+
+  return `OMSB rules may be outdated.${reasonText}${candidateText} Run /omsb init to refresh.`;
 }
 
 async function main() {
@@ -208,9 +262,12 @@ async function main() {
       return;
     }
 
-    if (hasStaleSource(manifest) || hasGuidelineSnapshotDrift(manifest)) {
+    const staleDetails = collectStaleSourceDetails(manifest);
+    const snapshotDrift = collectGuidelineSnapshotDrift(manifest);
+
+    if (hasStaleSource(staleDetails) || hasGuidelineSnapshotDrift(snapshotDrift)) {
       process.stdout.write(
-        advisory(buildRecoveryMessage(manifest, process.cwd()))
+        advisory(buildRecoveryMessage(manifest, process.cwd(), staleDetails, snapshotDrift))
       );
       return;
     }

@@ -1,11 +1,13 @@
 import * as path from "node:path";
 import type {
+  GovernanceConfig,
   GuidelineDomainMap,
   GuidelineRequirement,
   ManagedPluginConfig,
   OmsbConfig,
   RoutingConfig,
 } from "../rules/types.js";
+import { defaultRuntimeEnforcementConfigGovernance } from "../rules/types.js";
 
 const VALID_SEVERITIES = ["block", "deny", "advisory"] as const;
 const VALID_GUIDELINE_REQUIREMENTS = ["folder", "frontmatter"] as const;
@@ -232,6 +234,47 @@ function validateRouting(raw: unknown): RoutingConfig {
   return routing;
 }
 
+function validateGovernance(raw: unknown): GovernanceConfig {
+  const defaults = defaultRuntimeEnforcementConfigGovernance();
+
+  if (raw === undefined) {
+    return {
+      runtime_enforcement: defaults,
+    };
+  }
+
+  if (!isObject(raw)) {
+    throw new Error(`omsb config: "governance" must be an object`);
+  }
+
+  const runtimeEnforcement = raw["runtime_enforcement"];
+  if (!isObject(runtimeEnforcement)) {
+    throw new Error(`omsb config: "governance.runtime_enforcement" must be an object`);
+  }
+
+  if (runtimeEnforcement["docs_are_runtime_authority"] !== false) {
+    throw new Error(
+      `omsb config: "governance.runtime_enforcement.docs_are_runtime_authority" must be false`,
+    );
+  }
+
+  if (runtimeEnforcement["human_guidelines"] !== defaults.human_guidelines) {
+    throw new Error(
+      `omsb config: "governance.runtime_enforcement.human_guidelines" must be "${defaults.human_guidelines}"`,
+    );
+  }
+
+  if (runtimeEnforcement["config_rules"] !== defaults.config_rules) {
+    throw new Error(
+      `omsb config: "governance.runtime_enforcement.config_rules" must be "${defaults.config_rules}"`,
+    );
+  }
+
+  return {
+    runtime_enforcement: defaults,
+  };
+}
+
 function validateManagedPlugins(raw: unknown): ManagedPluginConfig[] {
   if (!Array.isArray(raw)) {
     throw new Error(`omsb config: "managed_plugins" must be an array`);
@@ -317,6 +360,7 @@ export function validateConfig(data: unknown): OmsbConfig {
     version: 1,
     vault_path: assertString(data["vault_path"], "vault_path"),
     vault_name: assertString(data["vault_name"], "vault_name"),
+    governance: validateGovernance(data["governance"]),
     guidelines: validateGuidelines(data["guidelines"]),
     rules: validateRules(data["rules"]),
     enforcement: validateEnforcement(data["enforcement"]),

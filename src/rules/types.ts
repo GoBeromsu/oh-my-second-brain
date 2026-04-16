@@ -12,6 +12,40 @@ export interface RoutingConfig {
 
 export type GuidelineDomainMap = Partial<Record<GuidelineRequirement, string>>;
 
+export interface RuntimeEnforcementConfigGovernance {
+  docs_are_runtime_authority: false;
+  human_guidelines: "authoritative";
+  config_rules: "tier1-operational-input";
+}
+
+export interface RuntimeEnforcementManifestGovernance
+  extends RuntimeEnforcementConfigGovernance {
+  rules_manifest: "generated-runtime-artifact";
+}
+
+export interface GovernanceConfig {
+  runtime_enforcement: RuntimeEnforcementConfigGovernance;
+}
+
+export interface GovernanceManifest {
+  runtime_enforcement: RuntimeEnforcementManifestGovernance;
+}
+
+export function defaultRuntimeEnforcementConfigGovernance(): RuntimeEnforcementConfigGovernance {
+  return {
+    docs_are_runtime_authority: false,
+    human_guidelines: "authoritative",
+    config_rules: "tier1-operational-input",
+  };
+}
+
+export function defaultRuntimeEnforcementManifestGovernance(): RuntimeEnforcementManifestGovernance {
+  return {
+    ...defaultRuntimeEnforcementConfigGovernance(),
+    rules_manifest: "generated-runtime-artifact",
+  };
+}
+
 export interface EnforcementRule {
   id: string;
   type: "path-boundary" | "path-boundary-exception" | "frontmatter-required" | "frontmatter-value" | "naming-convention";
@@ -27,6 +61,7 @@ export interface EnforcementRule {
 export interface RuleManifest {
   version: 1;
   generated_at: string;
+  governance?: GovernanceManifest;
   source_mtimes: Record<string, number>;
   source_snapshot: {
     config_path: string;
@@ -45,6 +80,7 @@ export interface OmsbConfig {
   version: 1;
   vault_path: string;
   vault_name: string;
+  governance?: GovernanceConfig;
   guidelines: {
     root: string;
     files: string[];

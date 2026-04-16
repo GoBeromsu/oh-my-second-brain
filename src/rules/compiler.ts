@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OmsbConfig, RuleManifest } from "./types.js";
+import { defaultRuntimeEnforcementManifestGovernance } from "./types.js";
 import { extractTier1Rules } from "./tier1-extractor.js";
 import { extractTier2Rules } from "./tier2-extractor.js";
 
@@ -123,6 +124,9 @@ export function compileRules(config: OmsbConfig, vaultPath: string): RuleManifes
   return {
     version: 1,
     generated_at: new Date().toISOString(),
+    governance: {
+      runtime_enforcement: defaultRuntimeEnforcementManifestGovernance(),
+    },
     source_mtimes,
     source_snapshot: {
       config_path: configPath,

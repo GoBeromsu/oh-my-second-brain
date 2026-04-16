@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OmsbConfig, EnforcementRule, RuleManifest } from "../rules/types.js";
+import { defaultRuntimeEnforcementConfigGovernance } from "../rules/types.js";
 import { validateConfig } from "../config/schema.js";
 import { compileRules, writeRuleManifest, readRuleManifest } from "../rules/compiler.js";
 
@@ -43,6 +44,9 @@ export async function generateConfig(opts: InitOptions): Promise<void> {
     version: 1,
     vault_path: opts.vaultPath,
     vault_name: opts.vaultName,
+    governance: {
+      runtime_enforcement: defaultRuntimeEnforcementConfigGovernance(),
+    },
     guidelines: {
       root: opts.guidelineRoot,
       files: opts.guidelineFiles,
@@ -177,6 +181,12 @@ export async function generateClaudeMd(
       : null,
   ].filter(Boolean);
 
+  const hierarchySummary = [
+    "- Human guideline docs in the configured guideline folder are authoritative for runtime enforcement.",
+    "- `omsb.config.json` stores vault-scoped mappings and Tier 1 operational inputs.",
+    "- `.omsb/rules.json` is a generated runtime artifact and does not outrank the guidelines.",
+  ].join("\n");
+
   // Build rule summaries sorted by severity (block → deny → advisory)
   let ruleSummaries: string;
   if (rules && rules.rules.length > 0) {
@@ -209,6 +219,9 @@ export async function generateClaudeMd(
     "This vault is managed by oh-my-second-brain. AI operations are structurally enforced.",
     "",
     ...vaultContext,
+    "",
+    "## Runtime Source Hierarchy",
+    hierarchySummary,
     "",
     "## Enforcement Rules",
     ruleSummaries,
