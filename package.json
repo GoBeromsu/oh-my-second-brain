@@ -1,7 +1,7 @@
 {
   "name": "oh-my-second-brain",
   "version": "0.1.0",
-  "description": "AI harness for second brain knowledge management — structurally enforce vault guidelines on AI behavior",
+  "description": "AI harness for second brain knowledge management \u2014 structurally enforce vault guidelines on AI behavior",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -19,7 +19,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/clean-dist.mjs && tsc",
     "test": "npm run build && node --test dist/src/__tests__/*.test.js",
     "postinstall": "node scripts/plugin-setup.mjs"
   },
