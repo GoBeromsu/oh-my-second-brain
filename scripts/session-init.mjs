@@ -49,6 +49,7 @@ function advisory(message) {
   return JSON.stringify({
     continue: true,
     hookSpecificOutput: {
+      hookEventName: 'SessionStart',
       additionalContext: `[OMSB] ${message}`,
     },
   });

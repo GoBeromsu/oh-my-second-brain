@@ -108,9 +108,10 @@ describe("session-init hook", () => {
     );
 
     const output = runSessionInit(vaultPath) as {
-      hookSpecificOutput: { additionalContext: string };
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
     };
 
+    assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart");
     assert.match(output.hookSpecificOutput.additionalContext, /added guideline files/i);
     assert.match(
       output.hookSpecificOutput.additionalContext,
@@ -129,9 +130,10 @@ describe("session-init hook", () => {
     );
 
     const output = runSessionInit(vaultPath) as {
-      hookSpecificOutput: { additionalContext: string };
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
     };
 
+    assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart");
     assert.match(output.hookSpecificOutput.additionalContext, /missing tracked sources/i);
     assert.match(output.hookSpecificOutput.additionalContext, /removed or renamed guideline files/i);
     assert.match(output.hookSpecificOutput.additionalContext, /Folder Guideline\.md/);
@@ -148,9 +150,10 @@ describe("session-init hook", () => {
     );
 
     const output = runSessionInit(vaultPath) as {
-      hookSpecificOutput: { additionalContext: string };
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
     };
 
+    assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart");
     assert.match(
       output.hookSpecificOutput.additionalContext,
       /Configured guideline folder is missing or unreadable/i,

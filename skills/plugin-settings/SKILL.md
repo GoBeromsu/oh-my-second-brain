@@ -1,5 +1,6 @@
 ---
-name: omsb plugin-settings
+name: plugin-settings
+level: 2
 description: Inspect and adjust managed Obsidian plugin settings using guideline-aware recommendations
 ---
 
