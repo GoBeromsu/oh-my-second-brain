@@ -1,5 +1,6 @@
 ---
-name: omsb init
+name: init
+level: 2
 description: Initialize oh-my-second-brain vault enforcement
 ---
 

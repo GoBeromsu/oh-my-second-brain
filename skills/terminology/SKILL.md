@@ -1,5 +1,6 @@
 ---
-name: omsb terminology
+name: terminology
+level: 2
 description: Create or route terminology notes with guideline-derived destinations
 ---
 

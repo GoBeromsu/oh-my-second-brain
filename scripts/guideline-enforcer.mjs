@@ -230,6 +230,7 @@ function buildRecoveryOutput(message) {
   return JSON.stringify({
     continue: true,
     hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
       additionalContext: `[OMSB] ${message}`,
     },
   });
@@ -446,6 +447,7 @@ function buildBlockOutput(rule, filePath) {
 
   return JSON.stringify({
     hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
       permissionDecisionReason: reason,
     },
@@ -463,6 +465,7 @@ function buildDenyOutput(rule, description, details) {
 
   return JSON.stringify({
     hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
       permissionDecisionReason: lines.join('\n'),
     },
@@ -474,6 +477,7 @@ function buildAdvisoryOutput(rule, message) {
   return JSON.stringify({
     continue: true,
     hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
       additionalContext: `[OMSB] ${message}\n\nRule: ${rule.id}`,
     },
   });

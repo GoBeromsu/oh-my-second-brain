@@ -82,10 +82,15 @@ describe("hook smoke flows", () => {
         content: "# source note\n",
       },
     }) as {
-      hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string };
+      hookSpecificOutput: {
+        hookEventName: string;
+        permissionDecision: string;
+        permissionDecisionReason: string;
+      };
       systemMessage: string;
     };
 
+    assert.equal(output.hookSpecificOutput.hookEventName, "PreToolUse");
     assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
     assert.match(output.hookSpecificOutput.permissionDecisionReason, /write to protected path/i);
     assert.match(output.hookSpecificOutput.permissionDecisionReason, /raw boundary pattern/i);
@@ -109,10 +114,11 @@ describe("hook smoke flows", () => {
       },
     }) as {
       continue: boolean;
-      hookSpecificOutput: { additionalContext: string };
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
     };
 
     assert.equal(output.continue, true);
+    assert.equal(output.hookSpecificOutput.hookEventName, "PreToolUse");
     assert.match(output.hookSpecificOutput.additionalContext, /enforcement is inactive/i);
     assert.match(output.hookSpecificOutput.additionalContext, /\/omsb init/i);
   });

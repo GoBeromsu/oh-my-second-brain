@@ -1,5 +1,6 @@
 ---
-name: omsb compile
+name: compile
+level: 2
 description: Compile raw vault sources into structured knowledge
 ---
 
