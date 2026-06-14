@@ -10,8 +10,14 @@ jobs:
   release-check:
     runs-on: ubuntu-latest
     strategy:
+      # Don't let one version's failure cancel the others -- we want the full
+      # per-version signal, not a fail-fast cancellation that masks real results.
+      fail-fast: false
       matrix:
-        node-version: [18, 20, 22, 24]
+        # Matches package.json engines (>=20). Node 18 is excluded on purpose:
+        # node-llama-cpp (>=20) pulls a string-width that uses the RegExp `v`
+        # flag, which Node 18's V8 cannot parse (npm ci fails at postinstall).
+        node-version: [20, 22, 24]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
