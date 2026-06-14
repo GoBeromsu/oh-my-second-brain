@@ -52,14 +52,14 @@ All knowledge logic (validation, ontology loading, folder resolution, graph/cach
                             │ invokes
                             ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  Oh My Second Brain convention layer  (src/ — TypeScript, Node ≥18)            │
+│  Oh My Second Brain convention layer  (src/ — TypeScript, Node ≥20)            │
 │                                                                  │
-│  src/cli/oms.ts          CLI verbs: setup / doctor / define     │
+│  src/cli/oms.ts          CLI verbs: setup / doctor / semantic   │
 │  src/ontology/loader.ts   load concepts/*.yaml + taxonomy.yaml   │
 │  src/ontology/resolver.ts resolve note path → Concept            │
 │  src/conventions/         validateFrontmatter → ValidationResult │
 │  src/adapt/HostAdapter.ts per-host adapter interface             │
-│  src/mcp/server.ts        stdio MCP: status/read/cache/capture   │
+│  src/mcp/server.ts        stdio MCP: retrieve/semantic/read/capture │
 └───────────────────────────┬──────────────────────────────────────┘
                             │ reads bundled static package assets
                             ▼
@@ -93,7 +93,7 @@ The correct runtime framing is:
 1. **Now**: CLI setup/doctor and convention engine are real; Claude Code skills exist as installable/guided surfaces.
 2. **Next**: install shell can print exact dry-run Claude plugin and MCP registration commands (`oh-my-second-brain setup --install-claude`) without claiming a live runtime.
 3. **Now in Phase 2**: real stdio MCP read/status tools are available through `oms mcp`.
-4. **Now in Phase 3**: derived graph/search cache tools are available for axis-first retrieval and lazy body load.
+4. **Now in Phase 3**: derived graph/search cache tools are available for axis-first retrieval, live context retrieval, native OMS semantic-index sync, semantic document rehydration, and lazy body load.
 5. **Now in Phase 4**: safe capture prepare/commit tools are available after path-safety and vault-confinement tests.
 
 ## Retrieval View Compatibility
@@ -102,7 +102,7 @@ Existing concept YAML may use `lenses`. Keep that key backward-compatible, but e
 
 ## Stack
 
-- **TypeScript** (`module: NodeNext`, Node ≥ 18) — runtime for the CLI, convention engine, and adapter interfaces.
+- **TypeScript** (`module: NodeNext`, Node ≥ 20) — runtime for the CLI, convention engine, and adapter interfaces.
 - **Markdown** — conventions, skills, agents, and adapter documentation.
 - **YAML** — ontology data files (`concepts/*.yaml`, `taxonomy.yaml`); parsed by the `yaml` npm package (the only runtime dependency in v0).
 - **No Obsidian app dependency** — a vault is just a folder of markdown files. Oh My Second Brain reads and writes it directly via the filesystem.

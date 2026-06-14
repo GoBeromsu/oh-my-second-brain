@@ -19,6 +19,7 @@
     "./skills/define/",
     "./skills/capture/",
     "./skills/retrieve/",
-    "./skills/uninstall/"
+    "./skills/uninstall/",
+    "./skills/update/"
   ]
 }

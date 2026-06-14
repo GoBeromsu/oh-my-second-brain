@@ -91,7 +91,7 @@ A retrieval view is not the graph itself. It is an output shape applied after ca
 Order of operations:
 
 1. Axis graph narrowing by folder/property/wikilink/concept.
-2. Optional qmd-like lexical/vector/hybrid search, either globally across the vault for broad semantic recall or restricted to the narrowed graph candidate space.
+2. Optional OMS semantic lexical/vector/hybrid search, either globally across the vault for broad semantic recall or restricted to the narrowed graph candidate space.
 3. Retrieval view (`lenses` in YAML) selects the returned fields/excerpts.
 
 Avoid the phrase "lens projection" unless a document defines it locally. Prefer "retrieval view" or "axis view".
@@ -154,7 +154,7 @@ Current-vs-target boundary:
 | Phase 0 | docs/plan | This architecture and terminology lock. |
 | Phase 1 | install shell | Claude Code skills, `oms setup`, and dry-run MCP registration guidance. |
 | Phase 2 | runtime | Real stdio MCP read/status tools: `oms_graph_status`, `oms_list_concepts`, and `oms_validate_contract`. Write tools remain gated. |
-| Phase 3 | derived cache | Ontology graph/search cache, invalidation slices, axis-first retrieval, and qmd-style lazy body access. |
+| Phase 3 | derived cache | Ontology graph/search cache, invalidation slices, axis-first retrieval, and semantic lazy body access. |
 | Phase 4 | safe writes | Capture prepare/commit tools after path-safety and vault-confinement tests. |
 
 Docs must not describe MCP write/capture runtime as present tense until the server and tests exist.
@@ -193,7 +193,7 @@ The write path rejects absolute paths, `..` escapes, non-markdown targets, `.oms
 
 Oh My Second Brain borrows patterns, not product identity:
 
-- **QMD**: anywhere access to a local markdown knowledge base through CLI/MCP/skills; qmd-like lexical/vector search is a derived support layer.
+- **OMS semantic retrieval**: anywhere access to a local markdown knowledge base through MCP/skills; lexical/vector search is a derived support layer.
 - **Graphify**: graph effect as a useful retrieval affordance; Oh My Second Brain's graph is grounded in intentional frontmatter/folder/wikilink axes instead of inferred body concepts by default.
 - **Ouroboros**: installable harness posture, stateful MCP/skill surfaces, and deterministic gates; Oh My Second Brain is not an OS-above host orchestrator.
 

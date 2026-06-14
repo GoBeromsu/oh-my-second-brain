@@ -39,6 +39,18 @@ describe("Oh My Second Brain MCP stdio server", () => {
         "oms_list_concepts",
         "oms_retrieve_by_axis",
         "oms_retrieve_context",
+        "oms_sync_embeddings",
+        "oms_semantic_query",
+        "oms_semantic_status",
+        "oms_semantic_collections",
+        "oms_semantic_contexts",
+        "oms_semantic_cleanup",
+        "oms_get_document",
+        "query",
+        "status",
+        "get",
+        "multi_get",
+        "oms_multi_get_documents",
         "oms_lazy_load_note",
         "oms_validate_contract",
         "oms_capture_prepare",
@@ -47,6 +59,17 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const commitTool = tools.tools.find((tool) => tool.name === "oms_capture_commit");
       expect(commitTool?.annotations?.readOnlyHint).toBe(false);
       expect(commitTool?.annotations?.destructiveHint).toBe(false);
+      const retrieveTool = tools.tools.find((tool) => tool.name === "oms_retrieve_context");
+      expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semanticMinScore");
+      expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semanticStorage");
+      expect(retrieveTool?.annotations?.readOnlyHint).toBe(false);
+      const semanticStatusTool = tools.tools.find((tool) => tool.name === "oms_semantic_status");
+      expect(JSON.stringify(semanticStatusTool?.inputSchema)).toContain("storage");
+      const semanticQueryTool = tools.tools.find((tool) => tool.name === "oms_semantic_query");
+      expect(JSON.stringify(semanticQueryTool?.inputSchema)).toContain("modelPath");
+      const getTool = tools.tools.find((tool) => tool.name === "oms_get_document");
+      expect(getTool?.annotations?.readOnlyHint).toBe(true);
+      expect(getTool?.annotations?.destructiveHint).toBe(false);
 
       const status = await client.callTool({ name: "oms_graph_status", arguments: {} });
       const parsedStatus = textPayload(status);
@@ -70,7 +93,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     }
   });
 
-  it("retrieves live graph context without requiring a warm cache or qmd", async () => {
+  it("retrieves live graph context without requiring a warm cache or semantic backend", async () => {
     const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-retrieve-"));
     await mkdir(path.join(tmpVault, "references"), { recursive: true });
     await writeFile(
@@ -126,15 +149,15 @@ Malformed frontmatter must not block retrieve.
             limit: 1,
             maxNeighbors: 5,
             useCache: false,
-            qmdEnabled: false,
+            semanticEnabled: false,
           },
         }),
       );
 
-      expect(result.mode).toBe("oms-local-graph-qmd-fusion");
+      expect(result.mode).toBe("oms-local-graph-semantic-fusion");
       const providers = result.providers as Record<string, unknown>;
       expect(providers.graph).toBe("headless-scan");
-      expect(providers.qmd).toEqual({ available: false, reason: "disabled" });
+      expect(providers.semantic).toEqual({ available: false, reason: "disabled" });
       const hits = result.hits as Array<Record<string, unknown>>;
       expect(hits.map((hit) => hit.source)).toEqual(["oms-seed", "oms-neighbor"]);
       expect(hits.map((hit) => hit.path)).toContain("references/Graph Index.md");

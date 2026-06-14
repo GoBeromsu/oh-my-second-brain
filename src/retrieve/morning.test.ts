@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOntology } from "../ontology/loader.js";
-import type { QmdCommandRunner } from "../search/qmd.js";
 import { retrieveMorningContext } from "./morning.js";
+import { writeMorningVaultFixture } from "./morning-test-fixtures.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,83 +20,9 @@ afterEach(async () => {
   }
 });
 
-function qmdRunner(status: number): QmdCommandRunner {
-  return {
-    run: async (args) => {
-      if (args[0] === "status") {
-        return {
-          status,
-          stdout:
-            status === 0
-              ? "Models\n  Embedding:   https://huggingface.co/example/embed\n"
-              : "",
-          stderr: status === 0 ? "" : "qmd unavailable",
-        };
-      }
-      return {
-        status,
-        stdout:
-          status === 0
-            ? JSON.stringify([
-                {
-                  docid: "#qmd1",
-                  score: 0.77,
-                  file: "qmd://obsidian/references/Agent Retrieval.md",
-                  title: "Agent Retrieval",
-                  snippet: "QMD semantic candidate.",
-                  explain: { ftsScores: [0.5], vectorScores: [0.6] },
-                },
-                {
-                  docid: "#qmd2",
-                  score: 0.74,
-                  file: "qmd://obsidian/references/Unrelated.md",
-                  title: "Unrelated",
-                  snippet: "QMD global candidate outside the selected graph.",
-                  explain: { ftsScores: [0.4], vectorScores: [0.5] },
-                },
-              ])
-            : "",
-        stderr: status === 0 ? "" : "qmd unavailable",
-      };
-    },
-  };
-}
-
-async function writeVaultFixture(): Promise<string> {
-  const vault = await mkdtemp(path.join(tmpdir(), "oms-morning-"));
-  await mkdir(path.join(vault, "references"), { recursive: true });
-  await writeFile(
-    path.join(vault, "references", "Agent Retrieval.md"),
-    `---
-title: Agent Retrieval
-source-url: https://example.com/agent-retrieval
-tags:
-  - agent-graph
----
-
-Agent retrieval follows [[Graph Index]].
-`,
-    "utf-8",
-  );
-  await writeFile(
-    path.join(vault, "references", "Graph Index.md"),
-    `---
-title: Graph Index
-source-url: https://example.com/graph-index
-tags:
-  - agent-graph
----
-
-Index note.
-`,
-    "utf-8",
-  );
-  return vault;
-}
-
 describe("morning context retrieval", () => {
-  it("combines local graph hits with qmd candidates when qmd is available", async () => {
-    tmpVault = await writeVaultFixture();
+  it("combines local graph hits with OMS native semantic candidates", async () => {
+    tmpVault = await writeMorningVaultFixture();
     const ontology = await loadOntology(ontologyDir);
 
     const result = await retrieveMorningContext({
@@ -109,27 +34,28 @@ describe("morning context retrieval", () => {
       limit: 1,
       maxNeighbors: 5,
       useCache: false,
-      qmd: {
+      semantic: {
         enabled: true,
         collection: "obsidian",
-        runner: qmdRunner(0),
+        limit: 2,
+        syncBeforeSearch: true,
       },
     });
 
-    expect(result.providers.qmd.available).toBe(true);
+    expect(result.providers.semantic.available).toBe(true);
     expect(result.graph.seeds.map((node) => node.path)).toEqual(["references/Agent Retrieval.md"]);
-    expect(result.hits.map((hit) => hit.source)).toEqual(["oms-seed", "oms-neighbor", "qmd", "qmd"]);
-    expect(result.hits.find((hit) => hit.source === "qmd")).toEqual(
+    expect(result.hits.map((hit) => hit.source)).toEqual(["oms-seed", "oms-neighbor", "oms-semantic", "oms-semantic"]);
+    expect(result.hits.find((hit) => hit.source === "oms-semantic")).toEqual(
       expect.objectContaining({
         path: "references/Agent Retrieval.md",
         evidence: expect.objectContaining({ lexical: true, vector: true }),
       }),
     );
-    expect(result.qmdHits.map((hit) => hit.path)).toContain("references/Unrelated.md");
+    expect(result.semanticHits.map((hit) => hit.path)).toContain("references/Unrelated.md");
   });
 
-  it("can restrict qmd candidates to the local graph when requested", async () => {
-    tmpVault = await writeVaultFixture();
+  it("can restrict semantic candidates to the local graph when requested", async () => {
+    tmpVault = await writeMorningVaultFixture();
     const ontology = await loadOntology(ontologyDir);
 
     const result = await retrieveMorningContext({
@@ -141,20 +67,161 @@ describe("morning context retrieval", () => {
       limit: 1,
       maxNeighbors: 5,
       useCache: false,
-      qmd: {
+      semantic: {
         enabled: true,
         collection: "obsidian",
-        runner: qmdRunner(0),
+        limit: 3,
         scope: "graph",
+        syncBeforeSearch: true,
       },
     });
 
-    expect(result.hits.map((hit) => hit.source)).toEqual(["oms-seed", "oms-neighbor", "qmd"]);
-    expect(result.qmdHits.map((hit) => hit.path)).not.toContain("references/Unrelated.md");
+    expect(result.hits.map((hit) => hit.source)).toEqual(
+      expect.arrayContaining(["oms-seed", "oms-neighbor", "oms-semantic"]),
+    );
+    expect(result.semanticHits.map((hit) => hit.path)).not.toContain("references/Unrelated.md");
   });
 
-  it("keeps graph results when qmd is unavailable", async () => {
-    tmpVault = await writeVaultFixture();
+  it("uses typed semantic query options and preserves native result context", async () => {
+    tmpVault = await writeMorningVaultFixture();
+    const ontology = await loadOntology(ontologyDir);
+
+    const result = await retrieveMorningContext({
+      vault: tmpVault,
+      ontology,
+      property: "tags",
+      value: "agent-graph",
+      query: "fallback retrieve query",
+      limit: 1,
+      maxNeighbors: 5,
+      useCache: false,
+      semantic: {
+        enabled: true,
+        collection: "obsidian",
+        limit: 3,
+        mode: "query",
+        intent: "route semantic evidence through oms retrieve",
+        lex: "agent retrieval",
+        vec: "semantic notes about retrieval integration",
+        hyde: "A note explaining how OMS semantic search is available from retrieve.",
+        minScore: 0.01,
+        syncBeforeSearch: true,
+      },
+    });
+
+    expect(result.semanticHits[0]).toEqual(
+      expect.objectContaining({
+        path: "references/Agent Retrieval.md",
+        context: expect.stringContaining("Agent retrieval"),
+      }),
+    );
+    expect(result.hits.find((hit) => hit.source === "oms-semantic")).toEqual(
+      expect.objectContaining({
+        source: "oms-semantic",
+        context: expect.stringContaining("Agent retrieval"),
+      }),
+    );
+  });
+
+  it("syncs embeddings before search when retrieve asks for fresh semantic storage", async () => {
+    tmpVault = await writeMorningVaultFixture();
+    const ontology = await loadOntology(ontologyDir);
+
+    const result = await retrieveMorningContext({
+      vault: tmpVault,
+      ontology,
+      property: "tags",
+      value: "agent-graph",
+      query: "agent retrieval",
+      limit: 1,
+      maxNeighbors: 5,
+      useCache: false,
+      semantic: {
+        enabled: true,
+        collection: "obsidian",
+        syncBeforeSearch: true,
+        syncForce: true,
+        index: "brain",
+        chunkStrategy: "auto",
+      },
+    });
+
+    expect(result.embeddingSync).toEqual(
+      expect.objectContaining({
+        available: true,
+        storage: "qmd-sqlite",
+        index: path.join(tmpVault, "brain"),
+      }),
+    );
+    expect(result.embeddingSync?.steps.map((step) => step.name)).toEqual(["scan", "write-index", "status"]);
+    expect(result.semanticHits).toHaveLength(1);
+  });
+
+  it("can route retrieve semantic sync through the JSON compatibility store when requested", async () => {
+    tmpVault = await writeMorningVaultFixture();
+    const ontology = await loadOntology(ontologyDir);
+
+    const result = await retrieveMorningContext({
+      vault: tmpVault,
+      ontology,
+      property: "tags",
+      value: "agent-graph",
+      query: "agent retrieval",
+      limit: 1,
+      maxNeighbors: 5,
+      useCache: false,
+      semantic: {
+        enabled: true,
+        collection: "obsidian",
+        syncBeforeSearch: true,
+        syncForce: true,
+        storage: "oms-native-json",
+        modelPath: "/models/embed.gguf",
+      },
+    });
+
+    expect(result.embeddingSync).toEqual(
+      expect.objectContaining({
+        available: true,
+        storage: "oms-native-json",
+      }),
+    );
+    expect(result.providers.semantic).toEqual(expect.objectContaining({ available: true, storage: "oms-native-json" }));
+    expect(result.semanticHits).toHaveLength(1);
+  });
+
+  it("keeps graph results and skips semantic search when requested embedding sync fails", async () => {
+    tmpVault = await writeMorningVaultFixture();
+    const ontology = await loadOntology(ontologyDir);
+
+    const result = await retrieveMorningContext({
+      vault: tmpVault,
+      ontology,
+      property: "tags",
+      value: "agent-graph",
+      query: "agent retrieval",
+      limit: 1,
+      maxNeighbors: 5,
+      useCache: false,
+      semantic: {
+        enabled: true,
+        collection: "obsidian",
+        syncBeforeSearch: true,
+        index: ".",
+      },
+    });
+
+    expect(result.embeddingSync).toEqual(expect.objectContaining({ available: false }));
+    expect(result.providers.semantic).toEqual({
+      available: false,
+      reason: expect.stringContaining("embedding sync failed:"),
+    });
+    expect(result.semanticHits).toEqual([]);
+    expect(result.hits.map((hit) => hit.source)).toEqual(["oms-seed", "oms-neighbor"]);
+  });
+
+  it("keeps graph results when the native semantic index is unavailable", async () => {
+    tmpVault = await writeMorningVaultFixture();
     const ontology = await loadOntology(ontologyDir);
 
     const result = await retrieveMorningContext({
@@ -165,17 +232,45 @@ describe("morning context retrieval", () => {
       query: "agent retrieval",
       limit: 1,
       useCache: false,
-      qmd: {
+      semantic: {
         enabled: true,
         collection: "obsidian",
-        runner: qmdRunner(127),
       },
     });
 
-    expect(result.providers.qmd).toEqual({
+    expect(result.providers.semantic).toEqual({
       available: false,
-      reason: "qmd unavailable",
+      reason: expect.stringContaining("OMS SQLite semantic store not found"),
     });
+    expect(result.hits.map((hit) => hit.source)).toEqual(["oms-seed", "oms-neighbor"]);
+  });
+
+  it("keeps graph results and explains semantic provider failure when the native index is malformed", async () => {
+    tmpVault = await writeMorningVaultFixture();
+    await mkdir(path.join(tmpVault, ".oms"), { recursive: true });
+    await writeFile(path.join(tmpVault, ".oms", "semantic-store.sqlite"), "not-sqlite", "utf-8");
+    const ontology = await loadOntology(ontologyDir);
+
+    const result = await retrieveMorningContext({
+      vault: tmpVault,
+      ontology,
+      property: "tags",
+      value: "agent-graph",
+      query: "agent retrieval",
+      limit: 1,
+      maxNeighbors: 5,
+      useCache: false,
+      semantic: {
+        enabled: true,
+        collection: "obsidian",
+      },
+    });
+
+    expect(result.providers.semantic).toEqual({
+      available: false,
+      reason: expect.stringContaining("SQLite semantic store"),
+    });
+    expect(result.semanticHits).toEqual([]);
     expect(result.hits.map((hit) => hit.source)).toEqual(["oms-seed", "oms-neighbor"]);
   });
 });

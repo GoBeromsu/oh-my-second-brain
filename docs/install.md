@@ -4,7 +4,7 @@ Oh My Second Brain v0 is distributed as one npm/GitHub-release package that cont
 
 ## Prerequisites
 
-- Node.js 18 or newer.
+- Node.js 20 or newer.
 - `npm` on `PATH`.
 - An Obsidian vault, or any folder of Markdown notes.
 - Optional host CLIs: `claude`, `codex`, `hermes`.
@@ -38,6 +38,8 @@ Environment knobs:
 | `OMS_INSTALL_RUNTIME` | `auto`, `all`, `claude`, `codex`, or `hermes` |
 | `OMS_VAULT` | vault path used for MCP registration |
 | `OMS_EXECUTE_EXTERNAL=1` | allow host CLI commands such as `claude plugin install` |
+| `OMS_UPDATE_NOTICE=0` | disable automatic update-available notices on normal CLI commands |
+| `OMS_UPDATE_NOTICE_TIMEOUT_MS` | timeout for the non-blocking update notice check |
 
 ## CLI install
 
@@ -66,6 +68,24 @@ Runtime selection follows the Ouroboros pattern:
 
 Host writes keep the legacy `oms` namespace for backward-compatible MCP/skill IDs and are reversible with `oh-my-second-brain uninstall` (or the `oms` alias).
 
+## Update
+
+Preview the package update and host adapter reconciliation first:
+
+```bash
+oh-my-second-brain update --dry-run --runtime all --vault /path/to/vault
+```
+
+Apply the latest npm package and refresh selected host adapters:
+
+```bash
+oh-my-second-brain update --yes --runtime all --vault /path/to/vault
+```
+
+`update` checks `oh-my-second-brain@latest`, then plans `npm install -g oh-my-second-brain@latest` plus a post-update adapter reconciliation. It does not mutate package or host config unless `--yes` is provided. Use `--execute` only when you want reconciliation to call external host CLIs where available.
+
+Normal CLI commands such as `setup`, `install`, `uninstall`, and `doctor` also print a short stderr notice when a newer npm version is available. Set `OMS_UPDATE_NOTICE=0` to silence that check in CI or release smoke environments.
+
 ## Legacy setup flow
 
 `setup` still adopts a vault into the Oh My Second Brain ontology and can print the Claude Code plan:
@@ -73,6 +93,14 @@ Host writes keep the legacy `oms` namespace for backward-compatible MCP/skill ID
 ```bash
 oh-my-second-brain setup --vault /path/to/vault --yes --install-claude
 ```
+
+Interactive setup now interviews folder axes, concept bindings, optional observed frontmatter fields, and retrieval lenses:
+
+```bash
+oh-my-second-brain setup --vault /path/to/vault --suggest-fields
+```
+
+Setup does not modify vault notes. It writes `.oms/taxonomy.yaml`, preserves existing `.oms/concepts/`, and only adds selected observed fields when `--suggest-fields` is enabled.
 
 Typical printed commands look like:
 
@@ -107,8 +135,13 @@ The uninstaller removes Oh My Second Brain host registrations and adapter files.
 
 ```bash
 oh-my-second-brain doctor --vault /path/to/vault
+oh-my-second-brain semantic sync --vault /path/to/vault --collection vault
+oh-my-second-brain semantic query "what should I retrieve?" --vault /path/to/vault
+oh-my-second-brain semantic context add vault "Prefer durable notes with reusable evidence." --vault /path/to/vault
+oh-my-second-brain semantic ls vault --vault /path/to/vault
+oh-my-second-brain semantic doctor --vault /path/to/vault
 oh-my-second-brain install --runtime all --vault /path/to/vault --dry-run
 claude plugin validate adapters/claude-code
 ```
 
-Inside a host runtime, verify the MCP server by listing MCP tools or asking for Oh My Second Brain graph/status. The server exposes status, graph build, axis retrieval, lazy note loading, contract validation, and gated capture tools.
+Inside a host runtime, verify the MCP server by listing MCP tools or asking for Oh My Second Brain graph/status. The server exposes status, graph build, context retrieval, native OMS semantic-index sync, qmd-compatible semantic query/status aliases, `qmd://` document resources, semantic document rehydration, axis retrieval, lazy note loading, contract validation, and gated capture tools. OMS does not require the `qmd` binary; `oms semantic doctor` now reports the built-in SQLite/FTS/vector backend and optional GGUF model path diagnostics.

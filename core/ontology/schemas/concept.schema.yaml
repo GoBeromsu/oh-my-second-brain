@@ -1,0 +1,70 @@
+# concept.schema.yaml — Layer 1 CONTRACT schema for concept (evergreen/wiki) notes
+# Machine-parsed by vault-lint and oms_validate_contract.
+# No prose rationale here — see .oms/governance/ for intent records.
+# Inherits base fields from note.schema.yaml; adds concept-specific required fields.
+
+schema: concept
+version: 1
+extends: note
+intent: "Schema for evergreen concept notes promoted into the wiki tier. Higher structural requirement than base notes."
+
+fields:
+  - name: title
+    type: string
+    required: true
+    intent: "Concept title — used as the wiki page heading and wikilink target."
+
+  - name: aliases
+    type: list
+    required: false
+    intent: "Alternative names or spellings that should resolve to this concept via wikilinks."
+    normalize: kebab
+
+  - name: status
+    type: enum
+    required: true
+    enum: [stub, draft, active, evergreen, archived]
+    intent: "Lifecycle status. 'stub' = referenced but not yet compiled; 'evergreen' = stable, high-confidence content."
+
+  - name: sources
+    type: list
+    required: false
+    intent: "Vault-relative paths or URLs of source materials used to compile this concept page."
+
+  - name: relations
+    type: list
+    required: false
+    intent: "Explicit semantic relations to other concepts (used for graph edge construction)."
+
+  - name: tags
+    type: list
+    required: false
+    intent: "Topical tags for retrieval and clustering."
+    normalize: kebab
+
+  - name: compiled-at
+    type: datetime
+    required: false
+    intent: "ISO-8601 timestamp of the last compile run that produced this page."
+
+  - name: sha
+    type: string
+    required: false
+    intent: "SHA-256 fingerprint of the source materials at last compile. Used for incremental skip."
+
+lenses:
+  - name: synthesis
+    intent: "Fields needed when synthesizing across concept pages."
+    fields: [title, aliases, sources, relations]
+
+  - name: audit
+    intent: "Fields needed to audit provenance and staleness."
+    fields: [title, sources, compiled-at, sha, status]
+
+  - name: navigation
+    intent: "Fields used to generate wiki/index.md catalog entries."
+    fields: [title, aliases, status, tags]
+
+validation:
+  allow_extra_fields: true
+  strict_enum: true

@@ -6,7 +6,9 @@
   "license": "MIT",
   "bin": {
     "oh-my-second-brain": "dist/cli/oms.js",
-    "oms": "dist/cli/oms.js"
+    "oms": "dist/cli/oms.js",
+    "oms-guard": "adapters/claude-code/hooks/oms-guard.mjs",
+    "oms-post-guard": "adapters/claude-code/hooks/oms-post-guard.mjs"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,10 +22,11 @@
     "scripts/uninstall.sh"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json",
+    "postbuild": "chmod +x dist/cli/oms.js",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "audit": "npm audit --omit=dev",
@@ -36,9 +39,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.10.0",
+    "node-llama-cpp": "^3.18.1",
+    "sqlite-vec": "^0.1.9",
     "yaml": "^2.5.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"

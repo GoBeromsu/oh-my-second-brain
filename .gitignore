@@ -18,3 +18,19 @@ coverage/
 .env
 .env.*
 .npmrc
+
+# External reference repos (dev-time consultation only — see docs/dev-reference-repos.md)
+vendor/reference-repos/
+
+# oms engine cache (never committed)
+.oms/cache/
+
+# oms native semantic store — built SQLite artifact, never committed
+# (.oms/ itself is committed per ADR-006; the generated store DB is not)
+.oms/*.sqlite
+.oms/*.sqlite-wal
+.oms/*.sqlite-shm
+
+# Private personal overlay — vault paths, names, personal recipes (R19/R20)
+# .oms/ itself is committed (ADR-006); only private/ is excluded here.
+private/

@@ -13,6 +13,8 @@ export interface HostOperationOptions {
   action: HostAction;
   runtime: RuntimeSelection;
   vault: string;
+  /** Optional second vault path (e.g. agent/raw vault). Emitted as OMS_AGENT_VAULT. */
+  agentVault?: string;
   packageSpec?: string;
   dryRun?: boolean;
   executeExternal?: boolean;
@@ -112,6 +114,217 @@ async function writeYamlObject(file: string, data: Record<string, unknown>, dryR
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Claude Code settings.json hook wiring
+// ---------------------------------------------------------------------------
+
+/** Sentinel strings that identify OMS-managed hook entries. */
+const GUARD_MARKER = "oms-guard";
+const POST_GUARD_MARKER = "oms-post-guard";
+const HOOK_MATCHER = "Write|Edit|NotebookEdit";
+
+/**
+ * Convert an absolute vault path to a shell-safe `$HOME`-relative reference.
+ * Returns `"$HOME/rel/path"` when the path is under homeDir, otherwise falls
+ * back to a quoted absolute path.  The outer double-quotes let the shell expand
+ * `$HOME` at hook execution time, so paths survive across reboots and username
+ * changes.
+ */
+export function toShellVaultPath(absPath: string, homeDir: string): string {
+  const rel = path.relative(homeDir, absPath);
+  if (rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+    return `"$HOME/${rel.replace(/\\/g, "/")}"`;
+  }
+  // Not under $HOME — use an absolute quoted path.
+  return `"${absPath}"`;
+}
+
+/** Build the shell command string for a guard binary entry. */
+export function buildGuardCommandString(
+  vault: string,
+  agentVault: string | undefined,
+  homeDir: string,
+  guardBin: string,
+): string {
+  const parts: string[] = [`OMS_VAULT=${toShellVaultPath(vault, homeDir)}`];
+  if (agentVault) {
+    parts.push(`OMS_AGENT_VAULT=${toShellVaultPath(agentVault, homeDir)}`);
+  }
+  parts.push(guardBin);
+  return parts.join(" ");
+}
+
+/** Build a single `{matcher, hooks:[{type,command}]}` entry. */
+function buildOmsHookEntry(matcher: string, command: string): Record<string, unknown> {
+  return { matcher, hooks: [{ type: "command", command }] };
+}
+
+/** Return true when any inner `hooks[*].command` contains the given marker string. */
+export function isOmsHookEntry(entry: unknown, marker: string): boolean {
+  if (!isRecord(entry)) return false;
+  const inner = entry["hooks"];
+  if (!Array.isArray(inner)) return false;
+  return inner.some(
+    (h) => isRecord(h) && typeof h["command"] === "string" && (h["command"] as string).includes(marker),
+  );
+}
+
+interface SettingsReadResult {
+  /** Parsed settings object, or null when the file is corrupt. */
+  data: Record<string, unknown> | null;
+  /** True when the file existed but could not be parsed. */
+  corrupt: boolean;
+}
+
+/**
+ * Read `~/.claude/settings.json` carefully:
+ * - Missing file → `{ data: {}, corrupt: false }`
+ * - Valid JSON   → `{ data: parsed, corrupt: false }`
+ * - Corrupt JSON → `{ data: null, corrupt: true }`  (caller must NOT write)
+ */
+async function readSettingsJsonSafe(settingsPath: string): Promise<SettingsReadResult> {
+  try {
+    const raw = await readFile(settingsPath, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    return { data: isRecord(parsed) ? parsed : {}, corrupt: false };
+  } catch (err) {
+    if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      // File does not exist yet — safe to create.
+      return { data: {}, corrupt: false };
+    }
+    // Parse error or other I/O error — do not touch the file.
+    return { data: null, corrupt: true };
+  }
+}
+
+/**
+ * Idempotently merge OMS guard hooks into `~/.claude/settings.json`.
+ * Existing non-OMS hook entries are never modified.
+ * Returns a human-readable message and whether the file was changed.
+ */
+export async function upsertClaudeHooks(
+  options: Pick<HostOperationOptions, "vault" | "agentVault" | "dryRun" | "homeDir">,
+  claudeDir: string,
+): Promise<{ changed: boolean; messages: string[] }> {
+  const settingsPath = path.join(claudeDir, "settings.json");
+  const homeDir = options.homeDir ?? homedir();
+  const { data, corrupt } = await readSettingsJsonSafe(settingsPath);
+  const messages: string[] = [];
+
+  if (corrupt) {
+    const preCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, GUARD_MARKER);
+    const postCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, POST_GUARD_MARKER);
+    messages.push(
+      `WARNING: ${settingsPath} is not valid JSON — hook wiring skipped to avoid data loss.`,
+      `Manual step: add these entries to ${settingsPath}:`,
+      `  hooks.PreToolUse:  {"matcher":"${HOOK_MATCHER}","hooks":[{"type":"command","command":"${preCmd}"}]}`,
+      `  hooks.PostToolUse: {"matcher":"${HOOK_MATCHER}","hooks":[{"type":"command","command":"${postCmd}"}]}`,
+    );
+    return { changed: false, messages };
+  }
+
+  const settings = data!;
+  const rawHooks = settings["hooks"];
+  const hooks: Record<string, unknown[]> = isRecord(rawHooks)
+    ? (rawHooks as Record<string, unknown[]>)
+    : {};
+  let changed = false;
+
+  const preCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, GUARD_MARKER);
+  const postCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, POST_GUARD_MARKER);
+
+  // PreToolUse
+  const preArr = Array.isArray(hooks["PreToolUse"]) ? [...(hooks["PreToolUse"] as unknown[])] : [];
+  if (!preArr.some((e) => isOmsHookEntry(e, GUARD_MARKER))) {
+    preArr.push(buildOmsHookEntry(HOOK_MATCHER, preCmd));
+    hooks["PreToolUse"] = preArr;
+    changed = true;
+  }
+
+  // PostToolUse
+  const postArr = Array.isArray(hooks["PostToolUse"]) ? [...(hooks["PostToolUse"] as unknown[])] : [];
+  if (!postArr.some((e) => isOmsHookEntry(e, POST_GUARD_MARKER))) {
+    postArr.push(buildOmsHookEntry(HOOK_MATCHER, postCmd));
+    hooks["PostToolUse"] = postArr;
+    changed = true;
+  }
+
+  if (!changed) {
+    messages.push("Claude Code hook entries already present (idempotent — nothing written).");
+    return { changed: false, messages };
+  }
+
+  settings["hooks"] = hooks;
+  if (!options.dryRun) {
+    await writeJsonObject(settingsPath, settings, false);
+  }
+  messages.push(`Wired ${GUARD_MARKER}/${POST_GUARD_MARKER} into ${settingsPath}.`);
+  return { changed: true, messages };
+}
+
+/**
+ * Remove OMS guard hook entries from `~/.claude/settings.json`.
+ * Only entries whose inner `command` contains `oms-guard` / `oms-post-guard`
+ * are removed; all other entries are preserved unchanged.
+ */
+export async function removeClaudeHooks(
+  options: Pick<HostOperationOptions, "dryRun" | "homeDir">,
+  claudeDir: string,
+): Promise<{ changed: boolean; messages: string[] }> {
+  const settingsPath = path.join(claudeDir, "settings.json");
+  const { data, corrupt } = await readSettingsJsonSafe(settingsPath);
+  const messages: string[] = [];
+
+  if (corrupt) {
+    messages.push(`WARNING: ${settingsPath} is not valid JSON — skipping hook removal.`);
+    return { changed: false, messages };
+  }
+
+  const settings = data!;
+  const rawHooks = settings["hooks"];
+  if (!isRecord(rawHooks)) {
+    return { changed: false, messages };
+  }
+  const hooks = rawHooks as Record<string, unknown>;
+  let changed = false;
+
+  for (const [eventName, marker] of [
+    ["PreToolUse", GUARD_MARKER],
+    ["PostToolUse", POST_GUARD_MARKER],
+  ] as const) {
+    const arr = hooks[eventName];
+    if (!Array.isArray(arr)) continue;
+    const filtered = (arr as unknown[]).filter((e) => !isOmsHookEntry(e, marker));
+    if (filtered.length < arr.length) {
+      hooks[eventName] = filtered.length > 0 ? filtered : undefined;
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    return { changed: false, messages };
+  }
+
+  // Clean up empty hooks object.
+  const remaining = Object.values(hooks).filter((v) => v !== undefined && Array.isArray(v) && (v as unknown[]).length > 0);
+  if (remaining.length === 0) {
+    delete settings["hooks"];
+  } else {
+    // Remove undefined-valued keys.
+    for (const key of Object.keys(hooks)) {
+      if (hooks[key] === undefined) delete hooks[key];
+    }
+    settings["hooks"] = hooks;
+  }
+
+  if (!options.dryRun) {
+    await writeJsonObject(settingsPath, settings, false);
+  }
+  messages.push(`Removed ${GUARD_MARKER}/${POST_GUARD_MARKER} entries from ${settingsPath}.`);
+  return { changed: true, messages };
+}
+
+
 function mcpServerEntry(options: HostOperationOptions): Record<string, unknown> {
   return {
     command: "oms",
@@ -192,6 +405,10 @@ async function installClaude(options: HostOperationOptions): Promise<HostOperati
   const mcpChanged = await upsertClaudeMcp(options, claudeDir);
   changed = changed || mcpChanged;
 
+  const hookResult = await upsertClaudeHooks(options, claudeDir);
+  changed = changed || hookResult.changed;
+  messages.push(...hookResult.messages);
+
   return {
     runtime: "claude",
     action: "install",
@@ -208,6 +425,10 @@ async function uninstallClaude(options: HostOperationOptions): Promise<HostOpera
   const commands = ["claude mcp remove oms", "claude plugin uninstall oms"];
   const messages = ["Claude Code uninstall removes the Oh My Second Brain MCP entry and, when requested, asks Claude CLI to uninstall the plugin."];
   let changed = await removeClaudeMcp(options, claudeDir);
+
+  const hookResult = await removeClaudeHooks(options, claudeDir);
+  changed = changed || hookResult.changed;
+  messages.push(...hookResult.messages);
 
   if (options.executeExternal && commandExists("claude") && !options.dryRun) {
     const externalCommands: [string, ...string[]][] = [

@@ -1,0 +1,40 @@
+# note.schema.yaml — Layer 1 CONTRACT schema for base note type
+# Machine-parsed by vault-lint and oms_validate_contract.
+# No prose rationale here — see .oms/governance/ for intent records.
+# Conforms to the oms concept-field declaration convention (taxonomy.yaml / concepts/*.yaml).
+
+schema: note
+version: 1
+intent: "Base schema for all vault notes. Every note must satisfy these fields regardless of concept."
+
+fields:
+  - name: title
+    type: string
+    required: true
+    intent: "Human-readable title of the note."
+
+  - name: created
+    type: date
+    required: false
+    intent: "ISO-8601 creation date (YYYY-MM-DD). Set at capture time."
+
+  - name: tags
+    type: list
+    required: false
+    intent: "Topical tags for retrieval and clustering."
+    normalize: kebab
+
+  - name: status
+    type: enum
+    required: false
+    enum: [draft, active, archived, evergreen]
+    intent: "Lifecycle status of the note."
+
+  - name: concept
+    type: string
+    required: false
+    intent: "The OMS concept this note belongs to (resolved from taxonomy.yaml folder map)."
+
+validation:
+  allow_extra_fields: true
+  strict_enum: true

@@ -12,6 +12,7 @@ The npm package root is the runtime asset root. A releasable tarball must includ
 - `core/ontology/concepts/`
 - `adapters/claude-code/.claude-plugin/plugin.json`
 - every Claude adapter `skills/*/SKILL.md`
+- Codex and Hermes adapter skill bundles, including the update skill surface
 - `docs/install.md`
 - `docs/release.md`
 - `scripts/install.sh`
@@ -41,7 +42,7 @@ npm run release:check
 6. `npm run release:artifact-smoke`
 7. `npm run release:plugin`
 
-`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and runs setup, host install dry-run, and MCP smoke from the extracted package root.
+`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and runs setup, host install dry-run, update dry-run, and MCP smoke from the extracted package root.
 
 ## Claude plugin validation
 

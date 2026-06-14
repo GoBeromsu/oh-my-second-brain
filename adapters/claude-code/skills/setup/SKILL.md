@@ -19,14 +19,17 @@ This skill is **REAL in v0** — it shells out to the fully-implemented CLI.
 Shells out to:
 
 ```bash
-oms setup [--vault <path>] [--yes] [--install-claude]
+oms setup [--vault <path>] [--yes] [--suggest-fields] [--install-claude]
 oms install [--runtime <auto|all|claude|codex|hermes>] [--vault <path>] [--dry-run] [--execute] [--yes]
 ```
 
 The CLI will:
 1. Scan your vault's existing top-level folders (does NOT impose a structure).
-2. Interactively ask the `intent` for each folder (use `--yes` to skip prompts).
-3. Write `vault/.oms/taxonomy.yaml` and copy default concept schemas.
+2. Interactively ask each folder's intent and concept binding (use `--yes` to accept defaults).
+3. Summarize observed frontmatter fields without changing notes.
+4. Optionally add selected observed fields to concept schemas with `--suggest-fields`.
+5. Ask for retrieval lenses and reject lenses that reference unknown fields.
+6. Write `vault/.oms/taxonomy.yaml` and preserve existing `vault/.oms/concepts/` files while adding missing defaults.
 
 ## Options
 
@@ -34,6 +37,7 @@ The CLI will:
 |------|-------------|
 | `--vault <path>` | Path to your Obsidian vault root (default: current directory) |
 | `--yes` | Non-interactive: accept all defaults, no prompts |
+| `--suggest-fields` | Merge observed note frontmatter fields into concept schemas without mutating notes. |
 | `--install-claude` | Legacy setup-only dry-run that prints Claude Code plugin install and MCP registration commands. |
 | `install --runtime <name>` | Install host adapter/MCP registration for `auto`, `all`, `claude`, `codex`, or `hermes`. |
 | `install --dry-run` | Preview host writes without mutating config. |
@@ -44,6 +48,9 @@ The CLI will:
 ```bash
 # Interactive (recommended first run):
 oms setup --vault ~/Documents/MyVault
+
+# Interactive setup with observed frontmatter field suggestions:
+oms setup --vault ~/Documents/MyVault --suggest-fields
 
 # Non-interactive (CI / scripted):
 oms setup --vault ~/Documents/MyVault --yes
