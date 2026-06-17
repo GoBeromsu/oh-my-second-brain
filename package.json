@@ -1,6 +1,6 @@
 {
   "name": "oh-my-second-brain",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Oh My Second Brain: a host-agnostic, user-owned convention layer for Obsidian and plain-markdown knowledge vaults.",
   "type": "module",
   "license": "MIT",
@@ -68,5 +68,8 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "overrides": {
+    "hono": "^4.12.25"
   }
 }

@@ -216,7 +216,7 @@ export function createGGUFEmbeddingProvider(
 
 const UPSTAGE_DIMENSIONS = 4096;
 const UPSTAGE_API_URL = "https://api.upstage.ai/v1/embeddings";
-const UPSTAGE_MODEL = "solar-embedding-1-passage";
+const UPSTAGE_MODEL = "embedding-passage";
 
 interface UpstageEmbeddingResponse {
   data: Array<{ embedding: number[]; index: number }>;
@@ -231,27 +231,50 @@ interface UpstageEmbeddingResponse {
  */
 export function createUpstageProvider(apiKey: string): EmbeddingProvider {
   return {
-    model: "upstage-solar-embedding-1-passage:4096d",
+    model: "upstage-embedding-passage:4096d",
     dimensions: UPSTAGE_DIMENSIONS,
 
     async embed(text: string): Promise<Float32Array> {
-      const response = await fetch(UPSTAGE_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({ input: text, model: UPSTAGE_MODEL }),
-      });
-      if (!response.ok) {
+      let input = (text ?? "").trim();
+      // Upstage rejects empty input with HTTP 400. Empty/whitespace chunks
+      // carry no semantic signal — return a zero vector so sync proceeds.
+      if (input.length === 0) return new Float32Array(UPSTAGE_DIMENSIONS);
+
+      // Solar caps input at 4000 tokens. Rather than fail the whole sync on a
+      // single oversized chunk, shrink the input and retry until it fits.
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const response = await fetch(UPSTAGE_API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({ input, model: UPSTAGE_MODEL }),
+        });
+        if (response.ok) {
+          const json = (await response.json()) as UpstageEmbeddingResponse;
+          const embedding = json.data[0]?.embedding;
+          if (!embedding) {
+            throw new Error("Upstage Solar API returned no embedding");
+          }
+          return normalizeVector(embedding);
+        }
+        const body = await response.text().catch(() => "");
+        if (
+          response.status === 400 &&
+          /maximum context length/i.test(body) &&
+          input.length > 200
+        ) {
+          input = input.slice(0, Math.floor(input.length * 0.6));
+          continue;
+        }
         throw new Error(
-          `Upstage Solar API error: ${response.status} ${response.statusText}`,
+          `Upstage Solar API error: ${response.status} ${response.statusText} ${body.slice(0, 160)}`,
         );
       }
-      const json = (await response.json()) as UpstageEmbeddingResponse;
-      const embedding = json.data[0]?.embedding;
-      if (!embedding) throw new Error("Upstage Solar API returned no embedding");
-      return normalizeVector(embedding);
+      throw new Error(
+        "Upstage Solar API error: input could not be reduced under the 4000-token limit",
+      );
     },
 
     dispose(): Promise<void> {
