@@ -18,11 +18,16 @@ export interface EngineConfig {
   /** Dimensionality of raw embeddings produced by the chosen model. Default 768. */
   embeddingDimensions: number;
   /**
-   * Optional path to a GGUF model file.
+   * Explicit embedding provider id (OMS_EMBEDDING_PROVIDER), e.g. "gguf" or "upstage".
    * Required on the strict production path (requireRealEmbeddingProvider);
-   * omitting it without UPSTAGE_API_KEY causes a loud throw.
+   * omitting it (and OMS_EMBEDDING_MODEL) causes a loud throw — no auto-detect.
    */
-  modelPath?: string;
+  embeddingProvider?: string;
+  /**
+   * Explicit embedding model/path/id (OMS_EMBEDDING_MODEL): a GGUF file path for
+   * the "gguf" provider, or a remote model id for API providers like "upstage".
+   */
+  embeddingModel?: string;
 }
 
 // ---------------------------------------------------------------------------

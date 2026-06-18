@@ -20,12 +20,16 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 describe("Oh My Second Brain MCP semantic stdio server", () => {
   it("runs typed semantic search and document rehydration through read-only MCP tools", async () => {
     // The clean swap routes oms_sync_embeddings / oms_semantic_query through the
-    // native engine, which REQUIRES a real embedding model (ADR-007). With
-    // OMS_MODEL_PATH set we assert real engine results end-to-end through stdio;
-    // without it we assert the loud guard — a positive routing proof, since the
-    // legacy src/search hash path would have returned available:true instead.
-    const modelPath = process.env["OMS_MODEL_PATH"];
-    const hasModel = typeof modelPath === "string" && modelPath.length > 0;
+    // native engine, which REQUIRES an explicitly configured embedding provider
+    // (ADR-007). With OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL set we assert
+    // real engine results end-to-end through stdio; without them we assert the
+    // loud guard — a positive routing proof, since the legacy src/search hash
+    // path would have returned available:true instead.
+    const embeddingProvider = process.env["OMS_EMBEDDING_PROVIDER"];
+    const embeddingModel = process.env["OMS_EMBEDDING_MODEL"];
+    const hasModel =
+      typeof embeddingProvider === "string" && embeddingProvider.length > 0 &&
+      typeof embeddingModel === "string" && embeddingModel.length > 0;
     const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-semantic-"));
     await mkdir(path.join(tmpVault, "references"), { recursive: true });
     await writeFile(
@@ -57,9 +61,15 @@ Index note for graph neighborhoods and semantic lookup.
       cwd: repoRoot,
       stderr: "pipe",
       // StdioClientTransport sandboxes the child env to a safe default subset,
-      // so OMS_MODEL_PATH must be forwarded explicitly for the engine path.
-      ...(hasModel && modelPath
-        ? { env: { ...getDefaultEnvironment(), OMS_MODEL_PATH: modelPath } }
+      // so the canonical embedding config must be forwarded for the engine path.
+      ...(hasModel
+        ? {
+            env: {
+              ...getDefaultEnvironment(),
+              OMS_EMBEDDING_PROVIDER: embeddingProvider!,
+              OMS_EMBEDDING_MODEL: embeddingModel!,
+            },
+          }
         : {}),
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -114,12 +124,13 @@ Index note for graph neighborhoods and semantic lookup.
           expect.objectContaining({ path: "references/Agent Retrieval.md" }),
         );
       } else {
-        // Loud-guard path: engine assembly throws without a model → isError
-        // envelope mentioning OMS_MODEL_PATH (ADR-007). Reaching this branch
-        // proves the op routed to the engine, not the legacy hash store.
+        // Loud-guard path: engine assembly throws without explicit embedding
+        // config → isError envelope naming the canonical keys (ADR-007).
+        // Reaching this branch proves the op routed to the engine, not the
+        // legacy hash store.
         expect(syncRaw.isError).toBe(true);
         const syncText = syncRaw.content[0]?.type === "text" ? syncRaw.content[0].text : "";
-        expect(syncText).toMatch(/OMS_MODEL_PATH|UPSTAGE_API_KEY/);
+        expect(syncText).toMatch(/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/);
         const queryRaw = await client.callTool(queryCall);
         expect(queryRaw.isError).toBe(true);
       }

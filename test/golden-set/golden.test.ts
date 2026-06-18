@@ -128,12 +128,14 @@ describe("golden harness — fail-loud behaviour (unit)", () => {
   it(
     "(b) engine throw propagates; runEngine does not swallow errors as []",
     async () => {
-      // Strip real-model env vars so requireRealEmbeddingProvider throws.
+      // Strip embedding-config env vars so requireRealEmbeddingProvider throws.
       // This verifies that the try/catch that used to return [] is gone.
       const savedUpstage = process.env["UPSTAGE_API_KEY"];
-      const savedModel = process.env["OMS_MODEL_PATH"];
+      const savedProvider = process.env["OMS_EMBEDDING_PROVIDER"];
+      const savedModel = process.env["OMS_EMBEDDING_MODEL"];
       delete process.env["UPSTAGE_API_KEY"];
-      delete process.env["OMS_MODEL_PATH"];
+      delete process.env["OMS_EMBEDDING_PROVIDER"];
+      delete process.env["OMS_EMBEDDING_MODEL"];
 
       try {
         const q: GoldenQuery = {
@@ -143,18 +145,18 @@ describe("golden harness — fail-loud behaviour (unit)", () => {
           expectedNotes: [],
           curated: true,
         };
-        // modelPath: undefined + no UPSTAGE_API_KEY → requireRealEmbeddingProvider throws
+        // No provider/model configured + no UPSTAGE_API_KEY → requireRealEmbeddingProvider throws
         const config = makeTracerConfig({
           vaultPath: "/nonexistent",
           dbPath: "/tmp/oms-golden-failsafe-b-do-not-use.db",
           embeddingDimensions: 768,
-          modelPath: undefined,
         });
         await expect(runEngine(q, config, [])).rejects.toThrow();
       } finally {
         // Restore env regardless of test outcome
         if (savedUpstage !== undefined) process.env["UPSTAGE_API_KEY"] = savedUpstage;
-        if (savedModel !== undefined) process.env["OMS_MODEL_PATH"] = savedModel;
+        if (savedProvider !== undefined) process.env["OMS_EMBEDDING_PROVIDER"] = savedProvider;
+        if (savedModel !== undefined) process.env["OMS_EMBEDDING_MODEL"] = savedModel;
       }
     },
   );
