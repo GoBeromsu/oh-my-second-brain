@@ -9,8 +9,8 @@
  * another temp dir. Both are cleaned up in afterAll.
  *
  * Assertions:
- *   1. assembleEngine() WITHOUT modelPath (no UPSTAGE_API_KEY) → THROWS.
- *   2. assembleEngine() WITH real modelPath → adapter constructed.
+ *   1. assembleEngine() WITHOUT embedding provider/model → THROWS.
+ *   2. assembleEngine() WITH provider=gguf + real model path → adapter constructed.
  *   3. syncVault() → syncs fixture, stores real 768d embeddings.
  *   4. vec0 stored dimension == 768 (proven via sqlite_master DDL).
  *   5. semantic query via adapter → astronomy doc ranks #1 for astronomy query.
@@ -129,35 +129,35 @@ function readVec0Dimension(dbPath: string): number | null {
 // ---------------------------------------------------------------------------
 
 describe("assembleEngine — strict guard (no model needed)", () => {
-  it("THROWS when no modelPath and no UPSTAGE_API_KEY", () => {
+  it("THROWS asking for OMS_EMBEDDING_PROVIDER when no provider/model configured", () => {
     const saved = process.env["UPSTAGE_API_KEY"];
     delete process.env["UPSTAGE_API_KEY"];
     try {
       expect(() =>
         assembleEngine({ vault: "/tmp/fake-vault" }),
-      ).toThrow("OMS_MODEL_PATH");
+      ).toThrow("OMS_EMBEDDING_PROVIDER");
     } finally {
       if (saved !== undefined) process.env["UPSTAGE_API_KEY"] = saved;
     }
   });
 
-  it("error message mentions hash-projection to explain what was avoided", () => {
+  it("THROWS asking for OMS_EMBEDDING_MODEL when provider is set but model is missing", () => {
     const saved = process.env["UPSTAGE_API_KEY"];
     delete process.env["UPSTAGE_API_KEY"];
     try {
       expect(() =>
-        assembleEngine({ vault: "/tmp/fake-vault" }),
-      ).toThrow("hash-projection");
+        assembleEngine({ vault: "/tmp/fake-vault", embeddingProvider: "gguf" }),
+      ).toThrow("OMS_EMBEDDING_MODEL");
     } finally {
       if (saved !== undefined) process.env["UPSTAGE_API_KEY"] = saved;
     }
   });
 
-  it("requireRealEmbeddingProvider THROWS when no modelPath and no UPSTAGE_API_KEY", () => {
+  it("requireRealEmbeddingProvider THROWS when no provider/model configured", () => {
     const saved = process.env["UPSTAGE_API_KEY"];
     delete process.env["UPSTAGE_API_KEY"];
     try {
-      expect(() => requireRealEmbeddingProvider({})).toThrow("OMS_MODEL_PATH");
+      expect(() => requireRealEmbeddingProvider({})).toThrow("OMS_EMBEDDING_PROVIDER");
     } finally {
       if (saved !== undefined) process.env["UPSTAGE_API_KEY"] = saved;
     }
@@ -168,8 +168,8 @@ describe("assembleEngine — strict guard (no model needed)", () => {
 // Stub-wiring test — adapter construction with fake provider (always runs)
 // ---------------------------------------------------------------------------
 
-describe("assembleEngine — stub-wiring via UPSTAGE_API_KEY shim", () => {
-  it("constructs adapter when UPSTAGE_API_KEY is set (does not call API)", () => {
+describe("assembleEngine — stub-wiring via explicit Upstage config", () => {
+  it("constructs adapter when provider=upstage + model + key are set (does not call API)", () => {
     let tmpVault = "";
     let tmpDb = "";
     const saved = process.env["UPSTAGE_API_KEY"];
@@ -180,7 +180,12 @@ describe("assembleEngine — stub-wiring via UPSTAGE_API_KEY shim", () => {
         "stub.sqlite",
       );
       process.env["UPSTAGE_API_KEY"] = "stub-key-for-construction-test";
-      const engine = assembleEngine({ vault: tmpVault, dbPath: tmpDb });
+      const engine = assembleEngine({
+        vault: tmpVault,
+        dbPath: tmpDb,
+        embeddingProvider: "upstage",
+        embeddingModel: "solar-embedding-1-large",
+      });
       expect(engine.adapter).toBeDefined();
       expect(engine.provider.model).toContain("upstage");
       // No embed() called — dispose is safe
@@ -217,7 +222,8 @@ describe.skipIf(!SMOKE_ENABLED)(
       () => {
         engine = assembleEngine({
           vault: fixtureVault,
-          modelPath: MODEL_PATH,
+          embeddingProvider: "gguf",
+          embeddingModel: MODEL_PATH,
           dbPath: fixtureDb,
         });
         expect(engine.provider.dimensions).toBe(768);

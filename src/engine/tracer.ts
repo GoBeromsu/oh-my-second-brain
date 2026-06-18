@@ -106,7 +106,10 @@ export async function runTracer(
   const files = await resolveFiles(vaultPath, config.files);
 
   // ── Step 2: create embed provider + store ─────────────────────────────────
-  const embedProvider = requireRealEmbeddingProvider({ modelPath: config.modelPath });
+  const embedProvider = requireRealEmbeddingProvider({
+    provider: config.embeddingProvider,
+    model: config.embeddingModel,
+  });
   await mkdir(path.dirname(config.dbPath), { recursive: true });
   const store = openEngineStore(config.dbPath, config.embeddingDimensions);
 
@@ -198,7 +201,8 @@ export function makeTracerConfig(overrides: Partial<TracerConfig> = {}): TracerC
     vaultPath,
     dbPath: overrides.dbPath ?? path.join(vaultPath, ".oms", "cache", "engine", "engine.db"),
     embeddingDimensions: overrides.embeddingDimensions ?? 768,
-    modelPath: overrides.modelPath ?? process.env["OMS_MODEL_PATH"],
+    embeddingProvider: overrides.embeddingProvider ?? process.env["OMS_EMBEDDING_PROVIDER"],
+    embeddingModel: overrides.embeddingModel ?? process.env["OMS_EMBEDDING_MODEL"],
     files: overrides.files,
     cacheDir: overrides.cacheDir,
     topK: overrides.topK ?? 10,

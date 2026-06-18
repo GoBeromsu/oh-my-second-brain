@@ -38,9 +38,9 @@ export function makeDeferredProvider(): EmbeddingProvider {
     embed(_text: string): Promise<Float32Array> {
       return Promise.reject(
         new Error(
-          `${GRAPH_ONLY}: embedding provider unavailable. Set OMS_MODEL_PATH or ` +
-            `UPSTAGE_API_KEY for engine semantic ops; semantic retrieval otherwise ` +
-            `stays on the src/search layer.`,
+          `${GRAPH_ONLY}: embedding provider unavailable. Configure embeddings via ` +
+            `OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL (and provider auth env vars, ` +
+            `e.g. UPSTAGE_API_KEY) for engine semantic ops.`,
         ),
       );
     },
@@ -66,6 +66,10 @@ export function makeDeferredStore(): EngineStore {
     );
   };
   return {
+    capabilities: () => ({ vecAvailable: false }),
+    upsertLex: () => unavailable(),
+    readEmbeddingIdentity: () => unavailable(),
+    writeEmbeddingIdentity: () => unavailable(),
     upsert: () => unavailable(),
     queryVec: () => unavailable(),
     queryLex: () => unavailable(),

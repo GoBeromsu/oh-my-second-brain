@@ -341,26 +341,32 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   // Native engine — semantic layer (lazy): assembled on the FIRST semantic op,
   // not at boot, so boot stays stateless (R2). assembleEngine opens the engine
   // SQLite store on construction and loads the embedding model on first embed().
-  // Golden-set parity is verified (engine >= 1.7x the src/search baseline recall@10
-  // on every query type), so the engine now owns semantic query/status/sync/
-  // collections/contexts/cleanup. Requires a real model: OMS_MODEL_PATH (GGUF) or
-  // UPSTAGE_API_KEY — absent both, assembleEngine throws a loud, actionable error
-  // (ADR-007: no hash/fake fallback) that surfaces via the dispatch catch below.
+  // Embedding selection is canonical and explicit: OMS_EMBEDDING_PROVIDER
+  // (e.g. gguf | upstage) + OMS_EMBEDDING_MODEL (path or model id). Absent
+  // either, assembleEngine throws a loud, actionable error (ADR-007: no
+  // hash/fake fallback, no auto-detect) that surfaces via the dispatch catch.
   let semanticEngine: AssembledEngine | null = null;
   const getSemanticEngine = (): AssembledEngine => {
     if (semanticEngine === null) {
-      const modelPath = process.env["OMS_MODEL_PATH"];
-      semanticEngine = assembleEngine({ vault, ...(modelPath ? { modelPath } : {}) });
+      semanticEngine = assembleEngine({
+        vault,
+        ...(process.env["OMS_EMBEDDING_PROVIDER"]
+          ? { embeddingProvider: process.env["OMS_EMBEDDING_PROVIDER"] }
+          : {}),
+        ...(process.env["OMS_EMBEDDING_MODEL"]
+          ? { embeddingModel: process.env["OMS_EMBEDDING_MODEL"] }
+          : {}),
+      });
     }
     return semanticEngine;
   };
 
-  // A real embedding model is configured iff one of these is set (ADR-007). The
-  // engine's model-OPTIONAL surface (document reads, retrieve_context's semantic
-  // leg, ReadResource) keys off this to decide engine vs src/search WITHOUT
-  // triggering an assembly throw on a model-less host.
+  // A real embedding provider is configured iff the canonical pair is set
+  // (ADR-007). The engine's model-OPTIONAL surface (document reads,
+  // retrieve_context's semantic leg, ReadResource) keys off this to decide
+  // engine vs src/search WITHOUT triggering an assembly throw on a model-less host.
   const hasEmbeddingModel = (): boolean =>
-    Boolean(process.env["OMS_MODEL_PATH"] ?? process.env["UPSTAGE_API_KEY"]);
+    Boolean(process.env["OMS_EMBEDDING_PROVIDER"] && process.env["OMS_EMBEDDING_MODEL"]);
 
   // Lenient adapter resolver for those model-optional paths: returns the engine
   // adapter only when a model is configured AND assembly succeeds, else null so
