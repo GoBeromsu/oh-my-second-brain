@@ -8,7 +8,6 @@
  * `Mcp`-prefixed names without re-declaring a parallel type set.
  */
 export type {
-  McpSemanticStorage as SemanticStorage,
   McpSemanticSearchMode as SemanticSearchMode,
   McpSemanticSearchFormat as SemanticSearchFormat,
   McpSemanticTypedSearchType as SemanticTypedSearchType,

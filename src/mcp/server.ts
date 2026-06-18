@@ -370,22 +370,19 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   // vec-capable vs core engine WITHOUT a no-model assembly throw.
   const hasEmbeddingModel = embeddingConfigPresent;
 
-  // Adapter resolver for the model-OPTIONAL paths: the vec-capable engine when a
-  // model is configured AND assembly succeeds, else the core (lex + document)
-  // engine. The counterpart isEngineSemanticOp path assembles eagerly and lets
-  // the no-model error surface loudly (ADR-007). Both honor the same invariant:
-  // query + document reads resolve on the SAME backend, so a retrieve_context
-  // real-path docid always hydrates where it was produced (no split-brain).
-  const resolveDocumentAdapter = (): McpEngineAdapter => {
-    if (hasEmbeddingModel()) {
-      try {
-        return getSemanticEngine().adapter;
-      } catch {
-        // Fall through to the core engine: file-based reads need no model.
-      }
-    }
-    return getCoreSemanticEngine().adapter;
-  };
+  // Adapter resolver for the model-OPTIONAL paths: the vec-capable engine when
+  // the canonical embedding pair is configured, else the core (lex + file-based
+  // document) engine. The counterpart isEngineSemanticOp path assembles eagerly
+  // and lets the no-model error surface loudly (ADR-007). Both honor the same
+  // invariant: query + document reads resolve on the SAME backend, so a
+  // retrieve_context real-path docid always hydrates where it was produced.
+  //
+  // No catch here: a CONFIGURED-but-broken full engine (bad provider/model,
+  // missing auth, store-open failure) must surface its error loudly rather than
+  // silently masquerade as a model-less host (ADR-007). The core fallback is
+  // strictly for the absent-config case.
+  const resolveDocumentAdapter = (): McpEngineAdapter =>
+    hasEmbeddingModel() ? getSemanticEngine().adapter : getCoreSemanticEngine().adapter;
 
   const server = new Server(
     { name: "oms", version: SERVER_VERSION },
