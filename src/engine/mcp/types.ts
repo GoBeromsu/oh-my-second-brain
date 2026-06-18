@@ -138,8 +138,8 @@ export type McpSemanticEmbeddingSyncResult =
       readonly index?: string;
       /**
        * Provider status snapshot captured at sync time.
-       * Mirrors `Extract<SemanticProviderStatus, { available: true }>` from
-       * src/search/semantic-sync-types.ts:41.
+       * Mirrors the success branch of the provider status (always
+       * available:true at sync time).
        */
       readonly status: McpSemanticProviderStatus & { readonly available: true };
       readonly steps: readonly McpSemanticSyncStep[];

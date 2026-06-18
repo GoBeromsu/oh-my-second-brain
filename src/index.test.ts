@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import * as api from "./index.js";
 
 describe("public package entrypoint", () => {
-  it("exports OMS semantic search names without qmd backend names", () => {
-    expect(api.querySemanticStore).toBeTypeOf("function");
-    expect(api.syncSemanticEmbeddingStore).toBeTypeOf("function");
+  it("exports the native engine semantic surface without qmd backend names", () => {
+    expect(api.assembleEngine).toBeTypeOf("function");
+    expect(api.assembleCoreSemanticEngine).toBeTypeOf("function");
+    expect(api.retrieveMorningContext).toBeTypeOf("function");
     expect("queryQmd" in api).toBe(false);
     expect("syncQmdEmbeddingStore" in api).toBe(false);
+    // Legacy src/search facade is retired: its functions are no longer exported.
+    expect("querySemanticStore" in api).toBe(false);
+    expect("syncSemanticEmbeddingStore" in api).toBe(false);
   });
 });

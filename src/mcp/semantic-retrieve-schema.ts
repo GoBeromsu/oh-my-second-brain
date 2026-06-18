@@ -7,7 +7,6 @@ const typedQuerySearchSchema = {
   required: ["type", "query"],
 } as const;
 
-const storageSchema = { type: "string", enum: ["qmd-sqlite", "oms-native-json"] } as const;
 
 export const retrieveContextSemanticInputProperties = {
   semanticEnabled: { type: "boolean" },
@@ -27,8 +26,6 @@ export const retrieveContextSemanticInputProperties = {
   semanticLineNumbers: { type: "boolean" },
   semanticFullPath: { type: "boolean" },
   semanticIndex: { type: "string" },
-  semanticStorage: storageSchema,
-  semanticModelPath: { type: "string" },
   semanticChunkStrategy: { type: "string" },
   semanticCandidateLimit: { type: "number" },
   semanticNoRerank: { type: "boolean" },
@@ -46,6 +43,4 @@ export const retrieveContextSemanticInputProperties = {
   embeddingSyncPull: { type: "boolean" },
   embeddingSyncMaxDocsPerBatch: { type: "number" },
   embeddingSyncMaxBatchMb: { type: "number" },
-  embeddingSyncStorage: storageSchema,
-  embeddingSyncModelPath: { type: "string" },
 } as const;

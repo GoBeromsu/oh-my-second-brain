@@ -1,4 +1,4 @@
-import type { SemanticQueryOptions, SemanticSearchMode, SemanticStorage } from "../search/semantic.js";
+import type { SemanticQueryOptions, SemanticSearchMode } from "../retrieve/semantic-contract.js";
 
 export interface ParsedSemanticArgs {
   readonly positional: readonly string[];
@@ -21,7 +21,7 @@ export function parseSemanticArgs(argv: readonly string[]): ParsedSemanticArgs {
     } else if (arg === "-l" || arg === "--line-limit") {
       options["lineLimit"] = argv[i + 1] ?? "";
       i++;
-    } else if (arg === "--index" || arg === "--min-score" || arg === "--chunk-strategy" || arg === "--storage" || arg === "--model-path") {
+    } else if (arg === "--index" || arg === "--min-score" || arg === "--chunk-strategy") {
       options[camelOption(arg)] = argv[i + 1] ?? "";
       i++;
     } else if (arg === "--intent" || arg === "--lex" || arg === "--vec" || arg === "--hyde") {
@@ -42,6 +42,8 @@ export function parseSemanticArgs(argv: readonly string[]): ParsedSemanticArgs {
       options["includeDefault"] = false;
     } else if (arg === "--line-numbers" || arg === "--full-path" || arg === "--force" || arg === "--all" || arg === "--full" || arg === "--pull" || arg === "--update" || arg === "--embed") {
       options[camelOption(arg)] = true;
+    } else if (arg === "--no-embed") {
+      options["embed"] = false;
     } else if (arg === "--no-line-numbers") {
       options["lineNumbers"] = false;
     } else {
@@ -72,11 +74,6 @@ export function numberOption(args: ParsedSemanticArgs, key: string): number | un
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-export function semanticStorageOption(args: ParsedSemanticArgs, key = "storage"): SemanticStorage | undefined {
-  const value = stringOption(args, key);
-  return value === "qmd-sqlite" || value === "oms-native-json" ? value : undefined;
-}
-
 export function stringListOption(args: ParsedSemanticArgs, key: string): readonly string[] | undefined {
   const value = stringOption(args, key);
   return value ? value.split(",").map((item) => item.trim()).filter((item) => item.length > 0) : undefined;
@@ -98,8 +95,6 @@ export function semanticQueryOptions(
     mode,
     collection: stringOption(args, "collection"),
     index: stringOption(args, "index"),
-    storage: semanticStorageOption(args),
-    modelPath: stringOption(args, "modelPath"),
     limit: numberOption(args, "limit"),
     minScore: numberOption(args, "minScore"),
     intent: stringOption(args, "intent"),

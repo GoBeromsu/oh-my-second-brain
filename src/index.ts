@@ -5,6 +5,7 @@ export * from "./conventions/frontmatter.js";
 export * from "./conventions/validate.js";
 export * from "./adapt/HostAdapter.js";
 export * from "./graph/explore.js";
-export * from "./search/semantic.js";
+export * from "./retrieve/semantic-contract.js";
+export * from "./engine/assemble.js";
 export * from "./retrieve/morning.js";
 export * from "./mcp/server.js";

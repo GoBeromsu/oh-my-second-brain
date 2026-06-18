@@ -38,8 +38,8 @@ import {
   semanticOptionsFromArgs,
   retrieveContextSemanticInputProperties,
 } from "./semantic-retrieve.js";
-import { getSemanticDocument } from "../search/semantic.js";
-import { assembleEngine, assembleGraphOnlyEngine, type AssembledEngine } from "../engine/assemble.js";
+import { assembleCoreSemanticEngine, assembleGraphOnlyEngine, type AssembledEngine } from "../engine/assemble.js";
+import { assembleFullSemanticEngine, embeddingConfigPresent } from "./semantic-engine.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 
 const SERVER_VERSION = "0.0.0";
@@ -339,49 +339,52 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   const engine = assembleGraphOnlyEngine({ vault });
 
   // Native engine — semantic layer (lazy): assembled on the FIRST semantic op,
-  // not at boot, so boot stays stateless (R2). assembleEngine opens the engine
-  // SQLite store on construction and loads the embedding model on first embed().
-  // Embedding selection is canonical and explicit: OMS_EMBEDDING_PROVIDER
-  // (e.g. gguf | upstage) + OMS_EMBEDDING_MODEL (path or model id). Absent
-  // either, assembleEngine throws a loud, actionable error (ADR-007: no
+  // not at boot, so boot stays stateless (R2). The vec-capable engine opens the
+  // engine SQLite store on construction and loads the embedding model on first
+  // embed(). Embedding selection is canonical and explicit: OMS_EMBEDDING_PROVIDER
+  // (e.g. gguf | upstage) + OMS_EMBEDDING_MODEL (path or model id). Absent either,
+  // assembleFullSemanticEngine throws a loud, actionable error (ADR-007: no
   // hash/fake fallback, no auto-detect) that surfaces via the dispatch catch.
   let semanticEngine: AssembledEngine | null = null;
   const getSemanticEngine = (): AssembledEngine => {
     if (semanticEngine === null) {
-      semanticEngine = assembleEngine({
-        vault,
-        ...(process.env["OMS_EMBEDDING_PROVIDER"]
-          ? { embeddingProvider: process.env["OMS_EMBEDDING_PROVIDER"] }
-          : {}),
-        ...(process.env["OMS_EMBEDDING_MODEL"]
-          ? { embeddingModel: process.env["OMS_EMBEDDING_MODEL"] }
-          : {}),
-      });
+      semanticEngine = assembleFullSemanticEngine(vault);
     }
     return semanticEngine;
+  };
+
+  // Core semantic engine (lazy): lex + file-based document reads with NO model.
+  // vec/HyDE fail fast (the core store has no vec0 table). This is the model-less
+  // backend for the document/retrieve_context paths after the src/search teardown.
+  let coreSemanticEngine: AssembledEngine | null = null;
+  const getCoreSemanticEngine = (): AssembledEngine => {
+    if (coreSemanticEngine === null) {
+      coreSemanticEngine = assembleCoreSemanticEngine({ vault });
+    }
+    return coreSemanticEngine;
   };
 
   // A real embedding provider is configured iff the canonical pair is set
   // (ADR-007). The engine's model-OPTIONAL surface (document reads,
   // retrieve_context's semantic leg, ReadResource) keys off this to decide
-  // engine vs src/search WITHOUT triggering an assembly throw on a model-less host.
-  const hasEmbeddingModel = (): boolean =>
-    Boolean(process.env["OMS_EMBEDDING_PROVIDER"] && process.env["OMS_EMBEDDING_MODEL"]);
+  // vec-capable vs core engine WITHOUT a no-model assembly throw.
+  const hasEmbeddingModel = embeddingConfigPresent;
 
-  // Lenient adapter resolver for those model-optional paths: returns the engine
-  // adapter only when a model is configured AND assembly succeeds, else null so
-  // the caller degrades to the model-free src/search layer. This is the deliberate
-  // counterpart to the isEngineSemanticOp path, which assembles eagerly and lets
+  // Adapter resolver for the model-OPTIONAL paths: the vec-capable engine when a
+  // model is configured AND assembly succeeds, else the core (lex + document)
+  // engine. The counterpart isEngineSemanticOp path assembles eagerly and lets
   // the no-model error surface loudly (ADR-007). Both honor the same invariant:
   // query + document reads resolve on the SAME backend, so a retrieve_context
   // real-path docid always hydrates where it was produced (no split-brain).
-  const trySemanticEngineAdapter = (): McpEngineAdapter | null => {
-    if (!hasEmbeddingModel()) return null;
-    try {
-      return getSemanticEngine().adapter;
-    } catch {
-      return null;
+  const resolveDocumentAdapter = (): McpEngineAdapter => {
+    if (hasEmbeddingModel()) {
+      try {
+        return getSemanticEngine().adapter;
+      } catch {
+        // Fall through to the core engine: file-based reads need no model.
+      }
     }
+    return getCoreSemanticEngine().adapter;
   };
 
   const server = new Server(
@@ -397,6 +400,9 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     void engine.dispose().catch(() => undefined);
     if (semanticEngine !== null) {
       void semanticEngine.dispose().catch(() => undefined);
+    }
+    if (coreSemanticEngine !== null) {
+      void coreSemanticEngine.dispose().catch(() => undefined);
     }
   };
 
@@ -418,13 +424,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
     // Resource reads hydrate on the SAME backend the semantic ops use: the engine
-    // (file-based, qmd:// / oms:// scheme aware) when a model is configured, else
-    // src/search — so a retrieve_context docid resolves through the URI surface
-    // regardless of which backend produced it.
-    const engineAdapter = trySemanticEngineAdapter();
-    const result = engineAdapter
-      ? await engineAdapter.getDocument({ vault, target: uri })
-      : await getSemanticDocument({ vault, target: uri });
+    // (file-based, qmd:// / oms:// scheme aware), vec-capable when a model is
+    // configured and core (lex + file reads) otherwise — so a retrieve_context
+    // docid resolves through the URI surface regardless of which backend produced it.
+    const result = await resolveDocumentAdapter().getDocument({ vault, target: uri });
     if (!result.available || !result.documents[0]) {
       throw new Error(
         !result.available && result.reason ? result.reason : "OMS semantic resource not found.",
@@ -545,13 +548,11 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
     if (request.params.name === "oms_retrieve_context") {
       // Graph + semantic fusion. The graph leg stays on the src/graph warm cache;
-      // the semantic leg routes to the native engine when a model is configured
-      // (parity-verified ranking, real-path docids) and degrades to the model-free
-      // src/search backend otherwise. get/multi_get and ReadResource make the SAME
-      // model-gated choice, so a docid emitted here always hydrates on the backend
-      // that produced it — no split-brain between query and document reads.
-      const engineAdapter = trySemanticEngineAdapter();
-      const semanticBackend = engineAdapter ? makeEngineMorningBackend(engineAdapter, vault) : undefined;
+      // the semantic leg routes to the native engine: vec-capable when a model is
+      // configured (parity ranking, real-path docids) and core (lex; vec/HyDE fail
+      // fast) otherwise. get/multi_get and ReadResource make the SAME choice, so a
+      // docid emitted here always hydrates on the backend that produced it.
+      const semanticBackend = makeEngineMorningBackend(resolveDocumentAdapter(), vault);
       const { ontology, source } = await activeOntology(vault);
       const limitValue = args?.["limit"];
       const maxNeighborsValue = args?.["maxNeighbors"];
@@ -580,24 +581,22 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
     }
 
-    // Semantic / sync / cleanup ops route to the native engine adapter, lazily
-    // assembled (parity verified vs the src/search baseline — golden-set gate).
-    // Two adapter-resolution policies:
-    //   - isEngineSemanticOp → EAGER getSemanticEngine().adapter: a model-less host
-    //     throws a loud ADR-007 error (surfaces via the dispatch catch below).
-    //   - isEngineDocumentOp → LENIENT trySemanticEngineAdapter(): model present →
-    //     engine (hydrates retrieve_context's real-path docids on the same backend),
-    //     absent → null so handleSemanticTool falls back to src/search WITHOUT
-    //     forcing engine assembly.
-    // Every other tool gets null and never touches the model path.
-    const semanticAdapter = isEngineSemanticOp(request.params.name)
-      ? getSemanticEngine().adapter
-      : isEngineDocumentOp(request.params.name)
-        ? trySemanticEngineAdapter()
-        : null;
-    const semanticToolResult = await handleSemanticTool(request.params.name, args, vault, semanticAdapter);
-    if (semanticToolResult) {
-      return semanticToolResult.ok ? jsonText(semanticToolResult.value) : errorText(semanticToolResult.message);
+    // Semantic / sync / cleanup / document ops route to the native engine adapter:
+    //   - isEngineSemanticOp → EAGER getSemanticEngine().adapter (vec-capable): a
+    //     model-less host throws a loud ADR-007 error (surfaces via the dispatch
+    //     catch below).
+    //   - isEngineDocumentOp → resolveDocumentAdapter(): vec-capable engine when a
+    //     model is configured (hydrates retrieve_context real-path docids on the
+    //     same backend), else the core engine (file-based reads need no model).
+    // Every other tool never touches the engine here.
+    if (isEngineSemanticOp(request.params.name) || isEngineDocumentOp(request.params.name)) {
+      const semanticAdapter = isEngineSemanticOp(request.params.name)
+        ? getSemanticEngine().adapter
+        : resolveDocumentAdapter();
+      const semanticToolResult = await handleSemanticTool(request.params.name, args, vault, semanticAdapter);
+      if (semanticToolResult) {
+        return semanticToolResult.ok ? jsonText(semanticToolResult.value) : errorText(semanticToolResult.message);
+      }
     }
 
     if (request.params.name === "oms_lazy_load_note") {
