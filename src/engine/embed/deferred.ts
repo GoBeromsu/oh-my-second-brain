@@ -9,10 +9,9 @@
  * silently fabricating vectors.
  *
  * ADR-007: these are LOUD GUARDS, not fake fallbacks. They never return a
- * projected / hash vector — they throw. Real semantic retrieval stays on the
- * src/search layer until the engine reaches output parity (Option-1 swap).
- *
- * R18: no runtime import from src/search.
+ * projected / hash vector — they throw. Real semantic retrieval requires an
+ * explicitly configured embedding provider/model; the graph-only engine never
+ * loads one.
  */
 
 import type { EmbeddingProvider } from "../types.js";

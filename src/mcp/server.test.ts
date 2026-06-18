@@ -61,12 +61,16 @@ describe("Oh My Second Brain MCP stdio server", () => {
       expect(commitTool?.annotations?.destructiveHint).toBe(false);
       const retrieveTool = tools.tools.find((tool) => tool.name === "oms_retrieve_context");
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semanticMinScore");
-      expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semanticStorage");
+      // storage/modelPath knobs were removed from the schemas (engine uses explicit env config).
+      expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticStorage");
+      expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticModelPath");
       expect(retrieveTool?.annotations?.readOnlyHint).toBe(false);
       const semanticStatusTool = tools.tools.find((tool) => tool.name === "oms_semantic_status");
-      expect(JSON.stringify(semanticStatusTool?.inputSchema)).toContain("storage");
+      expect(JSON.stringify(semanticStatusTool?.inputSchema)).toContain("index");
+      expect(JSON.stringify(semanticStatusTool?.inputSchema)).not.toContain("storage");
       const semanticQueryTool = tools.tools.find((tool) => tool.name === "oms_semantic_query");
-      expect(JSON.stringify(semanticQueryTool?.inputSchema)).toContain("modelPath");
+      expect(JSON.stringify(semanticQueryTool?.inputSchema)).toContain("query");
+      expect(JSON.stringify(semanticQueryTool?.inputSchema)).not.toContain("modelPath");
       const getTool = tools.tools.find((tool) => tool.name === "oms_get_document");
       expect(getTool?.annotations?.readOnlyHint).toBe(true);
       expect(getTool?.annotations?.destructiveHint).toBe(false);

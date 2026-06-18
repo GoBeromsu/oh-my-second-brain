@@ -58,8 +58,8 @@ export function syncOptionsToEngineArgs(opts: McpSemanticEmbeddingSyncOptions): 
  * @param statusSnapshot - Provider status captured at sync time, synthesized from
  *                         deps.embed by the facade. Mirrors the mandatory
  *                         `status: Extract<SemanticProviderStatus, { available: true }>`
- *                         field on the real SemanticEmbeddingSyncResult success branch
- *                         (src/search/semantic-sync-types.ts:41).
+ *                         field on the McpSemanticEmbeddingSyncResult success branch
+ *                         (always available:true at sync time).
  */
 export function engineSyncResultToMcp(
   result: EngineSyncResult,

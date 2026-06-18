@@ -102,7 +102,7 @@ oms hook       Vault guard hooks (Claude Code pre/post tool-use)
 
 ## Semantic search (optional)
 
-Semantic retrieval requires a real embedding model — there is no fake/hash fallback (ADR-007). Configure **either** a local GGUF model (`OMS_MODEL_PATH`) **or** an embedding API key (`UPSTAGE_API_KEY`), then sync and query:
+Semantic retrieval requires a real embedding model — there is no fake/hash fallback (ADR-007). Configure embeddings explicitly with `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` (`gguf` with a local GGUF model path, or `upstage` with a model id and `UPSTAGE_API_KEY`), then sync and query:
 
 ```bash
 oms semantic sync  --vault /path/to/vault --collection vault

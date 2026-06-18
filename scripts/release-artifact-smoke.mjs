@@ -172,13 +172,12 @@ async function mcpSmoke(packageRoot, vault) {
     ];
     const missing = requiredTools.filter((tool) => !toolNames.has(tool));
     if (missing.length > 0) fail(`MCP server missing tools: ${missing.join(", ")}`);
-    // Warm the backing store the way the WITH/NO-model unit test does. On a
-    // model-less host the qmd:// ReadResource and semantic query below hydrate
-    // from the src/search SQLite store, which only exists after a sync -- and
-    // oms_sync_embeddings is engine-owned, so it loud-guards (ADR-007) instead
-    // of populating that store without a model. retrieve_context's lenient
-    // semantic leg with embeddingSyncBeforeSearch is the model-free way to
-    // populate it; with a model present the engine handles the sync just as well.
+    // Exercise retrieve_context the way the WITH/NO-model unit test does. On a
+    // model-less host the qmd:// ReadResource and document reads below hydrate
+    // from disk through the engine's core (lex + file-based) adapter, which needs
+    // no model. oms_sync_embeddings is engine-owned and loud-guards (ADR-007)
+    // without a model, so retrieve_context's semantic leg simply degrades to the
+    // graph leg here; with a model present the engine handles the sync just as well.
     await client.callTool({
       name: "oms_retrieve_context",
       arguments: {
@@ -192,7 +191,7 @@ async function mcpSmoke(packageRoot, vault) {
         semanticCollection: "vault",
         semanticLimit: 3,
         semanticMode: "query",
-        semanticIntent: "warm the src/search store for the model-less artifact smoke",
+        semanticIntent: "exercise the model-less retrieve path for the artifact smoke",
         semanticLex: "agent retrieval semantic",
         semanticMinScore: 0.01,
         embeddingSyncBeforeSearch: true,
@@ -203,7 +202,7 @@ async function mcpSmoke(packageRoot, vault) {
     // which REQUIRES a real embedding model (ADR-007). With a model we assert
     // real results; without one (the default CI runner) we assert the op
     // *refuses to falsely succeed* -- which itself proves it routed to the
-    // engine, not the legacy hash store. Mirrors src/mcp/semantic-server.test.ts.
+    // engine and never fabricated a result. Mirrors src/mcp/semantic-server.test.ts.
     // Gate on the canonical embedding pair, mirroring semantic-server.test.ts: the
     // smoke forwards OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL to the child, so the
     // runner gate must key off the same pair to stay in sync with the forwarded child

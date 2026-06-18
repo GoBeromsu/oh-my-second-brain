@@ -14,17 +14,6 @@ const writeAnnotations = {
   openWorldHint: true,
 } as const;
 
-const storageProperty = {
-  type: "string",
-  enum: ["qmd-sqlite", "oms-native-json"],
-  description: "Semantic storage backend. Defaults to qmd-sqlite for qmd-compatible SQLite/FTS/vector storage.",
-} as const;
-
-const modelPathProperty = {
-  type: "string",
-  description: "Optional local GGUF embedding model path used for node-llama-cpp embeddings and diagnostics.",
-} as const;
-
 const queryInputSchema: Tool["inputSchema"] = {
   type: "object",
   properties: {
@@ -38,8 +27,6 @@ const queryInputSchema: Tool["inputSchema"] = {
     vec: { type: "string" },
     hyde: { type: "string" },
     index: { type: "string" },
-    storage: storageProperty,
-    modelPath: modelPathProperty,
   },
   required: ["query"],
 };
@@ -57,8 +44,6 @@ const getDocumentInputSchema: Tool["inputSchema"] = {
     lineNumbers: { type: "boolean" },
     fullPath: { type: "boolean" },
     index: { type: "string" },
-    storage: storageProperty,
-    modelPath: modelPathProperty,
   },
   required: ["target"],
 };
@@ -73,8 +58,6 @@ const multiGetInputSchema: Tool["inputSchema"] = {
     lineNumbers: { type: "boolean" },
     fullPath: { type: "boolean" },
     index: { type: "string" },
-    storage: storageProperty,
-    modelPath: modelPathProperty,
   },
 };
 
@@ -93,8 +76,6 @@ export const semanticMcpTools: Tool[] = [
         force: { type: "boolean" },
         pull: { type: "boolean" },
         index: { type: "string" },
-        storage: storageProperty,
-        modelPath: modelPathProperty,
         chunkStrategy: { type: "string" },
         maxDocsPerBatch: { type: "number" },
         maxBatchMb: { type: "number" },
@@ -112,29 +93,29 @@ export const semanticMcpTools: Tool[] = [
   {
     name: "oms_semantic_status",
     title: "Oh My Second Brain semantic status",
-    description: "Report native OMS semantic index status, qmd-compatible SQLite/vector metadata, and model diagnostics.",
-    inputSchema: { type: "object", properties: { index: { type: "string" }, storage: storageProperty, modelPath: modelPathProperty } },
+    description: "Report native OMS semantic index status and embedding model metadata.",
+    inputSchema: { type: "object", properties: { index: { type: "string" } } },
     annotations: readOnlyAnnotations,
   },
   {
     name: "oms_semantic_collections",
     title: "Oh My Second Brain semantic collections",
-    description: "List native OMS semantic collections and stored qmd-compatible collection metadata.",
-    inputSchema: { type: "object", properties: { index: { type: "string" }, storage: storageProperty } },
+    description: "List native OMS semantic collections and stored collection metadata.",
+    inputSchema: { type: "object", properties: { index: { type: "string" } } },
     annotations: readOnlyAnnotations,
   },
   {
     name: "oms_semantic_contexts",
     title: "Oh My Second Brain semantic contexts",
     description: "List native OMS semantic global, collection, and path-prefix contexts.",
-    inputSchema: { type: "object", properties: { index: { type: "string" }, storage: storageProperty } },
+    inputSchema: { type: "object", properties: { index: { type: "string" } } },
     annotations: readOnlyAnnotations,
   },
   {
     name: "oms_semantic_cleanup",
     title: "Oh My Second Brain semantic cleanup",
     description: "Remove stale native OMS semantic index entries whose files no longer exist.",
-    inputSchema: { type: "object", properties: { index: { type: "string" }, storage: storageProperty } },
+    inputSchema: { type: "object", properties: { index: { type: "string" } } },
     annotations: writeAnnotations,
   },
   {
@@ -155,7 +136,7 @@ export const semanticMcpTools: Tool[] = [
     name: "status",
     title: "QMD-compatible semantic status alias",
     description: "Compatibility alias for oms_semantic_status backed by the native OMS semantic index.",
-    inputSchema: { type: "object", properties: { index: { type: "string" }, storage: storageProperty, modelPath: modelPathProperty } },
+    inputSchema: { type: "object", properties: { index: { type: "string" } } },
     annotations: readOnlyAnnotations,
   },
   {

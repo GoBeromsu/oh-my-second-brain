@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { runHarness, runBaseline, runEngine, printHarnessReport } from "./harness.js";
+import { runHarness, runEngine, printHarnessReport } from "./harness.js";
 import { QUERY_COUNT, QUERIES_BY_TYPE } from "./queries.js";
 import type { GoldenQuery } from "./queries.js";
 import { makeTracerConfig } from "../../src/engine/tracer.js";
@@ -107,21 +107,15 @@ describe("golden harness — fail-loud behaviour (unit)", () => {
   });
 
   it(
-    "(a) absent baseline ⇒ runBaseline throws; gate is not silently green",
+    "(a) engine recall is computed only for curated queries; uncurated never silently scored",
     async () => {
-      // /nonexistent path has no .oms/semantic store.
-      // querySemanticStore returns available:false → runBaseline must throw,
-      // not swallow the failure and return [].
-      const q: GoldenQuery = {
-        id: "failsafe-a",
-        type: "vec",
-        query: "test query for absent baseline",
-        expectedNotes: ["notes/some-note.md"],
-        curated: true,
-      };
-      await expect(
-        runBaseline(q, "/nonexistent-oms-golden-vault-do-not-create"),
-      ).rejects.toThrow("baseline semantic store unavailable");
+      // The engine-only harness has no src/search baseline anymore. The fail-loud
+      // invariant that remains: uncurated queries are skipped (asserted in (c)),
+      // and a scored run with zero curated queries can never be vacuously green.
+      const report = await runHarness({ vaultPath: "/tmp", files: [] });
+      const scored = report.queries.filter((r) => !r.skipped);
+      expect(scored.length).toBe(0);
+      expect(report.overallPass).toBe(false);
     },
   );
 
@@ -188,7 +182,6 @@ describe("golden harness — fail-loud behaviour (unit)", () => {
         expect(row.skipped, `query ${row.id} should be skipped`).toBe(true);
         expect(row.pass, `query ${row.id} skipped row must not be vacuously pass:true`).toBe(false);
         expect(row.engineTop10).toEqual([]);
-        expect(row.baselineTop10).toEqual([]);
       }
     },
   );
@@ -198,9 +191,9 @@ describe("golden harness — fail-loud behaviour (unit)", () => {
 // Runtime parity test — GATED behind RUN_GOLDEN=1
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!process.env["RUN_GOLDEN"])("golden-set parity — engine vs baseline", () => {
+describe.skipIf(!process.env["RUN_GOLDEN"])("golden-set recall — engine floor", () => {
   it(
-    "engine recall@10 per-type average >= baseline AND no type below 80% of baseline",
+    "engine recall@10 per-type average meets the configured floor",
     async () => {
       const vaultPath = process.env["OMS_VAULT"] ?? process.cwd();
 
@@ -209,18 +202,18 @@ describe.skipIf(!process.env["RUN_GOLDEN"])("golden-set parity — engine vs bas
       // Always print the report for visibility
       printHarnessReport(report);
 
-      // Assert per-type parity
+      // Assert per-type recall floor
       for (const type of ["lex", "vec", "hyde", "graph"] as const) {
-        const { engineAvg, baselineAvg, parityPass } = report.byType[type];
+        const { engineAvg, pass } = report.byType[type];
         expect(
-          parityPass,
-          `Type '${type}' failed parity: engine=${(engineAvg * 100).toFixed(1)}% < 80% of baseline=${(baselineAvg * 100).toFixed(1)}%`,
+          pass,
+          `Type '${type}' below recall floor: engine=${(engineAvg * 100).toFixed(1)}%`,
         ).toBe(true);
       }
 
       expect(
         report.overallPass,
-        "Overall parity check failed — see query-level report above",
+        "Overall recall gate failed — see query-level report above",
       ).toBe(true);
     },
     // Allow up to 5 minutes for a full vault run

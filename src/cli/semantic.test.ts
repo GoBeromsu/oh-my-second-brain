@@ -41,20 +41,21 @@ function jsonOutput(output: readonly string[]): Record<string, unknown> {
 }
 
 describe("semantic CLI", () => {
-  it("syncs, queries, and gets documents through OMS native commands", async () => {
+  it("runs a lex-only sync, lexical query, and document get through the native engine", async () => {
     tmpVault = await writeVault();
     const output: string[] = [];
 
+    // Model-less: --no-embed performs a lexical-only sync (no vectors fabricated).
     const syncCode = await runSemanticCli({
-      argv: ["semantic", "sync", "--collection", "obsidian"],
+      argv: ["semantic", "sync", "--collection", "obsidian", "--no-embed"],
       vault: tmpVault,
       write: (message) => output.push(message),
     });
     expect(syncCode).toBe(0);
-    expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true, storage: "qmd-sqlite" }));
+    expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true, storage: "oms-native-json" }));
 
     const queryCode = await runSemanticCli({
-      argv: ["query", "agent retrieval", "-c", "obsidian", "-n", "1"],
+      argv: ["query", "--lex", "agent retrieval", "-c", "obsidian", "-n", "1"],
       vault: tmpVault,
       write: (message) => output.push(message),
     });
@@ -81,74 +82,40 @@ describe("semantic CLI", () => {
         documents: [
           expect.objectContaining({
             path: "references/Agent Retrieval.md",
-            content: expect.stringContaining("4: # Agent Retrieval"),
+            content: expect.stringContaining("# Agent Retrieval"),
           }),
         ],
       }),
     );
   });
 
-  it("lists the active native collection", async () => {
+  it("reports status, lists the engine collection, and lists contexts", async () => {
     tmpVault = await writeVault();
     const output: string[] = [];
-    await runSemanticCli({
-      argv: ["semantic", "collection", "add", ".", "--name", "obsidian"],
-      vault: tmpVault,
-      write: (message) => output.push(message),
-    });
 
-    const code = await runSemanticCli({
-      argv: ["collection", "list"],
-      vault: tmpVault,
-      write: (message) => output.push(message),
-    });
+    expect(
+      await runSemanticCli({
+        argv: ["semantic", "status"],
+        vault: tmpVault,
+        write: (message) => output.push(message),
+      }),
+    ).toBe(0);
+    expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true, storage: "oms-native-json" }));
 
-    expect(code).toBe(0);
+    expect(
+      await runSemanticCli({
+        argv: ["collection", "list"],
+        vault: tmpVault,
+        write: (message) => output.push(message),
+      }),
+    ).toBe(0);
     expect(jsonOutput(output)).toEqual({
-      collections: [
-        expect.objectContaining({
-          name: "obsidian",
-          documents: 1,
-        }),
-      ],
+      collections: [expect.objectContaining({ name: "default" })],
     });
-  });
-
-  it("exposes qmd-compatible native maintenance, collection, context, ls, pull, and bench commands", async () => {
-    tmpVault = await writeVault();
-    const output: string[] = [];
 
     expect(
       await runSemanticCli({
-        argv: ["semantic", "init"],
-        vault: tmpVault,
-        write: (message) => output.push(message),
-      }),
-    ).toBe(0);
-    expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true, initialized: true }));
-
-    expect(
-      await runSemanticCli({
-        argv: [
-          "semantic",
-          "collection",
-          "add",
-          "references",
-          "--name",
-          "refs",
-          "--pattern",
-          "**/*.md",
-          "--update-command",
-          "git pull --ff-only",
-        ],
-        vault: tmpVault,
-        write: (message) => output.push(message),
-      }),
-    ).toBe(0);
-
-    expect(
-      await runSemanticCli({
-        argv: ["semantic", "context", "add", "refs/references", "Prefer retrieval notes for agent workflows."],
+        argv: ["context", "list"],
         vault: tmpVault,
         write: (message) => output.push(message),
       }),
@@ -157,59 +124,11 @@ describe("semantic CLI", () => {
 
     expect(
       await runSemanticCli({
-        argv: ["semantic", "ls", "refs"],
+        argv: ["semantic", "cleanup"],
         vault: tmpVault,
         write: (message) => output.push(message),
       }),
     ).toBe(0);
-    expect(jsonOutput(output)).toEqual(
-      expect.objectContaining({
-        available: true,
-        documents: [expect.objectContaining({ path: "references/Agent Retrieval.md", collection: "refs" })],
-      }),
-    );
-
-    const fixture = path.join(tmpVault, "bench.json");
-    await writeFile(
-      fixture,
-      JSON.stringify({ cases: [{ query: "lex: agent retr", expected: "references/Agent Retrieval.md" }] }),
-      "utf-8",
-    );
-    expect(
-      await runSemanticCli({
-        argv: ["semantic", "bench", fixture, "-c", "refs"],
-        vault: tmpVault,
-        write: (message) => output.push(message),
-      }),
-    ).toBe(0);
-    expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true, passed: 1, total: 1 }));
-
-    expect(
-      await runSemanticCli({
-        argv: ["semantic", "pull"],
-        vault: tmpVault,
-        write: (message) => output.push(message),
-      }),
-    ).toBe(0);
-    expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true, storage: "qmd-sqlite" }));
-
-    expect(
-      await runSemanticCli({
-        argv: ["semantic", "doctor", "--storage", "qmd-sqlite", "--model-path", "/models/embed.gguf"],
-        vault: tmpVault,
-        write: (message) => output.push(message),
-      }),
-    ).toBe(0);
-    const doctor = jsonOutput(output);
-    expect(doctor).toEqual(expect.objectContaining({ available: true, checks: expect.any(Array) }));
-    expect(doctor.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "GGUF embedding model",
-          status: "pass",
-          detail: expect.stringContaining("/models/embed.gguf"),
-        }),
-      ]),
-    );
+    expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true }));
   });
 });

@@ -1,34 +1,29 @@
 /**
- * Parity comparator harness: new engine vs. src/search baseline.
+ * Golden-set recall harness for the native retrieval engine.
  *
- * For each golden query:
- *   1. Run the new engine via runTracer().
- *   2. Run the baseline via querySemanticStore() from src/search.
- *   3. Compute recall@10 = |expected ∩ top-10| / |expected|.
- *   4. Emit a JSON report row.
+ * After the src/search teardown there is no second backend to compare against,
+ * so this is an ENGINE-ONLY recall gate (previously a parity comparator vs the
+ * retired src/search baseline). For each curated golden query:
+ *   1. Run the engine via runTracer().
+ *   2. Compute recall@10 = |expected ∩ top-10| / |expected|.
+ *   3. Emit a JSON report row.
  *
- * Parity rule (enforced in golden.test.ts):
- *   engine recall@10 per-type average >= baseline per-type average
- *   AND no individual type's engine average falls below 80% of baseline average.
+ * Gate rule (enforced in golden.test.ts):
+ *   per-type engine recall@10 average >= floor (OMS_GOLDEN_MIN_RECALL, default 0.5)
+ *   AND at least one curated query was scored (0 scored => inconclusive => fail).
  *
  * FAIL-LOUD guarantees:
  *   - Uncurated queries (curated !== true) are EXCLUDED from scoring with a
  *     visible console.warn; they are NEVER silently scored 0.
  *   - If runTracer() throws, the error propagates — never swallowed as [].
- *   - If querySemanticStore() returns available:false or throws, the whole
- *     gate is INCONCLUSIVE and a descriptive error is thrown (red gate).
- *   - A zero or absent baseline is NOT auto-pass: "measured nothing ≠ parity".
- *
- * NOTE: baseline querySemanticStore requires a live .oms semantic store.
- *       A missing store is a hard error, not a graceful degradation.
+ *   - A zero or absent measurement is NOT auto-pass: "measured nothing ≠ pass".
  */
 
 import path from "node:path";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { runTracer, makeTracerConfig, type TracerConfig } from "../../src/engine/tracer.js";
-import { querySemanticStore } from "../../src/search/semantic.js";
-import { GOLDEN_QUERIES, QUERIES_BY_TYPE, type GoldenQuery, type QueryType } from "./queries.js";
+import { GOLDEN_QUERIES, type GoldenQuery, type QueryType } from "./queries.js";
 
 // ---------------------------------------------------------------------------
 // External golden-set loader (privacy-preserving)
@@ -53,6 +48,14 @@ function loadGoldenQueries(): GoldenQuery[] {
   return raw as GoldenQuery[];
 }
 
+/** Minimum per-type engine recall@10 average required to pass (default 0.5). */
+function recallFloor(): number {
+  const raw = process.env["OMS_GOLDEN_MIN_RECALL"];
+  if (!raw) return 0.5;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : 0.5;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -63,25 +66,20 @@ export interface QueryReport {
   readonly query: string;
   readonly expected: string[];
   readonly engineTop10: string[];
-  readonly baselineTop10: string[];
   readonly engineRecall: number;
-  readonly baselineRecall: number;
-  /** true when engineRecall >= 80% of baselineRecall (curated queries only). */
+  /** true when engineRecall >= floor (curated queries only). */
   readonly pass: boolean;
   /**
    * true when the query was uncurated and excluded from scoring.
    * Skipped rows are included in queries[] for count-consistency but are
-   * excluded from all recall averages and parity gates.
+   * excluded from all recall averages and gates.
    */
   readonly skipped: boolean;
 }
 
 export interface HarnessReport {
   readonly queries: QueryReport[];
-  readonly byType: Record<
-    QueryType,
-    { engineAvg: number; baselineAvg: number; parityPass: boolean }
-  >;
+  readonly byType: Record<QueryType, { engineAvg: number; pass: boolean }>;
   readonly overallPass: boolean;
 }
 
@@ -93,8 +91,6 @@ export interface HarnessReport {
  * Compute recall@K = |expected ∩ topK| / |expected|.
  *
  * Called only for curated queries (expectedNotes verified against a real vault).
- * No TODO-filter is applied here; curation is enforced at the query level via
- * the `curated` flag in GoldenQuery, not by inspecting string contents.
  */
 function recall(topK: string[], expected: string[]): number {
   if (expected.length === 0) return 0;
@@ -104,58 +100,11 @@ function recall(topK: string[], expected: string[]): number {
 }
 
 // ---------------------------------------------------------------------------
-// Baseline runner (src/search layer — read-only import, R18)
-// ---------------------------------------------------------------------------
-
-/**
- * Run the src/search baseline for a single query.
- *
- * FAIL-LOUD: throws — never returns [] — when the semantic store is unavailable
- * or the call errors. A missing baseline makes the parity gate INCONCLUSIVE.
- */
-export async function runBaseline(q: GoldenQuery, vaultPath: string): Promise<string[]> {
-  // graph queries have no direct baseline equivalent — use vec as proxy
-  const searchType = q.type === "graph" ? "vec" : q.type;
-  const seedQuery = q.type === "graph"
-    ? path.basename(q.query, ".md").replace(/-/g, " ")
-    : q.query;
-
-  let result;
-  try {
-    result = await querySemanticStore({
-      query: seedQuery,
-      vault: vaultPath,
-      limit: 10,
-      modelPath: process.env["OMS_MODEL_PATH"],
-      searches:
-        searchType === "lex"
-          ? [{ type: "lex", query: seedQuery }]
-          : searchType === "vec" || searchType === "hyde"
-          ? [{ type: searchType, query: seedQuery }]
-          : undefined,
-    });
-  } catch (err) {
-    throw new Error(
-      `baseline semantic store unavailable at "${vaultPath}" — #8 gate inconclusive; build the floor first\n  Cause: ${String(err)}`,
-    );
-  }
-
-  if (!result.available) {
-    throw new Error(
-      `baseline semantic store unavailable at "${vaultPath}" — #8 gate inconclusive; build the floor first` +
-      (result.reason ? `\n  Reason: ${result.reason}` : ""),
-    );
-  }
-
-  return result.hits.map((h) => h.path);
-}
-
-// ---------------------------------------------------------------------------
 // Engine runner
 // ---------------------------------------------------------------------------
 
 /**
- * Run the new retrieval engine for a single query.
+ * Run the retrieval engine for a single query.
  *
  * FAIL-LOUD: any throw from runTracer() propagates directly.
  * An engine failure is a red gate — never a silent empty result.
@@ -195,7 +144,7 @@ export interface HarnessOptions {
 }
 
 /**
- * Run the full golden-set parity comparison and return a structured report.
+ * Run the full golden-set recall comparison and return a structured report.
  *
  * Uncurated queries (curated !== true) are excluded from scoring with a
  * console.warn and appear in report.queries with skipped:true.
@@ -205,6 +154,7 @@ export interface HarnessOptions {
  */
 export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessReport> {
   const vaultPath = opts.vaultPath ?? process.env["OMS_VAULT"] ?? process.cwd();
+  const floor = recallFloor();
 
   // Resolve DB path: explicit opts > OMS_GOLDEN_DB env > temp
   const resolvedDbPath = opts.dbPath ?? process.env["OMS_GOLDEN_DB"];
@@ -235,34 +185,17 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
           query: q.query,
           expected: q.expectedNotes,
           engineTop10: [],
-          baselineTop10: [],
           engineRecall: 0,
-          baselineRecall: 0,
           pass: false, // explicitly false; excluded from gate by skipped:true
           skipped: true,
         });
         continue;
       }
 
-      // ── Curated query: run engine AND baseline (both fail-loud) ────────────
-      const [engineTop10, baselineTop10] = await Promise.all([
-        runEngine(q, config, opts.files),
-        runBaseline(q, vaultPath),
-      ]);
-
+      // ── Curated query: run the engine (fail-loud) ──────────────────────────
+      const engineTop10 = await runEngine(q, config, opts.files);
       const engineRecall = recall(engineTop10, q.expectedNotes);
-      const baselineRecall = recall(baselineTop10, q.expectedNotes);
-
-      /**
-       * Pass rule: engine recall >= 80% of baseline recall.
-       *
-       * The baseline is guaranteed present at this point (runBaseline throws
-       * otherwise). When baseline IS available but yields 0 recall on a curated
-       * query, the engine trivially satisfies >= 0; this is a signal to improve
-       * the expected notes or the semantic store — NOT an auto-pass shortcut.
-       * "Measured nothing" (baselineRecall === 0) is never treated as parity.
-       */
-      const pass = engineRecall >= baselineRecall * 0.8;
+      const pass = engineRecall >= floor;
 
       reports.push({
         id: q.id,
@@ -270,9 +203,7 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
         query: q.query,
         expected: q.expectedNotes,
         engineTop10,
-        baselineTop10,
         engineRecall,
-        baselineRecall,
         pass,
         skipped: false,
       });
@@ -286,32 +217,23 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
 
   // ── Per-type aggregation (curated / non-skipped rows only) ──────────────
   const types: QueryType[] = ["lex", "vec", "hyde", "graph"];
-  const byType = {} as Record<QueryType, { engineAvg: number; baselineAvg: number; parityPass: boolean }>;
+  const byType = {} as Record<QueryType, { engineAvg: number; pass: boolean }>;
 
   for (const t of types) {
     // Exclude skipped (uncurated) queries from all averages and gates
     const rows = reports.filter((r) => r.type === t && !r.skipped);
     // 0 scored => inconclusive => fail: an unmeasured type is never a pass.
     if (rows.length === 0) {
-      byType[t] = { engineAvg: 0, baselineAvg: 0, parityPass: false };
+      byType[t] = { engineAvg: 0, pass: false };
       continue;
     }
     const engineAvg = rows.reduce((s, r) => s + r.engineRecall, 0) / rows.length;
-    const baselineAvg = rows.reduce((s, r) => s + r.baselineRecall, 0) / rows.length;
-    /**
-     * Parity: engine type avg >= 80% of baseline type avg.
-     *
-     * baselineAvg === 0 is NOT an auto-pass (that branch has been removed).
-     * When baseline IS available but returns 0 average for a type, the engine
-     * trivially satisfies >= 0; flag this for investigation but don't gate-fail.
-     */
-    const parityPass = engineAvg >= baselineAvg * 0.8;
-    byType[t] = { engineAvg, baselineAvg, parityPass };
+    byType[t] = { engineAvg, pass: engineAvg >= floor };
   }
 
   // 0 scored => inconclusive => fail: zero total scored rows can never be green.
   const scoredTotal = reports.filter((r) => !r.skipped).length;
-  const overallPass = scoredTotal > 0 && types.every((t) => byType[t]!.parityPass);
+  const overallPass = scoredTotal > 0 && types.every((t) => byType[t]!.pass);
 
   const report = { queries: reports, byType, overallPass };
   const reportPath = process.env["OMS_GOLDEN_REPORT"];
@@ -329,17 +251,15 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
  * Emit a human-readable summary of the harness report to stdout.
  */
 export function printHarnessReport(report: HarnessReport): void {
-  console.log("\n=== OMS M1 Retrieval Engine — Golden-Set Parity Report ===\n");
+  console.log("\n=== OMS M1 Retrieval Engine — Golden-Set Recall Report ===\n");
 
   for (const t of ["lex", "vec", "hyde", "graph"] as QueryType[]) {
     const s = report.byType[t];
-    const status = s.parityPass ? "PASS" : "FAIL";
-    console.log(
-      `[${status}] type=${t}  engine=${(s.engineAvg * 100).toFixed(1)}%  baseline=${(s.baselineAvg * 100).toFixed(1)}%`,
-    );
+    const status = s.pass ? "PASS" : "FAIL";
+    console.log(`[${status}] type=${t}  engine=${(s.engineAvg * 100).toFixed(1)}%`);
   }
 
-  console.log(`\nOverall parity: ${report.overallPass ? "PASS" : "FAIL"}`);
+  console.log(`\nOverall: ${report.overallPass ? "PASS" : "FAIL"}`);
 
   const scored = report.queries.filter((r) => !r.skipped);
   const skipped = report.queries.filter((r) => r.skipped);
@@ -351,9 +271,7 @@ export function printHarnessReport(report: HarnessReport): void {
   if (failing.length > 0) {
     console.log("\nFailing queries:");
     for (const r of failing) {
-      console.log(
-        `  [${r.id}] engine=${(r.engineRecall * 100).toFixed(0)}%  baseline=${(r.baselineRecall * 100).toFixed(0)}%  query="${r.query.slice(0, 60)}"`,
-      );
+      console.log(`  [${r.id}] engine=${(r.engineRecall * 100).toFixed(0)}%  query="${r.query.slice(0, 60)}"`);
     }
   }
   console.log();

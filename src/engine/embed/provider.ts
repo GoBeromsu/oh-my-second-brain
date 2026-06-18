@@ -72,8 +72,8 @@ type LlamaEmbeddingContextInstance = Awaited<
 /**
  * L2-normalise a raw embedding vector and return as Float32Array.
  *
- * Unlike src/search/semantic-embedding-provider.ts::projectEmbeddingVector(),
- * there is NO modulo fold here: the full 768-element vector is preserved.
+ * There is NO modulo fold or projection here: the full 768-element vector is
+ * preserved (no lossy fold to a smaller width).
  * For EmbeddingGemma-300M this means float[768], no lossy fold to 64d.
  */
 function normalizeVector(values: readonly number[]): Float32Array {
