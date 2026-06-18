@@ -130,10 +130,12 @@ async function mcpSmoke(packageRoot, vault) {
   // StdioClientTransport sandboxes the child env to a safe default subset, so the
   // embedding-model path must be forwarded explicitly or the child is always
   // model-less regardless of this process's env -- which would desync it from the
-  // hasModel gate below. Forward only the local OMS_MODEL_PATH (no remote Upstage
-  // network from an artifact smoke), matching src/mcp/semantic-server.test.ts.
+  // hasModel gate below. Forward the canonical OMS_EMBEDDING_PROVIDER +
+  // OMS_EMBEDDING_MODEL pair (ADR-007: explicit config, no auto-detect),
+  // matching src/mcp/semantic-server.test.ts.
   const childEnv = { ...getDefaultEnvironment() };
-  if (process.env.OMS_MODEL_PATH) childEnv.OMS_MODEL_PATH = process.env.OMS_MODEL_PATH;
+  if (process.env.OMS_EMBEDDING_PROVIDER) childEnv.OMS_EMBEDDING_PROVIDER = process.env.OMS_EMBEDDING_PROVIDER;
+  if (process.env.OMS_EMBEDDING_MODEL) childEnv.OMS_EMBEDDING_MODEL = process.env.OMS_EMBEDDING_MODEL;
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [cli, "mcp", "--vault", vault],
@@ -202,11 +204,11 @@ async function mcpSmoke(packageRoot, vault) {
     // real results; without one (the default CI runner) we assert the op
     // *refuses to falsely succeed* -- which itself proves it routed to the
     // engine, not the legacy hash store. Mirrors src/mcp/semantic-server.test.ts.
-    // Gate on the local model path only, mirroring semantic-server.test.ts: the
-    // smoke forwards OMS_MODEL_PATH to the child but deliberately leaves the remote
-    // Upstage path out (no network in CI), so gating on UPSTAGE_API_KEY here would
-    // desync the runner gate from the forwarded child env.
-    const hasModel = Boolean(process.env.OMS_MODEL_PATH);
+    // Gate on the canonical embedding pair, mirroring semantic-server.test.ts: the
+    // smoke forwards OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL to the child, so the
+    // runner gate must key off the same pair to stay in sync with the forwarded child
+    // env (ADR-007: explicit config, no auto-detect).
+    const hasModel = Boolean(process.env.OMS_EMBEDDING_PROVIDER && process.env.OMS_EMBEDDING_MODEL);
     const textOf = (res) => (res.content?.[0]?.type === "text" ? res.content[0].text : "");
     const syncCall = { name: "oms_sync_embeddings", arguments: { collection: "vault" } };
     const queryCall = {
@@ -237,7 +239,7 @@ async function mcpSmoke(packageRoot, vault) {
     } else {
       // sync gives the strong routing proof: the ADR-007 loud guard naming the model env.
       const sync = await callGuarded(syncCall);
-      if (!sync.guarded || !/OMS_MODEL_PATH|UPSTAGE_API_KEY/.test(sync.text)) {
+      if (!sync.guarded || !/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/.test(sync.text)) {
         fail("MCP semantic sync did not loud-guard the missing embedding model (ADR-007)");
       }
       // query must likewise refuse to falsely succeed without a model/store.
