@@ -155,8 +155,6 @@ async function main(): Promise<void> {
   }
 }
 
-// Guard: only run main() when this file is the entry point.
-// Works for both source (`src/cli/oms.ts`) and built (`dist/cli/oms.js`) paths.
 const __filename = fileURLToPath(import.meta.url);
 
 function sameEntrypoint(left: string, right: string): boolean {
