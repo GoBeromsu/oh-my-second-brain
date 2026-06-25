@@ -2,7 +2,7 @@
 
 ## Principle
 
-Oh My Second Brain's **core** (ontology loading, convention validation, graph/search runtime targets, and MCP server once implemented) is written once.
+Oh My Second Brain's **core** (ontology loading, convention validation, graph/search runtime targets, and MCP server) is written once.
 Each **adapter** absorbs exactly one host's structural differences — manifest schema,
 hook format, invocation sigil, and convention-file name — so adding a new host
 means adding one new adapter directory, not touching core.
@@ -51,13 +51,13 @@ Release contract: the npm tarball must include `adapters/claude-code/` because `
   - Each path must contain a `SKILL.md`.
 - **Convention file**: `CLAUDE.md` — append `adapters/claude-code/CLAUDE.md` to your project's `CLAUDE.md`.
 - **Sigil**: `/` (e.g. `/oms-setup`).
-- **Hooks**: none in v0 (hook format is `hooks/hooks.json` multi-script array — roadmap).
+- **Hooks**: `oms install --runtime claude` can upsert OMS guard entries in `~/.claude/settings.json` while preserving existing non-OMS hooks.
 - **Install**: `claude plugin install path/to/adapters/claude-code` or point Claude Code at the adapter directory.
 
 ### codex (native skills + MCP install v0)
 
 - **Manifest**: `.codex-plugin/plugin.json`
-  - Schema differs from claude-code: codex uses a unified `codex-native-hook.mjs` instead of `hooks.json`.
+  - Schema differs from claude-code: codex declares its skill directory and MCP server manifest directly.
   - Skills are invoked with `$` sigil instead of `/`.
 - **Convention file**: `AGENTS.md` — append `adapters/codex/AGENTS.md` to your project's `AGENTS.md`.
 - **Status**: v0 native install. `oms install --runtime codex` installs `~/.codex/rules/oms.md`, namespaced `~/.codex/skills/oms-*`, a managed `[mcp_servers.oms]` block in `~/.codex/config.toml`, and a copy of the adapter under `~/.codex/plugins/oms`.

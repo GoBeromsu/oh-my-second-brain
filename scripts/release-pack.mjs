@@ -21,6 +21,19 @@ function hasPath(files, requiredPath) {
   return files.some((file) => file.path === requiredPath || file.path.startsWith(`${requiredPath}/`));
 }
 
+async function readHarnessRegistry() {
+  try {
+    return (await import("../dist/harness/surface-registry.js")).harnessSurfaceRegistry;
+  } catch (error) {
+    fail(
+      `could not load built harness registry; run npm run build before release checks: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+const harnessSurfaceRegistry = await readHarnessRegistry();
 const stdout = run("npm", ["pack", "--dry-run", "--json"]);
 let packs;
 try {
@@ -35,37 +48,7 @@ if (!pack || !Array.isArray(pack.files)) {
 }
 
 const files = pack.files;
-const required = [
-  "package.json",
-  "dist/cli/oms.js",
-  "dist/mcp/server.js",
-  "core/ontology/taxonomy.yaml",
-  "core/ontology/concepts",
-  "adapters/claude-code/.claude-plugin/plugin.json",
-  "adapters/claude-code/skills/setup/SKILL.md",
-  "adapters/claude-code/skills/doctor/SKILL.md",
-  "adapters/claude-code/skills/define/SKILL.md",
-  "adapters/claude-code/skills/capture/SKILL.md",
-  "adapters/claude-code/skills/retrieve/SKILL.md",
-  "adapters/claude-code/skills/uninstall/SKILL.md",
-  "adapters/claude-code/skills/update/SKILL.md",
-  "adapters/codex/.codex-plugin/plugin.json",
-  "adapters/codex/.mcp.json",
-  "adapters/codex/rules/oms.md",
-  "adapters/codex/skills/oms-setup/SKILL.md",
-  "adapters/codex/skills/oms-capture/SKILL.md",
-  "adapters/codex/skills/oms-retrieve/SKILL.md",
-  "adapters/codex/skills/oms-update/SKILL.md",
-  "adapters/hermes/manifest.json",
-  "adapters/hermes/skills/setup/SKILL.md",
-  "adapters/hermes/skills/capture/SKILL.md",
-  "adapters/hermes/skills/retrieve/SKILL.md",
-  "adapters/hermes/skills/update/SKILL.md",
-  "docs/install.md",
-  "docs/release.md",
-  "scripts/install.sh",
-  "scripts/uninstall.sh",
-];
+const required = harnessSurfaceRegistry.packageAssets.releaseRequiredPaths;
 
 const missing = required.filter((requiredPath) => !hasPath(files, requiredPath));
 if (missing.length > 0) {

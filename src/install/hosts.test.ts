@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -46,6 +46,70 @@ describe("host installer/uninstaller", () => {
     expect(existsSync(path.join(codexDir, "plugins", "oms"))).toBe(false);
     expect(existsSync(path.join(codexDir, "rules", "oms.md"))).toBe(false);
     expect(existsSync(path.join(codexDir, "skills", "oms-capture"))).toBe(false);
+  });
+
+  it("removes only stale Codex OMS skill directories during install", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-codex-stale-"));
+    const codexSkillsDir = path.join(home, ".codex", "skills");
+    await mkdir(path.join(codexSkillsDir, "oms-old-skill"), { recursive: true });
+    await mkdir(path.join(codexSkillsDir, "personal-skill"), { recursive: true });
+
+    await runHostOperation({ action: "install", runtime: "codex", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+
+    expect(existsSync(path.join(codexSkillsDir, "oms-old-skill"))).toBe(false);
+    expect(existsSync(path.join(codexSkillsDir, "personal-skill"))).toBe(true);
+  });
+
+  it("registers Claude MCP with the installed oms command when executing external install", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-external-"));
+    const binDir = path.join(home, "bin");
+    const argvLog = path.join(home, "claude-argv.log");
+    const claudePath = path.join(binDir, "claude");
+    const originalPath = process.env.PATH;
+    const originalArgvLog = process.env.CLAUDE_ARGV_LOG;
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      claudePath,
+      [
+        "#!/bin/sh",
+        "printf 'claude' >> \"$CLAUDE_ARGV_LOG\"",
+        "for arg in \"$@\"; do",
+        "  printf ' %s' \"$arg\" >> \"$CLAUDE_ARGV_LOG\"",
+        "done",
+        "printf '\\n' >> \"$CLAUDE_ARGV_LOG\"",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(claudePath, 0o755);
+
+    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+    process.env.CLAUDE_ARGV_LOG = argvLog;
+
+    try {
+      await runHostOperation({
+        action: "install",
+        runtime: "claude",
+        vault: "/tmp/Vault",
+        homeDir: home,
+        adapterRoot,
+        executeExternal: true,
+      });
+
+      const executedCommands = (await readFile(argvLog, "utf-8")).trim().split("\n");
+      expect(executedCommands).not.toContain("claude mcp add oms -- npx mcp --vault /tmp/Vault");
+      expect(executedCommands).toContain("claude mcp add oms -- oms mcp --vault /tmp/Vault");
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = originalPath;
+      }
+      if (originalArgvLog === undefined) {
+        delete process.env.CLAUDE_ARGV_LOG;
+      } else {
+        process.env.CLAUDE_ARGV_LOG = originalArgvLog;
+      }
+    }
   });
 
   it("installs and uninstalls Hermes native skill bundle and MCP config", async () => {
@@ -162,7 +226,6 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     const home = path.dirname(claudeDir);
     const vaultPath = path.join(home, "Vault");
     await upsertClaudeHooks({ vault: vaultPath, homeDir: home }, claudeDir);
-    // Add an unrelated hook to PreToolUse.
     const raw = JSON.parse(await readFile(path.join(claudeDir, "settings.json"), "utf-8")) as Record<string, unknown>;
     const hooks = raw["hooks"] as Record<string, unknown>;
     (hooks["PreToolUse"] as unknown[]).unshift({ matcher: ".*", hooks: [{ type: "command", command: "keep-me" }] });
@@ -184,7 +247,6 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     const result = await upsertClaudeHooks({ vault: "/tmp/Vault" }, claudeDir);
     expect(result.changed).toBe(false);
     expect(result.messages[0]).toContain("WARNING");
-    // File must be unchanged.
     const raw = await readFile(settingsPath, "utf-8");
     expect(raw).toBe("{ this is not valid json");
   });

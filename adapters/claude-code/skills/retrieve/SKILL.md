@@ -38,14 +38,12 @@ Pass `semanticSearches` to issue typed sub-queries in a single call:
 | `lex`   | BM25 keyword search (exact terms, fast)          |
 | `vec`   | SQLite-vector semantic search (meaning-based)    |
 | `hyde`  | Hypothetical-document expansion before search    |
-| `graph` | Semantic candidates confined to graph neighbors  |
 
 ```
 semanticSearches: [
   { type: "lex",   query: "transformer attention" },
   { type: "vec",   query: "self-attention replaces recurrence" },
-  { type: "hyde",  query: "a paper about attention mechanisms" },
-  { type: "graph", query: "related concepts in my notes" }
+  { type: "hyde",  query: "a paper about attention mechanisms" }
 ]
 ```
 
@@ -62,11 +60,10 @@ to the set already selected by the OMS graph traversal.
 5. Choose semantic scope: `semanticScope: "global"` for broad vault-wide search;
    `semanticScope: "graph"` (gph mode) when candidates must stay inside the
    selected graph neighbors. Pass typed sub-queries via `semanticSearches`
-   using `lex`, `vec`, `hyde`, or `graph` types as appropriate.
+   using `lex`, `vec`, or `hyde` types as appropriate.
    Pass `semanticMode`, `semanticIntent`, `semanticLex`, `semanticVec`,
    `semanticHyde`, and `semanticMinScore` for additional control.
-   Use `semanticStorage: "qmd-sqlite"` for the default qmd-compatible SQLite
-   store; set `embeddingSyncBeforeSearch: true` only when the native semantic
+   Set `embeddingSyncBeforeSearch: true` only when the native semantic
    index must be refreshed before retrieval.
 6. Use `oms_sync_embeddings` for explicit update/embed sync.
 7. Use `oms_semantic_query`, `oms_semantic_status`, `oms_semantic_collections`,
@@ -94,7 +91,7 @@ Purpose: "Synthesize my transformer papers"
 ## Runtime
 
 Use MCP `oms_retrieve_context` for live graph/semantic retrieval. Pass typed
-sub-queries via `semanticSearches` (types: `lex`, `vec`, `hyde`, `graph`).
+sub-queries via `semanticSearches` (types: `lex`, `vec`, `hyde`).
 Use `semanticScope: "graph"` (gph mode) to confine semantic candidates to
 graph neighbors. Use MCP `oms_sync_embeddings` for native semantic-index sync.
 Use MCP `oms_get_document` or `oms_multi_get_documents` for document rehydration.

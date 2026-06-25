@@ -51,7 +51,6 @@ For semantic retrieval, keep semantic-index and search controls on the OMS retri
 - pass `semanticMode: "query" | "search" | "vsearch"` to choose hybrid, lexical, or vector search
 - pass `semanticIntent`, `semanticLex`, `semanticVec`, `semanticHyde`, or `semanticSearches` for typed query documents
 - pass `semanticMinScore`, `semanticAll`, `semanticFull`, `semanticLineNumbers`, or `semanticFullPath` when the retrieval task needs search flags
-- pass `semanticStorage: "qmd-sqlite"` for the default qmd-compatible SQLite store, or `semanticStorage: "oms-native-json"` only for the legacy JSON fallback
 - pass `embeddingSyncBeforeSearch: true` when the native semantic index must be fresh before retrieval
 - use `oms_sync_embeddings` for an explicit semantic-index sync without doing a retrieval query
 - use `oms_semantic_query`, `oms_semantic_status`, `oms_semantic_collections`, and `oms_semantic_contexts` for qmd-compatible semantic follow-ups on the native OMS index

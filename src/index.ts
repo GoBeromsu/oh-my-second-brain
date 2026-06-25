@@ -1,6 +1,6 @@
-export * from "./ontology/types.js";
-export * from "./ontology/loader.js";
-export * from "./ontology/resolver.js";
+export * from "./core/ontology/types.js";
+export * from "./core/ontology/loader.js";
+export * from "./core/ontology/resolver.js";
 export * from "./conventions/frontmatter.js";
 export * from "./conventions/validate.js";
 export * from "./adapt/HostAdapter.js";
@@ -9,3 +9,5 @@ export * from "./retrieve/semantic-contract.js";
 export * from "./engine/assemble.js";
 export * from "./retrieve/morning.js";
 export * from "./mcp/server.js";
+export * from "./harness/surface-registry.js";
+export * from "./harness/validation.js";
