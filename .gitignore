@@ -1,5 +1,6 @@
 # Dependencies & build output
-node_modules/
+# 'node_modules' (no trailing slash) so worktree symlinks are ignored too
+node_modules
 dist/
 *.tsbuildinfo
 coverage/
