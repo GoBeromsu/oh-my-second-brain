@@ -15,6 +15,20 @@ function fail(message) {
   process.exit(1);
 }
 
+async function readHarnessRegistry() {
+  try {
+    return (await import("../dist/harness/surface-registry.js")).harnessSurfaceRegistry;
+  } catch (error) {
+    fail(
+      `could not load built harness registry; run npm run build before release checks: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+const harnessSurfaceRegistry = await readHarnessRegistry();
+
 function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, {
     encoding: "utf-8",
@@ -147,29 +161,7 @@ async function mcpSmoke(packageRoot, vault) {
     await client.connect(transport);
     const result = await client.listTools();
     const toolNames = new Set(result.tools.map((tool) => tool.name));
-    const requiredTools = [
-      "oms_graph_status",
-      "oms_graph_build",
-      "oms_list_concepts",
-      "oms_retrieve_by_axis",
-      "oms_retrieve_context",
-      "oms_sync_embeddings",
-      "oms_semantic_query",
-      "oms_semantic_status",
-      "oms_semantic_collections",
-      "oms_semantic_contexts",
-      "oms_semantic_cleanup",
-      "oms_get_document",
-      "query",
-      "status",
-      "get",
-      "multi_get",
-      "oms_multi_get_documents",
-      "oms_lazy_load_note",
-      "oms_validate_contract",
-      "oms_capture_prepare",
-      "oms_capture_commit",
-    ];
+    const requiredTools = harnessSurfaceRegistry.mcpTools.map((tool) => tool.name);
     const missing = requiredTools.filter((tool) => !toolNames.has(tool));
     if (missing.length > 0) fail(`MCP server missing tools: ${missing.join(", ")}`);
     // Exercise retrieve_context the way the WITH/NO-model unit test does. On a
@@ -265,19 +257,9 @@ let tarball;
 try {
   tarball = packTarball();
   const packageRoot = extractPackage(tarball, tempRoot);
-  assertPath(path.join(packageRoot, "dist"), "dist directory");
-  assertPath(path.join(packageRoot, "core"), "core directory");
-  assertPath(path.join(packageRoot, "adapters/claude-code/.claude-plugin/plugin.json"), "Claude plugin manifest");
-  assertPath(path.join(packageRoot, "adapters/claude-code/skills/update/SKILL.md"), "Claude update skill");
-  assertPath(path.join(packageRoot, "adapters/codex/rules/oms.md"), "Codex Oh My Second Brain rule");
-  assertPath(path.join(packageRoot, "adapters/codex/skills/oms-capture/SKILL.md"), "Codex Oh My Second Brain capture skill");
-  assertPath(path.join(packageRoot, "adapters/codex/skills/oms-update/SKILL.md"), "Codex Oh My Second Brain update skill");
-  assertPath(path.join(packageRoot, "adapters/hermes/skills/capture/SKILL.md"), "Hermes Oh My Second Brain capture skill");
-  assertPath(path.join(packageRoot, "adapters/hermes/skills/update/SKILL.md"), "Hermes Oh My Second Brain update skill");
-  assertPath(path.join(packageRoot, "docs/install.md"), "install docs");
-  assertPath(path.join(packageRoot, "docs/release.md"), "release docs");
-  assertPath(path.join(packageRoot, "scripts/install.sh"), "install shell script");
-  assertPath(path.join(packageRoot, "scripts/uninstall.sh"), "uninstall shell script");
+  for (const requiredPath of harnessSurfaceRegistry.packageAssets.releaseRequiredPaths) {
+    assertPath(path.join(packageRoot, requiredPath), `required release asset ${requiredPath}`);
+  }
   installRuntimeDependencies(packageRoot);
   const vault = makeVault(tempRoot);
   if (runSetup) {

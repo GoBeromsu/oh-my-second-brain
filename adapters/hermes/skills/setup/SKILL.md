@@ -28,7 +28,10 @@ oms setup --vault <vault> --suggest-fields
 Then, when host registration is desired:
 
 ```bash
-oms install --runtime codex --vault <vault> --yes
+oms install --runtime hermes --vault <vault> --yes
 ```
 
-Setup interviews folder intent, concept binding, optional observed fields, and retrieval lenses. It rejects lenses that reference unknown fields. Do not modify vault notes during setup. Oh My Second Brain writes only `vault/.oms/taxonomy.yaml` and `vault/.oms/concepts/`, preserving existing concept files while adding missing defaults or selected observed fields.
+Setup interviews folder intent, concept binding, optional observed fields, and retrieval lenses.
+It rejects lenses that reference unknown fields. Do not modify vault notes during setup.
+Oh My Second Brain writes only `vault/.oms/taxonomy.yaml` and `vault/.oms/concepts/`,
+preserving existing concept files while adding missing defaults or selected observed fields.

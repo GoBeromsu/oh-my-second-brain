@@ -8,7 +8,6 @@ describe("public package entrypoint", () => {
     expect(api.retrieveMorningContext).toBeTypeOf("function");
     expect("queryQmd" in api).toBe(false);
     expect("syncQmdEmbeddingStore" in api).toBe(false);
-    // Legacy src/search facade is retired: its functions are no longer exported.
     expect("querySemanticStore" in api).toBe(false);
     expect("syncSemanticEmbeddingStore" in api).toBe(false);
   });

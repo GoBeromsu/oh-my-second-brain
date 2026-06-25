@@ -88,8 +88,10 @@ after editing imports.
 ## Contribution Rules
 
 - **Keep diffs small.** One concern per PR. Prefer targeted edits over broad refactors.
-- **No new dependencies without approval.** Current runtime dependency: `yaml` only.
-  Adding any dependency requires explicit sign-off in the PR description.
+- **No new dependencies without approval.** Runtime dependencies are tracked in
+  `package.json` and currently include MCP, SQLite/vector search, local model,
+  and YAML packages. Adding any dependency requires explicit sign-off in the PR
+  description.
 - **No `any` without justification.** Add a comment explaining why if you must use it.
 - **Test new logic paths.** Any new branch in `src/` should have a corresponding vitest case.
 - **Backward-compatible config changes only.** If a config shape changes, provide a migration path.
