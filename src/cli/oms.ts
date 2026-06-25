@@ -33,6 +33,12 @@ import {
   type RuntimeSelection,
 } from "../install/hosts.js";
 import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
+import {
+  createVaultLink,
+  resolveEffectiveVault,
+  LINKED_GITIGNORE_PATTERN,
+  type CreateVaultLinkResult,
+} from "../link/link.js";
 import type { Concept, FieldType, FolderBinding, OntologyField, OntologyLens, Taxonomy } from "../ontology/types.js";
 
 // ---------------------------------------------------------------------------
@@ -691,6 +697,7 @@ Usage:
   oh-my-second-brain mcp [--vault <path>]
   oh-my-second-brain hook pre-tool-use [--vault <path>]
   oh-my-second-brain hook post-tool-use [--vault <path>]
+  oh-my-second-brain link --vault <path> --folder <name> [--folder <name> ...]
 
 Compatibility alias: oms <command>
 
@@ -705,9 +712,11 @@ Commands:
   hook     Vault guard hooks for Claude Code PreToolUse / PostToolUse events.
              pre-tool-use  Read PreToolUse JSON from stdin; block unregistered folder creation.
              post-tool-use Read PostToolUse JSON from stdin; audit frontmatter + trigger graph build.
+  link     Bridge an external repo to a vault (gitignored .oms/linked/ symlinks + .oms/links.yaml).
 
 Options:
   --vault <path>   Path to the vault root (default: current directory).
+  --folder <name>  (link) Vault top-level folder to expose; repeatable.
   --yes            Non-interactive setup, uninstall confirmation, or update execution.
   --suggest-fields During setup --yes, add conservative observed frontmatter fields to concepts.
   --install-claude Print Claude Code plugin install and MCP registration commands (dry-run).
@@ -717,12 +726,24 @@ Options:
 `);
 }
 
+function formatLinkResult(result: CreateVaultLinkResult): string {
+  const lines: string[] = ["Oh My Second Brain vault bridge ready."];
+  lines.push(`  Vault:     ${result.record.vault}`);
+  lines.push(`  Scope:     ${result.record.scope.join(", ") || "(none)"}`);
+  if (result.linked.length > 0) lines.push(`  Linked:    ${result.linked.join(", ")}`);
+  if (result.unchanged.length > 0) lines.push(`  Existing:  ${result.unchanged.join(", ")}`);
+  lines.push(`  Record:    ${result.recordPath}`);
+  if (result.gitignoreUpdated) lines.push(`  Gitignore: added ${LINKED_GITIGNORE_PATTERN}`);
+  return lines.join("\n");
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const command = argv[0];
 
   // Parse shared flags.
   let vault = process.cwd();
+  let vaultExplicit = false;
   let yes = false;
   let installClaude = false;
   let suggestFields = false;
@@ -733,10 +754,12 @@ async function main(): Promise<void> {
   let timeoutMs: number | undefined;
   let agentVault: string | undefined;
   const unknownFlags: string[] = [];
+  const folders: string[] = [];
 
   for (let i = 1; i < argv.length; i++) {
     if (argv[i] === "--vault" && argv[i + 1]) {
       vault = path.resolve(argv[i + 1]!);
+      vaultExplicit = true;
       i++;
     } else if (argv[i] === "--yes") {
       yes = true;
@@ -778,13 +801,46 @@ async function main(): Promise<void> {
       dryRun = true;
     } else if (argv[i] === "--execute") {
       executeExternal = true;
+    } else if (argv[i] === "--folder" && argv[i + 1]) {
+      folders.push(argv[i + 1]!);
+      i++;
     } else {
       unknownFlags.push(argv[i]!);
     }
   }
 
+  // Bridge-aware vault resolution: when run from an external repo holding a
+  // `.oms/links.yaml` bridge (and no explicit --vault), resolve the real vault
+  // so consumer commands operate against it. Hooks always pass --vault.
+  if (
+    !vaultExplicit &&
+    (command === "doctor" || command === "mcp" || isSemanticCliCommand(command))
+  ) {
+    vault = (await resolveEffectiveVault(process.cwd(), process.env)).vault;
+  }
+
   if (command === "setup") {
     await runSetup({ vault, yes, installClaude, suggestFields });
+    await maybePrintUpdateNotice();
+  } else if (command === "link") {
+    if (!vaultExplicit) {
+      console.error("[oms] link requires --vault <path> (the Obsidian vault to bridge to).");
+      process.exitCode = 1;
+      return;
+    }
+    if (folders.length === 0) {
+      console.error("[oms] link requires at least one --folder <name>.");
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const result = await createVaultLink({ cwd: process.cwd(), vault, folders });
+      console.log(formatLinkResult(result));
+    } catch (error) {
+      console.error(`[oms] ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+      return;
+    }
     await maybePrintUpdateNotice();
   } else if (command === "install" || command === "uninstall") {
     const selectedRuntime = runtime ?? (command === "install" ? "auto" : "all");
