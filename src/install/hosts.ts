@@ -40,49 +40,34 @@ export async function runHostOperation(options: HostOperationOptions): Promise<H
   for (const runtime of runtimes) {
     const host = hostSurfaceForRuntime(runtime);
     if (options.action === "install") {
-      switch (runtime) {
-        case "claude":
-          results.push(await installClaude(options, host));
-          break;
-        case "codex":
-          results.push(await installCodex(options, host));
-          break;
-        case "hermes":
-          results.push(await installHermes(options, host));
-          break;
-      }
+      if (runtime === "claude") results.push(await installClaude(options, host));
+      if (runtime === "codex") results.push(await installCodex(options, host));
+      if (runtime === "hermes") results.push(await installHermes(options, host));
     } else {
-      switch (runtime) {
-        case "claude":
-          results.push(await uninstallClaude(options));
-          break;
-        case "codex":
-          results.push(await uninstallCodex(options));
-          break;
-        case "hermes":
-          results.push(await uninstallHermes(options));
-          break;
-      }
+      if (runtime === "claude") results.push(await uninstallClaude(options));
+      if (runtime === "codex") results.push(await uninstallCodex(options));
+      if (runtime === "hermes") results.push(await uninstallHermes(options));
     }
   }
   return results;
 }
 
-export function formatHostOperationResults(results: HostOperationResult[], dryRun: boolean): string {
-  const lines: string[] = [];
-  lines.push(dryRun ? "Oh My Second Brain host operation plan (dry-run)." : "Oh My Second Brain host operation complete.");
-  for (const result of results) {
-    const resultPrefix = `- ${result.runtime} ${result.action}:`;
-    if (result.skipped) {
-      lines.push(`${resultPrefix} skipped`);
-    } else if (result.changed || dryRun) {
-      lines.push(`${resultPrefix} ok`);
-    } else {
-      lines.push(`${resultPrefix} no changes`);
-    }
-    for (const message of result.messages) lines.push(`  ${message}`);
-    for (const filePath of result.paths) lines.push(`  path: ${filePath}`);
-    for (const command of result.commands) lines.push(`  command: ${command}`);
-  }
-  return lines.join("\n");
+export function formatHostOperationResults(
+  results: readonly HostOperationResult[],
+  dryRun = false,
+): string {
+  return results.map((result) => {
+    const status = result.skipped
+      ? "skipped"
+      : result.changed
+        ? "changed"
+        : "unchanged";
+    const lines = [
+      `[${result.runtime}] ${result.action} ${status}${dryRun ? " (dry-run)" : ""}`,
+      ...result.paths.map((item) => `  path: ${item}`),
+      ...result.commands.map((item) => `  command: ${item}`),
+      ...result.messages.map((item) => `  note: ${item}`),
+    ];
+    return lines.join("\n");
+  }).join("\n\n");
 }

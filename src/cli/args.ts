@@ -12,6 +12,7 @@ export class CliArgumentError extends Error {
 export interface ParsedCliArgs {
   readonly command: string | undefined;
   readonly vault: string;
+  readonly vaultExplicit: boolean;
   readonly yes: boolean;
   readonly installClaude: boolean;
   readonly suggestFields: boolean;
@@ -24,6 +25,7 @@ export interface ParsedCliArgs {
   readonly verbose: boolean;
   readonly json: boolean;
   readonly maxPerConcept: number | undefined;
+  readonly folders: readonly string[];
   readonly unknownFlags: readonly string[];
   readonly error: CliArgumentError | undefined;
 }
@@ -36,6 +38,7 @@ export function isRuntimeSelection(value: string): value is RuntimeSelection {
 export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): ParsedCliArgs {
   const command = argv[0];
   let vault = cwd;
+  let vaultExplicit = false;
   let yes = false;
   let installClaude = false;
   let suggestFields = false;
@@ -48,6 +51,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   let verbose = false;
   let json = false;
   let maxPerConcept: number | undefined;
+  const folders: string[] = [];
   const unknownFlags: string[] = [];
 
   for (let i = 1; i < argv.length; i++) {
@@ -55,6 +59,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     const next = argv[i + 1];
     if (arg === "--vault" && next) {
       vault = path.resolve(cwd, next);
+      vaultExplicit = true;
       i++;
     } else if (arg === "--yes") {
       yes = true;
@@ -96,6 +101,9 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       }
       maxPerConcept = parsed;
       i++;
+    } else if (arg === "--folder" && next) {
+      folders.push(next);
+      i++;
     } else if (arg !== undefined) {
       unknownFlags.push(arg);
     }
@@ -104,6 +112,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   return {
     command,
     vault,
+    vaultExplicit,
     yes,
     installClaude,
     suggestFields,
@@ -116,6 +125,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     verbose,
     json,
     maxPerConcept,
+    folders,
     unknownFlags,
     error: undefined,
   };
@@ -124,6 +134,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     return {
       command,
       vault,
+      vaultExplicit,
       yes,
       installClaude,
       suggestFields,
@@ -136,6 +147,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       verbose,
       json,
       maxPerConcept,
+      folders,
       unknownFlags,
       error: new CliArgumentError(message),
     };

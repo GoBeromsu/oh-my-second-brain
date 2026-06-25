@@ -116,7 +116,7 @@ function hostInstallSmoke(packageRoot, vault) {
     env: { ...process.env, OMS_UPDATE_NOTICE: "0" },
   });
   const output = `${result.stdout}\n${result.stderr}`;
-  for (const expected of ["claude install", "codex install", "hermes install", "rules/oms.md", "skills/knowledge-management/oms"]) {
+  for (const expected of ["[claude] install", "[codex] install", "[hermes] install", "rules/oms.md", "skills/knowledge-management/oms"]) {
     if (!output.includes(expected)) fail(`host install dry-run did not include ${expected}`);
   }
   console.log("[release:artifact-smoke] ok: host install dry-run works from unpacked package.");

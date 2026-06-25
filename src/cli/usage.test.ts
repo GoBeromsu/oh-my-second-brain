@@ -15,6 +15,7 @@ describe("CLI usage text", () => {
       "update",
       "doctor",
       "lint",
+      "link",
       "semantic",
       "mcp",
       "hook",

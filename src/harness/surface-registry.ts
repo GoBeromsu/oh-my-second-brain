@@ -76,6 +76,7 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
     { name: "setup", owner: "cli", stability: "stable" },
     { name: "doctor", owner: "cli", stability: "stable" },
     { name: "lint", owner: "cli", stability: "stable" },
+    { name: "link", owner: "cli", stability: "experimental" },
     { name: "install", owner: "install", stability: "stable" },
     { name: "uninstall", owner: "install", stability: "stable" },
     { name: "update", owner: "install", stability: "stable" },

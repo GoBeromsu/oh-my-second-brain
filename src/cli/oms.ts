@@ -2,27 +2,34 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMcpServer } from "../mcp/server.js";
-import { runPreToolUse } from "../hook/pre-tool-use.js";
 import { runPostToolUse } from "../hook/post-tool-use.js";
+import { runPreToolUse } from "../hook/pre-tool-use.js";
+import {
+  formatHostOperationResults,
+  runHostOperation,
+} from "../install/hosts.js";
+import { resolveEffectiveVault } from "../link/link.js";
+import { runMcpServer } from "../mcp/server.js";
 import { resolveBundledAssetPaths } from "../runtime/assets.js";
 import {
   formatUpdateResult,
   runUpdate,
 } from "../update/update.js";
-import {
-  formatHostOperationResults,
-  runHostOperation,
-} from "../install/hosts.js";
 import { parseCliArgs } from "./args.js";
 import { runDoctor, runLint } from "./doctor-lint.js";
+import { runLink } from "./link-command.js";
 import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
 import { runSetup } from "./setup-command.js";
 import { maybePrintUpdateNotice, readCurrentPackageVersion } from "./update-notice.js";
 import { printUsage } from "./usage.js";
+
 export { buildClaudeInstallPlan } from "./claude-install-plan.js";
 export type { ClaudeInstallPlan } from "./claude-install-plan.js";
 export { runDoctor, runLint } from "./doctor-lint.js";
+export {
+  formatLinkResult,
+  runLink,
+} from "./link-command.js";
 export {
   runSetup,
   type SetupPrompt,
@@ -35,6 +42,16 @@ function bundledAdapterRoot(): string {
   return bundledAssets.adapterRoot;
 }
 
+function shouldResolveBridgeVault(command: string | undefined, vaultExplicit: boolean): boolean {
+  return (
+    !vaultExplicit &&
+    (command === "doctor" ||
+      command === "lint" ||
+      command === "mcp" ||
+      isSemanticCliCommand(command))
+  );
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const parsedArgs = parseCliArgs(argv);
@@ -43,9 +60,10 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  const {
+  let {
     command,
     vault,
+    vaultExplicit,
     yes,
     installClaude,
     suggestFields,
@@ -58,11 +76,24 @@ async function main(): Promise<void> {
     verbose,
     json,
     maxPerConcept,
+    folders,
     unknownFlags,
   } = parsedArgs;
 
+  if (shouldResolveBridgeVault(command, vaultExplicit)) {
+    vault = (await resolveEffectiveVault(process.cwd(), process.env)).vault;
+  }
+
   if (command === "setup") {
     await runSetup({ vault, yes, installClaude, suggestFields });
+    await maybePrintUpdateNotice();
+  } else if (command === "link") {
+    process.exitCode = await runLink({
+      cwd: process.cwd(),
+      vault,
+      vaultExplicit,
+      folders,
+    });
     await maybePrintUpdateNotice();
   } else if (command === "install" || command === "uninstall") {
     const selectedRuntime = runtime ?? (command === "install" ? "auto" : "all");

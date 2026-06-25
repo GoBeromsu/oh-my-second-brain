@@ -22,6 +22,7 @@ describe("CLI argument parser", () => {
     expect(parsed.error).toBeUndefined();
     expect(parsed.command).toBe("install");
     expect(parsed.vault).toBe("/tmp/oms-cli/Vault");
+    expect(parsed.vaultExplicit).toBe(true);
     expect(parsed.agentVault).toBe("/tmp/oms-cli/AgentVault");
     expect(parsed.runtime).toBe("hermes");
     expect(parsed.dryRun).toBe(true);
@@ -47,5 +48,20 @@ describe("CLI argument parser", () => {
     expect(parsed.error).toBeUndefined();
     expect(parsed.runtime).toBeUndefined();
     expect(parsed.unknownFlags).toEqual(["--runtime"]);
+  });
+
+  it("parses repeated link folders and distinguishes implicit vault defaults", () => {
+    const implicit = parseCliArgs(["doctor"], "/tmp/oms-cli");
+    const linked = parseCliArgs(
+      ["link", "--vault", "../Vault", "--folder", "notes", "--folder", "15. Work/Project"],
+      "/tmp/oms-cli/repo",
+    );
+
+    expect(implicit.vault).toBe("/tmp/oms-cli");
+    expect(implicit.vaultExplicit).toBe(false);
+    expect(implicit.folders).toEqual([]);
+    expect(linked.vault).toBe("/tmp/oms-cli/Vault");
+    expect(linked.vaultExplicit).toBe(true);
+    expect(linked.folders).toEqual(["notes", "15. Work/Project"]);
   });
 });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink, mkdtemp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -29,12 +29,17 @@ async function makeVault(): Promise<string> {
   return vault;
 }
 
-function runCli(args: readonly string[], input?: string, env?: Readonly<Record<string, string | undefined>>) {
+function runCli(
+  args: readonly string[],
+  input?: string,
+  env?: Readonly<Record<string, string | undefined>>,
+  cwd = repoRoot,
+) {
   if (!existsSync(distCli)) {
     throw new Error("dist/cli/oms.js is missing; run npm run build before CLI dispatch tests.");
   }
   return spawnSync(process.execPath, [distCli, ...args], {
-    cwd: repoRoot,
+    cwd,
     env: { ...baseEnv, ...env },
     input,
     encoding: "utf-8",
@@ -57,7 +62,7 @@ describe("oms CLI dispatch", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("Compatibility alias: oms <command>");
-    for (const command of ["setup", "install", "uninstall", "update", "doctor", "lint", "semantic", "mcp", "hook"]) {
+    for (const command of ["setup", "install", "uninstall", "update", "doctor", "lint", "link", "semantic", "mcp", "hook"]) {
       expect(result.stdout).toContain(command);
     }
   });
@@ -131,5 +136,31 @@ describe("oms CLI dispatch", () => {
     expect(alias.status).toBe(0);
     expect(jsonObject(nested.stdout)).toEqual(expect.objectContaining({ available: true, storage: "oms-native-json" }));
     expect(jsonObject(alias.stdout)).toEqual(expect.objectContaining({ available: true, storage: "oms-native-json" }));
+  });
+
+  it("creates a vault bridge and resolves doctor through it", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oms-cli-link-"));
+    tempRoots.push(root);
+    const vault = path.join(root, "vault");
+    const repo = path.join(root, "repo");
+    await mkdir(path.join(vault, "notes"), { recursive: true });
+    await mkdir(repo, { recursive: true });
+
+    const setup = runCli(["setup", "--vault", vault, "--yes"]);
+    expect(setup.status).toBe(0);
+
+    const link = runCli(["link", "--vault", vault, "--folder", "notes"], undefined, undefined, repo);
+    expect(link.status).toBe(0);
+    expect(link.stderr).toBe("");
+    expect(link.stdout).toContain("Oh My Second Brain vault bridge ready.");
+
+    const linkPath = path.join(repo, ".oms", "linked", "notes");
+    expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
+    expect(path.resolve(path.dirname(linkPath), await readlink(linkPath))).toBe(path.join(vault, "notes"));
+    expect(await readFile(path.join(repo, ".gitignore"), "utf-8")).toContain(".oms/linked/");
+
+    const doctor = runCli(["doctor"], undefined, undefined, repo);
+    expect(doctor.status).toBe(0);
+    expect(doctor.stdout).toContain(`Vault: ${vault}`);
   });
 });
