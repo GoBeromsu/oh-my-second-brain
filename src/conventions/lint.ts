@@ -1,12 +1,7 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseNote } from "./frontmatter.js";
-
-// Folders skipped during vault walks (same set as graph/cache.ts).
-const SKIP_DIRS = new Set([
-  ".oms", ".obsidian", ".trash", ".git", ".claude",
-  "_archive", "node_modules",
-]);
+import { walkVaultMarkdown, mapWithConcurrency } from "./vault-walk.js";
 
 export interface BrokenLink {
   notePath: string;
@@ -20,23 +15,7 @@ export interface VaultLintResult {
   totalNotes: number;
 }
 
-async function* walkMarkdown(dir: string, base: string): AsyncGenerator<string> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      yield* walkMarkdown(full, base);
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      yield path.relative(base, full).replace(/\\/g, "/");
-    }
-  }
-}
+
 
 const WIKILINK_RE = /\[\[([^\]|#\n]+?)(?:[#|][^\]]*?)?\]\]/g;
 
@@ -74,7 +53,7 @@ function buildNoteIndex(notePaths: readonly string[]): Map<string, string> {
  */
 export async function detectLinkIssues(vault: string): Promise<VaultLintResult> {
   const allPaths: string[] = [];
-  for await (const p of walkMarkdown(vault, vault)) {
+  for await (const p of walkVaultMarkdown(vault)) {
     allPaths.push(p);
   }
 
@@ -82,15 +61,19 @@ export async function detectLinkIssues(vault: string): Promise<VaultLintResult> 
   const brokenLinks: BrokenLink[] = [];
   const incomingCount = new Map<string, number>(allPaths.map((p) => [p, 0]));
 
-  for (const notePath of allPaths) {
-    let raw: string;
+  // Read + extract links in parallel (I/O-bound), then resolve sequentially in
+  // path order so brokenLinks ordering stays deterministic.
+  const perNote = await mapWithConcurrency(allPaths, 64, async (notePath) => {
     try {
-      raw = await readFile(path.join(vault, notePath), "utf-8");
+      const raw = await readFile(path.join(vault, notePath), "utf-8");
+      return { notePath, targets: extractWikilinks(parseNote(raw).body) };
     } catch {
-      continue;
+      return { notePath, targets: [] as string[] };
     }
-    const { body } = parseNote(raw);
-    for (const target of extractWikilinks(body)) {
+  });
+
+  for (const { notePath, targets } of perNote) {
+    for (const target of targets) {
       const resolved = noteIndex.get(target.toLowerCase());
       if (resolved === undefined) {
         brokenLinks.push({ notePath, target });

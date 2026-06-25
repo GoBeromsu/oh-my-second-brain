@@ -16,6 +16,7 @@ import {
   formatLintReport,
   type NoteReport,
 } from "../conventions/report.js";
+import { walkVaultMarkdown, mapWithConcurrency } from "../conventions/vault-walk.js";
 import { runMcpServer } from "../mcp/server.js";
 import { runPreToolUse } from "../hook/pre-tool-use.js";
 import { runPostToolUse } from "../hook/post-tool-use.js";
@@ -323,30 +324,6 @@ function printClaudeInstallPlan(plan: ClaudeInstallPlan): void {
   );
 }
 
-/** Walk a directory recursively, yielding relative paths for all .md files. */
-async function* walkMarkdown(
-  dir: string,
-  base: string,
-  skipDirs: Set<string>,
-): AsyncGenerator<string> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-    if (skipDirs.has(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      yield* walkMarkdown(full, base, skipDirs);
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      yield path.relative(base, full).replace(/\\/g, "/");
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // runSetup
 // ---------------------------------------------------------------------------
@@ -612,30 +589,35 @@ export async function runDoctor(opts: {
 
     const ontology = await loadOntology(ontologyDir);
 
-    const skipDirs = new Set(["node_modules"]);
-    const notes: NoteReport[] = [];
-
-    for await (const relPath of walkMarkdown(vault, vault, skipDirs)) {
+    // Enumerate concept-matched notes first, then read + validate in parallel
+    // (reading note contents dominates wall time on large vaults).
+    const candidates: { relPath: string; concept: Concept }[] = [];
+    for await (const relPath of walkVaultMarkdown(vault)) {
       const concept = resolveConcept(ontology, relPath);
-      if (!concept) continue;
-
-      const fullPath = path.join(vault, relPath);
-      let raw: string;
-      try {
-        raw = await readFile(fullPath, "utf-8");
-      } catch {
-        console.warn(`[oms] Could not read ${relPath}`);
-        continue;
-      }
-
-      const { frontmatter } = parseNote(raw);
-      const result = validateFrontmatter(frontmatter, concept);
-      notes.push({
-        notePath: relPath,
-        concept: concept.concept,
-        violations: result.violations,
-      });
+      if (concept) candidates.push({ relPath, concept });
     }
+
+    const scanned = await mapWithConcurrency(
+      candidates,
+      64,
+      async ({ relPath, concept }): Promise<NoteReport | null> => {
+        try {
+          const raw = await readFile(path.join(vault, relPath), "utf-8");
+          const { frontmatter } = parseNote(raw);
+          return {
+            notePath: relPath,
+            concept: concept.concept,
+            violations: validateFrontmatter(frontmatter, concept).violations,
+          };
+        } catch {
+          console.warn(`[oms] Could not read ${relPath}`);
+          return null;
+        }
+      },
+    );
+    const notes: NoteReport[] = scanned.filter(
+      (n): n is NoteReport => n !== null,
+    );
 
     const aggregate = aggregateDoctor(notes);
     if (opts.json) {
