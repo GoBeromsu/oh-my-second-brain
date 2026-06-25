@@ -10,6 +10,12 @@ import { resolveConcept } from "../ontology/resolver.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { validateFrontmatter } from "../conventions/validate.js";
 import { detectLinkIssues } from "../conventions/lint.js";
+import {
+  aggregateDoctor,
+  formatDoctorReport,
+  formatLintReport,
+  type NoteReport,
+} from "../conventions/report.js";
 import { runMcpServer } from "../mcp/server.js";
 import { runPreToolUse } from "../hook/pre-tool-use.js";
 import { runPostToolUse } from "../hook/post-tool-use.js";
@@ -577,10 +583,15 @@ export async function runSetup(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// runDoctor
+// runDoctor — frontmatter convention validation, aggregated by field/concept
 // ---------------------------------------------------------------------------
 
-export async function runDoctor(opts: { vault: string }): Promise<number> {
+export async function runDoctor(opts: {
+  vault: string;
+  verbose?: boolean;
+  json?: boolean;
+  maxPerConcept?: number;
+}): Promise<number> {
   const { vault } = opts;
 
   // Doctor is non-blocking (onViolation: warn). It must ALWAYS exit 0 in v0,
@@ -602,15 +613,12 @@ export async function runDoctor(opts: { vault: string }): Promise<number> {
     const ontology = await loadOntology(ontologyDir);
 
     const skipDirs = new Set(["node_modules"]);
-    let totalNotes = 0;
-    let totalViolations = 0;
-    let notesWithViolations = 0;
+    const notes: NoteReport[] = [];
 
     for await (const relPath of walkMarkdown(vault, vault, skipDirs)) {
       const concept = resolveConcept(ontology, relPath);
       if (!concept) continue;
 
-      totalNotes++;
       const fullPath = path.join(vault, relPath);
       let raw: string;
       try {
@@ -622,54 +630,67 @@ export async function runDoctor(opts: { vault: string }): Promise<number> {
 
       const { frontmatter } = parseNote(raw);
       const result = validateFrontmatter(frontmatter, concept);
-
-      if (result.violations.length > 0) {
-        notesWithViolations++;
-        totalViolations += result.violations.length;
-        console.log(`\n  ${relPath} [concept: ${concept.concept}]`);
-        for (const v of result.violations) {
-          console.log(`    [${v.rule}] ${v.message}`);
-        }
-      }
+      notes.push({
+        notePath: relPath,
+        concept: concept.concept,
+        violations: result.violations,
+      });
     }
 
-    console.log(
-      `\nOh My Second Brain doctor: ${totalNotes} notes checked, ${notesWithViolations} with violations, ${totalViolations} total violations.`,
-    );
-    console.log("All violations are warnings (onViolation: warn). Exit 0.\n");
-
-    // Broken-link and orphan detection (C4 lint port).
-    try {
-      const lintResult = await detectLinkIssues(vault);
-      if (lintResult.brokenLinks.length > 0) {
-        console.log(`\n--- Broken wikilinks (${lintResult.brokenLinks.length}) ---`);
-        for (const { notePath, target } of lintResult.brokenLinks) {
-          console.log(`  [broken-link] ${notePath} -> [[${target}]]`);
-        }
-      } else {
-        console.log("Broken wikilinks: 0");
-      }
-
-      const orphanCount = lintResult.orphanPaths.length;
-      if (orphanCount > 0) {
-        console.log(`\n--- Orphan notes (no incoming links): ${orphanCount} ---`);
-        for (const p of lintResult.orphanPaths.slice(0, 20)) {
-          console.log(`  [orphan] ${p}`);
-        }
-        if (orphanCount > 20) {
-          console.log(`  ... and ${orphanCount - 20} more`);
-        }
-      } else {
-        console.log("Orphan notes: 0");
-      }
-    } catch (lintErr) {
-      console.warn("[oms] lint detection could not complete:", lintErr);
+    const aggregate = aggregateDoctor(notes);
+    if (opts.json) {
+      console.log(JSON.stringify(aggregate, null, 2));
+    } else {
+      console.log(
+        formatDoctorReport(aggregate, {
+          vault,
+          verbose: opts.verbose,
+          maxPerConcept: opts.maxPerConcept,
+          notes,
+        }),
+      );
     }
   } catch (err) {
     console.warn("[oms] doctor could not complete:", err);
   }
 
   // Always exit 0 in v0 (non-blocking, onViolation: warn).
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// runLint — link & structure hygiene (broken wikilinks, orphan notes)
+// ---------------------------------------------------------------------------
+
+export async function runLint(opts: {
+  vault: string;
+  verbose?: boolean;
+  json?: boolean;
+}): Promise<number> {
+  const { vault } = opts;
+
+  // Lint is non-blocking like doctor: surface findings, always exit 0.
+  try {
+    const result = await detectLinkIssues(vault);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            totalNotes: result.totalNotes,
+            brokenLinks: result.brokenLinks,
+            orphanPaths: result.orphanPaths,
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      console.log(formatLintReport(result, { vault, verbose: opts.verbose }));
+    }
+  } catch (err) {
+    console.warn("[oms] lint could not complete:", err);
+  }
+
   return 0;
 }
 
@@ -686,7 +707,8 @@ Usage:
   oh-my-second-brain install [--vault <path>] [--runtime <auto|all|claude|codex|hermes>] [--dry-run] [--execute] [--yes]
   oh-my-second-brain uninstall [--runtime <all|claude|codex|hermes>] [--dry-run] [--execute] [--yes]
   oh-my-second-brain update [--check] [--dry-run] [--yes] [--runtime <auto|all|claude|codex|hermes>] [--vault <path>]
-  oh-my-second-brain doctor [--vault <path>]
+  oh-my-second-brain doctor [--vault <path>] [--verbose] [--json] [--max <n>]
+  oh-my-second-brain lint [--vault <path>] [--verbose] [--json]
   oh-my-second-brain semantic <status|sync|query|search|vsearch|get|multi-get|collection> [options]
   oh-my-second-brain mcp [--vault <path>]
   oh-my-second-brain hook pre-tool-use [--vault <path>]
@@ -699,7 +721,8 @@ Commands:
   install  Install Oh My Second Brain host adapters and MCP registration.
   uninstall Remove Oh My Second Brain host adapters and MCP registration.
   update   Check for or apply an explicit package update, then refresh host adapters.
-  doctor   Validate vault notes against the active ontology (includes broken-link and orphan detection).
+  doctor   Validate vault frontmatter against the active ontology, aggregated by field and concept.
+  lint     Check vault link health: broken [[wikilinks]] and orphan notes.
   semantic Native markdown semantic index/search/get commands.
   mcp      Start the read/status MCP stdio server.
   hook     Vault guard hooks for Claude Code PreToolUse / PostToolUse events.
@@ -714,6 +737,9 @@ Options:
   --runtime <name> Select host runtime (default: auto for install, all for uninstall).
   --dry-run        Preview host config changes without writing files.
   --execute        Allow external host CLIs such as \`claude\` to run when available.
+  --verbose        doctor/lint: list every affected note instead of a summary.
+  --json           doctor/lint: emit machine-readable aggregation as JSON.
+  --max <n>        doctor --verbose: max notes listed per concept (default 50).
 `);
 }
 
@@ -732,6 +758,9 @@ async function main(): Promise<void> {
   let checkUpdate = false;
   let timeoutMs: number | undefined;
   let agentVault: string | undefined;
+  let verbose = false;
+  let json = false;
+  let maxPerConcept: number | undefined;
   const unknownFlags: string[] = [];
 
   for (let i = 1; i < argv.length; i++) {
@@ -778,6 +807,19 @@ async function main(): Promise<void> {
       dryRun = true;
     } else if (argv[i] === "--execute") {
       executeExternal = true;
+    } else if (argv[i] === "--verbose" || argv[i] === "-v") {
+      verbose = true;
+    } else if (argv[i] === "--json") {
+      json = true;
+    } else if (argv[i] === "--max" && argv[i + 1]) {
+      const parsed = Number.parseInt(argv[i + 1]!, 10);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        console.error(`[oms] Unsupported --max value: ${argv[i + 1]!}`);
+        process.exitCode = 1;
+        return;
+      }
+      maxPerConcept = parsed;
+      i++;
     } else {
       unknownFlags.push(argv[i]!);
     }
@@ -847,7 +889,10 @@ async function main(): Promise<void> {
     });
     console.log(formatHostOperationResults(results, dryRun));
   } else if (command === "doctor") {
-    process.exitCode = await runDoctor({ vault });
+    process.exitCode = await runDoctor({ vault, verbose, json, maxPerConcept });
+    await maybePrintUpdateNotice();
+  } else if (command === "lint") {
+    process.exitCode = await runLint({ vault, verbose, json });
     await maybePrintUpdateNotice();
   } else if (isSemanticCliCommand(command)) {
     process.exitCode = await runSemanticCli({
