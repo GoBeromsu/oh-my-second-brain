@@ -392,7 +392,7 @@ async function installClaude(options: HostOperationOptions): Promise<HostOperati
     } else if (!options.dryRun) {
       const externalCommands: [string, ...string[]][] = [
         ["claude", "plugin", "install", pluginPath],
-        ["claude", "mcp", "add", "oms", "--", "npx", ...mcpArgs(options)],
+        ["claude", "mcp", "add", "oms", "--", "oms", ...mcpArgs(options)],
       ];
       for (const [command, ...args] of externalCommands) {
         const result = runExternal(command, args);
