@@ -74,7 +74,8 @@ oms setup      Adopt an existing vault into the convention (writes .oms/taxonomy
 oms install    Install host adapters + MCP registration
 oms uninstall  Remove host adapters + MCP registration
 oms update     Check/apply a package update, then reconcile adapters
-oms doctor     Validate notes against the ontology (broken-link + orphan detection)
+oms doctor     Validate note frontmatter against the ontology (aggregated by field & concept)
+oms lint       Check vault link health: broken [[wikilinks]] + orphan notes
 oms semantic   Native markdown semantic index / search / get
 oms mcp        Start the stdio MCP server
 oms hook       Vault guard hooks (Claude Code pre/post tool-use)
