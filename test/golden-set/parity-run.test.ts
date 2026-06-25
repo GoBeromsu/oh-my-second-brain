@@ -7,7 +7,7 @@
  *
  * Uses the SAME harness instrument; emits OMS_GOLDEN_REPORT for an independent
  * verification pass. Run via:
- *   OMS_GOLDEN_QUERIES=… OMS_VAULT=… OMS_MODEL_PATH=… OMS_GOLDEN_DB=… \
+ *   OMS_GOLDEN_QUERIES=… OMS_VAULT=… OMS_EMBEDDING_PROVIDER=… OMS_EMBEDDING_MODEL=… OMS_GOLDEN_DB=… \
  *   OMS_ENGINE_CACHE=… OMS_SLICE_MANIFEST=… OMS_GOLDEN_REPORT=… \
  *   npx vitest run test/golden-set/parity-run.test.ts
  */

@@ -9,10 +9,9 @@ import type {
   SemanticMultiGetOptions,
   SemanticSearchFormat,
   SemanticSearchMode,
-  SemanticStorage,
   SemanticTypedSearch,
   SemanticTypedSearchType,
-} from "../search/semantic.js";
+} from "../retrieve/semantic-contract.js";
 
 export type ParseResult<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly message: string };
 
@@ -61,18 +60,6 @@ function semanticTypedSearchType(value: string | undefined): SemanticTypedSearch
   return value === "lex" || value === "vec" || value === "hyde" ? value : undefined;
 }
 
-function semanticStorage(value: string | undefined): SemanticStorage | undefined {
-  return value === "qmd-sqlite" || value === "oms-native-json" ? value : undefined;
-}
-
-function storageArg(args: Record<string, unknown> | undefined, key: string): SemanticStorage | undefined {
-  return semanticStorage(stringArg(args, key)) ?? semanticStorage(stringArg(args, "storage"));
-}
-
-function modelPathArg(args: Record<string, unknown> | undefined, key: string): string | undefined {
-  return stringArg(args, key) ?? stringArg(args, "modelPath");
-}
-
 function semanticSearchesArg(args: Record<string, unknown> | undefined): readonly SemanticTypedSearch[] | undefined {
   const value = args?.["semanticSearches"];
   if (!Array.isArray(value)) return undefined;
@@ -107,8 +94,6 @@ export function semanticOptionsFromArgs(
     lineNumbers: booleanArg(args, "semanticLineNumbers"),
     fullPath: booleanArg(args, "semanticFullPath"),
     index: stringArg(args, "semanticIndex"),
-    storage: storageArg(args, "semanticStorage"),
-    modelPath: modelPathArg(args, "semanticModelPath"),
     chunkStrategy: stringArg(args, "semanticChunkStrategy"),
     candidateLimit: numberArg(args, "semanticCandidateLimit"),
     noRerank: booleanArg(args, "semanticNoRerank"),
@@ -126,8 +111,6 @@ export function semanticOptionsFromArgs(
     syncPull: booleanArg(args, "embeddingSyncPull"),
     syncMaxDocsPerBatch: numberArg(args, "embeddingSyncMaxDocsPerBatch"),
     syncMaxBatchMb: numberArg(args, "embeddingSyncMaxBatchMb"),
-    syncStorage: storageArg(args, "embeddingSyncStorage"),
-    syncModelPath: modelPathArg(args, "embeddingSyncModelPath"),
   };
 }
 
@@ -144,8 +127,6 @@ export function embeddingSyncOptionsFromArgs(
     force: booleanArg(args, "force"),
     pull: booleanArg(args, "pull"),
     index: stringArg(args, "index"),
-    storage: storageArg(args, "storage"),
-    modelPath: modelPathArg(args, "modelPath"),
     chunkStrategy: stringArg(args, "chunkStrategy"),
     maxDocsPerBatch: numberArg(args, "maxDocsPerBatch"),
     maxBatchMb: numberArg(args, "maxBatchMb"),
@@ -165,8 +146,6 @@ export function semanticQueryOptionsFromArgs(vault: string, args: Record<string,
     vec: stringArg(args, "vec"),
     hyde: stringArg(args, "hyde"),
     index: stringArg(args, "index"),
-    storage: storageArg(args, "storage"),
-    modelPath: modelPathArg(args, "modelPath"),
   };
 }
 
@@ -174,8 +153,6 @@ export function semanticStatusOptionsFromArgs(vault: string, args: Record<string
   return {
     vault,
     index: indexArg(args),
-    storage: storageArg(args, "storage"),
-    modelPath: modelPathArg(args, "modelPath"),
   };
 }
 
@@ -195,9 +172,6 @@ export function documentGetOptionsFromArgs(args: Record<string, unknown> | undef
       lineCount: numberArg(args, "lineCount"),
       lineNumbers: booleanArg(args, "lineNumbers"),
       fullPath: booleanArg(args, "fullPath"),
-      index: stringArg(args, "index"),
-      storage: storageArg(args, "storage"),
-      modelPath: modelPathArg(args, "modelPath"),
     },
   };
 }
@@ -213,14 +187,11 @@ export function documentMultiGetOptionsFromArgs(
   return {
     ok: true,
     value: {
-      targets,
+      targets: [...targets],
       lineLimit: numberArg(args, "lineLimit"),
       maxBytes: numberArg(args, "maxBytes"),
       lineNumbers: booleanArg(args, "lineNumbers"),
       fullPath: booleanArg(args, "fullPath"),
-      index: stringArg(args, "index"),
-      storage: storageArg(args, "storage"),
-      modelPath: modelPathArg(args, "modelPath"),
     },
   };
 }

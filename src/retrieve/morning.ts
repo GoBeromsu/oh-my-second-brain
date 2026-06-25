@@ -4,24 +4,19 @@ import {
   type GraphExploreOptions,
   type GraphExploreResult,
 } from "../graph/explore.js";
-import {
-  getSemanticDocument,
-  multiGetSemanticDocuments,
-  querySemanticStore,
-  readSemanticStatus,
-  type SemanticDocument,
-  type SemanticDocumentResult,
-  type SemanticEmbeddingSyncResult,
-  type SemanticGetOptions,
-  type SemanticHitEvidence,
-  type SemanticMultiGetOptions,
-  type SemanticProviderStatus,
-  type SemanticQueryOptions,
-  type SemanticQueryResult,
-  type SemanticSearchHit,
-  type SemanticStatusOptions,
-} from "../search/semantic.js";
-import { syncRetrieveEmbeddings } from "./embedding-sync.js";
+import type {
+  SemanticDocument,
+  SemanticDocumentResult,
+  SemanticEmbeddingSyncResult,
+  SemanticGetOptions,
+  SemanticHitEvidence,
+  SemanticMultiGetOptions,
+  SemanticProviderStatus,
+  SemanticQueryOptions,
+  SemanticQueryResult,
+  SemanticSearchHit,
+  SemanticStatusOptions,
+} from "./semantic-contract.js";
 
 export type MorningHitSource = "oms-seed" | "oms-neighbor" | "oms-semantic";
 export type SemanticFusionScope = "global" | "graph";
@@ -46,7 +41,6 @@ export interface MorningRetrieveOptions extends GraphExploreOptions {
     readonly lineNumbers?: boolean;
     readonly fullPath?: boolean;
     readonly index?: string;
-    readonly storage?: SemanticQueryOptions["storage"]; readonly modelPath?: string;
     readonly chunkStrategy?: string;
     readonly candidateLimit?: number;
     readonly noRerank?: boolean;
@@ -64,7 +58,6 @@ export interface MorningRetrieveOptions extends GraphExploreOptions {
     readonly syncPull?: boolean;
     readonly syncMaxDocsPerBatch?: number;
     readonly syncMaxBatchMb?: number;
-    readonly syncStorage?: SemanticQueryOptions["storage"]; readonly syncModelPath?: string;
   };
 }
 
@@ -99,15 +92,17 @@ export interface MorningRetrieveResult {
  * Pluggable semantic backend for the morning retrieval flow.
  *
  * Abstracts the five semantic leaf operations so the caller chooses the
- * implementation without morning.ts knowing which one it is:
- *   - {@link defaultMorningSemanticBackend} → the model-free src/search layer.
- *   - makeEngineMorningBackend(...) (src/mcp/engine-morning-backend.ts) → the
- *     native EmbeddingGemma engine, injected by the MCP server once a real
- *     model is configured.
+ * implementation without morning.ts knowing which one it is. After the
+ * src/search teardown there is a single implementation —
+ * makeEngineMorningBackend(...) (src/mcp/engine-morning-backend.ts), which wraps
+ * the native engine adapter (vec-capable when a model is configured, lex +
+ * file-based document reads otherwise). The backend is injected by the caller so
+ * morning.ts stays free of any engine-assembly policy and has no module cycle
+ * back into src/mcp.
  *
  * query + getDocument + multiGet MUST come from the SAME backend: the engine
  * emits real-path docids that only its own file-based hydration resolves, so a
- * split backend (engine query + src/search hydration) would strand every hit.
+ * split backend would strand every hit.
  */
 export interface MorningSemanticBackend {
   readonly sync: (opts: MorningRetrieveOptions) => Promise<SemanticEmbeddingSyncResult | undefined>;
@@ -116,19 +111,6 @@ export interface MorningSemanticBackend {
   readonly getDocument: (opts: SemanticGetOptions) => Promise<SemanticDocumentResult>;
   readonly multiGet: (opts: SemanticMultiGetOptions) => Promise<SemanticDocumentResult>;
 }
-
-/**
- * Default semantic backend: the mature, model-free src/search layer (SHA-1
- * hash embeddings + JSON/SQLite store). Used by the CLI and by any caller that
- * does not inject an engine-backed backend, so non-MCP paths are unchanged.
- */
-export const defaultMorningSemanticBackend: MorningSemanticBackend = {
-  sync: (opts) => syncRetrieveEmbeddings(opts),
-  status: (opts) => readSemanticStatus(opts),
-  query: (opts) => querySemanticStore(opts),
-  getDocument: (opts) => getSemanticDocument(opts),
-  multiGet: (opts) => multiGetSemanticDocuments(opts),
-};
 
 function graphHit(source: "oms-seed" | "oms-neighbor", node: GraphExploreNode): MorningRetrieveHit {
   return {
@@ -191,8 +173,6 @@ function semanticQueryOptions(opts: MorningRetrieveOptions): SemanticQueryOption
     lineNumbers: opts.semantic?.lineNumbers,
     fullPath: opts.semantic?.fullPath,
     index: opts.semantic?.index,
-    storage: opts.semantic?.storage,
-    modelPath: opts.semantic?.modelPath,
     chunkStrategy: opts.semantic?.chunkStrategy,
     candidateLimit: opts.semantic?.candidateLimit,
     noRerank: opts.semantic?.noRerank,
@@ -228,23 +208,17 @@ async function hydrateSemanticHits(
       lineCount: opts.semantic.hydrateLineCount,
       lineNumbers: opts.semantic.lineNumbers,
       fullPath: opts.semantic.fullPath,
-      index: opts.semantic.index,
-      storage: opts.semantic.storage,
-      modelPath: opts.semantic.modelPath,
     });
     return result.available ? result.documents : [];
   }
 
   const result = await backend.multiGet({
     vault: opts.vault,
-    targets,
+    targets: [...targets],
     lineLimit: opts.semantic?.hydrateLineLimit,
     maxBytes: opts.semantic?.hydrateMaxBytes,
     lineNumbers: opts.semantic?.lineNumbers,
     fullPath: opts.semantic?.fullPath,
-    index: opts.semantic?.index,
-    storage: opts.semantic?.storage,
-    modelPath: opts.semantic?.modelPath,
   });
   return result.available ? result.documents : [];
 }
@@ -273,8 +247,6 @@ async function loadSemantic(
   const status = await backend.status({
     vault: opts.vault,
     index: opts.semantic?.index,
-    storage: opts.semantic?.storage,
-    modelPath: opts.semantic?.modelPath,
   });
   if (!status.available) {
     return { status, sync, hits: [] };
@@ -290,7 +262,7 @@ async function loadSemantic(
 
 export async function retrieveMorningContext(
   opts: MorningRetrieveOptions,
-  backend: MorningSemanticBackend = defaultMorningSemanticBackend,
+  backend: MorningSemanticBackend,
 ): Promise<MorningRetrieveResult> {
   const graph = await exploreLocalGraph(opts);
   const semantic = await loadSemantic(opts, backend);

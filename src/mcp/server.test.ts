@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { harnessSurfaceRegistry } from "../harness/surface-registry.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,40 +34,31 @@ describe("Oh My Second Brain MCP stdio server", () => {
 
       const tools = await client.listTools();
       const names = tools.tools.map((tool) => tool.name);
-      expect(names).toEqual([
-        "oms_graph_status",
-        "oms_graph_build",
-        "oms_list_concepts",
-        "oms_retrieve_by_axis",
-        "oms_retrieve_context",
-        "oms_sync_embeddings",
-        "oms_semantic_query",
-        "oms_semantic_status",
-        "oms_semantic_collections",
-        "oms_semantic_contexts",
-        "oms_semantic_cleanup",
-        "oms_get_document",
-        "query",
-        "status",
-        "get",
-        "multi_get",
-        "oms_multi_get_documents",
-        "oms_lazy_load_note",
-        "oms_validate_contract",
-        "oms_capture_prepare",
-        "oms_capture_commit",
-      ]);
+      expect(names).toEqual(harnessSurfaceRegistry.mcpTools.map((tool) => tool.name));
+      for (const registryTool of harnessSurfaceRegistry.mcpTools) {
+        const tool = tools.tools.find((candidate) => candidate.name === registryTool.name);
+        expect(tool, registryTool.name).toBeDefined();
+        expect(tool?.annotations?.readOnlyHint).toBe(registryTool.posture === "read");
+        expect(tool?.annotations?.destructiveHint).toBe(registryTool.destructive);
+        expect(tool?.annotations?.idempotentHint).toBe(registryTool.idempotent);
+        expect(tool?.annotations?.openWorldHint).toBe(registryTool.openWorld);
+      }
       const commitTool = tools.tools.find((tool) => tool.name === "oms_capture_commit");
       expect(commitTool?.annotations?.readOnlyHint).toBe(false);
       expect(commitTool?.annotations?.destructiveHint).toBe(false);
+      expect(commitTool?.annotations?.idempotentHint).toBe(false);
       const retrieveTool = tools.tools.find((tool) => tool.name === "oms_retrieve_context");
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semanticMinScore");
-      expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semanticStorage");
+      // storage/modelPath knobs were removed from the schemas (engine uses explicit env config).
+      expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticStorage");
+      expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticModelPath");
       expect(retrieveTool?.annotations?.readOnlyHint).toBe(false);
       const semanticStatusTool = tools.tools.find((tool) => tool.name === "oms_semantic_status");
-      expect(JSON.stringify(semanticStatusTool?.inputSchema)).toContain("storage");
+      expect(JSON.stringify(semanticStatusTool?.inputSchema)).toContain("index");
+      expect(JSON.stringify(semanticStatusTool?.inputSchema)).not.toContain("storage");
       const semanticQueryTool = tools.tools.find((tool) => tool.name === "oms_semantic_query");
-      expect(JSON.stringify(semanticQueryTool?.inputSchema)).toContain("modelPath");
+      expect(JSON.stringify(semanticQueryTool?.inputSchema)).toContain("query");
+      expect(JSON.stringify(semanticQueryTool?.inputSchema)).not.toContain("modelPath");
       const getTool = tools.tools.find((tool) => tool.name === "oms_get_document");
       expect(getTool?.annotations?.readOnlyHint).toBe(true);
       expect(getTool?.annotations?.destructiveHint).toBe(false);

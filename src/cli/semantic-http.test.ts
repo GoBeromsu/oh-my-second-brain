@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { syncSemanticEmbeddingStore } from "../search/semantic.js";
+import { syncEngineStore } from "../engine/embed/sync.js";
 import { startSemanticHttpServer, type SemanticHttpServer } from "./semantic-http.js";
 
 let tmpVault: string | undefined;
@@ -51,9 +51,10 @@ async function jsonFetch(url: string, body: unknown): Promise<Record<string, unk
 }
 
 describe("semantic HTTP transport", () => {
-  it("serves qmd-compatible health, query/search, and MCP tool-list endpoints without qmd", async () => {
+  it("serves engine-backed health, lexical query/search, and MCP tool-list endpoints", async () => {
     tmpVault = await writeVault();
-    await syncSemanticEmbeddingStore({ vault: tmpVault, collection: "obsidian" });
+    // Model-less: a lex-only sync populates the engine FTS index (no vectors).
+    await syncEngineStore({ vault: tmpVault, embed: false });
     httpServer = await startSemanticHttpServer({ vault: tmpVault, port: 0 });
 
     const healthResponse = await fetch(`${httpServer.url}/health`);
@@ -61,12 +62,12 @@ describe("semantic HTTP transport", () => {
     await expect(healthResponse.json()).resolves.toEqual(
       expect.objectContaining({
         ok: true,
-        storage: "qmd-sqlite",
+        storage: "oms-native-json",
       }),
     );
 
     const query = await jsonFetch(`${httpServer.url}/query`, {
-      query: "lex: agent retr",
+      lex: "agent retrieval",
       collection: "obsidian",
       limit: 1,
     });
@@ -75,7 +76,7 @@ describe("semantic HTTP transport", () => {
     expect(hits).toEqual([expect.objectContaining({ path: "references/Agent Retrieval.md" })]);
 
     const search = await jsonFetch(`${httpServer.url}/search`, {
-      query: "agent retrieval",
+      lex: "agent retrieval",
       collection: "obsidian",
       limit: 1,
     });

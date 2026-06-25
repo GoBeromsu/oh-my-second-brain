@@ -55,6 +55,14 @@ CI pipeline order: **build first, then test**. A broken build blocks the test ru
 
 ---
 
+## Git workflow
+
+- **Sync with mainline before you branch.** Start every task with `git fetch origin && git switch -c <branch> origin/main` (or `git pull --rebase` on a tracking branch). This repo is frequently developed in **detached-HEAD worktrees that lag behind `main`**; branching off a stale HEAD risks rebuilding on retired code (e.g., a module that was deleted on `main`).
+- **Rebase on mainline drift.** If `main` advances mid-task, `git rebase origin/main` before opening the PR.
+- **Worktree caveat:** when `main` is checked out in another worktree, skip `gh pr merge --delete-branch` — the local branch-delete step fails with `'main' is already used by worktree`. Merge, then delete branches manually (`git push origin --delete <branch>`).
+
+---
+
 ## CRITICAL: NodeNext Import Extensions
 
 **tsconfig uses `moduleResolution: NodeNext`.**
@@ -88,8 +96,10 @@ after editing imports.
 ## Contribution Rules
 
 - **Keep diffs small.** One concern per PR. Prefer targeted edits over broad refactors.
-- **No new dependencies without approval.** Current runtime dependency: `yaml` only.
-  Adding any dependency requires explicit sign-off in the PR description.
+- **No new dependencies without approval.** Runtime dependencies are tracked in
+  `package.json` and currently include MCP, SQLite/vector search, local model,
+  and YAML packages. Adding any dependency requires explicit sign-off in the PR
+  description.
 - **No `any` without justification.** Add a comment explaining why if you must use it.
 - **Test new logic paths.** Any new branch in `src/` should have a corresponding vitest case.
 - **Backward-compatible config changes only.** If a config shape changes, provide a migration path.

@@ -15,6 +15,20 @@ function fail(message) {
   process.exit(1);
 }
 
+async function readHarnessRegistry() {
+  try {
+    return (await import("../dist/harness/surface-registry.js")).harnessSurfaceRegistry;
+  } catch (error) {
+    fail(
+      `could not load built harness registry; run npm run build before release checks: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+const harnessSurfaceRegistry = await readHarnessRegistry();
+
 function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, {
     encoding: "utf-8",
@@ -102,7 +116,7 @@ function hostInstallSmoke(packageRoot, vault) {
     env: { ...process.env, OMS_UPDATE_NOTICE: "0" },
   });
   const output = `${result.stdout}\n${result.stderr}`;
-  for (const expected of ["claude install", "codex install", "hermes install", "rules/oms.md", "skills/knowledge-management/oms"]) {
+  for (const expected of ["[claude] install", "[codex] install", "[hermes] install", "rules/oms.md", "skills/knowledge-management/oms"]) {
     if (!output.includes(expected)) fail(`host install dry-run did not include ${expected}`);
   }
   console.log("[release:artifact-smoke] ok: host install dry-run works from unpacked package.");
@@ -130,10 +144,12 @@ async function mcpSmoke(packageRoot, vault) {
   // StdioClientTransport sandboxes the child env to a safe default subset, so the
   // embedding-model path must be forwarded explicitly or the child is always
   // model-less regardless of this process's env -- which would desync it from the
-  // hasModel gate below. Forward only the local OMS_MODEL_PATH (no remote Upstage
-  // network from an artifact smoke), matching src/mcp/semantic-server.test.ts.
+  // hasModel gate below. Forward the canonical OMS_EMBEDDING_PROVIDER +
+  // OMS_EMBEDDING_MODEL pair (ADR-007: explicit config, no auto-detect),
+  // matching src/mcp/semantic-server.test.ts.
   const childEnv = { ...getDefaultEnvironment() };
-  if (process.env.OMS_MODEL_PATH) childEnv.OMS_MODEL_PATH = process.env.OMS_MODEL_PATH;
+  if (process.env.OMS_EMBEDDING_PROVIDER) childEnv.OMS_EMBEDDING_PROVIDER = process.env.OMS_EMBEDDING_PROVIDER;
+  if (process.env.OMS_EMBEDDING_MODEL) childEnv.OMS_EMBEDDING_MODEL = process.env.OMS_EMBEDDING_MODEL;
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [cli, "mcp", "--vault", vault],
@@ -145,38 +161,15 @@ async function mcpSmoke(packageRoot, vault) {
     await client.connect(transport);
     const result = await client.listTools();
     const toolNames = new Set(result.tools.map((tool) => tool.name));
-    const requiredTools = [
-      "oms_graph_status",
-      "oms_graph_build",
-      "oms_list_concepts",
-      "oms_retrieve_by_axis",
-      "oms_retrieve_context",
-      "oms_sync_embeddings",
-      "oms_semantic_query",
-      "oms_semantic_status",
-      "oms_semantic_collections",
-      "oms_semantic_contexts",
-      "oms_semantic_cleanup",
-      "oms_get_document",
-      "query",
-      "status",
-      "get",
-      "multi_get",
-      "oms_multi_get_documents",
-      "oms_lazy_load_note",
-      "oms_validate_contract",
-      "oms_capture_prepare",
-      "oms_capture_commit",
-    ];
+    const requiredTools = harnessSurfaceRegistry.mcpTools.map((tool) => tool.name);
     const missing = requiredTools.filter((tool) => !toolNames.has(tool));
     if (missing.length > 0) fail(`MCP server missing tools: ${missing.join(", ")}`);
-    // Warm the backing store the way the WITH/NO-model unit test does. On a
-    // model-less host the qmd:// ReadResource and semantic query below hydrate
-    // from the src/search SQLite store, which only exists after a sync -- and
-    // oms_sync_embeddings is engine-owned, so it loud-guards (ADR-007) instead
-    // of populating that store without a model. retrieve_context's lenient
-    // semantic leg with embeddingSyncBeforeSearch is the model-free way to
-    // populate it; with a model present the engine handles the sync just as well.
+    // Exercise retrieve_context the way the WITH/NO-model unit test does. On a
+    // model-less host the qmd:// ReadResource and document reads below hydrate
+    // from disk through the engine's core (lex + file-based) adapter, which needs
+    // no model. oms_sync_embeddings is engine-owned and loud-guards (ADR-007)
+    // without a model, so retrieve_context's semantic leg simply degrades to the
+    // graph leg here; with a model present the engine handles the sync just as well.
     await client.callTool({
       name: "oms_retrieve_context",
       arguments: {
@@ -190,7 +183,7 @@ async function mcpSmoke(packageRoot, vault) {
         semanticCollection: "vault",
         semanticLimit: 3,
         semanticMode: "query",
-        semanticIntent: "warm the src/search store for the model-less artifact smoke",
+        semanticIntent: "exercise the model-less retrieve path for the artifact smoke",
         semanticLex: "agent retrieval semantic",
         semanticMinScore: 0.01,
         embeddingSyncBeforeSearch: true,
@@ -201,12 +194,12 @@ async function mcpSmoke(packageRoot, vault) {
     // which REQUIRES a real embedding model (ADR-007). With a model we assert
     // real results; without one (the default CI runner) we assert the op
     // *refuses to falsely succeed* -- which itself proves it routed to the
-    // engine, not the legacy hash store. Mirrors src/mcp/semantic-server.test.ts.
-    // Gate on the local model path only, mirroring semantic-server.test.ts: the
-    // smoke forwards OMS_MODEL_PATH to the child but deliberately leaves the remote
-    // Upstage path out (no network in CI), so gating on UPSTAGE_API_KEY here would
-    // desync the runner gate from the forwarded child env.
-    const hasModel = Boolean(process.env.OMS_MODEL_PATH);
+    // engine and never fabricated a result. Mirrors src/mcp/semantic-server.test.ts.
+    // Gate on the canonical embedding pair, mirroring semantic-server.test.ts: the
+    // smoke forwards OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL to the child, so the
+    // runner gate must key off the same pair to stay in sync with the forwarded child
+    // env (ADR-007: explicit config, no auto-detect).
+    const hasModel = Boolean(process.env.OMS_EMBEDDING_PROVIDER && process.env.OMS_EMBEDDING_MODEL);
     const textOf = (res) => (res.content?.[0]?.type === "text" ? res.content[0].text : "");
     const syncCall = { name: "oms_sync_embeddings", arguments: { collection: "vault" } };
     const queryCall = {
@@ -237,7 +230,7 @@ async function mcpSmoke(packageRoot, vault) {
     } else {
       // sync gives the strong routing proof: the ADR-007 loud guard naming the model env.
       const sync = await callGuarded(syncCall);
-      if (!sync.guarded || !/OMS_MODEL_PATH|UPSTAGE_API_KEY/.test(sync.text)) {
+      if (!sync.guarded || !/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/.test(sync.text)) {
         fail("MCP semantic sync did not loud-guard the missing embedding model (ADR-007)");
       }
       // query must likewise refuse to falsely succeed without a model/store.
@@ -264,19 +257,9 @@ let tarball;
 try {
   tarball = packTarball();
   const packageRoot = extractPackage(tarball, tempRoot);
-  assertPath(path.join(packageRoot, "dist"), "dist directory");
-  assertPath(path.join(packageRoot, "core"), "core directory");
-  assertPath(path.join(packageRoot, "adapters/claude-code/.claude-plugin/plugin.json"), "Claude plugin manifest");
-  assertPath(path.join(packageRoot, "adapters/claude-code/skills/update/SKILL.md"), "Claude update skill");
-  assertPath(path.join(packageRoot, "adapters/codex/rules/oms.md"), "Codex Oh My Second Brain rule");
-  assertPath(path.join(packageRoot, "adapters/codex/skills/oms-capture/SKILL.md"), "Codex Oh My Second Brain capture skill");
-  assertPath(path.join(packageRoot, "adapters/codex/skills/oms-update/SKILL.md"), "Codex Oh My Second Brain update skill");
-  assertPath(path.join(packageRoot, "adapters/hermes/skills/capture/SKILL.md"), "Hermes Oh My Second Brain capture skill");
-  assertPath(path.join(packageRoot, "adapters/hermes/skills/update/SKILL.md"), "Hermes Oh My Second Brain update skill");
-  assertPath(path.join(packageRoot, "docs/install.md"), "install docs");
-  assertPath(path.join(packageRoot, "docs/release.md"), "release docs");
-  assertPath(path.join(packageRoot, "scripts/install.sh"), "install shell script");
-  assertPath(path.join(packageRoot, "scripts/uninstall.sh"), "uninstall shell script");
+  for (const requiredPath of harnessSurfaceRegistry.packageAssets.releaseRequiredPaths) {
+    assertPath(path.join(packageRoot, requiredPath), `required release asset ${requiredPath}`);
+  }
   installRuntimeDependencies(packageRoot);
   const vault = makeVault(tempRoot);
   if (runSetup) {

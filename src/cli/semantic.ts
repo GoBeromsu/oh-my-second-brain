@@ -1,30 +1,16 @@
-import path from "node:path";
-import {
-  cleanupSemanticStore,
-  getSemanticDocument,
-  initSemanticStore,
-  listSemanticDocuments,
-  multiGetSemanticDocuments,
-  pullSemanticModels,
-  querySemanticStore,
-  readSemanticDoctor,
-  readSemanticStatus,
-  runSemanticBenchmark,
-  syncSemanticEmbeddingStore,
-} from "../search/semantic.js";
+
+import type { McpEngineAdapter } from "../engine/mcp/facade.js";
+import { assembleSemanticEngine } from "../mcp/semantic-engine.js";
 import {
   booleanOption,
   numberOption,
   parseSemanticArgs,
   printJson,
   semanticQueryOptions,
-  semanticStorageOption,
-  stringListOption,
   stringOption,
   targetList,
 } from "./semantic-args.js";
 import { startSemanticHttpServer } from "./semantic-http.js";
-import { runCollectionCommand, runContextCommand } from "./semantic-metadata-commands.js";
 import { semanticUsageText } from "./semantic-usage.js";
 
 export interface SemanticCliRunOptions {
@@ -45,12 +31,7 @@ const TOP_LEVEL_COMMANDS = new Set([
   "embed",
   "collection",
   "context",
-  "ls",
-  "init",
   "cleanup",
-  "doctor",
-  "pull",
-  "bench",
   "serve",
   "http",
 ]);
@@ -61,6 +42,16 @@ export function isSemanticCliCommand(command: string | undefined): boolean {
 
 export { semanticUsageText } from "./semantic-usage.js";
 
+/** Assemble the engine adapter (vec-capable when configured, else lex + docs), run, dispose. */
+async function withSemanticAdapter<T>(vault: string, fn: (adapter: McpEngineAdapter) => Promise<T>): Promise<T> {
+  const engine = assembleSemanticEngine(vault);
+  try {
+    return await fn(engine.adapter);
+  } finally {
+    await engine.dispose();
+  }
+}
+
 export async function runSemanticCli(options: SemanticCliRunOptions): Promise<number> {
   const write = options.write ?? ((message: string) => console.log(message));
   const writeError = options.writeError ?? ((message: string) => console.error(message));
@@ -68,149 +59,74 @@ export async function runSemanticCli(options: SemanticCliRunOptions): Promise<nu
   const command = parsed.positional[0] === "semantic" ? parsed.positional[1] : parsed.positional[0];
   const commandOffset = parsed.positional[0] === "semantic" ? 2 : 1;
   const rest = parsed.positional.slice(commandOffset);
+  const vault = options.vault;
 
   if (!command || command === "help") {
     write(semanticUsageText());
     return 0;
   }
 
-  if (command === "init") {
-    const result = await initSemanticStore({
-      vault: options.vault,
-      index: stringOption(parsed, "index"),
-      storage: semanticStorageOption(parsed),
-    });
-    printJson(write, result);
-    return result.available ? 0 : 1;
-  }
-
-  if (command === "sync" || command === "update" || command === "embed") {
-    const result = await syncSemanticEmbeddingStore({
-      vault: options.vault,
-      collection: stringOption(parsed, "collection"),
-      pattern: stringOption(parsed, "pattern"),
-      ignore: stringListOption(parsed, "ignore"),
-      includeByDefault: booleanOption(parsed, "includeDefault"),
-      updateCommand: stringOption(parsed, "updateCommand"),
-      index: stringOption(parsed, "index"),
-      storage: semanticStorageOption(parsed),
-      modelPath: stringOption(parsed, "modelPath"),
-      force: booleanOption(parsed, "force"),
-      pull: booleanOption(parsed, "pull"),
-      update: booleanOption(parsed, "update"),
-      embed: booleanOption(parsed, "embed"),
-      chunkStrategy: stringOption(parsed, "chunkStrategy"),
-      maxDocsPerBatch: numberOption(parsed, "maxDocsPerBatch"),
-      maxBatchMb: numberOption(parsed, "maxBatchMb"),
-    });
-    printJson(write, result);
-    return result.available ? 0 : 1;
-  }
-
-  if (command === "status") {
-    const status = await readSemanticStatus({
-      vault: options.vault,
-      index: stringOption(parsed, "index"),
-      storage: semanticStorageOption(parsed),
-      modelPath: stringOption(parsed, "modelPath"),
-    });
-    printJson(write, status);
-    return status.available ? 0 : 1;
-  }
-
-  if (command === "doctor") {
-    const result = await readSemanticDoctor({
-      vault: options.vault,
-      index: stringOption(parsed, "index"),
-      storage: semanticStorageOption(parsed),
-      modelPath: stringOption(parsed, "modelPath"),
-    });
-    printJson(write, result);
-    return result.available ? 0 : 1;
-  }
-
-  if (command === "cleanup") {
-    const result = await cleanupSemanticStore({
-      vault: options.vault,
-      index: stringOption(parsed, "index"),
-      storage: semanticStorageOption(parsed),
-    });
-    printJson(write, result);
-    return result.available ? 0 : 1;
-  }
-
-  if (command === "pull") {
-    printJson(write, pullSemanticModels());
-    return 0;
-  }
-
-  if (command === "bench") {
-    return runBenchCommand(rest, parsed, options.vault, write, writeError);
-  }
-
-  if (command === "ls") {
-    const result = await listSemanticDocuments({
-      vault: options.vault,
-      index: stringOption(parsed, "index"),
-      storage: semanticStorageOption(parsed),
-      target: rest[0],
-    });
-    printJson(write, result);
-    return result.available ? 0 : 1;
-  }
-
-  if (command === "query" || command === "search" || command === "vsearch") {
-    const mode = command === "search" ? "search" : command === "vsearch" ? "vsearch" : "query";
-    const result = await querySemanticStore(semanticQueryOptions(mode, options.vault, parsed, rest.join(" ")));
-    printJson(write, result);
-    return result.available ? 0 : 1;
-  }
-
-  if (command === "get") return runGetCommand(rest, parsed, options.vault, write, writeError);
-  if (command === "multi-get") return runMultiGetCommand(rest, parsed, options.vault, write, writeError);
-  if (command === "collection") return runCollectionCommand(rest[0], rest[1], parsed, options.vault, write, writeError);
-  if (command === "context") return runContextCommand(rest[0], rest, parsed, options.vault, write, writeError);
-
   if (command === "serve" || command === "http") {
     const server = await startSemanticHttpServer({
-      vault: options.vault,
+      vault,
       host: stringOption(parsed, "host"),
       port: numberOption(parsed, "port") ?? 8765,
       index: stringOption(parsed, "index"),
-      storage: semanticStorageOption(parsed),
-      modelPath: stringOption(parsed, "modelPath"),
     });
     printJson(write, { available: true, url: server.url });
     await new Promise(() => undefined);
     return 0;
   }
 
+  if (command === "sync" || command === "update" || command === "embed") {
+    return withSemanticAdapter(vault, async (adapter) => {
+      const result = await adapter.syncEmbeddings({
+        vault,
+        collection: stringOption(parsed, "collection"),
+        index: stringOption(parsed, "index"),
+        embed: booleanOption(parsed, "embed"),
+        force: booleanOption(parsed, "force"),
+        chunkStrategy: stringOption(parsed, "chunkStrategy"),
+        maxDocsPerBatch: numberOption(parsed, "maxDocsPerBatch"),
+        maxBatchMb: numberOption(parsed, "maxBatchMb"),
+      });
+      printJson(write, result);
+      return result.available ? 0 : 1;
+    });
+  }
+
+  if (command === "status") {
+    return withSemanticAdapter(vault, (adapter) => {
+      const status = adapter.semanticStatus({ vault, index: stringOption(parsed, "index") });
+      printJson(write, status);
+      return Promise.resolve(status.available ? 0 : 1);
+    });
+  }
+
+  if (command === "cleanup") {
+    return withSemanticAdapter(vault, async (adapter) => {
+      const result = await adapter.cleanup({ vault, index: stringOption(parsed, "index") });
+      printJson(write, result);
+      return result.available ? 0 : 1;
+    });
+  }
+
+  if (command === "query" || command === "search" || command === "vsearch") {
+    const mode = command === "search" ? "search" : command === "vsearch" ? "vsearch" : "query";
+    return withSemanticAdapter(vault, async (adapter) => {
+      const result = await adapter.semanticQuery(semanticQueryOptions(mode, vault, parsed, rest.join(" ")));
+      printJson(write, result);
+      return result.available ? 0 : 1;
+    });
+  }
+
+  if (command === "get") return runGetCommand(rest, parsed, vault, write, writeError);
+  if (command === "multi-get") return runMultiGetCommand(rest, parsed, vault, write, writeError);
+  if (command === "collection") return runCollectionCommand(rest[0], rest[1], parsed, vault, write);
+  if (command === "context") return runContextCommand(rest[0], parsed, vault, write);
+
   writeError(semanticUsageText());
   return 1;
-}
-
-async function runBenchCommand(
-  rest: readonly string[],
-  parsed: ReturnType<typeof parseSemanticArgs>,
-  vault: string,
-  write: (message: string) => void,
-  writeError: (message: string) => void,
-): Promise<number> {
-  const fixture = rest[0];
-  if (!fixture) {
-    writeError("Usage: oms semantic bench <fixture.json>");
-    return 1;
-  }
-  const result = await runSemanticBenchmark({
-    vault,
-    index: stringOption(parsed, "index"),
-    storage: semanticStorageOption(parsed),
-    modelPath: stringOption(parsed, "modelPath"),
-    fixture: path.resolve(vault, fixture),
-    collection: stringOption(parsed, "collection"),
-  });
-  printJson(write, result);
-  return result.available && result.failed === 0 ? 0 : 1;
 }
 
 async function runGetCommand(
@@ -225,20 +141,19 @@ async function runGetCommand(
     writeError("Usage: oms semantic get <target>");
     return 1;
   }
-  const result = await getSemanticDocument({
-    vault,
-    target,
-    collection: stringOption(parsed, "collection"),
-    index: stringOption(parsed, "index"),
-    storage: semanticStorageOption(parsed),
-    modelPath: stringOption(parsed, "modelPath"),
-    fromLine: numberOption(parsed, "fromLine"),
-    lineCount: numberOption(parsed, "lineCount"),
-    lineNumbers: booleanOption(parsed, "lineNumbers"),
-    fullPath: booleanOption(parsed, "fullPath"),
+  return withSemanticAdapter(vault, async (adapter) => {
+    const result = await adapter.getDocument({
+      vault,
+      target,
+      collection: stringOption(parsed, "collection"),
+      fromLine: numberOption(parsed, "fromLine"),
+      lineCount: numberOption(parsed, "lineCount"),
+      lineNumbers: booleanOption(parsed, "lineNumbers"),
+      fullPath: booleanOption(parsed, "fullPath"),
+    });
+    printJson(write, result);
+    return result.available ? 0 : 1;
   });
-  printJson(write, result);
-  return result.available ? 0 : 1;
 }
 
 async function runMultiGetCommand(
@@ -253,18 +168,54 @@ async function runMultiGetCommand(
     writeError("Usage: oms semantic multi-get <target...>");
     return 1;
   }
-  const result = await multiGetSemanticDocuments({
-    vault,
-    targets,
-    collection: stringOption(parsed, "collection"),
-    index: stringOption(parsed, "index"),
-    storage: semanticStorageOption(parsed),
-    modelPath: stringOption(parsed, "modelPath"),
-    lineLimit: numberOption(parsed, "lineLimit"),
-    maxBytes: numberOption(parsed, "maxBytes"),
-    lineNumbers: booleanOption(parsed, "lineNumbers"),
-    fullPath: booleanOption(parsed, "fullPath"),
+  return withSemanticAdapter(vault, async (adapter) => {
+    const result = await adapter.multiGetDocuments({
+      vault,
+      targets: [...targets],
+      collection: stringOption(parsed, "collection"),
+      lineLimit: numberOption(parsed, "lineLimit"),
+      maxBytes: numberOption(parsed, "maxBytes"),
+      lineNumbers: booleanOption(parsed, "lineNumbers"),
+      fullPath: booleanOption(parsed, "fullPath"),
+    });
+    printJson(write, result);
+    return result.available ? 0 : 1;
   });
-  printJson(write, result);
-  return result.available ? 0 : 1;
+}
+
+async function runCollectionCommand(
+  action: string | undefined,
+  collectionName: string | undefined,
+  parsed: ReturnType<typeof parseSemanticArgs>,
+  vault: string,
+  write: (message: string) => void,
+): Promise<number> {
+  return withSemanticAdapter(vault, (adapter) => {
+    const result = adapter.listCollections({ vault, index: stringOption(parsed, "index") });
+    if (!result.available) {
+      printJson(write, result);
+      return Promise.resolve(1);
+    }
+    const name = action === "show" ? collectionName : undefined;
+    const collections = name ? result.collections.filter((collection) => collection.name === name) : result.collections;
+    printJson(write, { collections });
+    return Promise.resolve(0);
+  });
+}
+
+async function runContextCommand(
+  action: string | undefined,
+  parsed: ReturnType<typeof parseSemanticArgs>,
+  vault: string,
+  write: (message: string) => void,
+): Promise<number> {
+  if (action && action !== "list") {
+    write(semanticUsageText());
+    return 1;
+  }
+  return withSemanticAdapter(vault, (adapter) => {
+    const result = adapter.listContexts({ vault, index: stringOption(parsed, "index") });
+    printJson(write, result);
+    return Promise.resolve(result.available ? 0 : 1);
+  });
 }

@@ -66,10 +66,10 @@ describe("createHashProjectionProvider", () => {
 // ---------------------------------------------------------------------------
 
 describe("requireRealEmbeddingProvider — GGUF path", () => {
-  it("returns GGUF provider when modelPath is provided", () => {
+  it("returns GGUF provider when provider=gguf + model are provided", () => {
     const saved = process.env["UPSTAGE_API_KEY"];
     delete process.env["UPSTAGE_API_KEY"];
-    const p = requireRealEmbeddingProvider({ modelPath: "/fake/model.gguf" });
+    const p = requireRealEmbeddingProvider({ provider: "gguf", model: "/fake/model.gguf" });
     expect(p.model).toMatch(/^node-llama-cpp:/);
     expect(p.dimensions).toBe(GGUF_EMBEDDING_DIMENSIONS);
     if (saved !== undefined) process.env["UPSTAGE_API_KEY"] = saved;
@@ -91,10 +91,6 @@ describe("requireRealEmbeddingProvider — GGUF path", () => {
 });
 
 // ---------------------------------------------------------------------------
-// GGUF provider with real model (skipped unless OMS_MODEL_PATH is set)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // requireRealEmbeddingProvider — strict production factory
 // ---------------------------------------------------------------------------
 
@@ -109,31 +105,54 @@ describe("requireRealEmbeddingProvider — strict guard", () => {
     }
   });
 
-  it("THROWS with OMS_MODEL_PATH message when no modelPath and no UPSTAGE_API_KEY", () => {
+  it("THROWS asking for OMS_EMBEDDING_PROVIDER when no provider is configured", () => {
     savedUpstage = process.env["UPSTAGE_API_KEY"];
     delete process.env["UPSTAGE_API_KEY"];
-    expect(() => requireRealEmbeddingProvider({})).toThrow("OMS_MODEL_PATH");
+    expect(() => requireRealEmbeddingProvider({})).toThrow("OMS_EMBEDDING_PROVIDER");
   });
 
-  it("THROWS mentioning 'hash-projection' to make the guard rationale clear", () => {
+  it("THROWS asking for OMS_EMBEDDING_MODEL when provider is set but model is missing", () => {
     savedUpstage = process.env["UPSTAGE_API_KEY"];
     delete process.env["UPSTAGE_API_KEY"];
-    expect(() => requireRealEmbeddingProvider()).toThrow("hash-projection");
+    expect(() => requireRealEmbeddingProvider({ provider: "gguf" })).toThrow("OMS_EMBEDDING_MODEL");
   });
 
-  it("returns GGUF provider (dimensions===768) when modelPath is given", () => {
+  it("returns GGUF provider (dimensions===768) when provider=gguf + model are given", () => {
     savedUpstage = process.env["UPSTAGE_API_KEY"];
     delete process.env["UPSTAGE_API_KEY"];
-    const p = requireRealEmbeddingProvider({ modelPath: "/fake/model.gguf" });
+    const p = requireRealEmbeddingProvider({ provider: "gguf", model: "/fake/model.gguf" });
     expect(p.model).toMatch(/^node-llama-cpp:/);
     expect(p.dimensions).toBe(768);
   });
 
-  it("does NOT throw when UPSTAGE_API_KEY is set (Upstage path)", () => {
+  it("does NOT auto-detect Upstage from UPSTAGE_API_KEY — provider must be explicit", () => {
     savedUpstage = process.env["UPSTAGE_API_KEY"];
     process.env["UPSTAGE_API_KEY"] = "test-key-123";
-    const p = requireRealEmbeddingProvider({});
+    // Key present but no OMS_EMBEDDING_PROVIDER → still throws (no key-based auto-detect).
+    expect(() => requireRealEmbeddingProvider({})).toThrow("OMS_EMBEDDING_PROVIDER");
+  });
+
+  it("returns Upstage provider when provider=upstage + model + UPSTAGE_API_KEY are set", () => {
+    savedUpstage = process.env["UPSTAGE_API_KEY"];
+    process.env["UPSTAGE_API_KEY"] = "test-key-123";
+    const p = requireRealEmbeddingProvider({ provider: "upstage", model: "solar-embedding-1-large" });
     expect(p.model).toContain("upstage");
+  });
+
+  it("THROWS for provider=upstage when UPSTAGE_API_KEY is missing", () => {
+    savedUpstage = process.env["UPSTAGE_API_KEY"];
+    delete process.env["UPSTAGE_API_KEY"];
+    expect(() =>
+      requireRealEmbeddingProvider({ provider: "upstage", model: "solar-embedding-1-large" }),
+    ).toThrow("UPSTAGE_API_KEY");
+  });
+
+  it("THROWS for an unsupported provider id", () => {
+    savedUpstage = process.env["UPSTAGE_API_KEY"];
+    delete process.env["UPSTAGE_API_KEY"];
+    expect(() =>
+      requireRealEmbeddingProvider({ provider: "cohere", model: "embed-v3" }),
+    ).toThrow("unsupported");
   });
 });
 

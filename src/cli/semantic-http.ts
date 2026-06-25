@@ -1,14 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
-import {
-  cleanupSemanticStore,
-  listSemanticCollections,
-  listSemanticContexts,
-  querySemanticStore,
-  readSemanticStatus,
-} from "../search/semantic.js";
-import type { SemanticQueryOptions, SemanticSearchMode } from "../search/semantic.js";
-import type { SemanticStorage } from "../search/semantic.js";
+import type { McpEngineAdapter } from "../engine/mcp/facade.js";
+import { assembleSemanticEngine } from "../mcp/semantic-engine.js";
+import type { SemanticQueryOptions, SemanticSearchMode } from "../retrieve/semantic-contract.js";
 import { handleSemanticTool } from "../mcp/semantic-retrieve.js";
 import { semanticMcpTools } from "../mcp/semantic-schemas.js";
 
@@ -20,10 +14,14 @@ export interface SemanticHttpServer {
 export interface SemanticHttpServerOptions {
   readonly vault: string;
   readonly index?: string;
-  readonly storage?: SemanticStorage;
-  readonly modelPath?: string;
   readonly host?: string;
   readonly port?: number;
+}
+
+interface RouteContext {
+  readonly vault: string;
+  readonly index?: string;
+  readonly adapter: McpEngineAdapter;
 }
 
 function safeHost(host: string | undefined): string {
@@ -55,27 +53,16 @@ function stringField(value: Record<string, unknown>, key: string): string | unde
   return typeof field === "string" ? field : undefined;
 }
 
-function storageField(value: Record<string, unknown>, key: string): SemanticStorage | undefined {
-  const field = stringField(value, key);
-  return field === "qmd-sqlite" || field === "oms-native-json" ? field : undefined;
-}
-
 function numberField(value: Record<string, unknown>, key: string): number | undefined {
   const field = value[key];
   return typeof field === "number" ? field : undefined;
 }
 
-function queryOptions(
-  opts: Required<Pick<SemanticHttpServerOptions, "vault">> & Pick<SemanticHttpServerOptions, "index" | "storage" | "modelPath">,
-  mode: SemanticSearchMode,
-  body: unknown,
-): SemanticQueryOptions {
+function queryOptions(ctx: RouteContext, mode: SemanticSearchMode, body: unknown): SemanticQueryOptions {
   const record = isRecord(body) ? body : {};
   return {
-    vault: opts.vault,
-    index: opts.index,
-    storage: storageField(record, "storage") ?? opts.storage,
-    modelPath: stringField(record, "modelPath") ?? opts.modelPath,
+    vault: ctx.vault,
+    index: ctx.index,
     mode,
     query: stringField(record, "query") ?? "",
     collection: stringField(record, "collection"),
@@ -88,10 +75,7 @@ function queryOptions(
   };
 }
 
-async function handleMcpJsonRpc(
-  opts: Required<Pick<SemanticHttpServerOptions, "vault">> & Pick<SemanticHttpServerOptions, "index" | "storage" | "modelPath">,
-  body: unknown,
-): Promise<unknown> {
+async function handleMcpJsonRpc(ctx: RouteContext, body: unknown): Promise<unknown> {
   if (!isRecord(body)) return { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid request." } };
   const id = body["id"] ?? null;
   const method = stringField(body, "method");
@@ -102,15 +86,10 @@ async function handleMcpJsonRpc(
     const params = body["params"];
     const name = stringField(params, "name");
     const args = isRecord(params["arguments"])
-      ? {
-          ...params["arguments"],
-          index: stringField(params["arguments"], "index") ?? opts.index,
-          storage: storageField(params["arguments"], "storage") ?? opts.storage,
-          modelPath: stringField(params["arguments"], "modelPath") ?? opts.modelPath,
-        }
-      : { index: opts.index, storage: opts.storage, modelPath: opts.modelPath };
+      ? { ...params["arguments"], index: stringField(params["arguments"], "index") ?? ctx.index }
+      : { index: ctx.index };
     if (!name) return { jsonrpc: "2.0", id, error: { code: -32602, message: "Missing tool name." } };
-    const result = await handleSemanticTool(name, args, opts.vault);
+    const result = await handleSemanticTool(name, args, ctx.vault, ctx.adapter);
     if (!result) return { jsonrpc: "2.0", id, error: { code: -32601, message: `Unknown OMS semantic tool: ${name}` } };
     return result.ok
       ? { jsonrpc: "2.0", id, result: result.value }
@@ -119,23 +98,14 @@ async function handleMcpJsonRpc(
   return { jsonrpc: "2.0", id, error: { code: -32601, message: `Unsupported OMS semantic MCP method: ${method ?? ""}` } };
 }
 
-async function routeRequest(
-  opts: Required<Pick<SemanticHttpServerOptions, "vault">> & Pick<SemanticHttpServerOptions, "index" | "storage" | "modelPath">,
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<void> {
+async function routeRequest(ctx: RouteContext, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const pathName = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
   try {
     if (request.method === "GET" && pathName === "/health") {
-      const status = await readSemanticStatus({
-        vault: opts.vault,
-        index: opts.index,
-        storage: opts.storage,
-        modelPath: opts.modelPath,
-      });
+      const status = ctx.adapter.semanticStatus({ vault: ctx.vault, index: ctx.index });
       sendJson(response, 200, {
         ok: status.available,
-        storage: status.available ? status.storage : opts.storage ?? "qmd-sqlite",
+        storage: status.available ? status.storage : "oms-native-json",
         status,
       });
       return;
@@ -143,23 +113,23 @@ async function routeRequest(
     if (request.method === "POST" && (pathName === "/query" || pathName === "/search")) {
       const body = await readJsonBody(request);
       const mode = pathName === "/search" ? "search" : "query";
-      sendJson(response, 200, await querySemanticStore(queryOptions(opts, mode, body)));
+      sendJson(response, 200, await ctx.adapter.semanticQuery(queryOptions(ctx, mode, body)));
       return;
     }
     if (request.method === "POST" && pathName === "/mcp") {
-      sendJson(response, 200, await handleMcpJsonRpc(opts, await readJsonBody(request)));
+      sendJson(response, 200, await handleMcpJsonRpc(ctx, await readJsonBody(request)));
       return;
     }
     if (request.method === "GET" && pathName === "/collections") {
-      sendJson(response, 200, await listSemanticCollections({ vault: opts.vault, index: opts.index, storage: opts.storage }));
+      sendJson(response, 200, ctx.adapter.listCollections({ vault: ctx.vault, index: ctx.index }));
       return;
     }
     if (request.method === "GET" && pathName === "/contexts") {
-      sendJson(response, 200, await listSemanticContexts({ vault: opts.vault, index: opts.index, storage: opts.storage }));
+      sendJson(response, 200, ctx.adapter.listContexts({ vault: ctx.vault, index: ctx.index }));
       return;
     }
     if (request.method === "POST" && pathName === "/cleanup") {
-      sendJson(response, 200, await cleanupSemanticStore({ vault: opts.vault, index: opts.index, storage: opts.storage }));
+      sendJson(response, 200, await ctx.adapter.cleanup({ vault: ctx.vault, index: ctx.index }));
       return;
     }
     sendJson(response, 404, { ok: false, reason: "Unknown OMS semantic HTTP endpoint." });
@@ -172,21 +142,25 @@ async function routeRequest(
 export async function startSemanticHttpServer(opts: SemanticHttpServerOptions): Promise<SemanticHttpServer> {
   const host = safeHost(opts.host);
   const port = opts.port ?? 8765;
+  // Single engine per server: vec-capable when OMS_EMBEDDING_PROVIDER/MODEL are
+  // configured, else a core lex + document engine (vec/HyDE fail fast).
+  const engine = assembleSemanticEngine(opts.vault);
+  const ctx: RouteContext = { vault: opts.vault, index: opts.index, adapter: engine.adapter };
   const server: Server = createServer((request, response) => {
-    void routeRequest({
-      vault: opts.vault,
-      index: opts.index,
-      storage: opts.storage,
-      modelPath: opts.modelPath,
-    }, request, response);
+    void routeRequest(ctx, request, response);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, host, () => {
-      server.off("error", reject);
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, host, () => {
+        server.off("error", reject);
+        resolve();
+      });
     });
-  });
+  } catch (error) {
+    await engine.dispose().catch(() => undefined);
+    throw error;
+  }
   const address = server.address();
   const actualPort = typeof address === "object" && address ? (address as AddressInfo).port : port;
   const urlHost = host === "::1" ? "[::1]" : host;
@@ -194,7 +168,11 @@ export async function startSemanticHttpServer(opts: SemanticHttpServerOptions): 
     url: `http://${urlHost}:${actualPort}`,
     close: () =>
       new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
+        server.close((error) => {
+          void engine.dispose().catch(() => undefined);
+          if (error) reject(error);
+          else resolve();
+        });
       }),
   };
 }

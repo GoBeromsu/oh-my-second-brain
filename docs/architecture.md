@@ -104,6 +104,6 @@ Existing concept YAML may use `lenses`. Keep that key backward-compatible, but e
 
 - **TypeScript** (`module: NodeNext`, Node ≥ 20) — runtime for the CLI, convention engine, and adapter interfaces.
 - **Markdown** — conventions, skills, agents, and adapter documentation.
-- **YAML** — ontology data files (`concepts/*.yaml`, `taxonomy.yaml`); parsed by the `yaml` npm package (the only runtime dependency in v0).
+- **YAML** — ontology data files (`concepts/*.yaml`, `taxonomy.yaml`); parsed by the `yaml` npm package. Runtime dependencies are tracked in `package.json`.
 - **No Obsidian app dependency** — a vault is just a folder of markdown files. Oh My Second Brain reads and writes it directly via the filesystem.
 - **No new heavy dependencies** — any additional dep requires explicit approval (spec constraint).

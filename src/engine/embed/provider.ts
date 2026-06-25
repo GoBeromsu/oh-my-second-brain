@@ -72,8 +72,8 @@ type LlamaEmbeddingContextInstance = Awaited<
 /**
  * L2-normalise a raw embedding vector and return as Float32Array.
  *
- * Unlike src/search/semantic-embedding-provider.ts::projectEmbeddingVector(),
- * there is NO modulo fold here: the full 768-element vector is preserved.
+ * There is NO modulo fold or projection here: the full 768-element vector is
+ * preserved (no lossy fold to a smaller width).
  * For EmbeddingGemma-300M this means float[768], no lossy fold to 64d.
  */
 function normalizeVector(values: readonly number[]): Float32Array {
@@ -216,7 +216,7 @@ export function createGGUFEmbeddingProvider(
 
 const UPSTAGE_DIMENSIONS = 4096;
 const UPSTAGE_API_URL = "https://api.upstage.ai/v1/embeddings";
-const UPSTAGE_MODEL = "embedding-passage";
+// No default model: OMS config must supply OMS_EMBEDDING_MODEL explicitly.
 
 interface UpstageEmbeddingResponse {
   data: Array<{ embedding: number[]; index: number }>;
@@ -229,9 +229,9 @@ interface UpstageEmbeddingResponse {
  * when UPSTAGE_API_KEY is set in the environment; never use by default.
  * The API key MUST come from env — never hardcoded (R4 secrets-via-env).
  */
-export function createUpstageProvider(apiKey: string): EmbeddingProvider {
+export function createUpstageProvider(apiKey: string, model: string): EmbeddingProvider {
   return {
-    model: "upstage-embedding-passage:4096d",
+    model: `upstage:${model}`,
     dimensions: UPSTAGE_DIMENSIONS,
 
     async embed(text: string): Promise<Float32Array> {
@@ -249,7 +249,7 @@ export function createUpstageProvider(apiKey: string): EmbeddingProvider {
             "Content-Type": "application/json",
             Authorization: `Bearer ${apiKey}`,
           },
-          body: JSON.stringify({ input, model: UPSTAGE_MODEL }),
+          body: JSON.stringify({ input, model }),
         });
         if (response.ok) {
           const json = (await response.json()) as UpstageEmbeddingResponse;
@@ -284,13 +284,17 @@ export function createUpstageProvider(apiKey: string): EmbeddingProvider {
 }
 
 // ---------------------------------------------------------------------------
-// Production factory — strict, fails loud when no real model is available
+// Production factory — strict, explicit, no auto-detect
 // ---------------------------------------------------------------------------
 
-/** Options for the production embedding factory. */
+export type EmbeddingProviderKind = "gguf" | "upstage";
+
+/** Options for the production embedding factory (explicit provider + model). */
 export interface EmbeddingProviderOptions {
-  /** Absolute path to a GGUF model file (enables real 768d embeddings). */
-  modelPath?: string;
+  /** Provider id selected by OMS_EMBEDDING_PROVIDER. */
+  provider?: EmbeddingProviderKind | string;
+  /** Provider-specific model identifier selected by OMS_EMBEDDING_MODEL. */
+  model?: string;
 }
 
 /** Alias kept for callers that import StrictEmbeddingProviderOptions by name. */
@@ -299,34 +303,48 @@ export type StrictEmbeddingProviderOptions = EmbeddingProviderOptions;
 /**
  * Resolve a REAL embedding provider or throw.
  *
- * This is the ONE production factory for the OMS engine.  It NEVER falls back
- * to a fake/stub embedder — missing configuration is a loud error, not a
- * silent corruption.
+ * This is the ONE production factory for the OMS engine. It NEVER falls back to
+ * a fake/stub embedder and it NEVER auto-selects a provider based on env key
+ * presence (UPSTAGE_API_KEY, etc.). Provider selection is explicit.
  *
- * Resolution order:
- *   1. UPSTAGE_API_KEY env var set → Upstage Solar (4096d).
- *   2. opts.modelPath provided → GGUF / node-llama-cpp (768d, EmbeddingGemma-300M).
- *   3. Neither available → throws with a clear message mentioning OMS_MODEL_PATH.
- *
- * @throws {Error} When neither UPSTAGE_API_KEY nor modelPath is available.
+ * @throws {Error} When provider/model are missing or unsupported, or when
+ *                 provider-specific auth is missing.
  */
 export function requireRealEmbeddingProvider(
   opts: StrictEmbeddingProviderOptions = {},
 ): EmbeddingProvider {
-  const upstageKey = process.env["UPSTAGE_API_KEY"];
-  if (upstageKey) {
-    return createUpstageProvider(upstageKey);
+  const providerRaw = (opts.provider ?? "").toString().trim();
+  const model = (opts.model ?? "").toString().trim();
+
+  if (!providerRaw) {
+    throw new Error(
+      "OMS embedding provider is not configured. Set OMS_EMBEDDING_PROVIDER " +
+        "(e.g. gguf or upstage) and OMS_EMBEDDING_MODEL, then rerun sync.",
+    );
   }
-  if (opts.modelPath) {
-    return createGGUFEmbeddingProvider(opts.modelPath);
+  if (!model) {
+    throw new Error(
+      `OMS embedding model is not configured for provider "${providerRaw}". ` +
+        "Set OMS_EMBEDDING_MODEL and rerun sync.",
+    );
   }
+
+  if (providerRaw === "gguf") {
+    return createGGUFEmbeddingProvider(model);
+  }
+
+  if (providerRaw === "upstage") {
+    const upstageKey = process.env["UPSTAGE_API_KEY"];
+    if (!upstageKey) {
+      throw new Error(
+        "OMS embedding provider is configured as upstage but UPSTAGE_API_KEY is missing.",
+      );
+    }
+    return createUpstageProvider(upstageKey, model);
+  }
+
   throw new Error(
-    "OMS production path requires a real embedding model but none is configured. " +
-    "Set OMS_MODEL_PATH to the absolute path of the GGUF model file " +
-    "(e.g. /path/to/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf) " +
-    "or set UPSTAGE_API_KEY for the Upstage Solar API. " +
-    "The hash-projection fallback (model id 'hash-projection:dim=64') is NOT " +
-    "permitted on the production assemble path — it would silently produce " +
-    "fake embeddings and corrupt the vault index.",
+    `OMS embedding provider "${providerRaw}" is unsupported. ` +
+      "Supported providers: gguf, upstage.",
   );
 }

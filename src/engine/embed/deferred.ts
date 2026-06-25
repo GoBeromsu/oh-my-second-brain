@@ -9,10 +9,9 @@
  * silently fabricating vectors.
  *
  * ADR-007: these are LOUD GUARDS, not fake fallbacks. They never return a
- * projected / hash vector — they throw. Real semantic retrieval stays on the
- * src/search layer until the engine reaches output parity (Option-1 swap).
- *
- * R18: no runtime import from src/search.
+ * projected / hash vector — they throw. Real semantic retrieval requires an
+ * explicitly configured embedding provider/model; the graph-only engine never
+ * loads one.
  */
 
 import type { EmbeddingProvider } from "../types.js";
@@ -38,9 +37,9 @@ export function makeDeferredProvider(): EmbeddingProvider {
     embed(_text: string): Promise<Float32Array> {
       return Promise.reject(
         new Error(
-          `${GRAPH_ONLY}: embedding provider unavailable. Set OMS_MODEL_PATH or ` +
-            `UPSTAGE_API_KEY for engine semantic ops; semantic retrieval otherwise ` +
-            `stays on the src/search layer.`,
+          `${GRAPH_ONLY}: embedding provider unavailable. Configure embeddings via ` +
+            `OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL (and provider auth env vars, ` +
+            `e.g. UPSTAGE_API_KEY) for engine semantic ops.`,
         ),
       );
     },
@@ -66,6 +65,10 @@ export function makeDeferredStore(): EngineStore {
     );
   };
   return {
+    capabilities: () => ({ vecAvailable: false }),
+    upsertLex: () => unavailable(),
+    readEmbeddingIdentity: () => unavailable(),
+    writeEmbeddingIdentity: () => unavailable(),
     upsert: () => unavailable(),
     queryVec: () => unavailable(),
     queryLex: () => unavailable(),

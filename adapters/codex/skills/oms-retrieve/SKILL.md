@@ -16,12 +16,11 @@ the selected OMS graph candidates.
 
 Pass typed sub-queries via `semanticSearches` to combine search strategies in one call:
 `type: "lex"` for BM25 keyword search, `type: "vec"` for SQLite-vector semantic
-search, `type: "hyde"` for hypothetical-document expansion, and `type: "graph"` for
-semantic candidates confined to graph neighbors. Pass `semanticMode`, `semanticIntent`,
-`semanticLex`, `semanticVec`, `semanticHyde`, and `semanticMinScore` for additional
-typed or thresholded control. Pass `semanticStorage: "qmd-sqlite"` for the default
-qmd-compatible SQLite store, and `embeddingSyncBeforeSearch: true` when the native
-semantic index must be refreshed before retrieval, or call `oms_sync_embeddings` explicitly.
+search, and `type: "hyde"` for hypothetical-document expansion. Pass `semanticMode`,
+`semanticIntent`, `semanticLex`, `semanticVec`, `semanticHyde`, and
+`semanticMinScore` for additional typed or thresholded control. Pass
+`embeddingSyncBeforeSearch: true` when the native semantic index must be refreshed
+before retrieval, or call `oms_sync_embeddings` explicitly.
 Use read-only `oms_get_document` or `oms_multi_get_documents` to rehydrate selected
 docids, paths, globs, or line ranges. Use `oms_semantic_query`,
 `oms_semantic_status`, `oms_semantic_collections`, or `oms_semantic_contexts` for

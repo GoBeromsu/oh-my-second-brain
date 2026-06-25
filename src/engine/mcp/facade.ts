@@ -283,16 +283,14 @@ export class McpEngineAdapter {
    * @param vaultPath - Absolute vault root, used by graph / sync / cleanup /
    *                    retrieve ops that are vault-scoped. Required so tsc
    *                    enforces it at every construction site (RISK-4).
-   * @param modelPath - Server-configured GGUF path (OMS_MODEL_PATH, resolved by
-   *                    assembleEngine). Threaded into syncEmbeddings so a sync
-   *                    triggered through the MCP surface — which carries no
-   *                    per-call modelPath — still reaches the real provider
-   *                    instead of tripping the ADR-007 model-less guard.
+   * @param config    - Optional embedding identity config (provider/model).
+   *                    This is used to enforce mismatch policy and to thread
+   *                    identity into syncEmbeddings when the call omits it.
    */
   constructor(
     private readonly deps: DispatcherDeps,
     private readonly vaultPath: string,
-    private readonly modelPath?: string,
+    private readonly config?: { readonly embeddingProvider?: string; readonly embeddingModel?: string },
   ) {}
 
   // -------------------------------------------------------------------------
@@ -361,12 +359,14 @@ export class McpEngineAdapter {
         vault: opts.vault,
         collection: opts.collection,
         collectionPath: opts.collectionPath,
-        // Fall back to the server-configured model (OMS_MODEL_PATH) when the MCP
-        // call omits an explicit modelPath — otherwise syncEngineStore builds a
-        // model-less provider and the ADR-007 guard rejects the sync. Mirrors
-        // AssembledEngine.syncVault, which threads config.modelPath the same way.
-        modelPath: opts.modelPath ?? this.modelPath,
+        // Embedding identity is owned by the assemble-time canonical config
+        // (OMS_EMBEDDING_PROVIDER / OMS_EMBEDDING_MODEL) threaded into the
+        // adapter; the MCP call no longer carries modelPath. syncEngineStore
+        // resolves the real provider and fails fast (ADR-007) if it is missing.
+        embeddingProvider: this.config?.embeddingProvider,
+        embeddingModel: this.config?.embeddingModel,
         embed: opts.embed ?? true,
+        force: opts.force ?? false,
       });
       if (!syncResult.available) {
         return syncResultUnavailable(syncResult.reason ?? "sync unavailable", opts);
