@@ -1,11 +1,11 @@
 ---
 name: oms-wiki
-description: Promote compiled concepts from processed/ into the wiki/ query surface, maintain the 5-state staleness ledger, regenerate navigation surfaces (index.md + log.md), and run 2-tier lint over the wiki collection.
+description: Two-path wiki skill — Path A (M3 engine): promote compiled concepts from processed/ into the wiki/ query surface; Path B (human authoring): build interlinked terminology notes in vault taxonomy folders via capture safety rails.
 ---
 
 # Skill: oms-wiki (Claude Code)
 
-Promote compiled concepts into the wiki query surface and keep the staleness ledger, navigation surfaces, and lint clean.
+Two-path skill — thin pointer to `core/skills/wiki`. Requires `OMS_VAULT`.
 
 ## Invocation
 
@@ -13,12 +13,21 @@ Promote compiled concepts into the wiki query surface and keep the staleness led
 /wiki
 ```
 
-## What this skill does
+## Which path?
 
-Thin pointer to `core/skills/wiki`. Requires `OMS_VAULT`. Operates on the
-`wiki/` query surface only — never writes to `processed/` or `src/`.
+Check **before acting**:
+- **Path A (M3 engine):** you have compiled `processed/<concept>.md` output → use `runCollection()` / `promoteToWiki()`, writes to `wiki/`.
+- **Path B (human authoring):** you have only a topic + terms, no compile output → use `oms_capture_prepare` / `oms_capture_commit`, writes to vault taxonomy folders.
 
-## Agent-guided steps (v0)
+These paths are **mutually exclusive**.
+
+---
+
+## Path A — M3 promotion engine
+
+*(Only when `processed/<concept>.md` exists.)*
+
+### Agent-guided steps
 
 1. Verify `processed/<concept>.md` exists (Phase-B compile output from M2).
 2. Load the staleness ledger from `.llmwiki/staleness.json`.
@@ -29,7 +38,7 @@ Thin pointer to `core/skills/wiki`. Requires `OMS_VAULT`. Operates on the
 5. Run `runLint()` — apply auto-fixes (index consistency, broken `[[wikilinks]]`,
    See-Also sections) and report findings (conflicts, orphans, outdated refs) to stdout.
 
-## Staleness states
+### Staleness states
 
 | State | Meaning |
 |-------|---------|
@@ -41,7 +50,7 @@ Thin pointer to `core/skills/wiki`. Requires `OMS_VAULT`. Operates on the
 
 Full-rebuild escape hatch: delete `.llmwiki/staleness.json` — every page resets to DIRTY.
 
-## Runtime
+### Runtime
 
 Implemented in `src/engine/wiki/`: `collection.ts` (`runCollection()`),
 `ledger.ts` (`loadLedger()` / `saveLedger()` / `resetLedger()`),
@@ -49,9 +58,34 @@ Implemented in `src/engine/wiki/`: `collection.ts` (`runCollection()`),
 `types.ts`.
 
 `promoteToWiki()` in `collection.ts` is the sole entry point into `wiki/`.
+`processed/` is engine-internal — NEVER synced to the Obsidian vault.
+A wiki run never triggers compile; compile never writes `wiki/` directly.
 
-## NOTES
+---
 
-`processed/` is engine-internal and is NEVER synced to the Obsidian vault —
-only `wiki/` crosses the sync boundary. A wiki run never triggers compile;
-compile never writes `wiki/` directly.
+## Path B — Human authoring
+
+*(Only when no compiled `processed/` output exists.)*
+
+Build a hub/MOC note plus one standalone note per coined term, cross-linked with
+`[[wikilinks]]` and committed via `oms_capture_prepare` / `oms_capture_commit`.
+Writes to vault taxonomy folders — **never to `wiki/`**.
+
+### Admission gate
+
+Apply before any `oms_capture_prepare` call:
+- **Coined/proper term** (only ever means one specific technical thing) → standalone note.
+- **General noun** (meaning shifts by domain) → `## Term` section inside the hub note.
+
+K8s example: `Pod`, `Service`, `Deployment`, `Ingress` → hub sections;
+`ReplicaSet`, `StatefulSet`, `DaemonSet`, `CronJob` → standalone notes.
+
+### Agent-guided steps
+
+1. Ask for the **topic** and **term list**.
+2. Resolve the **target concept/folder** from `vault/.oms/taxonomy.yaml`.
+3. Apply the admission gate to every term.
+4. **Deduplicate**: `oms_capture_prepare` per coined term; if `exists: true`, reuse existing `[[wikilink]]`.
+5. Draft coined-term notes (definition + `## See Also` back-link to hub). Commit terms first.
+6. Draft hub/MOC note (general-noun `## Term` sections + `## See Also` coined-term links). Commit hub last.
+7. Run `oms doctor` (non-blocking, exits 0).

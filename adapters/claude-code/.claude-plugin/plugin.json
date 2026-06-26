@@ -20,7 +20,6 @@
     "./skills/capture/",
     "./skills/retrieve/",
     "./skills/uninstall/",
-    "./skills/update/",
-    "./skills/glossary/"
+    "./skills/update/"
   ]
 }
