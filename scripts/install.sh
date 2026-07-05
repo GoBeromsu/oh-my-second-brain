@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash
 set -euo pipefail
 
-PACKAGE_SPEC="${OMS_PACKAGE_SPEC:-oh-my-second-brain@0.1.7}"
+PACKAGE_SPEC="${OMS_PACKAGE_SPEC:-oh-my-second-brain@0.1.8}"
 RUNTIME="${OMS_INSTALL_RUNTIME:-auto}"
 VAULT="${OMS_VAULT:-$PWD}"
 EXECUTE="${OMS_EXECUTE_EXTERNAL:-0}"
