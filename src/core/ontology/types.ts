@@ -9,6 +9,8 @@ export interface OntologyField {
   intent: string;
   normalize?: Normalize;
   immutable?: boolean;
+  /** Closed vocabulary for string fields; a value outside this list is a lint violation. */
+  enum?: string[];
 }
 
 export interface OntologyLens {
@@ -28,11 +30,22 @@ export interface Concept {
 export interface FolderBinding {
   intent: string;
   concept: string | string[] | null;
+  /**
+   * Marks this folder as an agent-writable zone per the vault routing guideline.
+   * Agent-writable alone is advisory; use routingLawStrict for hard created_by checks.
+   */
+  agentWritable?: boolean;
+  /**
+   * Marks an agent-writable folder as agent-exclusive for hard routing-law enforcement.
+   */
+  routingLawStrict?: boolean;
 }
 
 export interface Taxonomy {
   version: number;
   folders: Record<string, FolderBinding>;
+  /** Vault-relative glob patterns exempt from audit/lint scans. */
+  exclude?: string[];
 }
 
 export interface Ontology {
