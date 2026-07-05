@@ -266,6 +266,10 @@ function enrichQueryHits(result: McpSemanticQueryResult, vault: string): McpSema
   });
   return { available: true, hits };
 }
+function isLexOnlySubQueries(subQueries: readonly { readonly type: string }[]): boolean {
+  return subQueries.length > 0 && subQueries.every((subQuery) => subQuery.type === "lex");
+}
+
 
 // ---------------------------------------------------------------------------
 // Adapter facade
@@ -326,6 +330,16 @@ export class McpEngineAdapter {
       return queryResultUnavailable("No sub-queries derived from options");
     }
     try {
+      if (isLexOnlySubQueries(subQueries)) {
+        const syncResult = await syncEngineStore({
+          vault: opts.vault ?? this.vaultPath,
+          collection: opts.collection,
+          embed: false,
+        });
+        if (!syncResult.available) {
+          return queryResultUnavailable(syncResult.reason ?? "Lexical index sync unavailable");
+        }
+      }
       const k = opts.candidateLimit ?? 20;
       const results = await dispatch(subQueries, this.deps, k);
       const mapped = retrievalResultsToQueryResult(results, opts);

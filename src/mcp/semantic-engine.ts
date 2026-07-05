@@ -7,13 +7,14 @@
  *
  *   - {@link assembleFullSemanticEngine} requires OMS_EMBEDDING_PROVIDER +
  *     OMS_EMBEDDING_MODEL and throws a loud, actionable error otherwise. The
- *     MCP server uses it for the eager semantic ops (sync/query/status/...) so a
- *     model-less host loud-guards instead of silently degrading.
+ *     MCP server uses it for vec/HyDE-bearing semantic ops so a model-less host
+ *     loud-guards instead of silently degrading.
  *   - {@link assembleSemanticEngine} returns the vec-capable engine when the
  *     canonical pair is configured, else a core (lex + document) engine where
  *     vec/HyDE fail fast. The CLI, the localhost HTTP transport, and the MCP
- *     server's model-OPTIONAL paths (document reads, retrieve_context's semantic
- *     leg, ReadResource) use it so lex and file-based reads work without a model.
+ *     server's model-OPTIONAL paths (explicit lex-only query, document reads,
+ *     retrieve_context's semantic leg, ReadResource) use it so lex and
+ *     file-based reads work without a model.
  */
 
 import {
