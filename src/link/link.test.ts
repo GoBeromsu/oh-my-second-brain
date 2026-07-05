@@ -61,11 +61,11 @@ describe("readLinkRecord / writeLinkRecord", () => {
     expect(record).toEqual({ version: 1, vault, scope: ["notes", "references"] });
   });
 
-  it("returns null when the vault field is absent", async () => {
+  it("throws when links.yaml is present but the vault field is absent", async () => {
     const omsDir = path.join(repo, ".oms");
     await mkdir(omsDir, { recursive: true });
     await writeFile(path.join(omsDir, "links.yaml"), "version: 1\nscope: [a]\n", "utf-8");
-    expect(await readLinkRecord(omsDir)).toBeNull();
+    await expect(readLinkRecord(omsDir)).rejects.toThrow(/missing required string field "vault"/);
   });
 
   it("defaults scope to an empty array and version to current", async () => {
@@ -123,11 +123,10 @@ describe("resolveEffectiveVault", () => {
     expect(resolved).toEqual({ vault: path.resolve(vault), scope: ["notes"], source: "bridge" });
   });
 
-  it("expands a ~ vault path stored in the bridge record", async () => {
+  it("expands a ~ vault path stored in the bridge record before validating existence", async () => {
     const omsDir = path.join(repo, ".oms");
     await writeLinkRecord(omsDir, { version: 1, vault: "~/v", scope: [] });
-    const resolved = await resolveEffectiveVault(repo, {});
-    expect(resolved.vault).toBe(path.resolve(os.homedir(), "v"));
+    await expect(resolveEffectiveVault(repo, {})).rejects.toThrow(path.resolve(os.homedir(), "v"));
   });
 
   it("falls back to OMS_VAULT when no local ontology or bridge exists", async () => {
@@ -152,6 +151,28 @@ describe("resolveEffectiveVault", () => {
     const resolved = await resolveEffectiveVault(repo, { OMS_VAULT: "/somewhere/else" });
     expect(resolved.source).toBe("bridge");
     expect(resolved.vault).toBe(path.resolve(vault));
+  });
+  it("errors on malformed bridge records instead of falling back to OMS_VAULT", async () => {
+    const omsDir = path.join(repo, ".oms");
+    await mkdir(omsDir, { recursive: true });
+    await writeFile(path.join(omsDir, "links.yaml"), "vault: [not valid\n", "utf-8");
+
+    await expect(resolveEffectiveVault(repo, { OMS_VAULT: vault })).rejects.toThrow(/not valid YAML/);
+  });
+
+  it("errors when a bridge record omits the required vault field instead of falling back to cwd", async () => {
+    const omsDir = path.join(repo, ".oms");
+    await mkdir(omsDir, { recursive: true });
+    await writeFile(path.join(omsDir, "links.yaml"), "version: 1\nscope: [notes]\n", "utf-8");
+
+    await expect(resolveEffectiveVault(repo, {})).rejects.toThrow(/missing required string field "vault"/);
+  });
+
+  it("errors when the linked vault path no longer exists", async () => {
+    const omsDir = path.join(repo, ".oms");
+    await writeLinkRecord(omsDir, { version: 1, vault: path.join(tmp, "deleted-vault"), scope: ["notes"] });
+
+    await expect(resolveEffectiveVault(repo, { OMS_VAULT: vault })).rejects.toThrow(/Linked vault path does not exist/);
   });
 });
 
