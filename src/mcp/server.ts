@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -12,6 +12,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { validateFrontmatter } from "../conventions/validate.js";
+import { lintVault } from "../engine/conventions/vault-lint.js";
 import {
   commitCapture,
   prepareCapture,
@@ -24,16 +25,16 @@ import {
   graphCachePath,
   lazyLoadNoteBody,
 } from "../graph/cache.js";
-import { loadOntology } from "../ontology/loader.js";
+import { resolveActiveOntology } from "../ontology/active.js";
 import { resolveConcept } from "../ontology/resolver.js";
 import { retrieveMorningContext } from "../retrieve/morning.js";
 import { makeEngineMorningBackend } from "./engine-morning-backend.js";
-import { resolveBundledAssetPaths } from "../runtime/assets.js";
-import type { Concept, Ontology } from "../ontology/types.js";
+import type { Concept } from "../ontology/types.js";
 import {
   handleSemanticTool,
   isEngineSemanticOp,
   isEngineDocumentOp,
+  isModelOptionalSemanticQueryOp,
   semanticMcpTools,
   semanticOptionsFromArgs,
   retrieveContextSemanticInputProperties,
@@ -43,46 +44,6 @@ import { assembleFullSemanticEngine, embeddingConfigPresent } from "./semantic-e
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 
 const SERVER_VERSION = "0.0.0";
-const bundledAssets = resolveBundledAssetPaths();
-
-async function activeOntology(vault: string): Promise<{ ontology: Ontology; source: string }> {
-  const localOntologyDir = path.join(vault, ".oms");
-  const omsKind = await pathKind(localOntologyDir);
-  if (omsKind === "missing") {
-    return { ontology: await loadOntology(bundledAssets.ontologyDir), source: "bundled" };
-  }
-  if (omsKind !== "directory") {
-    throw new Error("Local .oms exists but is not a directory.");
-  }
-
-  const taxonomyKind = await pathKind(path.join(localOntologyDir, "taxonomy.yaml"));
-  const conceptsKind = await pathKind(path.join(localOntologyDir, "concepts"));
-
-  if (taxonomyKind === "missing" && conceptsKind === "missing") {
-    return { ontology: await loadOntology(bundledAssets.ontologyDir), source: "bundled" };
-  }
-  if (taxonomyKind !== "file" || conceptsKind !== "directory") {
-    throw new Error(
-      "Local .oms ontology is incomplete; expected .oms/taxonomy.yaml and .oms/concepts/.",
-    );
-  }
-
-  return { ontology: await loadOntology(localOntologyDir), source: "vault" };
-}
-
-async function pathKind(target: string): Promise<"missing" | "file" | "directory" | "other"> {
-  try {
-    const info = await stat(target);
-    if (info.isFile()) return "file";
-    if (info.isDirectory()) return "directory";
-    return "other";
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return "missing";
-    }
-    throw error;
-  }
-}
 
 function jsonText(value: unknown): CallToolResult {
   return {
@@ -281,6 +242,27 @@ export const omsMcpTools: Tool[] = [
     },
   },
   {
+    name: "oms_vault_audit",
+    title: "Oh My Second Brain vault audit",
+    description:
+      "Scan vault notes against the active ontology and return a structured violation report. Read-only; the CLI counterpart is `oms audit`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder: {
+          type: "string",
+          description: "Restrict the scan to one top-level vault folder, for example \"references\".",
+        },
+      },
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "oms_capture_prepare",
     title: "Oh My Second Brain capture prepare",
     description:
@@ -454,7 +436,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       // throw escape ALL inner catch branches and break the MCP handler.
       const engineGraph = await engine.adapter.graphStatus(vault).catch(() => null);
       try {
-        const { ontology, source } = await activeOntology(vault);
+        const { ontology, source } = await resolveActiveOntology(vault);
         const cacheStatus = await graphCacheStatus(vault, ontology);
         return jsonText({
           vault,
@@ -496,7 +478,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
     try {
     if (request.params.name === "oms_graph_build") {
-      const { ontology, source } = await activeOntology(vault);
+      const { ontology, source } = await resolveActiveOntology(vault);
       const cache = await buildGraphCache({ vault, ontology, write: true });
       return jsonText({
         vault,
@@ -511,7 +493,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (request.params.name === "oms_list_concepts") {
-      const { ontology, source } = await activeOntology(vault);
+      const { ontology, source } = await resolveActiveOntology(vault);
       return jsonText({
         vault,
         ontologySource: source,
@@ -550,7 +532,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       // fast) otherwise. get/multi_get and ReadResource make the SAME choice, so a
       // docid emitted here always hydrates on the backend that produced it.
       const semanticBackend = makeEngineMorningBackend(resolveDocumentAdapter(), vault);
-      const { ontology, source } = await activeOntology(vault);
+      const { ontology, source } = await resolveActiveOntology(vault);
       const limitValue = args?.["limit"];
       const maxNeighborsValue = args?.["maxNeighbors"];
       const useCacheValue = args?.["useCache"];
@@ -579,17 +561,18 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     // Semantic / sync / cleanup / document ops route to the native engine adapter:
-    //   - isEngineSemanticOp → EAGER getSemanticEngine().adapter (vec-capable): a
-    //     model-less host throws a loud ADR-007 error (surfaces via the dispatch
+    //   - vec/HyDE semantic ops → EAGER getSemanticEngine().adapter (vec-capable):
+    //     a model-less host throws a loud ADR-007 error (surfaces via the dispatch
     //     catch below).
-    //   - isEngineDocumentOp → resolveDocumentAdapter(): vec-capable engine when a
-    //     model is configured (hydrates retrieve_context real-path docids on the
-    //     same backend), else the core engine (file-based reads need no model).
+    //   - lex-only query and document ops → resolveDocumentAdapter(): vec-capable
+    //     engine when a model is configured, else the core engine. Lex is a real
+    //     model-free BM25/FTS feature, not an ADR-007 fake vector fallback.
     // Every other tool never touches the engine here.
     if (isEngineSemanticOp(request.params.name) || isEngineDocumentOp(request.params.name)) {
-      const semanticAdapter = isEngineSemanticOp(request.params.name)
-        ? getSemanticEngine().adapter
-        : resolveDocumentAdapter();
+      const semanticAdapter =
+        isEngineSemanticOp(request.params.name) && !isModelOptionalSemanticQueryOp(request.params.name, args, vault)
+          ? getSemanticEngine().adapter
+          : resolveDocumentAdapter();
       const semanticToolResult = await handleSemanticTool(request.params.name, args, vault, semanticAdapter);
       if (semanticToolResult) {
         return semanticToolResult.ok ? jsonText(semanticToolResult.value) : errorText(semanticToolResult.message);
@@ -617,7 +600,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         return errorText(error instanceof Error ? error.message : String(error));
       }
 
-      const { ontology, source } = await activeOntology(vault);
+      const { ontology, source } = await resolveActiveOntology(vault);
       const normalizedNotePath = path.relative(vault, fullPath).replace(/\\/g, "/");
       const concept = resolveConcept(ontology, normalizedNotePath);
       if (!concept) {
@@ -651,8 +634,30 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
     }
 
+    if (request.params.name === "oms_vault_audit") {
+      if (
+        args !== undefined &&
+        Object.prototype.hasOwnProperty.call(args, "folder") &&
+        typeof args["folder"] !== "string"
+      ) {
+        return errorText('Argument "folder" must be a string top-level folder name.');
+      }
+      const folder = stringArg(args, "folder");
+      const { ontology, source } = await resolveActiveOntology(vault);
+      const report = await lintVault(vault, ontology, { folder });
+      return jsonText({
+        vault,
+        ontologySource: source,
+        folder: folder ?? null,
+        scannedNotes: report.scannedNotes,
+        excludedNotes: report.excludedNotes,
+        clean: report.clean,
+        violations: report.violations,
+      });
+    }
+
     if (request.params.name === "oms_capture_prepare") {
-      const { ontology, source } = await activeOntology(vault);
+      const { ontology, source } = await resolveActiveOntology(vault);
       const frontmatterArg = args?.["frontmatter"];
       const frontmatter = isRecord(frontmatterArg) ? frontmatterArg : {};
       return jsonText({
@@ -670,7 +675,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (request.params.name === "oms_capture_commit") {
-      const { ontology, source } = await activeOntology(vault);
+      const { ontology, source } = await resolveActiveOntology(vault);
       const notePath = stringArg(args, "notePath");
       const body = stringArg(args, "body");
       const mode = stringArg(args, "mode");

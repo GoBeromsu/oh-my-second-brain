@@ -16,6 +16,7 @@ import {
   runUpdate,
 } from "../update/update.js";
 import { parseCliArgs } from "./args.js";
+import { runAudit } from "./audit.js";
 import { runDoctor, runLint } from "./doctor-lint.js";
 import { runLink } from "./link-command.js";
 import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
@@ -26,6 +27,7 @@ import { printUsage } from "./usage.js";
 export { buildClaudeInstallPlan } from "./claude-install-plan.js";
 export type { ClaudeInstallPlan } from "./claude-install-plan.js";
 export { runDoctor, runLint } from "./doctor-lint.js";
+export { runAudit } from "./audit.js";
 export {
   formatLinkResult,
   runLink,
@@ -45,7 +47,8 @@ function bundledAdapterRoot(): string {
 function shouldResolveBridgeVault(command: string | undefined, vaultExplicit: boolean): boolean {
   return (
     !vaultExplicit &&
-    (command === "doctor" ||
+    (command === "audit" ||
+      command === "doctor" ||
       command === "lint" ||
       command === "mcp" ||
       isSemanticCliCommand(command))
@@ -77,6 +80,7 @@ async function main(): Promise<void> {
     json,
     maxPerConcept,
     folders,
+    conventionNote,
     unknownFlags,
   } = parsedArgs;
 
@@ -93,6 +97,7 @@ async function main(): Promise<void> {
       vault,
       vaultExplicit,
       folders,
+      conventionNote,
     });
     await maybePrintUpdateNotice();
   } else if (command === "install" || command === "uninstall") {
@@ -157,6 +162,14 @@ async function main(): Promise<void> {
     console.log(formatHostOperationResults(results, dryRun));
   } else if (command === "doctor") {
     process.exitCode = await runDoctor({ vault, verbose, json, maxPerConcept });
+    await maybePrintUpdateNotice();
+  } else if (command === "audit") {
+    process.exitCode = await runAudit({
+      vault,
+      json,
+      folder: folders[0],
+      suggestFields,
+    });
     await maybePrintUpdateNotice();
   } else if (command === "lint") {
     process.exitCode = await runLint({ vault, verbose, json });

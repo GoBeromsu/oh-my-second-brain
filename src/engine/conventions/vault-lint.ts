@@ -15,24 +15,17 @@
  * DEFAULT MODE: report-only. The vault is NEVER mutated unless
  * `autofixEnabled: true` is passed (human-gate flag).
  *
- * NEVER throws. Notes that cannot be parsed are silently skipped.
+ * Invalid folder scopes throw clear caller-facing errors; individual notes that cannot be parsed are skipped.
  */
 
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { Concept, Ontology, OntologyField } from "../../ontology/types.js";
-import { validateFrontmatter } from "../../conventions/validate.js";
 import { parseNote } from "../../conventions/frontmatter.js";
+import { validateFrontmatter } from "../../conventions/validate.js";
+import { walkVaultMarkdown } from "../../conventions/vault-walk.js";
+import { resolveConcept } from "../../ontology/resolver.js";
+import type { Concept, Ontology } from "../../ontology/types.js";
 
-// ── Internal extension ────────────────────────────────────────────────────────
-
-/**
- * Concept YAML files may optionally declare an `enum` array on a field.
- * TypeScript doesn't know about it (OntologyField has no `enum` key), but
- * the YAML loader passes it through at runtime. We widen locally here —
- * never modify src/ontology/types.ts for a single consumer.
- */
-type FieldWithEnum = OntologyField & { enum?: string[] };
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -61,6 +54,8 @@ export interface VaultLintReport {
   violations: VaultLintViolation[];
   /** How many markdown notes with frontmatter were evaluated. */
   scannedNotes: number;
+  /** How many markdown notes were skipped because they matched an exclude glob. */
+  excludedNotes: number;
   /** Convenience flag: true when violations is empty. */
   clean: boolean;
 }
@@ -78,62 +73,107 @@ export interface VaultLintOptions {
    * Default: false (report-only).
    */
   autofixEnabled?: boolean;
+  /** Restrict the scan to a single top-level vault folder. */
+  folder?: string;
+  /** Additional vault-relative glob patterns to exempt from scanning. */
+  excludeGlobs?: readonly string[];
 }
 
 // ── Internals ─────────────────────────────────────────────────────────────────
 
-const SKIP_DIRS = new Set([
-  ".oms",
-  ".obsidian",
-  ".trash",
-  ".git",
-  ".claude",
-  "_archive",
-  "node_modules",
-]);
+/**
+ * Default audit exemptions — deliberately not contract violations: build artifacts,
+ * self-documenting templates, and skill files that intentionally carry no frontmatter.
+ */
+export const DEFAULT_EXCLUDE_GLOBS: readonly string[] = [
+  "25. Digital Garden/.deploy-staging/**",
+  "**/*.template.md",
+  "**/SKILL.md",
+  ".obsidian/**",
+  ".trash/**",
+  ".oms/**",
+  "_attachments/**",
+];
 
-async function* walkMarkdown(
-  dir: string,
-  base: string,
-): AsyncGenerator<string> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
+/** Convert a `*`/`**` glob into an anchored RegExp. `**` matches across `/`, `*` does not. */
+function globToRegExp(glob: string): RegExp {
+  const GLOBSTAR = "\u0000";
+  const withPlaceholder = glob.replace(/\*\*/g, GLOBSTAR);
+  const escaped = withPlaceholder.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const withStar = escaped.replace(/\*/g, "[^/]*");
+  const pattern = withStar.split(GLOBSTAR).join(".*");
+  return new RegExp(`^${pattern}$`);
+}
+
+export function matchesAnyGlob(notePath: string, globs: readonly string[]): boolean {
+  return globs.some((glob) => globToRegExp(glob).test(notePath));
+}
+
+/** Merge built-in defaults with vault-declared and caller-supplied exclude globs. */
+export function resolveExcludeGlobs(ontology: Ontology, extra: readonly string[] = []): string[] {
+  return [...DEFAULT_EXCLUDE_GLOBS, ...(ontology.taxonomy.exclude ?? []), ...extra];
+}
+
+export async function validateVaultLintFolder(
+  vaultRoot: string,
+  ontology: Ontology,
+  folder: string | undefined,
+): Promise<void> {
+  if (folder === undefined) return;
+
+  if (
+    folder.length === 0 ||
+    folder === "." ||
+    folder.includes("/") ||
+    folder.includes("\\") ||
+    folder.includes("..")
+  ) {
+    throw new Error(
+      `Audit folder "${folder}" must be one top-level vault folder name; path separators and ".." are not allowed.`,
+    );
   }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      yield* walkMarkdown(full, base);
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      yield path.relative(base, full).replace(/\\/g, "/");
+
+  if (!Object.prototype.hasOwnProperty.call(ontology.taxonomy.folders, folder)) {
+    throw new Error(`Audit folder "${folder}" is not declared in the active taxonomy.`);
+  }
+
+  try {
+    const info = await stat(path.join(vaultRoot, folder));
+    if (!info.isDirectory()) {
+      throw new Error(`Audit folder "${folder}" does not exist as a top-level vault folder.`);
     }
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      throw new Error(`Audit folder "${folder}" does not exist as a top-level vault folder.`);
+    }
+    throw error;
   }
 }
 
 /**
- * Derive the set of "agent-writable" folders from the loaded ontology.
+ * Derive the set of agent-writable folders from the loaded ontology.
  *
- * A folder is agent-writable when:
- *  - It is declared in taxonomy.folders
- *  - Its bound concept is NOT null
- *  - The concept declares at least one field (i.e. it is NOT a raw-capture
- *    inbox with no structure requirements)
+ * A folder is agent-writable when taxonomy explicitly declares `agentWritable: true`.
  */
-function agentWritableFolders(ontology: Ontology): Set<string> {
+export function agentWritableFolders(ontology: Ontology): Set<string> {
   const zones = new Set<string>();
   for (const [folder, binding] of Object.entries(ontology.taxonomy.folders)) {
-    if (binding.concept === null) continue;
-    const names = Array.isArray(binding.concept)
-      ? binding.concept
-      : [binding.concept];
-    for (const name of names) {
-      const concept = ontology.concepts.get(name);
-      if (concept && concept.fields.length > 0) {
-        zones.add(folder);
-      }
+    if (binding.agentWritable === true) zones.add(folder);
+  }
+  return zones;
+}
+
+/**
+ * Derive folders where the ROUTING LAW is enforced as a hard per-note requirement.
+ *
+ * This is a strict subset of agentWritableFolders(): folders must be marked both
+ * `agentWritable: true` and `routingLawStrict: true`.
+ */
+export function routingLawStrictFolders(ontology: Ontology): Set<string> {
+  const zones = new Set<string>();
+  for (const [folder, binding] of Object.entries(ontology.taxonomy.folders)) {
+    if (binding.agentWritable === true && binding.routingLawStrict === true) {
+      zones.add(folder);
     }
   }
   return zones;
@@ -171,7 +211,7 @@ function checkEnum(
   notePath: string,
 ): VaultLintViolation[] {
   const violations: VaultLintViolation[] = [];
-  for (const field of concept.fields as FieldWithEnum[]) {
+  for (const field of concept.fields) {
     if (!field.enum || field.enum.length === 0) continue;
     const value = frontmatter[field.name];
     if (value === undefined || value === null) continue; // required check handles missing
@@ -292,11 +332,21 @@ export async function lintVault(
     // protocol for M5 vault mutations is fully specified and approved.
   }
 
-  const agentZones = agentWritableFolders(ontology);
+  await validateVaultLintFolder(vaultRoot, ontology, options.folder);
+  const agentZones = routingLawStrictFolders(ontology);
+  const excludeGlobs = resolveExcludeGlobs(ontology, options.excludeGlobs ?? []);
   const violations: VaultLintViolation[] = [];
   let scannedNotes = 0;
+  let excludedNotes = 0;
 
-  for await (const notePath of walkMarkdown(vaultRoot, vaultRoot)) {
+  const walkRoot = options.folder ? path.join(vaultRoot, options.folder) : vaultRoot;
+
+  for await (const notePath of walkVaultMarkdown(walkRoot, { base: vaultRoot })) {
+    if (matchesAnyGlob(notePath, excludeGlobs)) {
+      excludedNotes++;
+      continue;
+    }
+
     let raw: string;
     try {
       raw = await readFile(path.join(vaultRoot, notePath), "utf-8");
@@ -307,18 +357,7 @@ export async function lintVault(
     const { frontmatter, hasFrontmatter } = parseNote(raw);
     if (!hasFrontmatter) continue;
 
-    // Resolve concept via top-level folder (taxonomy shortest-path)
-    const folder = notePath.split("/")[0] ?? "";
-    const binding = ontology.taxonomy.folders[folder];
-    if (binding === undefined || binding.concept === null) continue;
-
-    const conceptNames = Array.isArray(binding.concept)
-      ? binding.concept
-      : [binding.concept];
-    const conceptName = conceptNames[0];
-    if (!conceptName) continue;
-
-    const concept = ontology.concepts.get(conceptName);
+    const concept = resolveConcept(ontology, notePath);
     if (!concept) continue;
 
     scannedNotes++;
@@ -327,5 +366,5 @@ export async function lintVault(
     );
   }
 
-  return { violations, scannedNotes, clean: violations.length === 0 };
+  return { violations, scannedNotes, excludedNotes, clean: violations.length === 0 };
 }

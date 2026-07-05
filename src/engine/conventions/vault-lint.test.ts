@@ -1,16 +1,14 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
-import type { Concept } from "../../ontology/types.js";
-import { lintNoteFrontmatter } from "./vault-lint.js";
+import type { Concept, Ontology } from "../../ontology/types.js";
+import { lintNoteFrontmatter, lintVault, routingLawStrictFolders } from "./vault-lint.js";
 
 // ── Inline fixtures — never touch the real vault ──────────────────────────────
 
-/**
- * A literature concept that includes an `enum` constraint on the `status`
- * field. OntologyField doesn't declare `enum` in the shared type, but the
- * YAML loader passes it through at runtime. We widen the fixture with
- * `as unknown as Concept` so the field is carried through to checkEnum().
- */
-const LITERATURE_CONCEPT = {
+/** A literature concept that includes an `enum` constraint on the `status` field. */
+const LITERATURE_CONCEPT: Concept = {
   concept: "literature",
   intent: "A processed reference.",
   folder: "references",
@@ -27,7 +25,7 @@ const LITERATURE_CONCEPT = {
     { name: "tags", type: "list", required: false, intent: "Topical tags." },
     { name: "created_by", type: "string", required: false, intent: "Authoring agent." },
   ],
-} as unknown as Concept;
+};
 
 /** Folders where the routing-law check fires. */
 const AGENT_ZONES = new Set(["references"]);
@@ -233,5 +231,124 @@ describe("lintNoteFrontmatter — BAD: (5) routing-law — missing created_by in
       AGENT_ZONES, // references is agent zone, but PERSONAL_NOTE is in "personal/"
     );
     expect(violations.filter((v) => v.rule === "routing-law")).toHaveLength(0);
+  });
+});
+
+describe("lintVault", () => {
+  it("uses routingLawStrict folders, folder scoping, and exclude globs", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-vault-lint-"));
+    try {
+      await mkdir(path.join(vault, "references"), { recursive: true });
+      await mkdir(path.join(vault, "notes"), { recursive: true });
+      await writeFile(
+        path.join(vault, "references", "missing-created-by.md"),
+        [
+          "---",
+          "title: Strict Zone",
+          "source-url: https://example.com/strict",
+          "---",
+          "",
+          "Body.",
+        ].join("\n"),
+        "utf-8",
+      );
+      await writeFile(
+        path.join(vault, "references", "skip.template.md"),
+        [
+          "---",
+          "rogue: true",
+          "---",
+          "",
+          "Template.",
+        ].join("\n"),
+        "utf-8",
+      );
+      await writeFile(
+        path.join(vault, "notes", "user-note.md"),
+        [
+          "---",
+          "title: User Zone",
+          "source-url: https://example.com/user",
+          "---",
+          "",
+          "Body.",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const ontology: Ontology = {
+        taxonomy: {
+          version: 1,
+          folders: {
+            references: {
+              intent: "strict",
+              concept: "literature",
+              agentWritable: true,
+              routingLawStrict: true,
+            },
+            notes: {
+              intent: "writable but mixed",
+              concept: "literature",
+              agentWritable: true,
+            },
+          },
+          exclude: ["**/*.template.md"],
+        },
+        concepts: new Map([["literature", LITERATURE_CONCEPT]]),
+      };
+
+      expect(routingLawStrictFolders(ontology)).toEqual(new Set(["references"]));
+
+      const fullReport = await lintVault(vault, ontology);
+      expect(fullReport.scannedNotes).toBe(2);
+      expect(fullReport.excludedNotes).toBe(1);
+      expect(fullReport.violations.map((violation) => violation.notePath)).toEqual([
+        "references/missing-created-by.md",
+      ]);
+      expect(fullReport.violations[0]?.rule).toBe("routing-law");
+
+      const scopedReport = await lintVault(vault, ontology, { folder: "notes" });
+      expect(scopedReport.scannedNotes).toBe(1);
+      expect(scopedReport.excludedNotes).toBe(0);
+      expect(scopedReport.violations).toEqual([]);
+    } finally {
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+  it("rejects invalid folder scopes before returning a clean report", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-vault-lint-folder-"));
+    try {
+      await mkdir(path.join(vault, "references"), { recursive: true });
+
+      const ontology: Ontology = {
+        taxonomy: {
+          version: 1,
+          folders: {
+            references: {
+              intent: "strict",
+              concept: "literature",
+            },
+            inbox: {
+              intent: "declared but absent",
+              concept: "literature",
+            },
+          },
+        },
+        concepts: new Map([["literature", LITERATURE_CONCEPT]]),
+      };
+
+      await expect(lintVault(vault, ontology, { folder: "references/missing" })).rejects.toThrow(
+        /path separators/,
+      );
+      await expect(lintVault(vault, ontology, { folder: ".." })).rejects.toThrow(/path separators/);
+      await expect(lintVault(vault, ontology, { folder: "unknown" })).rejects.toThrow(
+        /not declared/,
+      );
+      await expect(lintVault(vault, ontology, { folder: "inbox" })).rejects.toThrow(
+        /does not exist/,
+      );
+    } finally {
+      await rm(vault, { recursive: true, force: true });
+    }
   });
 });

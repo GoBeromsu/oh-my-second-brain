@@ -14,6 +14,7 @@ describe("CLI usage text", () => {
       "uninstall",
       "update",
       "doctor",
+      "audit",
       "lint",
       "link",
       "semantic",
