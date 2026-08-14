@@ -3,10 +3,12 @@ slug: self-owned-second-brain
 date: 2026-06-13
 author: oh-my-claudecode:planner
 spec: self-owned-second-brain
-status: active
+status: archived
 ---
 
 # Plan: Self-Owned Second-Brain Engine
+
+> **Archived 2026-08-14.** The retrieval vertical and `src/search/` teardown already shipped. Keep this as the historical execution record; do not treat `src/search/` as a live fallback.
 
 **Approach.** Build a complete six-component second-brain engine (C1 Vector/Index, C2 Graph, C3 Retrieval, C4 Config/Setup, C5 Wiki/Synthesis, C6 Distill) in a new parallel module at `src/engine/`, leaving the existing working vector layer (`src/search/`) untouched until a golden-set parity gate is cleared (R18). Build order is fixed by R8: start with the Retrieval vertical tracer (M1, C1+C2+C3) as the parity anchor, then compile (M2), wiki (M3), distill (M4), and governance+vault-lint+setup (M5). Every skill follows the `/skillify` structure (R17b). All vault bindings are resolved at setup-time via the engine's own deep-interview-methodology reimplementation (R16); no Ataraxia-specific values are hardcoded (Non-Sticky). The `.oms/` dotfolder enforces ADR-006 two-layer separation: Layer 1 CONTRACT (taxonomy.yaml / concepts / schemas, machine-validated) stays strictly separate from Layer 2 GOVERNANCE (.oms/governance/, intent records). Skills package as one **thick router** (private, env-injected personal recipes — R20) that routes to **generic public leaves** (retrieve / compile / wiki / vault-lint / vault-scaffold / vault-decision-record), with **distill** standing alone (R16); the project stays a single monorepo with personal content (recipes, vault paths, names) isolated behind `.gitignore` or a submodule (R19 — see *Skill Packaging & Repo Topology* below). After M5 completes and parity is confirmed, `src/search/` is retired in a dedicated swap commit.
 
@@ -156,7 +158,7 @@ M1 completes first (hard dependency anchor). After M1 gate clears: M2 (Compile) 
 2. **Red-team analysis** (`src/engine/distill/analyzer.ts`): Adversarial pass: identify (a) patterns/ideas with file:line evidence citations, (b) risks/red-flags (anti-patterns, fragile assumptions), (c) attribution memo (source identity for ACKNOWLEDGMENTS, not license flags — R13 license-check removal). Structured JSON output schema: `{ patterns: [{file, line, description, absorb_confidence}], risks: [{description, severity}], attribution: {repo, url, license_note} }`.
 3. **Absorption report writer** (`src/engine/distill/report.ts`): Converts analyzer JSON to human-readable markdown report. Three sections: §1 Patterns (ranked by absorb_confidence), §2 Risks, §3 Attribution memo. Report is the only output; no vault write, no code mutation.
 4. **Skill scaffold** (`core/skills/distill/SKILL.md` + `CHANGELOG.md`): Standalone skill — does not import from `src/engine/compile/` or `src/engine/wiki/`. Works on any target (repo, skill, document, concept). Vault-agnostic: `OMS_VAULT` env not required.
-5. **Smoke-test on existing mined targets**: Run distill on two of the already-mined reference repos (qmd or graphify). Verify output matches the absorption ledger entries in `docs/exec-plan/active/self-owned-second-brain/deep-interview-record.md`.
+5. **Smoke-test on existing mined targets**: Run distill on two of the already-mined reference repos (qmd or graphify). Verify output matches the absorption ledger entries in `docs/exec-plan/archived/self-owned-second-brain/deep-interview-record.md`.
 
 **Completion gate:** Distill runs on 2 test targets (one repo, one document) without mutating any system state; absorption report contains all 3 required sections; red-team analysis identifies at least the known patterns from the existing mining docs.
 
@@ -276,7 +278,7 @@ M1 completes first (hard dependency anchor). After M1 gate clears: M2 (Compile) 
 | C5 `src/engine/wiki/navigation.ts` | wiki/index.md global catalog + wiki/log.md append-only, 3 operations (ingest/query/lint) | Karpathy gist (no license declared — idea only) + Astro-Han SKILL.md (MIT) | `docs/research/llm-wiki-ecosystem-design-references.md` |
 | C5 `src/engine/wiki/collection.ts` | raw/wiki 2-folder structure, init-if-missing, cascade pass, 3-phase hard separation | Astro-Han SKILL.md (MIT) + nvk/llm-wiki (Apache 2.0) | `docs/research/llm-wiki-ecosystem-design-references.md` |
 | C5 `src/engine/wiki/collection.ts` (fan-out) | Perspective-based fan-out (Academic/Technical/Applied/Contrarian), Thesis mode (Supporting vs Opposing) | nvk/llm-wiki (Apache 2.0) | `docs/research/llm-wiki-ecosystem-design-references.md` |
-| C4 `core/skills/setup/` | Socratic clarity, ambiguity scoring, Round-0 topology gate, challenge modes | omc deep-interview methodology (self-reimplemented — no code copy, method only) | `docs/exec-plan/active/self-owned-second-brain/deep-interview-record.md` R16 |
+| C4 `core/skills/setup/` | Socratic clarity, ambiguity scoring, Round-0 topology gate, challenge modes | omc deep-interview methodology (self-reimplemented — no code copy, method only) | `docs/exec-plan/archived/self-owned-second-brain/deep-interview-record.md` R16 |
 
 ---
 

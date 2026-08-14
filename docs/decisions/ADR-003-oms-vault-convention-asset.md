@@ -5,8 +5,8 @@ date: 2026-06-13
 created_by: claude-code
 deciders: [beomsu]
 relates_to:
-  - ../exec-plan/active/self-owned-second-brain/spec.md §10
-  - ../exec-plan/active/self-owned-second-brain/spec.md §11
+  - ../exec-plan/archived/self-owned-second-brain/spec.md §10
+  - ../exec-plan/archived/self-owned-second-brain/spec.md §11
   - craft-skills `documents` 스킬 (ADR/research/spec/rule 규율 대칭)
 ---
 

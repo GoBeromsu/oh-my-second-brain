@@ -8,7 +8,7 @@ deciders: [beomsu]
 relates_to:
   - ./ADR-002-vector-embedding-backend.md
   - ./ADR-003-oms-vault-convention-asset.md
-  - ../exec-plan/active/self-owned-second-brain/spec.md §10
+  - ../exec-plan/archived/self-owned-second-brain/spec.md §10
 ---
 
 # ADR-005: 그래프 접근 모델 — 엣지 계층 · 운영 모드 · MCP tools

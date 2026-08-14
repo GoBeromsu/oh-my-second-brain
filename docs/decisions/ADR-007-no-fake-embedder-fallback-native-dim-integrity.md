@@ -6,8 +6,8 @@ created_by: claude-code
 deciders: [beomsu]
 relates_to:
   - docs/decisions/ADR-002-vector-embedding-backend.md
-  - docs/exec-plan/active/self-owned-second-brain/plan.md §Principles 3
-  - docs/exec-plan/active/self-owned-second-brain/plan.md §Alternatives Considered ~line 353
+  - docs/exec-plan/archived/self-owned-second-brain/plan.md §Principles 3
+  - docs/exec-plan/archived/self-owned-second-brain/plan.md §Alternatives Considered ~line 353
 ---
 
 # ADR 0007: 임베딩 무결성 불변 — 네이티브 차원 보존 & 가짜 임베더 폴백 금지
@@ -71,6 +71,6 @@ qmd와 gbrain은 임베딩 벡터를 절대 투영·폴딩·절단하지 않는�
 ## Links
 
 - [ADR-002 Vector Embedding Backend](./ADR-002-vector-embedding-backend.md) — 임베더 티어(768d/4096d), HNSW 차원 제한 정책, `#5 swap` 교체 절차, 64-dim 해시 임베더 마이그레이션의 원본 결정
-- [plan.md Principle 3 — Parity-or-Better before Swap](../exec-plan/active/self-owned-second-brain/plan.md) — `src/search/`(레거시 회귀 층, 768→64 모듈로 폴드 포함)을 교체 대상·회귀 층으로 명시
-- [plan.md §Alternatives Considered ~line 353](../exec-plan/active/self-owned-second-brain/plan.md) — "the existing layer's architecture (no chunking, no graph integration, SHA1 hash embedder) requires replacement, not extension"
-- [deep-interview-record.md R22](../exec-plan/active/self-owned-second-brain/deep-interview-record.md) — P-A / P-B 원칙 잠금 라운드 기록
+- [plan.md Principle 3 — Parity-or-Better before Swap](../exec-plan/archived/self-owned-second-brain/plan.md) — `src/search/`(레거시 회귀 층, 768→64 모듈로 폴드 포함)을 교체 대상·회귀 층으로 명시
+- [plan.md §Alternatives Considered ~line 353](../exec-plan/archived/self-owned-second-brain/plan.md) — "the existing layer's architecture (no chunking, no graph integration, SHA1 hash embedder) requires replacement, not extension"
+- [deep-interview-record.md R22](../exec-plan/archived/self-owned-second-brain/deep-interview-record.md) — P-A / P-B 원칙 잠금 라운드 기록

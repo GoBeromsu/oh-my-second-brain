@@ -5,13 +5,13 @@
 - Status: **THRESHOLD MET — compile/wiki 동작 잠금 완료, plan 진입 대기** (모든 컴포넌트+lint+tracer+폴더 토폴로지+ingest+provenance+setup+`.oms` 거버넌스 분리+compile/wiki 동작 잠금; 잔여 = plan.md 작성 go-ahead)
 - Rounds completed: Round 0 (topology gate) + R1–R17 (R17=.oms 거버넌스 분리→ADR-006, R17b=compile/wiki 동작 설계)
 - Current Ambiguity: **~3%** (threshold 0.05 통과 ✅)
-- 위치 이전(2026-06-13): `.omc/specs/`(gitignored, omc 아티팩트)에서 repo-소유 `docs/exec-plan/active/self-owned-second-brain/deep-interview-record.md`로 이전. 유출 방지: `.omc/.omx/.omo`는 gitignore로 은닉(설계 rationale 텍스트는 유지).
+- 위치 이전(2026-06-13): `.omc/specs/`(gitignored, omc 아티팩트)에서 repo-소유 `docs/exec-plan/archived/self-owned-second-brain/deep-interview-record.md`로 이전. 유출 방지: `.omc/.omx/.omo`는 gitignore로 은닉(설계 rationale 텍스트는 유지).
 - **RESOLVED(R17b)**: compile·wiki 스킬 동작 설계 잠금 완료 — `docs/research/compile-wiki-operation-references.md`(837줄, 10개 구현 마이닝) + 자기저작 레퍼런스 bstack `terminology` 흡수. Compile=stateless per-concept SHA worker, Wiki=stateful collection owner(staleness ledger 5-state CLEAN|DIRTY|STUB|ORPHAN|CONFLICT), 물리 3-tier에 sync 경계 횡단. 물리 폴더 분리(raw/processed/wiki)는 사용자 동의(R14).
 - Type: brownfield (oms repo 존재, ADR-002/004/005 + research 입력)
 - Generated: 2026-06-13
 - Threshold: 0.05 (source: `~/.claude/settings.json` → `omc.deepInterview.ambiguityThreshold`)
 - Brownfield weights: Goal 0.35 / Constraints 0.25 / Criteria 0.25 / Context 0.15
-- 입력 문서: ADR-002(벡터/임베더 티어/RRF), ADR-004(설정/시크릿/접근), ADR-005(frontmatter 4-tier 그래프), `docs/exec-plan/active/self-owned-second-brain/spec.md`(living design doc), `docs/research/*-mining.md`
+- 입력 문서: ADR-002(벡터/임베더 티어/RRF), ADR-004(설정/시크릿/접근), ADR-005(frontmatter 4-tier 그래프), `docs/exec-plan/archived/self-owned-second-brain/spec.md`(living design doc), `docs/research/*-mining.md`
 - 교차참조: 이 인터뷰는 **scoping 결정 + ambiguity 추적**을 소유. "무엇을 짓나"의 살아있는 설계는 design doc(`active/self-owned-second-brain/spec.md`)이 소유. 둘은 상보적, 중복 금지.
 
 ---

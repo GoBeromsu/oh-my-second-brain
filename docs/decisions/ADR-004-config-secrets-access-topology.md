@@ -6,7 +6,7 @@ date: 2026-06-13
 created_by: claude-code
 deciders: [beomsu]
 relates_to:
-  - ../exec-plan/active/self-owned-second-brain/spec.md §11
+  - ../exec-plan/archived/self-owned-second-brain/spec.md §11
   - ./ADR-002-vector-embedding-backend.md
   - ./ADR-003-oms-vault-convention-asset.md
 ---

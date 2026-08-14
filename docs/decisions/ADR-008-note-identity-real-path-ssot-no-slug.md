@@ -8,7 +8,7 @@ relates_to:
   - docs/decisions/ADR-003-oms-vault-convention-asset.md
   - docs/decisions/ADR-007-no-fake-embedder-fallback-native-dim-integrity.md
   - src/engine/tracer.ts (walkMd → path.relative)
-  - docs/exec-plan/active/self-owned-second-brain/plan.md §Principle 3 (Parity-or-Better before Swap)
+  - docs/exec-plan/archived/self-owned-second-brain/plan.md §Principle 3 (Parity-or-Better before Swap)
 ---
 
 # ADR 0008: 노트 식별자 모델 — 실경로 SSOT, 슬러그 비도입
@@ -64,4 +64,4 @@ Accepted
 - [ADR-003 oms Vault Convention Asset](./ADR-003-oms-vault-convention-asset.md) — vault 경로·컨벤션 자산
 - [ADR-007 임베딩 무결성 불변](./ADR-007-no-fake-embedder-fallback-native-dim-integrity.md) — 자매 불변(네이티브 차원 무결성: no-projection). 본 ADR은 식별자 차원의 무손실 원칙
 - `src/engine/tracer.ts` `walkMd → path.relative` — 실경로를 docPath로 저장하는 SSOT 구현 지점
-- [plan.md §Principle 3 — Parity-or-Better before Swap](../exec-plan/active/self-owned-second-brain/plan.md) — #8 골든셋 parity 게이트 맥락(슬러그 발견 계기)
+- [plan.md §Principle 3 — Parity-or-Better before Swap](../exec-plan/archived/self-owned-second-brain/plan.md) — #8 골든셋 parity 게이트 맥락(슬러그 발견 계기)

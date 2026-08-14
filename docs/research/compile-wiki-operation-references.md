@@ -6,8 +6,8 @@ created: 2026-06-13
 created_by: research-agent
 type: research
 relates_to:
-  - docs/exec-plan/active/self-owned-second-brain/spec.md
-  - docs/exec-plan/active/self-owned-second-brain/deep-interview-record.md
+  - docs/exec-plan/archived/self-owned-second-brain/spec.md
+  - docs/exec-plan/archived/self-owned-second-brain/deep-interview-record.md
   - docs/research/llm-wiki-ecosystem-design-references.md
 ---
 
