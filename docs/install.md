@@ -1,6 +1,6 @@
 # Install Oh My Second Brain
 
-Oh My Second Brain v0 is distributed as one npm/GitHub-release package that contains the CLI/runtime, the default ontology, host adapter assets, host-native skill/rule bundles, and shell installers. Claude Code, Codex, and Hermes install Oh My Second Brain host surfaces backed by the same MCP capture/retrieve runtime. Legacy runtime IDs remain `oms` for compatibility.
+Oh My Second Brain v0 is distributed as one npm/GitHub-release package that contains the CLI/runtime, the default ontology, host adapter assets, host-native skill/rule bundles, and shell installers. Claude Code, Codex, and Hermes install Oh My Second Brain host surfaces backed by the same MCP write/retrieve runtime. Legacy runtime IDs remain `oms` for compatibility.
 
 ## Prerequisites
 
@@ -144,4 +144,4 @@ oh-my-second-brain install --runtime all --vault /path/to/vault --dry-run
 claude plugin validate adapters/claude-code
 ```
 
-Inside a host runtime, verify the MCP server by listing MCP tools or asking for Oh My Second Brain graph/status. The server exposes status, graph build, context retrieval, native OMS semantic-index sync, qmd-compatible semantic query/status aliases, `qmd://` document resources, semantic document rehydration, axis retrieval, lazy note loading, contract validation, and gated capture tools. OMS does not require the `qmd` binary; `oms semantic doctor` now reports the built-in SQLite/FTS/vector backend and optional GGUF model path diagnostics.
+Inside a host runtime, verify the MCP server by listing MCP tools or asking for Oh My Second Brain graph/status. The server exposes status, graph build, context retrieval, native OMS semantic-index sync, qmd-compatible semantic query/status aliases, `qmd://` document resources, semantic document rehydration, axis retrieval, lazy note loading, contract validation, and gated write tools. OMS does not require the `qmd` binary; `oms semantic doctor` now reports the built-in SQLite/FTS/vector backend and optional GGUF model path diagnostics.

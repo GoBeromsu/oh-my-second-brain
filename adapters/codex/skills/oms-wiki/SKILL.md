@@ -1,6 +1,6 @@
 ---
 name: oms-wiki
-description: Two-path wiki skill — Path A: promote compiled concepts from processed/ into the wiki/ query surface; Path B (human authoring): build interlinked terminology notes in vault taxonomy folders via capture safety rails.
+description: Two-path wiki skill — Path A: promote compiled concepts from processed/ into the wiki/ query surface; Path B (human authoring): build interlinked terminology notes in vault taxonomy folders via write.
 ---
 
 # oms-wiki

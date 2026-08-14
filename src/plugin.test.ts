@@ -69,7 +69,7 @@ describe("codex and hermes adapter DoD", () => {
     await expect(access(path.join(codexRoot, ".mcp.json"))).resolves.toBeUndefined();
     await expect(access(path.join(codexRoot, "rules", "oms.md"))).resolves.toBeUndefined();
 
-    for (const name of ["oms-setup", "oms-install", "oms-uninstall", "oms-doctor", "oms-capture", "oms-write", "oms-retrieve", "oms-update"]) {
+    for (const name of ["oms-setup", "oms-install", "oms-uninstall", "oms-doctor", "oms-write", "oms-retrieve", "oms-update"]) {
       await expect(access(path.join(codexRoot, "skills", name, "SKILL.md"))).resolves.toBeUndefined();
     }
   });
@@ -80,7 +80,7 @@ describe("codex and hermes adapter DoD", () => {
     const manifest = JSON.parse(raw) as Record<string, unknown>;
 
     expect(manifest["skills"]).toBe("./skills/");
-    for (const name of ["setup", "install", "uninstall", "doctor", "capture", "write", "retrieve", "update"]) {
+    for (const name of ["setup", "install", "uninstall", "doctor", "write", "retrieve", "update"]) {
       await expect(access(path.join(hermesRoot, "skills", name, "SKILL.md"))).resolves.toBeUndefined();
     }
   });

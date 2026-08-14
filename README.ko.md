@@ -84,11 +84,11 @@ oms hook       볼트 가드 훅 (Claude Code pre/post tool-use)
 
 ## MCP 도구
 
-`oms mcp`는 상태, 읽기, 검색, 검증, 게이트된 캡처 도구를 노출한다:
+`oms mcp`는 상태, 읽기, 검색, 검증, 게이트된 write 도구를 노출한다:
 
-`oms_graph_status` · `oms_graph_build` · `oms_list_concepts` · `oms_retrieve_context` · `oms_retrieve_by_axis` · `oms_sync_embeddings` · `oms_semantic_query` · `oms_get_document` · `oms_multi_get_documents` · `oms_lazy_load_note` · `oms_validate_contract` · `write` · `oms_capture_prepare` · `oms_capture_commit`
+`oms_graph_status` · `oms_graph_build` · `oms_list_concepts` · `oms_retrieve_context` · `oms_retrieve_by_axis` · `oms_sync_embeddings` · `oms_semantic_query` · `oms_get_document` · `oms_multi_get_documents` · `oms_lazy_load_note` · `oms_validate_contract` · `write`
 
-`write`는 경로 안전성, 볼트 격리, 커널이 소유한 컨셉 계약으로 게이트된다. `oms_capture_prepare` / `oms_capture_commit`은 호환 별칭이다.
+`write`는 경로 안전성, 볼트 격리, 커널이 소유한 컨셉 계약으로 게이트된다.
 
 ## 볼트 구조 (`.oms/`)
 

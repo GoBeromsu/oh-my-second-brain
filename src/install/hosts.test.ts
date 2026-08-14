@@ -37,7 +37,7 @@ describe("host installer/uninstaller", () => {
     expect(installed).toContain("[other]");
     expect(existsSync(path.join(codexDir, "plugins", "oms", "AGENTS.md"))).toBe(true);
     expect(existsSync(path.join(codexDir, "rules", "oms.md"))).toBe(true);
-    expect(existsSync(path.join(codexDir, "skills", "oms-capture", "SKILL.md"))).toBe(true);
+    expect(existsSync(path.join(codexDir, "skills", "oms-write", "SKILL.md"))).toBe(true);
 
     await runHostOperation({ action: "uninstall", runtime: "codex", vault: "/tmp/Vault", homeDir: home, adapterRoot });
     const uninstalled = await readFile(path.join(codexDir, "config.toml"), "utf-8");
@@ -45,7 +45,7 @@ describe("host installer/uninstaller", () => {
     expect(uninstalled).toContain("[other]");
     expect(existsSync(path.join(codexDir, "plugins", "oms"))).toBe(false);
     expect(existsSync(path.join(codexDir, "rules", "oms.md"))).toBe(false);
-    expect(existsSync(path.join(codexDir, "skills", "oms-capture"))).toBe(false);
+    expect(existsSync(path.join(codexDir, "skills", "oms-write"))).toBe(false);
   });
 
   it("removes only stale Codex OMS skill directories during install", async () => {
@@ -118,7 +118,7 @@ describe("host installer/uninstaller", () => {
     const config = await readFile(path.join(home, ".hermes", "config.yaml"), "utf-8");
     expect(config).toContain("oms:");
     expect(config).toContain("command: oms");
-    expect(existsSync(path.join(home, ".hermes", "skills", "knowledge-management", "oms", "capture", "SKILL.md"))).toBe(true);
+    expect(existsSync(path.join(home, ".hermes", "skills", "knowledge-management", "oms", "write", "SKILL.md"))).toBe(true);
     expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "SOUL.md"))).toBe(true);
 
     await runHostOperation({ action: "uninstall", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });

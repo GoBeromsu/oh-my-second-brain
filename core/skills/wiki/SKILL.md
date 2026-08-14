@@ -1,7 +1,7 @@
 ---
 name: wiki
 version: 0.1.0
-description: Two-path wiki skill — Path A: promote compiled concepts from processed/ into the wiki/ query surface, maintain the staleness ledger, and lint; Path B (human authoring): build interlinked terminology notes directly in vault taxonomy folders via capture safety rails.
+description: Two-path wiki skill — Path A: promote compiled concepts from processed/ into the wiki/ query surface, maintain the staleness ledger, and lint; Path B (human authoring): build interlinked terminology notes directly in vault taxonomy folders via write.
 trigger: /wiki
 tags: [wiki, collection, staleness, navigation, lint, second-brain, oms]
 ---

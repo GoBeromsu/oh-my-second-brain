@@ -143,7 +143,7 @@ Graph status should report stale slices separately: schema stale, graph stale, s
 
 The first installable target is Claude Code. The harness surface should make Oh My Second Brain usable where the user is already working:
 
-- skills for setup, doctor, capture, retrieve, and graph/status operations
+- skills for setup, doctor, write, retrieve, and graph/status operations
 - CLI commands for deterministic local actions
 - MCP server for cross-host read/status tools first, then gated write tools
 
@@ -185,7 +185,6 @@ The MCP tools for this layer are:
 Phase 4 adds the write kernel:
 
 - `write` creates, appends, or updates a markdown note only after vault-relative path checks and concept contract validation pass. Missing fields return `ask`; unbound placement returns `inbox`; contract or path failure returns `rejected`.
-- `oms_capture_prepare` / `oms_capture_commit` remain as compatibility aliases for the same kernel.
 
 The write path rejects absolute paths, `..` escapes, non-markdown targets, `.oms/` internals, and frontmatter that violates the resolved concept contract.
 

@@ -43,10 +43,6 @@ describe("Oh My Second Brain MCP stdio server", () => {
         expect(tool?.annotations?.idempotentHint).toBe(registryTool.idempotent);
         expect(tool?.annotations?.openWorldHint).toBe(registryTool.openWorld);
       }
-      const commitTool = tools.tools.find((tool) => tool.name === "oms_capture_commit");
-      expect(commitTool?.annotations?.readOnlyHint).toBe(false);
-      expect(commitTool?.annotations?.destructiveHint).toBe(false);
-      expect(commitTool?.annotations?.idempotentHint).toBe(false);
       const retrieveTool = tools.tools.find((tool) => tool.name === "oms_retrieve_context");
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semanticMinScore");
       // storage/modelPath knobs were removed from the schemas (engine uses explicit env config).
@@ -210,8 +206,8 @@ Malformed frontmatter must not block retrieve.
       expect(status.ontologySource).toBe("vault-invalid");
       expect(status.writeTools).toBe("disabled-invalid-ontology");
 
-      const commit = await client.callTool({
-        name: "oms_capture_commit",
+      const write = await client.callTool({
+        name: "write",
         arguments: {
           notePath: "references/unsafe.md",
           frontmatter: {
@@ -222,8 +218,8 @@ Malformed frontmatter must not block retrieve.
           mode: "create",
         },
       });
-      expect(commit.isError).toBe(true);
-      expect(commit.content[0]?.type === "text" ? commit.content[0].text : "").toContain(
+      expect(write.isError).toBe(true);
+      expect(write.content[0]?.type === "text" ? write.content[0].text : "").toContain(
         "Oh My Second Brain MCP error",
       );
     } finally {
@@ -278,8 +274,8 @@ Malformed frontmatter must not block retrieve.
       expect(status.ontologySource).toBe("vault-invalid");
       expect(status.writeTools).toBe("disabled-invalid-ontology");
 
-      const commit = await client.callTool({
-        name: "oms_capture_commit",
+      const write = await client.callTool({
+        name: "write",
         arguments: {
           notePath: "references/unsafe.md",
           frontmatter: {
@@ -290,14 +286,14 @@ Malformed frontmatter must not block retrieve.
           mode: "create",
         },
       });
-      expect(commit.isError).toBe(true);
+      expect(write.isError).toBe(true);
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
     }
   });
 
-  it("writes through write and the capture-commit alias against the same kernel", async () => {
+  it("writes through write against the kernel contract", async () => {
     const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-write-"));
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -341,24 +337,6 @@ Malformed frontmatter must not block retrieve.
       );
       expect(created.status).toBe("written");
       expect(created.notePath).toBe("references/kernel-note.md");
-
-      const alias = textPayload(
-        await client.callTool({
-          name: "oms_capture_commit",
-          arguments: {
-            notePath: "references/alias-note.md",
-            frontmatter: {
-              title: "Alias Note",
-              "source-url": "https://example.com/alias-note",
-            },
-            body: "Created by alias.",
-            mode: "create",
-          },
-        }),
-      );
-      const aliasResult = alias.result as Record<string, unknown>;
-      expect(aliasResult.written).toBe(true);
-      expect(aliasResult.notePath).toBe("references/alias-note.md");
 
       const broken = textPayload(
         await client.callTool({

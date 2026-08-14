@@ -85,11 +85,11 @@ oms hook       Vault guard hooks (Claude Code pre/post tool-use)
 
 ## MCP tools
 
-`oms mcp` exposes status, read, retrieve, validation, and gated capture tools, including:
+`oms mcp` exposes status, read, retrieve, validation, and gated write tools, including:
 
-`oms_graph_status` · `oms_graph_build` · `oms_list_concepts` · `oms_retrieve_context` · `oms_retrieve_by_axis` · `oms_sync_embeddings` · `oms_semantic_query` · `oms_get_document` · `oms_multi_get_documents` · `oms_lazy_load_note` · `oms_validate_contract` · `write` · `oms_capture_prepare` · `oms_capture_commit`
+`oms_graph_status` · `oms_graph_build` · `oms_list_concepts` · `oms_retrieve_context` · `oms_retrieve_by_axis` · `oms_sync_embeddings` · `oms_semantic_query` · `oms_get_document` · `oms_multi_get_documents` · `oms_lazy_load_note` · `oms_validate_contract` · `write`
 
-`write` is gated by path-safety, vault-confinement, and the kernel-owned concept contract. `oms_capture_prepare` / `oms_capture_commit` are compatibility aliases.
+`write` is gated by path-safety, vault-confinement, and the kernel-owned concept contract.
 
 ## Vault layout (`.oms/`)
 

@@ -75,17 +75,17 @@ Release contract: the npm tarball must include `adapters/claude-code/` because `
 ## MCP Backbone
 
 The cross-host mechanism is an **MCP server** (`src/mcp/server.ts`) that exposes
-contract validation, retrieve, graph/status, and gated capture tools.
+contract validation, retrieve, graph/status, and gated write tools.
 
 All three hosts natively support MCP (`.mcp.json` for claude-code and codex; "any MCP server" for Hermes).
 In the current repository, `src/mcp/server.ts` starts a real stdio MCP server via `oms mcp`.
 
-The MCP server currently exposes status/read/cache/retrieve/capture tools:
+The MCP server currently exposes status/read/cache/retrieve/write tools:
 `oms_graph_status`, `oms_graph_build`, `oms_list_concepts`,
 `oms_retrieve_context`, `oms_sync_embeddings`, `oms_get_document`, `oms_multi_get_documents`,
 `oms_retrieve_by_axis`, `oms_lazy_load_note`,
-`oms_validate_contract`, `write`, `oms_capture_prepare`, and `oms_capture_commit`.
-`write` is gated by path-safety, vault-confinement, and contract validation. Capture tools are compatibility aliases. The CLI (`oms setup`, `oms install`, `oms uninstall`, `oms doctor`) remains the real surface for lifecycle commands.
+`oms_validate_contract`, and `write`.
+`write` is gated by path-safety, vault-confinement, and contract validation. The CLI (`oms setup`, `oms install`, `oms uninstall`, `oms doctor`) remains the real surface for lifecycle commands.
 
 ---
 
@@ -94,6 +94,6 @@ The MCP server currently exposes status/read/cache/retrieve/capture tools:
 1. Create `adapters/<host>/`.
 2. Write the host-specific manifest in the correct subdirectory and schema.
 3. Write the convention-file shim (`CLAUDE.md` / `AGENTS.md` / `SOUL.md` / whatever the host uses).
-4. Write skill wrappers that shell out to `oms <verb>` (for lifecycle) or call the MCP server (for capture/retrieve).
+4. Write skill wrappers that shell out to `oms <verb>` (for lifecycle) or call the MCP server (for write/retrieve).
 5. Document the host's structural differences in this table.
 6. Do **not** modify `core/` or add host-specific logic to shared code.

@@ -13,4 +13,4 @@ This vault is governed by Oh My Second Brain conventions stored in `.oms/`.
 **Write:** Use `$oms-write`. Call MCP `write`. Do not use host Write/Edit for vault `.md` files.
 **Retrieve:** Use `$oms-retrieve` skill or follow the retriever persona with declared lenses.
 
-> **v0 native install:** `oms install --runtime codex` installs Codex rules, `$oms-*` skills, and a managed Codex MCP config. Use Oh My Second Brain MCP tools for capture/retrieve and CLI commands for lifecycle.
+> **v0 native install:** `oms install --runtime codex` installs Codex rules, `$oms-*` skills, and a managed Codex MCP config. Use Oh My Second Brain MCP tools for write/retrieve and CLI commands for lifecycle.

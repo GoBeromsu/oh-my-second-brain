@@ -85,7 +85,7 @@ All knowledge logic (validation, ontology loading, folder resolution, graph/cach
 
 ## MCP Backbone — Current Boundary and Roadmap
 
-MCP is the shared cross-host transport for retrieve, graph/status, validation, cache, and safe capture operations. In the current repository, `src/mcp/server.ts` starts a real stdio MCP server through `oh-my-second-brain mcp` (or `oms mcp`).
+MCP is the shared cross-host transport for retrieve, graph/status, validation, cache, and gated write operations. In the current repository, `src/mcp/server.ts` starts a real stdio MCP server through `oh-my-second-brain mcp` (or `oms mcp`).
 
 The correct runtime framing is:
 
@@ -93,7 +93,7 @@ The correct runtime framing is:
 2. **Next**: install shell can print exact dry-run Claude plugin and MCP registration commands (`oh-my-second-brain setup --install-claude`) without claiming a live runtime.
 3. **Now in Phase 2**: real stdio MCP read/status tools are available through `oms mcp`.
 4. **Now in Phase 3**: derived graph/search cache tools are available for axis-first retrieval, live context retrieval, native OMS semantic-index sync, semantic document rehydration, and lazy body load.
-5. **Now in Phase 4**: safe capture prepare/commit tools are available after path-safety and vault-confinement tests.
+5. **Now in Phase 4**: the `write` tool is available after path-safety and vault-confinement tests.
 
 ## Retrieval View Compatibility
 
