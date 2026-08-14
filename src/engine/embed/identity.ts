@@ -22,12 +22,3 @@ export function makeEmbeddingIdentity(input: {
     fingerprint: fingerprintEmbeddingIdentity(input),
   };
 }
-
-export function embeddingIdentityEqual(a: EmbeddingIdentity, b: EmbeddingIdentity): boolean {
-  return (
-    a.provider === b.provider &&
-    a.model === b.model &&
-    a.dimensions === b.dimensions &&
-    a.fingerprint === b.fingerprint
-  );
-}
