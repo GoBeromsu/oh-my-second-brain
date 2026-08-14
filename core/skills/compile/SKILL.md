@@ -1,54 +1,55 @@
 ---
 name: compile
 version: 0.1.0
-description: Stateless per-concept compile worker — takes a concept name, source materials, and graph context; returns a synthesized Markdown page body with SHA-incremental skip, 2-step analysis-draft/synthesis-output separation, atomicstrata 2-phase separation, lucasastorian cascade backlinks, and provenance-weighted synthesis context.
+description: Agent-guided concept compile — synthesize a concept wiki page from source materials with incremental skip, two-phase write separation, cascade backlinks, and provenance-weighted context.
 trigger: /compile
 tags: [compile, wiki, synthesis, sha, incremental, second-brain, oms]
 ---
 
 ## compile
 
-Compile a concept page from source materials using the OMS compile engine.
+Synthesize a concept page from source materials. There is no `oms compile` CLI
+and no TypeScript compile worker — follow this recipe as the agent.
 
 ### When to use
 
-Use `compile` when you need to synthesize a concept wiki page from one or more source materials. The worker skips recompile when material SHA is unchanged (incremental by default).
+Use `compile` when you need to synthesize a concept wiki page from one or more
+source materials. Skip rewrite when the material fingerprint is unchanged.
 
 ### Inputs
 
-- `concept` — human-readable concept name (used in LLM prompts)
-- `materials` — list of `{ path, text, grade }` items (grade resolved from folder->grade map)
-- `graph` — compile graph providing `getBacklinks(docPath)` (use `createNullGraph()` when unavailable)
-- `llm` — injected LLM provider (use `createDeterministicStub()` for offline/tests)
-- `dotLlmwiki` — absolute path to `.llmwiki/` dotfolder (SHA cache location)
+- `concept` — human-readable concept name (used in prompts)
+- `materials` — list of `{ path, text, grade }` items (grade from folder→grade map)
+- backlinks — wiki pages that already link to this concept (empty if unknown)
 - `conceptId` — stable cache key (vault-relative path recommended)
+
+Gather materials with MCP `oms_retrieve_context` or `oms_get_document`.
 
 ### Output
 
-Returns `CascadeResult`:
-- `body` — synthesized Markdown with `[[wikilinks]]` (empty string when SHA unchanged / skipped)
+- `body` — synthesized Markdown with `[[wikilinks]]` (empty when skipped)
 - `sha` — SHA-256 fingerprint of the input materials
 - `provenance` — grades of contributing materials
-- `affected_backlinks` — vault paths of wiki pages that link to this concept (for M3 staleness)
+- `affected_backlinks` — vault paths of wiki pages that link to this concept
 
 ### Recipe
 
-1. Run Phase A (`phaseA`) to load and grade all source materials (pure read, no vault mutation).
-2. Call `compile(opts)` with the Phase A materials, graph, llm, and cache path.
-3. Check `wasSkipped(result)` — if true, skip downstream processing.
-4. If not skipped, run Phase B (`phaseB`) to write the body to `processed/` tier.
-5. Pass `result.affected_backlinks` to the wiki collection owner (M3) to mark stale pages.
+1. **Phase A** — load and grade all source materials (pure read, no vault mutation).
+2. Fingerprint the materials. If `{dotLlmwiki}/sha-cache.json` already has the
+   same SHA for `conceptId`, skip the rest.
+3. **Phase B** — write the synthesized body to the `processed/` tier only.
+4. Pass `affected_backlinks` to the wiki skill so those pages can be marked stale.
 
 ### Phase constraints
 
 - Phase A and Phase B never overlap in one execution context.
 - Phase B writes to `processed/` ONLY — never to `wiki/` directly.
-- Promotion from `processed/` to `wiki/` is the M3 collection owner's responsibility.
+- Promotion from `processed/` to `wiki/` is the wiki skill's responsibility.
 
 ### Provenance weighting
 
 Materials are sorted authored > curated > external-raw in synthesis context.
-Authored materials are labelled `[AUTHORED — preserve individual voice]` in the LLM prompt.
+Authored materials are labelled `[AUTHORED — preserve individual voice]` in the prompt.
 
 ### SHA cache
 

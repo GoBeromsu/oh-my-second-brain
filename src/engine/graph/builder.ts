@@ -346,7 +346,7 @@ interface NodeCacheFile {
 
 /**
  * Scan the vault (or an explicit file slice) and build the per-note index
- * consumed by retrieve_by_axis and retrieve_context.
+ * consumed by retrieve_by_axis.
  *
  * Each node carries concept (frontmatter["concept"] only — no Ontology, R18),
  * folder group, every frontmatter field as a string-array axis, resolved

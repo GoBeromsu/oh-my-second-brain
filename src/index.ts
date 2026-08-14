@@ -3,7 +3,6 @@ export * from "./core/ontology/loader.js";
 export * from "./core/ontology/resolver.js";
 export * from "./conventions/frontmatter.js";
 export * from "./conventions/validate.js";
-export * from "./adapt/HostAdapter.js";
 export * from "./graph/explore.js";
 export * from "./retrieve/semantic-contract.js";
 export * from "./engine/assemble.js";

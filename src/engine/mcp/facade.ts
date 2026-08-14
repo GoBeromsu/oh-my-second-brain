@@ -1,5 +1,5 @@
 /**
- * McpEngineAdapter — engine-side adapter facade for the 10 MCP ops.
+ * McpEngineAdapter — engine-side adapter facade for live MCP semantic ops.
  *
  * Receives DispatcherDeps + the vault root as INJECTED dependencies; never
  * instantiates VectorStore, EmbeddingProvider, or any other backend. Backend
@@ -14,7 +14,8 @@
  *   - semantic_cleanup    → orphan diff (store paths − live vault paths)
  *   - graph_build / status → builder.ts edge graph + node index, cached on disk
  *   - retrieve_by_axis    → node-index axis filter + lexical score
- *   - retrieve_context    → axis-seeded local-graph exploration + optional semantic fan-out
+ *
+ * Live oms_retrieve_context is handled by retrieveMorningContext(), not this class.
  *
  * R18: NO import from src/search.
  */
@@ -28,7 +29,6 @@ import type { EngineStore } from "../embed/store.js";
 import {
   buildGraph,
   saveCachedGraph,
-  loadCachedGraph,
   loadCachedGraphMeta,
   buildNodeIndex,
   saveNodeIndex,
@@ -36,8 +36,6 @@ import {
 } from "../graph/builder.js";
 import type { EngineGraphNode } from "../graph/node.js";
 import { filterNodesByAxis, searchScore } from "../graph/node.js";
-import { exploreEngineGraph } from "../graph/explore.js";
-import type { EngineGraphExploreNode } from "../graph/explore.js";
 import type {
   McpSemanticQueryOptions,
   McpSemanticQueryResult,
@@ -52,7 +50,6 @@ import type {
   McpGraphBuildResult,
   McpGraphStatusResult,
   McpAxisFilters,
-  McpRetrieveContextOptions,
   McpSemanticSearchHit,
   EngineSyncResult,
   McpSemanticGetOptions,
@@ -594,72 +591,6 @@ export class McpEngineAdapter {
         }),
         evidence: { lexical: true, vector: false },
       }));
-      return { available: true, hits };
-    } catch (err) {
-      return { available: false, reason: err instanceof Error ? err.message : String(err), hits: [] };
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // 8c. oms_retrieve_context
-  // -------------------------------------------------------------------------
-
-  /**
-   * Axis-seeded local-graph exploration: filter nodes to seeds, expand the
-   * neighbourhood via property-value / wikilink / backlink reasons, then
-   * optionally fan out semantic sub-queries through dispatch(). Hits are
-   * assembled seeds → neighbours → semantic (no re-ranking — mirrors the
-   * floor contract). Dropped semantic sub-fields are the documented GAP-10.
-   */
-  async retrieveContext(opts: McpRetrieveContextOptions): Promise<McpSemanticQueryResult> {
-    try {
-      const nodes = await this.loadOrBuildNodes();
-      let edges = await loadCachedGraph(this.graphCachePath(this.vaultPath));
-      if (edges === null) edges = await buildGraph({ vaultPath: this.vaultPath });
-
-      const exploreResult = exploreEngineGraph(nodes, edges, {
-        concept: opts.concept,
-        folder: opts.folder,
-        property: opts.property,
-        value: opts.value,
-        wikilink: opts.wikilink,
-        query: opts.query,
-        limit: opts.limit,
-        maxNeighbors: opts.maxNeighbors,
-      });
-
-      let semanticHits: McpSemanticSearchHit[] = [];
-      if (opts.semanticSearches && opts.semanticSearches.length > 0) {
-        const first = opts.semanticSearches[0];
-        const queryResult = await this.semanticQuery({
-          query: first?.query ?? opts.query ?? "",
-          searches: opts.semanticSearches,
-          limit: opts.maxNeighbors ?? 10,
-        });
-        if (queryResult.available) semanticHits = [...queryResult.hits];
-      }
-
-      const nodeToHit = (n: EngineGraphExploreNode, source: string): McpSemanticSearchHit => ({
-        docid: n.path,
-        score: n.score,
-        uri: n.path,
-        path: n.path,
-        snippet: n.bodyPreview,
-        context: JSON.stringify({
-          source,
-          concept: n.concept,
-          folder: n.folder,
-          axes: n.axes,
-          reasons: n.reasons,
-        }),
-        evidence: { lexical: true, vector: false },
-      });
-
-      const hits: McpSemanticSearchHit[] = [
-        ...exploreResult.seeds.map((n) => nodeToHit(n, "oms-seed")),
-        ...exploreResult.neighbors.map((n) => nodeToHit(n, "oms-neighbor")),
-        ...semanticHits,
-      ];
       return { available: true, hits };
     } catch (err) {
       return { available: false, reason: err instanceof Error ? err.message : String(err), hits: [] };

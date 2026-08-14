@@ -1,52 +1,53 @@
 ---
 name: wiki
 version: 0.1.0
-description: Two-path wiki skill — Path A (M3 engine): promote compiled concepts from processed/ into the wiki/ query surface, maintain the staleness ledger, and run lint; Path B (human authoring): build interlinked terminology notes directly in vault taxonomy folders via capture safety rails.
+description: Two-path wiki skill — Path A: promote compiled concepts from processed/ into the wiki/ query surface, maintain the staleness ledger, and lint; Path B (human authoring): build interlinked terminology notes directly in vault taxonomy folders via capture safety rails.
 trigger: /wiki
 tags: [wiki, collection, staleness, navigation, lint, second-brain, oms]
 ---
 
 ## wiki
 
-Manage the wiki collection (M3 engine) and author interlinked vault notes (human authoring).
+Manage the wiki collection and author interlinked vault notes. There is no
+TypeScript wiki engine — follow this recipe as the agent.
 
 ## Which path?
 
 Determine which path applies **before acting**:
 
-| | Path A — M3 promotion engine | Path B — Human authoring |
+| | Path A — promotion | Path B — Human authoring |
 |---|---|---|
-| **When to use** | You have compiled `processed/<concept>.md` output (M1→M2 done) | You have only a topic + terms; no compile output exists |
-| **Entry point** | `runCollection()` / `promoteToWiki()` | `oms_capture_prepare` / `oms_capture_commit` |
-| **Writes to** | `wiki/` (engine-managed query surface) | Vault taxonomy folders (`vault/.oms/taxonomy.yaml`) |
+| **When to use** | You have compiled `processed/<concept>.md` output | You have only a topic + terms; no compile output exists |
+| **Entry point** | Promote files, then update ledger + index | `oms_capture_prepare` / `oms_capture_commit` |
+| **Writes to** | `wiki/` (query surface) | Vault taxonomy folders (`vault/.oms/taxonomy.yaml`) |
 | **Prerequisite** | `processed/<concept>.md` must exist | None — user provides topic and term list |
 
 These paths are **mutually exclusive and never combined in a single invocation.**
 
 ---
 
-## Path A — M3 promotion engine
+## Path A — promotion
 
 *(Use only when `processed/<concept>.md` already exists.)*
 
 ### What this skill does
 
-1. Verify the M2 compile output exists in `processed/` for the target concept.
+1. Verify the compile output exists in `processed/` for the target concept.
 2. Check the staleness ledger (`.llmwiki/staleness.json`) for current state.
-3. Run `runCollection()` to promote `processed/→wiki/`, update the ledger, flip cascade backlinks, detect stubs and orphans, and regenerate navigation surfaces.
+3. Promote `processed/→wiki/`, update the ledger, flip cascade backlinks, detect stubs and orphans, and regenerate navigation surfaces.
 4. Regenerate `wiki/index.md` (global catalog) and append an entry to `wiki/log.md`.
-5. Run `runLint()` — apply auto-fixes (index consistency, broken links, See-Also) and report findings (conflicts, orphans, outdated refs) to stdout.
+5. Lint — apply auto-fixes (index consistency, broken links, See-Also) and report findings (conflicts, orphans, outdated refs).
 
 ### 3-phase hard separation
 
 ```
-Research (M1) → Compile (M2, sequential) → Wiki (read-only query surface)
+Research → Compile (sequential) → Wiki (read-only query surface)
 ```
 
 A wiki query never triggers compile. Compile never writes `wiki/` directly.
-`promoteToWiki()` in `collection.ts` is the sole entry point into `wiki/`.
+Promotion is the sole entry point into `wiki/`.
 
-**Sync boundary:** `processed/` is internal compile state and is **NEVER synced to the Obsidian vault** — only `wiki/` crosses the Obsidian sync boundary. `processed/` stays non-synced (engine-internal); `wiki/` is the synced, user-visible surface.
+**Sync boundary:** `processed/` is internal compile state and is **NEVER synced to the Obsidian vault** — only `wiki/` crosses the Obsidian sync boundary.
 
 ### Staleness states
 
@@ -72,16 +73,6 @@ Full-rebuild escape hatch: delete `.llmwiki/staleness.json` — every page reset
 - Orphan pages
 - Outdated refs (DIRTY pages in the ledger)
 
-### Engine
-
-Implemented in `src/engine/wiki/`:
-
-- `collection.ts` — `runCollection()` orchestrates the full cycle
-- `ledger.ts` — 5-state FSM, `loadLedger()` / `saveLedger()` / `resetLedger()`
-- `navigation.ts` — `regenerateIndex()` + `appendLog()`
-- `lint.ts` — `runLint()`
-- `types.ts` — local type definitions
-
 ### Example agent steps (Path A)
 
 ```
@@ -89,13 +80,12 @@ User: "Promote the Alpha concept into the wiki after compile."
 
 1. Verify processed/alpha.md exists (Phase-B compile output)
 2. Load ledger from .llmwiki/staleness.json
-3. runCollection({ conceptId: "concepts/alpha.md", conceptName: "Alpha", ... })
-   → promotes processed/alpha.md → wiki/alpha.md
-   → marks concepts/alpha.md CLEAN in ledger
-   → flips CLEAN backlinks to DIRTY
-   → detects stubs (dangling wikilinks) and orphans
-   → regenerates wiki/index.md and appends to wiki/log.md
-4. runLint({ wikiDir, ledger }) → apply auto-fixes, print report-only findings
+3. Copy processed/alpha.md → wiki/alpha.md
+   → mark concepts/alpha.md CLEAN in ledger
+   → flip CLEAN backlinks to DIRTY
+   → detect stubs (dangling wikilinks) and orphans
+   → regenerate wiki/index.md and append to wiki/log.md
+4. Apply auto-fixes; print report-only findings
 ```
 
 ---

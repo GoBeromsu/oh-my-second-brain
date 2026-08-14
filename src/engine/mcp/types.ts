@@ -10,8 +10,8 @@
 // Storage / mode / format discriminants
 // ---------------------------------------------------------------------------
 
-/** Storage backend discriminant (mirrors SemanticStorage in src/search). */
-export type McpSemanticStorage = "qmd-sqlite" | "oms-native-json";
+/** Storage backend discriminant. Native JSON is the only live store. */
+export type McpSemanticStorage = "oms-native-json";
 
 /** Query mode (mirrors SemanticSearchMode in src/search). */
 export type McpSemanticSearchMode = "query" | "search" | "vsearch";
@@ -275,10 +275,10 @@ export type McpGraphStatusResult =
   | { readonly available: false; readonly reason: string };
 
 // ---------------------------------------------------------------------------
-// oms_retrieve_by_axis / oms_retrieve_context — options
+// oms_retrieve_by_axis — options
 // ---------------------------------------------------------------------------
 
-/** Axis filters common to both retrieve ops. */
+/** Axis filters for oms_retrieve_by_axis. */
 export interface McpAxisFilters {
   readonly concept?: string;
   readonly folder?: string;
@@ -287,14 +287,6 @@ export interface McpAxisFilters {
   readonly wikilink?: string;
   readonly query?: string;
   readonly limit?: number;
-}
-
-/** Extended options for oms_retrieve_context (adds semantic + graph neighbors). */
-export interface McpRetrieveContextOptions extends McpAxisFilters {
-  readonly maxNeighbors?: number;
-  readonly useCache?: boolean;
-  /** Optional semantic sub-queries to fan out alongside axis filters. */
-  readonly semanticSearches?: readonly McpSemanticTypedSearch[];
 }
 
 // ---------------------------------------------------------------------------
@@ -344,30 +336,11 @@ export interface McpSemanticMultiGetOptions {
 // Engine-facing seam types (internal to engine/mcp — not mirrored from src/search)
 // ---------------------------------------------------------------------------
 
-/** Engine-internal args produced by the sync request mapper. */
-export interface EngineSyncArgs {
-  /** Vault-relative paths to (re-)embed. Empty slice = full-scan. */
-  readonly paths: readonly string[];
-  readonly collection?: string;
-  readonly collectionPath?: string;
-  readonly pattern?: string;
-  readonly ignore?: readonly string[];
-  readonly includeByDefault?: boolean;
-  readonly updateCommand?: string;
-  readonly context?: string;
-  readonly force: boolean;
-}
-
 /** Engine-internal result from the sync operation. */
 export interface EngineSyncResult {
   readonly upserted: number;
   readonly skipped: number;
   readonly errors: number;
-}
-
-/** Engine-internal args for a status probe of DispatcherDeps capabilities. */
-export interface EngineStatusArgs {
-  readonly includeModels: boolean;
 }
 
 /** Engine-internal result from a status probe. */

@@ -1,13 +1,13 @@
 ---
 name: wiki
-description: Two-path wiki skill — Path A (M3 engine): promote compiled concepts from processed/ into the wiki/ query surface; Path B (human authoring): build interlinked terminology notes in vault taxonomy folders via capture safety rails.
+description: Two-path wiki skill — Path A: promote compiled concepts from processed/ into the wiki/ query surface; Path B (human authoring): build interlinked terminology notes in vault taxonomy folders via capture safety rails.
 ---
 
 # oms-wiki
 
 Thin pointer to `core/skills/wiki`. Requires `OMS_VAULT`.
 
-**Path A (M3 engine) — use when `processed/<concept>.md` exists:** Verify `processed/<concept>.md` exists (Phase-B compile output from M2), load staleness ledger from `.llmwiki/staleness.json`, run `runCollection()` to promote `processed/→wiki/`, update the ledger, flip cascade backlinks, detect stubs and orphans. Regenerate `wiki/index.md` and append to `wiki/log.md` via `regenerateIndex()` and `appendLog()`. Run `runLint()` — auto-fix index consistency, broken `[[wikilinks]]`, and See-Also sections; report conflicts, orphans, and outdated refs to stdout. `promoteToWiki()` in `collection.ts` is the sole entry point into `wiki/`. Only `wiki/` crosses the Obsidian sync boundary; `processed/` is engine-internal.
+**Path A — use when `processed/<concept>.md` exists:** Verify the file exists, load `.llmwiki/staleness.json`, promote `processed/→wiki/`, update the ledger, flip cascade backlinks, detect stubs and orphans. Regenerate `wiki/index.md` and append to `wiki/log.md`. Lint — auto-fix index consistency, broken `[[wikilinks]]`, and See-Also sections; report conflicts, orphans, and outdated refs. Only `wiki/` crosses the Obsidian sync boundary; `processed/` is internal.
 
 NOTE: Delete `.llmwiki/staleness.json` to force a full rebuild — every page resets to DIRTY.
 

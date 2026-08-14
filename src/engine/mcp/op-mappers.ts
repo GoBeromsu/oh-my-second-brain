@@ -22,10 +22,7 @@ import type {
   McpGraphBuildOptions,
   McpGraphBuildResult,
   McpGraphStatusResult,
-  McpStatusOptions,
-  EngineSyncArgs,
   EngineSyncResult,
-  EngineStatusArgs,
   EngineStatusResult,
   EngineGraphBuildArgs,
   EngineGraphBuildResult,
@@ -34,21 +31,6 @@ import type {
 // ---------------------------------------------------------------------------
 // oms_sync_embeddings
 // ---------------------------------------------------------------------------
-
-/** Map McpSemanticEmbeddingSyncOptions → EngineSyncArgs. */
-export function syncOptionsToEngineArgs(opts: McpSemanticEmbeddingSyncOptions): EngineSyncArgs {
-  return {
-    paths: [],              // empty = full vault scan; caller populates for incremental
-    collection: opts.collection,
-    collectionPath: opts.collectionPath,
-    pattern: opts.pattern,
-    ignore: opts.ignore,
-    includeByDefault: opts.includeByDefault,
-    updateCommand: opts.updateCommand,
-    context: opts.context,
-    force: opts.force ?? false,
-  };
-}
 
 /**
  * Map EngineSyncResult → McpSemanticEmbeddingSyncResult (success path).
@@ -101,11 +83,6 @@ export function syncResultUnavailable(
 // ---------------------------------------------------------------------------
 // oms_semantic_status
 // ---------------------------------------------------------------------------
-
-/** Map McpStatusOptions → EngineStatusArgs. */
-export function statusOptionsToEngineArgs(_opts: McpStatusOptions): EngineStatusArgs {
-  return { includeModels: true };
-}
 
 /**
  * Derive EngineStatusResult from live DispatcherDeps capabilities.
@@ -192,19 +169,6 @@ export function engineStatusToContextResult(
 // ---------------------------------------------------------------------------
 // oms_semantic_cleanup
 // ---------------------------------------------------------------------------
-
-/** Map EngineSyncResult → McpSemanticCleanupResult. */
-export function engineSyncResultToCleanupResult(
-  result: EngineSyncResult,
-): McpSemanticCleanupResult {
-  return {
-    available: true,
-    storage: "oms-native-json",
-    removedDocuments: result.errors,
-    remainingDocuments: result.upserted,
-    collections: 1,
-  };
-}
 
 /** Build an unavailable cleanup result (error path). */
 export function cleanupResultUnavailable(reason: string): McpSemanticCleanupResult {

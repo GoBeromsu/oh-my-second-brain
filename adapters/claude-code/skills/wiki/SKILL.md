@@ -1,6 +1,6 @@
 ---
 name: oms-wiki
-description: Two-path wiki skill — Path A (M3 engine): promote compiled concepts from processed/ into the wiki/ query surface; Path B (human authoring): build interlinked terminology notes in vault taxonomy folders via capture safety rails.
+description: Two-path wiki skill — Path A: promote compiled concepts from processed/ into the wiki/ query surface; Path B (human authoring): build interlinked terminology notes in vault taxonomy folders via capture safety rails.
 ---
 
 # Skill: oms-wiki (Claude Code)
@@ -16,27 +16,26 @@ Two-path skill — thin pointer to `core/skills/wiki`. Requires `OMS_VAULT`.
 ## Which path?
 
 Check **before acting**:
-- **Path A (M3 engine):** you have compiled `processed/<concept>.md` output → use `runCollection()` / `promoteToWiki()`, writes to `wiki/`.
+- **Path A:** you have compiled `processed/<concept>.md` output → promote into `wiki/`.
 - **Path B (human authoring):** you have only a topic + terms, no compile output → use `oms_capture_prepare` / `oms_capture_commit`, writes to vault taxonomy folders.
 
 These paths are **mutually exclusive**.
 
 ---
 
-## Path A — M3 promotion engine
+## Path A — promotion
 
 *(Only when `processed/<concept>.md` exists.)*
 
 ### Agent-guided steps
 
-1. Verify `processed/<concept>.md` exists (Phase-B compile output from M2).
+1. Verify `processed/<concept>.md` exists.
 2. Load the staleness ledger from `.llmwiki/staleness.json`.
-3. Run `runCollection()` — promotes `processed/→wiki/`, updates the ledger,
-   flips cascade backlinks, and detects stubs and orphans.
-4. Regenerate `wiki/index.md` (global catalog) and append an entry to `wiki/log.md`
-   via `regenerateIndex()` and `appendLog()`.
-5. Run `runLint()` — apply auto-fixes (index consistency, broken `[[wikilinks]]`,
-   See-Also sections) and report findings (conflicts, orphans, outdated refs) to stdout.
+3. Promote `processed/→wiki/`, update the ledger, flip cascade backlinks,
+   and detect stubs and orphans.
+4. Regenerate `wiki/index.md` and append an entry to `wiki/log.md`.
+5. Lint — auto-fix index consistency, broken `[[wikilinks]]`, and See-Also
+   sections; report conflicts, orphans, and outdated refs.
 
 ### Staleness states
 
@@ -50,15 +49,7 @@ These paths are **mutually exclusive**.
 
 Full-rebuild escape hatch: delete `.llmwiki/staleness.json` — every page resets to DIRTY.
 
-### Runtime
-
-Implemented in `src/engine/wiki/`: `collection.ts` (`runCollection()`),
-`ledger.ts` (`loadLedger()` / `saveLedger()` / `resetLedger()`),
-`navigation.ts` (`regenerateIndex()` / `appendLog()`), `lint.ts` (`runLint()`),
-`types.ts`.
-
-`promoteToWiki()` in `collection.ts` is the sole entry point into `wiki/`.
-`processed/` is engine-internal — NEVER synced to the Obsidian vault.
+`processed/` is internal — NEVER synced to the Obsidian vault.
 A wiki run never triggers compile; compile never writes `wiki/` directly.
 
 ---
