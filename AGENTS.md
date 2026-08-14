@@ -116,3 +116,14 @@ after editing imports.
 | `/core/AGENTS.md` | Vault-convention SSOT for end users | Separate lane |
 
 Do not conflate them. Do not create or modify `core/AGENTS.md` from this lane.
+
+---
+
+## Cursor Cloud specific instructions
+
+Environment: Node 22 (satisfies `engines.node >=20`), npm, and a C/C++ toolchain (`gcc`/`g++`/`make`/`python3`) are preinstalled. The startup update script runs `npm install`, which prebuilds/compiles the native deps (`better-sqlite3`, `sqlite-vec`, `node-llama-cpp`) — they load out of the box, no extra system packages needed.
+
+- **Build before running the CLI/MCP.** `bin` points at compiled `dist/` (`dist/cli/oms.js`), so `npm install` alone does not make `oms` runnable. Run `npm run build` first, then invoke `node dist/cli/oms.js <command>`. Standard commands are in the "Build and Test Commands" section above.
+- **No long-running daemon for tests.** `npm test` (vitest) covers everything (incl. `src/e2e.test.ts`, `src/setup.e2e.test.ts`) without starting a server.
+- **Exercising the product end-to-end:** point at any folder of markdown notes, e.g. `node dist/cli/oms.js setup --vault <path> --yes` (writes `.oms/taxonomy.yaml`), then `doctor` / `lint`. The MCP server is stdio: `node dist/cli/oms.js mcp --vault <path>` and speaks JSON-RPC (`initialize` → `tools/list` → `tools/call`).
+- **Semantic search is optional and off by default.** It needs a real embedding model via `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` (ADR-007: no fake fallback). Graph retrieval + convention validation work without any model, so semantic setup is not required to run/test the core product.
