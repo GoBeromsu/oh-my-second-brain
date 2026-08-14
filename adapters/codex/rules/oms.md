@@ -14,7 +14,7 @@ Oh My Second Brain is a convention harness, not a content generator. The user ow
 | install host integration | `$oms-install` or `oms install --runtime codex --vault <path> --yes` |
 | uninstall host integration | `$oms-uninstall` or `oms uninstall --runtime codex --yes` |
 | validate notes | `$oms-doctor` or `oms doctor --vault <path>` |
-| capture knowledge | use MCP `oms_capture_prepare` then `oms_capture_commit` |
+| write a vault note | use `$oms-write` / MCP `write` (`create`, `append`, or `update`) |
 | retrieve knowledge | use MCP `oms_retrieve_context`, then `oms_lazy_load_note` only when needed |
 
 ## Safety

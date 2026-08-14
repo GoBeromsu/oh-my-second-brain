@@ -31,9 +31,9 @@ NOTE: `processed/` is internal — never synced to the Obsidian vault. Only `wik
    - Coined/proper term (only ever means one specific technical thing) → standalone note.
    - General noun (meaning shifts by domain) → `## Term` section inside the hub note only.
    - K8s example: `Pod`, `Service`, `Deployment`, `Ingress` → hub sections; `ReplicaSet`, `StatefulSet`, `DaemonSet`, `CronJob` → standalone notes.
-4. **Deduplicate**: call `oms_capture_prepare` for each coined term; if `exists: true`, reuse the `[[wikilink]]` and skip creation.
-5. Draft coined-term notes: frontmatter from the concept's required fields + definition + `## See Also` back-link to the hub. Commit terms first via `oms_capture_commit`.
-6. Draft hub/MOC note: general-noun `## Term` sections + `## See Also` listing all coined-term `[[wikilinks]]`. Commit hub last via `oms_capture_commit`.
+4. **Deduplicate**: call MCP `write` with `mode: "create"` for each coined term; if the note already exists, reuse the `[[wikilink]]`.
+5. Draft coined-term notes: frontmatter from the concept's required fields + definition + `## See Also` back-link to the hub. Commit terms first via MCP `write`.
+6. Draft hub/MOC note: general-noun `## Term` sections + `## See Also` listing all coined-term `[[wikilinks]]`. Commit hub last via MCP `write`.
 7. Run `oms doctor` after all notes are committed (non-blocking, exits 0).
 
 NOTE: Path B writes to vault taxonomy folders — **never to `wiki/`**.

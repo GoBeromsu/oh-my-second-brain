@@ -18,6 +18,7 @@
     "./skills/doctor/",
     "./skills/define/",
     "./skills/capture/",
+    "./skills/write/",
     "./skills/retrieve/",
     "./skills/uninstall/",
     "./skills/update/"

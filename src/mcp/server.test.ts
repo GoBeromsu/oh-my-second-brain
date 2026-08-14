@@ -69,8 +69,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const status = await client.callTool({ name: "oms_graph_status", arguments: {} });
       const parsedStatus = textPayload(status);
       expect(parsedStatus.writeTools).toBe(
-        "capture-commit-gated-by-vault-confinement-and-contract-validation",
+        "write-gated-by-vault-confinement-and-contract-validation",
       );
+      const writeTool = tools.tools.find((tool) => tool.name === "write");
+      expect(writeTool?.annotations?.readOnlyHint).toBe(false);
+      expect(JSON.stringify(writeTool?.inputSchema)).toContain("update");
       expect(parsedStatus.counts.concepts).toBeGreaterThan(0);
       const derivedState = parsedStatus.derivedState as Record<string, unknown>;
       const staleness = derivedState.staleness as Record<string, unknown>;
@@ -288,6 +291,87 @@ Malformed frontmatter must not block retrieve.
         },
       });
       expect(commit.isError).toBe(true);
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
+    }
+  });
+
+  it("writes through write and the capture-commit alias against the same kernel", async () => {
+    const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-write-"));
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", tmpVault],
+      cwd: repoRoot,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      const asked = textPayload(
+        await client.callTool({
+          name: "write",
+          arguments: {
+            mode: "create",
+            concept: "literature",
+            frontmatter: { title: "Incomplete" },
+            body: "Body",
+          },
+        }),
+      );
+      expect(asked.status).toBe("ask");
+      expect(asked.missingFields).toEqual(["source-url"]);
+
+      const created = textPayload(
+        await client.callTool({
+          name: "write",
+          arguments: {
+            mode: "create",
+            notePath: "references/kernel-note.md",
+            frontmatter: {
+              title: "Kernel Note",
+              "source-url": "https://example.com/kernel-note",
+              extra: "kept",
+            },
+            body: "Created by write.",
+          },
+        }),
+      );
+      expect(created.status).toBe("written");
+      expect(created.notePath).toBe("references/kernel-note.md");
+
+      const alias = textPayload(
+        await client.callTool({
+          name: "oms_capture_commit",
+          arguments: {
+            notePath: "references/alias-note.md",
+            frontmatter: {
+              title: "Alias Note",
+              "source-url": "https://example.com/alias-note",
+            },
+            body: "Created by alias.",
+            mode: "create",
+          },
+        }),
+      );
+      const aliasResult = alias.result as Record<string, unknown>;
+      expect(aliasResult.written).toBe(true);
+      expect(aliasResult.notePath).toBe("references/alias-note.md");
+
+      const broken = textPayload(
+        await client.callTool({
+          name: "write",
+          arguments: {
+            mode: "update",
+            notePath: "references/kernel-note.md",
+            frontmatter: { title: "" },
+          },
+        }),
+      );
+      expect(broken.status).toBe("rejected");
+      expect((broken.violations as Array<Record<string, unknown>>)[0]?.rule).toBe("required");
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });

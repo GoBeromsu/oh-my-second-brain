@@ -182,10 +182,10 @@ The MCP tools for this layer are:
 
 `oms_retrieve_by_axis` returns candidate notes and previews; `oms_lazy_load_note` reads full body payload only after a note has been selected.
 
-Phase 4 adds safe capture tools:
+Phase 4 adds the write kernel:
 
-- `oms_capture_prepare` plans placement, asks for missing required frontmatter fields, or routes ambiguous captures to inbox.
-- `oms_capture_commit` creates or appends a markdown note only after vault-relative path checks and concept contract validation pass.
+- `write` creates, appends, or updates a markdown note only after vault-relative path checks and concept contract validation pass. Missing fields return `ask`; unbound placement returns `inbox`; contract or path failure returns `rejected`.
+- `oms_capture_prepare` / `oms_capture_commit` remain as compatibility aliases for the same kernel.
 
 The write path rejects absolute paths, `..` escapes, non-markdown targets, `.oms/` internals, and frontmatter that violates the resolved concept contract.
 

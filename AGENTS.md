@@ -87,7 +87,7 @@ after editing imports.
 
 - The active convention is **user-owned**: resolved from `vault/.oms/` at runtime.
 - Oh My Second Brain ships read-only **defaults** in `core/ontology/`.
-- Enforcement policy: `onViolation: warn` — violations are non-blocking by default.
+- Enforcement policy: `onViolation: warn` for doctor/audit reporting. MCP `write` rejects contract violations and does not change the disk.
 - Schema policy: `additionalProperties: preserve` — unknown fields are kept, not rejected.
 - Never change these defaults to blocking/error without an explicit product decision.
 

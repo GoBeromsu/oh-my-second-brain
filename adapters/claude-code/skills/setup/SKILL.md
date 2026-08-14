@@ -74,6 +74,6 @@ Run `/oms-doctor` to validate your existing notes against the convention.
 Setup plus `oms install`/`oms uninstall` host lifecycle commands are real and release-gated by unpacked npm tarball smoke tests. The MCP command starts
 the status/read/cache/retrieve/capture runtime (`oms_graph_status`, `oms_graph_build`,
 `oms_list_concepts`, `oms_retrieve_context`, `oms_retrieve_by_axis`,
-`oms_lazy_load_note`, `oms_validate_contract`, `oms_capture_prepare`,
+`oms_lazy_load_note`, `oms_validate_contract`, `write`, `oms_capture_prepare`,
 `oms_capture_commit`).
-Capture commit is gated by path-safety and contract validation.
+`write` is gated by path-safety and the kernel-owned contract.

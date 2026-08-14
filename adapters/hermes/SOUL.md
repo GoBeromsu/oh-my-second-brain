@@ -11,8 +11,7 @@ This vault is governed by Oh My Second Brain conventions stored in `.oms/`.
 - Read `.oms/taxonomy.yaml` for folder-to-concept bindings.
 - Read `.oms/concepts/*.yaml` for field declarations and lenses.
 
-**Capture:** Follow the librarian persona — resolve concept, resolve folder from taxonomy,
-construct required frontmatter, write note, then run `oms doctor`.
+**Write:** Use the `write` skill. Call MCP `write`. Do not use host Write/Edit for vault `.md` files.
 
 **Retrieve:** Follow the retriever persona — identify purpose, match lens, project lens fields only.
 

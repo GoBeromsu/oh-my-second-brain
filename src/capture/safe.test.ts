@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { loadOntology } from "../core/ontology/loader.js";
-import { commitCapture, prepareCapture, safeVaultNotePath } from "./safe.js";
+import type { Concept, Ontology } from "../core/ontology/types.js";
+import { commitCapture, prepareCapture, safeVaultNotePath, writeNote } from "./safe.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -132,3 +133,171 @@ describe("safe capture", () => {
     ).rejects.toThrow(/unsafe|inside/);
   });
 });
+
+const LITERATURE: Concept = {
+  concept: "literature",
+  intent: "A processed reference.",
+  folder: "references",
+  fields: [
+    { name: "title", type: "string", required: true, intent: "Title." },
+    { name: "source-url", type: "url", required: true, intent: "Canonical URL." },
+    {
+      name: "status",
+      type: "string",
+      required: false,
+      intent: "Publication state.",
+      enum: ["draft", "published", "archived"],
+    },
+  ],
+};
+
+function testOntology(): Ontology {
+  return {
+    taxonomy: {
+      version: 1,
+      folders: {
+        references: { intent: "refs", concept: "literature" },
+        inbox: { intent: "inbox", concept: "inbox" },
+      },
+    },
+    concepts: new Map([
+      ["literature", LITERATURE],
+      ["inbox", { concept: "inbox", intent: "inbox", folder: "inbox", fields: [] }],
+    ]),
+  };
+}
+
+describe("writeNote kernel", () => {
+  it("asks on create when required or enum fields fail and does not write", async () => {
+    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-write-ask-"));
+    const ontology = testOntology();
+    const missing = await writeNote({
+      vault: tmpVault,
+      ontology,
+      mode: "create",
+      dryRun: false,
+      concept: "literature",
+      frontmatter: { title: "Only title" },
+      body: "Body",
+    });
+    expect(missing.status).toBe("ask");
+    expect(missing.missingFields).toContain("source-url");
+    expect(missing.fields.map((field) => field.name)).toContain("source-url");
+
+    const badEnum = await writeNote({
+      vault: tmpVault,
+      ontology,
+      mode: "create",
+      dryRun: false,
+      notePath: "references/enum.md",
+      frontmatter: {
+        title: "Enum",
+        "source-url": "https://example.com/enum",
+        status: "preview",
+      },
+      body: "Body",
+    });
+    expect(badEnum.status).toBe("ask");
+    expect(badEnum.violations.map((violation) => violation.rule)).toContain("enum");
+  });
+
+  it("creates, appends, and updates when the contract passes, preserving extra keys", async () => {
+    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-write-ok-"));
+    const ontology = testOntology();
+    const notePath = "references/new-book.md";
+    const created = await writeNote({
+      vault: tmpVault,
+      ontology,
+      mode: "create",
+      dryRun: false,
+      notePath,
+      frontmatter: {
+        title: "New Book",
+        "source-url": "https://example.com/new-book",
+        "my-rating": 5,
+      },
+      body: "Initial body.",
+    });
+    expect(created).toMatchObject({ status: "written", mode: "create", notePath });
+
+    const appended = await writeNote({
+      vault: tmpVault,
+      ontology,
+      mode: "append",
+      dryRun: false,
+      notePath,
+      body: "Appended body.",
+    });
+    expect(appended).toMatchObject({ status: "written", mode: "append", notePath });
+
+    const updated = await writeNote({
+      vault: tmpVault,
+      ontology,
+      mode: "update",
+      dryRun: false,
+      notePath,
+      frontmatter: { status: "published" },
+    });
+    expect(updated.status).toBe("written");
+    expect(updated.frontmatter["my-rating"]).toBe(5);
+    expect(updated.frontmatter["status"]).toBe("published");
+
+    const written = await readFile(path.join(tmpVault, notePath), "utf-8");
+    expect(written).toContain("Initial body.");
+    expect(written).toContain("Appended body.");
+    expect(written).toContain("my-rating: 5");
+    expect(written).toContain("status: published");
+  });
+
+  it("rejects update that breaks required fields and leaves the file unchanged", async () => {
+    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-write-reject-"));
+    const ontology = testOntology();
+    const notePath = "references/keep.md";
+    await writeNote({
+      vault: tmpVault,
+      ontology,
+      mode: "create",
+      dryRun: false,
+      notePath,
+      frontmatter: {
+        title: "Keep",
+        "source-url": "https://example.com/keep",
+      },
+      body: "Original.",
+    });
+
+    const rejected = await writeNote({
+      vault: tmpVault,
+      ontology,
+      mode: "update",
+      dryRun: false,
+      notePath,
+      frontmatter: { title: "" },
+    });
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.violations.map((violation) => violation.rule)).toContain("required");
+
+    const written = await readFile(path.join(tmpVault, notePath), "utf-8");
+    expect(written).toContain("title: Keep");
+    expect(written).toContain("Original.");
+  });
+
+  it("rejects an explicit unsafe notePath instead of writing", async () => {
+    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-write-path-"));
+    const rejected = await writeNote({
+      vault: tmpVault,
+      ontology: testOntology(),
+      mode: "create",
+      dryRun: false,
+      notePath: "../outside.md",
+      frontmatter: {
+        title: "Nope",
+        "source-url": "https://example.com/nope",
+      },
+      body: "Bad",
+    });
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.reason).toMatch(/unsafe|inside|relative/);
+  });
+});
+
