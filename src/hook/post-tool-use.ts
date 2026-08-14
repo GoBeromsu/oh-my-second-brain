@@ -1,10 +1,10 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildGraphCache } from "../graph/cache.js";
-import { loadOntology } from "../ontology/loader.js";
+import { loadOntology } from "../core/ontology/loader.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { validateFrontmatter } from "../conventions/validate.js";
-import { resolveConcept } from "../ontology/resolver.js";
+import { resolveConcept } from "../core/ontology/resolver.js";
 import { readStdinTimeout } from "./stdin.js";
 
 /** Debounce window for graph builds, in seconds. */

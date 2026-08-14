@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { loadOntology } from "../ontology/loader.js";
+import { loadOntology } from "../core/ontology/loader.js";
 import { commitCapture, prepareCapture, safeVaultNotePath } from "./safe.js";
 
 const __filename = fileURLToPath(import.meta.url);

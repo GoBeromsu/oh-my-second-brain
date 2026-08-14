@@ -10,10 +10,10 @@ import {
 } from "../conventions/report.js";
 import { mapWithConcurrency, walkVaultMarkdown } from "../conventions/vault-walk.js";
 import { validateFrontmatter } from "../conventions/validate.js";
-import { loadOntology } from "../ontology/loader.js";
-import { resolveConcept } from "../ontology/resolver.js";
-import type { Concept } from "../ontology/types.js";
-import { resolveBundledAssetPaths } from "../runtime/assets.js";
+import { loadOntology } from "../core/ontology/loader.js";
+import { resolveConcept } from "../core/ontology/resolver.js";
+import type { Concept } from "../core/ontology/types.js";
+import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
 
 const bundledAssets = resolveBundledAssetPaths();
 

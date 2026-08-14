@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadOntology } from "../ontology/loader.js";
+import { loadOntology } from "../core/ontology/loader.js";
 import { exploreLocalGraph } from "./explore.js";
 
 const __filename = fileURLToPath(import.meta.url);

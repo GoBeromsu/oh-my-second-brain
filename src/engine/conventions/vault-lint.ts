@@ -23,8 +23,8 @@ import path from "node:path";
 import { parseNote } from "../../conventions/frontmatter.js";
 import { validateFrontmatter } from "../../conventions/validate.js";
 import { walkVaultMarkdown } from "../../conventions/vault-walk.js";
-import { resolveConcept } from "../../ontology/resolver.js";
-import type { Concept, Ontology } from "../../ontology/types.js";
+import { resolveConcept } from "../../core/ontology/resolver.js";
+import type { Concept, Ontology } from "../../core/ontology/types.js";
 
 
 // ── Public types ──────────────────────────────────────────────────────────────

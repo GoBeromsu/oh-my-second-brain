@@ -1,8 +1,8 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { resolveBundledAssetPaths } from "../runtime/assets.js";
-import { loadOntology } from "./loader.js";
-import type { Ontology } from "./types.js";
+import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
+import { loadOntology } from "../core/ontology/loader.js";
+import type { Ontology } from "../core/ontology/types.js";
 
 export type ActiveOntologySource = "vault" | "bundled";
 

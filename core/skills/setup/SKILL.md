@@ -157,11 +157,10 @@ Paths outside `agent_writable_zone` are read-only to all agents.
 > Interview output is written ONLY to `vault/.oms/taxonomy.yaml`.
 > Writing to `core/ontology/taxonomy.yaml` or any engine path is FORBIDDEN.
 
-This guard is enforced by construction in `src/engine/setup/writer.ts`:
+This guard is enforced by `oms setup` (`src/cli/setup-command.ts`) and by this skill:
 
-- `writeTaxonomyToVaultOverride(vaultRoot, data)` resolves the canonical path as
-  `{vaultRoot}/.oms/taxonomy.yaml` and refuses any path that escapes `{vaultRoot}/.oms/`.
-- Any attempt to write to the engine default throws before touching disk.
+- The only write target is `{vaultRoot}/.oms/taxonomy.yaml`.
+- Never write to `core/ontology/taxonomy.yaml` or any other engine path.
 
 **Why this matters:** The engine default at `core/ontology/taxonomy.yaml` is the shared
 fallback for every vault. Overwriting it would silently propagate one vault's assumptions
@@ -184,11 +183,10 @@ to all future users. Vault-local overrides preserve this separation permanently.
 
 4. **Validate completeness** — confirm all 6 output keys are present and non-empty.
 
-5. **Write** to `{vaultRoot}/.oms/taxonomy.yaml` ONLY via
-   `writeTaxonomyToVaultOverride(vaultRoot, data)`:
-   - Create `{vaultRoot}/.oms/` if it does not exist.
-   - Merge with any existing file (do not clobber unrelated keys).
-   - Ensure `version: 1` (upgrade from v0 if needed).
+5. **Write** to `{vaultRoot}/.oms/taxonomy.yaml` ONLY:
+   - Prefer `oms setup --vault <path>` for the non-interactive/default path.
+   - If writing during the interview, create `{vaultRoot}/.oms/` if needed, merge
+     with any existing file (do not clobber unrelated keys), and keep `version: 1`.
 
 6. **Confirm** — print the written path and the resolved values. Never silently succeed.
 
@@ -239,10 +237,10 @@ Run the `doctor` skill to validate existing notes against the resolved conventio
 oms doctor [--vault <path>]
 ```
 
-## Executable helpers
+## Executable helper
 
-Pure stateless helpers live in `src/engine/setup/` (co-located vitest tests):
+Use the live CLI writer, not a parallel engine setup module:
 
-- `types.ts` — `DimensionScore`, `InterviewConfig`, `TaxonomyOutput`, `BindingDimension`
-- `ambiguity.ts` — `computeAmbiguity()`, `meetsThreshold()`, `validateScores()`
-- `writer.ts` — `writeTaxonomyToVaultOverride()`, `resolveVaultOverridePath()` (Non-Sticky Guard)
+```bash
+oms setup [--vault <path>] [--yes]
+```

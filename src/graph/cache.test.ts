@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { loadOntology } from "../ontology/loader.js";
+import { loadOntology } from "../core/ontology/loader.js";
 import {
   buildGraphCache,
   graphCacheStatus,

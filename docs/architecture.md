@@ -55,8 +55,8 @@ All knowledge logic (validation, ontology loading, folder resolution, graph/cach
 │  Oh My Second Brain convention layer  (src/ — TypeScript, Node ≥20)            │
 │                                                                  │
 │  src/cli/oms.ts          CLI verbs: setup / doctor / semantic   │
-│  src/ontology/loader.ts   load concepts/*.yaml + taxonomy.yaml   │
-│  src/ontology/resolver.ts resolve note path → Concept            │
+│  src/core/ontology/       load concepts/*.yaml + taxonomy.yaml   │
+│  src/ontology/active.ts   resolve vault vs bundled ontology      │
 │  src/conventions/         validateFrontmatter → ValidationResult │
 │  src/adapt/HostAdapter.ts per-host adapter interface             │
 │  src/mcp/server.ts        stdio MCP: retrieve/semantic/read/capture │

@@ -1,4 +1,4 @@
-import type { Concept, OntologyField } from "../ontology/types.js";
+import type { Concept, OntologyField } from "../core/ontology/types.js";
 
 export type ViolationRule = "required" | "type" | "immutable";
 

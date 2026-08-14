@@ -32,7 +32,7 @@ M5 vault mutations. Never set it programmatically.
 
 ```ts
 import { lintVault } from "./src/engine/conventions/vault-lint.js";
-import { loadOntology } from "./src/ontology/loader.js";
+import { loadOntology } from "./src/core/ontology/loader.js";
 
 const ontology = await loadOntology(".oms/ontology");
 const report = await lintVault("/path/to/vault", ontology);

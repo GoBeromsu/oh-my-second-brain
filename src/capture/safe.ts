@@ -2,8 +2,8 @@ import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import path from "node:path";
 import { stringify as yamlStringify } from "yaml";
 import { validateFrontmatter } from "../conventions/validate.js";
-import { resolveConcept } from "../ontology/resolver.js";
-import type { Concept, Ontology } from "../ontology/types.js";
+import { resolveConcept } from "../core/ontology/resolver.js";
+import type { Concept, Ontology } from "../core/ontology/types.js";
 
 export type CapturePrepareAction = "ready" | "ask-missing-fields" | "route-to-inbox";
 export type CaptureWriteMode = "create" | "append";

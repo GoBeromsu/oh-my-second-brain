@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadOntology } from "./loader.js";
-import { resolveConcept } from "./resolver.js";
-import type { Ontology } from "./types.js";
+import { loadOntology } from "../core/ontology/loader.js";
+import { resolveConcept } from "../core/ontology/resolver.js";
+import type { Ontology } from "../core/ontology/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

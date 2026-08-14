@@ -8,7 +8,7 @@ import {
   mergeObservedFieldsIntoConcept,
   parseLensDefinitions,
 } from "./axis.js";
-import type { Concept, Ontology } from "../ontology/types.js";
+import type { Concept, Ontology } from "../core/ontology/types.js";
 
 let tmpVault: string | undefined;
 
