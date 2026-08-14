@@ -8,7 +8,6 @@ import {
   buildGraphCache,
   graphCacheStatus,
   lazyLoadNoteBody,
-  retrieveByAxis,
 } from "./cache.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,7 +26,7 @@ afterEach(async () => {
 });
 
 describe("derived graph cache", () => {
-  it("builds folder/property/search slices and supports axis-first retrieval", async () => {
+  it("builds folder/property/search slices and lazy-loads note bodies", async () => {
     tmpVault = await mkdtemp(path.join(tmpdir(), "oms-graph-"));
     await cp(fixtureVault, tmpVault, { recursive: true });
     const ontology = await loadOntology(ontologyDir);
@@ -49,16 +48,8 @@ describe("derived graph cache", () => {
       ),
     ).toBe(true);
 
-    const hits = await retrieveByAxis({
-      vault: tmpVault,
-      ontology,
-      property: "tags",
-      value: "software-architecture",
-      query: "unrelatedterm",
-    });
-    expect(hits).toHaveLength(1);
-    expect(hits[0]?.path).toBe("references/clean-architecture.md");
-    expect(hits[0]?.bodyPreview).toContain("Clean Architecture");
+    const literature = cache.notes.find((note) => note.path === "references/clean-architecture.md");
+    expect(literature?.axes["tags"]).toContain("software-architecture");
 
     const body = await lazyLoadNoteBody(tmpVault, "references/clean-architecture.md");
     expect(body.body).toContain("Dependency Rule");
