@@ -13,6 +13,15 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
   { name: "uninstall", line: "  uninstall Remove Oh My Second Brain host adapters and MCP registration." },
   { name: "update", line: "  update   Check for or apply an explicit package update, then refresh host adapters." },
   { name: "doctor", line: "  doctor   Validate vault frontmatter against the active ontology, aggregated by field and concept." },
+  {
+    name: "audit",
+    line: "  audit    CI-usable ontology lint: doctor checks with non-zero exit on violations.",
+    detailLines: [
+      "             --folder <name>   Restrict the scan to one top-level vault folder.",
+      "             --json             Emit structured JSON instead of console text.",
+      "             --suggest-fields   Report undeclared observed fields and enum-value drift.",
+    ],
+  },
   { name: "lint", line: "  lint     Check vault link health: broken [[wikilinks]] and orphan notes." },
   { name: "link", line: "  link     Bridge an external repo to scoped vault folders via gitignored symlinks." },
   { name: "semantic", line: "  semantic Native markdown semantic index/search/get commands." },
@@ -60,8 +69,9 @@ Usage:
   oh-my-second-brain uninstall [--runtime <all|${registry.hosts.map((host) => host.runtime).join("|")}>] [--dry-run] [--execute] [--yes]
   oh-my-second-brain update [--check] [--dry-run] [--yes] [--runtime <${runtime}>] [--vault <path>]
   oh-my-second-brain doctor [--vault <path>] [--verbose] [--json] [--max <n>]
+  oh-my-second-brain audit [--vault <path>] [--folder <name>] [--json] [--suggest-fields]
   oh-my-second-brain lint [--vault <path>] [--verbose] [--json]
-  oh-my-second-brain link --vault <path> --folder <name> [--folder <name> ...]
+  oh-my-second-brain link --vault <path> --folder <name> [--folder <name> ...] [--no-convention-note]
   oh-my-second-brain semantic <status|sync|query|search|vsearch|get|multi-get|collection> [options]
   oh-my-second-brain mcp [--vault <path>]
   oh-my-second-brain hook pre-tool-use [--vault <path>]
@@ -81,9 +91,11 @@ Options:
   --dry-run        Preview host config changes without writing files.
   --execute        Allow external host CLIs such as \`claude\` to run when available.
   --verbose        doctor/lint: list every affected note instead of a summary.
-  --json           doctor/lint: emit machine-readable aggregation as JSON.
+  --json           doctor/lint/audit: emit machine-readable output as JSON.
   --max <n>        doctor --verbose: max notes listed per concept (default 50).
-  --folder <name>  link: vault folder or nested vault subpath to expose; repeatable.
+  --folder <name>  audit: restrict scan; link: vault folder/subpath to expose (repeatable for link).
+  --no-convention-note
+                  link: skip writing the managed OMS usage block to AGENTS.md.
 `;
 }
 

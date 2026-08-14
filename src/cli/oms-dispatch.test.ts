@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, readFile, readlink, mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -62,7 +62,7 @@ describe("oms CLI dispatch", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("Compatibility alias: oms <command>");
-    for (const command of ["setup", "install", "uninstall", "update", "doctor", "lint", "link", "semantic", "mcp", "hook"]) {
+    for (const command of ["setup", "install", "uninstall", "update", "doctor", "audit", "lint", "link", "semantic", "mcp", "hook"]) {
       expect(result.stdout).toContain(command);
     }
   });
@@ -127,6 +127,43 @@ describe("oms CLI dispatch", () => {
     );
   });
 
+  it("emits audit JSON and exits 0 for a clean fixture folder", () => {
+    const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
+    const audit = runCli(["audit", "--vault", fixtureVault, "--folder", "references", "--json"]);
+
+    expect(audit.status).toBe(0);
+    expect(audit.stderr).toBe("");
+    expect(jsonObject(audit.stdout)).toEqual(
+      expect.objectContaining({
+        folder: "references",
+        scannedNotes: 1,
+        excludedNotes: 0,
+        clean: true,
+        violations: [],
+      }),
+    );
+  });
+
+  it("G002-CLI-001 rejects audit folder scopes that are not top-level folders", () => {
+    const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
+    const audit = runCli(["audit", "--vault", fixtureVault, "--folder", "references/missing", "--json"]);
+
+    expect(audit.status).toBe(1);
+    expect(audit.stdout).toBe("");
+    expect(audit.stderr).toContain("path separators");
+  });
+
+  it("reports incomplete local .oms during audit instead of falling back to bundled defaults", async () => {
+    const vault = await makeVault();
+    await mkdir(path.join(vault, ".oms", "concepts"), { recursive: true });
+
+    const audit = runCli(["audit", "--vault", vault, "--json"]);
+
+    expect(audit.status).toBe(1);
+    expect(audit.stdout).toBe("");
+    expect(audit.stderr).toContain("Local .oms ontology is incomplete");
+  });
+
   it("supports semantic status as both nested command and top-level alias", async () => {
     const vault = await makeVault();
     const nested = runCli(["semantic", "status", "--vault", vault]);
@@ -145,6 +182,11 @@ describe("oms CLI dispatch", () => {
     const repo = path.join(root, "repo");
     await mkdir(path.join(vault, "notes"), { recursive: true });
     await mkdir(repo, { recursive: true });
+    await writeFile(
+      path.join(vault, "notes", "Alpha.md"),
+      "# Alpha\n\nAlpha bridge lexical search should work immediately after link.\n",
+      "utf-8",
+    );
 
     const setup = runCli(["setup", "--vault", vault, "--yes"]);
     expect(setup.status).toBe(0);
@@ -153,14 +195,29 @@ describe("oms CLI dispatch", () => {
     expect(link.status).toBe(0);
     expect(link.stderr).toBe("");
     expect(link.stdout).toContain("Oh My Second Brain vault bridge ready.");
+    expect(link.stdout).toContain("Convention: wrote");
 
     const linkPath = path.join(repo, ".oms", "linked", "notes");
     expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
     expect(path.resolve(path.dirname(linkPath), await readlink(linkPath))).toBe(path.join(vault, "notes"));
     expect(await readFile(path.join(repo, ".gitignore"), "utf-8")).toContain(".oms/linked/");
+    const agents = await readFile(path.join(repo, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("<!-- oms:begin -->");
+    expect(agents).toContain(`- Connected vault: ${path.basename(vault)}`);
+    expect(agents).not.toContain(vault);
+    expect(agents).toContain("`oms query \"what context should I know for this change?\"`");
+    expect(agents).toContain("`oms mcp`");
 
     const doctor = runCli(["doctor"], undefined, undefined, repo);
     expect(doctor.status).toBe(0);
     expect(doctor.stdout).toContain(`Vault: ${vault}`);
+    const search = runCli(["search", "--lex", "Alpha"], undefined, undefined, repo);
+    expect(search.status).toBe(0);
+    expect(search.stderr).toBe("");
+    const searchJson = jsonObject(search.stdout);
+    expect(searchJson).toEqual(expect.objectContaining({ available: true }));
+    expect(searchJson.hits).toEqual([
+      expect.objectContaining({ path: "notes/Alpha.md" }),
+    ]);
   });
 });

@@ -80,25 +80,25 @@ Published versions:
 
 - `oh-my-second-brain@0.1.5`: first npm publish after using a recovery code.
 - `oh-my-second-brain@0.1.6`: fixed docs/runtime command surfaces to prefer the published npm package and installed `oh-my-second-brain` binary instead of stale GitHub-release `npx` tarball URLs.
-- `oh-my-second-brain@0.1.7`: current/latest; aligns GitHub repository identity, package metadata, canonical installed command, and release gates around `oh-my-second-brain`.
+- `oh-my-second-brain@0.1.8`: current/latest; aligns package docs and installer defaults with the package metadata.
 
 Install command:
 
 ```bash
-npm install -g oh-my-second-brain@0.1.7
+npm install -g oh-my-second-brain@0.1.8
 oh-my-second-brain --help
 oh-my-second-brain install --runtime all --vault /path/to/vault --dry-run
 ```
 
-GitHub release `oh-my-second-brain-v0.1.7` includes `oh-my-second-brain-0.1.7.tgz`.
+GitHub release `oh-my-second-brain-v0.1.8` includes `oh-my-second-brain-0.1.8.tgz`.
 
 ## Verification evidence
 
 Before release/publish we verified:
 
 - `npm run release:check`
-- npm registry publish and `npm view oh-my-second-brain@0.1.7`
-- temporary `npm install oh-my-second-brain@0.1.7`
+- npm registry publish and `npm view oh-my-second-brain@0.1.8`
+- temporary `npm install oh-my-second-brain@0.1.8`
 - `./node_modules/.bin/oh-my-second-brain --help`
 - `./node_modules/.bin/oh-my-second-brain install --runtime all --vault /tmp/Vault --dry-run`
 - GitHub release asset download and CLI execution from the tarball

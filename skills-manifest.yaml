@@ -1,0 +1,2012 @@
+# 분산 SSOT, 집계는 generated. Do not edit generated outputs by hand.
+# No private account, vault, host, or absolute-path context belongs in this manifest.
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/capture",
+      "name": "oms-capture",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/capture",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/compile",
+      "name": "oms-compile",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/compile",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/define",
+      "name": "oms-define",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/define",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/distill",
+      "name": "oms-distill",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/distill",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/doctor",
+      "name": "oms-doctor",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/doctor",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/retrieve",
+      "name": "oms-retrieve",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/retrieve",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/setup",
+      "name": "oms-setup",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/setup",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/uninstall",
+      "name": "oms-uninstall",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/uninstall",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/update",
+      "name": "oms-update",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/vault-decision-record",
+      "name": "oms-vault-decision-record",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/vault-decision-record",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/vault-lint",
+      "name": "oms-vault-lint",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/vault-lint",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/vault-scaffold",
+      "name": "oms-vault-scaffold",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/vault-scaffold",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/wiki",
+      "name": "oms-wiki",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/wiki",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-capture",
+      "name": "oms-capture",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/capture",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-compile",
+      "name": "oms-compile",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/compile",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-distill",
+      "name": "oms-distill",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/distill",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-doctor",
+      "name": "oms-doctor",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/doctor",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-install",
+      "name": "oms-install",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-retrieve",
+      "name": "oms-retrieve",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/retrieve",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-setup",
+      "name": "oms-setup",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/setup",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-uninstall",
+      "name": "oms-uninstall",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/uninstall",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-update",
+      "name": "oms-update",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-vault-lint",
+      "name": "oms-vault-lint",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/vault-lint",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-wiki",
+      "name": "oms-wiki",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/wiki",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/capture",
+      "name": "capture",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/capture",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/compile",
+      "name": "compile",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/compile",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/distill",
+      "name": "distill",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/distill",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/doctor",
+      "name": "doctor",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/doctor",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/install",
+      "name": "install",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/setup",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/retrieve",
+      "name": "retrieve",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/retrieve",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/setup",
+      "name": "setup",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/setup",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/uninstall",
+      "name": "uninstall",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/uninstall",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/update",
+      "name": "update",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/wiki",
+      "name": "wiki",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/wiki",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/capture",
+      "name": "capture",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex",
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/compile",
+      "name": "compile",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.1.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex",
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/define",
+      "name": "define",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/distill",
+      "name": "distill",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.1.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex",
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/doctor",
+      "name": "doctor",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex",
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/retrieve",
+      "name": "retrieve",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex",
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/setup",
+      "name": "setup",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.2.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex",
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/uninstall",
+      "name": "oms-uninstall",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex",
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/vault-decision-record",
+      "name": "vault-decision-record",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.1.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/vault-lint",
+      "name": "vault-lint",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.1.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/vault-scaffold",
+      "name": "vault-scaffold",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.1.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/wiki",
+      "name": "wiki",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.1.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex",
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    }
+  ]
+}

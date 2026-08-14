@@ -8,15 +8,15 @@ import {
   type ParseResult,
 } from "./semantic-retrieve-args.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
+import { queryOptionsToSubQueries } from "../engine/mcp/query-mapper.js";
 
 export { semanticMcpTools, retrieveContextSemanticInputProperties } from "./semantic-schemas.js";
 export { semanticOptionsFromArgs };
 
 /**
- * The op-name set that REQUIRES a real embedding model: sync / query / status /
- * collections / contexts / cleanup, plus the bare CLI aliases. The main stdio
- * server assembles the vec-capable engine EAGERLY for these so a model-less host
- * loud-guards (ADR-007) instead of silently degrading.
+ * The op-name set that normally requires a real embedding model. Query is listed
+ * here because its default mode is hybrid lex+vec; `isModelOptionalSemanticQueryOp`
+ * narrows explicit lex-only calls back onto the core BM25/FTS adapter.
  *
  * oms_get_document / oms_multi_get_documents are NOT here: they form the
  * model-OPTIONAL set ({@link isEngineDocumentOp}). The server resolves them on
@@ -35,13 +35,21 @@ const ENGINE_SEMANTIC_OPS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * True when `name` is a semantic op that requires the vec-capable engine. The
- * main stdio server uses this to assemble the model-backed engine ONLY for these
- * ops, keeping get/multi_get (GAP-9) and every non-semantic tool off the eager
- * model path.
+ * True when `name` is a semantic op. The server uses this together with
+ * `isModelOptionalSemanticQueryOp` so vec/HyDE paths loud-guard without a model
+ * while explicit lex-only query uses real model-free BM25/FTS.
  */
 export function isEngineSemanticOp(name: string): boolean {
   return ENGINE_SEMANTIC_OPS.has(name);
+}
+export function isModelOptionalSemanticQueryOp(
+  name: string,
+  args: Record<string, unknown> | undefined,
+  vault: string,
+): boolean {
+  if (name !== "oms_semantic_query" && name !== "query") return false;
+  const subQueries = queryOptionsToSubQueries(semanticQueryOptionsFromArgs(vault, args));
+  return subQueries.length > 0 && subQueries.every((subQuery) => subQuery.type === "lex");
 }
 
 /**

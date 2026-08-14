@@ -126,15 +126,23 @@ Index note for graph neighborhoods and semantic lookup.
           expect.objectContaining({ path: "references/Agent Retrieval.md" }),
         );
       } else {
-        // Loud-guard path: engine assembly throws without explicit embedding
-        // config → isError envelope naming the canonical keys (ADR-007).
-        // Reaching this branch proves the op routed to the engine, not the
-        // legacy hash store.
+        // Loud-guard path: sync and default hybrid query still require explicit
+        // embedding config, but lex-only query is model-free BM25/FTS.
         expect(syncRaw.isError).toBe(true);
         const syncText = syncRaw.content[0]?.type === "text" ? syncRaw.content[0].text : "";
         expect(syncText).toMatch(/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/);
         const queryRaw = await client.callTool(queryCall);
         expect(queryRaw.isError).toBe(true);
+
+        const lexOnlyQuery = textPayload(
+          await client.callTool({
+            name: "query",
+            arguments: { query: "", lex: "agent retrieval", collection: "obsidian", limit: 1 },
+          }),
+        );
+        expect((lexOnlyQuery.hits as Array<Record<string, unknown>>)[0]).toEqual(
+          expect.objectContaining({ path: "references/Agent Retrieval.md" }),
+        );
       }
 
       const templates = await client.listResourceTemplates();

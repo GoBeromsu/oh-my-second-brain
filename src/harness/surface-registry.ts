@@ -75,6 +75,7 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
   cliCommands: [
     { name: "setup", owner: "cli", stability: "stable" },
     { name: "doctor", owner: "cli", stability: "stable" },
+    { name: "audit", owner: "cli", stability: "stable" },
     { name: "lint", owner: "cli", stability: "stable" },
     { name: "link", owner: "cli", stability: "experimental" },
     { name: "install", owner: "install", stability: "stable" },
@@ -276,6 +277,15 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
     },
     {
       name: "oms_validate_contract",
+      owner: "core",
+      posture: "read",
+      destructive: false,
+      idempotent: true,
+      openWorld: false,
+      stability: "stable",
+    },
+    {
+      name: "oms_vault_audit",
       owner: "core",
       posture: "read",
       destructive: false,

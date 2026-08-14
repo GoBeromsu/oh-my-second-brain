@@ -26,6 +26,7 @@ export interface ParsedCliArgs {
   readonly json: boolean;
   readonly maxPerConcept: number | undefined;
   readonly folders: readonly string[];
+  readonly conventionNote: boolean;
   readonly unknownFlags: readonly string[];
   readonly error: CliArgumentError | undefined;
 }
@@ -52,6 +53,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   let json = false;
   let maxPerConcept: number | undefined;
   const folders: string[] = [];
+  let conventionNote = true;
   const unknownFlags: string[] = [];
 
   for (let i = 1; i < argv.length; i++) {
@@ -104,6 +106,8 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     } else if (arg === "--folder" && next) {
       folders.push(next);
       i++;
+    } else if (arg === "--no-convention-note") {
+      conventionNote = false;
     } else if (arg !== undefined) {
       unknownFlags.push(arg);
     }
@@ -126,6 +130,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     json,
     maxPerConcept,
     folders,
+    conventionNote,
     unknownFlags,
     error: undefined,
   };
@@ -148,6 +153,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       json,
       maxPerConcept,
       folders,
+      conventionNote,
       unknownFlags,
       error: new CliArgumentError(message),
     };

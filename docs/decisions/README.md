@@ -11,6 +11,8 @@ oh-my-secondbrain 프로젝트의 주요 설계 결정을 기록한다.
 | [ADR-005](./ADR-005-graph-access-model.md) | 그래프 접근 모델 — 엣지 계층 · 운영 모드 · MCP tools | Proposed |
 | [ADR-006](./ADR-006-oms-governance-contract-separation.md) | .oms 거버넌스 — 기계검증 계약(yaml) ↔ 의도 기록(documents) 명시적 분리 | Accepted |
 | [ADR-007](./ADR-007-no-fake-embedder-fallback-native-dim-integrity.md) | 임베딩 무결성 불변 — 네이티브 차원 보존 & 가짜 임베더 폴백 금지 | Accepted |
+| [ADR-008](./ADR-008-note-identity-real-path-ssot-no-slug.md) | 노트 식별자 모델 — 실경로 SSOT, 슬러그 비도입 | Accepted |
+| [ADR-009](./ADR-009-qmd-compatible-global-collection-bridge.md) | qmd-호환 전역 컬렉션 브릿지 — link 기반 vault 해석과 product interface 계약 | Accepted |
 
 ## 작성 규칙
 

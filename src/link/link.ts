@@ -112,7 +112,8 @@ function parseScope(value: unknown): string[] {
 
 /**
  * Read a bridge link record from `<omsDir>/links.yaml`.
- * Returns `null` when the file is missing or has no usable `vault` field.
+ * Returns `null` only when the file is missing; a present-but-invalid bridge
+ * record is a configuration error and must not silently fall back to cwd/env.
  */
 export async function readLinkRecord(omsDir: string): Promise<LinkRecord | null> {
   const recordPath = path.join(omsDir, "links.yaml");
@@ -126,11 +127,24 @@ export async function readLinkRecord(omsDir: string): Promise<LinkRecord | null>
     throw error;
   }
 
-  const parsed = yamlParse(raw) as Record<string, unknown> | null;
-  if (parsed == null || typeof parsed !== "object") return null;
+  let parsed: Record<string, unknown> | null;
+  try {
+    parsed = yamlParse(raw) as Record<string, unknown> | null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`[oms] Invalid bridge record at ${recordPath}: links.yaml is not valid YAML (${message}). Re-run oms link to repair it.`);
+  }
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`[oms] Invalid bridge record at ${recordPath}: expected a YAML mapping with vault and scope.`);
+  }
 
   const vault = parsed["vault"];
-  if (typeof vault !== "string" || vault.trim().length === 0) return null;
+  if (typeof vault !== "string" || vault.trim().length === 0) {
+    throw new Error(`[oms] Invalid bridge record at ${recordPath}: missing required string field "vault". Re-run oms link to repair it.`);
+  }
+  if (parsed["scope"] !== undefined && !Array.isArray(parsed["scope"])) {
+    throw new Error(`[oms] Invalid bridge record at ${recordPath}: field "scope" must be a list.`);
+  }
 
   return {
     version: typeof parsed["version"] === "number" ? parsed["version"] : LINK_RECORD_VERSION,
@@ -170,7 +184,11 @@ export async function resolveEffectiveVault(
 
   const record = await readLinkRecord(omsDir);
   if (record) {
-    return { vault: expandHome(record.vault), scope: record.scope, source: "bridge" };
+    const resolvedVault = expandHome(record.vault);
+    if ((await pathKind(resolvedVault)) !== "directory") {
+      throw new Error(`[oms] Linked vault path does not exist or is not a directory: ${resolvedVault}. Re-run oms link with a valid --vault.`);
+    }
+    return { vault: resolvedVault, scope: record.scope, source: "bridge" };
   }
 
   const envVault = env["OMS_VAULT"];

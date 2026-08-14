@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,7 +8,7 @@ import {
   mergeObservedFieldsIntoConcept,
   parseLensDefinitions,
 } from "./axis.js";
-import type { Concept } from "../ontology/types.js";
+import type { Concept, Ontology } from "../ontology/types.js";
 
 let tmpVault: string | undefined;
 
@@ -32,9 +32,7 @@ async function makeVault(): Promise<string> {
     "utf-8",
   );
   await writeFile(path.join(tmpVault, "README.txt"), "status: draft\n", "utf-8");
-  await import("node:fs/promises").then(({ mkdir }) =>
-    mkdir(path.join(tmpVault ?? "", "references"), { recursive: true }),
-  );
+  await mkdir(path.join(tmpVault, "references"), { recursive: true });
   await writeFile(
     path.join(tmpVault, "references", "source.md"),
     [
@@ -80,6 +78,35 @@ describe("setup axis discovery", () => {
     expect(references?.warnings).toHaveLength(1);
   });
 
+  it("uses audit folder scope and exclude globs when collecting suggested fields", async () => {
+    const vault = await makeVault();
+    await writeFile(
+      path.join(vault, "references", "skip.template.md"),
+      "---\nignored-field: true\n---\n# Template",
+      "utf-8",
+    );
+
+    const ontology: Ontology = {
+      taxonomy: {
+        version: 1,
+        folders: {
+          references: {
+            intent: "References",
+            concept: "literature",
+          },
+        },
+        exclude: ["references/broken.md"],
+      },
+      concepts: new Map(),
+    };
+
+    const summaries = await collectObservedFields({ vault, ontology, folder: "references" });
+    const references = summaries.find((summary) => summary.folder === "references");
+
+    expect(summaries.map((summary) => summary.folder)).toEqual(["references"]);
+    expect(references?.warnings).toEqual([]);
+    expect(references?.fields.map((field) => field.name)).not.toContain("ignored-field");
+  });
   it("SETUP-AXIS-004 rejects lenses that reference unknown fields", () => {
     expect(() => parseLensDefinitions("synthesis:title,missing", new Set(["title"]))).toThrow(
       /unknown field "missing"/,

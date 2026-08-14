@@ -8,6 +8,12 @@ export async function loadOntology(ontologyDir: string): Promise<Ontology> {
   const taxonomyRaw = await readFile(taxonomyPath, "utf-8");
   const taxonomyParsed = parseYaml(taxonomyRaw) as Record<string, unknown>;
 
+  const rawExclude = taxonomyParsed["exclude"];
+  const exclude =
+    Array.isArray(rawExclude) && rawExclude.every((item) => typeof item === "string")
+      ? rawExclude
+      : undefined;
+
   const taxonomy: Taxonomy = {
     version:
       typeof taxonomyParsed["version"] === "number"
@@ -19,6 +25,7 @@ export async function loadOntology(ontologyDir: string): Promise<Ontology> {
       !Array.isArray(taxonomyParsed["folders"])
         ? (taxonomyParsed["folders"] as Taxonomy["folders"])
         : {},
+    ...(exclude !== undefined ? { exclude } : {}),
   };
 
   const conceptsDir = path.join(ontologyDir, "concepts");

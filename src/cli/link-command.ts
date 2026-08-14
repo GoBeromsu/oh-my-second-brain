@@ -3,8 +3,12 @@ import {
   LINKED_GITIGNORE_PATTERN,
   type CreateVaultLinkResult,
 } from "../link/link.js";
+import { writeConventionUsageSection } from "../link/convention-note.js";
 
-export function formatLinkResult(result: CreateVaultLinkResult): string {
+export function formatLinkResult(
+  result: CreateVaultLinkResult,
+  conventionNotePath?: string,
+): string {
   const lines: string[] = ["Oh My Second Brain vault bridge ready."];
   lines.push(`  Vault:     ${result.record.vault}`);
   lines.push(`  Scope:     ${result.record.scope.join(", ") || "(none)"}`);
@@ -16,6 +20,9 @@ export function formatLinkResult(result: CreateVaultLinkResult): string {
       ? `  Gitignore: added ${LINKED_GITIGNORE_PATTERN}`
       : `  Gitignore: ${LINKED_GITIGNORE_PATTERN} already present`,
   );
+  if (conventionNotePath !== undefined) {
+    lines.push(`  Convention: wrote ${conventionNotePath}`);
+  }
   return lines.join("\n");
 }
 
@@ -24,6 +31,7 @@ export async function runLink(options: {
   readonly vault: string;
   readonly vaultExplicit: boolean;
   readonly folders: readonly string[];
+  readonly conventionNote?: boolean;
 }): Promise<number> {
   if (!options.vaultExplicit) {
     console.error("[oms] link requires --vault <path> (the Obsidian vault to bridge to).");
@@ -40,7 +48,11 @@ export async function runLink(options: {
       vault: options.vault,
       folders: [...options.folders],
     });
-    console.log(formatLinkResult(result));
+    let conventionNotePath: string | undefined;
+    if (options.conventionNote !== false) {
+      conventionNotePath = (await writeConventionUsageSection(options.cwd, result.record.vault)).agentsPath;
+    }
+    console.log(formatLinkResult(result, conventionNotePath));
     return 0;
   } catch (error) {
     console.error(`[oms] ${error instanceof Error ? error.message : String(error)}`);

@@ -1,7 +1,7 @@
 ---
 name: compile
 version: 0.1.0
-description: Stateless per-concept compile worker — takes a concept name, source materials, and graph context; returns a synthesized Markdown page body with SHA-incremental skip, nashsu 2-step CoT, atomicstrata 2-phase separation, lucasastorian cascade backlinks, and provenance-weighted synthesis context.
+description: Stateless per-concept compile worker — takes a concept name, source materials, and graph context; returns a synthesized Markdown page body with SHA-incremental skip, 2-step analysis-draft/synthesis-output separation, atomicstrata 2-phase separation, lucasastorian cascade backlinks, and provenance-weighted synthesis context.
 trigger: /compile
 tags: [compile, wiki, synthesis, sha, incremental, second-brain, oms]
 ---

@@ -46,6 +46,7 @@ A **field** is one frontmatter key — the smallest unit of convention. Each fie
 | `intent`   | Semantic purpose: *what this field is FOR.* |
 | `normalize` | Optional: `kebab`, `lower`, or `trim` — applied at validation. |
 | `immutable` | Advisory: once written, should not change (v0: no-op, forward-compat). |
+| `enum` | Optional closed vocabulary for string fields; values outside it are lint violations. |
 
 Users grow their convention field-by-field. There is no mandatory field list.
 
@@ -77,7 +78,7 @@ folders:
     concept: inbox
 ```
 
-A folder may bind to one concept, multiple concepts (list), or `null` (not yet assigned).
+A folder may bind to one concept, multiple concepts (list), or `null` (not yet assigned). A folder binding may set `agentWritable: true`; paired with `routingLawStrict: true`, notes in that folder must carry `created_by`. Top-level `exclude` entries are vault-relative globs skipped by audit/lint scans.
 
 ---
 
@@ -105,6 +106,7 @@ Oh My Second Brain enforces what the user declared; it does not touch anything e
 ## Quick Reference for Host Agents
 
 - To understand a note: look up its folder in the taxonomy → read the `concept.intent`.
-- To validate frontmatter: load the concept's `fields`; check `required` + `type`.
+- To validate frontmatter: load the concept's `fields`; check `required`, `type`, and any `enum`.
 - To retrieve knowledge: apply the relevant `lens` to surface the fields that matter.
+- To audit a vault: honor taxonomy `exclude` globs and routing-law flags.
 - When in doubt, preserve: `additionalProperties: preserve` means unknown keys are safe.

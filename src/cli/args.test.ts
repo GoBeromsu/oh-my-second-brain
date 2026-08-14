@@ -53,15 +53,31 @@ describe("CLI argument parser", () => {
   it("parses repeated link folders and distinguishes implicit vault defaults", () => {
     const implicit = parseCliArgs(["doctor"], "/tmp/oms-cli");
     const linked = parseCliArgs(
-      ["link", "--vault", "../Vault", "--folder", "notes", "--folder", "15. Work/Project"],
+      ["link", "--vault", "../Vault", "--folder", "notes", "--folder", "15. Work/Project", "--no-convention-note"],
       "/tmp/oms-cli/repo",
     );
 
     expect(implicit.vault).toBe("/tmp/oms-cli");
     expect(implicit.vaultExplicit).toBe(false);
     expect(implicit.folders).toEqual([]);
+    expect(implicit.conventionNote).toBe(true);
     expect(linked.vault).toBe("/tmp/oms-cli/Vault");
     expect(linked.vaultExplicit).toBe(true);
     expect(linked.folders).toEqual(["notes", "15. Work/Project"]);
+    expect(linked.conventionNote).toBe(false);
+  });
+
+  it("parses audit flags", () => {
+    const parsed = parseCliArgs(
+      ["audit", "--vault", "Vault", "--folder", "references", "--json", "--suggest-fields"],
+      "/tmp/oms-cli",
+    );
+
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.command).toBe("audit");
+    expect(parsed.vault).toBe("/tmp/oms-cli/Vault");
+    expect(parsed.folders).toEqual(["references"]);
+    expect(parsed.json).toBe(true);
+    expect(parsed.suggestFields).toBe(true);
   });
 });

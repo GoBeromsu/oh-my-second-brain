@@ -71,10 +71,9 @@ Dynamics in music range from pianissimo (very soft) to fortissimo (very loud).
 // Environment detection
 // ---------------------------------------------------------------------------
 
-// Use the known cached model path or OMS_MODEL_PATH env var
-const KNOWN_MODEL = "/Users/beomsu/.cache/qmd/models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf";
-const MODEL_PATH = process.env["OMS_MODEL_PATH"] ?? KNOWN_MODEL;
-const SMOKE_ENABLED = process.env["ASSEMBLE_SMOKE"] === "1" || process.env["OMS_MODEL_PATH"] !== undefined;
+// Real-model smoke runs are opt-in: provide the model via OMS_MODEL_PATH.
+const MODEL_PATH = process.env["OMS_MODEL_PATH"] ?? "";
+const SMOKE_ENABLED = MODEL_PATH !== "" && (process.env["ASSEMBLE_SMOKE"] === "1" || process.env["OMS_MODEL_PATH"] !== undefined);
 
 // ---------------------------------------------------------------------------
 // Temp dirs (created/cleaned per describe block that needs them)
@@ -207,14 +206,18 @@ describe.skipIf(!SMOKE_ENABLED)(
   "assembleEngine — real GGUF smoke (OMS_MODEL_PATH or cached model required)",
   () => {
     let engine: Awaited<ReturnType<typeof assembleEngine>> | null = null;
+    let savedUpstage: string | undefined;
 
     beforeAll(() => {
+      savedUpstage = process.env["UPSTAGE_API_KEY"];
+      delete process.env["UPSTAGE_API_KEY"];
       createFixture();
     });
 
     afterAll(async () => {
       await engine?.dispose();
       cleanupFixture();
+      if (savedUpstage !== undefined) process.env["UPSTAGE_API_KEY"] = savedUpstage;
     });
 
     it(

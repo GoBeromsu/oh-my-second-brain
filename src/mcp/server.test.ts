@@ -62,6 +62,9 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const getTool = tools.tools.find((tool) => tool.name === "oms_get_document");
       expect(getTool?.annotations?.readOnlyHint).toBe(true);
       expect(getTool?.annotations?.destructiveHint).toBe(false);
+      const auditTool = tools.tools.find((tool) => tool.name === "oms_vault_audit");
+      expect(auditTool?.annotations?.readOnlyHint).toBe(true);
+      expect(JSON.stringify(auditTool?.inputSchema)).toContain("folder");
 
       const status = await client.callTool({ name: "oms_graph_status", arguments: {} });
       const parsedStatus = textPayload(status);
@@ -80,6 +83,31 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const parsedValidation = textPayload(validation);
       expect(parsedValidation.valid).toBe(true);
       expect(parsedValidation.concept).toBe("literature");
+      const audit = await client.callTool({
+        name: "oms_vault_audit",
+        arguments: { folder: "references" },
+      });
+      const parsedAudit = textPayload(audit);
+      expect(parsedAudit.clean).toBe(true);
+      expect(parsedAudit.scannedNotes).toBe(1);
+      expect(parsedAudit.excludedNotes).toBe(0);
+      const nonStringFolderAudit = await client.callTool({
+        name: "oms_vault_audit",
+        arguments: { folder: 123 },
+      });
+      expect(nonStringFolderAudit.isError).toBe(true);
+      expect(nonStringFolderAudit.content[0]?.type === "text" ? nonStringFolderAudit.content[0].text : "").toContain(
+        'Argument "folder" must be a string',
+      );
+
+      const missingVaultFolderAudit = await client.callTool({
+        name: "oms_vault_audit",
+        arguments: { folder: "inbox" },
+      });
+      expect(missingVaultFolderAudit.isError).toBe(true);
+      expect(
+        missingVaultFolderAudit.content[0]?.type === "text" ? missingVaultFolderAudit.content[0].text : "",
+      ).toContain('Audit folder "inbox" does not exist');
     } finally {
       await client.close();
     }
