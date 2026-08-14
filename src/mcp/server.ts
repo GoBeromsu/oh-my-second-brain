@@ -26,10 +26,10 @@ import {
   lazyLoadNoteBody,
 } from "../graph/cache.js";
 import { resolveActiveOntology } from "../ontology/active.js";
-import { resolveConcept } from "../ontology/resolver.js";
+import { resolveConcept } from "../core/ontology/resolver.js";
 import { retrieveMorningContext } from "../retrieve/morning.js";
 import { makeEngineMorningBackend } from "./engine-morning-backend.js";
-import type { Concept } from "../ontology/types.js";
+import type { Concept } from "../core/ontology/types.js";
 import {
   handleSemanticTool,
   isEngineSemanticOp,

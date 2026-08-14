@@ -6,7 +6,7 @@ import {
 } from "../setup/axis.js";
 import { lintVault, type VaultLintViolation } from "../engine/conventions/vault-lint.js";
 import { resolveActiveOntology } from "../ontology/active.js";
-import type { Ontology } from "../ontology/types.js";
+import type { Ontology } from "../core/ontology/types.js";
 
 /** Fields observed in a folder that its bound concept(s) do not declare. */
 function undeclaredObservedFields(

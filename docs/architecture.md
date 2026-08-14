@@ -47,7 +47,7 @@ All knowledge logic (validation, ontology loading, folder resolution, graph/cach
 │                                                                  │
 │  host ADAPTER                                                    │
 │  ├─ plugin.json / rule+skill bundle / SOUL.md fragment              │
-│  └─ shells out to: oh-my-second-brain setup | doctor | define │
+│  └─ shells out to: oh-my-second-brain setup | doctor | lint   │
 └───────────────────────────┬──────────────────────────────────────┘
                             │ invokes
                             ▼
@@ -55,10 +55,9 @@ All knowledge logic (validation, ontology loading, folder resolution, graph/cach
 │  Oh My Second Brain convention layer  (src/ — TypeScript, Node ≥20)            │
 │                                                                  │
 │  src/cli/oms.ts          CLI verbs: setup / doctor / semantic   │
-│  src/ontology/loader.ts   load concepts/*.yaml + taxonomy.yaml   │
-│  src/ontology/resolver.ts resolve note path → Concept            │
+│  src/core/ontology/       load concepts/*.yaml + taxonomy.yaml   │
+│  src/ontology/active.ts   resolve vault vs bundled ontology      │
 │  src/conventions/         validateFrontmatter → ValidationResult │
-│  src/adapt/HostAdapter.ts per-host adapter interface             │
 │  src/mcp/server.ts        stdio MCP: retrieve/semantic/read/capture │
 └───────────────────────────┬──────────────────────────────────────┘
                             │ reads bundled static package assets

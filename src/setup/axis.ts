@@ -2,9 +2,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseNote } from "../conventions/frontmatter.js";
 import { walkVaultMarkdown } from "../conventions/vault-walk.js";
-import { resolveConcept } from "../ontology/resolver.js";
+import { resolveConcept } from "../core/ontology/resolver.js";
 import { matchesAnyGlob, resolveExcludeGlobs, validateVaultLintFolder } from "../engine/conventions/vault-lint.js";
-import type { Concept, FieldType, Ontology, OntologyField, OntologyLens } from "../ontology/types.js";
+import type { Concept, FieldType, Ontology, OntologyField, OntologyLens } from "../core/ontology/types.js";
 
 export interface ObservedField {
   readonly name: string;

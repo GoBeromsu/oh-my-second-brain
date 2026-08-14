@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadOntology } from "../ontology/loader.js";
+import { loadOntology } from "../core/ontology/loader.js";
 import { retrieveMorningContext, type MorningSemanticBackend } from "./morning.js";
 import { writeMorningVaultFixture } from "./morning-test-fixtures.js";
 import type {

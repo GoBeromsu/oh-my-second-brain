@@ -14,12 +14,11 @@ const CORE_DOMAIN_DIRS = [
   "src/engine",
   "src/setup",
 ] as const;
-const CONTROL_SURFACE_DIRS = ["src/cli", "src/install", "src/hook", "src/adapt"] as const;
+const CONTROL_SURFACE_DIRS = ["src/cli", "src/install", "src/hook"] as const;
 const HARNESS_FORBIDDEN_DIRS = [
   "src/cli",
   "src/install",
   "src/hook",
-  "src/adapt",
   "src/mcp",
   "src/runtime",
 ] as const;

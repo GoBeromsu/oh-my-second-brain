@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { validateFrontmatter } from "./validate.js";
-import type { Concept } from "../ontology/types.js";
+import type { Concept } from "../core/ontology/types.js";
 
 const literatureConcept: Concept = {
   concept: "literature",

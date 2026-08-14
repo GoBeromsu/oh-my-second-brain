@@ -6,7 +6,7 @@ created: 2026-06-13
 created_by: claude-code
 type: research
 relates_to:
-  - docs/exec-plan/active/self-owned-second-brain/spec.md
+  - docs/exec-plan/archived/self-owned-second-brain/spec.md
 ---
 
 # LLM-Wiki 생태계 구현체 설계 레퍼런스 — 우리 L4 wiki + 온톨로지에 흡수할 패턴

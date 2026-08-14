@@ -9,7 +9,7 @@ relates_to:
   - docs/decisions/ADR-002-vector-embedding-backend.md
   - docs/decisions/ADR-004-config-secrets-access-topology.md
   - docs/decisions/ADR-005-graph-access-model.md
-  - docs/exec-plan/active/self-owned-second-brain/spec.md §6
+  - docs/exec-plan/archived/self-owned-second-brain/spec.md §6
 ---
 
 # Self-owned 검색 엔진 설계 레퍼런스 — qmd · gbrain 흡수 및 pgvector 아키텍처 옵션 조사

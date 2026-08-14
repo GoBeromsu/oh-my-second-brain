@@ -2,9 +2,9 @@ import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stringify as yamlStringify } from "yaml";
-import { loadOntology } from "../ontology/loader.js";
-import type { FolderBinding, OntologyField, OntologyLens, Taxonomy } from "../ontology/types.js";
-import { resolveBundledAssetPaths } from "../runtime/assets.js";
+import { loadOntology } from "../core/ontology/loader.js";
+import type { FolderBinding, OntologyField, OntologyLens, Taxonomy } from "../core/ontology/types.js";
+import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
 import {
   collectObservedFields,
   mergeObservedFieldsIntoConcept,

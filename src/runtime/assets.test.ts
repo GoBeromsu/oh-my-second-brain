@@ -2,8 +2,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { HarnessRuntimeAssetRoot } from "../harness/surface-registry.js";
-import * as coreAssets from "../core/runtime/assets.js";
-import { MissingBundledAssetRootError, resolveBundledAssetPaths } from "./assets.js";
+import {
+  MissingBundledAssetRootError,
+  resolveBundledAssetPaths,
+} from "../core/runtime/assets.js";
 
 describe("resolveBundledAssetPaths", () => {
   it("resolves package assets when called from the built runtime module", () => {
@@ -52,7 +54,7 @@ describe("resolveBundledAssetPaths", () => {
     ).href;
 
     // When
-    const paths = coreAssets.resolveBundledAssetPaths(moduleUrl);
+    const paths = resolveBundledAssetPaths(moduleUrl);
 
     // Then
     expect(paths).toEqual({
@@ -71,7 +73,7 @@ describe("resolveBundledAssetPaths", () => {
     ).href;
 
     // When
-    const paths = coreAssets.resolveBundledAssetPaths(moduleUrl);
+    const paths = resolveBundledAssetPaths(moduleUrl);
 
     // Then
     expect(paths).toEqual({

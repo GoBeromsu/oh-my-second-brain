@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
-import type { Concept, Ontology } from "../../ontology/types.js";
+import type { Concept, Ontology } from "../../core/ontology/types.js";
 import { lintNoteFrontmatter, lintVault, routingLawStrictFolders } from "./vault-lint.js";
 
 // ── Inline fixtures — never touch the real vault ──────────────────────────────

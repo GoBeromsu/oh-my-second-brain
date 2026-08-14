@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
-import { loadOntology } from "./ontology/loader.js";
-import { resolveConcept } from "./ontology/resolver.js";
+import { loadOntology } from "./core/ontology/loader.js";
+import { resolveConcept } from "./core/ontology/resolver.js";
 import { parseNote } from "./conventions/frontmatter.js";
 import { validateFrontmatter } from "./conventions/validate.js";
 

@@ -7,6 +7,4 @@ description: Standalone meta-absorption skill — analyzes any target in a clean
 
 Thin pointer to `core/skills/distill`. Vault-agnostic — `OMS_VAULT` not required.
 
-Load target via `prepareCleanRoom(target)` — inert text only, never execute. Snapshot SHA, run `runAnalysis(spec, provider)`, generate report via `generateReport(result, targetName)`. Report has exactly three sections: §1 Patterns, §2 Risks, §3 Attribution. Verify mutation detector after: SHA must be unchanged. Return the report string — no vault write occurs inside distill. Use `createStubAnalyzerProvider()` for offline/test runs.
-
-NOTE: Wiki mirror deferred — depends on M3.
+Load the target as inert text only, never execute. Snapshot a content hash, run a read-only red-team pass, then write §1 Patterns, §2 Risks, §3 Attribution. Verify the hash is unchanged. Return the report string — no vault write occurs inside distill.

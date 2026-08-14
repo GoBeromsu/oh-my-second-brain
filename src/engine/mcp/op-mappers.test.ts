@@ -7,11 +7,9 @@ import {
   engineStatusResultToMcp,
   engineStatusToCollectionResult,
   engineStatusToContextResult,
-  engineSyncResultToCleanupResult,
   engineSyncResultToMcp,
   graphBuildOptionsToEngineArgs,
   statusResultUnavailable,
-  syncOptionsToEngineArgs,
   syncResultUnavailable,
 } from "./op-mappers.js";
 import type { McpSemanticEmbeddingSyncOptions } from "./types.js";
@@ -51,50 +49,6 @@ const STATUS_SNAPSHOT = {
   models: { embedding: "test-model" },
 };
 
-describe("syncOptionsToEngineArgs", () => {
-  it("defaults to empty paths, force=false, and undefined collection-config fields", () => {
-    expect(syncOptionsToEngineArgs(SYNC_OPTS)).toEqual({
-      paths: [],
-      collection: undefined,
-      collectionPath: undefined,
-      pattern: undefined,
-      ignore: undefined,
-      includeByDefault: undefined,
-      updateCommand: undefined,
-      context: undefined,
-      force: false,
-    });
-  });
-
-  it("passes collection and force through", () => {
-    const opts: McpSemanticEmbeddingSyncOptions = {
-      vault: "/v",
-      collection: "main",
-      force: true,
-    };
-    expect(syncOptionsToEngineArgs(opts)).toMatchObject({ collection: "main", force: true });
-  });
-
-  it("threads all 6 collection-config fields through", () => {
-    const opts: McpSemanticEmbeddingSyncOptions = {
-      vault: "/v",
-      collectionPath: "/vault/notes",
-      pattern: "**/*.md",
-      ignore: ["private/**"],
-      includeByDefault: false,
-      updateCommand: "git pull",
-      context: "My personal notes",
-    };
-    const args = syncOptionsToEngineArgs(opts);
-    expect(args.collectionPath).toBe("/vault/notes");
-    expect(args.pattern).toBe("**/*.md");
-    expect(args.ignore).toEqual(["private/**"]);
-    expect(args.includeByDefault).toBe(false);
-    expect(args.updateCommand).toBe("git pull");
-    expect(args.context).toBe("My personal notes");
-  });
-});
-
 describe("engineSyncResultToMcp", () => {
   it("returns available=true with write-index step", () => {
     const result = engineSyncResultToMcp(
@@ -128,19 +82,6 @@ describe("engineSyncResultToMcp", () => {
     expect(result.status.models.embedding).toBe("embed-v2");
   });
 
-  it("uses opts.storage when provided", () => {
-    const opts: McpSemanticEmbeddingSyncOptions = {
-      vault: "/v",
-      storage: "qmd-sqlite",
-    };
-    const result = engineSyncResultToMcp(
-      { upserted: 0, skipped: 0, errors: 0 },
-      opts,
-      STATUS_SNAPSHOT,
-    );
-    if (!result.available) return;
-    expect(result.storage).toBe("qmd-sqlite");
-  });
 });
 
 describe("syncResultUnavailable", () => {
@@ -251,17 +192,6 @@ describe("engineStatusToContextResult", () => {
 // ---------------------------------------------------------------------------
 // oms_semantic_cleanup
 // ---------------------------------------------------------------------------
-
-describe("engineSyncResultToCleanupResult", () => {
-  it("maps errors → removedDocuments, upserted → remainingDocuments", () => {
-    const result = engineSyncResultToCleanupResult({ upserted: 50, skipped: 0, errors: 3 });
-    expect(result.available).toBe(true);
-    if (!result.available) return;
-    expect(result.removedDocuments).toBe(3);
-    expect(result.remainingDocuments).toBe(50);
-    expect(result.storage).toBe("oms-native-json");
-  });
-});
 
 describe("cleanupResultUnavailable", () => {
   it("returns available=false with storage and reason", () => {

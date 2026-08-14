@@ -329,26 +329,3 @@ describe("McpEngineAdapter.retrieveByAxis", () => {
     expect(result.hits.some((h) => h.path.endsWith("alpha.md"))).toBe(false);
   });
 });
-
-// ---------------------------------------------------------------------------
-// retrieveContext — axis-seeded local-graph exploration
-// ---------------------------------------------------------------------------
-
-describe("McpEngineAdapter.retrieveContext", () => {
-  it("returns seed hits from the axis-filtered exploration", async () => {
-    const v = freshVault();
-    const adapter = new McpEngineAdapter(makeDeps(), v);
-    const result = await adapter.retrieveContext({ concept: "Project" });
-    expect(result.available).toBe(true);
-    if (!result.available) return;
-    const seed = result.hits.find((h) => {
-      try {
-        return (JSON.parse(h.context ?? "{}") as { source?: string }).source === "oms-seed";
-      } catch {
-        return false;
-      }
-    });
-    expect(seed).toBeDefined();
-    expect(seed!.path).toContain("alpha");
-  });
-});

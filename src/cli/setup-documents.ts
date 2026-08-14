@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
-import type { Concept, FieldType, FolderBinding, OntologyField, OntologyLens, Taxonomy } from "../ontology/types.js";
+import type { Concept, FieldType, FolderBinding, OntologyField, OntologyLens, Taxonomy } from "../core/ontology/types.js";
 
 export interface ConceptDocument {
   readonly filePath: string;

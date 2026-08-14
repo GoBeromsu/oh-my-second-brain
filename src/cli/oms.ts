@@ -10,7 +10,7 @@ import {
 } from "../install/hosts.js";
 import { resolveEffectiveVault } from "../link/link.js";
 import { runMcpServer } from "../mcp/server.js";
-import { resolveBundledAssetPaths } from "../runtime/assets.js";
+import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
 import {
   formatUpdateResult,
   runUpdate,

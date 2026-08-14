@@ -4,8 +4,8 @@ import path from "node:path";
 import { parseNote } from "../conventions/frontmatter.js";
 import { validateFrontmatter } from "../conventions/validate.js";
 import { safeVaultNotePath } from "../capture/safe.js";
-import { resolveConcept } from "../ontology/resolver.js";
-import type { Concept, Ontology } from "../ontology/types.js";
+import { resolveConcept } from "../core/ontology/resolver.js";
+import type { Concept, Ontology } from "../core/ontology/types.js";
 
 export type GraphEdgeType = "folder-concept" | "property-axis" | "property-value" | "wikilink";
 
@@ -90,16 +90,6 @@ export interface RetrieveByAxisOptions {
   wikilink?: string;
   query?: string;
   limit?: number;
-}
-
-export interface RetrieveHit {
-  path: string;
-  concept: string | null;
-  folder: string;
-  axes: Record<string, string[]>;
-  wikilinks: string[];
-  score: number;
-  bodyPreview: string;
 }
 
 const CACHE_VERSION = 1;
@@ -428,47 +418,6 @@ export async function graphCacheStatus(vault: string, ontology: Ontology): Promi
     searchDocuments: cache.search.length,
     staleness: compareSignatures(cache.signatures, await buildSourceSignatures(vault, ontology)),
   };
-}
-
-function matchesAxis(note: GraphNote, opts: RetrieveByAxisOptions): boolean {
-  if (opts.concept && note.concept !== opts.concept) return false;
-  if (opts.folder && note.folder !== opts.folder) return false;
-  if (opts.wikilink && !note.wikilinks.includes(opts.wikilink)) return false;
-  if (opts.property) {
-    const values = note.axes[opts.property] ?? [];
-    if (opts.value && !values.includes(opts.value)) return false;
-    if (!opts.value && values.length === 0) return false;
-  }
-  return true;
-}
-
-function searchScore(search: SearchDocument | undefined, query: string | undefined): number {
-  if (!query || !search) return 0;
-  const queryTerms = tokenize(query);
-  return queryTerms.filter((term) => search.terms.includes(term)).length;
-}
-
-export async function retrieveByAxis(opts: RetrieveByAxisOptions): Promise<RetrieveHit[]> {
-  const cache = (await readGraphCache(opts.vault)) ?? (await buildGraphCache({ ...opts, write: false }));
-  const searchByPath = new Map(cache.search.map((item) => [item.path, item]));
-  const limit = Math.max(1, Math.min(opts.limit ?? 10, 50));
-
-  return cache.notes
-    .filter((note) => matchesAxis(note, opts))
-    .map((note) => {
-      const search = searchByPath.get(note.path);
-      return {
-        path: note.path,
-        concept: note.concept,
-        folder: note.folder,
-        axes: note.axes,
-        wikilinks: note.wikilinks,
-        score: searchScore(search, opts.query),
-        bodyPreview: search?.bodyPreview ?? "",
-      };
-    })
-    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
-    .slice(0, limit);
 }
 
 export async function lazyLoadNoteBody(vault: string, notePath: string): Promise<{ path: string; body: string }> {

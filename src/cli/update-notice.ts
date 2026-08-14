@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { resolveBundledAssetPaths } from "../runtime/assets.js";
+import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
 import {
   checkUpdateNotice,
   formatUpdateNotice,

@@ -8,7 +8,7 @@ deciders: [beomsu]
 relates_to:
   - ./ADR-004-config-secrets-access-topology.md
   - ./ADR-008-note-identity-real-path-ssot-no-slug.md
-  - ../exec-plan/active/self-owned-second-brain/deep-interview-record.md
+  - ../exec-plan/archived/self-owned-second-brain/deep-interview-record.md
 ---
 
 # ADR-009: qmd-호환 전역 컬렉션 브릿지 — link 기반 vault 해석과 product interface 계약

@@ -19,7 +19,7 @@ checker is safe to call at any time — it is read-only by default.
 ### Inputs
 
 - `vaultRoot` — absolute path to the vault root directory
-- `ontology` — loaded `Ontology` object (use `loadOntology(ontologyDir)` from `src/ontology/loader.ts`)
+- `ontology` — loaded `Ontology` object (use `loadOntology(ontologyDir)` from `src/core/ontology/loader.ts`)
 - `options.autofixEnabled` — optional human-gate flag (default `false`); set `true` ONLY after explicit user confirmation; currently a no-op reserved for future implementation
 
 ### Output

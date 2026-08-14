@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { isSemanticCliCommand } from "../cli/semantic.js";
 import { omsMcpTools } from "../mcp/server.js";
-import { resolveBundledAssetPaths } from "../runtime/assets.js";
+import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
 import { harnessSurfaceRegistry } from "./surface-registry.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");

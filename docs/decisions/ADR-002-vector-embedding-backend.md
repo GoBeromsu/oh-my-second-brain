@@ -4,7 +4,7 @@ status: Accepted
 date: 2026-06-13
 created_by: claude-code
 deciders: [beomsu]
-relates_to: ../exec-plan/active/self-owned-second-brain/spec.md §6
+relates_to: ../exec-plan/archived/self-owned-second-brain/spec.md §6
 ---
 
 # ADR 0002: Vector Embedding Backend — pgvector + 상용 임베딩

@@ -6,9 +6,9 @@ created_by: claude-code
 deciders: [beomsu]
 relates_to:
   - ./ADR-003-oms-vault-convention-asset.md
-  - ../exec-plan/active/self-owned-second-brain/spec.md §10
-  - ../exec-plan/active/self-owned-second-brain/spec.md §11
-  - ../exec-plan/active/self-owned-second-brain/deep-interview-record.md R17
+  - ../exec-plan/archived/self-owned-second-brain/spec.md §10
+  - ../exec-plan/archived/self-owned-second-brain/spec.md §11
+  - ../exec-plan/archived/self-owned-second-brain/deep-interview-record.md R17
   - craft-skills `documents` 스킬 (ADR/research/spec/rule 규율 대칭)
 ---
 
