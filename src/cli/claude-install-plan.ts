@@ -32,6 +32,6 @@ export function printClaudeInstallPlan(plan: ClaudeInstallPlan): void {
   console.log(`  Plugin command: ${plan.pluginInstallCommand}`);
   console.log(`  MCP command: ${plan.mcpRegistrationCommand}`);
   console.log(
-    "  MCP status: status/read/cache/retrieval plus safe capture; commit is gated by vault confinement and contract validation.",
+    "  MCP status: status/read/cache/retrieval plus write; write is gated by vault confinement and contract validation.",
   );
 }

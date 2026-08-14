@@ -22,6 +22,11 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseNote } from "../../conventions/frontmatter.js";
 import { validateFrontmatter } from "../../conventions/validate.js";
+import {
+  enumViolations,
+  routingLawStrictFolders as writeContractStrictFolders,
+  routingLawViolations,
+} from "../../conventions/write-contract.js";
 import { walkVaultMarkdown } from "../../conventions/vault-walk.js";
 import { resolveConcept } from "../../core/ontology/resolver.js";
 import type { Concept, Ontology } from "../../core/ontology/types.js";
@@ -170,13 +175,7 @@ export function agentWritableFolders(ontology: Ontology): Set<string> {
  * `agentWritable: true` and `routingLawStrict: true`.
  */
 export function routingLawStrictFolders(ontology: Ontology): Set<string> {
-  const zones = new Set<string>();
-  for (const [folder, binding] of Object.entries(ontology.taxonomy.folders)) {
-    if (binding.agentWritable === true && binding.routingLawStrict === true) {
-      zones.add(folder);
-    }
-  }
-  return zones;
+  return writeContractStrictFolders(ontology);
 }
 
 // ── Per-note check functions ──────────────────────────────────────────────────
@@ -210,24 +209,12 @@ function checkEnum(
   concept: Concept,
   notePath: string,
 ): VaultLintViolation[] {
-  const violations: VaultLintViolation[] = [];
-  for (const field of concept.fields) {
-    if (!field.enum || field.enum.length === 0) continue;
-    const value = frontmatter[field.name];
-    if (value === undefined || value === null) continue; // required check handles missing
-    if (typeof value !== "string") continue; // type check handles wrong type
-    if (!field.enum.includes(value)) {
-      violations.push({
-        notePath,
-        field: field.name,
-        rule: "enum",
-        message:
-          `Field "${field.name}" value "${value}" is not one of` +
-          ` [${field.enum.map((e) => `"${e}"`).join(", ")}].`,
-      });
-    }
-  }
-  return violations;
+  return enumViolations(frontmatter, concept).map((violation) => ({
+    notePath,
+    field: violation.field,
+    rule: violation.rule,
+    message: violation.message,
+  }));
 }
 
 /**
@@ -241,27 +228,12 @@ function checkRoutingLaw(
   notePath: string,
   agentZones: Set<string>,
 ): VaultLintViolation[] {
-  const folder = notePath.split("/")[0] ?? "";
-  if (!agentZones.has(folder)) return [];
-
-  const createdBy = frontmatter["created_by"];
-  const missing =
-    createdBy === undefined ||
-    createdBy === null ||
-    (typeof createdBy === "string" && createdBy.trim() === "");
-
-  if (!missing) return [];
-
-  return [
-    {
-      notePath,
-      field: "created_by",
-      rule: "routing-law",
-      message:
-        `Note in agent-writable zone "${folder}" must carry "created_by"` +
-        ` to satisfy the ROUTING LAW (agent-authored notes are traceable).`,
-    },
-  ];
+  return routingLawViolations(frontmatter, notePath, agentZones).map((violation) => ({
+    notePath,
+    field: violation.field,
+    rule: violation.rule,
+    message: violation.message,
+  }));
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

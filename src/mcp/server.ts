@@ -14,10 +14,9 @@ import { parseNote } from "../conventions/frontmatter.js";
 import { validateFrontmatter } from "../conventions/validate.js";
 import { lintVault } from "../engine/conventions/vault-lint.js";
 import {
-  commitCapture,
-  prepareCapture,
   safeVaultNotePath,
-  type CaptureWriteMode,
+  writeNote,
+  type WriteMode,
 } from "../capture/safe.js";
 import {
   buildGraphCache,
@@ -263,40 +262,21 @@ export const omsMcpTools: Tool[] = [
     },
   },
   {
-    name: "oms_capture_prepare",
-    title: "Oh My Second Brain capture prepare",
+    name: "write",
+    title: "Oh My Second Brain write",
     description:
-      "Plan a safe capture: choose folder/concept, surface missing fields, or route ambiguous input to inbox without writing.",
+      "Write a vault note through the kernel-owned .oms contract. Modes: create, append, update. Returns ask, inbox, written, or rejected.",
     inputSchema: {
       type: "object",
       properties: {
+        mode: { type: "string", enum: ["create", "append", "update"] },
+        notePath: { type: "string" },
         concept: { type: "string" },
         folder: { type: "string" },
         filename: { type: "string" },
         frontmatter: { type: "object" },
-      },
-    },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-  },
-  {
-    name: "oms_capture_commit",
-    title: "Oh My Second Brain capture commit",
-    description:
-      "Write or append a note only after vault path confinement and contract validation pass.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        notePath: { type: "string" },
-        frontmatter: { type: "object" },
         body: { type: "string" },
-        mode: { type: "string", enum: ["create", "append"] },
       },
-      required: ["notePath", "frontmatter", "body", "mode"],
     },
     annotations: {
       readOnlyHint: false,
@@ -371,7 +351,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     {
       capabilities: { tools: {}, resources: {} },
       instructions:
-        "Oh My Second Brain exposes ontology/status/cache/retrieval tools and safe capture tools. Capture commit is gated by vault confinement and contract validation.",
+        "Oh My Second Brain exposes ontology/status/cache/retrieval tools and the write tool. write is gated by vault confinement and contract validation.",
     },
   );
 
@@ -448,7 +428,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           },
           derivedState: cacheStatus,
           engineGraph,
-          writeTools: "capture-commit-gated-by-vault-confinement-and-contract-validation",
+          writeTools: "write-gated-by-vault-confinement-and-contract-validation",
           readTools: omsMcpTools.map((tool) => tool.name),
         });
       } catch (error) {
@@ -656,51 +636,28 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
     }
 
-    if (request.params.name === "oms_capture_prepare") {
+    if (request.params.name === "write") {
       const { ontology, source } = await resolveActiveOntology(vault);
+      const modeArg = stringArg(args, "mode");
+      const mode: WriteMode = isWriteMode(modeArg) ? modeArg : "create";
       const frontmatterArg = args?.["frontmatter"];
-      const frontmatter = isRecord(frontmatterArg) ? frontmatterArg : {};
+      const result = await writeNote({
+        vault,
+        ontology,
+        mode,
+        dryRun: false,
+        concept: stringArg(args, "concept"),
+        folder: stringArg(args, "folder"),
+        filename: stringArg(args, "filename"),
+        notePath: stringArg(args, "notePath"),
+        frontmatter: isRecord(frontmatterArg) ? frontmatterArg : undefined,
+        body: stringArg(args, "body"),
+      });
       return jsonText({
         vault,
         ontologySource: source,
-        plan: prepareCapture({
-          vault,
-          ontology,
-          concept: stringArg(args, "concept"),
-          folder: stringArg(args, "folder"),
-          filename: stringArg(args, "filename"),
-          frontmatter,
-        }),
+        ...result,
       });
-    }
-
-    if (request.params.name === "oms_capture_commit") {
-      const { ontology, source } = await resolveActiveOntology(vault);
-      const notePath = stringArg(args, "notePath");
-      const body = stringArg(args, "body");
-      const mode = stringArg(args, "mode");
-      const frontmatterArg = args?.["frontmatter"];
-      if (!notePath || !body || !isCaptureMode(mode) || !isRecord(frontmatterArg)) {
-        return errorText(
-          'Missing required arguments: notePath:string, frontmatter:object, body:string, mode:"create"|"append".',
-        );
-      }
-      try {
-        return jsonText({
-          vault,
-          ontologySource: source,
-          result: await commitCapture({
-            vault,
-            ontology,
-            notePath,
-            frontmatter: frontmatterArg,
-            body,
-            mode,
-          }),
-        });
-      } catch (error) {
-        return errorText(error instanceof Error ? error.message : String(error));
-      }
     }
 
     return errorText(`Unknown Oh My Second Brain tool: ${request.params.name}`);
@@ -718,6 +675,6 @@ export async function runMcpServer(opts: OMSMcpServerOptions): Promise<void> {
   await server.connect(transport);
 }
 
-function isCaptureMode(value: string | undefined): value is CaptureWriteMode {
-  return value === "create" || value === "append";
+function isWriteMode(value: string | undefined): value is WriteMode {
+  return value === "create" || value === "append" || value === "update";
 }

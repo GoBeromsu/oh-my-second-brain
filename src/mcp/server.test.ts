@@ -43,10 +43,6 @@ describe("Oh My Second Brain MCP stdio server", () => {
         expect(tool?.annotations?.idempotentHint).toBe(registryTool.idempotent);
         expect(tool?.annotations?.openWorldHint).toBe(registryTool.openWorld);
       }
-      const commitTool = tools.tools.find((tool) => tool.name === "oms_capture_commit");
-      expect(commitTool?.annotations?.readOnlyHint).toBe(false);
-      expect(commitTool?.annotations?.destructiveHint).toBe(false);
-      expect(commitTool?.annotations?.idempotentHint).toBe(false);
       const retrieveTool = tools.tools.find((tool) => tool.name === "oms_retrieve_context");
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semanticMinScore");
       // storage/modelPath knobs were removed from the schemas (engine uses explicit env config).
@@ -69,8 +65,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const status = await client.callTool({ name: "oms_graph_status", arguments: {} });
       const parsedStatus = textPayload(status);
       expect(parsedStatus.writeTools).toBe(
-        "capture-commit-gated-by-vault-confinement-and-contract-validation",
+        "write-gated-by-vault-confinement-and-contract-validation",
       );
+      const writeTool = tools.tools.find((tool) => tool.name === "write");
+      expect(writeTool?.annotations?.readOnlyHint).toBe(false);
+      expect(JSON.stringify(writeTool?.inputSchema)).toContain("update");
       expect(parsedStatus.counts.concepts).toBeGreaterThan(0);
       const derivedState = parsedStatus.derivedState as Record<string, unknown>;
       const staleness = derivedState.staleness as Record<string, unknown>;
@@ -207,8 +206,8 @@ Malformed frontmatter must not block retrieve.
       expect(status.ontologySource).toBe("vault-invalid");
       expect(status.writeTools).toBe("disabled-invalid-ontology");
 
-      const commit = await client.callTool({
-        name: "oms_capture_commit",
+      const write = await client.callTool({
+        name: "write",
         arguments: {
           notePath: "references/unsafe.md",
           frontmatter: {
@@ -219,8 +218,8 @@ Malformed frontmatter must not block retrieve.
           mode: "create",
         },
       });
-      expect(commit.isError).toBe(true);
-      expect(commit.content[0]?.type === "text" ? commit.content[0].text : "").toContain(
+      expect(write.isError).toBe(true);
+      expect(write.content[0]?.type === "text" ? write.content[0].text : "").toContain(
         "Oh My Second Brain MCP error",
       );
     } finally {
@@ -275,8 +274,8 @@ Malformed frontmatter must not block retrieve.
       expect(status.ontologySource).toBe("vault-invalid");
       expect(status.writeTools).toBe("disabled-invalid-ontology");
 
-      const commit = await client.callTool({
-        name: "oms_capture_commit",
+      const write = await client.callTool({
+        name: "write",
         arguments: {
           notePath: "references/unsafe.md",
           frontmatter: {
@@ -287,7 +286,70 @@ Malformed frontmatter must not block retrieve.
           mode: "create",
         },
       });
-      expect(commit.isError).toBe(true);
+      expect(write.isError).toBe(true);
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
+    }
+  });
+
+  it("writes through write against the kernel contract", async () => {
+    const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-write-"));
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", tmpVault],
+      cwd: repoRoot,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      const asked = textPayload(
+        await client.callTool({
+          name: "write",
+          arguments: {
+            mode: "create",
+            concept: "literature",
+            frontmatter: { title: "Incomplete" },
+            body: "Body",
+          },
+        }),
+      );
+      expect(asked.status).toBe("ask");
+      expect(asked.missingFields).toEqual(["source-url"]);
+
+      const created = textPayload(
+        await client.callTool({
+          name: "write",
+          arguments: {
+            mode: "create",
+            notePath: "references/kernel-note.md",
+            frontmatter: {
+              title: "Kernel Note",
+              "source-url": "https://example.com/kernel-note",
+              extra: "kept",
+            },
+            body: "Created by write.",
+          },
+        }),
+      );
+      expect(created.status).toBe("written");
+      expect(created.notePath).toBe("references/kernel-note.md");
+
+      const broken = textPayload(
+        await client.callTool({
+          name: "write",
+          arguments: {
+            mode: "update",
+            notePath: "references/kernel-note.md",
+            frontmatter: { title: "" },
+          },
+        }),
+      );
+      expect(broken.status).toBe("rejected");
+      expect((broken.violations as Array<Record<string, unknown>>)[0]?.rule).toBe("required");
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });

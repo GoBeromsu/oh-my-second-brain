@@ -176,8 +176,9 @@ A folder with `concept: null` is still meaningful: its `intent` tells agents wha
 When `validateFrontmatter` finds a violation it returns a `ValidationResult { valid, violations[] }` and **never throws**. The `oh-my-second-brain doctor` command prints a violation summary and always exits 0. This means:
 
 - A missing required field is surfaced as a warning, not an error.
-- Agent workflows are never blocked by a convention mismatch.
 - You can run `oh-my-second-brain doctor` at any time with zero risk of breaking a build.
+
+MCP `write` is different: the kernel owns the `.oms` contract and returns `ask` / `rejected` without changing the disk.
 
 ### `additionalProperties: preserve`
 

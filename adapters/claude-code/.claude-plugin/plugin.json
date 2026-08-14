@@ -1,6 +1,6 @@
 {
   "name": "oms",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Oh My Second Brain convention layer for Obsidian vaults — capture, retrieve, and validate knowledge under a declared semantic convention.",
   "author": {
     "name": "gobeumsu"
@@ -17,7 +17,7 @@
     "./skills/setup/",
     "./skills/doctor/",
     "./skills/define/",
-    "./skills/capture/",
+    "./skills/write/",
     "./skills/retrieve/",
     "./skills/uninstall/",
     "./skills/update/"
