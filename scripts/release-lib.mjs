@@ -1,0 +1,197 @@
+// Pure release helpers shared by scripts/*.mjs and test/release-lib.test.ts.
+// No file I/O, no process.exit, no child_process: every function maps input to output.
+
+const STABLE_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
+const CHANGELOG_HEADER = "# Changelog";
+const UNRELEASED_HEADING = "## [Unreleased]";
+const RELEASED_HEADING = /^## \[(\d+\.\d+\.\d+)\]/gm;
+
+/**
+ * @param {string} version
+ * @returns {boolean} true when version is a stable X.Y.Z release (no prerelease/build metadata).
+ */
+export function isStableVersion(version) {
+  return typeof version === "string" && STABLE_VERSION.test(version);
+}
+
+/**
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean} true when a is strictly greater than b comparing X.Y.Z numerically.
+ */
+export function isVersionGreater(a, b) {
+  const left = versionSegments(a);
+  const right = versionSegments(b);
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] > right[index];
+  }
+  return false;
+}
+
+/**
+ * @param {string} version
+ * @returns {number[]}
+ */
+function versionSegments(version) {
+  if (!isStableVersion(version)) {
+    throw new Error(`invalid version: ${String(version)} (expected X.Y.Z)`);
+  }
+  return version.split(".").map((segment) => Number(segment));
+}
+
+/**
+ * Roll `## [Unreleased]` into a dated release section, keeping released sections byte-identical.
+ *
+ * @param {string} content CHANGELOG.md text
+ * @param {string} version release version (X.Y.Z)
+ * @param {string} date release date (YYYY-MM-DD)
+ * @param {{ allowEmpty?: boolean }} [options] allowEmpty inserts an empty release section instead of throwing
+ * @returns {string} rolled changelog text
+ */
+export function rolledChangelog(content, version, date, options = {}) {
+  const allowEmpty = options.allowEmpty === true;
+  if (typeof content !== "string" || !content.startsWith(`${CHANGELOG_HEADER}\n`)) {
+    throw new Error(`malformed changelog: missing '${CHANGELOG_HEADER}' header on the first line`);
+  }
+  const unreleasedStart = content.indexOf(`\n${UNRELEASED_HEADING}`);
+  if (unreleasedStart === -1) {
+    throw new Error(`malformed changelog: missing '${UNRELEASED_HEADING}' section`);
+  }
+
+  const headingEnd = content.indexOf("\n", unreleasedStart + 1);
+  const bodyStart = headingEnd === -1 ? content.length : headingEnd + 1;
+  const nextSection = content.indexOf("\n## [", bodyStart - 1);
+  const bodyEnd = nextSection === -1 ? content.length : nextSection + 1;
+  const body = content.slice(bodyStart, bodyEnd);
+  const rest = content.slice(bodyEnd);
+  const releaseHeading = `## [${version}] - ${date}`;
+
+  if (body.trim() === "") {
+    if (!allowEmpty) {
+      throw new Error("empty [Unreleased] - write release notes before releasing");
+    }
+    return `${CHANGELOG_HEADER}\n\n${UNRELEASED_HEADING}\n\n${releaseHeading}\n\n${rest}`;
+  }
+
+  return `${CHANGELOG_HEADER}\n\n${UNRELEASED_HEADING}\n\n${releaseHeading}\n${body}${rest}`;
+}
+
+/**
+ * @param {string} content CHANGELOG.md text
+ * @param {string} version release version (X.Y.Z)
+ * @returns {string} trimmed body of the release section
+ */
+export function extractReleaseNotes(content, version) {
+  const heading = new RegExp(`^## \\[${escapeRegExp(version)}\\] - .*$`, "m");
+  const match = heading.exec(content ?? "");
+  if (!match) {
+    throw new Error(`missing changelog section for version ${version}`);
+  }
+  const bodyStart = match.index + match[0].length;
+  const nextSection = content.indexOf("\n## [", bodyStart);
+  const body = nextSection === -1 ? content.slice(bodyStart) : content.slice(bodyStart, nextSection);
+  return body.trim();
+}
+
+/**
+ * @param {string} value
+ * @returns {string}
+ */
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Replace only the first `"version": "..."` pair, preserving all other formatting.
+ *
+ * @param {string} jsonText
+ * @param {string} version
+ * @returns {string}
+ */
+export function bumpedJsonVersion(jsonText, version) {
+  if (!isStableVersion(version)) {
+    throw new Error(`invalid version: ${String(version)} (expected X.Y.Z)`);
+  }
+  const pattern = /"version"(\s*:\s*)"[^"]*"/;
+  if (!pattern.test(jsonText ?? "")) {
+    throw new Error('malformed json: no "version" field found');
+  }
+  return jsonText.replace(pattern, (_match, separator) => `"version"${separator}"${version}"`);
+}
+
+/**
+ * Set both package-lock version carriers (root and packages[""]).
+ *
+ * @param {string} jsonText
+ * @param {string} version
+ * @returns {string} re-stringified lockfile with 2-space indent and trailing newline
+ */
+export function bumpedPackageLock(jsonText, version) {
+  if (!isStableVersion(version)) {
+    throw new Error(`invalid version: ${String(version)} (expected X.Y.Z)`);
+  }
+  const lock = JSON.parse(jsonText);
+  if (!lock || typeof lock !== "object" || !lock.packages || typeof lock.packages !== "object" || !lock.packages[""]) {
+    throw new Error('malformed package-lock: missing packages[""] entry');
+  }
+  lock.version = version;
+  lock.packages[""].version = version;
+  return `${JSON.stringify(lock, null, 2)}\n`;
+}
+
+/**
+ * @param {{
+ *   version: string,
+ *   packageJson: { version?: string },
+ *   packageLock: { version?: string, packages?: Record<string, { version?: string }> },
+ *   claudePluginJson: { version?: string },
+ *   codexPluginJson: { version?: string },
+ *   hermesManifestJson: { version?: string },
+ * }} carriers
+ * @returns {string[]} human-readable mismatch descriptions; empty when every carrier matches
+ */
+export function versionMismatches({
+  version,
+  packageJson,
+  packageLock,
+  claudePluginJson,
+  codexPluginJson,
+  hermesManifestJson,
+}) {
+  const checks = [
+    ["package.json", packageJson?.version],
+    ["package-lock.json", packageLock?.version],
+    ['package-lock.json packages[""]', packageLock?.packages?.[""]?.version],
+    ["adapters/claude-code/.claude-plugin/plugin.json", claudePluginJson?.version],
+    ["adapters/codex/.codex-plugin/plugin.json", codexPluginJson?.version],
+    ["adapters/hermes/manifest.json", hermesManifestJson?.version],
+  ];
+  return checks
+    .filter(([, actual]) => actual !== version)
+    .map(([name, actual]) => `${name}=${actual === undefined ? "missing" : actual} (expected ${version})`);
+}
+
+/**
+ * @param {string} baseContent CHANGELOG.md at the merge base
+ * @param {string} headContent CHANGELOG.md at HEAD
+ * @returns {string[]} released headings present in base but absent in head
+ */
+export function missingReleasedHeadings(baseContent, headContent) {
+  const headHeadings = new Set(releasedHeadings(headContent));
+  return releasedHeadings(baseContent).filter((heading) => !headHeadings.has(heading));
+}
+
+/**
+ * @param {string} content
+ * @returns {string[]} `## [X.Y.Z]` headings in document order (never `## [Unreleased]`)
+ */
+function releasedHeadings(content) {
+  const headings = [];
+  const pattern = new RegExp(RELEASED_HEADING.source, RELEASED_HEADING.flags);
+  let match = pattern.exec(content ?? "");
+  while (match !== null) {
+    headings.push(`## [${match[1]}]`);
+    match = pattern.exec(content);
+  }
+  return headings;
+}
