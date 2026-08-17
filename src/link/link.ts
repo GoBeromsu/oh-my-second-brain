@@ -38,7 +38,7 @@ export interface LinkRecord {
   scope: string[];
 }
 
-export type VaultSource = "vault" | "bridge" | "env" | "cwd";
+export type VaultSource = "vault" | "bridge" | "env" | "global" | "cwd";
 
 export interface ResolvedVault {
   /** Effective vault root — where the `.oms/` ontology lives. */
@@ -168,11 +168,13 @@ export async function writeLinkRecord(omsDir: string, record: LinkRecord): Promi
  *   1. Local vault ontology (`.oms/concepts` or `.oms/taxonomy.yaml`) → vault.
  *   2. Local bridge (`.oms/links.yaml`)                              → bridge.
  *   3. `OMS_VAULT` environment variable                             → env.
- *   4. Fallback to `startDir`                                       → cwd.
+ *   4. Global vault target registry (`~/.oms/config.yaml`)          → global.
+ *   5. Fallback to `startDir`                                       → cwd.
  */
 export async function resolveEffectiveVault(
   startDir: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  opts?: { homeDir?: string },
 ): Promise<ResolvedVault> {
   const omsDir = path.join(startDir, ".oms");
 
@@ -194,6 +196,16 @@ export async function resolveEffectiveVault(
   const envVault = env["OMS_VAULT"];
   if (envVault && envVault.trim().length > 0) {
     return { vault: expandHome(envVault), scope: null, source: "env" };
+  }
+
+  const { readGlobalConfig } = await import("./global-config.js");
+  const globalConfig = await readGlobalConfig(opts?.homeDir);
+  if (globalConfig) {
+    const resolvedVault = globalConfig.vault;
+    if ((await pathKind(resolvedVault)) !== "directory") {
+      throw new Error(`[oms] Global vault target does not exist or is not a directory: ${resolvedVault}. Update ~/.oms/config.yaml with a valid vault path, or run oms setup to register your vault.`);
+    }
+    return { vault: resolvedVault, scope: null, source: "global" };
   }
 
   return { vault: path.resolve(startDir), scope: null, source: "cwd" };
