@@ -31,6 +31,7 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "audit": "npm audit --omit=dev",
+    "release": "node scripts/release.mjs",
     "release:pack": "node scripts/release-pack.mjs",
     "release:setup-smoke": "node scripts/release-artifact-smoke.mjs --setup-only",
     "release:mcp-smoke": "node scripts/release-artifact-smoke.mjs --mcp-only",
