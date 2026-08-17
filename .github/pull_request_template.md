@@ -9,6 +9,7 @@
 ## Verification evidence
 - [ ] npm run build
 - [ ] npm test
+- [ ] User-facing change? Added an entry under `## [Unreleased]` in CHANGELOG.md
 - [ ] Additional focused checks documented below
 
 ## Risks / follow-ups
