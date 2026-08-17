@@ -58,6 +58,7 @@ export interface HarnessRuntimeAssetRoot {
 
 export interface HarnessPackageAssetSurface {
   readonly npmFiles: readonly string[];
+  readonly rootShippedFiles: readonly string[];
   readonly runtimeAssetRoots: readonly HarnessRuntimeAssetRoot[];
   readonly releaseRequiredPaths: readonly string[];
 }
@@ -400,6 +401,10 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       "docs/release.md",
       "scripts/install.sh",
       "scripts/uninstall.sh",
+      "CHANGELOG.md",
+    ],
+    rootShippedFiles: [
+      "CHANGELOG.md",
     ],
     runtimeAssetRoots: [
       { id: "ontology", path: "core/ontology", owner: "core" },

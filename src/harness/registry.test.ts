@@ -129,4 +129,89 @@ describe("validateHarnessRegistry", () => {
       ]),
     );
   });
+
+  it("reports rootShippedFiles entries with path separators", () => {
+    const base = cloneRegistry();
+    const registry: HarnessSurfaceRegistry = {
+      ...base,
+      packageAssets: {
+        ...base.packageAssets,
+        rootShippedFiles: [...base.packageAssets.rootShippedFiles, "docs/x.md"],
+        npmFiles: [...base.packageAssets.npmFiles, "docs/x.md"],
+      },
+    };
+
+    expect(validateHarnessRegistry(registry)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "forbidden_path",
+          surface: "packageAssets.rootShippedFiles.docs/x.md",
+          value: "docs/x.md",
+        }),
+      ]),
+    );
+  });
+
+  it("reports rootShippedFiles entries with parent directory traversal", () => {
+    const base = cloneRegistry();
+    const registry: HarnessSurfaceRegistry = {
+      ...base,
+      packageAssets: {
+        ...base.packageAssets,
+        rootShippedFiles: [...base.packageAssets.rootShippedFiles, ".."],
+        npmFiles: [...base.packageAssets.npmFiles, ".."],
+      },
+    };
+
+    expect(validateHarnessRegistry(registry)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "forbidden_path",
+          surface: "packageAssets.rootShippedFiles...",
+          value: "..",
+        }),
+      ]),
+    );
+  });
+
+  it("reports rootShippedFiles entries not present in npmFiles", () => {
+    const base = cloneRegistry();
+    const registry: HarnessSurfaceRegistry = {
+      ...base,
+      packageAssets: {
+        ...base.packageAssets,
+        rootShippedFiles: [...base.packageAssets.rootShippedFiles, "MISSING_FILE.txt"],
+      },
+    };
+
+    expect(validateHarnessRegistry(registry)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "missing_path",
+          surface: "packageAssets.rootShippedFiles.MISSING_FILE.txt",
+        }),
+      ]),
+    );
+  });
+
+  it("reports duplicate rootShippedFiles entries", () => {
+    const base = cloneRegistry();
+    const registry: HarnessSurfaceRegistry = {
+      ...base,
+      packageAssets: {
+        ...base.packageAssets,
+        rootShippedFiles: [...base.packageAssets.rootShippedFiles, "package.json", "package.json"],
+      },
+    };
+
+    expect(validateHarnessRegistry(registry)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "duplicate_path",
+          surface: "packageAssets.rootShippedFiles",
+          value: "package.json",
+        }),
+      ]),
+    );
+  });
 });

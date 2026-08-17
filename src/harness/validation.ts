@@ -158,6 +158,27 @@ function validatePackagePath(
   }
 }
 
+function validateRootShippedFile(
+  violations: HarnessRegistryViolation[],
+  surface: string,
+  fileName: unknown,
+): void {
+  if (typeof fileName !== "string" || fileName.length === 0) {
+    violations.push({ code: "missing_path", surface, message: `${surface} is missing a file name.` });
+    return;
+  }
+
+  if (fileName.includes("/") || fileName.includes("\\") || fileName === ".." || fileName === ".") {
+    violations.push({
+      code: "forbidden_path",
+      surface,
+      value: fileName,
+      message: `${surface} contains an unsafe root file name: ${fileName}`,
+    });
+    return;
+  }
+}
+
 function validateRuntime(
   violations: HarnessRegistryViolation[],
   surface: string,
@@ -229,8 +250,11 @@ export function validateHarnessRegistry(registry: HarnessSurfaceRegistry): Harne
     registry.packageAssets.npmFiles,
     "duplicate_path",
   );
+  const rootShippedFilesSet = new Set(registry.packageAssets.rootShippedFiles);
   for (const npmFile of registry.packageAssets.npmFiles) {
-    validatePackagePath(violations, `packageAssets.npmFiles.${npmFile}`, npmFile);
+    if (!rootShippedFilesSet.has(npmFile)) {
+      validatePackagePath(violations, `packageAssets.npmFiles.${npmFile}`, npmFile);
+    }
   }
   pushDuplicateViolations(
     violations,
@@ -248,6 +272,23 @@ export function validateHarnessRegistry(registry: HarnessSurfaceRegistry): Harne
     validateOwner(violations, `packageAssets.runtimeAssetRoots.${asset.id}`, asset.owner);
     validatePackagePath(violations, `packageAssets.runtimeAssetRoots.${asset.id}`, asset.path);
   }
+  pushDuplicateViolations(
+    violations,
+    "packageAssets.rootShippedFiles",
+    registry.packageAssets.rootShippedFiles,
+    "duplicate_path",
+  );
+  for (const rootFile of registry.packageAssets.rootShippedFiles) {
+    validateRootShippedFile(violations, `packageAssets.rootShippedFiles.${rootFile}`, rootFile);
+    if (!registry.packageAssets.npmFiles.includes(rootFile)) {
+      violations.push({
+        code: "missing_path",
+        surface: `packageAssets.rootShippedFiles.${rootFile}`,
+        message: `${rootFile} declared in rootShippedFiles must also be in npmFiles`,
+      });
+    }
+  }
+
   pushDuplicateViolations(
     violations,
     "packageAssets.releaseRequiredPaths",
