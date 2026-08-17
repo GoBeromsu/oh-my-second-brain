@@ -129,7 +129,7 @@ The whole pipeline, including headless Claude CLI validation, is provable withou
 gh workflow run release.yml --ref <branch> -f rehearsal=true
 ```
 
-A `workflow_dispatch` run has no tag ref, so the guard, publish, and GitHub Release steps are skipped by their `if:` conditions. What still runs: `npm ci`, the Claude CLI install and version check, the full `release:check` (real `claude plugin validate`), and the **Dry-run publish (rehearsal)** step, `npm publish --dry-run --access public`. No token, no registry write, no release page.
+A `workflow_dispatch` run has no tag ref, so the guard, publish, and GitHub Release steps are skipped by their `if:` conditions. What still runs: `npm ci`, the Claude CLI install and version check, the full `release:check` (real `claude plugin validate`), and the **Dry-run publish (rehearsal)** step, `npm publish --dry-run --access public`. No token, no registry write, no release page. The dry-run step always runs against the current (normally already-published) version; `npm publish --dry-run` performs the server-side precondition check and rejects publishing over previously published versions. The rehearsal treats this specific rejection for the current version as the expected outcome, confirming the package is valid; any other error (packing, manifest, or already-published for a different version) still fails the step.
 
 Run a rehearsal on any branch that changes the release pipeline itself.
 
