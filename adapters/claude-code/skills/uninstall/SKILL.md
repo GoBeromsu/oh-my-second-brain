@@ -31,4 +31,4 @@ oms uninstall --runtime all --dry-run
 oms uninstall --runtime all --yes
 ```
 
-Use `--execute` only when you want Oh My Second Brain to call external host CLIs such as `claude mcp remove oms` or `claude plugin uninstall oms`.
+Use `--execute` only when you want Oh My Second Brain to call external host CLIs such as the scoped `claude mcp remove oms --scope local|project|user` commands or `claude plugin uninstall oms`.

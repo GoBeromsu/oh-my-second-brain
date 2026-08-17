@@ -326,7 +326,7 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       guidanceFiles: ["CLAUDE.md"],
       hookFiles: ["hooks/oms-guard.mjs", "hooks/oms-post-guard.mjs"],
       ruleFiles: [],
-      mcpConfigFiles: [],
+      mcpConfigFiles: [".mcp.json"],
       hardHookGuarantee: true,
     },
     {

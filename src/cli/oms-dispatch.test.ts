@@ -220,4 +220,29 @@ describe("oms CLI dispatch", () => {
       expect.objectContaining({ path: "notes/Alpha.md" }),
     ]);
   });
+
+  it("routes update-reconcile dry-run through the scoped Claude cleanup plan", async () => {
+    const vault = await makeVault();
+    const result = runCli(["update-reconcile", "--runtime", "claude", "--vault", vault, "--dry-run"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("claude mcp remove oms --scope local");
+    expect(result.stdout).toContain("claude mcp remove oms --scope project");
+    expect(result.stdout).toContain("claude mcp remove oms --scope user");
+  });
+
+  it("returns stable cleanup fields for host JSON output", async () => {
+    const vault = await makeVault();
+    const result = runCli(["install", "--runtime", "claude", "--vault", vault, "--dry-run", "--json"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const output = jsonObject(result.stdout) as {
+      dryRun: boolean;
+      results: Array<{ cleanup: unknown[]; messages: string[] }>;
+    };
+    expect(output.dryRun).toBe(true);
+    expect(output.results[0]?.cleanup).toEqual([]);
+    expect(output.results[0]?.messages.join(" ")).toContain("scope local");
+  });
 });

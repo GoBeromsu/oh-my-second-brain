@@ -165,7 +165,7 @@ The Phase 1 command surface is intentionally dry-run for Claude runtime registra
 oms setup --vault /path/to/vault --yes --install-claude
 ```
 
-This initializes `.oms/` and prints a Claude Code plugin install command plus a `claude mcp add ...` command. It does not mutate Claude config. Capture/write tools are only available through the gated safe-write path.
+This initializes `.oms/` and prints a Claude Code plugin install command plus the plugin-owned MCP asset. It does not mutate Claude config. Capture/write tools are only available through the gated safe-write path.
 
 Phase 3 adds a derived cache at `vault/.oms/cache/graph.json`. This file is not canonical. It can be rebuilt from markdown plus `.oms/` and contains:
 

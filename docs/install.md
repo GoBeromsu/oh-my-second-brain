@@ -62,7 +62,7 @@ Runtime selection follows the Ouroboros pattern:
 
 | Host | Install behavior |
 | --- | --- |
-| Claude Code | Upserts `~/.claude/mcp.json` entry for `oms`; prints Claude plugin/MCP commands; with `--execute`, runs `claude plugin install` and `claude mcp add` when the CLI is available. |
+| Claude Code | Installs the plugin-owned `.mcp.json` surface; removes stale `oms` registrations across local/project/user scopes; with `--execute`, runs the Claude plugin lifecycle commands when the CLI is available. |
 | Codex | Installs `~/.codex/rules/oms.md`, `~/.codex/skills/oms-*`, copies adapter files to `~/.codex/plugins/oms`, and writes a managed `[mcp_servers.oms]` block plus `OMS_AGENT_RUNTIME=codex` env in `~/.codex/config.toml`. |
 | Hermes | Installs `~/.hermes/skills/knowledge-management/oms/`, copies adapter files to `~/.hermes/adapters/oms`, and writes `mcp_servers.oms` in `~/.hermes/config.yaml`. |
 
@@ -106,7 +106,7 @@ Typical printed commands look like:
 
 ```bash
 claude plugin install /path/to/oh-my-second-brain/adapters/claude-code
-claude mcp add oms -- oms mcp --vault /path/to/vault
+# MCP is declared by the installed plugin in adapters/claude-code/.mcp.json.
 ```
 
 ## Uninstall

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   runHostOperation,
   formatHostOperationResults,
+  formatHostOperationResultsJson,
   upsertClaudeHooks,
   removeClaudeHooks,
   toShellVaultPath,
@@ -60,7 +61,7 @@ describe("host installer/uninstaller", () => {
     expect(existsSync(path.join(codexSkillsDir, "personal-skill"))).toBe(true);
   });
 
-  it("registers Claude MCP with the installed oms command when executing external install", async () => {
+  it("installs the plugin-owned Claude MCP surface when executing external install", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-external-"));
     const binDir = path.join(home, "bin");
     const argvLog = path.join(home, "claude-argv.log");
@@ -96,8 +97,15 @@ describe("host installer/uninstaller", () => {
       });
 
       const executedCommands = (await readFile(argvLog, "utf-8")).trim().split("\n");
-      expect(executedCommands).not.toContain("claude mcp add oms -- npx mcp --vault /tmp/Vault");
-      expect(executedCommands).toContain("claude mcp add oms -- oms mcp --vault /tmp/Vault");
+      expect(executedCommands).toContain("claude mcp remove oms --scope local");
+      expect(executedCommands).toContain("claude mcp remove oms --scope project");
+      expect(executedCommands).toContain("claude mcp remove oms --scope user");
+      expect(executedCommands.some((command) => command.startsWith("claude plugin install "))).toBe(true);
+      expect(executedCommands.every((command) => !command.includes("mcp add oms"))).toBe(true);
+      const pluginManifest = await readFile(path.join(adapterRoot, "claude-code", ".claude-plugin", "plugin.json"), "utf-8");
+      const pluginMcp = await readFile(path.join(adapterRoot, "claude-code", ".mcp.json"), "utf-8");
+      expect(pluginManifest).toContain('"mcpServers": "./.mcp.json"');
+      expect(pluginMcp).toContain('"oms"');
     } finally {
       if (originalPath === undefined) {
         delete process.env.PATH;
@@ -110,6 +118,133 @@ describe("host installer/uninstaller", () => {
         process.env.CLAUDE_ARGV_LOG = originalArgvLog;
       }
     }
+  });
+
+  it("continues plugin installation when one scoped cleanup fails", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-cleanup-failure-"));
+    const binDir = path.join(home, "bin");
+    const argvLog = path.join(home, "claude-argv.log");
+    const claudePath = path.join(binDir, "claude");
+    const originalPath = process.env.PATH;
+    const originalArgvLog = process.env.CLAUDE_ARGV_LOG;
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      claudePath,
+      [
+        "#!/bin/sh",
+        "printf 'claude' >> \"$CLAUDE_ARGV_LOG\"",
+        "for arg in \"$@\"; do printf ' %s' \"$arg\" >> \"$CLAUDE_ARGV_LOG\"; done",
+        "printf '\\n' >> \"$CLAUDE_ARGV_LOG\"",
+        "if [ \"$1\" = \"mcp\" ] && [ \"$5\" = \"project\" ]; then",
+        "  printf 'permission denied\\n' >&2",
+        "  exit 7",
+        "fi",
+        "if [ \"$1\" = \"mcp\" ] && [ \"$5\" = \"user\" ]; then",
+        "  printf 'No local mcp server found with name: oms\\n' >&2",
+        "  exit 1",
+        "fi",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(claudePath, 0o755);
+
+    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+    process.env.CLAUDE_ARGV_LOG = argvLog;
+
+    try {
+      const [result] = await runHostOperation({
+        action: "install",
+        runtime: "claude",
+        vault: "/tmp/Vault",
+        homeDir: home,
+        adapterRoot,
+        executeExternal: true,
+      });
+
+      expect(result.cleanup).toEqual([
+        expect.objectContaining({ scope: "local", status: "removed" }),
+        expect.objectContaining({ scope: "project", status: "failed", reasonCode: "legacy_cleanup_failed" }),
+        expect.objectContaining({ scope: "user", status: "failed", reasonCode: "legacy_cleanup_failed" }),
+      ]);
+      expect(result.messages.some((message) => message.includes("Install continued"))).toBe(true);
+      expect((await readFile(argvLog, "utf-8"))).toContain("claude plugin install");
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      if (originalArgvLog === undefined) delete process.env.CLAUDE_ARGV_LOG;
+      else process.env.CLAUDE_ARGV_LOG = originalArgvLog;
+    }
+  });
+
+  it("dry-run lists all scoped Claude cleanup attempts without mutating", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-cleanup-dry-"));
+    const [result] = await runHostOperation({
+      action: "install",
+      runtime: "claude",
+      vault: "/tmp/Vault",
+      homeDir: home,
+      adapterRoot,
+      dryRun: true,
+      executeExternal: true,
+    });
+
+    expect(result.messages).toEqual(expect.arrayContaining([
+      expect.stringContaining("claude mcp remove oms --scope local"),
+      expect.stringContaining("claude mcp remove oms --scope project"),
+      expect.stringContaining("claude mcp remove oms --scope user"),
+    ]));
+    expect(existsSync(path.join(home, ".claude", "mcp.json"))).toBe(false);
+  });
+
+  it("reports manual plugin activation when Claude CLI is unavailable", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-no-cli-"));
+    const originalPath = process.env.PATH;
+    process.env.PATH = path.join(home, "missing-bin");
+    try {
+      const [result] = await runHostOperation({
+        action: "install",
+        runtime: "claude",
+        vault: "/tmp/Vault",
+        homeDir: home,
+        adapterRoot,
+        executeExternal: true,
+      });
+
+      expect(result.cleanup).toEqual([
+        expect.objectContaining({ scope: "local", status: "failed", reasonCode: "claude_cli_unavailable" }),
+        expect.objectContaining({ scope: "project", status: "failed", reasonCode: "claude_cli_unavailable" }),
+        expect.objectContaining({ scope: "user", status: "failed", reasonCode: "claude_cli_unavailable" }),
+      ]);
+      expect(result.messages.join(" ")).toContain("no plugin or MCP activation was performed");
+      expect(result.messages.join(" ")).not.toContain("wrote MCP config");
+      expect(existsSync(path.join(home, ".claude", "mcp.json"))).toBe(false);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
+  it("removes a stale direct Claude MCP entry without rewriting unrelated config bytes", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-mcp-migrate-"));
+    const claudeDir = path.join(home, ".claude");
+    await mkdir(claudeDir, { recursive: true });
+    const original = '{"custom":"  unmanaged spacing  ","mcpServers":{"oms":{"command":"oms"},"other":{"command":"keep"}}}';
+    const mcpPath = path.join(claudeDir, "mcp.json");
+    await writeFile(mcpPath, original, "utf-8");
+
+    await runHostOperation({
+      action: "install",
+      runtime: "claude",
+      vault: "/tmp/Vault",
+      homeDir: home,
+      adapterRoot,
+    });
+    const updated = await readFile(mcpPath, "utf-8");
+    expect(updated).not.toContain('"oms":');
+    const parsed = JSON.parse(updated) as { mcpServers: { other: { command: string } }; custom: string };
+    expect(parsed.mcpServers.other.command).toBe("keep");
+    expect(parsed.custom).toBe("  unmanaged spacing  ");
   });
 
   it("installs and uninstalls Hermes native skill bundle and MCP config", async () => {
@@ -135,6 +270,24 @@ describe("host installer/uninstaller", () => {
     expect(formatHostOperationResults(results, true)).toContain("dry-run");
     expect(existsSync(path.join(home, ".codex"))).toBe(false);
     expect(existsSync(path.join(home, ".hermes"))).toBe(false);
+  });
+
+  it("renders cleanup outcomes as stable JSON", async () => {
+    const results = await runHostOperation({
+      action: "install",
+      runtime: "claude",
+      vault: "/tmp/Vault",
+      homeDir: await mkdtemp(path.join(tmpdir(), "oms-install-json-")),
+      adapterRoot,
+      dryRun: true,
+    });
+    const parsed = JSON.parse(formatHostOperationResultsJson(results, true)) as {
+      dryRun: boolean;
+      results: Array<{ cleanup: unknown[]; messages: string[] }>;
+    };
+    expect(parsed.dryRun).toBe(true);
+    expect(parsed.results[0]?.cleanup).toEqual([]);
+    expect(parsed.results[0]?.messages.join(" ")).toContain("scope local");
   });
 });
 
@@ -164,9 +317,46 @@ describe("Claude Code hook wiring helpers", () => {
   });
 
   it("isOmsHookEntry detects marker in hook command", () => {
-    const entry = { matcher: ".*", hooks: [{ type: "command", command: "OMS_VAULT=$HOME/V oms-guard" }] };
+    const entry = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="$HOME/V" oms-guard' }] };
     expect(isOmsHookEntry(entry, "oms-guard")).toBe(true);
     expect(isOmsHookEntry(entry, "oms-post-guard")).toBe(false);
+  });
+
+  it("does not claim a user hook with a suffix after the quoted assignment", () => {
+    const entry = {
+      matcher: ".*",
+      hooks: [{ type: "command", command: 'OMS_VAULT="/x"suffix oms-guard' }],
+    };
+    expect(isOmsHookEntry(entry, "oms-guard")).toBe(false);
+  });
+
+  it("does not claim escaped-quote assignments", () => {
+    const entry = {
+      matcher: ".*",
+      hooks: [{ type: "command", command: 'OMS_VAULT="/x\\q" oms-guard' }],
+    };
+    expect(isOmsHookEntry(entry, "oms-guard")).toBe(false);
+  });
+
+  it("does not claim a matching command under a different hook shape", () => {
+    const wrongMatcher = { matcher: ".*", hooks: [{ type: "command", command: 'OMS_VAULT="/x" oms-guard' }] };
+    const multipleHooks = {
+      matcher: "Write|Edit|NotebookEdit",
+      hooks: [
+        { type: "command", command: 'OMS_VAULT="/x" oms-guard' },
+        { type: "command", command: "other-hook" },
+      ],
+    };
+    const wrongType = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "prompt", command: 'OMS_VAULT="/x" oms-guard' }] };
+    const extraField = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/x" oms-guard', owner: "user" }] };
+    const embeddedHome = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="prefix$HOME/foo" oms-guard' }] };
+    const emptyAssignment = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="" oms-guard' }] };
+    expect(isOmsHookEntry(wrongMatcher, "oms-guard")).toBe(false);
+    expect(isOmsHookEntry(multipleHooks, "oms-guard")).toBe(false);
+    expect(isOmsHookEntry(wrongType, "oms-guard")).toBe(false);
+    expect(isOmsHookEntry(extraField, "oms-guard")).toBe(false);
+    expect(isOmsHookEntry(embeddedHome, "oms-guard")).toBe(false);
+    expect(isOmsHookEntry(emptyAssignment, "oms-guard")).toBe(false);
   });
 });
 
@@ -221,6 +411,27 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     expect(JSON.stringify(preArr)).toContain("other-tool");
   });
 
+  it("preserves unmanaged root JSON bytes while splicing hooks", async () => {
+    const claudeDir = await makeClaudeDir("bytes");
+    const home = path.dirname(claudeDir);
+    const original = [
+      "{",
+      '  "permissions": { "allow": ["keep-exactly"] },',
+      '  "hooks": { "PreToolUse": [] },',
+      '  "custom": "  unmanaged spacing  "',
+      "}",
+      "",
+    ].join("\n");
+    const settingsPath = path.join(claudeDir, "settings.json");
+    await writeFile(settingsPath, original, "utf-8");
+
+    await upsertClaudeHooks({ vault: path.join(home, "Vault"), homeDir: home }, claudeDir);
+    const updated = await readFile(settingsPath, "utf-8");
+
+    expect(updated).toContain('  "permissions": { "allow": ["keep-exactly"] },');
+    expect(updated).toContain('  "custom": "  unmanaged spacing  "');
+  });
+
   it("removeClaudeHooks removes only OMS entries, leaves others intact", async () => {
     const claudeDir = await makeClaudeDir("remove");
     const home = path.dirname(claudeDir);
@@ -249,6 +460,82 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     expect(result.messages[0]).toContain("WARNING");
     const raw = await readFile(settingsPath, "utf-8");
     expect(raw).toBe("{ this is not valid json");
+  });
+
+  it("does not overwrite valid non-object settings.json", async () => {
+    const claudeDir = await makeClaudeDir("non-object");
+    const settingsPath = path.join(claudeDir, "settings.json");
+    await writeFile(settingsPath, "[]\n", "utf-8");
+    const result = await upsertClaudeHooks({ vault: "/tmp/Vault" }, claudeDir);
+    expect(result.changed).toBe(false);
+    expect(result.messages[0]).toContain("supported JSON object");
+    expect(await readFile(settingsPath, "utf-8")).toBe("[]\n");
+  });
+
+  it("does not overwrite unsupported hook metadata", async () => {
+    const claudeDir = await makeClaudeDir("metadata");
+    const settingsPath = path.join(claudeDir, "settings.json");
+    await writeFile(settingsPath, JSON.stringify({ hooks: { metadata: "keep" } }, null, 2), "utf-8");
+    const result = await upsertClaudeHooks({ vault: "/tmp/Vault" }, claudeDir);
+    expect(result.changed).toBe(false);
+    expect(result.messages[0]).toContain("unsupported hook metadata");
+    expect(JSON.parse(await readFile(settingsPath, "utf-8"))).toEqual({ hooks: { metadata: "keep" } });
+  });
+
+  it("keeps compact settings JSON valid during hook removal", async () => {
+    const claudeDir = await makeClaudeDir("compact");
+    const settingsPath = path.join(claudeDir, "settings.json");
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        permissions: 1,
+        hooks: {
+          PreToolUse: [{ matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/x" oms-guard' }] }],
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await removeClaudeHooks({}, claudeDir);
+    expect(result.changed).toBe(true);
+    const parsed = JSON.parse(await readFile(settingsPath, "utf-8")) as { hooks?: unknown; permissions: number };
+    expect(parsed.hooks).toBeUndefined();
+    expect(parsed.permissions).toBe(1);
+  });
+
+  it("keeps generated quoted vault paths idempotent", async () => {
+    const claudeDir = await makeClaudeDir("quoted-vault");
+    const home = path.dirname(claudeDir);
+    const options = { vault: path.join(home, 'Vault"Quote'), homeDir: home };
+    await upsertClaudeHooks(options, claudeDir);
+    await upsertClaudeHooks(options, claudeDir);
+    const installed = JSON.parse(await readFile(path.join(claudeDir, "settings.json"), "utf-8")) as {
+      hooks: { PreToolUse: unknown[]; PostToolUse: unknown[] };
+    };
+    expect(installed.hooks.PreToolUse).toHaveLength(1);
+    expect(installed.hooks.PostToolUse).toHaveLength(1);
+
+    await removeClaudeHooks({}, claudeDir);
+    const removed = JSON.parse(await readFile(path.join(claudeDir, "settings.json"), "utf-8")) as { hooks?: unknown };
+    expect(removed.hooks).toBeUndefined();
+  });
+
+  it("reports malformed direct MCP config without mutating it", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-mcp-invalid-"));
+    const claudeDir = path.join(home, ".claude");
+    await mkdir(claudeDir, { recursive: true });
+    const mcpPath = path.join(claudeDir, "mcp.json");
+    await writeFile(mcpPath, "[]\n", "utf-8");
+
+    const [result] = await runHostOperation({
+      action: "install",
+      runtime: "claude",
+      vault: "/tmp/Vault",
+      homeDir: home,
+      adapterRoot,
+    });
+    expect(result.messages.join(" ")).toContain("not a JSON object");
+    expect(await readFile(mcpPath, "utf-8")).toBe("[]\n");
   });
 
   it("install+uninstall Claude runtime writes and then removes hooks from settings.json", async () => {

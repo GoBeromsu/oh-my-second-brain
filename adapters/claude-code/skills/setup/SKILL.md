@@ -38,7 +38,7 @@ The CLI will:
 | `--vault <path>` | Path to your Obsidian vault root (default: current directory) |
 | `--yes` | Non-interactive: accept all defaults, no prompts |
 | `--suggest-fields` | Merge observed note frontmatter fields into concept schemas without mutating notes. |
-| `--install-claude` | Legacy setup-only dry-run that prints Claude Code plugin install and MCP registration commands. |
+| `--install-claude` | Legacy setup-only dry-run that prints the Claude Code plugin install command and plugin-owned MCP asset. |
 | `install --runtime <name>` | Install host adapter/MCP registration for `auto`, `all`, `claude`, `codex`, or `hermes`. |
 | `install --dry-run` | Preview host writes without mutating config. |
 | `install --execute` | Allow external host CLIs such as `claude plugin install` to run when available. |
@@ -71,7 +71,7 @@ Run `/oms-doctor` to validate your existing notes against the convention.
 
 ## Roadmap
 
-Setup plus `oms install`/`oms uninstall` host lifecycle commands are real and release-gated by unpacked npm tarball smoke tests. The MCP command starts
+Setup plus `oms install`/`oms uninstall` host lifecycle commands are real and release-gated by unpacked npm tarball smoke tests. The plugin-owned MCP asset starts
 the status/read/cache/retrieve/write runtime (`oms_graph_status`, `oms_graph_build`,
 `oms_list_concepts`, `oms_retrieve_context`, `oms_retrieve_by_axis`,
 `oms_lazy_load_note`, `oms_validate_contract`, `write`).

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "oms": {
+      "command": "oms",
+      "args": ["mcp"]
+    }
+  }
+}

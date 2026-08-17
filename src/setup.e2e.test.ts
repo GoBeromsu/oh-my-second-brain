@@ -188,9 +188,7 @@ describe("runSetup --yes E2E", () => {
 
     expect(plan.pluginPath).toContain("adapters/claude-code");
     expect(plan.pluginInstallCommand).toContain("claude plugin install");
-    expect(plan.mcpRegistrationCommand).toBe(
-      "claude mcp add oms -- oms mcp --vault '/tmp/My Vault'",
-    );
+    expect(plan.pluginMcpAsset).toContain("adapters/claude-code/.mcp.json");
     expect(plan.mcpRuntimeStatus).toBe("read-status-runtime");
   });
 });
