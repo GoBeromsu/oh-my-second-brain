@@ -9,6 +9,7 @@ import {
   formatHostOperationResultsJson,
   runHostOperation,
 } from "../install/hosts.js";
+import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { resolveEffectiveVault } from "../link/link.js";
 import { runMcpServer } from "../mcp/server.js";
 import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
@@ -19,6 +20,11 @@ import {
 import { parseCliArgs } from "./args.js";
 import { runAudit } from "./audit.js";
 import { runDoctor, runLint } from "./doctor-lint.js";
+import {
+  backfillGlobalVaultFromEnv,
+  nonFatalGlobalWriteback,
+  registerGlobalVault,
+} from "./global-writeback.js";
 import { runLink } from "./link-command.js";
 import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
 import { runSetup } from "./setup-command.js";
@@ -85,12 +91,23 @@ async function main(): Promise<void> {
     unknownFlags,
   } = parsedArgs;
 
-  if (shouldResolveBridgeVault(command, vaultExplicit)) {
+  // `mcp` keeps the FULL resolution result: the write surface trusts every
+  // source except `cwd`, so the server needs the source, not just the path.
+  let mcpTarget: { vault: string; scope: string[] | null; source: WriteTargetSource } | undefined;
+  if (command === "mcp") {
+    mcpTarget = vaultExplicit
+      ? { vault, scope: null, source: "explicit" }
+      : await resolveEffectiveVault(process.cwd(), process.env);
+    vault = mcpTarget.vault;
+  } else if (shouldResolveBridgeVault(command, vaultExplicit)) {
     vault = (await resolveEffectiveVault(process.cwd(), process.env)).vault;
   }
 
   if (command === "setup") {
     await runSetup({ vault, yes, installClaude, suggestFields });
+    await nonFatalGlobalWriteback(() =>
+      registerGlobalVault({ vault: path.resolve(vault), homeDir: undefined, overwrite: true }),
+    );
     await maybePrintUpdateNotice();
   } else if (command === "link") {
     process.exitCode = await runLink({
@@ -119,6 +136,15 @@ async function main(): Promise<void> {
       adapterRoot: bundledAdapterRoot(),
     });
     console.log(json ? formatHostOperationResultsJson(results, dryRun) : formatHostOperationResults(results, dryRun));
+    if (command === "install" && !dryRun) {
+      if (vaultExplicit) {
+        await nonFatalGlobalWriteback(() =>
+          registerGlobalVault({ vault: path.resolve(vault), homeDir: undefined, overwrite: true }),
+        );
+      } else {
+        await nonFatalGlobalWriteback(() => backfillGlobalVaultFromEnv({ env: process.env, homeDir: undefined }));
+      }
+    }
     await maybePrintUpdateNotice();
   } else if (command === "update") {
     if (unknownFlags.length > 0) {
@@ -182,7 +208,10 @@ async function main(): Promise<void> {
     });
     await maybePrintUpdateNotice();
   } else if (command === "mcp") {
-    await runMcpServer({ vault });
+    await runMcpServer({
+      vault,
+      source: mcpTarget?.source ?? "explicit",
+    });
   } else if (command === "hook") {
     const subcommand = argv[1];
     if (subcommand === "pre-tool-use") {

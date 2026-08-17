@@ -24,6 +24,7 @@ import {
   graphCachePath,
   lazyLoadNoteBody,
 } from "../graph/cache.js";
+import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { resolveActiveOntology } from "../ontology/active.js";
 import { resolveConcept } from "../core/ontology/resolver.js";
 import { retrieveMorningContext } from "../retrieve/morning.js";
@@ -289,10 +290,16 @@ export const omsMcpTools: Tool[] = [
 
 export interface OMSMcpServerOptions {
   vault: string;
+  /**
+   * How the vault was resolved. The write surface trusts every source except
+   * `cwd` (the server may have booted in an arbitrary directory - issue #58).
+   */
+  source: WriteTargetSource;
 }
 
 export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   const vault = path.resolve(opts.vault);
+  const source = opts.source;
 
   // Native engine — graph layer (boot): assembled model-free via deferred
   // (throw-on-use) embedding primitives. Axis-first retrieval and the derived
@@ -351,7 +358,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     {
       capabilities: { tools: {}, resources: {} },
       instructions:
-        "Oh My Second Brain exposes ontology/status/cache/retrieval tools and the write tool. write is gated by vault confinement and contract validation.",
+        "Oh My Second Brain exposes ontology/status/cache/retrieval tools and the write tool. write is gated by a verified vault target (a vault inferred from the current directory is refused), vault confinement, and contract validation.",
     },
   );
 
@@ -416,11 +423,11 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       // throw escape ALL inner catch branches and break the MCP handler.
       const engineGraph = await engine.adapter.graphStatus(vault).catch(() => null);
       try {
-        const { ontology, source } = await resolveActiveOntology(vault);
+        const { ontology, source: ontologySource } = await resolveActiveOntology(vault);
         const cacheStatus = await graphCacheStatus(vault, ontology);
         return jsonText({
           vault,
-          ontologySource: source,
+          ontologySource,
           sourceOfTruth: ["markdown notes", ".oms/taxonomy.yaml", ".oms/concepts/*.yaml"],
           counts: {
             concepts: ontology.concepts.size,
@@ -428,7 +435,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           },
           derivedState: cacheStatus,
           engineGraph,
-          writeTools: "write-gated-by-vault-confinement-and-contract-validation",
+          writeTools:
+            source === "cwd"
+              ? "write-disabled-target-unverified"
+              : "write-gated-by-verified-target-and-contract",
           readTools: omsMcpTools.map((tool) => tool.name),
         });
       } catch (error) {
@@ -637,12 +647,12 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (request.params.name === "write") {
-      const { ontology, source } = await resolveActiveOntology(vault);
+      const { ontology, source: ontologySource } = await resolveActiveOntology(vault);
       const modeArg = stringArg(args, "mode");
       const mode: WriteMode = isWriteMode(modeArg) ? modeArg : "create";
       const frontmatterArg = args?.["frontmatter"];
       const result = await writeNote({
-        vault,
+        target: { vault, source },
         ontology,
         mode,
         dryRun: false,
@@ -655,8 +665,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
       return jsonText({
         vault,
-        ontologySource: source,
+        ontologySource,
         ...result,
+        resolvedVault: vault,
+        resolutionSource: source,
       });
     }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -64,9 +64,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
 
       const status = await client.callTool({ name: "oms_graph_status", arguments: {} });
       const parsedStatus = textPayload(status);
-      expect(parsedStatus.writeTools).toBe(
-        "write-gated-by-vault-confinement-and-contract-validation",
-      );
+      expect(parsedStatus.writeTools).toBe("write-gated-by-verified-target-and-contract");
       const writeTool = tools.tools.find((tool) => tool.name === "write");
       expect(writeTool?.annotations?.readOnlyHint).toBe(false);
       expect(JSON.stringify(writeTool?.inputSchema)).toContain("update");
@@ -337,6 +335,17 @@ Malformed frontmatter must not block retrieve.
       );
       expect(created.status).toBe("written");
       expect(created.notePath).toBe("references/kernel-note.md");
+      expect(created.resolvedVault).toBe(tmpVault);
+      expect(created.resolutionSource).toBe("explicit");
+      expect(created.receipt).toMatchObject({
+        resolvedVault: tmpVault,
+        resolutionSource: "explicit",
+        notePath: "references/kernel-note.md",
+        mode: "create",
+        postconditionVerified: true,
+      });
+      expect(asked.resolvedVault).toBe(tmpVault);
+      expect(asked.resolutionSource).toBe("explicit");
 
       const broken = textPayload(
         await client.callTool({
@@ -353,6 +362,126 @@ Malformed frontmatter must not block retrieve.
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects writes and reports an unverified posture when the target came from cwd", async () => {
+    // No --vault, a non-vault cwd, an empty HOME (no ~/.oms/config.yaml) and no
+    // OMS_VAULT: resolution falls all the way through to the `cwd` source, which
+    // is unverified for the write surface (issue #58).
+    const tmpHome = await mkdtemp(path.join(tmpdir(), "oms-mcp-cwd-home-"));
+    // realpath: a spawned process reports the canonical cwd (macOS /tmp is a symlink),
+    // and the server resolves its target from that cwd.
+    const tmpCwd = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-cwd-")));
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp"],
+      cwd: tmpCwd,
+      env: { HOME: tmpHome, PATH: process.env["PATH"] ?? "" },
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      const status = textPayload(await client.callTool({ name: "oms_graph_status", arguments: {} }));
+      expect(status.writeTools).toBe("write-disabled-target-unverified");
+
+      const write = textPayload(
+        await client.callTool({
+          name: "write",
+          arguments: {
+            mode: "create",
+            notePath: "references/misrouted.md",
+            frontmatter: {
+              title: "Misrouted Note",
+              "source-url": "https://example.com/misrouted",
+            },
+            body: "Must not land in the booting directory.",
+          },
+        }),
+      );
+      expect(write.status).toBe("rejected");
+      expect(write.rejection).toMatchObject({
+        stage: "admission",
+        code: "target-unverified",
+        recoverable: true,
+      });
+      expect(write.receipt).toBeUndefined();
+      expect(write.resolvedVault).toBe(tmpCwd);
+      expect(write.resolutionSource).toBe("cwd");
+      expect(await readdir(tmpCwd)).toEqual([]);
+    } finally {
+      await client.close();
+      await rm(tmpCwd, { recursive: true, force: true });
+      await rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps writing normally when `oms mcp` boots inside a real vault", async () => {
+    // Regression guard: local `.oms` resolution (source "vault") stays a trusted
+    // write target even though `cwd` resolution is now rejected.
+    const tmpHome = await mkdtemp(path.join(tmpdir(), "oms-mcp-vault-home-"));
+    const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-local-vault-")));
+    await mkdir(path.join(tmpVault, ".oms", "concepts"), { recursive: true });
+    await writeFile(
+      path.join(tmpVault, ".oms", "taxonomy.yaml"),
+      "version: 1\nfolders:\n  references:\n    concept: literature\n",
+      "utf-8",
+    );
+    await writeFile(
+      path.join(tmpVault, ".oms", "concepts", "literature.yaml"),
+      `concept: literature
+intent: External sources worth revisiting.
+folder: references
+fields:
+  - name: title
+    type: string
+    required: true
+    intent: Human-readable title.
+`,
+      "utf-8",
+    );
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp"],
+      cwd: tmpVault,
+      env: { HOME: tmpHome, PATH: process.env["PATH"] ?? "" },
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      const status = textPayload(await client.callTool({ name: "oms_graph_status", arguments: {} }));
+      expect(status.writeTools).toBe("write-gated-by-verified-target-and-contract");
+
+      const created = textPayload(
+        await client.callTool({
+          name: "write",
+          arguments: {
+            mode: "create",
+            notePath: "references/local-vault-note.md",
+            frontmatter: { title: "Local Vault Note" },
+            body: "Written from inside the vault.",
+          },
+        }),
+      );
+      expect(created.status).toBe("written");
+      expect(created.resolutionSource).toBe("vault");
+      expect(created.resolvedVault).toBe(tmpVault);
+      expect(created.receipt).toMatchObject({
+        resolutionSource: "vault",
+        postconditionVerified: true,
+      });
+      expect(await readdir(path.join(tmpVault, "references"))).toEqual(["local-vault-note.md"]);
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
+      await rm(tmpHome, { recursive: true, force: true });
     }
   });
 });
