@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Fails CI loudly if a previously-released CHANGELOG.md heading disappears
 // between the base ref and the working tree. A missing base ref is a CI
 // config failure (exit 2), never a silent pass.
@@ -5,13 +6,17 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { missingReleasedHeadings } from "./release-lib.mjs";
 
+function fail(message, code = 1) {
+  console.error(`changelog-history-guard: ${message}`);
+  process.exit(code);
+}
+
 const base = process.env.CHANGELOG_GUARD_BASE || "origin/main";
 
 try {
   execFileSync("git", ["rev-parse", "--verify", base], { stdio: "pipe" });
 } catch {
-  console.error(`changelog-history-guard: base ref '${base}' does not exist or is not fetched.`);
-  process.exit(2);
+  fail(`base ref '${base}' does not exist or is not fetched.`, 2);
 }
 
 let baseContent;
@@ -37,13 +42,8 @@ try {
 const missing = missingReleasedHeadings(baseContent, headContent);
 
 if (missing.length > 0) {
-  console.error(
-    `changelog-history-guard: ${missing.length} released heading(s) present at '${base}' are missing from the working tree CHANGELOG.md:`,
-  );
-  for (const heading of missing) {
-    console.error(`  - ${heading}`);
-  }
-  process.exit(1);
+  const message = `${missing.length} released heading(s) present at '${base}' are missing from the working tree CHANGELOG.md:\n${missing.map((h) => `  - ${h}`).join("\n")}`;
+  fail(message, 1);
 }
 
 console.log("changelog-history-guard: ok - no released headings were removed.");
