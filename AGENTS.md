@@ -88,6 +88,7 @@ after editing imports.
 - The active convention is **user-owned**: resolved from `vault/.oms/` at runtime.
 - Oh My Second Brain ships read-only **defaults** in `core/ontology/`.
 - Enforcement policy: `onViolation: warn` for doctor/audit reporting. MCP `write` rejects contract violations and does not change the disk.
+- Write target policy: `write` demands a verified target vault (`explicit` > local vault `.oms` > bridge `links.yaml` > `OMS_VAULT` > `~/.oms/config.yaml`). A `cwd`-inferred target is read-only and writes are rejected. See [docs/verified-target.md](./docs/verified-target.md).
 - Schema policy: `additionalProperties: preserve` — unknown fields are kept, not rejected.
 - Never change these defaults to blocking/error without an explicit product decision.
 
