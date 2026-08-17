@@ -106,7 +106,29 @@ jobs:
 
       - name: Dry-run publish (rehearsal)
         if: github.event_name == 'workflow_dispatch'
-        run: npm publish --dry-run --access public
+        run: |
+          set -uo pipefail
+          # A rehearsal runs on the CURRENT version, which is normally already on the
+          # registry. `npm publish --dry-run` still performs the server-side
+          # "cannot publish over previously published versions" precondition check, so
+          # that one specific error is the expected rehearsal outcome, not a failure.
+          # Every other error (packing, auth, manifest) must still fail the job.
+          set +e
+          out=$(npm publish --dry-run --access public 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -eq 0 ]; then
+            echo "[rehearsal] npm publish --dry-run succeeded"
+            exit 0
+          fi
+          V=$(node -p "require('./package.json').version")
+          if echo "$out" | grep -qF "You cannot publish over the previously published versions: $V"; then
+            echo "[rehearsal] npm publish --dry-run reached the registry precondition for the already-published version $V - packaging verified, publish correctly refused"
+            exit 0
+          fi
+          echo "::error::rehearsal dry-run publish failed for a reason other than the already-published guard"
+          exit "$rc"
 
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
