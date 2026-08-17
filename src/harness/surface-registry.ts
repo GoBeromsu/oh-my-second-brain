@@ -400,6 +400,7 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       "docs/release.md",
       "scripts/install.sh",
       "scripts/uninstall.sh",
+      "CHANGELOG.md",
     ],
     runtimeAssetRoots: [
       { id: "ontology", path: "core/ontology", owner: "core" },

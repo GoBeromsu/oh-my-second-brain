@@ -19,7 +19,8 @@
     "docs/install.md",
     "docs/release.md",
     "scripts/install.sh",
-    "scripts/uninstall.sh"
+    "scripts/uninstall.sh",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"
