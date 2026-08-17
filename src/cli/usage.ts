@@ -65,8 +65,8 @@ oh-my-second-brain — Oh My Second Brain convention layer for Obsidian vaults
 
 Usage:
   oh-my-second-brain setup [--vault <path>] [--yes] [--suggest-fields] [--install-claude]
-  oh-my-second-brain install [--vault <path>] [--runtime <${runtime}>] [--dry-run] [--execute] [--yes]
-  oh-my-second-brain uninstall [--runtime <all|${registry.hosts.map((host) => host.runtime).join("|")}>] [--dry-run] [--execute] [--yes]
+  oh-my-second-brain install [--vault <path>] [--runtime <${runtime}>] [--dry-run] [--execute] [--yes] [--json]
+  oh-my-second-brain uninstall [--runtime <all|${registry.hosts.map((host) => host.runtime).join("|")}>] [--dry-run] [--execute] [--yes] [--json]
   oh-my-second-brain update [--check] [--dry-run] [--yes] [--runtime <${runtime}>] [--vault <path>]
   oh-my-second-brain doctor [--vault <path>] [--verbose] [--json] [--max <n>]
   oh-my-second-brain audit [--vault <path>] [--folder <name>] [--json] [--suggest-fields]

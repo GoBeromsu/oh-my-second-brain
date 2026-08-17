@@ -92,12 +92,40 @@ export function mcpServerEntry(options: HostOperationOptions): Record<string, un
   };
 }
 
-export function runExternal(command: string, args: string[]): { ok: boolean; message: string } {
+export interface ExternalCommandResult {
+  readonly ok: boolean;
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly message: string;
+}
+
+export function runExternal(command: string, args: string[]): ExternalCommandResult {
   const result = spawnSync(command, args, { stdio: "pipe", encoding: "utf-8" });
-  if (result.status === 0) return { ok: true, message: `${command} ${args.join(" ")}` };
-  const stderr = result.stderr.trim();
-  const stdout = result.stdout.trim();
-  return { ok: false, message: stderr || stdout || `${command} exited ${result.status ?? "unknown"}` };
+  const stdout = typeof result.stdout === "string" ? result.stdout : "";
+  const stderr = typeof result.stderr === "string" ? result.stderr : "";
+  const exitCode = result.status;
+  const signal = result.signal;
+  if (exitCode === 0) {
+    return {
+      ok: true,
+      exitCode,
+      signal,
+      stdout,
+      stderr,
+      message: `${command} ${args.join(" ")}`,
+    };
+  }
+  const spawnError = result.error instanceof Error ? result.error.message : "";
+  return {
+    ok: false,
+    exitCode,
+    signal,
+    stdout,
+    stderr,
+    message: spawnError || stderr.trim() || stdout.trim() || `${command} exited ${exitCode ?? "unknown"}`,
+  };
 }
 
 function refuseSymlinkedLeaf(target: string): void {

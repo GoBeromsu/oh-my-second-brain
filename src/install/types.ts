@@ -4,6 +4,16 @@ export type HostRuntime = HarnessHostRuntime;
 export type RuntimeSelection = HostRuntime | "auto" | "all";
 export type HostAction = "install" | "uninstall";
 
+export type ClaudeMcpScope = "local" | "project" | "user";
+export type LegacyCleanupStatus = "removed" | "not_found" | "failed";
+
+export interface LegacyCleanupResult {
+  readonly scope: ClaudeMcpScope;
+  readonly status: LegacyCleanupStatus;
+  readonly reasonCode: string;
+  readonly manualCommand: string;
+}
+
 export interface HostOperationOptions {
   readonly action: HostAction;
   readonly runtime: RuntimeSelection;
@@ -25,4 +35,5 @@ export interface HostOperationResult {
   readonly paths: string[];
   readonly commands: string[];
   readonly messages: string[];
+  readonly cleanup?: readonly LegacyCleanupResult[];
 }

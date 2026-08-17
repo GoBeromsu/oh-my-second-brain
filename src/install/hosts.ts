@@ -17,6 +17,7 @@ export {
   buildGuardCommandString,
   isOmsHookEntry,
   removeClaudeHooks,
+  replaceRootJsonPropertyPreservingBytes,
   toShellVaultPath,
   upsertClaudeHooks,
 } from "./claude-hooks.js";
@@ -70,4 +71,27 @@ export function formatHostOperationResults(
     ];
     return lines.join("\n");
   }).join("\n\n");
+}
+
+export function formatHostOperationResultsJson(
+  results: readonly HostOperationResult[],
+  dryRun = false,
+): string {
+  return JSON.stringify(
+    {
+      dryRun,
+      results: results.map((result) => ({
+        runtime: result.runtime,
+        action: result.action,
+        changed: result.changed,
+        skipped: result.skipped,
+        paths: result.paths,
+        commands: result.commands,
+        messages: result.messages,
+        cleanup: result.cleanup ?? [],
+      })),
+    },
+    null,
+    2,
+  );
 }

@@ -6,6 +6,7 @@ import { runPostToolUse } from "../hook/post-tool-use.js";
 import { runPreToolUse } from "../hook/pre-tool-use.js";
 import {
   formatHostOperationResults,
+  formatHostOperationResultsJson,
   runHostOperation,
 } from "../install/hosts.js";
 import { resolveEffectiveVault } from "../link/link.js";
@@ -117,7 +118,7 @@ async function main(): Promise<void> {
       yes,
       adapterRoot: bundledAdapterRoot(),
     });
-    console.log(formatHostOperationResults(results, dryRun));
+    console.log(json ? formatHostOperationResultsJson(results, dryRun) : formatHostOperationResults(results, dryRun));
     await maybePrintUpdateNotice();
   } else if (command === "update") {
     if (unknownFlags.length > 0) {
@@ -159,7 +160,7 @@ async function main(): Promise<void> {
       yes: true,
       adapterRoot: bundledAdapterRoot(),
     });
-    console.log(formatHostOperationResults(results, dryRun));
+    console.log(json ? formatHostOperationResultsJson(results, dryRun) : formatHostOperationResults(results, dryRun));
   } else if (command === "doctor") {
     process.exitCode = await runDoctor({ vault, verbose, json, maxPerConcept });
     await maybePrintUpdateNotice();

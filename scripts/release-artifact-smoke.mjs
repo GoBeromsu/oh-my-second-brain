@@ -95,8 +95,8 @@ function setupSmoke(packageRoot, vault) {
   assertPath(path.join(vault, ".oms/taxonomy.yaml"), "vault taxonomy");
   assertPath(path.join(vault, ".oms/concepts"), "vault concepts directory");
   if (!output.includes("claude plugin install")) fail("setup output did not include Claude plugin install command");
-  if (!output.includes("claude mcp add oms -- oms mcp --vault")) {
-    fail("setup output did not include Claude MCP registration command");
+  if (!output.includes("plugin-owned and plugin-qualified")) {
+    fail("setup output did not declare the plugin-owned Claude MCP surface");
   }
   const pluginPathLine = output.split(/\r?\n/).find((line) => line.includes("Plugin path:"));
   if (!pluginPathLine) fail("setup output did not include Plugin path line");
