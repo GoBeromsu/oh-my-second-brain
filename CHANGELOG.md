@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- The npm package now ships `CHANGELOG.md`, so release notes are available offline and in version control.
+- Releases are published by CI from `oms-v*` tags with npm provenance and an auto-generated GitHub Release whose notes come from the CHANGELOG.
+- Maintainers release with a single command: `npm run release -- <X.Y.Z>` rolls the `[Unreleased]` section into a versioned entry, bumps all version carriers (package.json, plugin manifests), commits, tags, and pushes atomically.
+
 ## [0.1.9] - 2026-08-14
 
 ### Added
