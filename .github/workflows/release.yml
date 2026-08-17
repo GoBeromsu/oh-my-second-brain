@@ -1,37 +1,123 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - "oms-v*"
   workflow_dispatch:
     inputs:
+      rehearsal:
+        description: "Rehearsal run: full pipeline with a dry-run publish and no GitHub Release"
+        required: false
+        default: true
+        type: boolean
       plugin_validation_attestation:
-        description: "Required JSON attestation when Claude CLI validation cannot run in the workflow"
-        required: true
+        description: "Emergency fallback: JSON attestation (or path) used when the Claude CLI cannot run here"
+        required: false
         type: string
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
-  publish-npm:
+  release:
     runs-on: ubuntu-latest
     env:
       OMS_REQUIRE_PLUGIN_VALIDATION: "1"
       OMS_PLUGIN_VALIDATION_ATTESTATION: ${{ inputs.plugin_validation_attestation }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - run: npm ci
-      - name: Verify version is release-ready
+
+      - name: Guard tag matches every version carrier
+        if: github.ref_type == 'tag'
         run: |
-          node -e "const p=require('./package.json'); if (p.version === '0.0.0') { throw new Error('Bump package.json version before publishing'); }"
-      - run: npm run release:check
-      - name: Publish to npm with provenance
+          set -euo pipefail
+          PKG=$(node -p "require('./package.json').version")
+          CLAUDE=$(node -p "require('./adapters/claude-code/.claude-plugin/plugin.json').version")
+          CODEX=$(node -p "require('./adapters/codex/.codex-plugin/plugin.json').version")
+          HERMES=$(node -p "require('./adapters/hermes/manifest.json').version")
+          echo "tag=$GITHUB_REF_NAME package.json=$PKG claude=$CLAUDE codex=$CODEX hermes=$HERMES"
+          if [ "$GITHUB_REF_NAME" != "oms-v$PKG" ] \
+            || [ "$CLAUDE" != "$PKG" ] \
+            || [ "$CODEX" != "$PKG" ] \
+            || [ "$HERMES" != "$PKG" ]; then
+            echo "::error::version carriers are out of lockstep with the tag"
+            echo "  tag                                          = $GITHUB_REF_NAME (expected oms-v$PKG)"
+            echo "  package.json                                 = $PKG"
+            echo "  adapters/claude-code/.claude-plugin/plugin.json = $CLAUDE"
+            echo "  adapters/codex/.codex-plugin/plugin.json       = $CODEX"
+            echo "  adapters/hermes/manifest.json                  = $HERMES"
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Install Claude CLI for plugin validation
+        run: |
+          set -uo pipefail
+          if npm install -g @anthropic-ai/claude-code && claude --version; then
+            echo "claude CLI available; release:check will run the real plugin validation"
+            exit 0
+          fi
+          if [ -n "${ATTESTATION:-}" ]; then
+            echo "::warning::Claude CLI unavailable; falling back to the provided plugin_validation_attestation input"
+            exit 0
+          fi
+          echo "::error::ENVIRONMENT failure: could not install or run the Claude CLI (@anthropic-ai/claude-code)."
+          echo "Remediation: run 'claude plugin validate adapters/claude-code' locally and either"
+          echo "  (a) commit the attestation file at .oms-release/plugin-validation.json, or"
+          echo "  (b) re-run this workflow via workflow_dispatch with the plugin_validation_attestation input set."
+          echo "Do NOT disable OMS_REQUIRE_PLUGIN_VALIDATION."
+          exit 1
         env:
-          # Optional: token auth for classic npm publishing. If this secret is absent,
-          # npm can still publish through trusted publishing/OIDC when the package is configured for it.
+          ATTESTATION: ${{ inputs.plugin_validation_attestation }}
+
+      - run: npm run release:check
+
+      - name: Publish to npm with provenance
+        if: github.ref_type == 'tag'
+        env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: |
+          set -euo pipefail
+          V=$(node -p "require('./package.json').version")
+          rc=0
+          node scripts/npm-version-exists.mjs "$V" || rc=$?
+          case "$rc" in
+            0)
+              echo "oh-my-second-brain@$V already published - idempotent re-run, skipping publish"
+              ;;
+            1)
+              npm publish --provenance --access public
+              ;;
+            *)
+              echo "::error::registry check failed (exit $rc); refusing to publish on an inconclusive result"
+              exit "$rc"
+              ;;
+          esac
+
+      - name: Dry-run publish (rehearsal)
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish --dry-run --access public
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V=$(node -p "require('./package.json').version")
+          node scripts/extract-release-notes.mjs "$V" > /tmp/notes.md
+          gh release view "$GITHUB_REF_NAME" \
+            || gh release create "$GITHUB_REF_NAME" \
+              --title "oms v$V" \
+              --notes-file /tmp/notes.md \
+              --verify-tag
