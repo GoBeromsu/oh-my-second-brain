@@ -210,6 +210,47 @@
     },
     {
       "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/claude-code/link",
+      "name": "oms-link",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/link",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
       "id": "oh-my-secondbrain/adapters/claude-code/retrieve",
       "name": "oms-retrieve",
       "kind": "adapter-wrapper",
@@ -743,6 +784,47 @@
     },
     {
       "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/codex/oms-link",
+      "name": "oms-link",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "codex"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/link",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
       "id": "oh-my-secondbrain/adapters/codex/oms-retrieve",
       "name": "oms-retrieve",
       "kind": "adapter-wrapper",
@@ -1194,6 +1276,47 @@
     },
     {
       "schema_version": 1,
+      "id": "oh-my-secondbrain/adapters/hermes/link",
+      "name": "link",
+      "kind": "adapter-wrapper",
+      "lifecycle": "active",
+      "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": "oh-my-secondbrain/core/skills/link",
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "declared-omissions",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "skip",
+        "install_doctor": "package",
+        "topology": "adapter-wrapper"
+      }
+    },
+    {
+      "schema_version": 1,
       "id": "oh-my-secondbrain/adapters/hermes/retrieve",
       "name": "retrieve",
       "kind": "adapter-wrapper",
@@ -1610,6 +1733,61 @@
       "kind": "leaf",
       "lifecycle": "active",
       "version": "0.0.0",
+      "owner_repo": "oh-my-secondbrain",
+      "owner_domain": "knowledge-management",
+      "visibility": "public",
+      "compatibility": [
+        "claude-code",
+        "codex",
+        "hermes"
+      ],
+      "provenance": {
+        "upstream": null,
+        "commit": null,
+        "license": "MIT",
+        "absorbed_from": []
+      },
+      "replacement_for": [],
+      "replaced_by": null,
+      "children": [],
+      "adapters": [
+        {
+          "runtime": "claude-code",
+          "surface": "plugin-skill",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "codex",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        },
+        {
+          "runtime": "hermes",
+          "surface": "instruction-file",
+          "status": "generated",
+          "reason": null
+        }
+      ],
+      "validation_profile": {
+        "discovery_parity": "strict",
+        "adapter_parity": "strict",
+        "provenance_license": "strict",
+        "private_data_hygiene": "strict",
+        "deprecation": "strict",
+        "routing_eval": "smoke",
+        "install_doctor": "package",
+        "topology": "leaf"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "oh-my-secondbrain/core/link",
+      "name": "link",
+      "kind": "leaf",
+      "lifecycle": "active",
+      "version": "0.1.0",
       "owner_repo": "oh-my-secondbrain",
       "owner_domain": "knowledge-management",
       "visibility": "public",
