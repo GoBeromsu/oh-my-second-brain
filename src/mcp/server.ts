@@ -25,6 +25,7 @@ import {
   lazyLoadNoteBody,
 } from "../graph/cache.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
+import { readBundledPackageVersion } from "../core/runtime/assets.js";
 import { resolveActiveOntology } from "../ontology/active.js";
 import { resolveConcept } from "../core/ontology/resolver.js";
 import { retrieveMorningContext } from "../retrieve/morning.js";
@@ -43,7 +44,7 @@ import { assembleCoreSemanticEngine, assembleGraphOnlyEngine, type AssembledEngi
 import { assembleFullSemanticEngine, embeddingConfigPresent } from "./semantic-engine.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 
-const SERVER_VERSION = "0.0.0";
+const SERVER_VERSION = readBundledPackageVersion();
 
 function jsonText(value: unknown): CallToolResult {
   return {

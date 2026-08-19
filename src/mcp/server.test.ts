@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -20,6 +20,39 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 }
 
 describe("Oh My Second Brain MCP stdio server", () => {
+  it("reports the package.json version in the MCP handshake", async () => {
+    // Given: the version declared by the shipped package manifest
+    const manifest: unknown = JSON.parse(
+      await readFile(path.join(repoRoot, "package.json"), "utf-8"),
+    );
+    const declaredVersion =
+      typeof manifest === "object" && manifest !== null && "version" in manifest
+        ? (manifest as { version: unknown }).version
+        : undefined;
+    expect(typeof declaredVersion).toBe("string");
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", fixtureVault],
+      cwd: repoRoot,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      // When: a client completes the initialize handshake
+      await client.connect(transport);
+
+      // Then: the server advertises the real package version, not the placeholder
+      const serverVersion = client.getServerVersion();
+      expect(serverVersion?.name).toBe("oms");
+      expect(serverVersion?.version).toBe(declaredVersion);
+      expect(serverVersion?.version).not.toBe("0.0.0");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("exposes read/status tools and validates a fixture note", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
