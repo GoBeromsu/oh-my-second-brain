@@ -42,6 +42,7 @@ import {
 } from "./semantic-retrieve.js";
 import { assembleCoreSemanticEngine, assembleGraphOnlyEngine, type AssembledEngine } from "../engine/assemble.js";
 import { assembleFullSemanticEngine, embeddingConfigPresent } from "./semantic-engine.js";
+import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 import {
   buildServerInstructions,
@@ -268,6 +269,67 @@ export const omsMcpTools: Tool[] = [
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "oms_link_suggest",
+    title: "Oh My Second Brain link suggest",
+    description:
+      "Propose [[wikilink]] insertions for one note against the vault's term notes. Read-only: returns ranked candidates plus the baseContentHash oms_link_apply requires.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        notePath: {
+          type: "string",
+          description: "Vault-relative markdown note path to linkify, for example notes/sage.md.",
+        },
+        folder: {
+          type: "string",
+          description: "Restrict the term-note candidate universe to one top-level vault folder.",
+        },
+      },
+      required: ["notePath"],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "oms_link_apply",
+    title: "Oh My Second Brain link apply",
+    description:
+      "Splice accepted oms_link_suggest candidates into a note and persist through the write kernel. Refuses without writing when baseContentHash no longer matches the note.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        notePath: {
+          type: "string",
+          description: "Vault-relative markdown note path returned by oms_link_suggest.",
+        },
+        baseContentHash: {
+          type: "string",
+          description: "The baseContentHash from the oms_link_suggest call the candidates came from.",
+        },
+        candidateIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Ids of the accepted candidates from that same oms_link_suggest call.",
+        },
+        folder: {
+          type: "string",
+          description: "Same candidate-universe folder scope used for the suggest call.",
+        },
+      },
+      required: ["notePath", "baseContentHash", "candidateIds"],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
       openWorldHint: false,
     },
   },
@@ -657,6 +719,41 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         clean: report.clean,
         violations: report.violations,
       });
+    }
+
+    if (request.params.name === "oms_link_suggest") {
+      const notePath = stringArg(args, "notePath");
+      if (!notePath) {
+        return errorText('Missing required string argument "notePath".');
+      }
+      const { ontology, source: ontologySource } = await resolveActiveOntology(vault);
+      const suggestion = await suggestLinksForNote(
+        { vault, source, ontology, notePath },
+        { folder: stringArg(args, "folder") },
+      );
+      return jsonText({ vault, ontologySource, ...suggestion });
+    }
+
+    if (request.params.name === "oms_link_apply") {
+      const notePath = stringArg(args, "notePath");
+      if (!notePath) {
+        return errorText('Missing required string argument "notePath".');
+      }
+      const baseContentHash = stringArg(args, "baseContentHash");
+      if (!baseContentHash) {
+        return errorText('Missing required string argument "baseContentHash".');
+      }
+      const idsArg = args?.["candidateIds"];
+      if (!Array.isArray(idsArg) || idsArg.some((id) => typeof id !== "string")) {
+        return errorText('Argument "candidateIds" must be an array of candidate id strings.');
+      }
+      const { ontology, source: ontologySource } = await resolveActiveOntology(vault);
+      const outcome = await applyLinksForNote(
+        { vault, source, ontology, notePath },
+        { baseContentHash, candidateIds: idsArg.filter((id): id is string => typeof id === "string") },
+        { folder: stringArg(args, "folder") },
+      );
+      return jsonText({ vault, ontologySource, ...linkApplyPayload(outcome) });
     }
 
     if (request.params.name === "write") {
