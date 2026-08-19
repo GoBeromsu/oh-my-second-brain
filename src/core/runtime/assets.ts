@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessSurfaceRegistry, type HarnessRuntimeAssetRoot } from "../../harness/surface-registry.js";
@@ -41,6 +42,36 @@ function packageRootFromModulePath(modulePath: string): string {
   }
 
   return path.resolve(path.dirname(modulePath), "../..");
+}
+
+/**
+ * Version reported when the bundled manifest cannot be read or declares no
+ * string `version`. Callers embed this in server handshakes at construction
+ * time, so a missing/corrupt manifest must degrade rather than abort boot.
+ */
+const UNKNOWN_PACKAGE_VERSION = "0.0.0";
+
+/**
+ * Reads `version` from the bundled package.json. Synchronous by contract: the
+ * MCP server info is built during (sync) server construction, and this reads a
+ * single small file that ships inside the package.
+ */
+export function readBundledPackageVersion(
+  packageRoot: string = resolveBundledAssetPaths().packageRoot,
+): string {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf-8"));
+  } catch (error) {
+    if (error instanceof Error) return UNKNOWN_PACKAGE_VERSION;
+    throw error;
+  }
+
+  const version =
+    typeof manifest === "object" && manifest !== null && "version" in manifest
+      ? (manifest as { version: unknown }).version
+      : undefined;
+  return typeof version === "string" ? version : UNKNOWN_PACKAGE_VERSION;
 }
 
 export function resolveBundledAssetPaths(

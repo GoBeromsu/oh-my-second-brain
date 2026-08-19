@@ -4,6 +4,11 @@ import type { HarnessHostSurface } from "../harness/surface-registry.js";
 import { resolveHostAdapterSource } from "./adapter-source.js";
 import { commandExists, hostHome, isRecord, runExternal } from "./common.js";
 import { removeClaudeHooks, replaceRootJsonPropertyPreservingBytes, upsertClaudeHooks } from "./claude-hooks.js";
+import {
+  MARKETPLACE_AUTO_UPDATE_MESSAGE,
+  resolveClaudeMarketplaceSource,
+  runClaudePluginInstall,
+} from "./claude-marketplace.js";
 import type {
   ClaudeMcpScope,
   HostOperationOptions,
@@ -148,12 +153,17 @@ async function removeClaudeMcp(
 export async function installClaude(options: HostOperationOptions, host: HarnessHostSurface): Promise<HostOperationResult> {
   const claudeDir = hostHome(options.homeDir, ".claude", "OMS_CLAUDE_HOME");
   const pluginPath = resolveHostAdapterSource(options.adapterRoot, host);
+  const marketplace = await resolveClaudeMarketplaceSource(pluginPath);
   const commands = [
     ...CLAUDE_MCP_SCOPES.map(claudeMcpRemoveCommand),
+    `claude plugin marketplace add ${marketplace.source}`,
+    `claude plugin install oms@${marketplace.marketplaceName}`,
     `claude plugin install ${pluginPath}`,
   ];
   const messages = [
     "Claude Code adapter is installed through the plugin-owned MCP surface declared in .mcp.json.",
+    `Claude marketplace source: ${marketplace.source} (${marketplace.kind}); the local plugin path stays available as an offline fallback.`,
+    MARKETPLACE_AUTO_UPDATE_MESSAGE,
   ];
   const directCleanup = await removeClaudeMcp(options, claudeDir);
   let changed = directCleanup.changed;
@@ -169,13 +179,14 @@ export async function installClaude(options: HostOperationOptions, host: Harness
     if (!commandExists("claude")) {
       messages.push("Claude CLI was not found; no plugin or MCP activation was performed. Run the listed plugin command manually.");
     } else if (!options.dryRun) {
-      const externalCommands: [string, ...string[]][] = [["claude", "plugin", "install", pluginPath]];
-      for (const [command, ...args] of externalCommands) {
-        const result = runExternal(command, args);
-        messages.push(result.ok ? `Executed: ${result.message}` : externalLifecycleFailure("install", result));
-        changed = changed || result.ok;
-        pluginInstalled = result.ok;
-      }
+      const install = runClaudePluginInstall({
+        marketplace,
+        pluginPath,
+        describeFailure: (result) => externalLifecycleFailure("install", result),
+      });
+      messages.push(...install.messages);
+      changed = changed || install.installed;
+      pluginInstalled = install.installed;
     }
   }
 

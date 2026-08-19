@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   bumpedJsonVersion,
+  bumpedMarketplace,
   bumpedPackageLock,
   isStableVersion,
   isVersionGreater,
@@ -27,6 +28,8 @@ const JSON_CARRIERS = {
   hermesManifestJson: "adapters/hermes/manifest.json",
 };
 const PACKAGE_LOCK = "package-lock.json";
+// Carries the version twice (top-level + plugins[0]), so it is bumped by parse-and-set.
+const MARKETPLACE_JSON = ".claude-plugin/marketplace.json";
 const CHANGELOG = "CHANGELOG.md";
 
 const FIX_FORWARD = [
@@ -190,6 +193,7 @@ function bumpVersionCarriers(version) {
     writeFileSync(path, bumpedJsonVersion(readFileSync(path, "utf-8"), version));
   }
   writeFileSync(PACKAGE_LOCK, bumpedPackageLock(readFileSync(PACKAGE_LOCK, "utf-8"), version));
+  writeFileSync(MARKETPLACE_JSON, bumpedMarketplace(readFileSync(MARKETPLACE_JSON, "utf-8"), version));
 
   const mismatches = versionMismatches({
     version,
@@ -198,6 +202,7 @@ function bumpVersionCarriers(version) {
     claudePluginJson: readJson(JSON_CARRIERS.claudePluginJson),
     codexPluginJson: readJson(JSON_CARRIERS.codexPluginJson),
     hermesManifestJson: readJson(JSON_CARRIERS.hermesManifestJson),
+    marketplaceJson: readJson(MARKETPLACE_JSON),
   });
   if (mismatches.length > 0) {
     fail(

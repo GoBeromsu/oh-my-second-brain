@@ -44,17 +44,23 @@ jobs:
           CLAUDE=$(node -p "require('./adapters/claude-code/.claude-plugin/plugin.json').version")
           CODEX=$(node -p "require('./adapters/codex/.codex-plugin/plugin.json').version")
           HERMES=$(node -p "require('./adapters/hermes/manifest.json').version")
-          echo "tag=$GITHUB_REF_NAME package.json=$PKG claude=$CLAUDE codex=$CODEX hermes=$HERMES"
+          MKT_TOP=$(node -p "require('./.claude-plugin/marketplace.json').version")
+          MKT_PLUGIN=$(node -p "require('./.claude-plugin/marketplace.json').plugins[0].version")
+          echo "tag=$GITHUB_REF_NAME package.json=$PKG claude=$CLAUDE codex=$CODEX hermes=$HERMES marketplace=$MKT_TOP marketplace.plugins[0]=$MKT_PLUGIN"
           if [ "$GITHUB_REF_NAME" != "oms-v$PKG" ] \
             || [ "$CLAUDE" != "$PKG" ] \
             || [ "$CODEX" != "$PKG" ] \
-            || [ "$HERMES" != "$PKG" ]; then
+            || [ "$HERMES" != "$PKG" ] \
+            || [ "$MKT_TOP" != "$PKG" ] \
+            || [ "$MKT_PLUGIN" != "$PKG" ]; then
             echo "::error::version carriers are out of lockstep with the tag"
             echo "  tag                                          = $GITHUB_REF_NAME (expected oms-v$PKG)"
             echo "  package.json                                 = $PKG"
             echo "  adapters/claude-code/.claude-plugin/plugin.json = $CLAUDE"
             echo "  adapters/codex/.codex-plugin/plugin.json       = $CODEX"
             echo "  adapters/hermes/manifest.json                  = $HERMES"
+            echo "  .claude-plugin/marketplace.json (version)      = $MKT_TOP"
+            echo "  .claude-plugin/marketplace.json (plugins[0])   = $MKT_PLUGIN"
             exit 1
           fi
 

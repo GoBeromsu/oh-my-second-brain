@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -20,6 +20,39 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 }
 
 describe("Oh My Second Brain MCP stdio server", () => {
+  it("reports the package.json version in the MCP handshake", async () => {
+    // Given: the version declared by the shipped package manifest
+    const manifest: unknown = JSON.parse(
+      await readFile(path.join(repoRoot, "package.json"), "utf-8"),
+    );
+    const declaredVersion =
+      typeof manifest === "object" && manifest !== null && "version" in manifest
+        ? (manifest as { version: unknown }).version
+        : undefined;
+    expect(typeof declaredVersion).toBe("string");
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", fixtureVault],
+      cwd: repoRoot,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      // When: a client completes the initialize handshake
+      await client.connect(transport);
+
+      // Then: the server advertises the real package version, not the placeholder
+      const serverVersion = client.getServerVersion();
+      expect(serverVersion?.name).toBe("oms");
+      expect(serverVersion?.version).toBe(declaredVersion);
+      expect(serverVersion?.version).not.toBe("0.0.0");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("exposes read/status tools and validates a fixture note", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -359,6 +392,167 @@ Malformed frontmatter must not block retrieve.
       );
       expect(broken.status).toBe("rejected");
       expect((broken.violations as Array<Record<string, unknown>>)[0]?.rule).toBe("required");
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
+    }
+  });
+
+  it("suggests term links for a note and applies them only against a current hash", async () => {
+    // Given: a vault with two term notes (one carrying a Korean alias) and a
+    // note whose body mentions both surfaces in prose
+    const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-linkify-")));
+    await mkdir(path.join(tmpVault, "terms"), { recursive: true });
+    await mkdir(path.join(tmpVault, "notes"), { recursive: true });
+    await writeFile(
+      path.join(tmpVault, "terms", "Ataraxia.md"),
+      "---\ntitle: Ataraxia\naliases:\n  - 아타락시아\n---\n\nFreedom from disturbance.\n",
+      "utf-8",
+    );
+    await writeFile(
+      path.join(tmpVault, "terms", "Stoicism.md"),
+      "---\ntitle: Stoicism\n---\n\nA school of thought.\n",
+      "utf-8",
+    );
+    const notePath = "notes/sage.md";
+    const noteFile = path.join(tmpVault, "notes", "sage.md");
+    await writeFile(
+      noteFile,
+      "---\ntitle: Sage\n---\n\nThe sage pursues Ataraxia through Stoicism.\n아타락시아를 향한 길.\n",
+      "utf-8",
+    );
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", tmpVault],
+      cwd: repoRoot,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      // When: link suggestions are requested for the mentioning note
+      const suggested = textPayload(
+        await client.callTool({ name: "oms_link_suggest", arguments: { notePath } }),
+      );
+
+      // Then: both term notes are proposed, first-occurrence only, with a hash
+      expect(suggested.notePath).toBe(notePath);
+      expect(typeof suggested.baseContentHash).toBe("string");
+      const candidates = suggested.candidates as Array<Record<string, unknown>>;
+      expect(candidates.map((candidate) => candidate.targetPath).sort()).toEqual([
+        "terms/Ataraxia.md",
+        "terms/Stoicism.md",
+      ]);
+      const ataraxia = candidates.find((candidate) => candidate.targetPath === "terms/Ataraxia.md");
+      expect(ataraxia?.matchedText).toBe("Ataraxia");
+      expect(ataraxia?.renderedReplacement).toBe("[[Ataraxia]]");
+      expect(typeof ataraxia?.id).toBe("string");
+      // The note being linkified is never a candidate for itself.
+      expect(candidates.some((candidate) => candidate.targetPath === notePath)).toBe(false);
+
+      // When: apply runs with a hash that no longer describes the note
+      const beforeApply = await readFile(noteFile, "utf-8");
+      const stale = textPayload(
+        await client.callTool({
+          name: "oms_link_apply",
+          arguments: {
+            notePath,
+            baseContentHash: "0".repeat(64),
+            candidateIds: candidates.map((candidate) => candidate.id),
+          },
+        }),
+      );
+
+      // Then: nothing is written and the refusal names the stale state
+      expect(stale.applied).toBe(false);
+      expect(stale.reason).toBe("note-changed");
+      expect(await readFile(noteFile, "utf-8")).toBe(beforeApply);
+
+      // When: apply runs with the hash the suggestions were computed against
+      const applied = textPayload(
+        await client.callTool({
+          name: "oms_link_apply",
+          arguments: {
+            notePath,
+            baseContentHash: suggested.baseContentHash,
+            candidateIds: candidates.map((candidate) => candidate.id),
+          },
+        }),
+      );
+
+      // Then: the persisted file bytes carry the wikilinks
+      expect(applied.applied).toBe(true);
+      expect(applied.receipt).toMatchObject({ notePath, mode: "update", postconditionVerified: true });
+      const persisted = await readFile(noteFile, "utf-8");
+      expect(persisted).not.toBe(beforeApply);
+      expect(persisted).toContain("[[Ataraxia]]");
+      expect(persisted).toContain("[[Stoicism]]");
+      expect(persisted).toContain("title: Sage");
+
+      // When: the same (now stale) hash is replayed
+      const replayed = textPayload(
+        await client.callTool({
+          name: "oms_link_apply",
+          arguments: {
+            notePath,
+            baseContentHash: suggested.baseContentHash,
+            candidateIds: candidates.map((candidate) => candidate.id),
+          },
+        }),
+      );
+
+      // Then: it is refused and the file is untouched
+      expect(replayed.applied).toBe(false);
+      expect(replayed.reason).toBe("note-changed");
+      expect(await readFile(noteFile, "utf-8")).toBe(persisted);
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed link-tool arguments without touching the vault", async () => {
+    // Given: a vault with one note
+    const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-linkify-bad-")));
+    await mkdir(path.join(tmpVault, "notes"), { recursive: true });
+    await writeFile(path.join(tmpVault, "notes", "sage.md"), "---\ntitle: Sage\n---\n\nBody.\n", "utf-8");
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", tmpVault],
+      cwd: repoRoot,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      // When: notePath is omitted
+      const missing = await client.callTool({ name: "oms_link_suggest", arguments: {} });
+      // Then: the tool reports a typed argument error
+      expect(missing.isError).toBe(true);
+      expect(missing.content[0]?.type === "text" ? missing.content[0].text : "").toContain("notePath");
+
+      // When: the note does not exist
+      const absent = await client.callTool({
+        name: "oms_link_suggest",
+        arguments: { notePath: "notes/does-not-exist.md" },
+      });
+      // Then: the tool errors instead of inventing an empty suggestion set
+      expect(absent.isError).toBe(true);
+
+      // When: apply omits the base hash
+      const noHash = await client.callTool({
+        name: "oms_link_apply",
+        arguments: { notePath: "notes/sage.md", candidateIds: [] },
+      });
+      // Then: the tool refuses before any write
+      expect(noHash.isError).toBe(true);
+      expect(noHash.content[0]?.type === "text" ? noHash.content[0].text : "").toContain("baseContentHash");
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });

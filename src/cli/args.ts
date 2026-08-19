@@ -14,6 +14,8 @@ export interface ParsedCliArgs {
   readonly vault: string;
   readonly vaultExplicit: boolean;
   readonly yes: boolean;
+  /** linkify: opt into rewriting notes in place (still requires `--yes`). */
+  readonly apply: boolean;
   readonly installClaude: boolean;
   readonly suggestFields: boolean;
   readonly runtime: RuntimeSelection | undefined;
@@ -41,6 +43,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   let vault = cwd;
   let vaultExplicit = false;
   let yes = false;
+  let apply = false;
   let installClaude = false;
   let suggestFields = false;
   let runtime: RuntimeSelection | undefined;
@@ -65,6 +68,8 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       i++;
     } else if (arg === "--yes") {
       yes = true;
+    } else if (arg === "--apply") {
+      apply = true;
     } else if (arg === "--install-claude") {
       installClaude = true;
     } else if (arg === "--suggest-fields") {
@@ -118,6 +123,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     vault,
     vaultExplicit,
     yes,
+    apply,
     installClaude,
     suggestFields,
     runtime,
@@ -141,6 +147,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       vault,
       vaultExplicit,
       yes,
+      apply,
       installClaude,
       suggestFields,
       runtime,

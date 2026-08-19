@@ -3,7 +3,7 @@ import { existsSync, lstatSync } from "node:fs";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import { isMap, parseDocument } from "yaml";
 import type { HostOperationOptions } from "./types.js";
 
 export class InstallTargetSymlinkError extends Error {
@@ -65,23 +65,31 @@ export async function writeJsonObject(
   return true;
 }
 
-export async function readYamlObject(file: string): Promise<Record<string, unknown>> {
-  try {
-    const parsed = yamlParse(await readFile(file, "utf-8")) as unknown;
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
+export type YamlEntryEdit =
+  | { readonly kind: "set"; readonly value: Record<string, unknown> }
+  | { readonly kind: "delete" };
 
-export async function writeYamlObject(
+/**
+ * Applies one `section.key` edit to a YAML file while leaving every other byte,
+ * comment, and key ordering the document already had in place.
+ */
+export async function editYamlEntryPreservingComments(
   file: string,
-  data: Record<string, unknown>,
-  dryRun: boolean,
+  entryPath: readonly [string, string],
+  edit: YamlEntryEdit,
 ): Promise<boolean> {
-  if (dryRun) return false;
+  const raw = existsSync(file) ? await readFile(file, "utf-8") : "";
+  const doc = parseDocument(raw);
+  if (doc.errors.length > 0) return false;
+  if (doc.contents !== null && !isMap(doc.contents)) return false;
+  if (edit.kind === "delete") {
+    if (!doc.hasIn(entryPath)) return false;
+    doc.deleteIn(entryPath);
+  } else {
+    doc.setIn(entryPath, edit.value);
+  }
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, yamlStringify(data), "utf-8");
+  await writeFile(file, doc.toString(), "utf-8");
   return true;
 }
 

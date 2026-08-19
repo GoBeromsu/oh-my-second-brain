@@ -1,0 +1,12 @@
+concept: term
+intent: "A named unit of vocabulary the vault defines once and links to everywhere else."
+folder: terms
+fields:
+  - name: title
+    type: string
+    required: true
+    intent: "The canonical name of the term; the wikilink target other notes point at."
+  - name: aliases
+    type: list
+    required: false
+    intent: "Alternative surface forms and synonyms that should link back to this term."
