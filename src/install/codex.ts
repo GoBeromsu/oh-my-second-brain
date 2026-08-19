@@ -117,6 +117,21 @@ async function installCodexNativeArtifacts(
   return [rulesTarget, ...paths];
 }
 
+/**
+ * Codex install stays file-copy based on purpose.
+ *
+ * `codex plugin marketplace add <repo>` does consume the same root
+ * `.claude-plugin/marketplace.json` (verified against codex-cli 0.147.0: the
+ * marketplace resolves as `oms` and `codex plugin add oms@oms` succeeds), but
+ * the manifest's plugin entry declares `"source": "./"`, so Codex caches the
+ * whole repository and finds no `rules/` or `skills/` at the cached root —
+ * those live under `adapters/codex/`. A marketplace install would therefore
+ * register a plugin that delivers none of the Codex-native surfaces this
+ * function installs, on top of the managed MCP block it already writes.
+ *
+ * Wiring Codex to the shared manifest needs a Codex-native descriptor whose
+ * source points at `adapters/codex`; that is a follow-up, not this change.
+ */
 export async function installCodex(options: HostOperationOptions, host: HarnessHostSurface): Promise<HostOperationResult> {
   const codexDir = hostHome(options.homeDir, ".codex", "OMS_CODEX_HOME");
   const pluginSource = resolveHostAdapterSource(options.adapterRoot, host);

@@ -120,6 +120,159 @@ describe("host installer/uninstaller", () => {
     }
   });
 
+  it("installs through the marketplace flow when the Claude CLI is present", async () => {
+    // Given: a Claude CLI on PATH that records every argv it is invoked with
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-marketplace-"));
+    const binDir = path.join(home, "bin");
+    const argvLog = path.join(home, "claude-argv.log");
+    const claudePath = path.join(binDir, "claude");
+    const originalPath = process.env.PATH;
+    const originalArgvLog = process.env.CLAUDE_ARGV_LOG;
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      claudePath,
+      [
+        "#!/bin/sh",
+        "printf 'claude' >> \"$CLAUDE_ARGV_LOG\"",
+        "for arg in \"$@\"; do printf ' %s' \"$arg\" >> \"$CLAUDE_ARGV_LOG\"; done",
+        "printf '\\n' >> \"$CLAUDE_ARGV_LOG\"",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(claudePath, 0o755);
+
+    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+    process.env.CLAUDE_ARGV_LOG = argvLog;
+
+    try {
+      // When: the Claude runtime is installed with external execution enabled
+      const [result] = await runHostOperation({
+        action: "install",
+        runtime: "claude",
+        vault: "/tmp/Vault",
+        homeDir: home,
+        adapterRoot,
+        executeExternal: true,
+      });
+
+      // Then: the marketplace is added and the plugin is installed by marketplace id
+      const executedCommands = (await readFile(argvLog, "utf-8")).trim().split("\n");
+      const marketplaceAdd = executedCommands.find((command) => command.startsWith("claude plugin marketplace add "));
+      expect(marketplaceAdd).toBeDefined();
+      expect(executedCommands).toContain("claude plugin install oms@oms");
+      // Then: the local-path install is not used while the marketplace flow succeeds
+      expect(executedCommands.some((command) => /^claude plugin install [^o]/.test(command))).toBe(false);
+      // Then: the reported command list matches what was executed
+      expect(result?.commands).toContain("claude plugin install oms@oms");
+      expect(result?.commands.some((command) => command.startsWith("claude plugin marketplace add "))).toBe(true);
+      // Then: auto-update stays the user's decision, surfaced as guidance only
+      expect(result?.messages.join(" ")).toContain("autoUpdate");
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      if (originalArgvLog === undefined) delete process.env.CLAUDE_ARGV_LOG;
+      else process.env.CLAUDE_ARGV_LOG = originalArgvLog;
+    }
+  });
+
+  it("falls back to the local plugin path when the marketplace add fails", async () => {
+    // Given: a Claude CLI whose marketplace add fails but whose plugin install succeeds
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-market-fail-"));
+    const binDir = path.join(home, "bin");
+    const argvLog = path.join(home, "claude-argv.log");
+    const claudePath = path.join(binDir, "claude");
+    const originalPath = process.env.PATH;
+    const originalArgvLog = process.env.CLAUDE_ARGV_LOG;
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      claudePath,
+      [
+        "#!/bin/sh",
+        "printf 'claude' >> \"$CLAUDE_ARGV_LOG\"",
+        "for arg in \"$@\"; do printf ' %s' \"$arg\" >> \"$CLAUDE_ARGV_LOG\"; done",
+        "printf '\\n' >> \"$CLAUDE_ARGV_LOG\"",
+        "if [ \"$2\" = \"marketplace\" ]; then",
+        "  printf 'network unreachable\\n' >&2",
+        "  exit 3",
+        "fi",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(claudePath, 0o755);
+
+    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+    process.env.CLAUDE_ARGV_LOG = argvLog;
+
+    try {
+      // When: the Claude runtime is installed
+      const [result] = await runHostOperation({
+        action: "install",
+        runtime: "claude",
+        vault: "/tmp/Vault",
+        homeDir: home,
+        adapterRoot,
+        executeExternal: true,
+      });
+
+      // Then: the offline local-path install runs instead, and no throw escapes
+      const executedCommands = (await readFile(argvLog, "utf-8")).trim().split("\n");
+      expect(executedCommands.some((command) => command.startsWith("claude plugin marketplace add "))).toBe(true);
+      expect(executedCommands).not.toContain("claude plugin install oms@oms");
+      expect(
+        executedCommands.some(
+          (command) => command.startsWith("claude plugin install ") && command.includes(path.join("claude-code")),
+        ),
+      ).toBe(true);
+      expect(result?.messages.join(" ")).toContain("local plugin path");
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      if (originalArgvLog === undefined) delete process.env.CLAUDE_ARGV_LOG;
+      else process.env.CLAUDE_ARGV_LOG = originalArgvLog;
+    }
+  });
+
+  it("leaves settings.json auto-update bytes untouched during a marketplace install", async () => {
+    // Given: a settings.json carrying an unmanaged marketplace entry with autoUpdate off
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-autoupdate-"));
+    const claudeDir = path.join(home, ".claude");
+    await mkdir(claudeDir, { recursive: true });
+    const settingsPath = path.join(claudeDir, "settings.json");
+    const original = [
+      "{",
+      '  "extraKnownMarketplaces": {',
+      '    "other": { "source": { "source": "github", "repo": "someone/else" }, "autoUpdate": false }',
+      "  },",
+      '  "custom": "  unmanaged spacing  "',
+      "}",
+      "",
+    ].join("\n");
+    await writeFile(settingsPath, original, "utf-8");
+
+    // When: the Claude runtime is installed
+    await runHostOperation({
+      action: "install",
+      runtime: "claude",
+      vault: path.join(home, "Vault"),
+      homeDir: home,
+      adapterRoot,
+    });
+
+    // Then: OMS never seeds itself into extraKnownMarketplaces nor flips autoUpdate
+    const updated = await readFile(settingsPath, "utf-8");
+    const parsed = JSON.parse(updated) as {
+      extraKnownMarketplaces: Record<string, { autoUpdate?: boolean }>;
+      custom: string;
+    };
+    expect(Object.keys(parsed.extraKnownMarketplaces)).toEqual(["other"]);
+    expect(parsed.extraKnownMarketplaces["other"]?.autoUpdate).toBe(false);
+    // Then: the unmanaged bytes around the managed hooks edit survive verbatim
+    expect(updated).toContain('  "custom": "  unmanaged spacing  "');
+    expect(updated).toContain('"repo": "someone/else"');
+  });
+
   it("continues plugin installation when one scoped cleanup fails", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-cleanup-failure-"));
     const binDir = path.join(home, "bin");
