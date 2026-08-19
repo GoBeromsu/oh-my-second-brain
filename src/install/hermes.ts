@@ -3,28 +3,25 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { HarnessHostSurface } from "../harness/surface-registry.js";
 import { resolveHostAdapterSource } from "./adapter-source.js";
-import { hostHome, isRecord, mcpServerEntry, readYamlObject, replaceDirectory, writeYamlObject } from "./common.js";
+import { editYamlEntryPreservingComments, hostHome, mcpServerEntry, replaceDirectory } from "./common.js";
 import type { HostOperationOptions, HostOperationResult } from "./types.js";
 
 const HERMES_SKILL_CATEGORY = "knowledge-management";
 const HERMES_SKILL_NAME = "oms";
 
+const HERMES_MCP_ENTRY_PATH = ["mcp_servers", "oms"] as const;
+
 async function upsertHermesMcp(options: HostOperationOptions, hermesConfig: string): Promise<boolean> {
-  const data = await readYamlObject(hermesConfig);
-  const rawServers = data["mcp_servers"];
-  const servers = isRecord(rawServers) ? rawServers : {};
-  servers["oms"] = { ...mcpServerEntry(options), enabled: true };
-  data["mcp_servers"] = servers;
-  return writeYamlObject(hermesConfig, data, Boolean(options.dryRun));
+  if (options.dryRun) return false;
+  return editYamlEntryPreservingComments(hermesConfig, HERMES_MCP_ENTRY_PATH, {
+    kind: "set",
+    value: { ...mcpServerEntry(options), enabled: true },
+  });
 }
 
 async function removeHermesMcp(options: HostOperationOptions, hermesConfig: string): Promise<boolean> {
-  const data = await readYamlObject(hermesConfig);
-  const rawServers = data["mcp_servers"];
-  if (!isRecord(rawServers) || !("oms" in rawServers)) return false;
-  delete rawServers["oms"];
-  data["mcp_servers"] = rawServers;
-  return writeYamlObject(hermesConfig, data, Boolean(options.dryRun));
+  if (options.dryRun) return false;
+  return editYamlEntryPreservingComments(hermesConfig, HERMES_MCP_ENTRY_PATH, { kind: "delete" });
 }
 
 export async function installHermes(options: HostOperationOptions, host: HarnessHostSurface): Promise<HostOperationResult> {
@@ -36,12 +33,15 @@ export async function installHermes(options: HostOperationOptions, host: Harness
   const skillTarget = path.join(hermesDir, "skills", HERMES_SKILL_CATEGORY, HERMES_SKILL_NAME);
   const configPath = path.join(hermesDir, "config.yaml");
   const adapterTarget = path.join(hermesDir, "adapters", "oms");
+  const messages = ["Installed Hermes-native Oh My Second Brain skill bundle and registered mcp_servers.oms in ~/.hermes/config.yaml."];
   if (!options.dryRun) {
     await rm(legacyPluginTarget, { recursive: true, force: true });
     await rm(legacyMcpPath, { force: true });
     await replaceDirectory(pluginSource, adapterTarget, false);
     await replaceDirectory(skillSource, skillTarget, false);
-    await upsertHermesMcp(options, configPath);
+    if (!(await upsertHermesMcp(options, configPath))) {
+      messages.push(`WARNING: ${configPath} is not a supported YAML mapping; mcp_servers.oms was not registered. Add it manually.`);
+    }
   }
   return {
     runtime: "hermes",
@@ -50,7 +50,7 @@ export async function installHermes(options: HostOperationOptions, host: Harness
     skipped: false,
     paths: [adapterTarget, skillTarget, configPath],
     commands: [`Hermes MCP config: ${configPath}`],
-    messages: ["Installed Hermes-native Oh My Second Brain skill bundle and registered mcp_servers.oms in ~/.hermes/config.yaml."],
+    messages,
   };
 }
 
