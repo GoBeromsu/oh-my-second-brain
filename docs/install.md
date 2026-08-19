@@ -62,11 +62,26 @@ Runtime selection follows the Ouroboros pattern:
 
 | Host | Install behavior |
 | --- | --- |
-| Claude Code | Installs the plugin-owned `.mcp.json` surface; removes stale `oms` registrations across local/project/user scopes; with `--execute`, runs the Claude plugin lifecycle commands when the CLI is available. |
+| Claude Code | Installs the plugin-owned `.mcp.json` surface; removes stale `oms` registrations across local/project/user scopes; with `--execute`, adds the OMS marketplace and installs `oms@oms` through it, falling back to the local plugin path when the marketplace flow can't complete. |
 | Codex | Installs `~/.codex/rules/oms.md`, `~/.codex/skills/oms-*`, copies adapter files to `~/.codex/plugins/oms`, and writes a managed `[mcp_servers.oms]` block plus `OMS_AGENT_RUNTIME=codex` env in `~/.codex/config.toml`. |
 | Hermes | Installs `~/.hermes/skills/knowledge-management/oms/`, copies adapter files to `~/.hermes/adapters/oms`, and writes `mcp_servers.oms` in `~/.hermes/config.yaml`. |
 
-Host writes keep the legacy `oms` namespace for backward-compatible MCP/skill IDs and are reversible with `oh-my-second-brain uninstall` (or the `oms` alias).
+Host writes keep the legacy `oms` namespace for backward-compatible MCP/skill IDs and are reversible with `oh-my-second-brain uninstall` (or the `oms` alias). Each runtime is installed independently: if one host fails, the others still complete.
+
+Hermes config writes are an upsert, so comments and key ordering in `~/.hermes/config.yaml` survive an install or update.
+
+### Claude Code marketplace
+
+OMS publishes a marketplace manifest at the repo root (`.claude-plugin/marketplace.json`), so Claude Code can discover and install it natively:
+
+```bash
+claude plugin marketplace add GoBeromsu/oh-my-second-brain
+claude plugin install oms@oms
+```
+
+A local checkout wins over the published repo, which keeps offline and dev installs working; the plain `claude plugin install <path>` route stays as the fallback.
+
+Claude keeps `autoUpdate` off for third-party marketplaces, and OMS does not change that for you. If you want this marketplace to refresh itself, set `extraKnownMarketplaces.<name>.autoUpdate` to `true` in `~/.claude/settings.json`. Otherwise run `claude plugin marketplace update` when you want a refresh. The install output prints this reminder.
 
 ## Update
 
@@ -85,6 +100,8 @@ oh-my-second-brain update --yes --runtime all --vault /path/to/vault
 `update` checks `oh-my-second-brain@latest`, then plans `npm install -g oh-my-second-brain@latest` plus a post-update adapter reconciliation. It does not mutate package or host config unless `--yes` is provided. Use `--execute` only when you want reconciliation to call external host CLIs where available.
 
 Normal CLI commands such as `setup`, `install`, `uninstall`, and `doctor` also print a short stderr notice when a newer npm version is available. Set `OMS_UPDATE_NOTICE=0` to silence that check in CI or release smoke environments.
+
+The MCP server carries the same nudge. At boot it reads a 24-hour cache (`~/.oms/update-notice-cache.json` by default) and, when a newer version is stamped there, appends one line to the server `instructions` your host sees. The registry lookup itself runs in a bounded background refresh, never on the startup path, so an offline or slow registry can't delay the server. `OMS_UPDATE_NOTICE=0` silences it here too.
 
 ## Legacy setup flow
 
@@ -130,6 +147,25 @@ curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/s
 ```
 
 The uninstaller removes Oh My Second Brain host registrations and adapter files. It does **not** remove vault notes or `vault/.oms/` ontology data. Pass `--keep-package` to the shell uninstaller if you want to keep the globally installed package.
+
+## Link existing notes
+
+OMS treats `term` as a first-class concept: notes in `terms/` define your vocabulary once, and their `aliases` frontmatter lists the other surface forms that should point back. Wikilinks resolve through those aliases, so `[[some-alias]]` reaches the term note.
+
+To retrofit links across notes you already wrote:
+
+```bash
+# Report only. Nothing is written.
+oh-my-second-brain linkify --vault /path/to/vault
+
+# Restrict the scan to one top-level folder.
+oh-my-second-brain linkify --vault /path/to/vault --folder notes
+
+# Rewrite in place. Both flags are required.
+oh-my-second-brain linkify --vault /path/to/vault --apply --yes
+```
+
+Hosts can do the same note by note through the `oms_link_suggest` (read-only) and `oms_link_apply` (writes accepted candidates) MCP tools. Nothing is linked behind your back: new notes are composed already linked, and existing notes change only when you ask.
 
 ## Verify the install
 

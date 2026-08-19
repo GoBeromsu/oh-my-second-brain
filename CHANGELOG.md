@@ -7,6 +7,31 @@
 - Releases are published by CI from `oms-v*` tags with npm provenance and an auto-generated GitHub Release whose notes come from the CHANGELOG.
 - Maintainers release with a single command: `npm run release -- <X.Y.Z>` rolls the `[Unreleased]` section into a versioned entry, bumps all version carriers (package.json, plugin manifests), commits, tags, and pushes atomically.
 
+#### Note linking
+
+- `term` is now a first-class concept in the core ontology, bound to a `terms/` folder. A term note is the one place you define a piece of vocabulary, and its new `aliases` frontmatter field lists every other way you write that word.
+- Two MCP tools turn those terms into links. `oms_link_suggest` is read-only: it ranks the spans in a note that could point at a term note and hands back a hash of the content it looked at. `oms_link_apply` writes, but only the candidates you accepted, and only while that hash still matches, so a note you edited in the meantime is never overwritten by a stale suggestion.
+- `oms linkify [--folder <f>] [--apply] [--yes]` does the same job in bulk over notes you already have. It reports and changes nothing by default; mutation needs both `--apply` and `--yes`.
+- Matching understands Korean josa, so `아타락시아를` links as `[[ataraxia|아타락시아]]를` instead of being skipped for not matching the bare term.
+- A note-linking skill ships to Claude, Codex, and Hermes, so each host knows the suggest-review-apply loop without you explaining it every session.
+
+#### Updates and install
+
+- A root `.claude-plugin/marketplace.json` makes OMS discoverable through Claude Code's native plugin marketplace. Claude installs now go through `claude plugin marketplace add` plus `claude plugin install oms@oms`, and fall back to the local plugin path when the marketplace flow can't complete, so offline and dev checkouts still work.
+- The MCP server tells you when a newer version exists. It reads a 24-hour cache at boot and appends one line to its `instructions`; the registry lookup happens in a bounded background refresh, never on the startup path. `OMS_UPDATE_NOTICE=0` turns it off.
+- A test and a CI release-tag guard now check that `marketplace.json` and `package.json` agree on the version, so a release can't ship a marketplace manifest pointing at the wrong build.
+
+### Changed
+
+- Wikilinks resolve through frontmatter `aliases`. `[[some-alias]]` used to resolve to nothing; it now finds the note that claims that alias, which means alias links count as real graph edges during retrieval.
+- Installing several hosts at once no longer stops at the first failure. Each runtime is isolated, so a broken Codex config can't cost you your Claude and Hermes install.
+- Hermes config writes are an upsert instead of a full overwrite: your comments and key ordering in `~/.hermes/config.yaml` survive an install or update.
+- Claude's third-party marketplace auto-update stays off unless you turn it on. Install prints how to enable `extraKnownMarketplaces.<name>.autoUpdate` in `~/.claude/settings.json` rather than flipping it for you; the `claude` CLI owns that setting.
+
+### Fixed
+
+- The MCP server reports its real package version instead of a hardcoded `0.0.0`, so host-side version checks and bug reports show what you're actually running.
+
 ## [0.1.9] - 2026-08-14
 
 ### Added
