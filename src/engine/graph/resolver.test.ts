@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildWikilinkIndex, resolveWikilink, wikilinkEdges } from "./resolver.js";
+import {
+  buildWikilinkIndex,
+  buildWikilinkIndexWithFrontmatter,
+  resolveWikilink,
+  wikilinkEdges,
+} from "./resolver.js";
 
 const VAULT_FILES = [
   "projects/foo.md",
@@ -71,6 +76,78 @@ describe("resolveWikilink", () => {
   it("empty string: returns docPath null", () => {
     const result = resolveWikilink("", INDEX);
     expect(result.docPath).toBeNull();
+  });
+});
+
+describe("buildWikilinkIndexWithFrontmatter", () => {
+  const DOCS = [
+    {
+      path: "concepts/ataraxia-note.md",
+      frontmatter: { aliases: ["Ataraxia", "アタラクシア"] },
+    },
+    { path: "projects/foo.md", frontmatter: { aliases: ["some-alias"] } },
+    { path: "notes/deep/plain.md", frontmatter: {} },
+  ];
+  const ALIAS_INDEX = buildWikilinkIndexWithFrontmatter(DOCS);
+
+  it("path-only builder yields an empty byAlias map", () => {
+    expect(INDEX.byAlias.size).toBe(0);
+  });
+
+  it("latin alias resolves to the declaring note", () => {
+    const result = resolveWikilink("[[Ataraxia]]", ALIAS_INDEX);
+    expect(result.docPath).toBe("concepts/ataraxia-note.md");
+  });
+
+  it("non-latin alias resolves to the declaring note", () => {
+    const result = resolveWikilink("[[アタラクシア]]", ALIAS_INDEX);
+    expect(result.docPath).toBe("concepts/ataraxia-note.md");
+  });
+
+  it("alias lookup is case-insensitive", () => {
+    expect(resolveWikilink("[[ATARAXIA]]", ALIAS_INDEX).docPath).toBe(
+      "concepts/ataraxia-note.md",
+    );
+  });
+
+  it("previously unresolvable alias link now resolves", () => {
+    expect(resolveWikilink("some-alias", INDEX).docPath).toBeNull();
+    expect(resolveWikilink("some-alias", ALIAS_INDEX).docPath).toBe("projects/foo.md");
+  });
+
+  it("exact path and basename still win over an alias claiming the same name", () => {
+    const shadowed = buildWikilinkIndexWithFrontmatter([
+      { path: "projects/foo.md", frontmatter: {} },
+      { path: "decoys/decoy.md", frontmatter: { aliases: ["foo"] } },
+    ]);
+    expect(resolveWikilink("foo", shadowed).docPath).toBe("projects/foo.md");
+  });
+
+  it("ambiguous alias: shortest path wins, ties broken alphabetically", () => {
+    const ambiguous = buildWikilinkIndexWithFrontmatter([
+      { path: "a/b/c/deep.md", frontmatter: { aliases: ["shared"] } },
+      { path: "top.md", frontmatter: { aliases: ["shared"] } },
+    ]);
+    expect(resolveWikilink("shared", ambiguous).docPath).toBe("top.md");
+  });
+
+  it("malformed aliases (non-string, empty, non-array) are skipped without throwing", () => {
+    const malformed = buildWikilinkIndexWithFrontmatter([
+      { path: "a.md", frontmatter: { aliases: [42, null, "", "  ", { x: 1 }, "ok"] } },
+      { path: "b.md", frontmatter: { aliases: "single-string" } },
+      { path: "c.md", frontmatter: { aliases: 7 } },
+      { path: "d.md", frontmatter: {} },
+    ]);
+    expect(resolveWikilink("ok", malformed).docPath).toBe("a.md");
+    expect(resolveWikilink("single-string", malformed).docPath).toBe("b.md");
+    expect(malformed.byAlias.has("")).toBe(false);
+    expect(resolveWikilink("42", malformed).docPath).toBeNull();
+  });
+
+  it("display alias in [[Target|Alias]] is still stripped, not resolved", () => {
+    const result = resolveWikilink("[[projects/foo|Ataraxia]]", ALIAS_INDEX);
+    expect(result.target).toBe("projects/foo");
+    expect(result.docPath).toBe("projects/foo.md");
   });
 });
 

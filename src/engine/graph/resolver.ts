@@ -14,6 +14,15 @@ export interface WikilinkIndex {
   readonly byBasename: ReadonlyMap<string, readonly string[]>;
   /** Lowercase vault-relative path (with .md) → original-case vault-relative path. */
   readonly byPath: ReadonlyMap<string, string>;
+  /** Lowercase frontmatter alias → list of vault-relative paths declaring it. */
+  readonly byAlias: ReadonlyMap<string, readonly string[]>;
+}
+
+/** A vault document paired with its already-parsed frontmatter. */
+export interface IndexedDoc {
+  /** Vault-relative path (original case, with .md). */
+  readonly path: string;
+  readonly frontmatter: Record<string, unknown>;
 }
 
 /** Result of resolving a single raw wikilink against the vault file set. */
@@ -38,6 +47,7 @@ export interface WikilinkResolution {
 export function buildWikilinkIndex(vaultFiles: readonly string[]): WikilinkIndex {
   const byBasename = new Map<string, string[]>();
   const byPath = new Map<string, string>();
+  const byAlias = new Map<string, string[]>();
 
   for (const f of vaultFiles) {
     // exact-path lookup (normalised to lowercase with .md)
@@ -52,7 +62,47 @@ export function buildWikilinkIndex(vaultFiles: readonly string[]): WikilinkIndex
     byBasename.set(base, bucket);
   }
 
-  return { byBasename, byPath };
+  return { byBasename, byPath, byAlias };
+}
+
+/**
+ * Build a wikilink index that also resolves frontmatter `aliases` declarations.
+ *
+ * Same path/basename behaviour as {@link buildWikilinkIndex}, plus a `byAlias`
+ * map so `[[Ataraxia]]` reaches a note whose frontmatter declares that alias.
+ * Non-string, blank, and non-array `aliases` values are ignored.
+ */
+export function buildWikilinkIndexWithFrontmatter(docs: readonly IndexedDoc[]): WikilinkIndex {
+  const { byBasename, byPath } = buildWikilinkIndex(docs.map((d) => d.path));
+  const byAlias = new Map<string, string[]>();
+
+  for (const doc of docs) {
+    for (const alias of aliasStrings(doc.frontmatter["aliases"])) {
+      const key = alias.toLowerCase();
+      const bucket = byAlias.get(key) ?? [];
+      bucket.push(doc.path);
+      byAlias.set(key, bucket);
+    }
+  }
+
+  return { byBasename, byPath, byAlias };
+}
+
+/** Flatten an unknown frontmatter `aliases` value to trimmed non-empty strings. */
+function aliasStrings(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(aliasStrings);
+  if (typeof value !== "string") return [];
+  const trimmed = value.trim();
+  return trimmed ? [trimmed] : [];
+}
+
+/** Shortest path wins; ties broken alphabetically. */
+function bestCandidate(candidates: readonly string[] | undefined): string | null {
+  if (candidates === undefined || candidates.length === 0) return null;
+  const sorted = candidates
+    .slice()
+    .sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
+  return sorted[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +140,7 @@ function cleanLinkTarget(raw: string): string {
  *  1. Exact vault-relative path (case-insensitive, `.md` optional)
  *  2. Basename match (case-insensitive) — when ambiguous, shortest path wins;
  *     ties broken alphabetically
+ *  3. Frontmatter `aliases` match (case-insensitive), same tie-break
  *
  * Returns `{ docPath: null }` when unresolvable.  Callers must **not** throw;
  * instead they should emit a `kind: "unknown-ref"` GraphEdge with weight 0.
@@ -105,17 +156,11 @@ export function resolveWikilink(rawLink: string, index: WikilinkIndex): Wikilink
   if (exactHit !== undefined) return { target, docPath: exactHit };
 
   // 2. Basename match — shortest path wins, ties broken alphabetically
-  const base = path.basename(lc, ".md");
-  const candidates = index.byBasename.get(base);
-  if (candidates !== undefined && candidates.length > 0) {
-    const sorted = candidates
-      .slice()
-      .sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
-    const best = sorted[0] ?? null;
-    return { target, docPath: best };
-  }
+  const byBasenameHit = bestCandidate(index.byBasename.get(path.basename(lc, ".md")));
+  if (byBasenameHit !== null) return { target, docPath: byBasenameHit };
 
-  return { target, docPath: null };
+  // 3. Frontmatter alias match — same tie-break
+  return { target, docPath: bestCandidate(index.byAlias.get(lc)) };
 }
 
 // ---------------------------------------------------------------------------
