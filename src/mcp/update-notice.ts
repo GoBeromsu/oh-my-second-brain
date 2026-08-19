@@ -109,6 +109,13 @@ function readCache(cachePath: string): UpdateNoticeCache | null {
   return { version: 1, channels };
 }
 
+/** True when the channel's stamp exists and is within the 24h TTL. */
+function stampIsFresh(stamp: ChannelStamp | undefined, now: number): boolean {
+  if (stamp === undefined) return false;
+  const age = now - stamp.checkedAt;
+  return age >= 0 && age <= CACHE_TTL_MS;
+}
+
 /**
  * Reads the cached latest version for the installed channel and renders a
  * one-line nudge when that version is newer and the stamp is within the 24h
@@ -125,9 +132,7 @@ export function cachedUpdateNotice(options: CachedUpdateNoticeOptions): string |
   const stamp = cache.channels[updateChannelOf(options.installedVersion)];
   if (stamp === undefined) return null;
 
-  const now = options.now ?? Date.now();
-  const age = now - stamp.checkedAt;
-  if (age < 0 || age > CACHE_TTL_MS) return null;
+  if (!stampIsFresh(stamp, options.now ?? Date.now())) return null;
   if (compareVersions(options.installedVersion, stamp.latestVersion) >= 0) return null;
 
   return `Update available for Oh My Second Brain: ${options.installedVersion} -> ${stamp.latestVersion}. Run \`oms update --yes\` to update and refresh host adapters.`;
@@ -208,11 +213,32 @@ export async function refreshUpdateNoticeCache(
 /**
  * Serve-path entrypoint: starts at most one detached refresh per process. Never
  * awaited by the caller, so startup latency is unaffected.
+ *
+ * Skips the registry entirely while the installed channel's stamp is still
+ * within the TTL: a fresh cache already answers the boot-time question, so
+ * every serve boot inside that window costs zero subprocesses. Returns the
+ * detached promise when a refresh was started and null when none was needed,
+ * so tests can await the background work without a timer.
  */
-export function scheduleUpdateNoticeRefresh(options: CachedUpdateNoticeOptions): void {
-  if (refreshStarted) return;
+export function scheduleUpdateNoticeRefresh(
+  options: RefreshUpdateNoticeCacheOptions,
+): Promise<void> | null {
+  if (refreshStarted) return null;
+
+  const env = options.env ?? process.env;
+  if (noticeSuppressed(env)) return null;
+
+  const cache = readCache(updateNoticeCachePath(env));
+  const stamp = cache?.channels[updateChannelOf(options.installedVersion)];
+  if (stampIsFresh(stamp, options.now ?? Date.now())) return null;
+
   refreshStarted = true;
-  void refreshUpdateNoticeCache(options);
+  return refreshUpdateNoticeCache(options);
+}
+
+/** Clears the per-process refresh lock. Test-only seam. */
+export function __resetUpdateNoticeRefreshLockForTests(): void {
+  refreshStarted = false;
 }
 
 /** Appends the nudge to the server's base instructions as a single extra line. */
