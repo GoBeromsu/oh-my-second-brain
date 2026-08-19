@@ -17,6 +17,7 @@ describe("CLI usage text", () => {
       "audit",
       "lint",
       "link",
+      "linkify",
       "semantic",
       "mcp",
       "hook",
