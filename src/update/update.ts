@@ -109,17 +109,17 @@ function formatCommand(command: string, args: readonly string[]): string {
   return [command, ...args].join(" ");
 }
 
-async function resolveLatestVersion(options: {
+export async function resolveLatestVersion(options: {
   readonly packageName: string;
-  readonly latestVersion?: string;
+  readonly latestVersion?: string | undefined;
   readonly timeoutMs: number;
-  readonly runner: UpdateRunner;
+  readonly runner?: UpdateRunner | undefined;
 }): Promise<{ readonly ok: true; readonly version: string } | { readonly ok: false; readonly error: string }> {
   if (options.latestVersion !== undefined) {
     return { ok: true, version: cleanVersion(options.latestVersion) };
   }
 
-  const result = await options.runner(
+  const result = await (options.runner ?? defaultRunner)(
     "npm",
     ["view", `${options.packageName}@latest`, "version", "--json"],
     { timeoutMs: options.timeoutMs },

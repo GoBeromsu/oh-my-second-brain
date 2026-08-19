@@ -43,8 +43,16 @@ import {
 import { assembleCoreSemanticEngine, assembleGraphOnlyEngine, type AssembledEngine } from "../engine/assemble.js";
 import { assembleFullSemanticEngine, embeddingConfigPresent } from "./semantic-engine.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
+import {
+  buildServerInstructions,
+  cachedUpdateNotice,
+  scheduleUpdateNoticeRefresh,
+} from "./update-notice.js";
 
 const SERVER_VERSION = readBundledPackageVersion();
+
+export const BASE_SERVER_INSTRUCTIONS =
+  "Oh My Second Brain exposes ontology/status/cache/retrieval tools and the write tool. write is gated by a verified vault target (a vault inferred from the current directory is refused), vault confinement, and contract validation.";
 
 function jsonText(value: unknown): CallToolResult {
   return {
@@ -358,8 +366,12 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     { name: "oms", version: SERVER_VERSION },
     {
       capabilities: { tools: {}, resources: {} },
-      instructions:
-        "Oh My Second Brain exposes ontology/status/cache/retrieval tools and the write tool. write is gated by a verified vault target (a vault inferred from the current directory is refused), vault confinement, and contract validation.",
+      // Cache read only: construction must never touch the network. The
+      // registry refresh that fills this cache is scheduled from runMcpServer.
+      instructions: buildServerInstructions(
+        BASE_SERVER_INSTRUCTIONS,
+        cachedUpdateNotice({ installedVersion: SERVER_VERSION }),
+      ),
     },
   );
 
@@ -686,6 +698,8 @@ export async function runMcpServer(opts: OMSMcpServerOptions): Promise<void> {
   const server = createOMSMcpServer(opts);
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // Detached and unawaited: a slow or offline registry must not delay serving.
+  scheduleUpdateNoticeRefresh({ installedVersion: SERVER_VERSION });
 }
 
 function isWriteMode(value: string | undefined): value is WriteMode {
