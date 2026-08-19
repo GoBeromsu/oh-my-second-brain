@@ -796,7 +796,8 @@ export async function runMcpServer(opts: OMSMcpServerOptions): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Detached and unawaited: a slow or offline registry must not delay serving.
-  scheduleUpdateNoticeRefresh({ installedVersion: SERVER_VERSION });
+  // Returns null while the cache is fresh, so most boots start nothing at all.
+  void scheduleUpdateNoticeRefresh({ installedVersion: SERVER_VERSION });
 }
 
 function isWriteMode(value: string | undefined): value is WriteMode {

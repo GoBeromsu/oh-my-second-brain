@@ -52,8 +52,11 @@ export type MatchSource = "basename" | "alias";
 /**
  * One proposed link: the body range to replace and the text to replace it with.
  *
- * `renderedReplacement` already carries the full wikilink INCLUDING any trailing
- * Korean particle that was absorbed into the span, so apply never re-derives it.
+ * `renderedReplacement` is the finished wikilink for the STEM only. A trailing
+ * Korean particle is left OUTSIDE both the span and the link — `아타락시아를`
+ * yields the range covering `아타락시아` and the replacement
+ * `[[Ataraxia|아타락시아]]`, so splicing keeps `를` in the prose. Apply never
+ * re-derives the text.
  */
 export interface LinkCandidate {
   readonly startOffset: number;
