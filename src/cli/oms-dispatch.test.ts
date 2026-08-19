@@ -62,7 +62,7 @@ describe("oms CLI dispatch", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("Compatibility alias: oms <command>");
-    for (const command of ["setup", "install", "uninstall", "update", "doctor", "audit", "lint", "link", "semantic", "mcp", "hook"]) {
+    for (const command of ["setup", "install", "uninstall", "update", "doctor", "audit", "lint", "link", "linkify", "semantic", "mcp", "hook"]) {
       expect(result.stdout).toContain(command);
     }
   });
@@ -219,6 +219,33 @@ describe("oms CLI dispatch", () => {
     expect(searchJson.hits).toEqual([
       expect.objectContaining({ path: "notes/Alpha.md" }),
     ]);
+  });
+
+  it("routes linkify report mode without touching the vault, and refuses --apply without --yes", async () => {
+    const vault = await makeVault();
+    await mkdir(path.join(vault, "terms"), { recursive: true });
+    await mkdir(path.join(vault, "notes"), { recursive: true });
+    await writeFile(path.join(vault, "terms", "Ataraxia.md"), "---\ntitle: Ataraxia\n---\n\nCalm.\n", "utf-8");
+    const notePath = path.join(vault, "notes", "Sage.md");
+    await writeFile(notePath, "---\ntitle: Sage\n---\n\nThe sage pursues Ataraxia daily.\n", "utf-8");
+    const before = await readFile(notePath, "utf-8");
+
+    const report = runCli(["linkify", "--vault", vault]);
+    expect(report.status).toBe(0);
+    expect(report.stdout).toContain("notes/Sage.md");
+    expect(report.stdout).toContain("[[Ataraxia]]");
+    expect(await readFile(notePath, "utf-8")).toBe(before);
+
+    const refused = runCli(["linkify", "--vault", vault, "--apply"]);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("--yes");
+    expect(await readFile(notePath, "utf-8")).toBe(before);
+
+    const applied = runCli(["linkify", "--vault", vault, "--apply", "--yes"]);
+    expect(applied.status).toBe(0);
+    const after = await readFile(notePath, "utf-8");
+    expect(after).toContain("[[Ataraxia]]");
+    expect(after).not.toBe(before);
   });
 
   it("routes update-reconcile dry-run through the scoped Claude cleanup plan", async () => {

@@ -4,31 +4,25 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPostToolUse } from "../hook/post-tool-use.js";
 import { runPreToolUse } from "../hook/pre-tool-use.js";
-import {
-  formatHostOperationResults,
-  formatHostOperationResultsJson,
-  runHostOperation,
-} from "../install/hosts.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { resolveEffectiveVault } from "../link/link.js";
 import { runMcpServer } from "../mcp/server.js";
 import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
-import {
-  formatUpdateResult,
-  runUpdate,
-} from "../update/update.js";
 import { parseCliArgs } from "./args.js";
 import { runAudit } from "./audit.js";
 import { runDoctor, runLint } from "./doctor-lint.js";
 import {
-  backfillGlobalVaultFromEnv,
-  nonFatalGlobalWriteback,
-  registerGlobalVault,
-} from "./global-writeback.js";
+  runInstallOrUninstall,
+  runUpdateCommand,
+  runUpdateReconcile,
+  type HostCommandContext,
+} from "./host-commands.js";
+import { nonFatalGlobalWriteback, registerGlobalVault } from "./global-writeback.js";
 import { runLink } from "./link-command.js";
+import { runLinkify } from "./linkify.js";
 import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
 import { runSetup } from "./setup-command.js";
-import { maybePrintUpdateNotice, readCurrentPackageVersion } from "./update-notice.js";
+import { maybePrintUpdateNotice } from "./update-notice.js";
 import { printUsage } from "./usage.js";
 
 export { buildClaudeInstallPlan } from "./claude-install-plan.js";
@@ -39,6 +33,7 @@ export {
   formatLinkResult,
   runLink,
 } from "./link-command.js";
+export { runLinkify } from "./linkify.js";
 export {
   runSetup,
   type SetupPrompt,
@@ -47,14 +42,11 @@ export { maybePrintUpdateNotice } from "./update-notice.js";
 
 const bundledAssets = resolveBundledAssetPaths();
 
-function bundledAdapterRoot(): string {
-  return bundledAssets.adapterRoot;
-}
-
 function shouldResolveBridgeVault(command: string | undefined, vaultExplicit: boolean): boolean {
   return (
     !vaultExplicit &&
     (command === "audit" ||
+      command === "linkify" ||
       command === "doctor" ||
       command === "lint" ||
       command === "mcp" ||
@@ -75,6 +67,7 @@ async function main(): Promise<void> {
     vault,
     vaultExplicit,
     yes,
+    apply,
     installClaude,
     suggestFields,
     runtime,
@@ -119,74 +112,12 @@ async function main(): Promise<void> {
     });
     await maybePrintUpdateNotice();
   } else if (command === "install" || command === "uninstall") {
-    const selectedRuntime = runtime ?? (command === "install" ? "auto" : "all");
-    if (command === "uninstall" && !yes && !dryRun && process.env["OMS_NON_INTERACTIVE"] !== "1") {
-      console.error("[oms] Refusing uninstall without --yes or --dry-run.");
-      process.exitCode = 1;
-      return;
-    }
-    const results = await runHostOperation({
-      action: command,
-      runtime: selectedRuntime,
-      vault,
-      agentVault,
-      dryRun,
-      executeExternal,
-      yes,
-      adapterRoot: bundledAdapterRoot(),
-    });
-    console.log(json ? formatHostOperationResultsJson(results, dryRun) : formatHostOperationResults(results, dryRun));
-    if (command === "install" && !dryRun) {
-      if (vaultExplicit) {
-        await nonFatalGlobalWriteback(() =>
-          registerGlobalVault({ vault: path.resolve(vault), homeDir: undefined, overwrite: true }),
-        );
-      } else {
-        await nonFatalGlobalWriteback(() => backfillGlobalVaultFromEnv({ env: process.env, homeDir: undefined }));
-      }
-    }
-    await maybePrintUpdateNotice();
+    process.exitCode = await runInstallOrUninstall(command, hostContext());
+    if (process.exitCode === 0) await maybePrintUpdateNotice();
   } else if (command === "update") {
-    if (unknownFlags.length > 0) {
-      console.error(`[oms] Unsupported update option: ${unknownFlags.join(", ")}`);
-      process.exitCode = 1;
-      return;
-    }
-    const currentVersion = await readCurrentPackageVersion();
-    const latestVersion = process.env["OMS_UPDATE_LATEST_VERSION"];
-    const result = await runUpdate({
-      currentVersion,
-      latestVersion,
-      runtime: runtime ?? "all",
-      vault,
-      check: checkUpdate,
-      dryRun,
-      yes,
-      executeExternal,
-      timeoutMs,
-      reconcileCommand: {
-        command: process.execPath,
-        argsPrefix: process.argv[1] === undefined ? [] : [process.argv[1]],
-      },
-    });
-    console.log(formatUpdateResult(result));
-    process.exitCode = result.success ? 0 : 1;
+    process.exitCode = await runUpdateCommand(hostContext());
   } else if (command === "update-reconcile") {
-    if (process.env["OMS_UPDATE_RECONCILE"] !== "1" && !dryRun) {
-      console.error("[oms] update-reconcile is internal; run `oms update --yes` instead.");
-      process.exitCode = 1;
-      return;
-    }
-    const results = await runHostOperation({
-      action: "install",
-      runtime: runtime ?? "all",
-      vault,
-      dryRun,
-      executeExternal,
-      yes: true,
-      adapterRoot: bundledAdapterRoot(),
-    });
-    console.log(json ? formatHostOperationResultsJson(results, dryRun) : formatHostOperationResults(results, dryRun));
+    process.exitCode = await runUpdateReconcile(hostContext());
   } else if (command === "doctor") {
     process.exitCode = await runDoctor({ vault, verbose, json, maxPerConcept });
     await maybePrintUpdateNotice();
@@ -196,6 +127,14 @@ async function main(): Promise<void> {
       json,
       folder: folders[0],
       suggestFields,
+    });
+    await maybePrintUpdateNotice();
+  } else if (command === "linkify") {
+    process.exitCode = await runLinkify({
+      vault,
+      folder: folders[0],
+      apply,
+      yes,
     });
     await maybePrintUpdateNotice();
   } else if (command === "lint") {
@@ -226,6 +165,23 @@ async function main(): Promise<void> {
   } else {
     printUsage();
     process.exitCode = 0;
+  }
+
+  function hostContext(): HostCommandContext {
+    return {
+      vault,
+      vaultExplicit,
+      runtime,
+      agentVault,
+      dryRun,
+      executeExternal,
+      yes,
+      json,
+      checkUpdate,
+      timeoutMs,
+      unknownFlags,
+      adapterRoot: bundledAssets.adapterRoot,
+    };
   }
 }
 

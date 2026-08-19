@@ -24,6 +24,14 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
   },
   { name: "lint", line: "  lint     Check vault link health: broken [[wikilinks]] and orphan notes." },
   { name: "link", line: "  link     Bridge an external repo to scoped vault folders via gitignored symlinks." },
+  {
+    name: "linkify",
+    line: "  linkify  Propose [[wikilinks]] to term notes across existing notes; report-only by default.",
+    detailLines: [
+      "             --folder <name>   Restrict the scan and writes to one top-level vault folder.",
+      "             --apply --yes     Rewrite notes in place; --apply alone refuses and writes nothing.",
+    ],
+  },
   { name: "semantic", line: "  semantic Native markdown semantic index/search/get commands." },
   { name: "mcp", line: "  mcp      Start the read/status MCP stdio server." },
   {
@@ -72,6 +80,7 @@ Usage:
   oh-my-second-brain audit [--vault <path>] [--folder <name>] [--json] [--suggest-fields]
   oh-my-second-brain lint [--vault <path>] [--verbose] [--json]
   oh-my-second-brain link --vault <path> --folder <name> [--folder <name> ...] [--no-convention-note]
+  oh-my-second-brain linkify [--vault <path>] [--folder <name>] [--apply --yes]
   oh-my-second-brain semantic <status|sync|query|search|vsearch|get|multi-get|collection> [options]
   oh-my-second-brain mcp [--vault <path>]
   oh-my-second-brain hook pre-tool-use [--vault <path>]
@@ -93,7 +102,8 @@ Options:
   --verbose        doctor/lint: list every affected note instead of a summary.
   --json           doctor/lint/audit: emit machine-readable output as JSON.
   --max <n>        doctor --verbose: max notes listed per concept (default 50).
-  --folder <name>  audit: restrict scan; link: vault folder/subpath to expose (repeatable for link).
+  --folder <name>  audit/linkify: restrict scan; link: vault folder/subpath to expose (repeatable for link).
+  --apply          linkify: rewrite notes in place; must be combined with --yes.
   --no-convention-note
                   link: skip writing the managed OMS usage block to AGENTS.md.
 `;
