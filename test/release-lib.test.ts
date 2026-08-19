@@ -10,6 +10,11 @@ interface PackageLockShape extends VersionCarrier {
   packages?: Record<string, VersionCarrier>;
 }
 
+// .claude-plugin/marketplace.json carries the version twice: top-level and plugins[0].
+interface MarketplaceShape extends VersionCarrier {
+  plugins?: VersionCarrier[];
+}
+
 interface VersionCarriers {
   version: string;
   packageJson: VersionCarrier;
@@ -17,6 +22,7 @@ interface VersionCarriers {
   claudePluginJson: VersionCarrier;
   codexPluginJson: VersionCarrier;
   hermesManifestJson: VersionCarrier;
+  marketplaceJson: MarketplaceShape;
 }
 
 interface ReleaseLib {
@@ -26,6 +32,7 @@ interface ReleaseLib {
   extractReleaseNotes(content: string, version: string): string;
   bumpedJsonVersion(jsonText: string, version: string): string;
   bumpedPackageLock(jsonText: string, version: string): string;
+  bumpedMarketplace(jsonText: string, version: string): string;
   versionMismatches(carriers: VersionCarriers): string[];
   missingReleasedHeadings(baseContent: string, headContent: string): string[];
 }
@@ -37,6 +44,7 @@ const {
   extractReleaseNotes,
   bumpedJsonVersion,
   bumpedPackageLock,
+  bumpedMarketplace,
   versionMismatches,
   missingReleasedHeadings,
 } = releaseLibModule as ReleaseLib;
@@ -61,6 +69,21 @@ const PACKAGE_LOCK = JSON.stringify(
   null,
   2,
 );
+
+// Mirrors the on-disk .claude-plugin/marketplace.json: the first "version" text
+// token is plugins[0].version, and the top-level "version" key comes last.
+const MARKETPLACE = `${JSON.stringify(
+  {
+    $schema: "https://anthropic.com/claude-code/marketplace.schema.json",
+    name: "oms",
+    description: "Oh My Second Brain",
+    owner: { name: "gobeumsu", email: "gobeumsu@gmail.com" },
+    plugins: [{ name: "oms", description: "convention layer", version: "0.1.9", source: "./" }],
+    version: "0.1.9",
+  },
+  null,
+  2,
+)}\n`;
 
 describe("isStableVersion", () => {
   it("accepts stable X.Y.Z versions including 0.x", () => {
@@ -201,6 +224,39 @@ describe("bumpedPackageLock", () => {
   });
 });
 
+describe("bumpedMarketplace", () => {
+  it("sets both the top-level version and plugins[0].version, leaving valid JSON", () => {
+    // Given: a marketplace manifest at 0.1.9 in both carriers
+    // When: it is bumped to the release version
+    const bumped = bumpedMarketplace(MARKETPLACE, "0.2.0");
+    // Then: the round-tripped JSON carries 0.2.0 in both places, other fields intact
+    const parsed = JSON.parse(bumped) as MarketplaceShape & { name?: string; plugins?: { source?: string }[] };
+    expect(parsed.version).toBe("0.2.0");
+    expect(parsed.plugins?.[0]?.version).toBe("0.2.0");
+    expect(parsed.name).toBe("oms");
+    expect(parsed.plugins?.[0]?.source).toBe("./");
+    expect(bumped.endsWith("\n")).toBe(true);
+  });
+
+  it("throws on a manifest without plugins[0] and on invalid versions", () => {
+    expect(() => bumpedMarketplace('{"name":"oms","plugins":[]}', "0.2.0")).toThrow(/plugins\[0\]/);
+    expect(() => bumpedMarketplace(MARKETPLACE, "0.2.0-rc.1")).toThrow(/expected X\.Y\.Z/);
+  });
+});
+
+// bumpedJsonVersion is the generic text bump used for the single-version carriers.
+// Documenting its behavior on the marketplace shape proves why that manifest needs
+// bumpedMarketplace instead: the first "version" pair is plugins[0].version, so the
+// top-level carrier would silently stay behind.
+describe("bumpedJsonVersion on the marketplace shape", () => {
+  it("targets plugins[0].version and leaves the trailing top-level version stale", () => {
+    const bumped = bumpedJsonVersion(MARKETPLACE, "0.2.0");
+    const parsed = JSON.parse(bumped) as MarketplaceShape;
+    expect(parsed.plugins?.[0]?.version).toBe("0.2.0");
+    expect(parsed.version).toBe("0.1.9");
+  });
+});
+
 describe("versionMismatches", () => {
   const consistent = (): VersionCarriers => ({
     version: "0.2.0",
@@ -209,6 +265,7 @@ describe("versionMismatches", () => {
     claudePluginJson: { version: "0.2.0" },
     codexPluginJson: { version: "0.2.0" },
     hermesManifestJson: { version: "0.2.0" },
+    marketplaceJson: { version: "0.2.0", plugins: [{ version: "0.2.0" }] },
   });
 
   it("returns an empty array when every carrier matches", () => {
@@ -222,15 +279,37 @@ describe("versionMismatches", () => {
     carriers.claudePluginJson = {};
     carriers.codexPluginJson = { version: "0.1.9" };
     carriers.hermesManifestJson = { version: "0.1.9" };
+    carriers.marketplaceJson = { version: "0.1.9", plugins: [{ version: "0.1.8" }] };
 
     const mismatches = versionMismatches(carriers);
-    expect(mismatches).toHaveLength(6);
+    expect(mismatches).toHaveLength(8);
     expect(mismatches[0]).toBe("package.json=0.1.9 (expected 0.2.0)");
     expect(mismatches[1]).toBe("package-lock.json=0.1.9 (expected 0.2.0)");
     expect(mismatches[2]).toBe('package-lock.json packages[""]=0.1.8 (expected 0.2.0)');
     expect(mismatches[3]).toBe("adapters/claude-code/.claude-plugin/plugin.json=missing (expected 0.2.0)");
     expect(mismatches[4]).toBe("adapters/codex/.codex-plugin/plugin.json=0.1.9 (expected 0.2.0)");
     expect(mismatches[5]).toBe("adapters/hermes/manifest.json=0.1.9 (expected 0.2.0)");
+    expect(mismatches[6]).toBe(".claude-plugin/marketplace.json=0.1.9 (expected 0.2.0)");
+    expect(mismatches[7]).toBe(".claude-plugin/marketplace.json plugins[0]=0.1.8 (expected 0.2.0)");
+  });
+
+  it("reports a drifted marketplace carrier even when every other carrier matches", () => {
+    // Given: a fully consistent release except a stale marketplace plugins[0]
+    const carriers = consistent();
+    carriers.marketplaceJson = { version: "0.2.0", plugins: [{ version: "0.1.9" }] };
+    // When: the carriers are compared against the release version
+    const mismatches = versionMismatches(carriers);
+    // Then: only the drifted nested carrier is named
+    expect(mismatches).toEqual(['.claude-plugin/marketplace.json plugins[0]=0.1.9 (expected 0.2.0)']);
+  });
+
+  it("reports a marketplace manifest that lost its version fields entirely", () => {
+    const carriers = consistent();
+    carriers.marketplaceJson = { plugins: [{}] };
+    expect(versionMismatches(carriers)).toEqual([
+      ".claude-plugin/marketplace.json=missing (expected 0.2.0)",
+      '.claude-plugin/marketplace.json plugins[0]=missing (expected 0.2.0)',
+    ]);
   });
 });
 
