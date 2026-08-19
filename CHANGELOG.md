@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-19
+
 ### Added
 - The npm package now ships `CHANGELOG.md`, so release notes are available offline and in version control.
 - Releases are published by CI from `oms-v*` tags with npm provenance and an auto-generated GitHub Release whose notes come from the CHANGELOG.
