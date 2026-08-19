@@ -1,0 +1,41 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "oms",
+  "description": "Oh My Second Brain: a host-agnostic, user-owned convention layer for Obsidian and plain-markdown knowledge vaults.",
+  "owner": {
+    "name": "gobeumsu",
+    "email": "gobeumsu@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "oms",
+      "description": "Oh My Second Brain convention layer for Obsidian vaults — capture, retrieve, and validate knowledge under a declared semantic convention.",
+      "version": "0.1.9",
+      "author": {
+        "name": "gobeumsu",
+        "email": "gobeumsu@gmail.com"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/GoBeromsu/oh-my-second-brain#readme",
+      "repository": "https://github.com/GoBeromsu/oh-my-second-brain",
+      "license": "MIT",
+      "keywords": [
+        "obsidian",
+        "knowledge-base",
+        "mcp",
+        "frontmatter",
+        "markdown",
+        "claude-code"
+      ],
+      "tags": [
+        "obsidian",
+        "knowledge-management",
+        "convention",
+        "frontmatter",
+        "vault"
+      ]
+    }
+  ],
+  "version": "0.1.9"
+}

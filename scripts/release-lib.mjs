@@ -140,6 +140,31 @@ export function bumpedPackageLock(jsonText, version) {
 }
 
 /**
+ * Set both marketplace version carriers (top-level and plugins[0]).
+ *
+ * The marketplace manifest is the only carrier holding the version twice, so a
+ * text replace of the first `"version"` pair (bumpedJsonVersion) would leave the
+ * other one stale. Parse-and-set, exactly like bumpedPackageLock.
+ *
+ * @param {string} jsonText
+ * @param {string} version
+ * @returns {string} re-stringified manifest with 2-space indent and trailing newline
+ */
+export function bumpedMarketplace(jsonText, version) {
+  if (!isStableVersion(version)) {
+    throw new Error(`invalid version: ${String(version)} (expected X.Y.Z)`);
+  }
+  const marketplace = JSON.parse(jsonText);
+  const plugin = marketplace?.plugins?.[0];
+  if (!plugin || typeof plugin !== "object") {
+    throw new Error("malformed marketplace: missing plugins[0] entry");
+  }
+  marketplace.version = version;
+  plugin.version = version;
+  return `${JSON.stringify(marketplace, null, 2)}\n`;
+}
+
+/**
  * @param {{
  *   version: string,
  *   packageJson: { version?: string },
@@ -147,6 +172,7 @@ export function bumpedPackageLock(jsonText, version) {
  *   claudePluginJson: { version?: string },
  *   codexPluginJson: { version?: string },
  *   hermesManifestJson: { version?: string },
+ *   marketplaceJson: { version?: string, plugins?: { version?: string }[] },
  * }} carriers
  * @returns {string[]} human-readable mismatch descriptions; empty when every carrier matches
  */
@@ -157,6 +183,7 @@ export function versionMismatches({
   claudePluginJson,
   codexPluginJson,
   hermesManifestJson,
+  marketplaceJson,
 }) {
   const checks = [
     ["package.json", packageJson?.version],
@@ -165,6 +192,8 @@ export function versionMismatches({
     ["adapters/claude-code/.claude-plugin/plugin.json", claudePluginJson?.version],
     ["adapters/codex/.codex-plugin/plugin.json", codexPluginJson?.version],
     ["adapters/hermes/manifest.json", hermesManifestJson?.version],
+    [".claude-plugin/marketplace.json", marketplaceJson?.version],
+    ['.claude-plugin/marketplace.json plugins[0]', marketplaceJson?.plugins?.[0]?.version],
   ];
   return checks
     .filter(([, actual]) => actual !== version)
