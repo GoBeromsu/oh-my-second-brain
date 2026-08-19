@@ -35,19 +35,46 @@ export function resolveRuntimeSelection(selection: RuntimeSelection): HostRuntim
   return [selection];
 }
 
+async function runSingleHostOperation(
+  options: HostOperationOptions,
+  runtime: HostRuntime,
+): Promise<HostOperationResult> {
+  const host = hostSurfaceForRuntime(runtime);
+  if (options.action === "install") {
+    if (runtime === "claude") return installClaude(options, host);
+    if (runtime === "codex") return installCodex(options, host);
+    return installHermes(options, host);
+  }
+  if (runtime === "claude") return uninstallClaude(options);
+  if (runtime === "codex") return uninstallCodex(options);
+  return uninstallHermes(options);
+}
+
+function failedHostOperationResult(
+  options: HostOperationOptions,
+  runtime: HostRuntime,
+  error: unknown,
+): HostOperationResult {
+  const reason = error instanceof Error ? error.message : String(error);
+  return {
+    runtime,
+    action: options.action,
+    changed: false,
+    skipped: false,
+    paths: [],
+    commands: [],
+    messages: [`FAILED: ${runtime} ${options.action} did not complete: ${reason}`],
+  };
+}
+
 export async function runHostOperation(options: HostOperationOptions): Promise<HostOperationResult[]> {
   const runtimes = resolveRuntimeSelection(options.runtime);
   const results: HostOperationResult[] = [];
   for (const runtime of runtimes) {
-    const host = hostSurfaceForRuntime(runtime);
-    if (options.action === "install") {
-      if (runtime === "claude") results.push(await installClaude(options, host));
-      if (runtime === "codex") results.push(await installCodex(options, host));
-      if (runtime === "hermes") results.push(await installHermes(options, host));
-    } else {
-      if (runtime === "claude") results.push(await uninstallClaude(options));
-      if (runtime === "codex") results.push(await uninstallCodex(options));
-      if (runtime === "hermes") results.push(await uninstallHermes(options));
+    try {
+      results.push(await runSingleHostOperation(options, runtime));
+    } catch (error) {
+      results.push(failedHostOperationResult(options, runtime, error));
     }
   }
   return results;

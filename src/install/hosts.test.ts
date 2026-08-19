@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -261,6 +261,60 @@ describe("host installer/uninstaller", () => {
     expect(after).not.toContain("oms:");
     expect(existsSync(path.join(home, ".hermes", "skills", "knowledge-management", "oms"))).toBe(false);
     expect(existsSync(path.join(home, ".hermes", "adapters", "oms"))).toBe(false);
+  });
+
+  it("keeps other runtimes installing when one runtime throws", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-isolation-"));
+    const decoy = await mkdtemp(path.join(tmpdir(), "oms-install-isolation-decoy-"));
+    const hermesSkillTarget = path.join(home, ".hermes", "skills", "knowledge-management", "oms");
+    await mkdir(path.dirname(hermesSkillTarget), { recursive: true });
+    await symlink(decoy, hermesSkillTarget, "dir");
+
+    const results = await runHostOperation({ action: "install", runtime: "all", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+
+    expect(results.map((result) => result.runtime)).toEqual(["claude", "codex", "hermes"]);
+    const hermes = results.find((result) => result.runtime === "hermes");
+    expect(hermes?.changed).toBe(false);
+    expect(hermes?.messages.join(" ")).toContain("Refusing to replace symlinked");
+    expect(results.find((result) => result.runtime === "codex")?.changed).toBe(true);
+    expect(existsSync(path.join(home, ".codex", "config.toml"))).toBe(true);
+  });
+
+  it("preserves unrelated comments in the Hermes config during install and uninstall", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-hermes-comments-"));
+    const configPath = path.join(home, ".hermes", "config.yaml");
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(
+      configPath,
+      ["# user top-level comment", "model: hermes-4 # trailing note", "", "mcp_servers:", "  # keep this server", "  other:", "    command: other-bin", ""].join("\n"),
+      "utf-8",
+    );
+
+    await runHostOperation({ action: "install", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+    const installed = await readFile(configPath, "utf-8");
+    expect(installed).toContain("# user top-level comment");
+    expect(installed).toContain("model: hermes-4 # trailing note");
+    expect(installed).toContain("# keep this server");
+    expect(installed).toContain("oms:");
+
+    await runHostOperation({ action: "uninstall", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+    const uninstalled = await readFile(configPath, "utf-8");
+    expect(uninstalled).toContain("# user top-level comment");
+    expect(uninstalled).toContain("# keep this server");
+    expect(uninstalled).toContain("command: other-bin");
+    expect(uninstalled).not.toContain("oms:");
+  });
+
+  it("reports an unusable Hermes config instead of overwriting it", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-hermes-invalid-"));
+    const configPath = path.join(home, ".hermes", "config.yaml");
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, "- not\n- a mapping\n", "utf-8");
+
+    const [result] = await runHostOperation({ action: "install", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+
+    expect(result?.messages.join(" ")).toContain("not a supported YAML mapping");
+    expect(await readFile(configPath, "utf-8")).toBe("- not\n- a mapping\n");
   });
 
   it("dry-run reports all host plans without mutating home", async () => {
