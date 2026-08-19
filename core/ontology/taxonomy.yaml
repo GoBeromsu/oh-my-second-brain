@@ -9,3 +9,6 @@ folders:
   inbox:
     intent: "Raw unprocessed captures awaiting triage; nothing required yet."
     concept: inbox
+  terms:
+    intent: "Defined vocabulary the vault links to from other notes."
+    concept: term
