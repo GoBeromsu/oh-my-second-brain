@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Shrink-only inventory of the transitional facade's OWN outward imports into not-yet-migrated legacy modules. This bounds the temporary boundary debt introduced while cli/ and mcp/ are being pointed at kernel/. Additions are forbidden; every migration PR must strictly shrink this list. It must reach zero and the file must be deleted in PR 7c, together with src/kernel-transitional/.",
+  "note": "This tracks edges FROM src/kernel-transitional/facade.ts INTO legacy src/* modules. It deliberately does NOT track inbound consumer edges (cli/mcp importing the facade) - those are legal by construction and inventorying them would bound the wrong direction, leaving the actual forbidden imports unconstrained.",
+  "facade": "src/kernel-transitional/facade.ts",
+  "outwardImports": []
+}

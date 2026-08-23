@@ -7,7 +7,11 @@ on:
     branches: [main]
 
 jobs:
-  release-check:
+  # Pull-request lane only. Release verification (pack, artifact smoke, plugin
+  # validate) is NOT run here: .github/workflows/release.yml already runs the
+  # full `npm run release:check` chain on `oms-v*` tags, so running it per merge
+  # duplicated that work three times over the Node matrix for no added signal.
+  check:
     runs-on: ubuntu-latest
     strategy:
       # Don't let one version's failure cancel the others -- we want the full
@@ -31,6 +35,3 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run audit
-      - run: npm run release:pack
-      - run: npm run release:artifact-smoke
-      - run: npm run release:plugin

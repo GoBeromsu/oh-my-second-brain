@@ -1,0 +1,33 @@
+name: module-size
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  ratchet:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 is required. The checker compares against the pull
+      # request's merge base and re-reads its own policy literals; without full
+      # history a pull request could grow a module and loosen the policy in the
+      # same commit with nothing to compare against.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+      # No npm ci: the checker is dependency-free so it cannot be blocked by an
+      # install failure, and it runs once rather than across the Node matrix.
+      - name: Module-size ratchet
+        env:
+          BASELINE_REF: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASELINE_REF" ]; then
+            node scripts/check-module-size.mjs --baseline-ref "$BASELINE_REF"
+          else
+            node scripts/check-module-size.mjs
+          fi
