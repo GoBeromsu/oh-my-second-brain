@@ -14,6 +14,7 @@ oh-my-secondbrain 프로젝트의 주요 설계 결정을 기록한다.
 | [ADR-008](./ADR-008-note-identity-real-path-ssot-no-slug.md) | 노트 식별자 모델 — 실경로 SSOT, 슬러그 비도입 | Accepted |
 | [ADR-009](./ADR-009-qmd-compatible-global-collection-bridge.md) | qmd-호환 전역 컬렉션 브릿지 — link 기반 vault 해석과 product interface 계약 | Superseded (ADR-010; D1/D3/D4 remain in force) |
 | [ADR-010](./ADR-010-search-backend-seam-qmd-optional.md) | SearchBackend seam — in-repo engine default, qmd optional backend | Accepted |
+| [ADR-011](./ADR-011-search-reranking-opt-in.md) | Search reranking — explicit opt-in until a production reranker exists | Accepted |
 
 ## 작성 규칙
 

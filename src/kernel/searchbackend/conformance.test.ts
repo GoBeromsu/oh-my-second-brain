@@ -30,6 +30,19 @@ async function fixtureVault(): Promise<string> {
   return vault;
 }
 
+async function defaultLimitFixtureVault(): Promise<string> {
+  const vault = await mkdtemp(path.join(tmpdir(), "oms-search-backend-default-limit-"));
+  vaults.push(vault);
+  await Promise.all(
+    Array.from({ length: 12 }, (_, index) => writeFile(
+      path.join(vault, `common-${index}.md`),
+      `# Common ${index}\ncommon retrieval fixture ${index}\n`,
+      "utf8",
+    )),
+  );
+  return vault;
+}
+
 async function collectionFixtureVault(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-search-backend-collections-"));
   vaults.push(vault);
@@ -96,6 +109,19 @@ function searchBackendConformance(
       try {
         const result = await backend.search({ query: "the", limit: 1 });
         expect(result.hits.length).toBeLessThanOrEqual(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("defaults an options-free query to ten results", async () => {
+      const vault = await defaultLimitFixtureVault();
+      const { backend, dispose } = create(vault);
+      try {
+        const result = await backend.search({ query: "common retrieval fixture" });
+
+        expect(result.available).toBe(true);
+        expect(result.hits).toHaveLength(10);
       } finally {
         await dispose();
       }
@@ -266,6 +292,32 @@ searchBackendConformance("in-repository engine", (vault) => {
 });
 
 describe("EngineSearchBackend reranking", () => {
+  it("applies default limit and minScore at the engine boundary", async () => {
+    const candidates = [-1, ...Array.from({ length: 11 }, (_, index) => index)].map((score) => ({
+      docid: `score-${score}.md`,
+      score,
+      uri: `vault://score-${score}.md`,
+      path: `score-${score}.md`,
+      snippet: "",
+      evidence: { lexical: true, vector: false },
+    }));
+    const adapter = {
+      semanticQuery: async ({ limit, minScore }: { readonly limit?: number; readonly minScore?: number }) => ({
+        available: true as const,
+        hits: candidates
+          .filter((candidate) => minScore === undefined || candidate.score >= minScore)
+          .slice(0, limit),
+      }),
+    };
+    const backend = new EngineSearchBackend(adapter as never, "/vault");
+
+    const result = await backend.search({ query: "default boundary behavior" });
+
+    expect(result).toMatchObject({ available: true });
+    expect(result.hits).toHaveLength(10);
+    expect(result.hits.map((hit) => hit.score)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
   it("passes the real query to a configured reranker and returns its changed ordering", async () => {
     const vault = await fixtureVault();
     const rerank = vi.fn(async (_query: string, hits: ScoredHit[]) =>
@@ -295,6 +347,27 @@ describe("EngineSearchBackend reranking", () => {
 
       await backend.search({ query: "telescope planets orbit", rerank: false });
       expect(rerank).toHaveBeenCalledTimes(1);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("derives a reranker query from typed searches", async () => {
+    const vault = await fixtureVault();
+    const rerank = vi.fn(async (_query: string, hits: ScoredHit[]) =>
+      [...hits].reverse().map((hit, index) => ({ ...hit, score: hits.length - index })),
+    );
+    const engine = assembleCoreSemanticEngine({ vault, reranker: { rerank } });
+    const backend = new EngineSearchBackend(engine.adapter, vault);
+    try {
+      const result = await backend.search({
+        searches: [{ type: "lex", query: "telescope planets orbit" }],
+        candidateLimit: 10,
+        rerank: true,
+      });
+
+      expect(result.available).toBe(true);
+      expect(rerank).toHaveBeenCalledWith("telescope planets orbit", expect.any(Array));
     } finally {
       await engine.dispose();
     }

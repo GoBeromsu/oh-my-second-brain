@@ -24,26 +24,6 @@ function assertNonVacuous(files, what) {
   }
 }
 
-function markdownFiles(directory, recursive) {
-  if (!existsSync(directory)) return [];
-  const files = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const path = resolve(directory, entry.name);
-    // Archived execution records are historical snapshots; validating their
-    // old links would rewrite history or make current CI depend on it.
-    if (entry.isDirectory() && relative(root, path) === "docs/exec-plan/archived") continue;
-    if (entry.isDirectory() && recursive) files.push(...markdownFiles(path, true));
-    else if (
-      entry.isFile()
-      && entry.name.endsWith(".md")
-      && !excludedMarkdownFiles.has(relative(root, path))
-    ) {
-      files.push(path);
-    }
-  }
-  return files;
-}
-
 function isRelativeTarget(target) {
   return target.length > 0
     && !target.startsWith("#")
@@ -67,6 +47,12 @@ function packagedFiles() {
     throw new Error(`npm pack --dry-run --json returned an unexpected file manifest for ${root}.`);
   }
   return new Set(result[0].files.map((file) => file.path));
+}
+
+function shippedMarkdownFiles(files) {
+  return [...files]
+    .filter((file) => file.endsWith(".md") && !excludedMarkdownFiles.has(file))
+    .map((file) => resolve(root, file));
 }
 
 function isPackaged(path, files) {
@@ -149,13 +135,9 @@ function checkHostSkillInvocations(file, text, skills) {
   }
 }
 
-const files = [
-  ...markdownFiles(root, false),
-  ...markdownFiles(resolve(root, "docs"), true),
-  ...markdownFiles(resolve(root, "assets"), true),
-];
-assertNonVacuous(files, "user-facing documentation");
 const packed = packagedFiles();
+const files = shippedMarkdownFiles(packed);
+assertNonVacuous(files, "user-facing documentation");
 const skills = installedSkillNames();
 
 for (const file of files) {

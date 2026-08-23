@@ -19,7 +19,7 @@ export interface SearchRequest {
   readonly hyde?: string;
   readonly limit?: number;
   readonly candidateLimit?: number;
-  /** Apply the configured reranker (default false). */
+  /** Apply the configured reranker (opt-in; ADR-011). */
   readonly rerank?: boolean;
   readonly minScore?: number;
   /** Context that disambiguates a query without becoming a sub-query. */
@@ -89,10 +89,10 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
     searches: hasExplicitSearches
       ? [...searches, ...shorthands]
       : [{ type: request.mode === "vsearch" ? "vec" : "lex", query: query! }],
-    limit: request.limit,
+    limit: request.limit ?? 10,
     candidateLimit: request.candidateLimit,
-    rerank: request.rerank,
-    minScore: request.minScore,
+    rerank: request.rerank ?? false,
+    minScore: request.minScore ?? 0,
     intent: request.intent,
     collection: request.collection,
     collections,

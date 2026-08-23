@@ -119,7 +119,7 @@ const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
 const searchProperties = {
   query: string, searches: { type: "array", maxItems: 10, items: { type: "object", properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } },
-  collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: number, candidateLimit: number, rerank: boolean, minScore: number, intent: string, lex: string, vec: string, hyde: string, index: string,
+  collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { ...number, default: 10 }, candidateLimit: number, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, intent: string, lex: string, vec: string, hyde: string, index: string,
   target: string, targets: stringArray, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean,
 } as const;
 const contextProperties = { concept: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: number, maxNeighbors: number, useCache: boolean,

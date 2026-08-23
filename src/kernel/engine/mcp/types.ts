@@ -69,7 +69,7 @@ export interface McpSemanticQueryOptions extends McpStatusOptions {
   readonly fullPath?: boolean;
   readonly chunkStrategy?: string;
   readonly candidateLimit?: number;
-  /** Apply the configured reranker (default false). */
+  /** Apply the configured reranker (opt-in; ADR-011). */
   readonly rerank?: boolean;
   /** Internal inverse spelling used by morning retrieval options. */
   readonly noRerank?: boolean;

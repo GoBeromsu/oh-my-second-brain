@@ -116,9 +116,9 @@ describe("documentation mapping checker", () => {
   it("excludes separately-owned core/AGENTS.md from mapping checks", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);
-    writePackage(fixture);
+    writePackage(fixture, ["core"]);
     mkdirSync(resolve(fixture, "core"), { recursive: true });
-    writeFileSync(resolve(fixture, "CONTRIBUTING.md"), "Contributor guidance.\n");
+    writeFileSync(resolve(fixture, "core", "README.md"), "Core guidance.\n");
     writeFileSync(resolve(fixture, "core", "AGENTS.md"), "[broken](./missing.md)\n");
 
     const result = runChecker(fixture);
@@ -127,9 +127,23 @@ describe("documentation mapping checker", () => {
     expect(result.output).toBe("");
   });
 
+  it("reports a broken reference in shipped markdown outside the former scan roots", () => {
+    const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
+    fixtures.push(fixture);
+    writePackage(fixture, ["core/ontology"]);
+    mkdirSync(resolve(fixture, "core", "ontology", "schemas"), { recursive: true });
+    writeFileSync(resolve(fixture, "core", "ontology", "schemas", "README.md"), "[broken](./missing.md)\n");
+
+    const result = runChecker(fixture);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("core/ontology/schemas/README.md:1: missing reference ./missing.md");
+  });
+
   it("fails closed when no user-facing documentation files are scanned", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);
+    writePackage(fixture, []);
 
     const result = runChecker(fixture);
 

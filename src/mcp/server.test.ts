@@ -24,6 +24,22 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 }
 
 describe("Oh My Second Brain MCP stdio server", () => {
+  it("advertises semantic-query defaults that match the SearchBackend contract", () => {
+    const search = omsMcpTools.find((tool) => tool.name === "oms_search");
+    const schema = search?.inputSchema as {
+      readonly oneOf?: readonly {
+        readonly properties?: Record<string, { readonly const?: string; readonly default?: unknown }>;
+      }[];
+    };
+    const semanticQuery = schema.oneOf?.find(
+      (operation) => operation.properties?.["op"]?.const === "semantic-query",
+    );
+
+    expect(semanticQuery?.properties?.["limit"]?.default).toBe(10);
+    expect(semanticQuery?.properties?.["minScore"]?.default).toBe(0);
+    expect(semanticQuery?.properties?.["rerank"]?.default).toBe(false);
+  });
+
   it("keeps every tool-declaring skill's MCP arguments valid for its advertised schema", async () => {
     const validator = new AjvJsonSchemaValidator();
     const toolByName = new Map(omsMcpTools.map((tool) => [tool.name, tool]));

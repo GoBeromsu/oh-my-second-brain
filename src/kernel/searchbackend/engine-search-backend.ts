@@ -39,9 +39,12 @@ export class EngineSearchBackend implements SearchBackend {
     const adapter = typeof this.adapterOrResolver === "function"
       ? this.adapterOrResolver(requiresEmbeddings({ searches: normalized.searches }))
       : this.adapterOrResolver;
+    // Typed searches have no plain `query`, but their text is still the caller's
+    // retrieval intent. Preserve it for an explicitly requested reranker.
+    const rerankQuery = normalized.query ?? normalized.searches.map((search) => search.query).join(" ");
     const searchCollection = async (collectionPath?: string): Promise<McpSemanticQueryResult> => adapter.semanticQuery({
       vault: this.vault,
-      query: normalized.query ?? "",
+      query: rerankQuery,
       searches: normalized.searches,
       limit: normalized.limit,
       candidateLimit: normalized.candidateLimit,

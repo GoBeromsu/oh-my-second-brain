@@ -1,14 +1,20 @@
-# core/ontology/schemas/
+# Schema reference assets
 
-Layer 1 CONTRACT — frontmatter schema definitions for all vault note types.
+The `*.schema.yaml` files in this directory are shipped reference assets. They
+are not installed into a vault and are not read by the current setup workflow.
 
-## What lives here
+## Setup output
 
-Each `*.schema.yaml` file declares the allowed frontmatter fields, types, enums,
-and required flags for one note type. These files are the authoring source;
-at vault setup time, `vault-scaffold` copies them into the vault's own `.oms/schemas/`.
+`oms setup` creates the vault's `.oms/` directory and writes:
 
-## Current schemas
+- `.oms/taxonomy.yaml`, containing the configured folder-to-concept bindings.
+- `.oms/concepts/`, containing bundled concept documents from
+  `core/ontology/concepts/` when a document does not already exist locally.
+
+Setup does not create `.oms/schemas/` or copy files from this directory. The
+live convention model is the taxonomy plus concept documents above.
+
+## Reference files
 
 | File | Note type | Key constraint |
 |------|-----------|----------------|
@@ -31,19 +37,19 @@ fields:
     enum: [...]        # only when type: enum
     normalize: kebab   # optional — normalize list values to kebab-case
 
-lenses:                # optional — named retrieval views (see retrieve skill)
+lenses:                # optional named retrieval views
   - name: <lens>
     intent: "..."
     fields: [...]
 
 validation:
   allow_extra_fields: true   # vault notes may carry additional ad-hoc keys
-  strict_enum: true          # enum violations are hard errors in vault-lint
+  strict_enum: true          # enum violations are hard errors
 ```
 
-## Invariants (ADR-006 Layer 1)
+## Reference constraints
 
-- These files are parsed by `vault-lint` and `oms_validate_contract`. No prose rationale.
-- Rationale for *why* a field exists belongs in `.oms/governance/` (Layer 2), not here.
-- Adding a required field is a breaking change — all existing notes must be migrated first.
-- `allow_extra_fields: true` is the default; vault notes routinely carry personal ad-hoc keys.
+- Changes to these reference files do not change a configured vault.
+- The active fields and constraints for a vault live in its `.oms/concepts/`
+  documents.
+- Adding a required field to an active concept requires updating existing notes.
