@@ -1,7 +1,8 @@
 ---
 slug: ADR-009-qmd-compatible-global-collection-bridge
 title: "qmd-호환 전역 컬렉션 브릿지 — link 기반 vault 해석과 product interface 계약"
-status: Accepted
+status: Superseded
+superseded_by: ./ADR-010-search-backend-seam-qmd-optional.md
 date: 2026-07-05
 created_by: gjc
 deciders: [beomsu]
@@ -15,7 +16,14 @@ relates_to:
 
 ## Status
 
-Accepted
+Superseded by [ADR-010](./ADR-010-search-backend-seam-qmd-optional.md) on 2026-08-24.
+
+This ADR is superseded only in part. **D1, D3, and D4 remain in force. D2 is
+retired. D5 is retired insofar as it requires parity for the D2 qmd-compatible
+aliases and `qmd://` resource.** The `superseded_by` frontmatter field is a
+deliberate extension to this repository's ADR frontmatter schema; it records
+the successor ADR without making a reader infer that every decision in this
+record is dead.
 
 ## Context
 
@@ -49,7 +57,7 @@ OMS가 명시적 `--vault` 없이 vault를 해석할 때의 공식 순서는 다
 
 이 순서는 `resolveEffectiveVault`의 product contract다. qmd식 전역 collection registry를 별도로 만들지 않는다. 외부 repo는 `oms link --vault <vault>`로 bridge를 생성하고, bridge는 config/secrets를 복제하지 않으며 vault real path와 scope만 가진다.
 
-### D2 — qmd-호환 CLI/MCP 표면은 공식 product interface다
+### D2 — qmd-호환 CLI/MCP 표면은 공식 product interface다 **[retired by ADR-010]**
 
 다음 표면은 우발적 compatibility가 아니라 문서화된 product interface다.
 
@@ -75,7 +83,7 @@ qmd-compatible 표면을 제공해도 document identity는 변하지 않는다.
 - `qmd://`는 resource URI scheme일 뿐 slug identity 계층이 아니다.
 - qmd slug와 호환해야 하는 경계가 생기면 ADR-008처럼 `slug(real path) → real path` forward map으로만 처리하고, 사용자·MCP 반환값은 real path를 유지한다.
 
-### D5 — Adapter parity는 의무다
+### D5 — Adapter parity는 의무다 **[retired with D2 by ADR-010]**
 
 qmd-compatible CLI/MCP alias와 `qmd://` resource 의미론을 변경할 때는 core 구현만 바꾸지 않는다. Claude Code, Codex, Hermes 등 host adapter 문서·skills·manifest·tests가 같은 의미론을 노출해야 하며, 변경 PR은 ADR-009 영향과 adapter parity 갱신 여부를 함께 다룬다.
 
@@ -101,19 +109,33 @@ ADR-008의 결정을 유지한다. qmd slug는 손실적이며 real path를 별�
 
 ### Enables
 
-- 외부 repo에서 `oms link --vault <vault>` 1회 후 CLI/MCP 질의가 같은 vault로 해석된다.
-- qmd와 유사한 query/get 사용감을 제공하면서 qmd runtime dependency는 제거한다.
-- adapter와 문서가 의존할 수 있는 안정적인 product interface contract가 생긴다.
+- 외부 repo에서 `oms link --vault <vault>` 1회 후 OMS CLI/MCP가 같은 vault로 해석된다.
 - ADR-004의 config/access topology와 ADR-008의 real-path identity가 충돌 없이 연결된다.
 
 ### Costs / trade-offs
 
-- qmd-compatible surface를 변경할 때 adapter parity와 문서 갱신 비용이 발생한다.
 - `resolveEffectiveVault` 순서가 product contract가 되므로 fallback 순서 변경은 breaking change로 취급해야 한다.
 - qmd 전역 collection registry를 원하는 미래 요구가 생기면 새 ADR/마이그레이션으로 별도 설계해야 한다.
 
 ### New constraints
 
 - bridge `.oms/links.yaml`에는 vault pointer와 scope만 둔다. config/secrets/ontology를 복제하지 않는다.
-- qmd-compatible CLI/MCP alias와 `qmd://` resource 의미론을 바꾸는 변경은 ADR-009 영향 평가와 adapter parity 갱신을 포함한다.
 - document identity는 real path SSOT다. slug를 canonical id로 승격하지 않는다.
+
+## Supersession scope
+
+- **D1 remains in force.** `resolveEffectiveVault` keeps link-based vault
+  resolution as the official path for the verified-target write kernel. The
+  implementation still resolves local vault, bridge `.oms/links.yaml`, and
+  `OMS_VAULT` before its later global-config and cwd fallbacks.
+- **D2 is retired.** The qmd-compatible CLI/MCP aliases and `qmd://` resource
+  are removed; they are no longer an OMS product interface.
+- **D3 remains in force.** `oms link` still writes its managed bridge usage
+  section to a project `AGENTS.md`; install-time host guidance remains
+  user-level.
+- **D4 remains in force.** ADR-008's vault-relative real-path document
+  identity remains canonical. The retired `qmd://` scheme no longer supplies a
+  URI boundary, but it does not change the real-path SSOT.
+- **D5 is retired with D2.** Its parity obligation was specifically for the
+  removed aliases and resource. It creates no continuing requirement for those
+  surfaces.

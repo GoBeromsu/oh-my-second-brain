@@ -104,7 +104,7 @@ after editing imports.
 - **No `any` without justification.** Add a comment explaining why if you must use it.
 - **Test new logic paths.** Any new branch in `src/` should have a corresponding vitest case.
 - **Backward-compatible config changes only.** If a config shape changes, provide a migration path.
-- **qmd-compatible interface is a product contract.** CLI/MCP aliases (`query`, `search`, `vsearch`, `get`, `multi-get`/`multi_get`) and `qmd://` resource semantics require ADR-009 review plus adapter parity updates when changed.
+- **SearchBackend seam.** The in-repo engine is the default search backend; optional backends such as qmd must be selected explicitly and fail loudly when unavailable.
 - Run `npm run lint && npm run build && npm test` before opening a PR and confirm all pass.
 
 ---
