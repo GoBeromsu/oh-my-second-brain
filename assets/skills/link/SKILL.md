@@ -3,8 +3,8 @@ name: link
 description: Suggest or apply safe wikilinks between vault notes.
 mcp_tool: oms_link
 mcp_args:
-  op: "$1"
-  notePath: "$2"
+  op: "suggest"
+  notePath: "$1"
 ---
 
 # link

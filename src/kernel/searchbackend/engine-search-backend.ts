@@ -16,8 +16,10 @@ export class InvalidSearchRequestError extends Error {
  * A caller who sends plain text has not chosen a retrieval strategy, so the
  * backend picks lexical, which needs no model and no configuration.
  *
- * Vector retrieval is deliberately NOT added here. Measured behaviour: a query
- * containing a `vec` sub-query returns `available: false` with
+ * Vector retrieval is deliberately NOT added for an unspecified query. An
+ * explicit `vsearch` mode is converted to the same `vec` sub-query as every
+ * other explicit vector spelling. Measured behaviour: a query containing a
+ * `vec` sub-query returns `available: false` with
  * "graph-only engine: embedding provider unavailable. Configure embeddings via
  * OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL..." whenever no provider is
  * configured. That is ADR-007's permanently-locked no-fake-fallback rule doing
@@ -34,14 +36,21 @@ export class InvalidSearchRequestError extends Error {
  * So: plain query means "answer with what is configured"; an explicit `vec`
  * sub-query means "I want vector search" and fails loudly when it cannot run.
  */
-function expandPlainQuery(query: string): readonly McpSemanticTypedSearch[] {
-  return [{ type: "lex", query }];
+function expandPlainQuery(
+  query: string,
+  mode: SearchRequest["mode"],
+): readonly McpSemanticTypedSearch[] {
+  return [{ type: mode === "vsearch" ? "vec" : "lex", query }];
+}
+
+function requiresEmbeddings(searches: readonly McpSemanticTypedSearch[]): boolean {
+  return searches.some((search) => search.type === "vec" || search.type === "hyde");
 }
 
 /** SearchBackend adapter for the in-repository OMS engine. */
 export class EngineSearchBackend implements SearchBackend {
   constructor(
-    private readonly adapterOrResolver: McpEngineAdapter | ((searches: readonly McpSemanticTypedSearch[]) => McpEngineAdapter),
+    private readonly adapterOrResolver: McpEngineAdapter | ((requiresEmbeddings: boolean) => McpEngineAdapter),
     private readonly vault: string,
   ) {}
 
@@ -62,10 +71,10 @@ export class EngineSearchBackend implements SearchBackend {
 
     const searches = hasSearches
       ? (request.searches as readonly McpSemanticTypedSearch[])
-      : expandPlainQuery((request.query as string).trim());
+      : expandPlainQuery((request.query as string).trim(), request.mode);
 
     const adapter = typeof this.adapterOrResolver === "function"
-      ? this.adapterOrResolver(searches)
+      ? this.adapterOrResolver(requiresEmbeddings(searches))
       : this.adapterOrResolver;
     return adapter.semanticQuery({
       vault: this.vault,

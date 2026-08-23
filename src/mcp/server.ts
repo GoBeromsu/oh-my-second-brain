@@ -158,7 +158,13 @@ async function semanticIndexPostcondition(vault: string): Promise<SemanticIndexP
   }
 }
 
-type Operation = { readonly op: string; readonly name: string; readonly properties?: Record<string, unknown>; readonly required?: readonly string[] };
+type Operation = {
+  readonly op?: string;
+  readonly name: string;
+  readonly properties?: Record<string, unknown>;
+  readonly required?: readonly string[];
+  readonly direct?: boolean;
+};
 const string = { type: "string" };
 const number = { type: "number" };
 const boolean = { type: "boolean" };
@@ -170,20 +176,29 @@ const searchProperties = {
 } as const;
 const contextProperties = { concept: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: number, maxNeighbors: number, useCache: boolean,
   semanticEnabled: boolean, semanticCollection: string, semanticLimit: number, semanticScope: { ...string, enum: ["global", "graph"] }, semanticMode: searchProperties.mode, semanticIntent: string, semanticSearches: searchProperties.searches, semanticLex: string, semanticVec: string, semanticHyde: string, semanticMinScore: number, semanticAll: boolean, semanticFormat: { ...string, enum: ["json", "files"] }, semanticFull: boolean, semanticLineNumbers: boolean, semanticFullPath: boolean, semanticIndex: string, semanticChunkStrategy: string, semanticCandidateLimit: number, semanticNoRerank: boolean, semanticHydrate: { ...string, enum: ["none", "top", "all", "targets"] }, semanticHydrateTargets: stringArray, semanticHydrateLineLimit: number, semanticHydrateMaxBytes: number, semanticHydrateFromLine: number, semanticHydrateLineCount: number, embeddingSyncBeforeSearch: boolean, embeddingSyncEnsureCollection: boolean, embeddingSyncUpdate: boolean, embeddingSyncEmbed: boolean, embeddingSyncForce: boolean, embeddingSyncPull: boolean, embeddingSyncMaxDocsPerBatch: number, embeddingSyncMaxBatchMb: number } as const;
+const writeProperties = { notePath: string, concept: string, frontmatter: { type: "object" }, body: string } as const;
 const operations: Record<string, readonly Operation[]> = {
-  oms_write: [{ op: "create", name: "write" }, { op: "append", name: "write" }, { op: "update", name: "write" }],
+  oms_write: [
+    { op: "create", name: "write", properties: writeProperties },
+    { op: "append", name: "write", properties: writeProperties },
+    { op: "update", name: "write", properties: writeProperties },
+  ],
   oms_search: [{ op: "axis", name: "oms_retrieve_by_axis", properties: contextProperties }, { op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "lazy-load", name: "oms_lazy_load_note", properties: { notePath: string }, required: ["notePath"] }, { op: "concepts", name: "oms_list_concepts" }, { op: "semantic-query", name: "oms_semantic_query", properties: searchProperties }, { op: "semantic-collections", name: "oms_semantic_collections", properties: { index: string } }, { op: "semantic-contexts", name: "oms_semantic_contexts", properties: { index: string } }, { op: "semantic-status", name: "oms_semantic_status", properties: { index: string } }, { op: "get-document", name: "oms_get_document", properties: searchProperties, required: ["target"] }, { op: "multi-get-documents", name: "oms_multi_get_documents", properties: searchProperties }],
   oms_link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
-  oms_status: [{ op: "status", name: "oms_graph_status" }],
+  oms_status: [{ name: "oms_graph_status", direct: true }],
   oms_doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_contract", properties: { notePath: string }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "semantic-cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { collection: string, ensureCollection: boolean, update: boolean, embed: boolean, force: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number } }],
 };
 function operationSchema(tool: string): Tool["inputSchema"] {
   const toolOperations = operations[tool];
   if (!toolOperations) throw new Error(`Missing MCP operation definition for ${tool}.`);
+  if (toolOperations.length === 1 && toolOperations[0]?.direct) {
+    const { properties = {}, required = [] } = toolOperations[0];
+    return { type: "object", additionalProperties: false, properties, required: [...required] } as Tool["inputSchema"];
+  }
   return { type: "object", oneOf: toolOperations.map(({ op, properties = {}, required = [] }) => ({ additionalProperties: false, properties: { op: { ...string, const: op }, ...properties }, required: ["op", ...required] })) } as Tool["inputSchema"];
 }
 function resolveOperation(tool: string, op: string | undefined): string | undefined {
-  return operations[tool]?.find((operation) => operation.op === op)?.name;
+  return operations[tool]?.find((operation) => operation.direct || operation.op === op)?.name;
 }
 export const omsMcpTools: Tool[] = [
   { name: "oms_write", title: "Oh My Second Brain write", description: "Write a vault note through the kernel-owned .oms contract.", inputSchema: operationSchema("oms_write"), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
@@ -258,7 +273,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   const resolveDocumentAdapter = (): McpEngineAdapter =>
     hasEmbeddingModel() ? getSemanticEngine().adapter : getCoreSemanticEngine().adapter;
   const searchBackend = new EngineSearchBackend(
-    (searches) => searches.some((search) => search.type === "vec" || search.type === "hyde")
+    (requiresEmbeddings) => requiresEmbeddings
       ? getSemanticEngine().adapter
       : resolveDocumentAdapter(),
     vault,
@@ -294,17 +309,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
-    const op = publicName === "oms_write"
-      ? stringArg(args, "op") ?? stringArg(args, "mode") ?? "create"
-      : publicName === "oms_status"
-        ? stringArg(args, "op") ?? "status"
-        : stringArg(args, "op");
+    const op = publicName === "oms_write" ? stringArg(args, "op") ?? "create" : stringArg(args, "op");
     const name = resolveOperation(publicName, op);
     if (!name) return errorText(`Unknown Oh My Second Brain tool: ${publicName}`);
     if (publicName === "oms_write") args = { ...args, mode: op };
     if (publicName === "oms_search" && op === "semantic-query") {
       const searches = args?.["searches"];
-      if ((typeof args?.["query"] === "string") === Array.isArray(searches)) {
+      if (typeof args?.["query"] === "string" && Array.isArray(searches)) {
         return errorText('Provide exactly one of "query" or "searches" for semantic-query.');
       }
     }

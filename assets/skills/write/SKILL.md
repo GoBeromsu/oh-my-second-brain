@@ -3,9 +3,9 @@ name: write
 description: Write a vault note through the Oh My Second Brain kernel contract.
 mcp_tool: oms_write
 mcp_args:
-  mode: "$1"
-  notePath: "$2"
-  body: "$3"
+  op: "create"
+  notePath: "$1"
+  body: "$2"
 ---
 
 # write
@@ -22,7 +22,7 @@ Use this skill for every vault-note mutation.
 /write <create|append|update> <vault-relative-note-path> [body]
 ```
 
-`mode` is `create`, `append`, or `update`. The kernel owns `.oms` and returns one status:
+Use `op` with `create`, `append`, or `update`. The kernel owns `.oms` and returns one status:
 
 - `ask` — fill the missing or invalid fields and call `write` again
 - `inbox` — tell the user; do not invent a folder

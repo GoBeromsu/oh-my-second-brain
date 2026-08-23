@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import { parse } from "yaml";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import { omsMcpTools } from "./server.js";
 
@@ -22,6 +24,44 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 }
 
 describe("Oh My Second Brain MCP stdio server", () => {
+  it("keeps every tool-declaring skill's MCP arguments valid for its advertised schema", async () => {
+    const validator = new AjvJsonSchemaValidator();
+    const toolByName = new Map(omsMcpTools.map((tool) => [tool.name, tool]));
+    const skillRoot = path.join(repoRoot, "assets", "skills");
+    const skillDirs = await readdir(skillRoot, { withFileTypes: true });
+    const declaredSkills = await Promise.all(
+      skillDirs.filter((entry) => entry.isDirectory()).map(async (entry) => {
+        const document = await readFile(path.join(skillRoot, entry.name, "SKILL.md"), "utf-8");
+        const frontmatter = parse(/^---\r?\n([\s\S]*?)\r?\n---/.exec(document)?.[1] ?? "") as Record<string, unknown>;
+        return { skill: entry.name, frontmatter };
+      }),
+    );
+    const skillsWithTools = declaredSkills.filter(({ frontmatter }) => typeof frontmatter["mcp_tool"] === "string");
+    expect(skillsWithTools).toHaveLength(5);
+    for (const { skill, frontmatter } of skillsWithTools) {
+      const tool = toolByName.get(frontmatter["mcp_tool"] as string);
+      expect(tool, `${skill} declares an advertised MCP tool`).toBeDefined();
+      expect(validator.getValidator(tool!.inputSchema)(frontmatter["mcp_args"]).valid, skill).toBe(true);
+    }
+  });
+
+  it("advertises the complete write payload and zero-argument status contract", () => {
+    const validator = new AjvJsonSchemaValidator();
+    const toolByName = new Map(omsMcpTools.map((tool) => [tool.name, tool]));
+    const write = validator.getValidator(toolByName.get("oms_write")!.inputSchema);
+    const status = validator.getValidator(toolByName.get("oms_status")!.inputSchema);
+
+    expect(write({
+      op: "create",
+      notePath: "references/schema-valid.md",
+      concept: "literature",
+      frontmatter: { title: "Schema Valid", "source-url": "https://example.com/schema-valid" },
+      body: "A schema-valid write payload.",
+    }).valid).toBe(true);
+    expect(status({}).valid).toBe(true);
+    expect(status({ op: "status" }).valid).toBe(false);
+  });
+
   it("registers only the five public tools and retires detail aliases", () => {
     expect(omsMcpTools.map((tool) => tool.name)).toEqual([
       "oms_write",
@@ -41,6 +81,35 @@ describe("Oh My Second Brain MCP stdio server", () => {
         "oms_get_document", "oms_multi_get_documents",
       ]),
     );
+  });
+
+  it.each([
+    ["typed vec searches", { op: "semantic-query", searches: [{ type: "vec", query: "telescope" }] }],
+    ["vec field", { op: "semantic-query", vec: "telescope" }],
+    ["hyde field", { op: "semantic-query", hyde: "hypothetical telescope answer" }],
+    ["vsearch mode", { op: "semantic-query", query: "telescope", mode: "vsearch" }],
+  ])("fails loudly for explicit vector retrieval via %s without embedding configuration", async (_strategy, arguments_) => {
+    const env = { ...process.env };
+    delete env.OMS_EMBEDDING_PROVIDER;
+    delete env.OMS_EMBEDDING_MODEL;
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", fixtureVault],
+      cwd: repoRoot,
+      env,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ name: "oms_search", arguments: arguments_ });
+      expect(result.isError).toBe(true);
+      const message = result.content[0]?.type === "text" ? result.content[0].text : "";
+      expect(message).toContain("OMS_EMBEDDING_PROVIDER");
+      expect(message).toContain("OMS_EMBEDDING_MODEL");
+    } finally {
+      await client.close();
+    }
   });
 
   it("reports the package.json version in the MCP handshake", async () => {
@@ -263,7 +332,7 @@ Malformed frontmatter must not block retrieve.
             "source-url": "https://example.com/should-not-write",
           },
           body: "Should not write.",
-          mode: "create",
+          op: "create",
         },
       });
       expect(write.isError).toBe(true);
@@ -331,7 +400,7 @@ Malformed frontmatter must not block retrieve.
             "source-url": "https://example.com/should-not-write",
           },
           body: "Should not write.",
-          mode: "create",
+          op: "create",
         },
       });
       expect(write.isError).toBe(true);
@@ -358,7 +427,7 @@ Malformed frontmatter must not block retrieve.
         await client.callTool({
           name: "oms_write",
           arguments: {
-            mode: "create",
+            op: "create",
             concept: "literature",
             frontmatter: { title: "Incomplete" },
             body: "Body",
@@ -372,7 +441,7 @@ Malformed frontmatter must not block retrieve.
         await client.callTool({
           name: "oms_write",
           arguments: {
-            mode: "create",
+            op: "create",
             notePath: "references/kernel-note.md",
             frontmatter: {
               title: "Kernel Note",
@@ -401,7 +470,7 @@ Malformed frontmatter must not block retrieve.
         await client.callTool({
           name: "oms_write",
           arguments: {
-            mode: "update",
+            op: "update",
             notePath: "references/kernel-note.md",
             frontmatter: { title: "" },
           },
@@ -603,7 +672,7 @@ Malformed frontmatter must not block retrieve.
         await client.callTool({
           name: "oms_write",
           arguments: {
-            mode: "create",
+            op: "create",
             notePath: "references/misrouted.md",
             frontmatter: {
               title: "Misrouted Note",
@@ -867,7 +936,7 @@ fields:
         await client.callTool({
           name: "oms_write",
           arguments: {
-            mode: "create",
+            op: "create",
             notePath: "references/local-vault-note.md",
             frontmatter: { title: "Local Vault Note" },
             body: "Written from inside the vault.",

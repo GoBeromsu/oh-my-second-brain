@@ -3,7 +3,7 @@ name: doctor
 description: Diagnose vault convention and index problems, then run explicit repairs.
 mcp_tool: oms_doctor
 mcp_args:
-  op: "$1"
+  op: "audit"
 ---
 
 # doctor

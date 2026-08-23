@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readdir } from "node:fs/promises";
+import { readdir, rm, writeFile } from "node:fs/promises";
 import {
   REPO_ROOT,
+  absolute,
   assertNonVacuous,
   collectFiles,
   findImports,
@@ -153,6 +154,18 @@ describe("import-direction gate", () => {
     if (files.length === 0) return; // kernel/ does not exist until PR 7a
     assertNonVacuous(files, KERNEL);
     expect(await findImports(files, (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS]))).toEqual([]);
+  });
+
+  it("rejects a .mts kernel module importing an MCP surface", async () => {
+    const fixture = "src/kernel/import-boundary-escape.mts";
+    await writeFile(absolute(fixture), 'import "../mcp/server.js";\n');
+    try {
+      expect(
+        await findImports([fixture], (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS])),
+      ).toEqual([{ file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" }]);
+    } finally {
+      await rm(absolute(fixture), { force: true });
+    }
   });
 
   it("keeps cli imports within cli and kernel", async () => {

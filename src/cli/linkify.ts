@@ -10,21 +10,10 @@
  * postcondition read-back unduplicated here.
  */
 
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { parseNote } from "../kernel/conventions/frontmatter.js";
-import { mapWithConcurrency, walkVaultMarkdown } from "../kernel/conventions/vault-walk.js";
-import { writeNote } from "../kernel/capture/safe.js";
-import { resolveConcept } from "../kernel/ontology/resolver.js";
-import type { Ontology } from "../kernel/ontology/types.js";
-import { applyLinks, hashBody } from "../kernel/engine/linkify/apply.js";
-import { suggestLinks, termBoundNotes } from "../kernel/engine/linkify/suggest.js";
-import type { LinkCandidate, TermNote } from "../kernel/engine/linkify/types.js";
+import { linkifyVault } from "../kernel/link/workflow.js";
+import type { LinkCandidate } from "../kernel/engine/linkify/types.js";
 import { validateVaultLintFolder } from "../kernel/engine/conventions/vault-lint.js";
 import { resolveActiveOntology } from "../kernel/ontology/active.js";
-
-/** Parallel note reads; the walk itself is cheap, contents are the hot cost. */
-const READ_CONCURRENCY = 16;
 
 export interface LinkifyOptions {
   readonly vault: string;
@@ -32,48 +21,6 @@ export interface LinkifyOptions {
   readonly folder?: string;
   readonly apply: boolean;
   readonly yes: boolean;
-}
-
-/** One scanned note: its path, its body, and the term surfaces it exposes. */
-interface ScannedNote {
-  readonly path: string;
-  readonly body: string;
-  readonly concept: string | null;
-  readonly aliases: readonly string[];
-}
-
-/** Flatten an unknown frontmatter `aliases` value to trimmed non-empty strings. */
-function aliasStrings(value: unknown): string[] {
-  if (Array.isArray(value)) return value.flatMap(aliasStrings);
-  if (typeof value !== "string") return [];
-  const trimmed = value.trim();
-  return trimmed ? [trimmed] : [];
-}
-
-/** Read every markdown note in the vault, parsed into body + surface forms. */
-async function scanVault(vault: string, ontology: Ontology): Promise<ScannedNote[]> {
-  const paths: string[] = [];
-  for await (const notePath of walkVaultMarkdown(vault)) paths.push(notePath);
-
-  return mapWithConcurrency(paths, READ_CONCURRENCY, async (notePath) => {
-    const raw = await readFile(path.join(vault, notePath), "utf-8");
-    const parsed = parseNote(raw);
-    return {
-      path: notePath,
-      body: parsed.body,
-      concept: resolveConcept(ontology, notePath)?.concept ?? null,
-      aliases: aliasStrings(parsed.frontmatter["aliases"]),
-    };
-  });
-}
-
-/** True when `notePath` sits inside `folder` (or when no scope was requested). */
-function inScope(notePath: string, folder: string | undefined): boolean {
-  return folder === undefined || notePath.startsWith(`${folder}/`);
-}
-
-function toTermNote(note: ScannedNote): TermNote {
-  return { path: note.path, concept: note.concept, aliases: note.aliases };
 }
 
 function describeCandidate(candidate: LinkCandidate): string {
@@ -85,25 +32,6 @@ function describeCandidate(candidate: LinkCandidate): string {
 function reportNote(notePath: string, candidates: readonly LinkCandidate[]): void {
   console.log(`\n  ${notePath}`);
   for (const candidate of candidates) console.log(describeCandidate(candidate));
-}
-
-/** Persist one note's candidates through the capture kernel. */
-async function applyNote(
-  vault: string,
-  ontology: Ontology,
-  note: ScannedNote,
-  candidates: readonly LinkCandidate[],
-): Promise<boolean> {
-  const result = await applyLinks({
-    body: note.body,
-    baseContentHash: hashBody(note.body),
-    accepted: candidates,
-    writeNote,
-    target: { target: { vault, source: "explicit" }, ontology, notePath: note.path },
-  });
-  if (result.applied) return true;
-  console.error(`[oms] linkify skipped ${note.path}: ${result.reason}`);
-  return false;
 }
 
 /**
@@ -120,30 +48,33 @@ export async function runLinkify(options: LinkifyOptions): Promise<number> {
     const { ontology } = await resolveActiveOntology(options.vault);
     await validateVaultLintFolder(options.vault, ontology, options.folder);
 
-    const notes = await scanVault(options.vault, ontology);
-    const targets = termBoundNotes(notes.map(toTermNote));
-    const scoped = notes.filter((note) => inScope(note.path, options.folder));
+    const workflow = await linkifyVault(
+      { vault: options.vault, source: "explicit", ontology },
+      { folder: options.folder, apply: options.apply },
+    );
 
     console.log(
-      `\nOh My Second Brain linkify: ${String(scoped.length)} note(s) in scope, ${String(targets.length)} term note(s) available as link targets.`,
+      `\nOh My Second Brain linkify: ${String(workflow.notesInScope)} note(s) in scope, ${String(workflow.targetNotes)} term note(s) available as link targets.`,
     );
 
     let candidateCount = 0;
     let appliedNotes = 0;
-    for (const note of scoped) {
-      const candidates = suggestLinks(note.body, targets, { notePath: note.path });
-      if (candidates.length === 0) continue;
-      candidateCount += candidates.length;
-      reportNote(note.path, candidates);
-      if (options.apply && (await applyNote(options.vault, ontology, note, candidates))) {
-        appliedNotes++;
+    for (const proposal of workflow.candidates) {
+      candidateCount += proposal.candidates.length;
+      reportNote(proposal.notePath, proposal.candidates);
+      if (proposal.outcome !== undefined) {
+        if (proposal.outcome.result.applied) {
+          appliedNotes++;
+        } else {
+          console.error(`[oms] linkify skipped ${proposal.notePath}: ${proposal.outcome.result.reason}`);
+        }
       }
     }
 
     console.log(
       options.apply
         ? `\n${String(candidateCount)} candidate(s); applied to ${String(appliedNotes)} note(s).\n`
-        : `\n${String(candidateCount)} candidate(s) proposed across ${String(scoped.length)} note(s). Report only — nothing was written. Re-run with --apply --yes to write.\n`,
+        : `\n${String(candidateCount)} candidate(s) proposed across ${String(workflow.notesInScope)} note(s). Report only — nothing was written. Re-run with --apply --yes to write.\n`,
     );
     return 0;
   } catch (error) {

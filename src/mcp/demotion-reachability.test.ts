@@ -19,8 +19,13 @@ function payload(result: Awaited<ReturnType<Client["callTool"]>>): Record<string
 }
 
 function expectAdvertisedArguments(tool: Tool, args: Record<string, unknown>): void {
-  const schema = tool.inputSchema as { oneOf?: { properties?: Record<string, unknown>; required?: string[] }[] };
-  const branch = schema.oneOf?.find((candidate) => {
+  const schema = tool.inputSchema as {
+    oneOf?: { properties?: Record<string, unknown>; required?: string[] }[];
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  const branches = schema.oneOf ?? [schema];
+  const branch = branches.find((candidate) => {
     const properties = candidate.properties ?? {};
     return Object.entries(args).every(([key, value]) => {
       const property = properties[key] as { const?: unknown; type?: string; items?: { type?: string } } | undefined;
@@ -50,7 +55,7 @@ describe("MCP detail-tool demotion", () => {
       };
       const demoted = ["oms_retrieve_by_axis", "oms_retrieve_context", "oms_lazy_load_note", "oms_list_concepts", "oms_semantic_query", "oms_semantic_collections", "oms_semantic_contexts", "oms_semantic_status", "oms_get_document", "oms_multi_get_documents", "oms_link_suggest", "oms_link_apply", "oms_graph_status", "oms_vault_audit", "oms_validate_contract", "oms_graph_build", "oms_semantic_cleanup", "oms_sync_embeddings", "query", "get", "multi_get", "status"];
       expect(names).not.toEqual(expect.arrayContaining(demoted));
-      expect(payload(await call("oms_status", { op: "status" })).derivedState).toBeDefined();
+      expect(payload(await call("oms_status", {})).derivedState).toBeDefined();
       expect(payload(await call("oms_doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
       expect(payload(await call("oms_doctor", { op: "validate", notePath: "references/clean-architecture.md" })).valid).toBe(true);
       expect(payload(await call("oms_doctor", { op: "build-graph" })).notes).toBeTypeOf("number");

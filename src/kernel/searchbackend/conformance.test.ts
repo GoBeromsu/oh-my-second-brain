@@ -95,23 +95,30 @@ function searchBackendConformance(
       }
     });
 
-    it("reports unavailable with actionable guidance when an explicit vector search cannot run", async () => {
-      const vault = await fixtureVault();
-      const { backend, dispose } = create(vault);
-      try {
-        const result = await backend.search({
-          searches: [{ type: "vec", query: "telescope planets orbit" }],
-        });
+    it.each([
+      ["typed vec search", { searches: [{ type: "vec", query: "telescope planets orbit" }] }],
+      ["vec shorthand", { searches: [{ type: "vec", query: "telescope planets orbit" }] }],
+      ["hyde shorthand", { searches: [{ type: "hyde", query: "telescope planets orbit" }] }],
+      ["vsearch mode", { query: "telescope planets orbit", mode: "vsearch" }],
+    ] as const)(
+      "reports actionable configuration guidance for an explicit vector strategy: %s",
+      async (_strategy, request) => {
+        const vault = await fixtureVault();
+        const { backend, dispose } = create(vault);
+        try {
+          const result = await backend.search(request);
 
-        // ADR-007 locks no-fake-fallback: an explicitly requested strategy that
-        // cannot run must say so, not silently return lexical results dressed
-        // up as vector ones. The reason has to name what to configure.
-        expect(result.available).toBe(false);
-        expect(result.reason ?? "").toMatch(/OMS_EMBEDDING_PROVIDER/);
-      } finally {
-        await dispose();
-      }
-    });
+          // ADR-007 locks no-fake-fallback: an explicitly requested strategy that
+          // cannot run must say so, not silently return lexical results dressed
+          // up as vector ones. The reason has to name what to configure.
+          expect(result.available).toBe(false);
+          expect(result.reason ?? "").toMatch(/OMS_EMBEDDING_PROVIDER/);
+          expect(result.reason ?? "").toMatch(/OMS_EMBEDDING_MODEL/);
+        } finally {
+          await dispose();
+        }
+      },
+    );
 
     it("rejects a request carrying both query and searches", async () => {
       const vault = await fixtureVault();

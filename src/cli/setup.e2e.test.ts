@@ -70,6 +70,16 @@ describe("runSetup --yes E2E", () => {
     await expect(readFile(literatureCopy, "utf-8")).resolves.toContain("concept: literature");
   });
 
+  it("previews setup with --dry-run without creating .oms", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-test-dry-run-"));
+    await cp(fixtureVault, vault, { recursive: true });
+
+    await runSetup({ vault, yes: true, dryRun: true });
+
+    await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf-8")).rejects.toThrow();
+    await rm(vault, { recursive: true, force: true });
+  });
+
   it("doctor runs against the freshly set-up vault and exits 0", async () => {
     // Regression guard: setup's vault-local layout (.oms/taxonomy.yaml +
     // .oms/concepts/) must be exactly what doctor's loadOntology consumes.

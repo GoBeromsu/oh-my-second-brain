@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SOURCE_EXTENSIONS } from "../../scripts/check-module-size.mjs";
 
 /**
  * Architecture gates live at a stable top-level path and must keep working when
@@ -108,7 +109,9 @@ export function assertNonVacuous(files: readonly string[], what: string): void {
 }
 
 export function isProductionTs(relativePath: string): boolean {
-  return relativePath.endsWith(".ts") && !relativePath.endsWith(".test.ts");
+  return SOURCE_EXTENSIONS.some(
+    (extension) => relativePath.endsWith(extension) && !relativePath.endsWith(`.test${extension}`),
+  );
 }
 
 export function importSpecifiers(source: string): string[] {

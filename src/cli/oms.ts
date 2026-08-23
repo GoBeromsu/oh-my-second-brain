@@ -97,11 +97,11 @@ async function main(): Promise<void> {
   }
 
   if (command === "setup") {
-    await runSetup({ vault, yes, installClaude, suggestFields });
-    await nonFatalGlobalWriteback(() =>
+    await runSetup({ vault, yes, installClaude, suggestFields, dryRun });
+    if (!dryRun) await nonFatalGlobalWriteback(() =>
       registerGlobalVault({ vault: path.resolve(vault), homeDir: undefined, overwrite: true }),
     );
-    await maybePrintUpdateNotice();
+    if (!dryRun) await maybePrintUpdateNotice();
   } else if (command === "link") {
     process.exitCode = await runLink({
       cwd: process.cwd(),
