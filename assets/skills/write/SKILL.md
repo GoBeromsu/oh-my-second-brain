@@ -10,7 +10,7 @@ mcp_args:
 
 # write
 
-Write, append to, or update a vault note through the MCP write kernel. Do not use host Write/Edit for vault `.md` files.
+Write, append to, or update a vault note through MCP `oms_write`. Do not use host Write/Edit for vault `.md` files.
 
 ## Use when
 

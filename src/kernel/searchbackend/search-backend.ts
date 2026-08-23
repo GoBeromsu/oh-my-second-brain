@@ -19,6 +19,8 @@ export interface SearchRequest {
   readonly hyde?: string;
   readonly limit?: number;
   readonly candidateLimit?: number;
+  /** Apply the configured reranker (default true). */
+  readonly rerank?: boolean;
   readonly minScore?: number;
   /** Context that disambiguates a query without becoming a sub-query. */
   readonly intent?: string;
@@ -31,6 +33,7 @@ export interface NormalizedSearchRequest {
   readonly searches: readonly McpSemanticTypedSearch[];
   readonly limit?: number;
   readonly candidateLimit?: number;
+  readonly rerank?: boolean;
   readonly minScore?: number;
   readonly intent?: string;
   readonly collection?: string;
@@ -85,6 +88,7 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
       : [{ type: request.mode === "vsearch" ? "vec" : "lex", query: query! }],
     limit: request.limit,
     candidateLimit: request.candidateLimit,
+    rerank: request.rerank,
     minScore: request.minScore,
     intent: request.intent,
     collection: request.collection,

@@ -52,6 +52,8 @@ export interface McpStatusOptions {
 export interface McpSemanticQueryOptions extends McpStatusOptions {
   readonly query: string;
   readonly collection?: string;
+  /** Vault-relative path prefix that constrains retrieval candidates. */
+  readonly collectionPath?: string;
   readonly limit?: number;
   readonly mode?: McpSemanticSearchMode;
   readonly intent?: string;
@@ -67,6 +69,9 @@ export interface McpSemanticQueryOptions extends McpStatusOptions {
   readonly fullPath?: boolean;
   readonly chunkStrategy?: string;
   readonly candidateLimit?: number;
+  /** Apply the configured reranker (default true). */
+  readonly rerank?: boolean;
+  /** Internal inverse spelling used by morning retrieval options. */
   readonly noRerank?: boolean;
 }
 

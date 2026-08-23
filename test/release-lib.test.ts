@@ -369,23 +369,38 @@ describe("alteredReleasedSections", () => {
     expect(alteredReleasedSections(base, head)).toEqual(["CHANGELOG-cli.md: ## [0.1.8]"]);
   });
 
-  it("ends a released section at every heading level", () => {
-    const base = { "CHANGELOG.md": "# Changelog\n\n## [0.1.0] - 2026-01-01\n\n- preserved\n# Next title\n" };
-    const head = { "CHANGELOG.md": `${base["CHANGELOG.md"]}Added after title.\n` };
+  it("rejects an edit beneath a nested release subsection", () => {
+    const base = {
+      "CHANGELOG.md": "# Changelog\n\n## [0.1.0] - 2026-01-01\n\n### Changed\n\n- preserved behaviour\n",
+    };
+    const head = {
+      "CHANGELOG.md": base["CHANGELOG.md"].replace("preserved behaviour", "rewritten behaviour"),
+    };
 
-    expect(alteredReleasedSections(base, head)).toEqual([]);
+    expect(alteredReleasedSections(base, head)).toEqual(["CHANGELOG.md: ## [0.1.0]"]);
+  });
+
+  it("rejects a date change while the release body is identical", () => {
+    const base = {
+      "CHANGELOG.md": "# Changelog\n\n## [0.1.0] - 2026-01-01\n\n### Fixed\n\n- preserved behaviour\n",
+    };
+    const head = {
+      "CHANGELOG.md": base["CHANGELOG.md"].replace("2026-01-01", "2026-01-02"),
+    };
+
+    expect(alteredReleasedSections(base, head)).toEqual(["CHANGELOG.md: ## [0.1.0]"]);
   });
 });
 
 describe("released section relocations", () => {
-  const source = "# Changelog\n\n## [0.1.0] - 2026-01-01\n\n- preserved\n";
+  const source = "# Changelog\n\n## [0.1.0] - 2026-01-01\n\n### Changed\n\n- preserved\n";
   const destination = "# Changelog\n\n## [Unreleased]\n";
 
   it("accepts and reports a byte-identical move to a file that lacked the version at base", () => {
     const base = { "CHANGELOG.md": source, "CHANGELOG-vendors.md": destination };
     const head = {
       "CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n",
-      "CHANGELOG-vendors.md": `${destination}\n## [0.1.0] - 2026-01-01\n\n- preserved\n`,
+      "CHANGELOG-vendors.md": `${destination}\n## [0.1.0] - 2026-01-01\n\n### Changed\n\n- preserved\n`,
     };
 
     expect(missingReleasedHeadings(base, head)).toEqual([]);
@@ -394,11 +409,11 @@ describe("released section relocations", () => {
     ]);
   });
 
-  it("rejects a move whose destination body changed", () => {
+  it("rejects a move whose destination nested bullet changed", () => {
     const base = { "CHANGELOG.md": source, "CHANGELOG-vendors.md": destination };
     const head = {
       "CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n",
-      "CHANGELOG-vendors.md": `${destination}\n## [0.1.0] - 2026-01-01\n\n- rewritten\n`,
+      "CHANGELOG-vendors.md": `${destination}\n## [0.1.0] - 2026-01-01\n\n### Changed\n\n- rewritten\n`,
     };
 
     expect(missingReleasedHeadings(base, head)).toEqual([

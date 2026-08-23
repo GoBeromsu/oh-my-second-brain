@@ -102,10 +102,10 @@ export interface ScoredHit {
 export interface VectorStore {
   /** Insert or replace chunk rows (keyed by docPath + ordinal). */
   upsert(rows: ReadonlyArray<Chunk & { vector: Float32Array }>): void;
-  /** ANN search: return the `k` nearest chunks to `vec`. */
-  queryVec(vec: Float32Array, k: number): ScoredHit[];
-  /** BM25 lexical search: return the top `k` chunks matching `text`. */
-  queryLex(text: string, k: number): ScoredHit[];
+  /** ANN search: return the `k` nearest chunks to `vec`, optionally scoped by path prefix. */
+  queryVec(vec: Float32Array, k: number, collection?: string): ScoredHit[];
+  /** BM25 lexical search: return the top `k` chunks matching `text`, optionally scoped by path prefix. */
+  queryLex(text: string, k: number, collection?: string): ScoredHit[];
   /** Flush WAL and release the database connection. */
   close(): void;
 }

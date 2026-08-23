@@ -39,7 +39,7 @@ export class EngineSearchBackend implements SearchBackend {
     const adapter = typeof this.adapterOrResolver === "function"
       ? this.adapterOrResolver(requiresEmbeddings({ searches: normalized.searches }))
       : this.adapterOrResolver;
-    const result = await adapter.semanticQuery({
+    const searchCollection = async (collectionPath?: string): Promise<McpSemanticQueryResult> => adapter.semanticQuery({
       vault: this.vault,
       query: "",
       searches: normalized.searches,
@@ -48,14 +48,23 @@ export class EngineSearchBackend implements SearchBackend {
       minScore: normalized.minScore,
       intent: normalized.intent,
       collection: normalized.collection,
+      collectionPath,
       index: normalized.index,
+      rerank: normalized.rerank,
     });
-    if (normalized.collections.length === 0) return result;
+
+    if (normalized.collections.length === 0) {
+      return searchCollection();
+    }
+
+    const results = await Promise.all(normalized.collections.map(searchCollection));
+    const unavailable = results.find((result) => !result.available);
+    if (unavailable !== undefined) return unavailable;
+    const hits = results.flatMap((result) => result.hits)
+      .sort((left, right) => right.score - left.score);
     return {
-      ...result,
-      hits: result.hits.filter((hit) => normalized.collections.some((collection) =>
-        hit.path === collection || hit.path.startsWith(`${collection}/`),
-      )),
+      available: true,
+      hits: normalized.limit === undefined ? hits : hits.slice(0, normalized.limit),
     };
   }
 }

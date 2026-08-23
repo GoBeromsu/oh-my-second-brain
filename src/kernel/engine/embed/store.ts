@@ -204,6 +204,14 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
      ORDER BY rank
      LIMIT ?`,
   );
+  const stmtQueryLexInCollection = db.prepare<[string, string, string, number], { doc_path: string; ordinal: number; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+     FROM engine_chunk_fts
+     JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
+     WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ?)
+     ORDER BY rank
+     LIMIT ?`,
+  );
 
   const stmtGetShas = db.prepare<[string], { ordinal: number; sha: string }>(
     "SELECT ordinal, sha FROM engine_chunk_meta WHERE doc_path = ?",
@@ -274,12 +282,14 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
       throw new Error("EngineStore(core-only): vector queries are unavailable.");
     },
 
-    queryLex(text: string, k: number): ScoredHit[] {
+    queryLex(text: string, k: number, collection?: string): ScoredHit[] {
       const ftsQ = makeFtsQuery(text);
       if (!ftsQ) return [];
       let rows: Array<{ doc_path: string; ordinal: number; rank: number }>;
       try {
-        rows = stmtQueryLex.all(ftsQ, k);
+        rows = collection === undefined
+          ? stmtQueryLex.all(ftsQ, k)
+          : stmtQueryLexInCollection.all(ftsQ, collection, `${collection}/%`, k);
       } catch {
         return [];
       }
@@ -403,6 +413,14 @@ export function openEngineStore(
      ORDER BY rank
      LIMIT ?`,
   );
+  const stmtQueryLexInCollection = db.prepare<[string, string, string, number], { doc_path: string; ordinal: number; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+     FROM engine_chunk_fts
+     JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
+     WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ?)
+     ORDER BY rank
+     LIMIT ?`,
+  );
 
   const stmtGetShas = db.prepare<[string], { ordinal: number; sha: string }>(
     "SELECT ordinal, sha FROM engine_chunk_meta WHERE doc_path = ?",
@@ -449,6 +467,9 @@ export function openEngineStore(
          ORDER BY v.distance`,
       )
     : null;
+  const stmtCountChunks = db.prepare<[], { count: number }>(
+    "SELECT COUNT(*) AS count FROM engine_chunk_meta",
+  );
 
   const stmtClearDocVec = vecAvailable
     ? db.prepare<[string]>(
@@ -537,25 +558,34 @@ export function openEngineStore(
       doUpsert(rows);
     },
 
-    queryVec(vec: Float32Array, k: number): ScoredHit[] {
+    queryVec(vec: Float32Array, k: number, collection?: string): ScoredHit[] {
       if (!stmtQueryVec) {
         throw new Error("EngineStore: vector queries are unavailable (sqlite-vec not loaded).");
       }
       const buf = vecBuf(vec);
-      const rows = stmtQueryVec.all(buf, k);
-      return rows.map((r): ScoredHit => ({
+      // sqlite-vec cannot apply a metadata predicate to ANN search. Fetch every
+      // indexed chunk before filtering so collection scoping cannot be starved
+      // by globally higher-ranked candidates, then restore the requested limit.
+      const candidateLimit = collection === undefined ? k : (stmtCountChunks.get()?.count ?? 0);
+      const rows = stmtQueryVec.all(buf, candidateLimit);
+      return rows
+        .filter((r) => collection === undefined || r.doc_path === collection || r.doc_path.startsWith(`${collection}/`))
+        .slice(0, k)
+        .map((r): ScoredHit => ({
         docPath: r.doc_path,
         chunkOrdinal: r.ordinal,
         score: 1 / (1 + Math.max(0, r.distance)),
-      }));
+        }));
     },
 
-    queryLex(text: string, k: number): ScoredHit[] {
+    queryLex(text: string, k: number, collection?: string): ScoredHit[] {
       const ftsQ = makeFtsQuery(text);
       if (!ftsQ) return [];
       let rows: Array<{ doc_path: string; ordinal: number; rank: number }>;
       try {
-        rows = stmtQueryLex.all(ftsQ, k);
+        rows = collection === undefined
+          ? stmtQueryLex.all(ftsQ, k)
+          : stmtQueryLexInCollection.all(ftsQ, collection, `${collection}/%`, k);
       } catch {
         return [];
       }

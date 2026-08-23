@@ -147,7 +147,8 @@ describe("changelog-history-guard", () => {
   it("rejects one-layer edits and removals when every layer shares the release version", () => {
     const directory = mkdtempSync(join(tmpdir(), "oms-changelog-history-guard-"));
     const version = "0.2.0";
-    const baseline = `# Changelog\n\n## [Unreleased]\n\n## [${version}] - 2026-08-24\n\n- preserved historical entry\n`;
+    const baseline =
+      `# Changelog\n\n## [Unreleased]\n\n## [${version}] - 2026-08-24\n\n### Changed\n\n- preserved historical entry\n`;
     const runGuard = () =>
       spawnSync(process.execPath, [CHANGELOG_HISTORY_GUARD], {
         cwd: directory,
@@ -165,10 +166,17 @@ describe("changelog-history-guard", () => {
         { cwd: directory },
       );
 
+      expect(runGuard().status).toBe(0);
+
       writeFileSync(join(directory, "CHANGELOG-cli.md"), baseline.replace("preserved", "rewritten"));
       const edited = runGuard();
       expect(edited.status).toBe(1);
       expect(edited.stderr).toContain("CHANGELOG-cli.md: ## [0.2.0]");
+
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), baseline.replace("2026-08-24", "2026-08-25"));
+      const redated = runGuard();
+      expect(redated.status).toBe(1);
+      expect(redated.stderr).toContain("CHANGELOG-cli.md: ## [0.2.0]");
 
       writeFileSync(join(directory, "CHANGELOG-cli.md"), "# Changelog\n\n## [Unreleased]\n");
       const deleted = runGuard();

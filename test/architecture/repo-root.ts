@@ -125,37 +125,47 @@ function isStaticSpecifier(node: ts.Expression): node is ts.StringLiteralLike {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
 }
 
+function importTypeSpecifier(node: ts.ImportTypeNode): ts.StringLiteralLike | undefined {
+  if (!ts.isLiteralTypeNode(node.argument) || !isStaticSpecifier(node.argument.literal)) return undefined;
+  return node.argument.literal;
+}
+
 function analyzeImports(source: string): ImportAnalysis {
   const sourceFile = ts.createSourceFile("boundary-check.ts", source, ts.ScriptTarget.Latest, false);
-  const specifiers: string[] = [];
+  const staticSpecifiers: string[] = [];
+  const dynamicSpecifiers: string[] = [];
   const unanalysableImports: string[] = [];
   const nonLiteralDynamicImports: string[] = [];
 
-  for (const statement of sourceFile.statements) {
-    if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) {
-      if (statement.moduleSpecifier === undefined) continue;
-      if (isStaticSpecifier(statement.moduleSpecifier)) {
-        specifiers.push(statement.moduleSpecifier.text);
-      } else {
-        unanalysableImports.push(statement.moduleSpecifier.getText(sourceFile));
-      }
-    } else if (ts.isImportEqualsDeclaration(statement) && ts.isExternalModuleReference(statement.moduleReference)) {
-      const expression = statement.moduleReference.expression;
-      if (expression === undefined) {
-        unanalysableImports.push(statement.getText(sourceFile));
-      } else if (isStaticSpecifier(expression)) {
-        specifiers.push(expression.text);
-      } else {
-        unanalysableImports.push(expression.getText(sourceFile));
-      }
+  const recordStaticSpecifier = (specifier: ts.Expression, node: ts.Node): void => {
+    if (isStaticSpecifier(specifier)) {
+      staticSpecifiers.push(specifier.text);
+    } else {
+      unanalysableImports.push(node.getText(sourceFile));
     }
-  }
+  };
 
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier !== undefined) recordStaticSpecifier(node.moduleSpecifier, node);
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      const expression = node.moduleReference.expression;
+      if (expression === undefined) {
+        unanalysableImports.push(node.getText(sourceFile));
+      } else {
+        recordStaticSpecifier(expression, node);
+      }
+    } else if (ts.isImportTypeNode(node)) {
+      const specifier = importTypeSpecifier(node);
+      if (specifier === undefined) {
+        unanalysableImports.push(node.getText(sourceFile));
+      } else {
+        staticSpecifiers.push(specifier.text);
+      }
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const specifier = node.arguments[0];
       if (specifier !== undefined && isStaticSpecifier(specifier)) {
-        specifiers.push(specifier.text);
+        dynamicSpecifiers.push(specifier.text);
       } else {
         const importExpression = node.getText(sourceFile);
         unanalysableImports.push(importExpression);
@@ -166,7 +176,11 @@ function analyzeImports(source: string): ImportAnalysis {
   };
   ts.forEachChild(sourceFile, visit);
 
-  return { specifiers, unanalysableImports, nonLiteralDynamicImports };
+  return {
+    specifiers: [...staticSpecifiers, ...dynamicSpecifiers],
+    unanalysableImports,
+    nonLiteralDynamicImports,
+  };
 }
 
 export function importSpecifiers(source: string): string[] {

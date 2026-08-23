@@ -22,8 +22,9 @@
 
 import path from "node:path";
 import { readFileSync } from "node:fs";
-import { dispatch } from "../retrieval/dispatcher.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
+import { passthroughReranker, retrieve } from "../retrieval/index.js";
+import type { Reranker } from "../retrieval/reranker.js";
 import { syncEngineStore, walkMarkdown } from "../embed/sync.js";
 import type { EngineStore } from "../embed/store.js";
 import {
@@ -292,6 +293,7 @@ export class McpEngineAdapter {
     private readonly deps: DispatcherDeps,
     private readonly vaultPath: string,
     private readonly config?: { readonly embeddingProvider?: string; readonly embeddingModel?: string },
+    private readonly reranker: Reranker = passthroughReranker,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -338,7 +340,14 @@ export class McpEngineAdapter {
         }
       }
       const k = opts.candidateLimit ?? 20;
-      const results = await dispatch(subQueries, this.deps, k);
+      const results = await retrieve({
+        subQueries,
+        deps: this.deps,
+        k,
+        collection: opts.collectionPath,
+        query: opts.query,
+        reranker: opts.rerank === false || opts.noRerank === true ? undefined : this.reranker,
+      });
       const mapped = retrievalResultsToQueryResult(results, opts);
       // Fill title + doc-head snippet from disk so engine hits reach practical
       // parity with the src/search preview (the pure mapper stays text-free).

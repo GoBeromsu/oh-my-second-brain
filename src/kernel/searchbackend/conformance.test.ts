@@ -38,6 +38,17 @@ async function collectionFixtureVault(): Promise<string> {
   return vault;
 }
 
+async function collectionOrderingFixtureVault(): Promise<string> {
+  const vault = await mkdtemp(path.join(tmpdir(), "oms-search-backend-collection-ordering-"));
+  vaults.push(vault);
+  await mkdir(path.join(vault, "architecture"), { recursive: true });
+  await mkdir(path.join(vault, "recipes"), { recursive: true });
+  await writeFile(path.join(vault, "architecture", "match.md"), "# Architecture\ncollection scope ordering target\n", "utf8");
+  await writeFile(path.join(vault, "recipes", "first.md"), "# Recipe\ncollection scope ordering target\n", "utf8");
+  await writeFile(path.join(vault, "recipes", "second.md"), "# Recipe\ncollection scope ordering target\n", "utf8");
+  return vault;
+}
+
 function searchBackendConformance(
   name: string,
   create: (vault: string) => { backend: SearchBackend; dispose(): Promise<void> },
@@ -111,6 +122,24 @@ function searchBackendConformance(
         expect(result.available).toBe(true);
         expect(result.hits).not.toHaveLength(0);
         expect(result.hits.map((hit) => hit.path)).toEqual(["architecture/system.md"]);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("scopes candidates before candidateLimit can be consumed by another collection", async () => {
+      const vault = await collectionOrderingFixtureVault();
+      const { backend, dispose } = create(vault);
+      try {
+        const result = await backend.search({
+          searches: [{ type: "lex", query: "collection scope ordering target" }],
+          collections: ["architecture"],
+          candidateLimit: 1,
+          limit: 1,
+        });
+
+        expect(result.available).toBe(true);
+        expect(result.hits.map((hit) => hit.path)).toEqual(["architecture/match.md"]);
       } finally {
         await dispose();
       }

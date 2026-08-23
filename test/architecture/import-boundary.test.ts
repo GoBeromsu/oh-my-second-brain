@@ -120,6 +120,10 @@ describe("import-direction gate", () => {
     expect(importSpecifiers(source)).toEqual(["./thing.js", "./y.js", "../kernel/x.js"]);
   });
 
+  it("extracts TypeScript import-type specifiers", () => {
+    expect(importSpecifiers('type Thing = import("./thing.js").Thing;')).toEqual(["./thing.js"]);
+  });
+
   it("rejects a computed dynamic import rather than silently skipping the boundary edge", () => {
     expect(nonLiteralDynamicImports('void import("../mcp/" + "server.js");')).toEqual([
       'import("../mcp/" + "server.js")',
@@ -159,6 +163,18 @@ describe("import-direction gate", () => {
   it("rejects a .mts kernel module importing an MCP surface", async () => {
     const fixture = "src/kernel/import-boundary-escape.mts";
     await writeFile(absolute(fixture), 'import "../mcp/server.js";\n');
+    try {
+      expect(
+        await findImports([fixture], (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS])),
+      ).toEqual([{ file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" }]);
+    } finally {
+      await rm(absolute(fixture), { force: true });
+    }
+  });
+
+  it("detects an import-type reference to an MCP surface", async () => {
+    const fixture = "src/kernel/import-boundary-import-type-escape.ts";
+    await writeFile(absolute(fixture), 'type X = import("../mcp/server.js").Something;\n');
     try {
       expect(
         await findImports([fixture], (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS])),

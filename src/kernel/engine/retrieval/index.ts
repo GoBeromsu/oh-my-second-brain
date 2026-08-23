@@ -50,6 +50,8 @@ export interface RetrieveOptions {
   query?: string;
   /** Optional cancel token to abort in-flight retrieval. */
   cancel?: CancelToken;
+  /** Optional vault-relative collection path that constrains backend candidates. */
+  collection?: string;
 }
 
 /**
@@ -66,7 +68,7 @@ export interface RetrieveOptions {
  */
 export async function retrieve(opts: RetrieveOptions): Promise<RetrievalResult[]> {
   // Step 1–3: dispatch + RRF fusion + provenance boost
-  const results = await dispatch(opts.subQueries, opts.deps, opts.k, opts.cancel);
+  const results = await dispatch(opts.subQueries, opts.deps, opts.k, opts.cancel, opts.collection);
 
   // Step 4: optional cross-encoder reranking
   if (!opts.reranker) return results;

@@ -4,7 +4,7 @@
 const STABLE_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const CHANGELOG_HEADER = "# Changelog";
 const UNRELEASED_HEADING = "## [Unreleased]";
-const RELEASED_HEADING = /^## \[(\d+\.\d+\.\d+)\]/gm;
+const RELEASED_HEADING = /^(## \[(\d+\.\d+\.\d+)\](?: - .*)?)$/gm;
 
 /**
  * @param {string} version
@@ -270,8 +270,8 @@ function relocatedSection(sourceFile, heading, body, baseChangelogs, headChangel
 /**
  * Split a changelog into released sections keyed by version heading.
  *
- * A section runs from its `## [X.Y.Z]` heading to the next `## ` heading, so the
- * body travels with the heading it belongs to.
+ * A section runs from its full `## [X.Y.Z] - date` heading to the next `## `
+ * heading. Nested headings belong to that section.
  *
  * @param {string} content
  * @returns {Map<string, string>}
@@ -279,7 +279,7 @@ function relocatedSection(sourceFile, heading, body, baseChangelogs, headChangel
 function releasedSections(content) {
   const sections = new Map();
   const lines = (content ?? "").split("\n");
-  const headingPattern = new RegExp(`^${RELEASED_HEADING.source.replace(/^\^/, "")}`);
+  const headingPattern = new RegExp(RELEASED_HEADING.source);
 
   let current = null;
   let buffer = [];
@@ -287,13 +287,11 @@ function releasedSections(content) {
     const match = headingPattern.exec(line);
     if (match !== null) {
       if (current !== null) sections.set(current, buffer.join("\n"));
-      current = `## [${match[1]}]`;
-      buffer = [];
+      current = `## [${match[2]}]`;
+      buffer = [match[1]];
       continue;
     }
-    // Any heading ends the section, not just `## `. This prevents a subordinate
-    // heading from becoming part of a released section's body.
-    if (/^#{1,6} /.test(line)) {
+    if (/^## /.test(line)) {
       if (current !== null) sections.set(current, buffer.join("\n"));
       current = null;
       buffer = [];
@@ -342,7 +340,7 @@ function releasedHeadings(content) {
   const pattern = new RegExp(RELEASED_HEADING.source, RELEASED_HEADING.flags);
   let match = pattern.exec(content ?? "");
   while (match !== null) {
-    headings.push(`## [${match[1]}]`);
+    headings.push(`## [${match[2]}]`);
     match = pattern.exec(content);
   }
   return headings;

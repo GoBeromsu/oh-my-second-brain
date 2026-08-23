@@ -143,11 +143,16 @@ async function dispatchOne(
   deps: DispatcherDeps,
   k: number,
   cancel: CancelToken,
+  collection?: string,
 ): Promise<ScoredHit[]> {
   switch (sub.type) {
     case "lex": {
       return withRetry(
-        () => Promise.resolve(deps.store.queryLex(sub.query, k)),
+        () => Promise.resolve(
+          collection === undefined
+            ? deps.store.queryLex(sub.query, k)
+            : deps.store.queryLex(sub.query, k, collection),
+        ),
         cancel,
       );
     }
@@ -155,7 +160,9 @@ async function dispatchOne(
     case "vec": {
       const vec = await withRetry(() => deps.embed.embed(sub.query), cancel);
       return withRetry(
-        () => Promise.resolve(deps.store.queryVec(vec, k)),
+        () => Promise.resolve(
+          collection === undefined ? deps.store.queryVec(vec, k) : deps.store.queryVec(vec, k, collection),
+        ),
         cancel,
       );
     }
@@ -165,7 +172,9 @@ async function dispatchOne(
       const hypoDoc = await withRetry(() => generator(sub.query), cancel);
       const vec = await withRetry(() => deps.embed.embed(hypoDoc), cancel);
       return withRetry(
-        () => Promise.resolve(deps.store.queryVec(vec, k)),
+        () => Promise.resolve(
+          collection === undefined ? deps.store.queryVec(vec, k) : deps.store.queryVec(vec, k, collection),
+        ),
         cancel,
       );
     }
@@ -200,6 +209,7 @@ export async function dispatch(
   deps: DispatcherDeps,
   k = 10,
   cancel?: CancelToken,
+  collection?: string,
 ): Promise<RetrievalResult[]> {
   const token = cancel ?? createCancelToken();
   const rrfK = deps.rrfK ?? 60;
@@ -208,7 +218,7 @@ export async function dispatch(
 
   // Execute all sub-queries in parallel (each with its own retry envelope)
   const rankedLists = await Promise.all(
-    subQueries.map((sub) => dispatchOne(sub, deps, k, token)),
+    subQueries.map((sub) => dispatchOne(sub, deps, k, token, collection)),
   );
 
   // Build per-type score index for the perTypeScores field

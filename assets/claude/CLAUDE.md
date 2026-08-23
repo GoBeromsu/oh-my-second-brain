@@ -13,13 +13,13 @@ All knowledge capture and retrieval must follow the declared semantic convention
 - Read `.oms/concepts/*.yaml` to understand field requirements and lenses.
 
 **When writing vault notes:**
-- Use the `/oms-write` skill. Call MCP `write`. Do not use host Write/Edit for vault `.md` files.
-- The kernel fills and checks frontmatter from `.oms`. `ask` or `rejected` means fix and call `write` again.
+- Use the `/write` skill. Call MCP `oms_write`. Do not use host Write/Edit for vault `.md` files.
+- The kernel fills and checks frontmatter from `.oms`. `ask` or `rejected` means fix and call `oms_write` again.
 
 **When retrieving knowledge:**
-- Use the `/oms-retrieve` skill or follow the retriever persona (`core/agents/retriever.md`).
+- Use the `/search` skill or follow the retriever persona (`core/agents/retriever.md`).
 - Apply the concept's declared lens for the retrieval purpose (synthesis, audit, etc.).
 - Return only the fields the lens specifies — do not dump full frontmatter.
 
 **Doctor is advisory. Write is not.**
-`oms doctor` always exits 0. MCP `write` rejects contract violations.
+`oms doctor` always exits 0. MCP `oms_write` rejects contract violations.

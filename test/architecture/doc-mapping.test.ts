@@ -61,6 +61,31 @@ describe("documentation mapping checker", () => {
     expect(result.output).toContain("docs/release.md:1: missing reference src/ontology/loader.ts");
   });
 
+  it("reports a missing inline source path in packaged host guidance", () => {
+    const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
+    fixtures.push(fixture);
+    mkdirSync(resolve(fixture, "assets", "codex"), { recursive: true });
+    writeFileSync(resolve(fixture, "assets", "codex", "AGENTS.md"), "The loader is `src/kernel/missing.ts`.\n");
+
+    const result = runChecker(fixture);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("assets/codex/AGENTS.md:1: missing reference src/kernel/missing.ts");
+  });
+
+  it("excludes separately-owned core/AGENTS.md from mapping checks", () => {
+    const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
+    fixtures.push(fixture);
+    mkdirSync(resolve(fixture, "core"), { recursive: true });
+    writeFileSync(resolve(fixture, "CONTRIBUTING.md"), "Contributor guidance.\n");
+    writeFileSync(resolve(fixture, "core", "AGENTS.md"), "[broken](./missing.md)\n");
+
+    const result = runChecker(fixture);
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe("");
+  });
+
   it("fails closed when no user-facing documentation files are scanned", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);

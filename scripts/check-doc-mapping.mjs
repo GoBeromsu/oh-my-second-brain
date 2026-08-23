@@ -5,6 +5,11 @@ import { resolve, relative } from "node:path";
 
 const root = resolve(process.argv[2] ?? process.cwd());
 const violations = [];
+const excludedMarkdownFiles = new Set([
+  // core/AGENTS.md is separately owned vault-convention SSOT; this gate only
+  // validates user-facing repository and packaged host guidance.
+  "core/AGENTS.md",
+]);
 
 // Keep this failure mode aligned with test/architecture/repo-root.ts:
 // a documentation gate that scans nothing is broken, not green.
@@ -27,7 +32,13 @@ function markdownFiles(directory, recursive) {
     // old links would rewrite history or make current CI depend on it.
     if (entry.isDirectory() && relative(root, path) === "docs/exec-plan/archived") continue;
     if (entry.isDirectory() && recursive) files.push(...markdownFiles(path, true));
-    else if (entry.isFile() && entry.name.endsWith(".md")) files.push(path);
+    else if (
+      entry.isFile()
+      && entry.name.endsWith(".md")
+      && !excludedMarkdownFiles.has(relative(root, path))
+    ) {
+      files.push(path);
+    }
   }
   return files;
 }
@@ -82,6 +93,7 @@ function checkInlineSourcePaths(file, text) {
 const files = [
   ...markdownFiles(root, false),
   ...markdownFiles(resolve(root, "docs"), true),
+  ...markdownFiles(resolve(root, "assets"), true),
 ];
 assertNonVacuous(files, "user-facing documentation");
 
