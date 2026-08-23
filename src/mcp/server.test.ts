@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { harnessSurfaceRegistry } from "../harness/surface-registry.js";
+import { omsMcpTools } from "./server.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,6 +21,27 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 }
 
 describe("Oh My Second Brain MCP stdio server", () => {
+  it("registers only the five public tools and retires detail aliases", () => {
+    expect(omsMcpTools.map((tool) => tool.name)).toEqual([
+      "oms_write",
+      "oms_search",
+      "oms_link",
+      "oms_status",
+      "oms_doctor",
+    ]);
+    expect(omsMcpTools.map((tool) => tool.name)).not.toEqual(
+      expect.arrayContaining([
+        "query", "get", "multi_get", "status",
+        "oms_graph_status", "oms_graph_build", "oms_list_concepts",
+        "oms_retrieve_by_axis", "oms_retrieve_context", "oms_lazy_load_note",
+        "oms_validate_contract", "oms_vault_audit", "oms_link_suggest", "oms_link_apply",
+        "oms_sync_embeddings", "oms_semantic_query", "oms_semantic_status",
+        "oms_semantic_collections", "oms_semantic_contexts", "oms_semantic_cleanup",
+        "oms_get_document", "oms_multi_get_documents",
+      ]),
+    );
+  });
+
   it("reports the package.json version in the MCP handshake", async () => {
     // Given: the version declared by the shipped package manifest
     const manifest: unknown = JSON.parse(
@@ -76,29 +98,23 @@ describe("Oh My Second Brain MCP stdio server", () => {
         expect(tool?.annotations?.idempotentHint).toBe(registryTool.idempotent);
         expect(tool?.annotations?.openWorldHint).toBe(registryTool.openWorld);
       }
-      const retrieveTool = tools.tools.find((tool) => tool.name === "oms_retrieve_context");
+      const retrieveTool = tools.tools.find((tool) => tool.name === "oms_search");
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semanticMinScore");
       // storage/modelPath knobs were removed from the schemas (engine uses explicit env config).
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticStorage");
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticModelPath");
-      expect(retrieveTool?.annotations?.readOnlyHint).toBe(false);
-      const semanticStatusTool = tools.tools.find((tool) => tool.name === "oms_semantic_status");
-      expect(JSON.stringify(semanticStatusTool?.inputSchema)).toContain("index");
-      expect(JSON.stringify(semanticStatusTool?.inputSchema)).not.toContain("storage");
-      const semanticQueryTool = tools.tools.find((tool) => tool.name === "oms_semantic_query");
-      expect(JSON.stringify(semanticQueryTool?.inputSchema)).toContain("query");
-      expect(JSON.stringify(semanticQueryTool?.inputSchema)).not.toContain("modelPath");
-      const getTool = tools.tools.find((tool) => tool.name === "oms_get_document");
-      expect(getTool?.annotations?.readOnlyHint).toBe(true);
-      expect(getTool?.annotations?.destructiveHint).toBe(false);
-      const auditTool = tools.tools.find((tool) => tool.name === "oms_vault_audit");
-      expect(auditTool?.annotations?.readOnlyHint).toBe(true);
-      expect(JSON.stringify(auditTool?.inputSchema)).toContain("folder");
+      expect(retrieveTool?.annotations?.readOnlyHint).toBe(true);
+      expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semantic-query");
+      expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("get-document");
+      expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("modelPath");
+      const doctorTool = tools.tools.find((tool) => tool.name === "oms_doctor");
+      expect(doctorTool?.annotations?.readOnlyHint).toBe(false);
+      expect(JSON.stringify(doctorTool?.inputSchema)).toContain("audit");
 
-      const status = await client.callTool({ name: "oms_graph_status", arguments: {} });
+      const status = await client.callTool({ name: "oms_status", arguments: {} });
       const parsedStatus = textPayload(status);
-      expect(parsedStatus.writeTools).toBe("write-gated-by-verified-target-and-contract");
-      const writeTool = tools.tools.find((tool) => tool.name === "write");
+      expect(parsedStatus.writeTools).toBe("oms_write-gated-by-verified-target-and-contract");
+      const writeTool = tools.tools.find((tool) => tool.name === "oms_write");
       expect(writeTool?.annotations?.readOnlyHint).toBe(false);
       expect(JSON.stringify(writeTool?.inputSchema)).toContain("update");
       expect(parsedStatus.counts.concepts).toBeGreaterThan(0);
@@ -107,23 +123,23 @@ describe("Oh My Second Brain MCP stdio server", () => {
       expect(staleness.graphStale).toBe(true);
 
       const validation = await client.callTool({
-        name: "oms_validate_contract",
-        arguments: { notePath: "references/clean-architecture.md" },
+        name: "oms_doctor",
+        arguments: { op: "validate", notePath: "references/clean-architecture.md" },
       });
       const parsedValidation = textPayload(validation);
       expect(parsedValidation.valid).toBe(true);
       expect(parsedValidation.concept).toBe("literature");
       const audit = await client.callTool({
-        name: "oms_vault_audit",
-        arguments: { folder: "references" },
+        name: "oms_doctor",
+        arguments: { op: "audit", folder: "references" },
       });
       const parsedAudit = textPayload(audit);
       expect(parsedAudit.clean).toBe(true);
       expect(parsedAudit.scannedNotes).toBe(1);
       expect(parsedAudit.excludedNotes).toBe(0);
       const nonStringFolderAudit = await client.callTool({
-        name: "oms_vault_audit",
-        arguments: { folder: 123 },
+        name: "oms_doctor",
+        arguments: { op: "audit", folder: 123 },
       });
       expect(nonStringFolderAudit.isError).toBe(true);
       expect(nonStringFolderAudit.content[0]?.type === "text" ? nonStringFolderAudit.content[0].text : "").toContain(
@@ -131,8 +147,8 @@ describe("Oh My Second Brain MCP stdio server", () => {
       );
 
       const missingVaultFolderAudit = await client.callTool({
-        name: "oms_vault_audit",
-        arguments: { folder: "inbox" },
+        name: "oms_doctor",
+        arguments: { op: "audit", folder: "inbox" },
       });
       expect(missingVaultFolderAudit.isError).toBe(true);
       expect(
@@ -191,8 +207,8 @@ Malformed frontmatter must not block retrieve.
 
       const result = textPayload(
         await client.callTool({
-          name: "oms_retrieve_context",
-          arguments: {
+          name: "oms_search",
+          arguments: { op: "context",
             property: "tags",
             value: "agent-graph",
             query: "agent retrieval graph",
@@ -233,12 +249,12 @@ Malformed frontmatter must not block retrieve.
     try {
       await client.connect(transport);
 
-      const status = textPayload(await client.callTool({ name: "oms_graph_status", arguments: {} }));
+      const status = textPayload(await client.callTool({ name: "oms_status", arguments: {} }));
       expect(status.ontologySource).toBe("vault-invalid");
-      expect(status.writeTools).toBe("disabled-invalid-ontology");
+      expect(status.writeTools).toBe("oms_write-disabled-invalid-ontology");
 
       const write = await client.callTool({
-        name: "write",
+        name: "oms_write",
         arguments: {
           notePath: "references/unsafe.md",
           frontmatter: {
@@ -271,13 +287,13 @@ Malformed frontmatter must not block retrieve.
 
     try {
       await client.connect(transport);
-      expect(textPayload(await client.callTool({ name: "oms_graph_status", arguments: {} })).ontologySource).toBe(
+      expect(textPayload(await client.callTool({ name: "oms_status", arguments: {} })).ontologySource).toBe(
         "bundled",
       );
 
-      await client.callTool({ name: "oms_graph_build", arguments: {} });
+      await client.callTool({ name: "oms_doctor", arguments: { op: "build-graph",} });
 
-      expect(textPayload(await client.callTool({ name: "oms_graph_status", arguments: {} })).ontologySource).toBe(
+      expect(textPayload(await client.callTool({ name: "oms_status", arguments: {} })).ontologySource).toBe(
         "bundled",
       );
     } finally {
@@ -301,12 +317,12 @@ Malformed frontmatter must not block retrieve.
     try {
       await client.connect(transport);
 
-      const status = textPayload(await client.callTool({ name: "oms_graph_status", arguments: {} }));
+      const status = textPayload(await client.callTool({ name: "oms_status", arguments: {} }));
       expect(status.ontologySource).toBe("vault-invalid");
-      expect(status.writeTools).toBe("disabled-invalid-ontology");
+      expect(status.writeTools).toBe("oms_write-disabled-invalid-ontology");
 
       const write = await client.callTool({
-        name: "write",
+        name: "oms_write",
         arguments: {
           notePath: "references/unsafe.md",
           frontmatter: {
@@ -339,7 +355,7 @@ Malformed frontmatter must not block retrieve.
 
       const asked = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "create",
             concept: "literature",
@@ -353,7 +369,7 @@ Malformed frontmatter must not block retrieve.
 
       const created = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "create",
             notePath: "references/kernel-note.md",
@@ -382,7 +398,7 @@ Malformed frontmatter must not block retrieve.
 
       const broken = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "update",
             notePath: "references/kernel-note.md",
@@ -435,7 +451,7 @@ Malformed frontmatter must not block retrieve.
 
       // When: link suggestions are requested for the mentioning note
       const suggested = textPayload(
-        await client.callTool({ name: "oms_link_suggest", arguments: { notePath } }),
+        await client.callTool({ name: "oms_link", arguments: { op: "suggest", notePath } }),
       );
 
       // Then: both term notes are proposed, first-occurrence only, with a hash
@@ -457,8 +473,8 @@ Malformed frontmatter must not block retrieve.
       const beforeApply = await readFile(noteFile, "utf-8");
       const stale = textPayload(
         await client.callTool({
-          name: "oms_link_apply",
-          arguments: {
+          name: "oms_link",
+          arguments: { op: "apply",
             notePath,
             baseContentHash: "0".repeat(64),
             candidateIds: candidates.map((candidate) => candidate.id),
@@ -474,8 +490,8 @@ Malformed frontmatter must not block retrieve.
       // When: apply runs with the hash the suggestions were computed against
       const applied = textPayload(
         await client.callTool({
-          name: "oms_link_apply",
-          arguments: {
+          name: "oms_link",
+          arguments: { op: "apply",
             notePath,
             baseContentHash: suggested.baseContentHash,
             candidateIds: candidates.map((candidate) => candidate.id),
@@ -495,8 +511,8 @@ Malformed frontmatter must not block retrieve.
       // When: the same (now stale) hash is replayed
       const replayed = textPayload(
         await client.callTool({
-          name: "oms_link_apply",
-          arguments: {
+          name: "oms_link",
+          arguments: { op: "apply",
             notePath,
             baseContentHash: suggested.baseContentHash,
             candidateIds: candidates.map((candidate) => candidate.id),
@@ -532,23 +548,23 @@ Malformed frontmatter must not block retrieve.
       await client.connect(transport);
 
       // When: notePath is omitted
-      const missing = await client.callTool({ name: "oms_link_suggest", arguments: {} });
+      const missing = await client.callTool({ name: "oms_link", arguments: { op: "suggest",} });
       // Then: the tool reports a typed argument error
       expect(missing.isError).toBe(true);
       expect(missing.content[0]?.type === "text" ? missing.content[0].text : "").toContain("notePath");
 
       // When: the note does not exist
       const absent = await client.callTool({
-        name: "oms_link_suggest",
-        arguments: { notePath: "notes/does-not-exist.md" },
+        name: "oms_link",
+        arguments: { op: "suggest", notePath: "notes/does-not-exist.md" },
       });
       // Then: the tool errors instead of inventing an empty suggestion set
       expect(absent.isError).toBe(true);
 
       // When: apply omits the base hash
       const noHash = await client.callTool({
-        name: "oms_link_apply",
-        arguments: { notePath: "notes/sage.md", candidateIds: [] },
+        name: "oms_link",
+        arguments: { op: "apply", notePath: "notes/sage.md", candidateIds: [] },
       });
       // Then: the tool refuses before any write
       expect(noHash.isError).toBe(true);
@@ -579,12 +595,12 @@ Malformed frontmatter must not block retrieve.
     try {
       await client.connect(transport);
 
-      const status = textPayload(await client.callTool({ name: "oms_graph_status", arguments: {} }));
-      expect(status.writeTools).toBe("write-disabled-target-unverified");
+      const status = textPayload(await client.callTool({ name: "oms_status", arguments: {} }));
+      expect(status.writeTools).toBe("oms_write-disabled-target-unverified");
 
       const write = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "create",
             notePath: "references/misrouted.md",
@@ -650,12 +666,12 @@ fields:
     try {
       await client.connect(transport);
 
-      const status = textPayload(await client.callTool({ name: "oms_graph_status", arguments: {} }));
-      expect(status.writeTools).toBe("write-gated-by-verified-target-and-contract");
+      const status = textPayload(await client.callTool({ name: "oms_status", arguments: {} }));
+      expect(status.writeTools).toBe("oms_write-gated-by-verified-target-and-contract");
 
       const created = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "create",
             notePath: "references/local-vault-note.md",

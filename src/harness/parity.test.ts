@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { isSemanticCliCommand } from "../cli/semantic.js";
 import { omsMcpTools } from "../mcp/server.js";
 import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
+import { SHARED_SKILLS_SOURCE } from "../install/adapter-source.js";
 import { harnessSurfaceRegistry } from "./surface-registry.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -62,17 +63,24 @@ describe("harness registry parity", () => {
     }
   });
 
-  it("matches shipped adapter skill directories", async () => {
+  it("resolves every host's declared skills to the one shared source", async () => {
+    // Zero copies is the point: no host has its own skills directory any more,
+    // so every host's declaration must match the single authored tree. A
+    // per-host directory reappearing here means a copy came back.
+    const shared = await skillDirs(SHARED_SKILLS_SOURCE);
+    expect(shared).not.toHaveLength(0);
+
     for (const host of harnessSurfaceRegistry.hosts) {
-      await expect(skillDirs(path.join(host.adapterDir, "skills"))).resolves.toEqual(
-        [...host.skillDirs].sort(),
-      );
+      expect([...host.skillDirs].sort(), host.runtime).toEqual(shared);
     }
+
+    // Every host resolves to the identical set, which is what makes the copies
+    // removable. Their absence on disk is asserted by the vendor-discovery gate
+    // once the deletion lands.
+    const declared = new Set(harnessSurfaceRegistry.hosts.map((host) => [...host.skillDirs].sort().join(",")));
+    expect(declared.size, "hosts declare divergent skill sets").toBe(1);
   });
 
-  it("matches shipped core skill directories", async () => {
-    await expect(skillDirs("core/skills")).resolves.toEqual([...harnessSurfaceRegistry.coreSkillDirs].sort());
-  });
 
   it("declares host manifest, guidance, hook, rule, and MCP config files that exist", async () => {
     for (const host of harnessSurfaceRegistry.hosts) {
@@ -117,14 +125,11 @@ describe("harness registry parity", () => {
     const distModuleUrl = pathToFileURL(path.join(packageRoot, "dist", "runtime", "assets.js")).href;
     const resolved = resolveBundledAssetPaths(distModuleUrl);
 
+    // Only the ontology root survives. The adapter roots were retired with the
+    // vendor topology move: skills resolve through SHARED_SKILLS_SOURCE now, not
+    // through a per-host runtime asset root.
     expect(harnessSurfaceRegistry.packageAssets.runtimeAssetRoots).toEqual([
       { id: "ontology", path: path.relative(packageRoot, resolved.ontologyDir), owner: "core" },
-      { id: "adapters", path: path.relative(packageRoot, resolved.adapterRoot), owner: "runtime" },
-      {
-        id: "claude-adapter",
-        path: path.relative(packageRoot, resolved.claudeAdapterDir),
-        owner: "runtime",
-      },
     ]);
   });
 });

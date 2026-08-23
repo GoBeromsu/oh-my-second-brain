@@ -7,15 +7,21 @@
   "bin": {
     "oh-my-second-brain": "dist/cli/oms.js",
     "oms": "dist/cli/oms.js",
-    "oms-guard": "adapters/claude-code/hooks/oms-guard.mjs",
-    "oms-post-guard": "adapters/claude-code/hooks/oms-post-guard.mjs"
+    "oms-guard": "assets/claude/hooks/oms-guard.mjs",
+    "oms-post-guard": "assets/claude/hooks/oms-post-guard.mjs"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "core",
-    "adapters",
+    "core/AGENTS.md",
+    "core/ontology",
+    ".claude-plugin",
+    ".codex-plugin",
+    ".mcp.json",
+    ".mcp.codex.json",
+    "assets",
+    "docs/adapters.md",
     "docs/install.md",
     "docs/release.md",
     "scripts/install.sh",

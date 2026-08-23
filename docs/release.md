@@ -23,9 +23,9 @@ The npm package root is the runtime asset root. A releasable tarball must includ
 - `dist/mcp/server.js`
 - `core/ontology/taxonomy.yaml`
 - `core/ontology/concepts/`
-- `adapters/claude-code/.claude-plugin/plugin.json`
-- every Claude adapter `skills/*/SKILL.md`
-- Codex and Hermes adapter skill bundles, including the update skill surface
+- `.claude-plugin/plugin.json`
+- `assets/skills/*/SKILL.md`
+- `assets/codex/rules/oms.md` and `assets/hermes-manifest.json`
 - `docs/install.md`
 - `docs/release.md`
 - `scripts/install.sh`
@@ -60,7 +60,7 @@ Every check below runs before a single file or git ref changes, so a failed pref
 
 ### 2. Lockstep version bump
 
-Five files get the new version: `package.json`, `package-lock.json` (root `version` plus `packages[""].version`), `adapters/claude-code/.claude-plugin/plugin.json`, `adapters/codex/.codex-plugin/plugin.json`, and `adapters/hermes/manifest.json`. The script then re-reads all of them and asserts consistency. If anything is off, it stops and tells you to run `git checkout -- .`, since nothing has been committed yet.
+Five files get the new version: `package.json`, `package-lock.json` (root `version` plus `packages[""].version`), `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `assets/hermes-manifest.json`. The script then re-reads all of them and asserts consistency. If anything is off, it stops and tells you to run `git checkout -- .`, since nothing has been committed yet.
 
 ### 3. Changelog roll
 
@@ -138,10 +138,10 @@ Run a rehearsal on any branch that changes the release pipeline itself.
 Validation is CI-first. The workflow installs the Claude CLI and `scripts/release-plugin.mjs` runs the real check:
 
 ```bash
-claude plugin validate adapters/claude-code
+claude plugin validate .
 ```
 
-That's also the command to run locally when debugging an adapter failure. A `claude plugin validate` failure inside `release:check` is a plugin content error: fix `adapters/claude-code`, don't work around the pipeline. Never disable `OMS_REQUIRE_PLUGIN_VALIDATION`.
+That's also the command to run locally when debugging an adapter failure. A `claude plugin validate` failure inside `release:check` is a plugin content error: fix the root plugin assets, don't work around the pipeline. Never disable `OMS_REQUIRE_PLUGIN_VALIDATION`.
 
 Only when the CLI itself can't run (install or `claude --version` fails, an environment failure) does the attestation fallback apply. `release-plugin.mjs` reads `OMS_PLUGIN_VALIDATION_ATTESTATION` as inline JSON or as a path to a JSON file, requires `actor`, `timestamp`, `command`, `pluginPath`, and `exitCode`, and rejects anything with a non-zero `exitCode`.
 
@@ -149,8 +149,8 @@ Only when the CLI itself can't run (install or `claude --version` fails, an envi
 {
   "actor": "person-or-bot",
   "timestamp": "2026-06-02T00:00:00Z",
-  "command": "claude plugin validate adapters/claude-code",
-  "pluginPath": "adapters/claude-code",
+  "command": "claude plugin validate .",
+  "pluginPath": ".",
   "claudeVersion": "optional version string",
   "exitCode": 0,
   "warnings": ["optional warning text"],
@@ -176,7 +176,7 @@ Before the first public release:
 
 1. Verify that the `oh-my-second-brain` npm package is publishable by the current publisher.
 2. Bump `package.json` to a real semver release.
-3. Keep `adapters/claude-code/.claude-plugin/plugin.json` version in sync with `package.json` unless a future ADR deliberately splits package/plugin versioning.
+3. Keep `.claude-plugin/plugin.json` version in sync with `package.json` unless a future ADR deliberately splits package/plugin versioning.
 4. Confirm release notes list Codex rules/skills and Hermes skill-bundle install paths, plus the MCP registration files that make capture/retrieve tools available.
 
 The operator script handles items 2 and 3 automatically on every release by bumping all version carriers in lockstep.

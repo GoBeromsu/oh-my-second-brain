@@ -189,9 +189,9 @@ export function versionMismatches({
     ["package.json", packageJson?.version],
     ["package-lock.json", packageLock?.version],
     ['package-lock.json packages[""]', packageLock?.packages?.[""]?.version],
-    ["adapters/claude-code/.claude-plugin/plugin.json", claudePluginJson?.version],
-    ["adapters/codex/.codex-plugin/plugin.json", codexPluginJson?.version],
-    ["adapters/hermes/manifest.json", hermesManifestJson?.version],
+    [".claude-plugin/plugin.json", claudePluginJson?.version],
+    [".codex-plugin/plugin.json", codexPluginJson?.version],
+    ["assets/hermes-manifest.json", hermesManifestJson?.version],
     [".claude-plugin/marketplace.json", marketplaceJson?.version],
     ['.claude-plugin/marketplace.json plugins[0]', marketplaceJson?.plugins?.[0]?.version],
   ];

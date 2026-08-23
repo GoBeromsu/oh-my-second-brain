@@ -12,7 +12,12 @@ export type {
   HostRuntime,
   RuntimeSelection,
 } from "./types.js";
-export { HostAdapterSourceError, UnsupportedHostRuntimeError, resolveHostAdapterSource } from "./adapter-source.js";
+export {
+  HostAdapterSourceError,
+  UnsupportedHostRuntimeError,
+  resolveHostAdapterSource,
+  resolveSharedSkillsSource,
+} from "./adapter-source.js";
 export {
   buildGuardCommandString,
   isOmsHookEntry,

@@ -112,7 +112,7 @@ describe("Issue #58: Verified-target write kernel", () => {
 
       const write = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "create",
             notePath: "references/verified-note.md",
@@ -167,7 +167,7 @@ describe("Issue #58: Verified-target write kernel", () => {
 
       const write = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "create",
             notePath: "references/rejected-note.md",
@@ -224,7 +224,7 @@ describe("Issue #58: Verified-target write kernel", () => {
 
       const write = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "create",
             notePath: "references/invalid-target.md",
@@ -324,7 +324,7 @@ describe("Issue #58: Verified-target write kernel", () => {
       // Case A: Written response with receipt
       const written = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "create",
             notePath: "references/response-test.md",
@@ -347,7 +347,7 @@ describe("Issue #58: Verified-target write kernel", () => {
       // Case B: Rejected response (ask status - contract violation)
       const rejected = textPayload(
         await client.callTool({
-          name: "write",
+          name: "oms_write",
           arguments: {
             mode: "create",
             notePath: "references/incomplete.md",

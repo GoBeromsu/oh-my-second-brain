@@ -36,7 +36,7 @@ All knowledge logic (validation, ontology loading, folder resolution, graph/cach
 | Convention file | `CLAUDE.md` / `AGENTS.md` | `AGENTS.md` | `SOUL.md` + context files |
 | Local vault access | yes | yes | yes |
 
-`adapters/claude-code/`, `adapters/codex/`, and `adapters/hermes/` all ship installable v0 host surfaces. `oh-my-second-brain install` copies host assets, installs Codex/Hermes skills or rules where the host expects them, and writes host MCP registration.
+Root plugin manifests and `assets/{claude,codex,hermes}/` ship installable host surfaces. `oh-my-second-brain install` copies host assets, installs Codex/Hermes skills or rules where the host expects them, and writes host MCP registration.
 
 ## Flow Diagram
 
@@ -66,8 +66,8 @@ All knowledge logic (validation, ontology loading, folder resolution, graph/cach
 │  Package-root assets  (not TypeScript source)                    │
 │                                                                  │
 │  core/ontology/          shipped default ontology copied to vault │
-│  core/skills/, core/agents/ host-agnostic skill/persona text       │
-│  adapters/*              host-native plugin/rule/skill bundles    │
+│  assets/skills/          host-agnostic skill text                  │
+│  assets/{claude,codex,hermes}/ host-native guidance, hooks, rules │
 └───────────────────────────┬──────────────────────────────────────┘
                             │ reads / writes
                             ▼

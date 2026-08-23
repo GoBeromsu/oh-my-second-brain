@@ -186,9 +186,12 @@ describe("runSetup --yes E2E", () => {
   it("builds a Claude Code install plan that only claims the read/status MCP runtime", () => {
     const plan = buildClaudeInstallPlan({ vault: "/tmp/My Vault" });
 
-    expect(plan.pluginPath).toContain("adapters/claude-code");
+    // The plugin root is the package root since the vendor topology move, so
+    // the plan points at the root manifest rather than a vendor subdirectory.
+    expect(plan.pluginPath).not.toContain("adapters/claude-code");
     expect(plan.pluginInstallCommand).toContain("claude plugin install");
-    expect(plan.pluginMcpAsset).toContain("adapters/claude-code/.mcp.json");
+    expect(plan.pluginMcpAsset).toContain(".mcp.json");
+    expect(plan.pluginMcpAsset).not.toContain("adapters/");
     expect(plan.mcpRuntimeStatus).toBe("read-status-runtime");
   });
 });

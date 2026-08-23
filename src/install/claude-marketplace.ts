@@ -4,9 +4,7 @@ import { isRecord, runExternal, type ExternalCommandResult } from "./common.js";
 
 /**
  * Published marketplace source used when the running install has no repo
- * checkout on disk. The npm package ships `adapters/` but not
- * `.claude-plugin/marketplace.json`, so a released install resolves the
- * marketplace from GitHub rather than from a local path.
+ * checkout on disk.
  */
 const PUBLISHED_MARKETPLACE_REPO = "GoBeromsu/oh-my-second-brain";
 
@@ -53,14 +51,13 @@ export async function readMarketplaceName(repoRoot: string): Promise<string | nu
 
 /**
  * Resolves the marketplace Claude should add. A repo checkout containing the
- * manifest above `adapters/` is preferred (dev and offline installs); otherwise
- * the published GitHub repo is used.
+ * manifest at its plugin root is preferred (dev and offline installs);
+ * otherwise the published GitHub repo is used.
  */
 export async function resolveClaudeMarketplaceSource(pluginPath: string): Promise<ClaudeMarketplaceSource> {
-  const repoRoot = path.resolve(pluginPath, "..", "..");
-  const localName = await readMarketplaceName(repoRoot);
+  const localName = await readMarketplaceName(pluginPath);
   if (localName !== null) {
-    return { kind: "local", source: repoRoot, marketplaceName: localName };
+    return { kind: "local", source: pluginPath, marketplaceName: localName };
   }
   return {
     kind: "github",

@@ -23,9 +23,9 @@ const USAGE = "usage: npm run release -- <X.Y.Z> [--allow-empty-changelog] | npm
 
 const JSON_CARRIERS = {
   packageJson: "package.json",
-  claudePluginJson: "adapters/claude-code/.claude-plugin/plugin.json",
-  codexPluginJson: "adapters/codex/.codex-plugin/plugin.json",
-  hermesManifestJson: "adapters/hermes/manifest.json",
+  claudePluginJson: ".claude-plugin/plugin.json",
+  codexPluginJson: ".codex-plugin/plugin.json",
+  hermesManifestJson: "assets/hermes-manifest.json",
 };
 const PACKAGE_LOCK = "package-lock.json";
 // Carries the version twice (top-level + plugins[0]), so it is bumped by parse-and-set.

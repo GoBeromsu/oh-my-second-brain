@@ -125,34 +125,7 @@ export const semanticMcpTools: Tool[] = [
     inputSchema: getDocumentInputSchema,
     annotations: readOnlyAnnotations,
   },
-  {
-    name: "query",
-    title: "QMD-compatible semantic query alias",
-    description: "Compatibility alias for oms_semantic_query backed by the native OMS semantic index.",
-    inputSchema: queryInputSchema,
-    annotations: readOnlyAnnotations,
-  },
-  {
-    name: "status",
-    title: "QMD-compatible semantic status alias",
-    description: "Compatibility alias for oms_semantic_status backed by the native OMS semantic index.",
-    inputSchema: { type: "object", properties: { index: { type: "string" } } },
-    annotations: readOnlyAnnotations,
-  },
-  {
-    name: "get",
-    title: "QMD-compatible document get alias",
-    description: "Compatibility alias for oms_get_document backed by the native OMS semantic index.",
-    inputSchema: getDocumentInputSchema,
-    annotations: readOnlyAnnotations,
-  },
-  {
-    name: "multi_get",
-    title: "QMD-compatible document multi-get alias",
-    description: "Compatibility alias for oms_multi_get_documents backed by the native OMS semantic index.",
-    inputSchema: multiGetInputSchema,
-    annotations: readOnlyAnnotations,
-  },
+
   {
     name: "oms_multi_get_documents",
     title: "Oh My Second Brain multi-get documents",

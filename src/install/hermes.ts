@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { HarnessHostSurface } from "../harness/surface-registry.js";
-import { resolveHostAdapterSource } from "./adapter-source.js";
+import { resolveHostAdapterSource, resolveSharedSkillsSource } from "./adapter-source.js";
 import { editYamlEntryPreservingComments, hostHome, mcpServerEntry, replaceDirectory } from "./common.js";
 import type { HostOperationOptions, HostOperationResult } from "./types.js";
 
@@ -26,18 +26,25 @@ async function removeHermesMcp(options: HostOperationOptions, hermesConfig: stri
 
 export async function installHermes(options: HostOperationOptions, host: HarnessHostSurface): Promise<HostOperationResult> {
   const hermesDir = hostHome(options.homeDir, ".hermes", "OMS_HERMES_HOME");
-  const pluginSource = resolveHostAdapterSource(options.adapterRoot, host);
+  const adapterSource = resolveHostAdapterSource(options.adapterRoot, host);
   const legacyPluginTarget = path.join(hermesDir, "plugins", "oms");
   const legacyMcpPath = path.join(hermesDir, "mcp", "oms.json");
-  const skillSource = path.join(pluginSource, "skills");
+  const skillSource = resolveSharedSkillsSource(options.adapterRoot);
   const skillTarget = path.join(hermesDir, "skills", HERMES_SKILL_CATEGORY, HERMES_SKILL_NAME);
   const configPath = path.join(hermesDir, "config.yaml");
   const adapterTarget = path.join(hermesDir, "adapters", "oms");
+  const adapterManifestTarget = path.join(adapterTarget, "hermes-manifest.json");
+  const guidanceTarget = path.join(adapterTarget, "SOUL.md");
+  const readmeTarget = path.join(adapterTarget, "README.md");
   const messages = ["Installed Hermes-native Oh My Second Brain skill bundle and registered mcp_servers.oms in ~/.hermes/config.yaml."];
   if (!options.dryRun) {
     await rm(legacyPluginTarget, { recursive: true, force: true });
     await rm(legacyMcpPath, { force: true });
-    await replaceDirectory(pluginSource, adapterTarget, false);
+    await rm(adapterTarget, { recursive: true, force: true });
+    await mkdir(adapterTarget, { recursive: true });
+    await cp(path.join(adapterSource, "hermes-manifest.json"), adapterManifestTarget);
+    await cp(path.join(adapterSource, "hermes", "SOUL.md"), guidanceTarget);
+    await cp(path.join(adapterSource, "hermes", "README.md"), readmeTarget);
     await replaceDirectory(skillSource, skillTarget, false);
     if (!(await upsertHermesMcp(options, configPath))) {
       messages.push(`WARNING: ${configPath} is not a supported YAML mapping; mcp_servers.oms was not registered. Add it manually.`);
@@ -48,7 +55,7 @@ export async function installHermes(options: HostOperationOptions, host: Harness
     action: "install",
     changed: !options.dryRun,
     skipped: false,
-    paths: [adapterTarget, skillTarget, configPath],
+    paths: [adapterTarget, guidanceTarget, readmeTarget, skillTarget, configPath],
     commands: [`Hermes MCP config: ${configPath}`],
     messages,
   };

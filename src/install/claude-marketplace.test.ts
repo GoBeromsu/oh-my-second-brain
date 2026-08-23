@@ -54,19 +54,21 @@ describe("readMarketplaceName", () => {
 
 describe("resolveClaudeMarketplaceSource", () => {
   it("uses the local repo root when it ships a marketplace manifest", async () => {
-    // Given: an adapter root inside a repo checkout carrying the manifest
+    // Given: a repo checkout carrying the manifest at its plugin root. Since the
+    // vendor topology move the plugin root IS the repository root, so the
+    // resolver is handed the root directly rather than a vendor subdirectory.
     const root = await makeRepoRoot("local", JSON.stringify({ name: "oms", plugins: [] }));
-    // When: the marketplace source is resolved from the bundled adapter path
-    const source = await resolveClaudeMarketplaceSource(path.join(root, "adapters", "claude-code"));
+    // When: the marketplace source is resolved from the plugin root
+    const source = await resolveClaudeMarketplaceSource(root);
     // Then: the local checkout is preferred over the remote repo
     expect(source).toEqual({ kind: "local", source: root, marketplaceName: "oms" });
   });
 
   it("falls back to the GitHub repo when no local manifest exists", async () => {
-    // Given: an adapter root with no marketplace manifest above it (npm install layout)
+    // Given: a plugin root with no marketplace manifest (npm install layout)
     const root = await makeRepoRoot("remote", null);
     // When: the marketplace source is resolved
-    const source = await resolveClaudeMarketplaceSource(path.join(root, "adapters", "claude-code"));
+    const source = await resolveClaudeMarketplaceSource(root);
     // Then: the published GitHub repo is used with the published marketplace name
     expect(source).toEqual({
       kind: "github",

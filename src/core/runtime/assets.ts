@@ -6,11 +6,9 @@ import { harnessSurfaceRegistry, type HarnessRuntimeAssetRoot } from "../../harn
 export interface BundledAssetPaths {
   readonly packageRoot: string;
   readonly ontologyDir: string;
-  readonly adapterRoot: string;
-  readonly claudeAdapterDir: string;
 }
 
-type BundledAssetRootId = "ontology" | "adapters" | "claude-adapter";
+type BundledAssetRootId = "ontology";
 
 export class MissingBundledAssetRootError extends Error {
   constructor(readonly assetRootId: BundledAssetRootId) {
@@ -84,7 +82,5 @@ export function resolveBundledAssetPaths(
   return {
     packageRoot,
     ontologyDir: path.join(packageRoot, requiredRuntimeAssetPath(runtimeAssetRoots, "ontology")),
-    adapterRoot: path.join(packageRoot, requiredRuntimeAssetPath(runtimeAssetRoots, "adapters")),
-    claudeAdapterDir: path.join(packageRoot, requiredRuntimeAssetPath(runtimeAssetRoots, "claude-adapter")),
   };
 }

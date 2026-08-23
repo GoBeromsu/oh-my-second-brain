@@ -159,8 +159,8 @@ cat ~/.oms/config.yaml
 
 The fix is entirely server-side. **No adapter files change.**
 
-- `adapters/claude-code` keeps `.mcp.json` with `args: ["mcp"]`. The server now resolves the vault from the global registry instead of the launch directory, which is exactly the behavior this registration always wanted.
-- `adapters/codex` keeps its `--vault .` registration, which resolves as `explicit` and was never affected.
-- `adapters/hermes` registers the same `oms mcp` command through `~/.hermes/config.yaml`; nothing to change.
+- Root `.mcp.json` keeps `args: ["mcp"]`. The server now resolves the vault from the global registry instead of the launch directory, which is exactly the behavior this registration always wanted.
+- Root `.mcp.codex.json` keeps its `--vault .` registration, which resolves as `explicit` and was never affected.
+- Hermes registers the same `oms mcp` command through `~/.hermes/config.yaml`; nothing to change.
 
 Related but not fixed here: issue #56, where the Claude plugin registers a bare user-scoped MCP server rather than a plugin-owned one and ships no usable write skill. That's a packaging and skill-surface problem in the adapter layer. Verified-target writes make the bare registration behave correctly at runtime, but they don't turn it into a plugin-owned server or add the missing write skill.

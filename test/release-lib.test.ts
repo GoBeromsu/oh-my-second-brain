@@ -286,9 +286,11 @@ describe("versionMismatches", () => {
     expect(mismatches[0]).toBe("package.json=0.1.9 (expected 0.2.0)");
     expect(mismatches[1]).toBe("package-lock.json=0.1.9 (expected 0.2.0)");
     expect(mismatches[2]).toBe('package-lock.json packages[""]=0.1.8 (expected 0.2.0)');
-    expect(mismatches[3]).toBe("adapters/claude-code/.claude-plugin/plugin.json=missing (expected 0.2.0)");
-    expect(mismatches[4]).toBe("adapters/codex/.codex-plugin/plugin.json=0.1.9 (expected 0.2.0)");
-    expect(mismatches[5]).toBe("adapters/hermes/manifest.json=0.1.9 (expected 0.2.0)");
+    // The plugin roots moved to the repository root so a single assets/skills/
+    // tree is an in-root reference for every host; the carrier labels follow.
+    expect(mismatches[3]).toBe(".claude-plugin/plugin.json=missing (expected 0.2.0)");
+    expect(mismatches[4]).toBe(".codex-plugin/plugin.json=0.1.9 (expected 0.2.0)");
+    expect(mismatches[5]).toBe("assets/hermes-manifest.json=0.1.9 (expected 0.2.0)");
     expect(mismatches[6]).toBe(".claude-plugin/marketplace.json=0.1.9 (expected 0.2.0)");
     expect(mismatches[7]).toBe(".claude-plugin/marketplace.json plugins[0]=0.1.8 (expected 0.2.0)");
   });

@@ -41,12 +41,34 @@ const OWNERS: readonly HarnessSurfaceOwner[] = [
 const HOSTS: readonly HarnessHostRuntime[] = ["claude", "codex", "hermes"];
 const POSTURES: readonly HarnessPosture[] = ["read", "write"];
 const STABILITIES: readonly HarnessStability[] = ["stable", "experimental", "compatibility"];
+/**
+ * Directory prefixes a shipped package path may live under.
+ *
+ * `assets/` holds all vendor runtime assets, including the single authored
+ * skill source and host-specific guidance, hooks, and rules.
+ */
 const PACKAGE_PATH_PREFIXES = [
-  "adapters/",
+  "assets/",
   "core/",
   "dist/",
   "docs/",
   "scripts/",
+] as const;
+
+/**
+ * Root-level files and directories that ship whole.
+ *
+ * The vendor plugin roots sit at the repository root because a host resolves a
+ * manifest's `skills` pointer relative to the manifest, and only a root-level
+ * manifest can reference `./assets/skills/` without climbing out of its own
+ * plugin root.
+ */
+const PACKAGE_ROOT_ENTRIES = [
+  ".claude-plugin",
+  ".codex-plugin",
+  ".mcp.json",
+  ".mcp.codex.json",
+  "package.json",
 ] as const;
 
 function includesValue<const T extends string>(values: readonly T[], value: unknown): value is T {
@@ -111,6 +133,38 @@ function validateStability(
   }
 }
 
+/**
+ * `adapterDir` names where a host's plugin manifest lives, which since the
+ * vendor topology move is decoupled from where its skills live. Claude and
+ * Codex read repo-root manifests, so `"."` is a legal and expected value here
+ * even though it is an unsafe segment in an ordinary package path.
+ *
+ * The legal set mirrors `resolveHostAdapterSource`'s allowlist exactly. Keeping
+ * it exhaustive rather than a prefix rule means there is no traversal to defend
+ * against: two literals cannot be escaped from.
+ */
+const LEGAL_ADAPTER_DIRS = [".", "assets"] as const;
+
+function validateAdapterDir(
+  violations: HarnessRegistryViolation[],
+  surface: string,
+  adapterDir: unknown,
+): void {
+  if (typeof adapterDir !== "string" || adapterDir.length === 0) {
+    violations.push({ code: "missing_path", surface, message: `${surface} is missing a path.` });
+    return;
+  }
+
+  if (!LEGAL_ADAPTER_DIRS.some((legal) => legal === adapterDir)) {
+    violations.push({
+      code: "forbidden_path",
+      surface,
+      value: adapterDir,
+      message: `${surface} must be one of ${LEGAL_ADAPTER_DIRS.join(", ")}: ${adapterDir}`,
+    });
+  }
+}
+
 function validatePackagePath(
   violations: HarnessRegistryViolation[],
   surface: string,
@@ -135,6 +189,11 @@ function validatePackagePath(
 
   const normalizedPath = pathPosix.normalize(path);
   if (normalizedPath === "package.json") return;
+  // `core/AGENTS.md` is the separately-owned vault-convention SSOT. It must SHIP
+  // - dropping it from the package silently removes an authoritative document -
+  // but nothing may treat it as a runtime asset or a release-verified artifact.
+  // So it is legal in npmFiles and rejected on every other surface.
+  if (normalizedPath === "core/AGENTS.md" && surface.startsWith("packageAssets.npmFiles")) return;
   if (normalizedPath === "core/AGENTS.md" || normalizedPath.startsWith("src/")) {
     violations.push({
       code: "forbidden_path",
@@ -144,11 +203,14 @@ function validatePackagePath(
     });
     return;
   }
-  if (
-    !PACKAGE_PATH_PREFIXES.some(
-      (prefix) => normalizedPath === prefix.slice(0, -1) || normalizedPath.startsWith(prefix),
-    )
-  ) {
+  const underPrefix = PACKAGE_PATH_PREFIXES.some(
+    (prefix) => normalizedPath === prefix.slice(0, -1) || normalizedPath.startsWith(prefix),
+  );
+  const underRootEntry = PACKAGE_ROOT_ENTRIES.some(
+    (entry) => normalizedPath === entry || normalizedPath.startsWith(`${entry}/`),
+  );
+
+  if (!underPrefix && !underRootEntry) {
     violations.push({
       code: "forbidden_path",
       surface,
@@ -207,7 +269,6 @@ export function validateHarnessRegistry(registry: HarnessSurfaceRegistry): Harne
     validateStability(violations, `cliCommands.${command.name}`, command.stability);
   }
 
-  pushDuplicateViolations(violations, "coreSkillDirs", registry.coreSkillDirs, "duplicate_name");
 
   pushDuplicateViolations(violations, "mcpTools", registry.mcpTools.map((tool) => tool.name), "duplicate_name");
   for (const tool of registry.mcpTools) {
@@ -226,7 +287,7 @@ export function validateHarnessRegistry(registry: HarnessSurfaceRegistry): Harne
   pushDuplicateViolations(violations, "hosts", registry.hosts.map((host) => host.runtime), "duplicate_name");
   for (const host of registry.hosts) {
     validateRuntime(violations, `hosts.${host.runtime}`, host.runtime);
-    validatePackagePath(violations, `hosts.${host.runtime}.adapterDir`, host.adapterDir);
+    validateAdapterDir(violations, `hosts.${host.runtime}.adapterDir`, host.adapterDir);
     pushDuplicateViolations(
       violations,
       `hosts.${host.runtime}.skillDirs`,

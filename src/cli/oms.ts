@@ -180,7 +180,7 @@ async function main(): Promise<void> {
       checkUpdate,
       timeoutMs,
       unknownFlags,
-      adapterRoot: bundledAssets.adapterRoot,
+      adapterRoot: bundledAssets.packageRoot,
     };
   }
 }

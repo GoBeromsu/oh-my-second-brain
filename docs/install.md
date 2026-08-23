@@ -63,7 +63,7 @@ Runtime selection follows the Ouroboros pattern:
 | Host | Install behavior |
 | --- | --- |
 | Claude Code | Installs the plugin-owned `.mcp.json` surface; removes stale `oms` registrations across local/project/user scopes; with `--execute`, adds the OMS marketplace and installs `oms@oms` through it, falling back to the local plugin path when the marketplace flow can't complete. |
-| Codex | Installs `~/.codex/rules/oms.md`, `~/.codex/skills/oms-*`, copies adapter files to `~/.codex/plugins/oms`, and writes a managed `[mcp_servers.oms]` block plus `OMS_AGENT_RUNTIME=codex` env in `~/.codex/config.toml`. |
+| Codex | Installs `~/.codex/rules/oms.md`, `~/.codex/skills/oms-*`, installs guidance to `~/.codex/plugins/oms`, and writes a managed `[mcp_servers.oms]` block plus `OMS_AGENT_RUNTIME=codex` env in `~/.codex/config.toml`. |
 | Hermes | Installs `~/.hermes/skills/knowledge-management/oms/`, copies adapter files to `~/.hermes/adapters/oms`, and writes `mcp_servers.oms` in `~/.hermes/config.yaml`. |
 
 Host writes keep the legacy `oms` namespace for backward-compatible MCP/skill IDs and are reversible with `oh-my-second-brain uninstall` (or the `oms` alias). Each runtime is installed independently: if one host fails, the others still complete.
@@ -122,8 +122,8 @@ Setup does not modify vault notes. It writes `.oms/taxonomy.yaml`, preserves exi
 Typical printed commands look like:
 
 ```bash
-claude plugin install /path/to/oh-my-second-brain/adapters/claude-code
-# MCP is declared by the installed plugin in adapters/claude-code/.mcp.json.
+claude plugin install /path/to/oh-my-second-brain
+# MCP is declared by the installed plugin in .mcp.json.
 ```
 
 ## Uninstall
@@ -177,7 +177,7 @@ oh-my-second-brain semantic context add vault "Prefer durable notes with reusabl
 oh-my-second-brain semantic ls vault --vault /path/to/vault
 oh-my-second-brain semantic doctor --vault /path/to/vault
 oh-my-second-brain install --runtime all --vault /path/to/vault --dry-run
-claude plugin validate adapters/claude-code
+claude plugin validate .
 ```
 
 Inside a host runtime, verify the MCP server by listing MCP tools or asking for Oh My Second Brain graph/status. The server exposes status, graph build, context retrieval, native OMS semantic-index sync, qmd-compatible semantic query/status aliases, `qmd://` document resources, semantic document rehydration, axis retrieval, lazy note loading, contract validation, and gated write tools. OMS does not require the `qmd` binary; `oms semantic doctor` now reports the built-in SQLite/FTS/vector backend and optional GGUF model path diagnostics.

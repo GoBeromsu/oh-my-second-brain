@@ -103,14 +103,14 @@ function positiveInt(value: string | undefined): number | undefined {
 }
 
 /**
- * Strip a resource scheme to a vault-relative path (parity with src/search
- * normalizePath): qmd://<path> and oms://<collection>/<path> are URL-decoded;
- * plain targets get backslashes and a leading "./" normalized away.
+ * Strip a resource scheme to a vault-relative path.
+ *
+ * `oms://<collection>/<path>` is URL-decoded; plain targets get backslashes and
+ * a leading "./" normalized away. The `qmd://` branch was removed with ADR-009:
+ * qmd compatibility is no longer a product contract, and keeping an input
+ * tolerance for a retired scheme is a compatibility layer with no caller.
  */
 function normalizeDocScheme(target: string): string {
-  if (target.startsWith("qmd://")) {
-    return decodeURIComponent(target.slice("qmd://".length)).replace(/^\/+/u, "");
-  }
   if (target.startsWith("oms://")) {
     const rest = target.slice("oms://".length);
     const slash = rest.indexOf("/");
@@ -149,7 +149,7 @@ function splitDocRange(value: string): { filePath: string; fromLine?: number; li
 
 /**
  * Parse target forms: "#docid", "file.md", "file.md:N", "file.md:N-M",
- * "file.md:FROM:COUNT", "dir/*.md" (glob), and qmd:// / oms:// resource URIs.
+ * "file.md:FROM:COUNT", "dir/*.md" (glob), and oms:// resource URIs.
  */
 function parseDocTarget(target: string): ParsedDocTarget {
   if (target.startsWith("#")) {

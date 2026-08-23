@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { HarnessHostSurface } from "../harness/surface-registry.js";
-import { resolveHostAdapterSource } from "./adapter-source.js";
+import { resolveHostAdapterSource, resolveSharedSkillsSource } from "./adapter-source.js";
 import { hostHome, jsonString, mcpArgs, replaceDirectory } from "./common.js";
 import type { HostOperationOptions, HostOperationResult } from "./types.js";
 
@@ -10,18 +10,6 @@ const MANAGED_CODEX_START = "# BEGIN OMS MANAGED MCP";
 const MANAGED_CODEX_END = "# END OMS MANAGED MCP";
 const CODEX_SKILL_PREFIX = "oms-";
 const CODEX_RULE_FILENAME = "oms.md";
-
-export class CodexSkillNamespaceError extends Error {
-  readonly skillDir: string;
-  readonly prefix: string;
-
-  constructor(skillDir: string, prefix: string) {
-    super(`Codex skill directory must be namespaced ${prefix}*: ${skillDir}`);
-    this.name = "CodexSkillNamespaceError";
-    this.skillDir = skillDir;
-    this.prefix = prefix;
-  }
-}
 
 function codexManagedBlock(options: HostOperationOptions): string {
   const args = mcpArgs(options).map(jsonString).join(", ");
@@ -82,12 +70,12 @@ function removeManagedCodexBlock(content: string): { content: string; removed: b
 async function installCodexNativeArtifacts(
   codexDir: string,
   options: HostOperationOptions,
-  adapterSource: string,
+  packageRoot: string,
+  skillsSource: string,
 ): Promise<string[]> {
   const paths: string[] = [];
-  const rulesSource = path.join(adapterSource, "rules", CODEX_RULE_FILENAME);
+  const rulesSource = path.join(packageRoot, "assets", "codex", "rules", CODEX_RULE_FILENAME);
   const rulesTarget = path.join(codexDir, "rules", CODEX_RULE_FILENAME);
-  const skillsSource = path.join(adapterSource, "skills");
   const skillsTargetRoot = path.join(codexDir, "skills");
 
   if (!options.dryRun) {
@@ -95,13 +83,12 @@ async function installCodexNativeArtifacts(
     await cp(rulesSource, rulesTarget);
     await mkdir(skillsTargetRoot, { recursive: true });
     const entries = await readdir(skillsSource, { withFileTypes: true });
-    const desired = new Set(entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name));
+    const desired = new Set(
+      entries.filter((entry) => entry.isDirectory()).map((entry) => `${CODEX_SKILL_PREFIX}${entry.name}`),
+    );
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      const target = path.join(skillsTargetRoot, entry.name);
-      if (!entry.name.startsWith(CODEX_SKILL_PREFIX)) {
-        throw new CodexSkillNamespaceError(entry.name, CODEX_SKILL_PREFIX);
-      }
+      const target = path.join(skillsTargetRoot, `${CODEX_SKILL_PREFIX}${entry.name}`);
       await replaceDirectory(path.join(skillsSource, entry.name), target, false);
       paths.push(target);
     }
@@ -120,22 +107,15 @@ async function installCodexNativeArtifacts(
 /**
  * Codex install stays file-copy based on purpose.
  *
- * `codex plugin marketplace add <repo>` does consume the same root
- * `.claude-plugin/marketplace.json` (verified against codex-cli 0.147.0: the
- * marketplace resolves as `oms` and `codex plugin add oms@oms` succeeds), but
- * the manifest's plugin entry declares `"source": "./"`, so Codex caches the
- * whole repository and finds no `rules/` or `skills/` at the cached root —
- * those live under `adapters/codex/`. A marketplace install would therefore
- * register a plugin that delivers none of the Codex-native surfaces this
- * function installs, on top of the managed MCP block it already writes.
- *
- * Wiring Codex to the shared manifest needs a Codex-native descriptor whose
- * source points at `adapters/codex`; that is a follow-up, not this change.
+ * Codex install stays file-copy based on purpose. Its native rules and skills
+ * are installed directly so they use Codex's expected destinations.
  */
 export async function installCodex(options: HostOperationOptions, host: HarnessHostSurface): Promise<HostOperationResult> {
   const codexDir = hostHome(options.homeDir, ".codex", "OMS_CODEX_HOME");
-  const pluginSource = resolveHostAdapterSource(options.adapterRoot, host);
-  const pluginTarget = path.join(codexDir, "plugins", "oms");
+  const packageRoot = resolveHostAdapterSource(options.adapterRoot, host);
+  const skillsSource = resolveSharedSkillsSource(packageRoot);
+  const guidanceSource = path.join(packageRoot, "assets", "codex", "AGENTS.md");
+  const guidanceTarget = path.join(codexDir, "plugins", "oms", "AGENTS.md");
   const configPath = path.join(codexDir, "config.toml");
   const original = existsSync(configPath) ? await readFile(configPath, "utf-8") : "";
   const stripped = removeManagedCodexBlock(original).content;
@@ -144,8 +124,10 @@ export async function installCodex(options: HostOperationOptions, host: HarnessH
   if (!options.dryRun) {
     await mkdir(path.dirname(configPath), { recursive: true });
     await writeFile(configPath, next, "utf-8");
-    await replaceDirectory(pluginSource, pluginTarget, false);
-    nativePaths = await installCodexNativeArtifacts(codexDir, options, pluginSource);
+    await rm(path.dirname(guidanceTarget), { recursive: true, force: true });
+    await mkdir(path.dirname(guidanceTarget), { recursive: true });
+    await cp(guidanceSource, guidanceTarget);
+    nativePaths = await installCodexNativeArtifacts(codexDir, options, packageRoot, skillsSource);
   } else {
     nativePaths = [
       path.join(codexDir, "rules", CODEX_RULE_FILENAME),
@@ -157,9 +139,9 @@ export async function installCodex(options: HostOperationOptions, host: HarnessH
     action: "install",
     changed: !options.dryRun,
     skipped: false,
-    paths: [configPath, pluginTarget, ...nativePaths],
+    paths: [configPath, guidanceTarget, ...nativePaths],
     commands: [`Codex MCP config: ${configPath}`],
-    messages: ["Installed Codex-native Oh My Second Brain rules, namespaced skills, plugin assets, and managed MCP/env config."],
+    messages: ["Installed Codex-native Oh My Second Brain rules, namespaced skills, and managed MCP/env config."],
   };
 }
 

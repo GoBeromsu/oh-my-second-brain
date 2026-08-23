@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import type { HarnessHostSurface } from "../harness/surface-registry.js";
-import { HostAdapterSourceError, resolveHostAdapterSource } from "./hosts.js";
+import { HostAdapterSourceError, resolveHostAdapterSource, resolveSharedSkillsSource } from "./hosts.js";
 
 describe("host registry adapter source resolution", () => {
-  it("resolves registry adapterDir paths under the local adapter root", () => {
+  it("resolves root and asset manifest directories under the package root", () => {
     const registryHost: HarnessHostSurface = {
       runtime: "claude",
-      adapterDir: "adapters/custom-claude",
+      adapterDir: ".",
       skillDirs: [],
       manifestFiles: [],
       guidanceFiles: [],
@@ -17,12 +17,13 @@ describe("host registry adapter source resolution", () => {
       hardHookGuarantee: true,
     };
 
-    const source = resolveHostAdapterSource("/package/adapters", registryHost);
+    const source = resolveHostAdapterSource("/package", registryHost);
 
-    expect(source).toBe(path.join("/package/adapters", "custom-claude"));
+    expect(source).toBe("/package");
+    expect(resolveSharedSkillsSource("/package")).toBe(path.join("/package", "assets", "skills"));
   });
 
-  it("rejects malformed registry adapterDir paths outside adapters", () => {
+  it("rejects adapter directories outside the root and assets allowlist", () => {
     const registryHost: HarnessHostSurface = {
       runtime: "codex",
       adapterDir: "core/codex",
@@ -35,6 +36,6 @@ describe("host registry adapter source resolution", () => {
       hardHookGuarantee: false,
     };
 
-    expect(() => resolveHostAdapterSource("/package/adapters", registryHost)).toThrow(HostAdapterSourceError);
+    expect(() => resolveHostAdapterSource("/package", registryHost)).toThrow(HostAdapterSourceError);
   });
 });

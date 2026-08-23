@@ -4,9 +4,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
-  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
-  ReadResourceRequestSchema,
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -36,7 +34,6 @@ import {
   isEngineSemanticOp,
   isEngineDocumentOp,
   isModelOptionalSemanticQueryOp,
-  semanticMcpTools,
   semanticOptionsFromArgs,
   retrieveContextSemanticInputProperties,
 } from "./semantic-retrieve.js";
@@ -53,7 +50,7 @@ import {
 const SERVER_VERSION = readBundledPackageVersion();
 
 export const BASE_SERVER_INSTRUCTIONS =
-  "Oh My Second Brain exposes ontology/status/cache/retrieval tools and the write tool. write is gated by a verified vault target (a vault inferred from the current directory is refused), vault confinement, and contract validation.";
+  "Oh My Second Brain exposes write, search, link, status, and doctor tools. oms_write is gated by a verified vault target (a vault inferred from the current directory is refused), vault confinement, and contract validation.";
 
 function jsonText(value: unknown): CallToolResult {
   return {
@@ -108,254 +105,34 @@ function conceptSummary(concept: Concept): Record<string, unknown> {
 
 export const omsMcpTools: Tool[] = [
   {
-    name: "oms_graph_status",
-    title: "Oh My Second Brain graph/status",
-    description:
-      "Read-only status for the active Oh My Second Brain ontology, graph/search cache phase, and gated write-tool posture.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    name: "oms_write", title: "Oh My Second Brain write",
+    description: "Write a vault note through the kernel-owned .oms contract.",
+    inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["create", "append", "update"] }, notePath: { type: "string" }, concept: { type: "string" }, folder: { type: "string" }, filename: { type: "string" }, frontmatter: { type: "object" }, body: { type: "string" } } },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
-    name: "oms_graph_build",
-    title: "Oh My Second Brain graph build",
-    description:
-      "Build the derived graph/search cache from markdown, frontmatter, folders, and wikilinks.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    name: "oms_search", title: "Oh My Second Brain search",
+    description: "Read vault retrieval, semantic search, ontology, and selected documents. `op` selects the operation.",
+    inputSchema: { type: "object", properties: { op: { type: "string", enum: ["axis", "context", "lazy-load", "concepts", "semantic-query", "semantic-collections", "semantic-contexts", "semantic-status", "get-document", "multi-get-documents"] }, query: { type: "string" }, searches: { type: "array", maxItems: 10, items: { type: "object", properties: { type: { type: "string", enum: ["lex", "vec", "hyde"] }, query: { type: "string" } }, required: ["type", "query"] } }, limit: { type: "number", default: 10 }, minScore: { type: "number", default: 0 }, collections: { type: "array", items: { type: "string" } }, intent: { type: "string" }, concept: { type: "string" }, folder: { type: "string" }, property: { type: "string" }, value: { type: "string" }, wikilink: { type: "string" }, notePath: { type: "string" }, target: { type: "string" }, targets: { type: "array", items: { type: "string" } }, maxNeighbors: { type: "number" }, useCache: { type: "boolean" }, ...retrieveContextSemanticInputProperties }, required: ["op"] },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: "oms_list_concepts",
-    title: "Oh My Second Brain list concepts",
-    description:
-      "Read the active ontology concepts, frontmatter axes, folder bindings, and retrieval views.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    name: "oms_link", title: "Oh My Second Brain link",
+    description: "Suggest or apply wikilinks; `op` is suggest or apply.",
+    inputSchema: { type: "object", properties: { op: { type: "string", enum: ["suggest", "apply"] }, notePath: { type: "string" }, folder: { type: "string" }, baseContentHash: { type: "string" }, candidateIds: { type: "array", items: { type: "string" } } }, required: ["op", "notePath"] },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
   {
-    name: "oms_retrieve_by_axis",
-    title: "Oh My Second Brain retrieve by axis",
-    description:
-      "Axis-first retrieval over the derived cache; optional lexical query only ranks inside the narrowed candidate set.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        concept: { type: "string" },
-        folder: { type: "string" },
-        property: { type: "string" },
-        value: { type: "string" },
-        wikilink: { type: "string" },
-        query: { type: "string" },
-        limit: { type: "number" },
-      },
-    },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    name: "oms_status", title: "Oh My Second Brain status",
+    description: "Read-only health and statistics for the active vault.",
+    inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: "oms_retrieve_context",
-    title: "Oh My Second Brain retrieve context",
-    description:
-      "Live local graph retrieval with axis seeds, frontmatter/wikilink neighbors, optional OMS semantic candidates, and no warm-cache requirement.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        concept: { type: "string" },
-        folder: { type: "string" },
-        property: { type: "string" },
-        value: { type: "string" },
-        wikilink: { type: "string" },
-        query: { type: "string" },
-        limit: { type: "number" },
-        maxNeighbors: { type: "number" },
-        useCache: { type: "boolean" },
-        ...retrieveContextSemanticInputProperties,
-      },
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-  },
-  ...semanticMcpTools,
-  {
-    name: "oms_lazy_load_note",
-    title: "Oh My Second Brain lazy-load note body",
-    description:
-      "Load a selected note body only after axis/search narrowing has selected the note.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        notePath: {
-          type: "string",
-          description: "Vault-relative markdown note path.",
-        },
-      },
-      required: ["notePath"],
-    },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-  },
-  {
-    name: "oms_validate_contract",
-    title: "Oh My Second Brain validate contract",
-    description:
-      "Read one vault note and validate its frontmatter against the active folder/concept contract.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        notePath: {
-          type: "string",
-          description: "Vault-relative markdown note path, for example references/book.md.",
-        },
-      },
-      required: ["notePath"],
-    },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-  },
-  {
-    name: "oms_vault_audit",
-    title: "Oh My Second Brain vault audit",
-    description:
-      "Scan vault notes against the active ontology and return a structured violation report. Read-only; the CLI counterpart is `oms audit`.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        folder: {
-          type: "string",
-          description: "Restrict the scan to one top-level vault folder, for example \"references\".",
-        },
-      },
-    },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-  },
-  {
-    name: "oms_link_suggest",
-    title: "Oh My Second Brain link suggest",
-    description:
-      "Propose [[wikilink]] insertions for one note against the vault's term notes. Read-only: returns ranked candidates plus the baseContentHash oms_link_apply requires.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        notePath: {
-          type: "string",
-          description: "Vault-relative markdown note path to linkify, for example notes/sage.md.",
-        },
-        folder: {
-          type: "string",
-          description: "Restrict the term-note candidate universe to one top-level vault folder.",
-        },
-      },
-      required: ["notePath"],
-    },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-  },
-  {
-    name: "oms_link_apply",
-    title: "Oh My Second Brain link apply",
-    description:
-      "Splice accepted oms_link_suggest candidates into a note and persist through the write kernel. Refuses without writing when baseContentHash no longer matches the note.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        notePath: {
-          type: "string",
-          description: "Vault-relative markdown note path returned by oms_link_suggest.",
-        },
-        baseContentHash: {
-          type: "string",
-          description: "The baseContentHash from the oms_link_suggest call the candidates came from.",
-        },
-        candidateIds: {
-          type: "array",
-          items: { type: "string" },
-          description: "Ids of the accepted candidates from that same oms_link_suggest call.",
-        },
-        folder: {
-          type: "string",
-          description: "Same candidate-universe folder scope used for the suggest call.",
-        },
-      },
-      required: ["notePath", "baseContentHash", "candidateIds"],
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-  },
-  {
-    name: "write",
-    title: "Oh My Second Brain write",
-    description:
-      "Write a vault note through the kernel-owned .oms contract. Modes: create, append, update. Returns ask, inbox, written, or rejected.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        mode: { type: "string", enum: ["create", "append", "update"] },
-        notePath: { type: "string" },
-        concept: { type: "string" },
-        folder: { type: "string" },
-        filename: { type: "string" },
-        frontmatter: { type: "object" },
-        body: { type: "string" },
-      },
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    name: "oms_doctor", title: "Oh My Second Brain doctor",
+    description: "Diagnose or repair the vault; `op` selects the operation.",
+    inputSchema: { type: "object", properties: { op: { type: "string", enum: ["audit", "validate", "build-graph", "semantic-cleanup", "sync-embeddings"] }, notePath: { type: "string" }, folder: { type: "string" }, collection: { type: "string" }, index: { type: "string" }, ensureCollection: { type: "boolean" }, update: { type: "boolean" }, embed: { type: "boolean" }, force: { type: "boolean" }, pull: { type: "boolean" } }, required: ["op"] },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
 ];
 
@@ -451,44 +228,38 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     tools: omsMcpTools,
   }));
 
-  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
-    resourceTemplates: [
-      {
-        uriTemplate: "qmd://{path}",
-        name: "QMD-compatible OMS semantic document",
-        description: "Read a native OMS semantic-index document by qmd:// vault-relative path.",
-        mimeType: "text/markdown",
-      },
-    ],
-  }));
-
-  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    const uri = request.params.uri;
-    // Resource reads hydrate on the SAME backend the semantic ops use: the engine
-    // (file-based, qmd:// / oms:// scheme aware), vec-capable when a model is
-    // configured and core (lex + file reads) otherwise — so a retrieve_context
-    // docid resolves through the URI surface regardless of which backend produced it.
-    const result = await resolveDocumentAdapter().getDocument({ vault, target: uri });
-    if (!result.available || !result.documents[0]) {
-      throw new Error(
-        !result.available && result.reason ? result.reason : "OMS semantic resource not found.",
-      );
-    }
-    return {
-      contents: [
-        {
-          uri,
-          mimeType: "text/markdown",
-          text: result.documents[0].content,
-        },
-      ],
-    };
-  });
-
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
+    let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
+    const publicName = request.params.name;
+    const op = stringArg(args, "op");
+    const name = publicName === "oms_status" ? "oms_graph_status"
+      : publicName === "oms_write" ? "write"
+      : publicName === "oms_link" && op === "suggest" ? "oms_link_suggest"
+      : publicName === "oms_link" && op === "apply" ? "oms_link_apply"
+      : publicName === "oms_doctor" ? ({ audit: "oms_vault_audit", validate: "oms_validate_contract", "build-graph": "oms_graph_build", "semantic-cleanup": "oms_semantic_cleanup", "sync-embeddings": "oms_sync_embeddings" } as Record<string, string>)[op ?? ""]
+      : publicName === "oms_search" ? ({ axis: "oms_retrieve_by_axis", context: "oms_retrieve_context", "lazy-load": "oms_lazy_load_note", concepts: "oms_list_concepts", "semantic-query": "oms_semantic_query", "semantic-collections": "oms_semantic_collections", "semantic-contexts": "oms_semantic_contexts", "semantic-status": "oms_semantic_status", "get-document": "oms_get_document", "multi-get-documents": "oms_multi_get_documents" } as Record<string, string>)[op ?? ""]
+      : undefined;
+    if (!name) return errorText(`Unknown Oh My Second Brain tool: ${publicName}`);
+    if (publicName === "oms_search" && op === "semantic-query") {
+      const searches = args?.["searches"];
+      if ((typeof args?.["query"] === "string") === Array.isArray(searches)) {
+        return errorText('Provide exactly one of "query" or "searches" for semantic-query.');
+      }
+      if (Array.isArray(searches)) {
+        const mapped = Object.fromEntries(searches.flatMap((search) =>
+          isRecord(search) && typeof search.type === "string" && typeof search.query === "string"
+            ? [[search.type, search.query]]
+            : [],
+        ));
+        args = { ...args, ...mapped, query: "" };
+      }
+      const collections = args?.["collections"];
+      if (Array.isArray(collections) && collections.every((value) => typeof value === "string")) {
+        args = { ...args, collection: collections[0] };
+      }
+    }
 
-    if (request.params.name === "oms_graph_status") {
+    if (name === "oms_graph_status") {
       // The src/graph derived-cache ledger (M3 5-state staleness) is the source
       // of truth for retrieve_context's optional warm cache and stays intact.
       // engineGraph is additive: it surfaces the native engine's axis cache that
@@ -512,8 +283,8 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           engineGraph,
           writeTools:
             source === "cwd"
-              ? "write-disabled-target-unverified"
-              : "write-gated-by-verified-target-and-contract",
+              ? "oms_write-disabled-target-unverified"
+              : "oms_write-gated-by-verified-target-and-contract",
           readTools: omsMcpTools.map((tool) => tool.name),
         });
       } catch (error) {
@@ -535,14 +306,14 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
             },
           },
           engineGraph,
-          writeTools: "disabled-invalid-ontology",
+          writeTools: "oms_write-disabled-invalid-ontology",
           readTools: ["oms_graph_status"],
         });
       }
     }
 
     try {
-    if (request.params.name === "oms_graph_build") {
+    if (name === "oms_graph_build") {
       const { ontology, source } = await resolveActiveOntology(vault);
       const cache = await buildGraphCache({ vault, ontology, write: true });
       return jsonText({
@@ -557,7 +328,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
     }
 
-    if (request.params.name === "oms_list_concepts") {
+    if (name === "oms_list_concepts") {
       const { ontology, source } = await resolveActiveOntology(vault);
       return jsonText({
         vault,
@@ -567,7 +338,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
     }
 
-    if (request.params.name === "oms_retrieve_by_axis") {
+    if (name === "oms_retrieve_by_axis") {
       // Engine-owned (graph-only swap): axis-first retrieval over the native
       // node index, built lazily off the filesystem — no embedding model needed.
       const limitValue = args?.["limit"];
@@ -590,7 +361,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
     }
 
-    if (request.params.name === "oms_retrieve_context") {
+    if (name === "oms_retrieve_context") {
       // Graph + semantic fusion. The graph leg stays on the src/graph warm cache;
       // the semantic leg routes to the native engine: vec-capable when a model is
       // configured (parity ranking, real-path docids) and core (lex; vec/HyDE fail
@@ -633,18 +404,18 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     //     engine when a model is configured, else the core engine. Lex is a real
     //     model-free BM25/FTS feature, not an ADR-007 fake vector fallback.
     // Every other tool never touches the engine here.
-    if (isEngineSemanticOp(request.params.name) || isEngineDocumentOp(request.params.name)) {
+    if (isEngineSemanticOp(name) || isEngineDocumentOp(name)) {
       const semanticAdapter =
-        isEngineSemanticOp(request.params.name) && !isModelOptionalSemanticQueryOp(request.params.name, args, vault)
+        isEngineSemanticOp(name) && !isModelOptionalSemanticQueryOp(name, args, vault)
           ? getSemanticEngine().adapter
           : resolveDocumentAdapter();
-      const semanticToolResult = await handleSemanticTool(request.params.name, args, vault, semanticAdapter);
+      const semanticToolResult = await handleSemanticTool(name, args, vault, semanticAdapter);
       if (semanticToolResult) {
         return semanticToolResult.ok ? jsonText(semanticToolResult.value) : errorText(semanticToolResult.message);
       }
     }
 
-    if (request.params.name === "oms_lazy_load_note") {
+    if (name === "oms_lazy_load_note") {
       const notePath = stringArg(args, "notePath");
       if (!notePath) {
         return errorText('Missing required string argument "notePath".');
@@ -652,7 +423,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       return jsonText(await lazyLoadNoteBody(vault, notePath));
     }
 
-    if (request.params.name === "oms_validate_contract") {
+    if (name === "oms_validate_contract") {
       const notePath = stringArg(args, "notePath");
       if (!notePath) {
         return errorText('Missing required string argument "notePath".');
@@ -699,7 +470,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
     }
 
-    if (request.params.name === "oms_vault_audit") {
+    if (name === "oms_vault_audit") {
       if (
         args !== undefined &&
         Object.prototype.hasOwnProperty.call(args, "folder") &&
@@ -721,7 +492,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
     }
 
-    if (request.params.name === "oms_link_suggest") {
+    if (name === "oms_link_suggest") {
       const notePath = stringArg(args, "notePath");
       if (!notePath) {
         return errorText('Missing required string argument "notePath".');
@@ -734,7 +505,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       return jsonText({ vault, ontologySource, ...suggestion });
     }
 
-    if (request.params.name === "oms_link_apply") {
+    if (name === "oms_link_apply") {
       const notePath = stringArg(args, "notePath");
       if (!notePath) {
         return errorText('Missing required string argument "notePath".');
@@ -756,7 +527,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       return jsonText({ vault, ontologySource, ...linkApplyPayload(outcome) });
     }
 
-    if (request.params.name === "write") {
+    if (name === "write") {
       const { ontology, source: ontologySource } = await resolveActiveOntology(vault);
       const modeArg = stringArg(args, "mode");
       const mode: WriteMode = isWriteMode(modeArg) ? modeArg : "create";
@@ -782,7 +553,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       });
     }
 
-    return errorText(`Unknown Oh My Second Brain tool: ${request.params.name}`);
+    return errorText(`Unknown Oh My Second Brain tool: ${publicName}`);
     } catch (error) {
       return errorText(`Oh My Second Brain MCP error: ${error instanceof Error ? error.message : String(error)}`);
     }

@@ -78,8 +78,8 @@ Index note for graph neighborhoods and semantic lookup.
       await client.connect(transport);
       const retrieve = textPayload(
         await client.callTool({
-          name: "oms_retrieve_context",
-          arguments: {
+          name: "oms_search",
+          arguments: { op: "context",
             property: "tags",
             value: "agent-graph",
             query: "fallback retrieve query",
@@ -108,12 +108,12 @@ Index note for graph neighborhoods and semantic lookup.
       const docid = "references/Agent Retrieval.md";
 
       const syncRaw = await client.callTool({
-        name: "oms_sync_embeddings",
-        arguments: { collection: "obsidian", ensureCollection: true, force: true, index: "brain" },
+        name: "oms_doctor",
+        arguments: { op: "sync-embeddings", collection: "obsidian", ensureCollection: true, force: true, index: "brain" },
       });
       const queryCall = {
-        name: "oms_semantic_query",
-        arguments: { query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
+        name: "oms_search",
+        arguments: { op: "semantic-query", query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
       };
       if (hasModel) {
         // Real engine path: sync builds the native store, query retrieves from it.
@@ -136,8 +136,8 @@ Index note for graph neighborhoods and semantic lookup.
 
         const lexOnlyQuery = textPayload(
           await client.callTool({
-            name: "query",
-            arguments: { query: "", lex: "agent retrieval", collection: "obsidian", limit: 1 },
+            name: "oms_search",
+            arguments: { op: "semantic-query", query: "", lex: "agent retrieval", collection: "obsidian", limit: 1 },
           }),
         );
         expect((lexOnlyQuery.hits as Array<Record<string, unknown>>)[0]).toEqual(
@@ -145,27 +145,18 @@ Index note for graph neighborhoods and semantic lookup.
         );
       }
 
-      const templates = await client.listResourceTemplates();
-      expect(templates.resourceTemplates).toEqual([expect.objectContaining({ uriTemplate: "qmd://{path}" })]);
-      const resource = await client.readResource({ uri: "qmd://references/Agent%20Retrieval.md" });
-      expect(resource.contents[0]).toEqual(
-        expect.objectContaining({
-          uri: "qmd://references/Agent%20Retrieval.md",
-          mimeType: "text/markdown",
-          text: expect.stringContaining("Agent retrieval follows"),
-        }),
-      );
+      await expect(client.listResourceTemplates()).rejects.toThrow(/Method not found/);
 
       const single = textPayload(
         await client.callTool({
-          name: "oms_get_document",
-          arguments: { target: `${docid}:1:20`, collection: "obsidian", fullPath: true },
+          name: "oms_search",
+          arguments: { op: "get-document", target: `${docid}:1:20`, collection: "obsidian", fullPath: true },
         }),
       );
       const batch = textPayload(
         await client.callTool({
-          name: "oms_multi_get_documents",
-          arguments: { targets: ["references/*.md", docid], lineLimit: 40, maxBytes: 2048 },
+          name: "oms_search",
+          arguments: { op: "multi-get-documents", targets: ["references/*.md", docid], lineLimit: 40, maxBytes: 2048 },
         }),
       );
       expect((single.documents as Array<Record<string, unknown>>)[0]).toEqual(

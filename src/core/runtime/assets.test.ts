@@ -18,6 +18,13 @@ async function manifestVersion(): Promise<string> {
 }
 
 describe("readBundledPackageVersion", () => {
+  it("resolves only the ontology runtime asset root", () => {
+    const assets = resolveBundledAssetPaths();
+
+    expect(Object.keys(assets).sort()).toEqual(["ontologyDir", "packageRoot"]);
+    expect(assets.ontologyDir).toBe(path.join(assets.packageRoot, "core", "ontology"));
+  });
+
   it("reports the version declared by the bundled package.json", async () => {
     // Given: the package root resolved from this module's own location
     const { packageRoot } = resolveBundledAssetPaths();

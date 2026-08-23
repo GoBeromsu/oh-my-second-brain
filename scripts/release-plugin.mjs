@@ -43,14 +43,14 @@ function validateAttestation(attestation) {
 }
 
 if (commandExists("claude")) {
-  const result = spawnSync("claude", ["plugin", "validate", "adapters/claude-code"], {
+  const result = spawnSync("claude", ["plugin", "validate", "."], {
     encoding: "utf-8",
     stdio: "inherit",
   });
   if (result.status !== 0) {
     fail(`claude plugin validate failed with exit ${result.status}`);
   }
-  console.log("[release:plugin] ok: claude plugin validate adapters/claude-code passed.");
+  console.log("[release:plugin] ok: claude plugin validate . passed.");
   process.exit(0);
 }
 

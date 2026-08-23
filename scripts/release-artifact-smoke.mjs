@@ -102,7 +102,7 @@ function setupSmoke(packageRoot, vault) {
   if (!pluginPathLine) fail("setup output did not include Plugin path line");
   const pluginPath = pluginPathLine.replace(/^.*Plugin path:\s*/, "").trim();
   assertPath(path.join(pluginPath, ".claude-plugin/plugin.json"), "printed Claude plugin manifest path");
-  const expectedRoot = path.join(packageRoot, "adapters/claude-code");
+  const expectedRoot = packageRoot;
   if (realpathSync(path.resolve(pluginPath)) !== realpathSync(path.resolve(expectedRoot))) {
     fail(`printed plugin path must resolve inside extracted package: expected ${expectedRoot}, got ${pluginPath}`);
   }

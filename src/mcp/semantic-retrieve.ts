@@ -26,9 +26,7 @@ export { semanticOptionsFromArgs };
 const ENGINE_SEMANTIC_OPS: ReadonlySet<string> = new Set([
   "oms_sync_embeddings",
   "oms_semantic_query",
-  "query",
   "oms_semantic_status",
-  "status",
   "oms_semantic_collections",
   "oms_semantic_contexts",
   "oms_semantic_cleanup",
@@ -47,7 +45,7 @@ export function isModelOptionalSemanticQueryOp(
   args: Record<string, unknown> | undefined,
   vault: string,
 ): boolean {
-  if (name !== "oms_semantic_query" && name !== "query") return false;
+  if (name !== "oms_semantic_query") return false;
   const subQueries = queryOptionsToSubQueries(semanticQueryOptionsFromArgs(vault, args));
   return subQueries.length > 0 && subQueries.every((subQuery) => subQuery.type === "lex");
 }
@@ -61,9 +59,7 @@ export function isModelOptionalSemanticQueryOp(
  */
 const ENGINE_DOCUMENT_OPS: ReadonlySet<string> = new Set([
   "oms_get_document",
-  "get",
   "oms_multi_get_documents",
-  "multi_get",
 ]);
 
 /**
@@ -92,11 +88,11 @@ export async function handleSemanticTool(
     return { ok: true, value: await adapter.syncEmbeddings(embeddingSyncOptionsFromArgs(vault, args)) };
   }
 
-  if (name === "oms_semantic_query" || name === "query") {
+  if (name === "oms_semantic_query") {
     return { ok: true, value: await adapter.semanticQuery(semanticQueryOptionsFromArgs(vault, args)) };
   }
 
-  if (name === "oms_semantic_status" || name === "status") {
+  if (name === "oms_semantic_status") {
     return { ok: true, value: adapter.semanticStatus(semanticStatusOptionsFromArgs(vault, args)) };
   }
 
@@ -112,13 +108,13 @@ export async function handleSemanticTool(
     return { ok: true, value: await adapter.cleanup(semanticStatusOptionsFromArgs(vault, args)) };
   }
 
-  if (name === "oms_get_document" || name === "get") {
+  if (name === "oms_get_document") {
     const parsed = documentGetOptionsFromArgs(args);
     if (!parsed.ok) return parsed;
     return { ok: true, value: await adapter.getDocument({ ...parsed.value, vault }) };
   }
 
-  if (name === "oms_multi_get_documents" || name === "multi_get") {
+  if (name === "oms_multi_get_documents") {
     const parsed = documentMultiGetOptionsFromArgs(args);
     if (!parsed.ok) return parsed;
     return {

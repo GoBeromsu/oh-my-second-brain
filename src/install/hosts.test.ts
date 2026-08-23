@@ -18,7 +18,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../..");
-const adapterRoot = path.join(repoRoot, "adapters");
+const adapterRoot = repoRoot;
 
 describe("host installer/uninstaller", () => {
   it("installs and uninstalls Codex managed MCP config without removing unrelated sections", async () => {
@@ -59,6 +59,24 @@ describe("host installer/uninstaller", () => {
 
     expect(existsSync(path.join(codexSkillsDir, "oms-old-skill"))).toBe(false);
     expect(existsSync(path.join(codexSkillsDir, "personal-skill"))).toBe(true);
+  });
+
+  it("removes stale whole-bundle targets before installing narrowed Codex and Hermes assets", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-stale-bundles-"));
+    const codexBundle = path.join(home, ".codex", "plugins", "oms");
+    const hermesBundleSkill = path.join(home, ".hermes", "adapters", "oms", "skills", "legacy");
+    await mkdir(codexBundle, { recursive: true });
+    await writeFile(path.join(codexBundle, "stale.txt"), "old bundle", "utf-8");
+    await mkdir(hermesBundleSkill, { recursive: true });
+    await writeFile(path.join(hermesBundleSkill, "SKILL.md"), "old bundle", "utf-8");
+
+    await runHostOperation({ action: "install", runtime: "codex", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+    await runHostOperation({ action: "install", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+
+    expect(existsSync(path.join(codexBundle, "stale.txt"))).toBe(false);
+    expect(existsSync(path.join(codexBundle, "AGENTS.md"))).toBe(true);
+    expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "skills"))).toBe(false);
+    expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "hermes-manifest.json"))).toBe(true);
   });
 
   it("installs the plugin-owned Claude MCP surface when executing external install", async () => {
@@ -102,8 +120,8 @@ describe("host installer/uninstaller", () => {
       expect(executedCommands).toContain("claude mcp remove oms --scope user");
       expect(executedCommands.some((command) => command.startsWith("claude plugin install "))).toBe(true);
       expect(executedCommands.every((command) => !command.includes("mcp add oms"))).toBe(true);
-      const pluginManifest = await readFile(path.join(adapterRoot, "claude-code", ".claude-plugin", "plugin.json"), "utf-8");
-      const pluginMcp = await readFile(path.join(adapterRoot, "claude-code", ".mcp.json"), "utf-8");
+      const pluginManifest = await readFile(path.join(adapterRoot, ".claude-plugin", "plugin.json"), "utf-8");
+      const pluginMcp = await readFile(path.join(adapterRoot, ".mcp.json"), "utf-8");
       expect(pluginManifest).toContain('"mcpServers": "./.mcp.json"');
       expect(pluginMcp).toContain('"oms"');
     } finally {
@@ -222,7 +240,7 @@ describe("host installer/uninstaller", () => {
       expect(executedCommands).not.toContain("claude plugin install oms@oms");
       expect(
         executedCommands.some(
-          (command) => command.startsWith("claude plugin install ") && command.includes(path.join("claude-code")),
+          (command) => command.startsWith("claude plugin install ") && command.includes(adapterRoot),
         ),
       ).toBe(true);
       expect(result?.messages.join(" ")).toContain("local plugin path");
@@ -407,7 +425,9 @@ describe("host installer/uninstaller", () => {
     expect(config).toContain("oms:");
     expect(config).toContain("command: oms");
     expect(existsSync(path.join(home, ".hermes", "skills", "knowledge-management", "oms", "write", "SKILL.md"))).toBe(true);
+    expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "hermes-manifest.json"))).toBe(true);
     expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "SOUL.md"))).toBe(true);
+    expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "README.md"))).toBe(true);
 
     await runHostOperation({ action: "uninstall", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
     const after = await readFile(path.join(home, ".hermes", "config.yaml"), "utf-8");
