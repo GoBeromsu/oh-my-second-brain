@@ -88,13 +88,17 @@ export class EngineSearchBackend implements SearchBackend {
       throw new InvalidSearchRequestError("provide either 'query' or a non-empty 'searches'");
     }
 
-    // `mode: "vsearch"` alongside explicit `searches` is contradictory: the
-    // caller has both named a strategy and supplied its own sub-queries.
-    // Refusing beats guessing - silently dropping the mode is what let an
-    // explicit vector request come back as lexical hits.
-    if (hasSearches && request.mode === "vsearch") {
+    // ANY explicit mode alongside explicit `searches` is contradictory: the
+    // caller has both named a strategy and supplied its own sub-queries, and
+    // one of the two has to be discarded. Refusing beats guessing.
+    //
+    // Scoping this to `vsearch` alone was the previous shape and it was wrong
+    // twice over: it left `mode: "search"` and `mode: "query"` silently
+    // dropped, and a rule that fires on one value of a field but not its
+    // siblings is the kind of inconsistency that grows the next hole.
+    if (hasSearches && request.mode !== undefined) {
       throw new InvalidSearchRequestError(
-        "'mode: vsearch' and explicit 'searches' are contradictory; supply typed searches or a mode, not both",
+        `'mode: ${request.mode}' and explicit 'searches' are contradictory; supply typed searches or a mode, not both`,
       );
     }
 

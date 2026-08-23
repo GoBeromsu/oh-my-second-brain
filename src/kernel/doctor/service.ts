@@ -60,12 +60,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export async function repairDoctor(
-  { operation, vault, source, args, adapter }: {
+  { operation, vault, source, args, resolveAdapter }: {
     readonly operation: DoctorRepairOperation;
     readonly vault: string;
     readonly source: WriteTargetSource;
     readonly args: Record<string, unknown> | undefined;
-    readonly adapter?: McpEngineAdapter;
+    /**
+     * Deferred on purpose. Constructing a semantic adapter opens - and
+     * therefore creates - `<vault>/.oms/engine-store.sqlite`, so accepting an
+     * already-built adapter would let that mutation happen in the caller's
+     * argument list, before this function ever runs admission. Taking a factory
+     * keeps admission the first effectful step even though the caller decides
+     * WHICH adapter is appropriate.
+     */
+    readonly resolveAdapter?: () => McpEngineAdapter;
   },
 ): Promise<DoctorRepairResult> {
   const rejection = await admitWriteTarget({ vault, source });
@@ -87,7 +95,10 @@ export async function repairDoctor(
     return { kind: "completed", value: { vault, ontologySource, cachePath, generatedAt: cache.generatedAt, notes: cache.notes.length, edges: cache.edges.length, searchDocuments: cache.search.length, sourceOfTruth: cache.sourceOfTruth, resolvedVault: vault, resolutionSource: source, receipt } };
   }
 
-  if (!adapter) throw new Error(`Doctor repair "${operation}" requires a semantic adapter.`);
+  if (!resolveAdapter) throw new Error(`Doctor repair "${operation}" requires a semantic adapter.`);
+  // Admission has passed; only now is it safe to let adapter construction touch
+  // the vault.
+  const adapter = resolveAdapter();
   const name = operation === "semantic-cleanup" ? "oms_semantic_cleanup" : "oms_sync_embeddings";
   const semanticResult = await handleSemanticTool(name, args, vault, adapter);
   if (!semanticResult) throw new Error(`Doctor repair "${operation}" was not handled.`);

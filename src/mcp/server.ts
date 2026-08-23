@@ -334,16 +334,29 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     try {
     if (name === "oms_graph_build" || name === "oms_semantic_cleanup" || name === "oms_sync_embeddings") {
       const operation = name === "oms_graph_build" ? "build-graph" : name === "oms_semantic_cleanup" ? "semantic-cleanup" : "sync-embeddings";
+      // A FACTORY, not a value. JavaScript evaluates an argument expression
+      // before entering the callee, so passing a constructed adapter here would
+      // open - and therefore create - `<vault>/.oms/engine-store.sqlite` before
+      // repairDoctor got the chance to run admission. On an invalid global
+      // target that means mutating a directory we are about to reject, which
+      // breaks the verified-target contract's requirement that admission
+      // precede ANY disk mutation. The kernel calls this only after admitting.
+      //
+      // Deliberately NOT re-checking admission here: two policy paths is how
+      // the check drifts. One authoritative decision, deferred dependency.
+      const resolveRepairAdapter = operation === "build-graph"
+        ? undefined
+        : (): McpEngineAdapter =>
+            operation === "semantic-cleanup" || (operation === "sync-embeddings" && args?.["embed"] === false)
+              ? resolveDocumentAdapter()
+              : getSemanticEngine().adapter;
+
       const repair = await repairDoctor({
         operation,
         vault,
         source,
         args,
-        adapter: operation === "build-graph" || source === "cwd"
-          ? undefined
-          : operation === "semantic-cleanup" || (operation === "sync-embeddings" && args?.["embed"] === false)
-            ? resolveDocumentAdapter()
-            : getSemanticEngine().adapter,
+        resolveAdapter: resolveRepairAdapter,
       });
       return repair.kind === "error" ? errorText(repair.message) : jsonText(repair.value);
     }
@@ -575,6 +588,20 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       const { ontology, source: ontologySource } = await resolveActiveOntology(vault);
       const modeArg = stringArg(args, "mode");
       const mode: WriteMode = isWriteMode(modeArg) ? modeArg : "create";
+
+      // `notePath` and `folder`/`filename` are two ways to address the same
+      // note. Supplying both is a contradiction the caller should hear about:
+      // silently preferring one produced a response that reported the concept
+      // implied by one form and the folder implied by the other, which reads as
+      // corruption rather than as the input error it is.
+      const hasNotePath = stringArg(args, "notePath") !== undefined;
+      const hasFolderForm = stringArg(args, "folder") !== undefined || stringArg(args, "filename") !== undefined;
+      if (hasNotePath && hasFolderForm) {
+        return errorText(
+          'Provide either "notePath" or "folder"/"filename" to address the note, not both.',
+        );
+      }
+
       const frontmatterArg = args?.["frontmatter"];
       const result = await writeNote({
         target: { vault, source },

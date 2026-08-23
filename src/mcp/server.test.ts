@@ -410,6 +410,43 @@ Malformed frontmatter must not block retrieve.
     }
   });
 
+  it("refuses a write that addresses the note two ways at once", async () => {
+    const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-write-ambig-"));
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", tmpVault],
+      cwd: repoRoot,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      // `notePath` and `folder`/`filename` are two spellings of the same
+      // address. Silently preferring one produced a response reporting the
+      // concept implied by one form and the folder implied by the other, which
+      // reads as corruption rather than as the input error it is.
+      const raw = await client.callTool({
+        name: "oms_write",
+        arguments: {
+          op: "create",
+          notePath: "notes/x.md",
+          folder: "notes",
+          filename: "x.md",
+          body: "Body",
+        },
+      });
+
+      expect(raw.isError).toBe(true);
+      const text = raw.content[0]?.type === "text" ? raw.content[0].text : "";
+      expect(text).toMatch(/notePath.*folder.*filename|not both/i);
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
+    }
+  });
+
   it("writes through write against the kernel contract", async () => {
     const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-write-"));
     const transport = new StdioClientTransport({

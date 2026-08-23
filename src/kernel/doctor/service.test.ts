@@ -30,6 +30,30 @@ describe("doctor repair service", () => {
     expect(result).toMatchObject({ kind: "rejected", value: { status: "rejected", resolvedVault: vault, resolutionSource: "cwd", rejection: { code: "target-unverified" } } });
   });
 
+  it("never resolves the adapter when admission rejects the target", async () => {
+    // Constructing a semantic adapter opens - and creates - the engine store, so
+    // it is a disk mutation. The verified-target contract requires admission to
+    // be the FIRST effectful step, which is why the dependency is a factory
+    // rather than a value: an argument expression is evaluated before the
+    // callee runs, so passing a built adapter would mutate a vault we are about
+    // to reject.
+    const vault = await makeVault();
+    let resolved = 0;
+
+    const result = await repairDoctor({
+      operation: "semantic-cleanup",
+      vault,
+      source: "cwd",
+      resolveAdapter: () => {
+        resolved += 1;
+        throw new Error("adapter must not be constructed before admission");
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "rejected", value: { status: "rejected" } });
+    expect(resolved, "adapter factory was invoked despite a rejected target").toBe(0);
+  });
+
   it("builds a graph and constructs its receipt from the persisted cache", async () => {
     const vault = await makeVault();
     const result = await repairDoctor({ operation: "build-graph", vault, source: "vault" });
@@ -45,7 +69,7 @@ describe("doctor repair service", () => {
     const vault = await makeVault();
     const engine = assembleCoreSemanticEngine({ vault });
     try {
-      const sync = await repairDoctor({ operation: "sync-embeddings", vault, source: "vault", args: { embed: false }, adapter: engine.adapter });
+      const sync = await repairDoctor({ operation: "sync-embeddings", vault, source: "vault", args: { embed: false }, resolveAdapter: () => engine.adapter });
       expect(sync.kind).toBe("completed");
       if (sync.kind !== "completed") return;
       const syncReceipt = sync.value["receipt"] as { postcondition: { documentPaths: string[]; orphanDocumentPaths: string[] } };
@@ -53,7 +77,7 @@ describe("doctor repair service", () => {
       expect(syncReceipt.postcondition.orphanDocumentPaths).toEqual([]);
 
       await rm(path.join(vault, "notes", "note.md"));
-      const cleanup = await repairDoctor({ operation: "semantic-cleanup", vault, source: "vault", adapter: engine.adapter });
+      const cleanup = await repairDoctor({ operation: "semantic-cleanup", vault, source: "vault", resolveAdapter: () => engine.adapter });
       expect(cleanup.kind).toBe("completed");
       if (cleanup.kind !== "completed") return;
       const cleanupReceipt = cleanup.value["receipt"] as { postcondition: { documentPaths: string[]; orphanDocumentPaths: string[] } };
