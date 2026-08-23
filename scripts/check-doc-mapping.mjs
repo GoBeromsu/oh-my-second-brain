@@ -12,6 +12,18 @@ const excludedMarkdownFiles = new Set([
   "core/AGENTS.md",
 ]);
 
+// Archived execution records are snapshots of what was believed at the time.
+// Forcing their links to stay live would either rewrite history or block CI
+// forever, so the exclusion is a stated policy rather than a silent skip.
+const excludedMarkdownPrefixes = ["docs/exec-plan/archived/"];
+
+function isExcludedMarkdown(relativePath) {
+  return (
+    excludedMarkdownFiles.has(relativePath)
+    || excludedMarkdownPrefixes.some((prefix) => relativePath.startsWith(prefix))
+  );
+}
+
 // Keep this failure mode aligned with test/architecture/repo-root.ts:
 // a documentation gate that scans nothing is broken, not green.
 function assertNonVacuous(files, what) {
@@ -49,10 +61,62 @@ function packagedFiles() {
   return new Set(result[0].files.map((file) => file.path));
 }
 
-function shippedMarkdownFiles(files) {
-  return [...files]
-    .filter((file) => file.endsWith(".md") && !excludedMarkdownFiles.has(file))
+/**
+ * Every Markdown document this repository is responsible for.
+ *
+ * The union of three sets, deduplicated:
+ *   - live root Markdown
+ *   - live `docs/**\/*.md`
+ *   - every Markdown file in the npm pack manifest
+ *
+ * Deriving ONLY from the pack manifest was tried and was wrong: `files` ships
+ * three documents out of `docs/`, so `AGENTS.md`, `CONTRIBUTING.md`, the ADRs
+ * and most of `docs/` silently stopped being checked. Deriving only from the
+ * live tree was also wrong: it missed shipped guidance under `assets/` and
+ * `core/ontology/`. Coverage must be additive, because a document can be
+ * repository-only, shipped-only, or both, and all three need checking.
+ */
+function documentedMarkdownFiles(packed) {
+  const found = new Set();
+
+  for (const file of packed) {
+    if (file.endsWith(".md")) found.add(file);
+  }
+  for (const file of liveMarkdownFiles()) {
+    found.add(file);
+  }
+
+  return [...found]
+    .filter((file) => !isExcludedMarkdown(file))
+    .sort()
     .map((file) => resolve(root, file));
+}
+
+/** Root-level and `docs/` Markdown present in the working tree. */
+function liveMarkdownFiles() {
+  const found = [];
+
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".md")) found.push(entry.name);
+  }
+
+  const walk = (relativeDir) => {
+    let entries;
+    try {
+      entries = readdirSync(resolve(root, relativeDir), { withFileTypes: true });
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const relativePath = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) walk(relativePath);
+      else if (entry.isFile() && entry.name.endsWith(".md")) found.push(relativePath);
+    }
+  };
+  walk("docs");
+
+  return found;
 }
 
 function isPackaged(path, files) {
@@ -60,8 +124,16 @@ function isPackaged(path, files) {
   return files.has(relativePath) || [...files].some((file) => file.startsWith(`${relativePath}/`));
 }
 
+/**
+ * Does this document ship?
+ *
+ * Any packed Markdown file's relative references must resolve inside the
+ * package, not merely inside the checkout. Restricting this to `assets/` let a
+ * packed `README.md` link to an unpackaged file and pass, because the target
+ * existed locally.
+ */
 function isPackagedGuidance(file, files) {
-  return relative(root, file).startsWith("assets/") && isPackaged(file, files);
+  return isPackaged(file, files);
 }
 
 function checkReference(file, line, target, packedFiles) {
@@ -136,7 +208,7 @@ function checkHostSkillInvocations(file, text, skills) {
 }
 
 const packed = packagedFiles();
-const files = shippedMarkdownFiles(packed);
+const files = documentedMarkdownFiles(packed);
 assertNonVacuous(files, "user-facing documentation");
 const skills = installedSkillNames();
 
@@ -146,12 +218,15 @@ for (const file of files) {
   checkHostSkillInvocations(file, text, skills);
   const relativeFile = relative(root, file);
   // Research notes and ADRs quote upstream or historical source topologies;
-  // changelogs do the latter as release records. They are citations, not live
-  // repository-path assertions.
+  // changelogs do the latter as release records; ACKNOWLEDGMENTS attributes
+  // provenance by naming the source file a pattern came from. All four cite
+  // source locations rather than asserting a path a reader should follow, so a
+  // packaged-path check would be measuring the wrong thing.
   if (
     !relativeFile.startsWith("docs/research/")
     && !relativeFile.startsWith("docs/decisions/")
     && !relativeFile.startsWith("CHANGELOG")
+    && relativeFile !== "ACKNOWLEDGMENTS.md"
   ) {
     checkInlineSourcePaths(file, text, packed);
   }

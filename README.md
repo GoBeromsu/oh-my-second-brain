@@ -121,7 +121,7 @@ npm test
 npm run release:check   # lint + build + test + audit + pack + artifact-smoke + plugin validate
 ```
 
-Release process: [docs/release.md](./docs/release.md).
+Release process: [docs/release.md](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/release.md).
 
 ## License
 

@@ -120,7 +120,7 @@ npm test
 npm run release:check   # lint + build + test + audit + pack + artifact-smoke + plugin 검증
 ```
 
-릴리스 절차: [docs/release.md](./docs/release.md).
+릴리스 절차: [docs/release.md](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/release.md).
 
 ## 라이선스
 

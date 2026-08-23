@@ -4,7 +4,7 @@ oh-my-secondbrain은 아래 공개 작업들의 아이디어와 구현에 빚지
 만들고 아낌없이 공개해주신 모든 분들께 진심으로 감사드린다.
 
 > 우리가 무엇을 흡수했는지(설계 로직·근거)는 `docs/research/*` 에 기록한다.
-> 관리 규칙: [`docs/rules/external-attribution.md`](./docs/rules/external-attribution.md)
+> 관리 규칙: [`docs/rules/external-attribution.md`](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/rules/external-attribution.md)
 
 ## LLM-Wiki 패턴 & 구현체
 

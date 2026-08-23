@@ -71,6 +71,16 @@ const PACKAGE_ROOT_ENTRIES = [
   "package.json",
 ] as const;
 
+/**
+ * Root-level documents that legitimately ship.
+ *
+ * Changelogs are release history a consumer can read; ACKNOWLEDGMENTS carries
+ * the upstream credits the licence section points at, so shipping the licence
+ * note without it would leave a dangling reference in the published artifact.
+ * Contributor-only documents deliberately do NOT belong here.
+ */
+const PACKAGE_ROOT_DOCUMENT = /^(?:CHANGELOG(?:-[a-z]+)?|ACKNOWLEDGMENTS)\.md$/;
+
 function includesValue<const T extends string>(values: readonly T[], value: unknown): value is T {
   return typeof value === "string" && values.some((candidate) => candidate === value);
 }
@@ -209,8 +219,9 @@ function validatePackagePath(
   const underRootEntry = PACKAGE_ROOT_ENTRIES.some(
     (entry) => normalizedPath === entry || normalizedPath.startsWith(`${entry}/`),
   );
+  const isRootDocument = PACKAGE_ROOT_DOCUMENT.test(normalizedPath);
 
-  if (!underPrefix && !underRootEntry) {
+  if (!underPrefix && !underRootEntry && !isRootDocument) {
     violations.push({
       code: "forbidden_path",
       surface,
