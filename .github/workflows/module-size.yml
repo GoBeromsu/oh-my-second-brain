@@ -24,10 +24,10 @@ jobs:
       # install failure, and it runs once rather than across the Node matrix.
       - name: Module-size ratchet
         env:
-          BASELINE_REF: ${{ github.event.pull_request.base.sha }}
+          BASELINE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -n "$BASELINE_REF" ]; then
-            node scripts/check-module-size.mjs --baseline-ref "$BASELINE_REF"
-          else
-            node scripts/check-module-size.mjs
+          if [ -z "$BASELINE_REF" ] || [ "$BASELINE_REF" = "0000000000000000000000000000000000000000" ]; then
+            echo "::error::Module-size ratchet has no usable baseline (push before SHA is unavailable or this is a new branch)."
+            exit 2
           fi
+          node scripts/check-module-size.mjs --baseline-ref "$BASELINE_REF"

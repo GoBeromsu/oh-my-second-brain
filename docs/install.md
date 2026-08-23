@@ -173,11 +173,10 @@ Hosts can do the same note by note through `oms_link`: its `suggest` operation i
 oh-my-second-brain doctor --vault /path/to/vault
 oh-my-second-brain semantic sync --vault /path/to/vault --collection vault
 oh-my-second-brain semantic query "what should I retrieve?" --vault /path/to/vault
-oh-my-second-brain semantic context add vault "Prefer durable notes with reusable evidence." --vault /path/to/vault
-oh-my-second-brain semantic ls vault --vault /path/to/vault
-oh-my-second-brain semantic doctor --vault /path/to/vault
+oh-my-second-brain semantic context list --vault /path/to/vault
+oh-my-second-brain semantic status --vault /path/to/vault
 oh-my-second-brain install --runtime all --vault /path/to/vault --dry-run
 claude plugin validate .
 ```
 
-Inside a host runtime, verify the MCP server by listing its five tools: `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`. `oms_search` provides retrieval operations, `oms_status` is read-only health/statistics, and `oms_doctor` provides diagnosis or repair operations. OMS does not require the `qmd` binary; `oms semantic doctor` reports the built-in SQLite/FTS/vector backend and optional GGUF model path diagnostics.
+Inside a host runtime, verify the MCP server by listing its five tools: `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`. `oms_search` provides retrieval operations, `oms_status` is read-only health/statistics, and `oms_doctor` provides diagnosis or repair operations. OMS does not require the `qmd` binary; `oms semantic status` reports semantic-engine availability.

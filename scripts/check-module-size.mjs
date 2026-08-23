@@ -43,6 +43,8 @@ const POLICY_NAMES = [
   "SOURCE_EXTENSIONS",
   "SOFT_CAP",
   "RESEED_SLACK",
+  "GRANDFATHERED",
+  "EXCLUDED",
 ];
 
 const SELF_PATH = fileURLToPath(import.meta.url);
@@ -64,6 +66,8 @@ export function assertPolicyLiterals(source) {
     SOURCE_EXTENSIONS: /^export const SOURCE_EXTENSIONS = \[[^\]]*\];$/m,
     SOFT_CAP: /^export const SOFT_CAP = \d+;$/m,
     RESEED_SLACK: /^export const RESEED_SLACK = \d+;$/m,
+    GRANDFATHERED: /^export const GRANDFATHERED = Object\.freeze\(\{[^\n]*\}\);$/m,
+    EXCLUDED: /^export const EXCLUDED = Object\.freeze\(\[[^\]]*\]\);$/m,
   };
 
   for (const name of POLICY_NAMES) {
@@ -80,6 +84,54 @@ function literalValue(source, name) {
   return match[1];
 }
 
+function jsonLiteralValue(source, name) {
+  try {
+    return JSON.parse(literalValue(source, name));
+  } catch {
+    throw new PolicyError(`${name} is not valid JSON`);
+  }
+}
+
+function frozenJsonLiteralValue(source, name) {
+  const value = literalValue(source, name);
+  const match = /^Object\.freeze\((.+)\)$/.exec(value);
+  if (match === null) throw new PolicyError(`${name} is not a frozen literal`);
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    throw new PolicyError(`${name} is not valid JSON`);
+  }
+}
+
+function policyValues(source) {
+  const sourceExtensions = jsonLiteralValue(source, "SOURCE_EXTENSIONS");
+  const grandfathered = frozenJsonLiteralValue(source, "GRANDFATHERED");
+  const excluded = frozenJsonLiteralValue(source, "EXCLUDED");
+  if (!Array.isArray(sourceExtensions) || !sourceExtensions.every((value) => typeof value === "string")) {
+    throw new PolicyError("SOURCE_EXTENSIONS must be an array of strings");
+  }
+  if (!Array.isArray(excluded) || !excluded.every((value) => typeof value === "string")) {
+    throw new PolicyError("EXCLUDED must be an array of strings");
+  }
+  if (
+    grandfathered === null ||
+    Array.isArray(grandfathered) ||
+    typeof grandfathered !== "object" ||
+    !Object.values(grandfathered).every((value) => Number.isSafeInteger(value) && value >= 0)
+  ) {
+    throw new PolicyError("GRANDFATHERED must map paths to non-negative integer line counts");
+  }
+  return {
+    policyId: jsonLiteralValue(source, "MODULE_SIZE_POLICY_ID"),
+    sourceRoot: jsonLiteralValue(source, "SOURCE_ROOT"),
+    sourceExtensions,
+    softCap: Number(literalValue(source, "SOFT_CAP")),
+    reseedSlack: Number(literalValue(source, "RESEED_SLACK")),
+    grandfathered,
+    excluded,
+  };
+}
+
 /**
  * Compare the policy literals from a trusted baseline source to the current
  * source. This is pure so tests can model a pull request changing both a cap
@@ -89,18 +141,8 @@ export function comparePolicySources(baselineSource, currentSource) {
   assertPolicyLiterals(baselineSource);
   assertPolicyLiterals(currentSource);
 
-  const baseline = {
-    policyId: JSON.parse(literalValue(baselineSource, "MODULE_SIZE_POLICY_ID")),
-    sourceRoot: JSON.parse(literalValue(baselineSource, "SOURCE_ROOT")),
-    softCap: Number(literalValue(baselineSource, "SOFT_CAP")),
-    reseedSlack: Number(literalValue(baselineSource, "RESEED_SLACK")),
-  };
-  const current = {
-    policyId: JSON.parse(literalValue(currentSource, "MODULE_SIZE_POLICY_ID")),
-    sourceRoot: JSON.parse(literalValue(currentSource, "SOURCE_ROOT")),
-    softCap: Number(literalValue(currentSource, "SOFT_CAP")),
-    reseedSlack: Number(literalValue(currentSource, "RESEED_SLACK")),
-  };
+  const baseline = policyValues(baselineSource);
+  const current = policyValues(currentSource);
   const violations = [];
 
   if (current.policyId !== baseline.policyId) {
@@ -114,6 +156,24 @@ export function comparePolicySources(baselineSource, currentSource) {
   }
   if (current.reseedSlack > baseline.reseedSlack) {
     violations.push(`RESEED_SLACK rose from ${baseline.reseedSlack} to ${current.reseedSlack}`);
+  }
+  for (const extension of baseline.sourceExtensions) {
+    if (!current.sourceExtensions.includes(extension)) {
+      violations.push(`SOURCE_EXTENSIONS removed ${JSON.stringify(extension)}`);
+    }
+  }
+  for (const file of current.excluded) {
+    if (!baseline.excluded.includes(file)) {
+      violations.push(`EXCLUDED added ${JSON.stringify(file)}`);
+    }
+  }
+  for (const [file, size] of Object.entries(current.grandfathered)) {
+    const baselineSize = baseline.grandfathered[file];
+    if (baselineSize === undefined) {
+      violations.push(`GRANDFATHERED added ${JSON.stringify(file)} at ${size}`);
+    } else if (size > baselineSize) {
+      violations.push(`GRANDFATHERED ${JSON.stringify(file)} rose from ${baselineSize} to ${size}`);
+    }
   }
 
   return violations;

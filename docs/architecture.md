@@ -58,7 +58,7 @@ Root plugin manifests and `assets/` ship installable host surfaces. Claude hooks
 │  src/kernel/             ontology, conventions, graph, engine   │
 │  src/mcp/server.ts       stdio MCP: five public OMS tools        │
 │  src/vendors/            per-host installation code             │
-│  src/assets/             runtime package-asset access           │
+│  src/assets/             shared skill-source location contract  │
 └───────────────────────────┬──────────────────────────────────────┘
                             │ reads bundled static package assets
                             ▼

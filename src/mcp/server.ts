@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -28,6 +29,7 @@ import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { resolveActiveOntology } from "../kernel/ontology/active.js";
 import { resolveConcept } from "../kernel/ontology/resolver.js";
 import { retrieveMorningContext } from "../kernel/search/morning.js";
+import { walkMarkdown } from "../kernel/engine/embed/sync.js";
 import { makeEngineMorningBackend } from "./engine-morning-backend.js";
 import type { Concept } from "../kernel/ontology/types.js";
 import {
@@ -102,6 +104,56 @@ function conceptSummary(concept: Concept): Record<string, unknown> {
       fields: lens.fields,
     })),
   };
+}
+
+type SemanticIndexPostcondition = {
+  readonly kind: "semantic-index";
+  readonly databasePath: string;
+  readonly documentPaths: readonly string[];
+  readonly chunks: number;
+  readonly orphanDocumentPaths: readonly string[];
+};
+
+type DoctorRepairReceipt =
+  | {
+      readonly operation: "build-graph";
+      readonly resolvedVault: string;
+      readonly resolutionSource: WriteTargetSource;
+      readonly written: { readonly paths: readonly string[]; readonly summary: { readonly notes: number; readonly edges: number; readonly searchDocuments: number } };
+      readonly postcondition: { readonly kind: "graph-cache"; readonly cachePath: string; readonly generatedAt: string; readonly notes: number; readonly edges: number; readonly searchDocuments: number };
+    }
+  | {
+      readonly operation: "semantic-cleanup" | "sync-embeddings";
+      readonly resolvedVault: string;
+      readonly resolutionSource: WriteTargetSource;
+      readonly written: { readonly paths: readonly string[]; readonly summary: Record<string, unknown> };
+      readonly postcondition: SemanticIndexPostcondition;
+    };
+
+async function semanticIndexPostcondition(vault: string): Promise<SemanticIndexPostcondition> {
+  const databasePath = path.join(vault, ".oms", "engine-store.sqlite");
+  await stat(databasePath);
+  const database = new Database(databasePath, { readonly: true });
+  try {
+    const documentPaths = (database
+      .prepare("SELECT DISTINCT doc_path FROM engine_chunk_meta ORDER BY doc_path")
+      .all() as { doc_path: string }[])
+      .map((row) => row.doc_path);
+    const chunks = (database
+      .prepare("SELECT COUNT(*) AS count FROM engine_chunk_meta")
+      .get() as { count: number }).count;
+    const livePaths = new Set<string>();
+    for await (const notePath of walkMarkdown(vault, vault)) livePaths.add(notePath);
+    return {
+      kind: "semantic-index",
+      databasePath,
+      documentPaths,
+      chunks,
+      orphanDocumentPaths: documentPaths.filter((notePath) => !livePaths.has(notePath)),
+    };
+  } finally {
+    database.close();
+  }
 }
 
 export const omsMcpTools: Tool[] = [
@@ -331,17 +383,52 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (name === "oms_graph_build") {
-      const { ontology, source } = await resolveActiveOntology(vault);
+      const { ontology, source: ontologySource } = await resolveActiveOntology(vault);
       const cache = await buildGraphCache({ vault, ontology, write: true });
+      const cachePath = graphCachePath(vault);
+      const persistedCache: unknown = JSON.parse(await readFile(cachePath, "utf-8"));
+      if (
+        !isRecord(persistedCache) ||
+        persistedCache["generatedAt"] !== cache.generatedAt ||
+        !Array.isArray(persistedCache["notes"]) ||
+        !Array.isArray(persistedCache["edges"]) ||
+        !Array.isArray(persistedCache["search"])
+      ) {
+        throw new Error("Graph cache postcondition failed: persisted cache does not match the completed build.");
+      }
+      const receipt: DoctorRepairReceipt = {
+        operation: "build-graph",
+        resolvedVault: vault,
+        resolutionSource: source,
+        written: {
+          paths: [cachePath],
+          summary: {
+            notes: persistedCache["notes"].length,
+            edges: persistedCache["edges"].length,
+            searchDocuments: persistedCache["search"].length,
+          },
+        },
+        postcondition: {
+          kind: "graph-cache",
+          cachePath,
+          generatedAt: persistedCache["generatedAt"],
+          notes: persistedCache["notes"].length,
+          edges: persistedCache["edges"].length,
+          searchDocuments: persistedCache["search"].length,
+        },
+      };
       return jsonText({
         vault,
-        ontologySource: source,
-        cachePath: graphCachePath(vault),
+        ontologySource,
+        cachePath,
         generatedAt: cache.generatedAt,
         notes: cache.notes.length,
         edges: cache.edges.length,
         searchDocuments: cache.search.length,
         sourceOfTruth: cache.sourceOfTruth,
+        resolvedVault: vault,
+        resolutionSource: opts.source,
+        receipt,
       });
     }
 
@@ -423,12 +510,42 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     // Every other tool never touches the engine here.
     if (isEngineSemanticOp(name) || isEngineDocumentOp(name)) {
       const semanticAdapter =
-        isEngineSemanticOp(name) && !isModelOptionalSemanticQueryOp(name, args, vault)
+        isEngineSemanticOp(name) &&
+        name !== "oms_semantic_cleanup" &&
+        !(name === "oms_sync_embeddings" && args?.["embed"] === false) &&
+        !isModelOptionalSemanticQueryOp(name, args, vault)
           ? getSemanticEngine().adapter
           : resolveDocumentAdapter();
       const semanticToolResult = await handleSemanticTool(name, args, vault, semanticAdapter);
       if (semanticToolResult) {
-        return semanticToolResult.ok ? jsonText(semanticToolResult.value) : errorText(semanticToolResult.message);
+        if (!semanticToolResult.ok) return errorText(semanticToolResult.message);
+        if (
+          (name === "oms_semantic_cleanup" || name === "oms_sync_embeddings") &&
+          isRecord(semanticToolResult.value) &&
+          semanticToolResult.value["available"] === true
+        ) {
+          const postcondition = await semanticIndexPostcondition(vault);
+          if (postcondition.orphanDocumentPaths.length > 0) {
+            throw new Error("Semantic index postcondition failed: stored documents include paths outside the live vault.");
+          }
+          const receipt: DoctorRepairReceipt = {
+            operation: name === "oms_semantic_cleanup" ? "semantic-cleanup" : "sync-embeddings",
+            resolvedVault: vault,
+            resolutionSource: source,
+            written: {
+              paths: [postcondition.databasePath],
+              summary: semanticToolResult.value,
+            },
+            postcondition,
+          };
+          return jsonText({
+            ...semanticToolResult.value,
+            resolvedVault: vault,
+            resolutionSource: source,
+            receipt,
+          });
+        }
+        return jsonText(semanticToolResult.value);
       }
     }
 

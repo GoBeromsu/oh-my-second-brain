@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import Database from "better-sqlite3";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
@@ -678,7 +679,7 @@ Malformed frontmatter must not block retrieve.
     }
   });
 
-  it("allows a verified target to build a graph repair and return its cache receipt", async () => {
+  it("returns a server-verified graph repair receipt for a verified target", async () => {
     const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-doctor-vault-")));
     await mkdir(path.join(tmpVault, ".oms", "concepts"), { recursive: true });
     await writeFile(
@@ -704,10 +705,118 @@ Malformed frontmatter must not block retrieve.
       const repair = textPayload(
         await client.callTool({ name: "oms_doctor", arguments: { op: "build-graph" } }),
       );
-      expect(repair).toMatchObject({ vault: tmpVault, ontologySource: "vault" });
-      expect(typeof repair.generatedAt).toBe("string");
-      expect(typeof repair.cachePath).toBe("string");
-      expect(await readFile(repair.cachePath as string, "utf-8")).toContain("\"generatedAt\"");
+      const receipt = repair.receipt as Record<string, unknown>;
+      const postcondition = receipt.postcondition as Record<string, unknown>;
+      expect(repair).toMatchObject({
+        vault: tmpVault,
+        ontologySource: "vault",
+        resolvedVault: tmpVault,
+        resolutionSource: "vault",
+      });
+      expect(receipt.resolvedVault).toBe(tmpVault);
+      expect(receipt.resolutionSource).toBe("vault");
+      expect(postcondition.kind).toBe("graph-cache");
+      const cache = JSON.parse(await readFile(postcondition.cachePath as string, "utf-8")) as Record<string, unknown>;
+      expect(postcondition.generatedAt).toBe(cache.generatedAt);
+      expect(postcondition.notes).toBe((cache.notes as unknown[]).length);
+      expect(postcondition.edges).toBe((cache.edges as unknown[]).length);
+      expect(postcondition.searchDocuments).toBe((cache.search as unknown[]).length);
+      expect((receipt.written as Record<string, unknown>).paths).toEqual([postcondition.cachePath]);
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a server-verified semantic sync receipt for a verified target", async () => {
+    const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-doctor-sync-")));
+    await mkdir(path.join(tmpVault, ".oms", "concepts"), { recursive: true });
+    await writeFile(path.join(tmpVault, ".oms", "taxonomy.yaml"), "version: 1\nfolders: {}\n", "utf-8");
+    await writeFile(path.join(tmpVault, "note.md"), "# Indexed note\n", "utf-8");
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp"],
+      cwd: tmpVault,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+      const repair = textPayload(
+        await client.callTool({ name: "oms_doctor", arguments: { op: "sync-embeddings", embed: false } }),
+      );
+      const receipt = repair.receipt as Record<string, unknown>;
+      const postcondition = receipt.postcondition as Record<string, unknown>;
+      expect(receipt).toMatchObject({
+        operation: "sync-embeddings",
+        resolvedVault: tmpVault,
+        resolutionSource: "vault",
+      });
+      expect(postcondition.kind).toBe("semantic-index");
+      const database = new Database(postcondition.databasePath as string, { readonly: true });
+      try {
+        const documentPaths = (database
+          .prepare("SELECT DISTINCT doc_path FROM engine_chunk_meta ORDER BY doc_path")
+          .all() as { doc_path: string }[])
+          .map((row) => row.doc_path);
+        const chunks = (database.prepare("SELECT COUNT(*) AS count FROM engine_chunk_meta").get() as { count: number }).count;
+        expect(postcondition.documentPaths).toEqual(documentPaths);
+        expect(postcondition.chunks).toBe(chunks);
+        expect(documentPaths).toEqual(["note.md"]);
+        expect((receipt.written as Record<string, unknown>).paths).toEqual([postcondition.databasePath]);
+      } finally {
+        database.close();
+      }
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a server-verified semantic cleanup receipt for a verified target", async () => {
+    const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-doctor-cleanup-")));
+    await mkdir(path.join(tmpVault, ".oms", "concepts"), { recursive: true });
+    await writeFile(path.join(tmpVault, ".oms", "taxonomy.yaml"), "version: 1\nfolders: {}\n", "utf-8");
+    await writeFile(path.join(tmpVault, "removed.md"), "# Removed note\n", "utf-8");
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp"],
+      cwd: tmpVault,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+      textPayload(
+        await client.callTool({ name: "oms_doctor", arguments: { op: "sync-embeddings", embed: false } }),
+      );
+      await rm(path.join(tmpVault, "removed.md"));
+      const repair = textPayload(
+        await client.callTool({ name: "oms_doctor", arguments: { op: "semantic-cleanup" } }),
+      );
+      const receipt = repair.receipt as Record<string, unknown>;
+      const postcondition = receipt.postcondition as Record<string, unknown>;
+      expect(receipt).toMatchObject({
+        operation: "semantic-cleanup",
+        resolvedVault: tmpVault,
+        resolutionSource: "vault",
+      });
+      expect(postcondition.kind).toBe("semantic-index");
+      expect(postcondition.orphanDocumentPaths).toEqual([]);
+      const database = new Database(postcondition.databasePath as string, { readonly: true });
+      try {
+        const documentPaths = (database
+          .prepare("SELECT DISTINCT doc_path FROM engine_chunk_meta ORDER BY doc_path")
+          .all() as { doc_path: string }[])
+          .map((row) => row.doc_path);
+        expect(documentPaths).toEqual(postcondition.documentPaths);
+        expect(documentPaths).not.toContain("removed.md");
+        expect((receipt.written as Record<string, unknown>).paths).toEqual([postcondition.databasePath]);
+      } finally {
+        database.close();
+      }
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });

@@ -12,6 +12,28 @@ import {
 } from "../../scripts/check-module-size.mjs";
 import { absolute } from "./repo-root.js";
 
+function policySource({
+  sourceExtensions = [".ts"],
+  grandfathered = {},
+  excluded = [],
+  softCap = 2000,
+}: {
+  sourceExtensions?: string[];
+  grandfathered?: Record<string, number>;
+  excluded?: string[];
+  softCap?: number;
+} = {}) {
+  return [
+    'export const MODULE_SIZE_POLICY_ID = "oms.module-size.v1";',
+    'export const SOURCE_ROOT = "src";',
+    `export const SOURCE_EXTENSIONS = ${JSON.stringify(sourceExtensions)};`,
+    `export const SOFT_CAP = ${softCap};`,
+    "export const RESEED_SLACK = 200;",
+    `export const GRANDFATHERED = Object.freeze(${JSON.stringify(grandfathered)});`,
+    `export const EXCLUDED = Object.freeze(${JSON.stringify(excluded)});`,
+  ].join("\n");
+}
+
 /**
  * The ratchet is only worth having if it rejects concrete bad inputs. Each case
  * below is a specific violation, not an existence check on the script.
@@ -57,26 +79,19 @@ describe("module-size ratchet", () => {
       'export const SOURCE_EXTENSIONS = [".ts"];',
       "export const SOFT_CAP = Number(process.env.CAP ?? 2000);",
       "export const RESEED_SLACK = 200;",
+      "export const GRANDFATHERED = Object.freeze({});",
+      "export const EXCLUDED = Object.freeze([]);",
     ].join("\n");
 
     expect(() => assertPolicyLiterals(tampered)).toThrow(/SOFT_CAP is not a literal assignment/);
   });
 
   it("rejects a raised cap even when the policy sentinel changes with it", () => {
-    const base = [
-      'export const MODULE_SIZE_POLICY_ID = "oms.module-size.v1";',
-      'export const SOURCE_ROOT = "src";',
-      'export const SOURCE_EXTENSIONS = [".ts"];',
-      "export const SOFT_CAP = 2000;",
-      "export const RESEED_SLACK = 200;",
-    ].join("\n");
-    const head = [
-      'export const MODULE_SIZE_POLICY_ID = "oms.module-size.v2-relaxed";',
-      'export const SOURCE_ROOT = "src";',
-      'export const SOURCE_EXTENSIONS = [".ts"];',
-      "export const SOFT_CAP = 2500;",
-      "export const RESEED_SLACK = 200;",
-    ].join("\n");
+    const base = policySource();
+    const head = policySource({ softCap: 2500 }).replace(
+      'MODULE_SIZE_POLICY_ID = "oms.module-size.v1"',
+      'MODULE_SIZE_POLICY_ID = "oms.module-size.v2-relaxed"',
+    );
 
     expect(comparePolicySources(base, head)).toEqual([
       'MODULE_SIZE_POLICY_ID changed from "oms.module-size.v1" to "oms.module-size.v2-relaxed"',
@@ -85,16 +100,73 @@ describe("module-size ratchet", () => {
   });
 
   it("accepts a lower cap", () => {
-    const base = [
-      'export const MODULE_SIZE_POLICY_ID = "oms.module-size.v1";',
-      'export const SOURCE_ROOT = "src";',
-      'export const SOURCE_EXTENSIONS = [".ts"];',
-      "export const SOFT_CAP = 2000;",
-      "export const RESEED_SLACK = 200;",
-    ].join("\n");
+    const base = policySource();
     const head = base.replace("SOFT_CAP = 2000", "SOFT_CAP = 1900");
 
     expect(comparePolicySources(base, head)).toEqual([]);
+  });
+
+  it("rejects excluding a file that the baseline scans", () => {
+    const violations = comparePolicySources(
+      policySource(),
+      policySource({ excluded: ["src/kernel/oversized.ts"] }),
+    );
+
+    expect(violations).toEqual(['EXCLUDED added "src/kernel/oversized.ts"']);
+  });
+
+  it("accepts removing an excluded file", () => {
+    expect(
+      comparePolicySources(
+        policySource({ excluded: ["src/kernel/generated.ts"] }),
+        policySource(),
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects raising a grandfathered file's recorded size", () => {
+    const violations = comparePolicySources(
+      policySource({ grandfathered: { "src/kernel/oversized.ts": 2100 } }),
+      policySource({ grandfathered: { "src/kernel/oversized.ts": 2600 } }),
+    );
+
+    expect(violations).toEqual(['GRANDFATHERED "src/kernel/oversized.ts" rose from 2100 to 2600']);
+  });
+
+  it("rejects granting a file a new grandfathered ceiling", () => {
+    const violations = comparePolicySources(
+      policySource(),
+      policySource({ grandfathered: { "src/kernel/oversized.ts": 2100 } }),
+    );
+
+    expect(violations).toEqual(['GRANDFATHERED added "src/kernel/oversized.ts" at 2100']);
+  });
+
+  it("accepts lowering a grandfathered file's recorded size", () => {
+    expect(
+      comparePolicySources(
+        policySource({ grandfathered: { "src/kernel/oversized.ts": 2600 } }),
+        policySource({ grandfathered: { "src/kernel/oversized.ts": 2100 } }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects removing a source extension that the baseline scans", () => {
+    const violations = comparePolicySources(
+      policySource({ sourceExtensions: [".ts"] }),
+      policySource({ sourceExtensions: [] }),
+    );
+
+    expect(violations).toEqual(['SOURCE_EXTENSIONS removed ".ts"']);
+  });
+
+  it("accepts adding a source extension", () => {
+    expect(
+      comparePolicySources(
+        policySource({ sourceExtensions: [".ts"] }),
+        policySource({ sourceExtensions: [".ts", ".tsx"] }),
+      ),
+    ).toEqual([]);
   });
 
   it("accepts its own current source as policy-clean", async () => {

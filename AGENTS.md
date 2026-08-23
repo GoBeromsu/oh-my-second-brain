@@ -14,7 +14,7 @@ Oh My Second Brain is a host-agnostic, user-owned convention layer for Obsidian 
 | `src/cli/` | The `oms` command surface | `CHANGELOG-cli.md` |
 | `src/mcp/` | MCP server, the five public tools, schemas | `CHANGELOG-mcp.md` |
 | `src/vendors/` | Per-host integration: `claude/`, `codex/`, `hermes/` | `CHANGELOG-vendors.md` |
-| `src/assets/` | Bundled-asset path resolution | `CHANGELOG-assets.md` |
+| `src/assets/` | The shared skill-source location contract | `CHANGELOG-assets.md` |
 
 Outside `src/`:
 
@@ -28,13 +28,17 @@ Outside `src/`:
 
 **Kernel-in-library.** The domain kernel is a library; `cli/` and `mcp/` are thin entrypoints over it. Neither owns behavior the other cannot reach.
 
-**Import direction is gated.** `cli/` and `mcp/` may import `kernel/` only. `kernel/` may not import `cli/`, `mcp/`, or `vendors/`. No `vendors/<a>/` may import `vendors/<b>/` — shared vendor code belongs in `kernel/`. See `test/architecture/import-boundary.test.ts`.
+**Import direction is gated.** `kernel/` may not import `cli/`, `mcp/`, `vendors/` or `assets/`. `assets/` is a leaf and imports none of them. No `vendors/<a>/` may import `vendors/<b>/` — shared vendor code belongs in `kernel/`.
+
+`cli/` and `mcp/` import `kernel/`, with one deliberate exception class: the CLI is the composition root, so it selects a host adapter for install/uninstall, invokes a host hook entrypoint, and starts the MCP server for `oms mcp`. Those six edges are enumerated with reasons in `CLI_ENTRYPOINT_EXCEPTIONS` in `test/architecture/import-boundary.test.ts`, and the assertion is exact-match — a new forbidden edge fails, and so does a stale exception. Adding a seventh requires editing that list in the same commit, in front of a reviewer. Everything else in `cli/` and `mcp/` must resolve into `kernel/`.
 
 **The public surface is three distinct sets, not one.** Six skills (`write`, `search`, `link`, `distill`, `status`, `doctor`). Five MCP tools, a strict subset — only skills declaring `mcp_tool` get one, so `distill` has none. CLI commands are an **independent** allowlist containing real commands that are not skills (`mcp`, `setup`, `install`, `update`, `audit`, `lint`, `hook`). Never collapse these into equality; `test/architecture/surface-parity.test.ts` guards it.
 
 **Detail operations are demoted, never deleted.** The 18 former detail tools route through the five public tools by an `op` parameter (`oms_doctor` + `op: "sync-embeddings"`, `oms_search` + `op: "semantic-query"`). Adding a capability means adding an `op`, not a sixth tool.
 
-**`status` reads, `doctor` writes.** `status` is read-only health and statistics. `doctor` diagnoses *and* repairs, and its repair path must route through the verified-target write kernel.
+**`status` reads, `doctor` writes.** `status` is read-only health and statistics. `doctor` diagnoses *and* repairs, and every mutating repair op routes through the verified-target write kernel and returns a receipt with a server-verified postcondition; a `cwd`-inferred target rejects repair while still allowing diagnosis.
+
+`oms_search` is NOT annotated read-only, and that is honest rather than aspirational: opening the engine store creates `.oms/` and initialises `engine-store.sqlite` on first use (`src/kernel/engine/embed/store.ts`). A read surface that writes is a known wart — the annotation tells the truth about it instead of hiding it. Making the read path non-creating is a tracked follow-up.
 
 **Vendor nativeness differs by host and that is correct.** Claude and Codex read repo-root plugin manifests; Hermes has no such concept and installs into `~/.hermes/skills/`. A uniform mechanism would be the compromise, not the asymmetry.
 

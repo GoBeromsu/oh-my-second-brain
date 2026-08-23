@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
-import { semanticUsageText } from "./semantic-usage.js";
 
 let tmpVault: string | undefined;
 
@@ -103,16 +102,34 @@ describe("semantic CLI", () => {
     expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true }));
   });
 
-  it.each(["query", "vsearch", "get", "multi-get", "status"])("rejects retired qmd alias %s", async (command) => {
-    const errors: string[] = [];
-    expect(isSemanticCliCommand(command)).toBe(false);
-    await expect(
-      runSemanticCli({
-        argv: [command],
-        vault: "/unused",
-        writeError: (message) => errors.push(message),
+  it("dispatches canonical nested query, status, get, multi-get, and vsearch commands", async () => {
+    tmpVault = await writeVault();
+    const output: string[] = [];
+    const write = (message: string) => output.push(message);
+
+    expect(
+      await runSemanticCli({
+        argv: ["semantic", "sync", "--collection", "obsidian", "--no-embed"],
+        vault: tmpVault,
+        write,
       }),
-    ).resolves.toBe(1);
-    expect(errors).toEqual([semanticUsageText()]);
+    ).toBe(0);
+
+    for (const [argv, expectedCode] of [
+      [["semantic", "query", "agent retrieval", "--lex", "agent retrieval"], 0],
+      [["semantic", "status"], 0],
+      [["semantic", "get", "references/Agent Retrieval.md"], 0],
+      [["semantic", "multi-get", "references/Agent Retrieval.md"], 0],
+      [["semantic", "vsearch", "agent retrieval"], 1],
+    ] as const) {
+      output.length = 0;
+      expect(await runSemanticCli({ argv, vault: tmpVault, write })).toBe(expectedCode);
+      expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: expect.any(Boolean) }));
+    }
+
+    expect(isSemanticCliCommand("search")).toBe(true);
+    for (const alias of ["query", "vsearch", "get", "multi-get", "status"]) {
+      expect(isSemanticCliCommand(alias)).toBe(false);
+    }
   });
 });

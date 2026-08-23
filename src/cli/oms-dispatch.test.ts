@@ -164,14 +164,25 @@ describe("oms CLI dispatch", () => {
     expect(audit.stderr).toContain("Local .oms ontology is incomplete");
   });
 
-  it("rejects retired semantic status commands", async () => {
+  it("dispatches nested semantic status and rejects the retired top-level status alias", async () => {
     const vault = await makeVault();
     const nested = runCli(["semantic", "status", "--vault", vault]);
     const alias = runCli(["status", "--vault", vault]);
 
-    expect(nested.status).toBe(1);
+    expect(nested.status).toBe(0);
+    expect(nested.stdout).toContain('"available": true');
     expect(alias.status).toBe(1);
   });
+
+  it.each(["query", "status", "get", "multi-get", "vsearch"])(
+    "rejects the retired top-level semantic %s alias",
+    async (command) => {
+      const vault = await makeVault();
+      const result = runCli([command, "--vault", vault]);
+
+      expect(result.status).toBe(1);
+    },
+  );
 
   it("creates a vault bridge and resolves doctor through it", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "oms-cli-link-"));
@@ -203,7 +214,7 @@ describe("oms CLI dispatch", () => {
     expect(agents).toContain("<!-- oms:begin -->");
     expect(agents).toContain(`- Connected vault: ${path.basename(vault)}`);
     expect(agents).not.toContain(vault);
-    expect(agents).toContain("`oms query \"what context should I know for this change?\"`");
+    expect(agents).toContain("`oms semantic query \"what context should I know for this change?\"`");
     expect(agents).toContain("`oms mcp`");
 
     const doctor = runCli(["doctor"], undefined, undefined, repo);
