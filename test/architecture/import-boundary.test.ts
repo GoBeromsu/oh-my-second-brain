@@ -168,6 +168,30 @@ describe("import-direction gate", () => {
     }
   });
 
+  it("detects comment-separated imports of an MCP surface", async () => {
+    const fixture = "src/kernel/import-boundary-comment-escape.ts";
+    await writeFile(
+      absolute(fixture),
+      [
+        'void import/* boundary-evasion */("../mcp/server.js");',
+        'import/*x*/ { server as staticServer } from "../mcp/server.js";',
+        "void import// boundary-evasion",
+        '("../mcp/server.js");',
+      ].join("\n"),
+    );
+    try {
+      expect(
+        await findImports([fixture], (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS])),
+      ).toEqual([
+        { file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" },
+        { file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" },
+        { file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" },
+      ]);
+    } finally {
+      await rm(absolute(fixture), { force: true });
+    }
+  });
+
   it("keeps cli imports within cli and kernel", async () => {
     const files = await collectFiles(CLI, isProductionTs);
     assertNonVacuous(files, CLI);

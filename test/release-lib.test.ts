@@ -34,7 +34,12 @@ interface ReleaseLib {
   bumpedPackageLock(jsonText: string, version: string): string;
   bumpedMarketplace(jsonText: string, version: string): string;
   versionMismatches(carriers: VersionCarriers): string[];
-  missingReleasedHeadings(baseContent: string, headContent: string): string[];
+  missingReleasedHeadings(baseChangelogs: Record<string, string>, headChangelogs: Record<string, string>): string[];
+  alteredReleasedSections(baseChangelogs: Record<string, string>, headChangelogs: Record<string, string>): string[];
+  relocatedReleasedSections(
+    baseChangelogs: Record<string, string>,
+    headChangelogs: Record<string, string>,
+  ): { fromFile: string; toFile: string; heading: string }[];
 }
 
 const {
@@ -47,6 +52,8 @@ const {
   bumpedMarketplace,
   versionMismatches,
   missingReleasedHeadings,
+  alteredReleasedSections,
+  relocatedReleasedSections,
 } = releaseLibModule as ReleaseLib;
 
 const RELEASED_0_1_9 = "## [0.1.9] - 2026-08-14\n\n### Added\n\n- hermes adapter (#59)\n";
@@ -317,20 +324,86 @@ describe("versionMismatches", () => {
 
 describe("missingReleasedHeadings", () => {
   it("detects a removed released heading", () => {
-    expect(missingReleasedHeadings(CHANGELOG, `# Changelog\n\n## [Unreleased]\n\n${RELEASED_0_1_9}`)).toEqual([
-      "## [0.1.8]",
-    ]);
+    expect(
+      missingReleasedHeadings(
+        { "CHANGELOG-cli.md": CHANGELOG },
+        { "CHANGELOG-cli.md": `# Changelog\n\n## [Unreleased]\n\n${RELEASED_0_1_9}` },
+      ),
+    ).toEqual(["CHANGELOG-cli.md: ## [0.1.8]"]);
   });
 
   it("returns [] for identical content, added sections, and edited bodies", () => {
-    expect(missingReleasedHeadings(CHANGELOG, CHANGELOG)).toEqual([]);
+    expect(missingReleasedHeadings({ "CHANGELOG.md": CHANGELOG }, { "CHANGELOG.md": CHANGELOG })).toEqual([]);
     const withNewRelease = rolledChangelog(CHANGELOG, "0.2.0", "2026-08-17");
-    expect(missingReleasedHeadings(CHANGELOG, withNewRelease)).toEqual([]);
-    expect(missingReleasedHeadings(CHANGELOG, CHANGELOG.replace("- codex parity fixes", "- reworded"))).toEqual([]);
+    expect(missingReleasedHeadings({ "CHANGELOG.md": CHANGELOG }, { "CHANGELOG.md": withNewRelease })).toEqual([]);
+    expect(
+      missingReleasedHeadings(
+        { "CHANGELOG.md": CHANGELOG },
+        { "CHANGELOG.md": CHANGELOG.replace("- codex parity fixes", "- reworded") },
+      ),
+    ).toEqual([]);
   });
 
   it("ignores [Unreleased] and treats a missing base changelog as no removals", () => {
-    expect(missingReleasedHeadings("# Changelog\n\n## [Unreleased]\n", "# Changelog\n")).toEqual([]);
-    expect(missingReleasedHeadings("", CHANGELOG)).toEqual([]);
+    expect(
+      missingReleasedHeadings(
+        { "CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n" },
+        { "CHANGELOG.md": "# Changelog\n" },
+      ),
+    ).toEqual([]);
+    expect(missingReleasedHeadings({ "CHANGELOG.md": "" }, { "CHANGELOG.md": CHANGELOG })).toEqual([]);
+  });
+});
+
+describe("alteredReleasedSections", () => {
+  it("keeps section identities scoped to their changelog files", () => {
+    const base = {
+      "CHANGELOG-cli.md": CHANGELOG,
+      "CHANGELOG-mcp.md": CHANGELOG,
+    };
+    const head = {
+      "CHANGELOG-cli.md": CHANGELOG.replace("- codex parity fixes", "- rewritten cli history"),
+      "CHANGELOG-mcp.md": CHANGELOG,
+    };
+
+    expect(alteredReleasedSections(base, head)).toEqual(["CHANGELOG-cli.md: ## [0.1.8]"]);
+  });
+
+  it("ends a released section at every heading level", () => {
+    const base = { "CHANGELOG.md": "# Changelog\n\n## [0.1.0] - 2026-01-01\n\n- preserved\n# Next title\n" };
+    const head = { "CHANGELOG.md": `${base["CHANGELOG.md"]}Added after title.\n` };
+
+    expect(alteredReleasedSections(base, head)).toEqual([]);
+  });
+});
+
+describe("released section relocations", () => {
+  const source = "# Changelog\n\n## [0.1.0] - 2026-01-01\n\n- preserved\n";
+  const destination = "# Changelog\n\n## [Unreleased]\n";
+
+  it("accepts and reports a byte-identical move to a file that lacked the version at base", () => {
+    const base = { "CHANGELOG.md": source, "CHANGELOG-vendors.md": destination };
+    const head = {
+      "CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n",
+      "CHANGELOG-vendors.md": `${destination}\n## [0.1.0] - 2026-01-01\n\n- preserved\n`,
+    };
+
+    expect(missingReleasedHeadings(base, head)).toEqual([]);
+    expect(relocatedReleasedSections(base, head)).toEqual([
+      { fromFile: "CHANGELOG.md", toFile: "CHANGELOG-vendors.md", heading: "## [0.1.0]" },
+    ]);
+  });
+
+  it("rejects a move whose destination body changed", () => {
+    const base = { "CHANGELOG.md": source, "CHANGELOG-vendors.md": destination };
+    const head = {
+      "CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n",
+      "CHANGELOG-vendors.md": `${destination}\n## [0.1.0] - 2026-01-01\n\n- rewritten\n`,
+    };
+
+    expect(missingReleasedHeadings(base, head)).toEqual([
+      "CHANGELOG.md: ## [0.1.0] moved to CHANGELOG-vendors.md with altered content",
+    ]);
+    expect(relocatedReleasedSections(base, head)).toEqual([]);
   });
 });

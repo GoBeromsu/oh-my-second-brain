@@ -202,17 +202,73 @@ export function versionMismatches({
 }
 
 /**
- * @param {string} baseContent CHANGELOG.md at the merge base
- * @param {string} headContent CHANGELOG.md at HEAD
- * @returns {string[]} released headings present in base but absent in head
+ * @param {Record<string, string>} baseChangelogs changelog text by file at the merge base
+ * @param {Record<string, string>} headChangelogs changelog text by file at HEAD
+ * @returns {string[]} file-qualified released headings present in base but absent in the same file at head
  */
-export function missingReleasedHeadings(baseContent, headContent) {
-  const headHeadings = new Set(releasedHeadings(headContent));
-  return releasedHeadings(baseContent).filter((heading) => !headHeadings.has(heading));
+export function missingReleasedHeadings(baseChangelogs, headChangelogs) {
+  const missing = [];
+  for (const [file, baseContent] of Object.entries(baseChangelogs)) {
+    const baseSections = releasedSections(baseContent);
+    const headHeadings = new Set(releasedHeadings(headChangelogs[file] ?? ""));
+    for (const [heading, body] of baseSections) {
+      if (headHeadings.has(heading)) continue;
+      const destination = relocatedSection(file, heading, body, baseChangelogs, headChangelogs);
+      if (destination === null) {
+        missing.push(`${file}: ${heading}`);
+      } else if (!destination.identical) {
+        missing.push(`${file}: ${heading} moved to ${destination.file} with altered content`);
+      }
+    }
+  }
+  return missing;
 }
 
 /**
- * Split content into released sections keyed by heading.
+ * Return released sections moved to a changelog that did not hold that version
+ * at base, preserving their content byte-for-byte (apart from trailing space).
+ *
+ * @param {Record<string, string>} baseChangelogs changelog text by file at the merge base
+ * @param {Record<string, string>} headChangelogs changelog text by file at HEAD
+ * @returns {{ fromFile: string, toFile: string, heading: string }[]}
+ */
+export function relocatedReleasedSections(baseChangelogs, headChangelogs) {
+  const relocations = [];
+  for (const [file, baseContent] of Object.entries(baseChangelogs)) {
+    const head = releasedSections(headChangelogs[file] ?? "");
+    for (const [heading, body] of releasedSections(baseContent)) {
+      if (head.has(heading)) continue;
+      const destination = relocatedSection(file, heading, body, baseChangelogs, headChangelogs);
+      if (destination?.identical) relocations.push({ fromFile: file, toFile: destination.file, heading });
+    }
+  }
+  return relocations;
+}
+
+/**
+ * @param {string} sourceFile
+ * @param {string} heading
+ * @param {string} body
+ * @param {Record<string, string>} baseChangelogs
+ * @param {Record<string, string>} headChangelogs
+ * @returns {{ file: string, identical: boolean } | null}
+ */
+function relocatedSection(sourceFile, heading, body, baseChangelogs, headChangelogs) {
+  const normalise = (text) => text.replace(/[ \t]+$/gm, "").replace(/\n+$/, "");
+  for (const [file, headContent] of Object.entries(headChangelogs)) {
+    if (file === sourceFile) continue;
+    const destinationBody = releasedSections(headContent).get(heading);
+    if (destinationBody === undefined) continue;
+    // A duplicate that already existed at base is not a move. This distinction
+    // keeps deleting one of six same-version layer sections from being masked.
+    if (releasedSections(baseChangelogs[file] ?? "").has(heading)) continue;
+    return { file, identical: normalise(body) === normalise(destinationBody) };
+  }
+  return null;
+}
+
+/**
+ * Split a changelog into released sections keyed by version heading.
  *
  * A section runs from its `## [X.Y.Z]` heading to the next `## ` heading, so the
  * body travels with the heading it belongs to.
@@ -235,10 +291,8 @@ function releasedSections(content) {
       buffer = [];
       continue;
     }
-    // ANY heading ends the section, not just `## `. The guard concatenates all
-    // six changelog files, so the next file's `# Title` must close the previous
-    // file's last released section - otherwise it absorbs that header and the
-    // section falsely reads as edited.
+    // Any heading ends the section, not just `## `. This prevents a subordinate
+    // heading from becoming part of a released section's body.
     if (/^#{1,6} /.test(line)) {
       if (current !== null) sections.set(current, buffer.join("\n"));
       current = null;
@@ -259,20 +313,22 @@ function releasedSections(content) {
  * immutability rule exists to prevent. Normalises trailing whitespace so a
  * formatter cannot trip the guard on a no-op change.
  *
- * @param {string} baseContent
- * @param {string} headContent
- * @returns {string[]} headings whose section content differs
+ * @param {Record<string, string>} baseChangelogs changelog text by file at the merge base
+ * @param {Record<string, string>} headChangelogs changelog text by file at HEAD
+ * @returns {string[]} file-qualified headings whose section content differs
  */
-export function alteredReleasedSections(baseContent, headContent) {
+export function alteredReleasedSections(baseChangelogs, headChangelogs) {
   const normalise = (text) => text.replace(/[ \t]+$/gm, "").replace(/\n+$/, "");
-  const head = releasedSections(headContent);
   const altered = [];
 
-  for (const [heading, body] of releasedSections(baseContent)) {
-    const headBody = head.get(heading);
-    // A heading that disappeared is reported by missingReleasedHeadings.
-    if (headBody === undefined) continue;
-    if (normalise(body) !== normalise(headBody)) altered.push(heading);
+  for (const [file, baseContent] of Object.entries(baseChangelogs)) {
+    const head = releasedSections(headChangelogs[file] ?? "");
+    for (const [heading, body] of releasedSections(baseContent)) {
+      const headBody = head.get(heading);
+      // A heading that disappeared is reported by missingReleasedHeadings.
+      if (headBody === undefined) continue;
+      if (normalise(body) !== normalise(headBody)) altered.push(`${file}: ${heading}`);
+    }
   }
   return altered;
 }

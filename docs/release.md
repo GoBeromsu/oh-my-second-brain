@@ -64,7 +64,11 @@ Five files get the new version: `package.json`, `package-lock.json` (root `versi
 
 ### 3. Changelog roll
 
-The release process rolls `CHANGELOG.md`'s aggregate `## [Unreleased]` section into `## [<version>] - <UTC date>` and reinstates an empty `## [Unreleased]` section. Layer changelogs remain the source for layer-specific changes. Released sections pass through byte-identical.
+The release process rolls all six changelogs — the aggregate `CHANGELOG.md` and the five layer files — in one transaction. Each file's `## [Unreleased]` section becomes `## [<version>] - <UTC date>` and a fresh empty `## [Unreleased]` is reinstated above it. Every roll is precomputed before anything is written, so a malformed file fails the release before any other changelog is touched rather than leaving some layers released and others not.
+
+A layer with nothing under `[Unreleased]` is normal — most releases touch a subset of layers — and is not an error.
+
+Released sections pass through byte-identical. The immutability guard identifies a section by `{file, version}`, not by version alone: after a release every layer carries the same version heading, so keying on the version would let an edit to one layer hide behind another layer that still holds it.
 
 An empty `## [Unreleased]` body is a hard error: *empty [Unreleased] - write release notes before releasing*. Write the notes, or pass the escape hatch when a release genuinely carries nothing user-facing:
 

@@ -4,7 +4,7 @@
 // config failure (exit 2), never a silent pass.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { alteredReleasedSections, missingReleasedHeadings } from "./release-lib.mjs";
+import { alteredReleasedSections, missingReleasedHeadings, relocatedReleasedSections } from "./release-lib.mjs";
 
 const CHANGELOG_FILES = [
   "CHANGELOG.md",
@@ -28,26 +28,26 @@ try {
   fail(`base ref '${base}' does not exist or is not fetched.`, 2);
 }
 
-const baseContent = CHANGELOG_FILES.map((file) => {
+const baseChangelogs = Object.fromEntries(CHANGELOG_FILES.map((file) => {
   try {
-    return execFileSync("git", ["show", `${base}:${file}`], {
+    return [file, execFileSync("git", ["show", `${base}:${file}`], {
       encoding: "utf8",
       stdio: "pipe",
-    });
+    })];
   } catch {
-    return "";
+    return [file, ""];
   }
-}).join("\n");
+}));
 
-const headContent = CHANGELOG_FILES.map((file) => {
+const headChangelogs = Object.fromEntries(CHANGELOG_FILES.map((file) => {
   try {
-    return readFileSync(file, "utf8");
+    return [file, readFileSync(file, "utf8")];
   } catch {
-    return "";
+    return [file, ""];
   }
-}).join("\n");
+}));
 
-const missing = missingReleasedHeadings(baseContent, headContent);
+const missing = missingReleasedHeadings(baseChangelogs, headChangelogs);
 
 if (missing.length > 0) {
   const message = `${missing.length} released heading(s) present at '${base}' are missing from the working tree changelogs:\n${missing.map((h) => `  - ${h}`).join("\n")}`;
@@ -56,11 +56,15 @@ if (missing.length > 0) {
 
 // Heading survival is not immutability: a released section's entire body can be
 // rewritten while its heading stays put. Compare the section content too.
-const altered = alteredReleasedSections(baseContent, headContent);
+const altered = alteredReleasedSections(baseChangelogs, headChangelogs);
 
 if (altered.length > 0) {
   const message = `${altered.length} released section(s) were edited relative to '${base}'. Released sections are immutable; fix forward with a new version instead:\n${altered.map((h) => `  - ${h}`).join("\n")}`;
   fail(message, 1);
+}
+
+for (const { fromFile, toFile, heading } of relocatedReleasedSections(baseChangelogs, headChangelogs)) {
+  console.log(`changelog-history-guard: ${heading} moved from ${fromFile} to ${toFile} with identical content.`);
 }
 
 console.log("changelog-history-guard: ok - released headings and section content are unchanged.");

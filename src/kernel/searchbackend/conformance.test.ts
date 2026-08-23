@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { assembleCoreSemanticEngine, type AssembledEngine } from "../engine/assemble.js";
@@ -25,6 +25,16 @@ async function fixtureVault(): Promise<string> {
     "# Recipe\nKnead bread dough before baking.\n",
     "utf8",
   );
+  return vault;
+}
+
+async function collectionFixtureVault(): Promise<string> {
+  const vault = await mkdtemp(path.join(tmpdir(), "oms-search-backend-collections-"));
+  vaults.push(vault);
+  await mkdir(path.join(vault, "architecture"), { recursive: true });
+  await mkdir(path.join(vault, "recipes"), { recursive: true });
+  await writeFile(path.join(vault, "architecture", "system.md"), "# Architecture\nSystem design architecture.\n", "utf8");
+  await writeFile(path.join(vault, "recipes", "system.md"), "# Recipe\nSystem design architecture.\n", "utf8");
   return vault;
 }
 
@@ -73,6 +83,34 @@ function searchBackendConformance(
       try {
         const result = await backend.search({ query: "the", limit: 1 });
         expect(result.hits.length).toBeLessThanOrEqual(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("honours candidateLimit before result limiting", async () => {
+      const vault = await fixtureVault();
+      const { backend, dispose } = create(vault);
+      try {
+        const result = await backend.search({ query: "telescope planets orbit", candidateLimit: 1, limit: 5 });
+        expect(result.hits).toHaveLength(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("filters results to the requested collections", async () => {
+      const vault = await collectionFixtureVault();
+      const { backend, dispose } = create(vault);
+      try {
+        const result = await backend.search({
+          searches: [{ type: "lex", query: "system design architecture" }],
+          collections: ["architecture"],
+        });
+
+        expect(result.available).toBe(true);
+        expect(result.hits).not.toHaveLength(0);
+        expect(result.hits.map((hit) => hit.path)).toEqual(["architecture/system.md"]);
       } finally {
         await dispose();
       }

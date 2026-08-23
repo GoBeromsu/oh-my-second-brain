@@ -112,6 +112,37 @@ describe("Oh My Second Brain MCP stdio server", () => {
     }
   });
 
+  it("does not discard vec shorthand when typed searches are also supplied", async () => {
+    const env = { ...process.env };
+    delete env.OMS_EMBEDDING_PROVIDER;
+    delete env.OMS_EMBEDDING_MODEL;
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", fixtureVault],
+      cwd: repoRoot,
+      env,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({
+        name: "oms_search",
+        arguments: {
+          op: "semantic-query",
+          searches: [{ type: "lex", query: "architecture" }],
+          vec: "explicit vector",
+        },
+      });
+      expect(result.isError).toBe(true);
+      const message = result.content[0]?.type === "text" ? result.content[0].text : "";
+      expect(message).toContain("OMS_EMBEDDING_PROVIDER");
+      expect(message).toContain("OMS_EMBEDDING_MODEL");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("reports the package.json version in the MCP handshake", async () => {
     // Given: the version declared by the shipped package manifest
     const manifest: unknown = JSON.parse(

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { SOURCE_EXTENSIONS } from "../../scripts/check-module-size.mjs";
 
 /**
@@ -114,19 +115,62 @@ export function isProductionTs(relativePath: string): boolean {
   );
 }
 
-export function importSpecifiers(source: string): string[] {
+interface ImportAnalysis {
+  readonly specifiers: string[];
+  readonly unanalysableImports: string[];
+  readonly nonLiteralDynamicImports: string[];
+}
+
+function isStaticSpecifier(node: ts.Expression): node is ts.StringLiteralLike {
+  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
+}
+
+function analyzeImports(source: string): ImportAnalysis {
+  const sourceFile = ts.createSourceFile("boundary-check.ts", source, ts.ScriptTarget.Latest, false);
   const specifiers: string[] = [];
-  const staticPattern = /(?:import|export)\s+(?:type\s+)?(?:[^"']+?\s+from\s+)?["']([^"']+)["']/g;
-  const dynamicPattern = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
-  for (const match of source.matchAll(staticPattern)) {
-    const specifier = match[1];
-    if (specifier !== undefined) specifiers.push(specifier);
+  const unanalysableImports: string[] = [];
+  const nonLiteralDynamicImports: string[] = [];
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) {
+      if (statement.moduleSpecifier === undefined) continue;
+      if (isStaticSpecifier(statement.moduleSpecifier)) {
+        specifiers.push(statement.moduleSpecifier.text);
+      } else {
+        unanalysableImports.push(statement.moduleSpecifier.getText(sourceFile));
+      }
+    } else if (ts.isImportEqualsDeclaration(statement) && ts.isExternalModuleReference(statement.moduleReference)) {
+      const expression = statement.moduleReference.expression;
+      if (expression === undefined) {
+        unanalysableImports.push(statement.getText(sourceFile));
+      } else if (isStaticSpecifier(expression)) {
+        specifiers.push(expression.text);
+      } else {
+        unanalysableImports.push(expression.getText(sourceFile));
+      }
+    }
   }
-  for (const match of source.matchAll(dynamicPattern)) {
-    const specifier = match[1];
-    if (specifier !== undefined) specifiers.push(specifier);
-  }
-  return specifiers;
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const specifier = node.arguments[0];
+      if (specifier !== undefined && isStaticSpecifier(specifier)) {
+        specifiers.push(specifier.text);
+      } else {
+        const importExpression = node.getText(sourceFile);
+        unanalysableImports.push(importExpression);
+        nonLiteralDynamicImports.push(importExpression);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sourceFile, visit);
+
+  return { specifiers, unanalysableImports, nonLiteralDynamicImports };
+}
+
+export function importSpecifiers(source: string): string[] {
+  return analyzeImports(source).specifiers;
 }
 
 /**
@@ -135,15 +179,7 @@ export function importSpecifiers(source: string): string[] {
  * an import boundary that cannot inspect an edge is not a boundary.
  */
 export function nonLiteralDynamicImports(source: string): string[] {
-  const violations: string[] = [];
-  const dynamicImport = /\bimport\s*\(([\s\S]*?)\)/g;
-  for (const match of source.matchAll(dynamicImport)) {
-    const expression = match[1]?.trim() ?? "";
-    if (!/^"[^"]*"$/s.test(expression) && !/^'[^']*'$/s.test(expression)) {
-      violations.push(match[0]);
-    }
-  }
-  return violations;
+  return analyzeImports(source).nonLiteralDynamicImports;
 }
 
 /**
@@ -175,13 +211,13 @@ export async function findImports(
   const found: ImportViolation[] = [];
   for (const file of files) {
     const source = await readFile(absolute(file), "utf8");
-    const dynamicViolations = nonLiteralDynamicImports(source);
-    if (dynamicViolations.length > 0) {
+    const imports = analyzeImports(source);
+    if (imports.unanalysableImports.length > 0) {
       throw new Error(
-        `${file} contains non-literal dynamic import(s): ${dynamicViolations.join(", ")}`,
+        `${file} contains import(s) with non-literal specifier(s): ${imports.unanalysableImports.join(", ")}`,
       );
     }
-    for (const specifier of importSpecifiers(source)) {
+    for (const specifier of imports.specifiers) {
       const resolved = resolveImportSource(file, specifier);
       if (resolved === null) continue;
       if (matches(resolved, file)) found.push({ file, specifier, resolved });
