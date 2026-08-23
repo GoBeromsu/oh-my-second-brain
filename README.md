@@ -14,15 +14,15 @@ It is **convention-first and user-owned**: your vault stays plain markdown, the 
 ## How it works
 
 ```
-core (written once)                       adapters (one per host)
-  ontology loading                          claude-code  .claude-plugin + CLAUDE.md   /sigil
-  convention validation         +           codex        .codex-plugin + AGENTS.md    $sigil
-  graph + semantic runtime                  hermes       manifest.json + SOUL.md      (MCP/tools)
-  MCP server (capture/retrieve/validate)
+kernel (written once)                     root host surfaces
+  ontology + convention logic                .claude-plugin/  Claude plugin manifest
+  graph + semantic runtime        +          .codex-plugin/   Codex plugin manifest
+  gated note operations                      .mcp.json         Claude MCP registration
+  CLI and MCP entry points                   .mcp.codex.json   Codex MCP registration
 ```
 
-- **core** is host-agnostic: ontology, validation, the graph/semantic engine, and the MCP server.
-- each **adapter** absorbs exactly one host's structural differences (manifest schema, convention file, invocation sigil) — adding a host means adding an adapter directory, not touching core.
+- **kernel** is host-agnostic: ontology, validation, graph/semantic logic, and note operations.
+- host-specific assets live at the package root: Claude hooks are in `assets/claude/hooks/`, Codex rules are in `assets/codex/rules/`, and Hermes metadata is `assets/hermes-manifest.json`.
 - the cross-host mechanism is one **MCP server** (`oms mcp`) that every host talks to.
 
 ## Requirements
@@ -63,17 +63,17 @@ Full guide: [docs/install.md](./docs/install.md).
 |------|----------|-----------------|-------|--------|
 | **claude-code** | `.claude-plugin/plugin.json` | `CLAUDE.md` | `/` | installable |
 | **codex** | `.codex-plugin/plugin.json` | `AGENTS.md` | `$` | native skills + MCP |
-| **hermes** | `manifest.json` | `SOUL.md` | (MCP/tools) | native skills + MCP |
+| **hermes** | `assets/hermes-manifest.json` | `SOUL.md` | (MCP/tools) | native skills + MCP |
 
-`oms install` writes the host-native rules/skills and a managed `oms` MCP registration, and is reversible with `oms uninstall`. Per-host details: [adapters/README.md](./adapters/README.md).
+`oms install` writes the host-native rules/skills and a managed `oms` MCP registration, and is reversible with `oms uninstall`. Per-host details: [docs/install.md](./docs/install.md).
 
 ## CLI
 
 ```
 oms setup      Adopt an existing vault into the convention (writes .oms/taxonomy.yaml; never edits notes)
-oms install    Install host adapters + MCP registration
-oms uninstall  Remove host adapters + MCP registration
-oms update     Check/apply a package update, then reconcile adapters
+oms install    Install host assets + MCP registration
+oms uninstall  Remove host assets + MCP registration
+oms update     Check/apply a package update, then reconcile host assets
 oms doctor     Validate note frontmatter against the ontology (aggregated by field & concept)
 oms lint       Check vault link health: broken [[wikilinks]] + orphan notes
 oms semantic   Native markdown semantic index / search / get
@@ -85,11 +85,11 @@ oms hook       Vault guard hooks (Claude Code pre/post tool-use)
 
 ## MCP tools
 
-`oms mcp` exposes status, read, retrieve, validation, and gated write tools, including:
+`oms mcp` exposes exactly five public tools:
 
-`oms_graph_status` · `oms_graph_build` · `oms_list_concepts` · `oms_retrieve_context` · `oms_retrieve_by_axis` · `oms_sync_embeddings` · `oms_semantic_query` · `oms_get_document` · `oms_multi_get_documents` · `oms_lazy_load_note` · `oms_validate_contract` · `write`
+`oms_write` · `oms_search` · `oms_link` · `oms_status` · `oms_doctor`
 
-`write` is gated by path-safety, vault-confinement, and the kernel-owned concept contract.
+`oms_write` is gated by path-safety, vault-confinement, and the kernel-owned concept contract.
 
 ## Vault layout (`.oms/`)
 

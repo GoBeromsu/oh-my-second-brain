@@ -41,6 +41,7 @@
     "postbuild": "chmod +x dist/cli/oms.js",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "check:docs": "node scripts/check-doc-mapping.mjs",
     "audit": "npm audit --omit=dev",
     "release": "node scripts/release.mjs",
     "release:pack": "node scripts/release-pack.mjs",

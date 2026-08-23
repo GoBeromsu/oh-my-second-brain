@@ -1,6 +1,6 @@
 ---
 title: Vector Embedding Backend — pgvector + 상용 임베딩
-status: Accepted
+status: Stale
 date: 2026-06-13
 created_by: claude-code
 deciders: [beomsu]
@@ -8,6 +8,8 @@ relates_to: ../exec-plan/archived/self-owned-second-brain/spec.md §6
 ---
 
 # ADR 0002: Vector Embedding Backend — pgvector + 상용 임베딩
+
+> **Stale:** This ADR records a proposal that is not the current implementation. The package depends on `sqlite-vec` and `node-llama-cpp`; it does not declare pgvector or a commercial embedding dependency. This note preserves the historical decision record and does not assert a replacement decision.
 
 ## Status
 

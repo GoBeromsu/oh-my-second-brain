@@ -8,10 +8,10 @@ Releasing is one operator command. Everything after the tag push belongs to CI.
 
 Six rules shape this pipeline. They're adopted from [gajae-code](https://github.com/Yeachan-Heo/gajae-code), which the project owner picked as the reference release discipline.
 
-1. **CHANGELOG-first release messages.** Contributors write user-facing notes under `## [Unreleased]` in `CHANGELOG.md` in the same PR as the change. Release notes are never reconstructed from git log at release time. `scripts/changelog-history-guard.mjs` runs in `ci.yml` and fails the build if a released `## [X.Y.Z]` heading that exists on `origin/main` disappears from the working tree.
+1. **CHANGELOG-first release messages.** Contributors write user-facing notes in the matching layer changelog: `CHANGELOG-kernel.md`, `CHANGELOG-cli.md`, `CHANGELOG-mcp.md`, `CHANGELOG-vendors.md`, or `CHANGELOG-assets.md`. `CHANGELOG.md` is the aggregate index, with entries only for changes spanning layers. Release notes are never reconstructed from git log at release time. `scripts/changelog-history-guard.mjs` runs in `ci.yml` and fails the build if a released `## [X.Y.Z]` heading that exists on `origin/main` disappears from the working tree.
 2. **One-command operator release.** `npm run release -- <X.Y.Z>` does preflight, lockstep version bump, changelog roll, `release:check`, commit, tag, atomic push, and CI watch. There's no checklist to follow by hand.
 3. **Tag immutability and fix-forward.** An `oms-v*` tag is never retagged, deleted, or force-pushed. A bad release is corrected by committing the fix on `main` and releasing a newer version.
-4. **Tag equals version.** The tag `oms-vX.Y.Z` must match `package.json` and all three adapter manifests. CI checks this before anything else and refuses to publish when the carriers drift.
+4. **Tag equals version.** The tag `oms-vX.Y.Z` must match `package.json`, the two root plugin manifests, and `assets/hermes-manifest.json`. Release CI checks this before anything else and refuses to publish when the carriers drift.
 5. **CI-only publish.** `npm publish` runs inside `.github/workflows/release.yml` and nowhere else. There is no local publish path, and the operator script never invokes npm publish.
 6. **Tested release logic.** All non-trivial release logic lives in `scripts/release-lib.mjs` as pure functions (changelog roll, notes extraction, version bump, lockstep comparison, semver checks) covered by vitest. The scripts around it stay thin.
 
@@ -30,13 +30,13 @@ The npm package root is the runtime asset root. A releasable tarball must includ
 - `docs/release.md`
 - `scripts/install.sh`
 - `scripts/uninstall.sh`
-- `CHANGELOG.md`
+- `CHANGELOG.md` and the five layer changelogs
 
 `src/` is TypeScript source only. Bundled host/ontology assets intentionally stay
 at the package root so the built CLI can read the same package-root layout in
 source checkouts and in published tarballs.
 
-Codex and Hermes adapter files are packaged as host-native skill/rule bundles plus MCP registrations; release notes must describe the exact installed paths and avoid claiming behavior beyond the shipped skills and MCP tools.
+Codex and Hermes host assets are packaged as host-native skill/rule bundles plus MCP registrations; release notes must describe the exact installed paths and avoid claiming behavior beyond the shipped skills and MCP tools.
 
 ## Operator flow
 
@@ -64,7 +64,7 @@ Five files get the new version: `package.json`, `package-lock.json` (root `versi
 
 ### 3. Changelog roll
 
-In `CHANGELOG.md`, `## [Unreleased]` becomes `## [<version>] - <UTC date>`, and a fresh empty `## [Unreleased]` is reinstated on top. Released sections pass through byte-identical.
+The release process rolls `CHANGELOG.md`'s aggregate `## [Unreleased]` section into `## [<version>] - <UTC date>` and reinstates an empty `## [Unreleased]` section. Layer changelogs remain the source for layer-specific changes. Released sections pass through byte-identical.
 
 An empty `## [Unreleased]` body is a hard error: *empty [Unreleased] - write release notes before releasing*. Write the notes, or pass the escape hatch when a release genuinely carries nothing user-facing:
 
@@ -106,9 +106,9 @@ npm run release -- watch
 
 ## CI flow
 
-Pushing an `oms-v*` tag triggers `.github/workflows/release.yml`. Steps, in order:
+Pushing an `oms-v*` tag triggers `.github/workflows/release.yml`; release verification does not run per pull request. Steps, in order:
 
-1. **Guard tag matches every version carrier** (tag runs only). Reads `package.json` plus all three adapter manifests and compares them against `$GITHUB_REF_NAME`. Any drift fails the job and prints each value, so you see exactly which carrier is out of lockstep.
+1. **Guard tag matches every version carrier** (tag runs only). Reads `package.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `assets/hermes-manifest.json` and compares them against `$GITHUB_REF_NAME`. Any drift fails the job and prints each value, so you see exactly which carrier is out of lockstep.
 2. `npm ci`.
 3. **Install Claude CLI for plugin validation**. Installs `@anthropic-ai/claude-code` globally and runs `claude --version`. Success means the later gate performs real plugin validation. Failure is an environment failure and stops the job with remediation text, unless an attestation input was supplied on a dispatch run.
 4. `npm run release:check`. Same gate you ran locally, this time with `OMS_REQUIRE_PLUGIN_VALIDATION=1` set, so `release:plugin` cannot silently skip validation.

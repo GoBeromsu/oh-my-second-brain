@@ -20,23 +20,24 @@ defines in their own vault configuration (`vault/.oms/`).
 
 ```
 oh-my-second-brain/
-├── core/                        # Ontology defaults, skills, agents
+├── core/                        # Bundled ontology and vault-convention guidance
 │   ├── AGENTS.md                # Vault-convention SSOT for end users (NOT this file)
 │   └── ontology/                # Default schemas and rule definitions
-├── adapters/
-│   ├── claude-code/             # Claude Code adapter
-│   ├── codex/                   # OpenAI Codex adapter
-│   └── hermes/                  # Hermes adapter
+├── assets/                      # Bundled host assets and the single skill set
+│   ├── skills/                  # write, search, link, distill, status, doctor
+│   ├── claude/hooks/            # Claude Code hook scripts
+│   ├── codex/rules/             # Codex rules
+│   └── hermes-manifest.json     # Hermes metadata
+├── .claude-plugin/              # Claude plugin manifest
+├── .codex-plugin/               # Codex plugin manifest
+├── .mcp.json                    # MCP registration for Claude Code
+├── .mcp.codex.json              # MCP registration for Codex
 ├── src/                         # TypeScript source
-│   ├── cli/oms.ts               # CLI entry point
-│   ├── ontology/
-│   │   ├── loader.ts            # Load vault/.oms/ config + core defaults
-│   │   └── resolver.ts          # Merge and resolve final ontology
-│   ├── conventions/
-│   │   ├── frontmatter.ts       # Frontmatter rule definitions
-│   │   └── validate.ts          # Validation engine
-│   ├── adapt/                   # Host adapter interfaces
-│   └── mcp/                     # MCP server integration
+│   ├── assets/                  # Runtime access to package assets
+│   ├── cli/                     # CLI entry point and commands
+│   ├── kernel/                  # Domain logic
+│   ├── mcp/                     # MCP server integration
+│   └── vendors/                 # Per-host installation code
 ├── docs/                        # User-facing documentation
 └── test/                        # Vitest test suite
 ```
