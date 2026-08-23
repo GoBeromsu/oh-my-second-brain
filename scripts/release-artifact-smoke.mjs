@@ -171,8 +171,9 @@ async function mcpSmoke(packageRoot, vault) {
     // without a model, so retrieve_context's semantic leg simply degrades to the
     // graph leg here; with a model present the engine handles the sync just as well.
     await client.callTool({
-      name: "oms_retrieve_context",
+      name: "oms_search",
       arguments: {
+        op: "context",
         property: "tags",
         value: "smoke-semantic",
         query: "agent semantic retrieval",
@@ -201,10 +202,16 @@ async function mcpSmoke(packageRoot, vault) {
     // env (ADR-007: explicit config, no auto-detect).
     const hasModel = Boolean(process.env.OMS_EMBEDDING_PROVIDER && process.env.OMS_EMBEDDING_MODEL);
     const textOf = (res) => (res.content?.[0]?.type === "text" ? res.content[0].text : "");
-    const syncCall = { name: "oms_sync_embeddings", arguments: { collection: "vault" } };
+    // The detail tools were demoted behind the five public tools during the
+    // surface cutover; they are routed by `op`, not deleted. Calling them
+    // through the public surface is what proves the demotion kept behaviour.
+    const syncCall = {
+      name: "oms_doctor",
+      arguments: { op: "sync-embeddings", collection: "vault" },
+    };
     const queryCall = {
-      name: "oms_semantic_query",
-      arguments: { query: "lex: agent retr", collection: "vault", limit: 1 },
+      name: "oms_search",
+      arguments: { op: "semantic-query", query: "lex: agent retr", collection: "vault", limit: 1 },
     };
     // Model-less, the refusal surfaces either as an isError tool envelope or as a
     // thrown protocol McpError, depending on how far the call gets before the
@@ -237,14 +244,21 @@ async function mcpSmoke(packageRoot, vault) {
       const query = await callGuarded(queryCall);
       if (!query.guarded) fail("MCP semantic query falsely succeeded without an embedding model (ADR-007)");
     }
-    const templates = await client.listResourceTemplates();
-    if (!templates.resourceTemplates.some((template) => template.uriTemplate === "qmd://{path}")) {
-      fail("MCP server missing qmd:// resource template");
+    // ADR-009 D2 retired the qmd-compatible surface, so the packaged server
+    // must NOT advertise it. Asserting its absence keeps a retired surface from
+    // quietly reappearing in a published artifact.
+    const templates = await client.listResourceTemplates().catch(() => ({ resourceTemplates: [] }));
+    if (templates.resourceTemplates.some((template) => template.uriTemplate?.startsWith("qmd://"))) {
+      fail("MCP server still advertises a retired qmd:// resource template (ADR-009 D2)");
     }
-    const resource = await client.readResource({ uri: "qmd://Literature/semantic-retrieval.md" });
-    const text = resource.contents[0]?.text ?? "";
-    if (!text.includes("Agent retrieval uses OMS native semantic search")) {
-      fail("MCP qmd:// resource did not read semantic smoke note");
+
+    // The public surface must be exactly the five tools.
+    const publicTools = result.tools.map((tool) => tool.name).sort();
+    const expectedTools = ["oms_doctor", "oms_link", "oms_search", "oms_status", "oms_write"];
+    if (JSON.stringify(publicTools) !== JSON.stringify(expectedTools)) {
+      fail(
+        `MCP public tool surface drifted: expected ${expectedTools.join(", ")}, got ${publicTools.join(", ")}`,
+      );
     }
     console.log("[release:artifact-smoke] ok: MCP listTools works from unpacked package.");
   } finally {
