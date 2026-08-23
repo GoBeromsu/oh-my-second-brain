@@ -27,10 +27,15 @@ The npm package root is the runtime asset root. A releasable tarball must includ
 - `assets/skills/*/SKILL.md`
 - `assets/codex/rules/oms.md` and `assets/hermes-manifest.json`
 - `docs/install.md`
-- `docs/release.md`
 - `scripts/install.sh`
 - `scripts/uninstall.sh`
 - `CHANGELOG.md` and the five layer changelogs
+- `ACKNOWLEDGMENTS.md`, because the licence section links to it
+
+This document is deliberately NOT in that list. It tells the reader how to
+release this package, which an installed consumer cannot do; shipping it would
+put instructions in the artifact that only apply to the repository. The READMEs
+link to the repository copy instead.
 
 `src/` is TypeScript source only. Bundled host/ontology assets intentionally stay
 at the package root so the built CLI can read the same package-root layout in

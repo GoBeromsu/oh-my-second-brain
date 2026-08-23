@@ -33,6 +33,46 @@ function writePackage(root: string, files?: string[]): void {
 }
 
 describe("documentation mapping checker", () => {
+  it("still checks repository documents that the package does not ship", () => {
+    // The regression this pins: deriving the scan set from the npm pack manifest
+    // alone silently stopped checking AGENTS.md, CONTRIBUTING.md and most of
+    // docs/, because `files` ships only a handful of documents. Earlier fixtures
+    // called writePackage without a `files` whitelist, so npm packed everything
+    // and the gap was invisible. This fixture uses a realistic restricted list.
+    const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
+    fixtures.push(fixture);
+    writePackage(fixture, ["docs/install.md"]);
+    mkdirSync(resolve(fixture, "docs"), { recursive: true });
+    writeFileSync(resolve(fixture, "docs", "install.md"), "Shipped and fine.\n");
+    // Neither of these ships. Both must still be scanned.
+    writeFileSync(resolve(fixture, "AGENTS.md"), "[broken](./nowhere-agents.md)\n");
+    writeFileSync(resolve(fixture, "docs", "architecture.md"), "[broken](./nowhere-arch.md)\n");
+
+    const result = runChecker(fixture);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("AGENTS.md:1: missing reference ./nowhere-agents.md");
+    expect(result.output).toContain("docs/architecture.md:1: missing reference ./nowhere-arch.md");
+  });
+
+  it("rejects a shipped document linking to a file the package does not ship", () => {
+    // A packed document's links must resolve inside the PACKAGE, not merely
+    // inside the checkout. Restricting this check to assets/ once let a packed
+    // README link to an unpackaged file and pass because the target existed
+    // locally.
+    const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
+    fixtures.push(fixture);
+    writePackage(fixture, ["README.md"]);
+    writeFileSync(resolve(fixture, "README.md"), "[credits](./ACKNOWLEDGMENTS.md)\n");
+    // Exists in the checkout, absent from the tarball.
+    writeFileSync(resolve(fixture, "ACKNOWLEDGMENTS.md"), "Credits.\n");
+
+    const result = runChecker(fixture);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("unpackaged reference ./ACKNOWLEDGMENTS.md");
+  });
+
   it("reports a deliberately broken relative reference", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);

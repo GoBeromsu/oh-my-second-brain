@@ -10,6 +10,11 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Changed
+
+- The published package now ships `ACKNOWLEDGMENTS.md`, because the licence section links to it and shipping the note without its target left a dangling reference in the artifact.
+- `docs/release.md` no longer ships. It documents how to release this package, which an installed consumer cannot do; the READMEs link to the repository copy instead.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added
