@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { assembleCoreSemanticEngine, type AssembledEngine } from "../engine/assemble.js";
-import { EngineSearchBackend } from "./engine-search-backend.js";
+import { EngineSearchBackend, requiresEmbeddings } from "./engine-search-backend.js";
 import type { SearchBackend } from "./search-backend.js";
 
 const vaults: string[] = [];
@@ -119,6 +119,44 @@ function searchBackendConformance(
         }
       },
     );
+
+    it("refuses a mode that contradicts explicit searches rather than dropping it", async () => {
+      const vault = await fixtureVault();
+      const { backend, dispose } = create(vault);
+      try {
+        // The sixth spelling a red-team lane found: `mode: "vsearch"` was
+        // honoured on the plain-query path but silently ignored when `searches`
+        // was also supplied, so an explicit vector request came back as lexical
+        // hits. Refusing contradictory input beats picking one signal - dropping
+        // either one is how a caller ends up believing they got vector results.
+        const contradictory = {
+          mode: "vsearch",
+          searches: [{ type: "lex", query: "telescope" }],
+        } as unknown as Parameters<SearchBackend["search"]>[0];
+
+        await expect(backend.search(contradictory)).rejects.toThrow(/contradictory/i);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("decides on every explicit-strategy signal, not just the one it happens to read", () => {
+      // Guards the decision point directly. Each signal below must be sufficient
+      // on its own; a regression that inspects only `searches` passes the cases
+      // above and fails here.
+      expect(requiresEmbeddings({ searches: [{ type: "vec", query: "x" }] })).toBe(true);
+      expect(requiresEmbeddings({ searches: [{ type: "hyde", query: "x" }] })).toBe(true);
+      expect(requiresEmbeddings({ mode: "vsearch" })).toBe(true);
+      expect(requiresEmbeddings({ vec: "x" })).toBe(true);
+      expect(requiresEmbeddings({ hyde: "x" })).toBe(true);
+      // A lexical sub-search alongside an explicit vector mode still counts.
+      expect(requiresEmbeddings({ mode: "vsearch", searches: [{ type: "lex", query: "x" }] })).toBe(true);
+      // Nothing explicit: plain queries stay lexical and must NOT demand a model.
+      expect(requiresEmbeddings({})).toBe(false);
+      expect(requiresEmbeddings({ searches: [{ type: "lex", query: "x" }] })).toBe(false);
+    });
+
+
 
     it("rejects a request carrying both query and searches", async () => {
       const vault = await fixtureVault();

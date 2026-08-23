@@ -1,6 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import Database from "better-sqlite3";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -19,9 +18,7 @@ import {
   type WriteMode,
 } from "../kernel/capture/safe.js";
 import {
-  buildGraphCache,
   graphCacheStatus,
-  graphCachePath,
   lazyLoadNoteBody,
 } from "../kernel/graph/cache.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
@@ -29,7 +26,7 @@ import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { resolveActiveOntology } from "../kernel/ontology/active.js";
 import { resolveConcept } from "../kernel/ontology/resolver.js";
 import { retrieveMorningContext } from "../kernel/search/morning.js";
-import { walkMarkdown } from "../kernel/engine/embed/sync.js";
+import { repairDoctor } from "../kernel/doctor/service.js";
 import { makeEngineMorningBackend } from "./engine-morning-backend.js";
 import type { Concept } from "../kernel/ontology/types.js";
 import {
@@ -108,56 +105,6 @@ function conceptSummary(concept: Concept): Record<string, unknown> {
   };
 }
 
-type SemanticIndexPostcondition = {
-  readonly kind: "semantic-index";
-  readonly databasePath: string;
-  readonly documentPaths: readonly string[];
-  readonly chunks: number;
-  readonly orphanDocumentPaths: readonly string[];
-};
-
-type DoctorRepairReceipt =
-  | {
-      readonly operation: "build-graph";
-      readonly resolvedVault: string;
-      readonly resolutionSource: WriteTargetSource;
-      readonly written: { readonly paths: readonly string[]; readonly summary: { readonly notes: number; readonly edges: number; readonly searchDocuments: number } };
-      readonly postcondition: { readonly kind: "graph-cache"; readonly cachePath: string; readonly generatedAt: string; readonly notes: number; readonly edges: number; readonly searchDocuments: number };
-    }
-  | {
-      readonly operation: "semantic-cleanup" | "sync-embeddings";
-      readonly resolvedVault: string;
-      readonly resolutionSource: WriteTargetSource;
-      readonly written: { readonly paths: readonly string[]; readonly summary: Record<string, unknown> };
-      readonly postcondition: SemanticIndexPostcondition;
-    };
-
-async function semanticIndexPostcondition(vault: string): Promise<SemanticIndexPostcondition> {
-  const databasePath = path.join(vault, ".oms", "engine-store.sqlite");
-  await stat(databasePath);
-  const database = new Database(databasePath, { readonly: true });
-  try {
-    const documentPaths = (database
-      .prepare("SELECT DISTINCT doc_path FROM engine_chunk_meta ORDER BY doc_path")
-      .all() as { doc_path: string }[])
-      .map((row) => row.doc_path);
-    const chunks = (database
-      .prepare("SELECT COUNT(*) AS count FROM engine_chunk_meta")
-      .get() as { count: number }).count;
-    const livePaths = new Set<string>();
-    for await (const notePath of walkMarkdown(vault, vault)) livePaths.add(notePath);
-    return {
-      kind: "semantic-index",
-      databasePath,
-      documentPaths,
-      chunks,
-      orphanDocumentPaths: documentPaths.filter((notePath) => !livePaths.has(notePath)),
-    };
-  } finally {
-    database.close();
-  }
-}
-
 type Operation = {
   readonly op?: string;
   readonly name: string;
@@ -176,7 +123,18 @@ const searchProperties = {
 } as const;
 const contextProperties = { concept: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: number, maxNeighbors: number, useCache: boolean,
   semanticEnabled: boolean, semanticCollection: string, semanticLimit: number, semanticScope: { ...string, enum: ["global", "graph"] }, semanticMode: searchProperties.mode, semanticIntent: string, semanticSearches: searchProperties.searches, semanticLex: string, semanticVec: string, semanticHyde: string, semanticMinScore: number, semanticAll: boolean, semanticFormat: { ...string, enum: ["json", "files"] }, semanticFull: boolean, semanticLineNumbers: boolean, semanticFullPath: boolean, semanticIndex: string, semanticChunkStrategy: string, semanticCandidateLimit: number, semanticNoRerank: boolean, semanticHydrate: { ...string, enum: ["none", "top", "all", "targets"] }, semanticHydrateTargets: stringArray, semanticHydrateLineLimit: number, semanticHydrateMaxBytes: number, semanticHydrateFromLine: number, semanticHydrateLineCount: number, embeddingSyncBeforeSearch: boolean, embeddingSyncEnsureCollection: boolean, embeddingSyncUpdate: boolean, embeddingSyncEmbed: boolean, embeddingSyncForce: boolean, embeddingSyncPull: boolean, embeddingSyncMaxDocsPerBatch: number, embeddingSyncMaxBatchMb: number } as const;
-const writeProperties = { notePath: string, concept: string, frontmatter: { type: "object" }, body: string } as const;
+// `folder` + `filename` is a supported addressing form that writeNote still
+// accepts. With `additionalProperties: false` a strict schema is only as
+// complete as its property list, so omitting them silently removed a real
+// capability from every schema-driven client while raw SDK calls kept working.
+const writeProperties = {
+  notePath: string,
+  folder: string,
+  filename: string,
+  concept: string,
+  frontmatter: { type: "object" },
+  body: string,
+} as const;
 const operations: Record<string, readonly Operation[]> = {
   oms_write: [
     { op: "create", name: "write", properties: writeProperties },
@@ -374,70 +332,20 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     try {
-    if (
-      name === "oms_graph_build" ||
-      name === "oms_semantic_cleanup" ||
-      name === "oms_sync_embeddings"
-    ) {
-      const rejection = await admitWriteTarget({ vault, source });
-      if (rejection) {
-        return jsonText({
-          status: "rejected",
-          rejection,
-          resolvedVault: vault,
-          resolutionSource: source,
-        });
-      }
-    }
-
-    if (name === "oms_graph_build") {
-      const { ontology, source: ontologySource } = await resolveActiveOntology(vault);
-      const cache = await buildGraphCache({ vault, ontology, write: true });
-      const cachePath = graphCachePath(vault);
-      const persistedCache: unknown = JSON.parse(await readFile(cachePath, "utf-8"));
-      if (
-        !isRecord(persistedCache) ||
-        persistedCache["generatedAt"] !== cache.generatedAt ||
-        !Array.isArray(persistedCache["notes"]) ||
-        !Array.isArray(persistedCache["edges"]) ||
-        !Array.isArray(persistedCache["search"])
-      ) {
-        throw new Error("Graph cache postcondition failed: persisted cache does not match the completed build.");
-      }
-      const receipt: DoctorRepairReceipt = {
-        operation: "build-graph",
-        resolvedVault: vault,
-        resolutionSource: source,
-        written: {
-          paths: [cachePath],
-          summary: {
-            notes: persistedCache["notes"].length,
-            edges: persistedCache["edges"].length,
-            searchDocuments: persistedCache["search"].length,
-          },
-        },
-        postcondition: {
-          kind: "graph-cache",
-          cachePath,
-          generatedAt: persistedCache["generatedAt"],
-          notes: persistedCache["notes"].length,
-          edges: persistedCache["edges"].length,
-          searchDocuments: persistedCache["search"].length,
-        },
-      };
-      return jsonText({
+    if (name === "oms_graph_build" || name === "oms_semantic_cleanup" || name === "oms_sync_embeddings") {
+      const operation = name === "oms_graph_build" ? "build-graph" : name === "oms_semantic_cleanup" ? "semantic-cleanup" : "sync-embeddings";
+      const repair = await repairDoctor({
+        operation,
         vault,
-        ontologySource,
-        cachePath,
-        generatedAt: cache.generatedAt,
-        notes: cache.notes.length,
-        edges: cache.edges.length,
-        searchDocuments: cache.search.length,
-        sourceOfTruth: cache.sourceOfTruth,
-        resolvedVault: vault,
-        resolutionSource: opts.source,
-        receipt,
+        source,
+        args,
+        adapter: operation === "build-graph" || source === "cwd"
+          ? undefined
+          : operation === "semantic-cleanup" || (operation === "sync-embeddings" && args?.["embed"] === false)
+            ? resolveDocumentAdapter()
+            : getSemanticEngine().adapter,
       });
+      return repair.kind === "error" ? errorText(repair.message) : jsonText(repair.value);
     }
 
     if (name === "oms_list_concepts") {
@@ -547,32 +455,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       const semanticToolResult = await handleSemanticTool(name, args, vault, semanticAdapter);
       if (semanticToolResult) {
         if (!semanticToolResult.ok) return errorText(semanticToolResult.message);
-        if (
-          (name === "oms_semantic_cleanup" || name === "oms_sync_embeddings") &&
-          isRecord(semanticToolResult.value) &&
-          semanticToolResult.value["available"] === true
-        ) {
-          const postcondition = await semanticIndexPostcondition(vault);
-          if (postcondition.orphanDocumentPaths.length > 0) {
-            throw new Error("Semantic index postcondition failed: stored documents include paths outside the live vault.");
-          }
-          const receipt: DoctorRepairReceipt = {
-            operation: name === "oms_semantic_cleanup" ? "semantic-cleanup" : "sync-embeddings",
-            resolvedVault: vault,
-            resolutionSource: source,
-            written: {
-              paths: [postcondition.databasePath],
-              summary: semanticToolResult.value,
-            },
-            postcondition,
-          };
-          return jsonText({
-            ...semanticToolResult.value,
-            resolvedVault: vault,
-            resolutionSource: source,
-            receipt,
-          });
-        }
         return jsonText(semanticToolResult.value);
       }
     }

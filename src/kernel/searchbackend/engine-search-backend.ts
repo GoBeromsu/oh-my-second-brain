@@ -43,8 +43,27 @@ function expandPlainQuery(
   return [{ type: mode === "vsearch" ? "vec" : "lex", query }];
 }
 
-function requiresEmbeddings(searches: readonly McpSemanticTypedSearch[]): boolean {
-  return searches.some((search) => search.type === "vec" || search.type === "hyde");
+/**
+ * Did the caller explicitly ask for a strategy that needs embeddings?
+ *
+ * Every signal is considered here, not just the one that happened to be
+ * inspected at the call site. A caller can express vector intent through a
+ * typed sub-search, through `mode`, or through the `vec`/`hyde` shorthands, and
+ * a per-signal check leaves whichever one it forgot silently answering with
+ * lexical results. That has now happened twice: first `mode: "vsearch"` was
+ * missed entirely, then it was honoured only on the plain-query path and
+ * ignored when `searches` was also supplied. One decision point, all signals.
+ */
+export function requiresEmbeddings(request: {
+  readonly searches?: readonly McpSemanticTypedSearch[];
+  readonly mode?: SearchRequest["mode"];
+  readonly vec?: string;
+  readonly hyde?: string;
+}): boolean {
+  if (request.mode === "vsearch") return true;
+  if (typeof request.vec === "string" && request.vec.length > 0) return true;
+  if (typeof request.hyde === "string" && request.hyde.length > 0) return true;
+  return (request.searches ?? []).some((search) => search.type === "vec" || search.type === "hyde");
 }
 
 /** SearchBackend adapter for the in-repository OMS engine. */
@@ -69,12 +88,22 @@ export class EngineSearchBackend implements SearchBackend {
       throw new InvalidSearchRequestError("provide either 'query' or a non-empty 'searches'");
     }
 
+    // `mode: "vsearch"` alongside explicit `searches` is contradictory: the
+    // caller has both named a strategy and supplied its own sub-queries.
+    // Refusing beats guessing - silently dropping the mode is what let an
+    // explicit vector request come back as lexical hits.
+    if (hasSearches && request.mode === "vsearch") {
+      throw new InvalidSearchRequestError(
+        "'mode: vsearch' and explicit 'searches' are contradictory; supply typed searches or a mode, not both",
+      );
+    }
+
     const searches = hasSearches
       ? (request.searches as readonly McpSemanticTypedSearch[])
       : expandPlainQuery((request.query as string).trim(), request.mode);
 
     const adapter = typeof this.adapterOrResolver === "function"
-      ? this.adapterOrResolver(requiresEmbeddings(searches))
+      ? this.adapterOrResolver(requiresEmbeddings({ ...request, searches }))
       : this.adapterOrResolver;
     return adapter.semanticQuery({
       vault: this.vault,
