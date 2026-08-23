@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { harnessSurfaceRegistry } from "../harness/surface-registry.js";
+import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import { omsMcpTools } from "./server.js";
 
 const __filename = fileURLToPath(import.meta.url);

@@ -1,7 +1,7 @@
 import type {
   McpSemanticQueryResult,
   McpSemanticTypedSearch,
-} from "../../engine/mcp/types.js";
+} from "../engine/mcp/types.js";
 
 /** A plain query or explicit retrieval sub-queries, but never both. */
 export type SearchRequest =

@@ -1,5 +1,5 @@
 
-import type { McpEngineAdapter } from "../engine/mcp/facade.js";
+import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import { assembleSemanticEngine } from "../mcp/semantic-engine.js";
 import {
   booleanOption,

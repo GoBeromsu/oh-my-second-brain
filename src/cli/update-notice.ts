@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
+import { resolveBundledAssetPaths } from "../assets/runtime/assets.js";
 import {
   checkUpdateNotice,
   formatUpdateNotice,
   type UpdateRunner,
-} from "../update/update.js";
+} from "../kernel/update/update.js";
 
 const bundledAssets = resolveBundledAssetPaths();
 

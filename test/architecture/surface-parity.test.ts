@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { harnessSurfaceRegistry } from "../../src/harness/surface-registry.js";
+import { harnessSurfaceRegistry } from "../../src/kernel/harness/surface-registry.js";
 
 /**
  * Surface-set parity gate, Phase A.

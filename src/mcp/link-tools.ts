@@ -16,14 +16,14 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { safeVaultNotePath, writeNote } from "../capture/safe.js";
-import { parseNote } from "../conventions/frontmatter.js";
-import type { WriteTargetSource } from "../conventions/write-protocol.js";
-import { resolveConcept } from "../core/ontology/resolver.js";
-import type { Ontology } from "../core/ontology/types.js";
-import { applyLinks, hashBody, type ApplyResult } from "../engine/linkify/apply.js";
-import { suggestLinks, TERM_CONCEPT, termBoundNotes } from "../engine/linkify/suggest.js";
-import type { LinkCandidate, TermNote } from "../engine/linkify/types.js";
+import { safeVaultNotePath, writeNote } from "../kernel/capture/safe.js";
+import { parseNote } from "../kernel/conventions/frontmatter.js";
+import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
+import { resolveConcept } from "../kernel/ontology/resolver.js";
+import type { Ontology } from "../kernel/ontology/types.js";
+import { applyLinks, hashBody, type ApplyResult } from "../kernel/engine/linkify/apply.js";
+import { suggestLinks, TERM_CONCEPT, termBoundNotes } from "../kernel/engine/linkify/suggest.js";
+import type { LinkCandidate, TermNote } from "../kernel/engine/linkify/types.js";
 
 /** A candidate as the MCP surface reports it: the core shape plus a stable id. */
 export interface IdentifiedCandidate extends LinkCandidate {

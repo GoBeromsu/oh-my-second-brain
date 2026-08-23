@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 
 const registryCalls: string[] = [];
 
-vi.mock("../update/update.js", async () => {
-  const actual = await vi.importActual<typeof import("../update/update.js")>("../update/update.js");
+vi.mock("../kernel/update/update.js", async () => {
+  const actual = await vi.importActual<typeof import("../kernel/update/update.js")>("../kernel/update/update.js");
   return {
     ...actual,
     resolveLatestVersion: async (options: { readonly packageName: string }) => {

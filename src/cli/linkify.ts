@@ -12,16 +12,16 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { parseNote } from "../conventions/frontmatter.js";
-import { mapWithConcurrency, walkVaultMarkdown } from "../conventions/vault-walk.js";
-import { writeNote } from "../capture/safe.js";
-import { resolveConcept } from "../core/ontology/resolver.js";
-import type { Ontology } from "../core/ontology/types.js";
-import { applyLinks, hashBody } from "../engine/linkify/apply.js";
-import { suggestLinks, termBoundNotes } from "../engine/linkify/suggest.js";
-import type { LinkCandidate, TermNote } from "../engine/linkify/types.js";
-import { validateVaultLintFolder } from "../engine/conventions/vault-lint.js";
-import { resolveActiveOntology } from "../ontology/active.js";
+import { parseNote } from "../kernel/conventions/frontmatter.js";
+import { mapWithConcurrency, walkVaultMarkdown } from "../kernel/conventions/vault-walk.js";
+import { writeNote } from "../kernel/capture/safe.js";
+import { resolveConcept } from "../kernel/ontology/resolver.js";
+import type { Ontology } from "../kernel/ontology/types.js";
+import { applyLinks, hashBody } from "../kernel/engine/linkify/apply.js";
+import { suggestLinks, termBoundNotes } from "../kernel/engine/linkify/suggest.js";
+import type { LinkCandidate, TermNote } from "../kernel/engine/linkify/types.js";
+import { validateVaultLintFolder } from "../kernel/engine/conventions/vault-lint.js";
+import { resolveActiveOntology } from "../kernel/ontology/active.js";
 
 /** Parallel note reads; the walk itself is cheap, contents are the hot cost. */
 const READ_CONCURRENCY = 16;

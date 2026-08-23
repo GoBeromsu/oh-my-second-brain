@@ -10,8 +10,8 @@
     "oms-guard": "assets/claude/hooks/oms-guard.mjs",
     "oms-post-guard": "assets/claude/hooks/oms-post-guard.mjs"
   },
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/kernel/index.js",
+  "types": "dist/kernel/index.d.ts",
   "files": [
     "dist",
     "core/AGENTS.md",

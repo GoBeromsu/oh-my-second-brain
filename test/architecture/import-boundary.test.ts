@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { readdir } from "node:fs/promises";
 import {
+  REPO_ROOT,
   assertNonVacuous,
   collectFiles,
   findImports,
   importSpecifiers,
   isProductionTs,
   pathExists,
-  readJson,
   underAny,
 } from "./repo-root.js";
 
@@ -26,7 +27,6 @@ import {
  */
 
 const KERNEL = "src/kernel";
-const KERNEL_TRANSITIONAL = "src/kernel-transitional";
 const CLI = "src/cli";
 const MCP = "src/mcp";
 const VENDORS = "src/vendors";
@@ -48,11 +48,6 @@ const LEGACY_CONTROL_DIRS = ["src/cli", "src/install", "src/hook"] as const;
 
 const HARNESS_FORBIDDEN_DIRS = ["src/cli", "src/install", "src/hook", "src/mcp", "src/runtime"] as const;
 
-interface FacadeInventory {
-  readonly facade: string;
-  readonly outwardImports: readonly string[];
-}
-
 async function vendorDirs(): Promise<string[]> {
   const files = await collectFiles(VENDORS, isProductionTs);
   const dirs = new Set<string>();
@@ -65,6 +60,13 @@ async function vendorDirs(): Promise<string[]> {
 }
 
 describe("import-direction gate", () => {
+  it("ends the migration at exactly the five production source layers", async () => {
+    const sourceEntries = (await readdir(`${REPO_ROOT}/src`)).sort();
+    expect(sourceEntries).toEqual(["assets", "cli", "kernel", "mcp", "vendors"]);
+    await expect(pathExists("test/architecture/kernel-transition-manifest.json")).resolves.toBe(false);
+    await expect(pathExists("test/architecture/facade-outward-imports.json")).resolves.toBe(false);
+  });
+
   it("extracts static and dynamic relative import specifiers", () => {
     const source = [
       'import type { Thing } from "./thing.js";',
@@ -117,20 +119,6 @@ describe("import-direction gate", () => {
     }
   });
 
-  it("bounds the transitional facade's outward imports to the declared inventory", async () => {
-    if (!(await pathExists(KERNEL_TRANSITIONAL))) return; // not created until PR 2 lands its facade
-
-    const inventory = await readJson<FacadeInventory>("test/architecture/facade-outward-imports.json");
-    const files = await collectFiles(KERNEL_TRANSITIONAL, isProductionTs);
-    assertNonVacuous(files, KERNEL_TRANSITIONAL);
-
-    const declared = new Set(inventory.outwardImports);
-    const actual = await findImports(files, (resolved) => !underAny(resolved, [KERNEL, KERNEL_TRANSITIONAL]));
-    const undeclared = actual.filter((violation) => !declared.has(violation.resolved));
-
-    expect(undeclared, "facade imports a legacy module not present in facade-outward-imports.json").toEqual([]);
-  });
-
   it("keeps package-root core as convention assets, not runtime source", async () => {
     const runtimeFiles = await collectFiles("core", (relativePath) =>
       /\.(?:ts|tsx|js|mjs|cjs)$/.test(relativePath),
@@ -139,9 +127,8 @@ describe("import-direction gate", () => {
   });
 
   it("keeps production harness declarations free of host/runtime side-effect imports", async () => {
-    const files = await collectFiles("src/harness", isProductionTs);
-    if (files.length === 0) return; // harness/ moves into kernel/ in PR 7a
-    assertNonVacuous(files, "src/harness");
+    const files = await collectFiles("src/kernel/harness", isProductionTs);
+    assertNonVacuous(files, "src/kernel/harness");
     expect(await findImports(files, (resolved) => underAny(resolved, HARNESS_FORBIDDEN_DIRS))).toEqual([]);
   });
 

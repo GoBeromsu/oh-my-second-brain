@@ -2,7 +2,7 @@ import type {
   MorningRetrieveOptions,
   SemanticFusionScope,
   SemanticHydrateMode,
-} from "../retrieve/morning.js";
+} from "../kernel/search/morning.js";
 import type {
   SemanticEmbeddingSyncOptions,
   SemanticGetOptions,
@@ -11,7 +11,7 @@ import type {
   SemanticSearchMode,
   SemanticTypedSearch,
   SemanticTypedSearchType,
-} from "../retrieve/semantic-contract.js";
+} from "../kernel/search/semantic-contract.js";
 
 export type ParseResult<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly message: string };
 

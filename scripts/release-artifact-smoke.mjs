@@ -17,7 +17,7 @@ function fail(message) {
 
 async function readHarnessRegistry() {
   try {
-    return (await import("../dist/harness/surface-registry.js")).harnessSurfaceRegistry;
+    return (await import("../dist/kernel/harness/surface-registry.js")).harnessSurfaceRegistry;
   } catch (error) {
     fail(
       `could not load built harness registry; run npm run build before release checks: ${

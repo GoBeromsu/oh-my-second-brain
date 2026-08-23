@@ -45,7 +45,7 @@ describe("module-size ratchet", () => {
   });
 
   it("holds every file to the soft cap because the grandfathered set is empty", () => {
-    expect(ceilingFor("src/capture/safe.ts")).toBe(SOFT_CAP);
+    expect(ceilingFor("src/kernel/capture/safe.ts")).toBe(SOFT_CAP);
     expect(ceilingFor("anything/at/all.ts")).toBe(SOFT_CAP);
   });
 

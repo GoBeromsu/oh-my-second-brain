@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { assembleCoreSemanticEngine, type AssembledEngine } from "../../engine/assemble.js";
+import { assembleCoreSemanticEngine, type AssembledEngine } from "../engine/assemble.js";
 import { EngineSearchBackend } from "./engine-search-backend.js";
 import type { SearchBackend } from "./search-backend.js";
 

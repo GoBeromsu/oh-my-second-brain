@@ -1,4 +1,4 @@
-import type { SemanticQueryOptions, SemanticSearchMode } from "../retrieve/semantic-contract.js";
+import type { SemanticQueryOptions, SemanticSearchMode } from "../kernel/search/semantic-contract.js";
 
 export interface ParsedSemanticArgs {
   readonly positional: readonly string[];

@@ -21,7 +21,7 @@ import {
   assembleCoreSemanticEngine,
   assembleEngine,
   type AssembledEngine,
-} from "../engine/assemble.js";
+} from "../kernel/engine/assemble.js";
 
 /** True when both canonical embedding-config env vars are set (ADR-007). */
 export function embeddingConfigPresent(): boolean {

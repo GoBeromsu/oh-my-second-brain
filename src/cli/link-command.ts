@@ -2,8 +2,8 @@ import {
   createVaultLink,
   LINKED_GITIGNORE_PATTERN,
   type CreateVaultLinkResult,
-} from "../link/link.js";
-import { writeConventionUsageSection } from "../link/convention-note.js";
+} from "../kernel/link/link.js";
+import { writeConventionUsageSection } from "../kernel/link/convention-note.js";
 
 export function formatLinkResult(
   result: CreateVaultLinkResult,

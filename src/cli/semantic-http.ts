@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
-import type { McpEngineAdapter } from "../engine/mcp/facade.js";
+import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import { assembleSemanticEngine } from "../mcp/semantic-engine.js";
-import type { SemanticQueryOptions, SemanticSearchMode } from "../retrieve/semantic-contract.js";
+import type { SemanticQueryOptions, SemanticSearchMode } from "../kernel/search/semantic-contract.js";
 import { handleSemanticTool } from "../mcp/semantic-retrieve.js";
 import { semanticMcpTools } from "../mcp/semantic-schemas.js";
 

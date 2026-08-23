@@ -8,27 +8,27 @@ import {
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { parseNote } from "../conventions/frontmatter.js";
-import { validateFrontmatter } from "../conventions/validate.js";
-import { lintVault } from "../engine/conventions/vault-lint.js";
+import { parseNote } from "../kernel/conventions/frontmatter.js";
+import { validateFrontmatter } from "../kernel/conventions/validate.js";
+import { lintVault } from "../kernel/engine/conventions/vault-lint.js";
 import {
   safeVaultNotePath,
   writeNote,
   type WriteMode,
-} from "../capture/safe.js";
+} from "../kernel/capture/safe.js";
 import {
   buildGraphCache,
   graphCacheStatus,
   graphCachePath,
   lazyLoadNoteBody,
-} from "../graph/cache.js";
-import type { WriteTargetSource } from "../conventions/write-protocol.js";
-import { readBundledPackageVersion } from "../core/runtime/assets.js";
-import { resolveActiveOntology } from "../ontology/active.js";
-import { resolveConcept } from "../core/ontology/resolver.js";
-import { retrieveMorningContext } from "../retrieve/morning.js";
+} from "../kernel/graph/cache.js";
+import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
+import { readBundledPackageVersion } from "../assets/runtime/assets.js";
+import { resolveActiveOntology } from "../kernel/ontology/active.js";
+import { resolveConcept } from "../kernel/ontology/resolver.js";
+import { retrieveMorningContext } from "../kernel/search/morning.js";
 import { makeEngineMorningBackend } from "./engine-morning-backend.js";
-import type { Concept } from "../core/ontology/types.js";
+import type { Concept } from "../kernel/ontology/types.js";
 import {
   handleSemanticTool,
   isEngineSemanticOp,
@@ -37,10 +37,10 @@ import {
   semanticOptionsFromArgs,
   retrieveContextSemanticInputProperties,
 } from "./semantic-retrieve.js";
-import { assembleCoreSemanticEngine, assembleGraphOnlyEngine, type AssembledEngine } from "../engine/assemble.js";
+import { assembleCoreSemanticEngine, assembleGraphOnlyEngine, type AssembledEngine } from "../kernel/engine/assemble.js";
 import { assembleFullSemanticEngine, embeddingConfigPresent } from "./semantic-engine.js";
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
-import type { McpEngineAdapter } from "../engine/mcp/facade.js";
+import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import {
   buildServerInstructions,
   cachedUpdateNotice,

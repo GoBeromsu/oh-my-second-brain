@@ -1,5 +1,5 @@
-import { harnessSurfaceRegistry } from "../harness/surface-registry.js";
-import type { HarnessSurfaceRegistry } from "../harness/surface-registry.js";
+import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
+import type { HarnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 
 interface MainUsageCommand {
   readonly name: string;

@@ -1,5 +1,5 @@
-import type { McpEngineAdapter } from "../../engine/mcp/facade.js";
-import type { McpSemanticQueryResult, McpSemanticTypedSearch } from "../../engine/mcp/types.js";
+import type { McpEngineAdapter } from "../engine/mcp/facade.js";
+import type { McpSemanticQueryResult, McpSemanticTypedSearch } from "../engine/mcp/types.js";
 import type { SearchBackend, SearchRequest } from "./search-backend.js";
 
 /** Raised when a request violates the query-XOR-searches contract. */

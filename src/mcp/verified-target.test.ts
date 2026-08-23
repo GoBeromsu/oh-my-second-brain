@@ -5,10 +5,10 @@ import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { resolveEffectiveVault } from "../link/link.js";
-import { writeGlobalConfig } from "../link/global-config.js";
-import { writeNote } from "../capture/safe.js";
-import { resolveActiveOntology } from "../ontology/active.js";
+import { resolveEffectiveVault } from "../kernel/link/link.js";
+import { writeGlobalConfig } from "../kernel/link/global-config.js";
+import { writeNote } from "../kernel/capture/safe.js";
+import { resolveActiveOntology } from "../kernel/ontology/active.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

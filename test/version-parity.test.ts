@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
-import { harnessSurfaceRegistry } from "../src/harness/surface-registry.js";
+import { harnessSurfaceRegistry } from "../src/kernel/harness/surface-registry.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 

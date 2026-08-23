@@ -1,4 +1,4 @@
-import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
+import { resolveBundledAssetPaths } from "../assets/runtime/assets.js";
 
 const bundledAssets = resolveBundledAssetPaths();
 

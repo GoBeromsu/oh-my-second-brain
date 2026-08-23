@@ -2,12 +2,12 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runPostToolUse } from "../hook/post-tool-use.js";
-import { runPreToolUse } from "../hook/pre-tool-use.js";
-import type { WriteTargetSource } from "../conventions/write-protocol.js";
-import { resolveEffectiveVault } from "../link/link.js";
+import { runPostToolUse } from "../vendors/claude/hook/post-tool-use.js";
+import { runPreToolUse } from "../vendors/claude/hook/pre-tool-use.js";
+import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
+import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { runMcpServer } from "../mcp/server.js";
-import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
+import { resolveBundledAssetPaths } from "../assets/runtime/assets.js";
 import { parseCliArgs } from "./args.js";
 import { runAudit } from "./audit.js";
 import { runDoctor, runLint } from "./doctor-lint.js";
