@@ -7,10 +7,9 @@
  * RESEED_SLACK. Any file may grow relative to the merge base only while staying
  * under its applicable ceiling.
  *
- * The policy constants below are signed by MODULE_SIZE_POLICY_ID. The checker
- * re-reads its own source and refuses to run if a constant has been replaced by
- * anything other than a literal, so a pull request cannot loosen the policy and
- * grow a module in the same commit.
+ * The policy constants below are compared with the version at the merge base.
+ * The checker also refuses to run if a constant has been replaced by anything
+ * other than a literal, so policy changes remain reviewable.
  *
  * Usage:
  *   node scripts/check-module-size.mjs [--baseline-ref <git-ref>] [--json]
@@ -59,17 +58,8 @@ class PolicyError extends Error {}
  * commit, with the gate reporting green.
  */
 export function assertPolicyLiterals(source) {
-  const sentinel = /^export const MODULE_SIZE_POLICY_ID = "([^"]+)";$/m.exec(source);
-  if (sentinel === null) {
-    throw new PolicyError("MODULE_SIZE_POLICY_ID is not a literal string assignment");
-  }
-  if (sentinel[1] !== MODULE_SIZE_POLICY_ID) {
-    throw new PolicyError(
-      `MODULE_SIZE_POLICY_ID literal ${JSON.stringify(sentinel[1])} does not match the loaded value`,
-    );
-  }
-
   const literalPatterns = {
+    MODULE_SIZE_POLICY_ID: /^export const MODULE_SIZE_POLICY_ID = "[^"]+";$/m,
     SOURCE_ROOT: /^export const SOURCE_ROOT = "[^"]+";$/m,
     SOURCE_EXTENSIONS: /^export const SOURCE_EXTENSIONS = \[[^\]]*\];$/m,
     SOFT_CAP: /^export const SOFT_CAP = \d+;$/m,
@@ -77,12 +67,56 @@ export function assertPolicyLiterals(source) {
   };
 
   for (const name of POLICY_NAMES) {
-    if (name === "MODULE_SIZE_POLICY_ID") continue;
     const pattern = literalPatterns[name];
     if (pattern === undefined || !pattern.test(source)) {
       throw new PolicyError(`${name} is not a literal assignment`);
     }
   }
+}
+
+function literalValue(source, name) {
+  const match = new RegExp(`^export const ${name} = (.+);$`, "m").exec(source);
+  if (match === null) throw new PolicyError(`${name} is missing`);
+  return match[1];
+}
+
+/**
+ * Compare the policy literals from a trusted baseline source to the current
+ * source. This is pure so tests can model a pull request changing both a cap
+ * and its policy ID in one commit.
+ */
+export function comparePolicySources(baselineSource, currentSource) {
+  assertPolicyLiterals(baselineSource);
+  assertPolicyLiterals(currentSource);
+
+  const baseline = {
+    policyId: JSON.parse(literalValue(baselineSource, "MODULE_SIZE_POLICY_ID")),
+    sourceRoot: JSON.parse(literalValue(baselineSource, "SOURCE_ROOT")),
+    softCap: Number(literalValue(baselineSource, "SOFT_CAP")),
+    reseedSlack: Number(literalValue(baselineSource, "RESEED_SLACK")),
+  };
+  const current = {
+    policyId: JSON.parse(literalValue(currentSource, "MODULE_SIZE_POLICY_ID")),
+    sourceRoot: JSON.parse(literalValue(currentSource, "SOURCE_ROOT")),
+    softCap: Number(literalValue(currentSource, "SOFT_CAP")),
+    reseedSlack: Number(literalValue(currentSource, "RESEED_SLACK")),
+  };
+  const violations = [];
+
+  if (current.policyId !== baseline.policyId) {
+    violations.push(`MODULE_SIZE_POLICY_ID changed from ${JSON.stringify(baseline.policyId)} to ${JSON.stringify(current.policyId)}`);
+  }
+  if (current.sourceRoot !== baseline.sourceRoot) {
+    violations.push(`SOURCE_ROOT changed from ${JSON.stringify(baseline.sourceRoot)} to ${JSON.stringify(current.sourceRoot)}`);
+  }
+  if (current.softCap > baseline.softCap) {
+    violations.push(`SOFT_CAP rose from ${baseline.softCap} to ${current.softCap}`);
+  }
+  if (current.reseedSlack > baseline.reseedSlack) {
+    violations.push(`RESEED_SLACK rose from ${baseline.reseedSlack} to ${current.reseedSlack}`);
+  }
+
+  return violations;
 }
 
 /** Ceiling for a given file: its grandfathered size plus slack, else SOFT_CAP. */
@@ -121,6 +155,14 @@ function baselineLineCount(baselineRef, relativePath) {
     return countLines(git(["show", `${baselineRef}:${relativePath}`]));
   } catch {
     return null; // new file at this ref
+  }
+}
+
+function baselinePolicySource(baselineRef) {
+  try {
+    return git(["show", `${baselineRef}:scripts/check-module-size.mjs`]);
+  } catch {
+    return null;
   }
 }
 
@@ -174,9 +216,11 @@ function parseArgs(argv) {
 
 function main(argv) {
   let options;
+  let currentPolicySource;
   try {
     options = parseArgs(argv);
-    assertPolicyLiterals(readFileSync(SELF_PATH, "utf8"));
+    currentPolicySource = readFileSync(SELF_PATH, "utf8");
+    assertPolicyLiterals(currentPolicySource);
   } catch (error) {
     process.stderr.write(`[module-size] policy error: ${error.message}\n`);
     return 2;
@@ -216,12 +260,35 @@ function main(argv) {
   }
 
   let baselineLines = null;
+  let policyViolations = [];
+  let baselineStatus = "unavailable";
   if (options.baselineRef !== null) {
-    baselineLines = {};
-    for (const file of files) baselineLines[file] = baselineLineCount(options.baselineRef, file);
+    const baselineSource = baselinePolicySource(options.baselineRef);
+    if (baselineSource === null) {
+      process.stderr.write(
+        `[module-size] warning: baseline ${options.baselineRef} cannot provide scripts/check-module-size.mjs; policy comparison was skipped.\n`,
+      );
+    } else {
+      try {
+        baselineLines = {};
+        for (const file of files) baselineLines[file] = baselineLineCount(options.baselineRef, file);
+        policyViolations = comparePolicySources(baselineSource, currentPolicySource);
+        baselineStatus = "compared";
+      } catch (error) {
+        process.stderr.write(`[module-size] policy error: baseline ${options.baselineRef}: ${error.message}\n`);
+        return 2;
+      }
+    }
+  } else {
+    process.stderr.write(
+      "[module-size] warning: no baseline ref supplied; policy comparison was skipped.\n",
+    );
   }
 
-  const violations = evaluate({ files: present, currentLines, baselineLines });
+  const violations = [
+    ...policyViolations.map((message) => ({ kind: "policy-loosened", message })),
+    ...evaluate({ files: present, currentLines, baselineLines }),
+  ];
   const nearCap = present
     .filter((file) => {
       const current = currentLines[file];
@@ -232,7 +299,7 @@ function main(argv) {
 
   if (options.json) {
     process.stdout.write(
-      `${JSON.stringify({ policyId: MODULE_SIZE_POLICY_ID, scanned: present.length, violations, nearCap }, null, 2)}\n`,
+      `${JSON.stringify({ policyId: MODULE_SIZE_POLICY_ID, baselineStatus, scanned: present.length, violations, nearCap }, null, 2)}\n`,
     );
   } else {
     process.stdout.write(`[module-size] scanned ${present.length} files under ${SOURCE_ROOT}/\n`);

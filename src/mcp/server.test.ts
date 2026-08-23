@@ -103,7 +103,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       // storage/modelPath knobs were removed from the schemas (engine uses explicit env config).
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticStorage");
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticModelPath");
-      expect(retrieveTool?.annotations?.readOnlyHint).toBe(true);
+      expect(retrieveTool?.annotations?.readOnlyHint).toBe(false);
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semantic-query");
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("get-document");
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("modelPath");
@@ -626,6 +626,91 @@ Malformed frontmatter must not block retrieve.
       await client.close();
       await rm(tmpCwd, { recursive: true, force: true });
       await rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects doctor repairs but permits diagnosis when the target came from cwd", async () => {
+    const tmpHome = await mkdtemp(path.join(tmpdir(), "oms-mcp-doctor-cwd-home-"));
+    const tmpCwd = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-doctor-cwd-")));
+    await mkdir(path.join(tmpCwd, "notes"), { recursive: true });
+    await writeFile(path.join(tmpCwd, "notes", "unbound.md"), "# Unbound\n", "utf-8");
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp"],
+      cwd: tmpCwd,
+      env: { HOME: tmpHome, PATH: process.env["PATH"] ?? "" },
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      for (const op of ["build-graph", "semantic-cleanup", "sync-embeddings"]) {
+        const repair = textPayload(await client.callTool({ name: "oms_doctor", arguments: { op } }));
+        expect(repair).toMatchObject({
+          status: "rejected",
+          rejection: {
+            stage: "admission",
+            code: "target-unverified",
+            recoverable: true,
+          },
+          resolvedVault: tmpCwd,
+          resolutionSource: "cwd",
+        });
+        expect(repair.receipt).toBeUndefined();
+      }
+
+      const audit = textPayload(await client.callTool({ name: "oms_doctor", arguments: { op: "audit" } }));
+      expect(audit).toMatchObject({ vault: tmpCwd, ontologySource: "bundled" });
+      const validate = textPayload(
+        await client.callTool({
+          name: "oms_doctor",
+          arguments: { op: "validate", notePath: "notes/unbound.md" },
+        }),
+      );
+      expect(validate).toMatchObject({ notePath: "notes/unbound.md", valid: true });
+      expect(await readdir(tmpCwd)).toEqual(["notes"]);
+    } finally {
+      await client.close();
+      await rm(tmpCwd, { recursive: true, force: true });
+      await rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("allows a verified target to build a graph repair and return its cache receipt", async () => {
+    const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-doctor-vault-")));
+    await mkdir(path.join(tmpVault, ".oms", "concepts"), { recursive: true });
+    await writeFile(
+      path.join(tmpVault, ".oms", "taxonomy.yaml"),
+      "version: 1\nfolders:\n  notes:\n    concept: note\n",
+      "utf-8",
+    );
+    await writeFile(
+      path.join(tmpVault, ".oms", "concepts", "note.yaml"),
+      "concept: note\nintent: A note.\nfolder: notes\nfields: []\n",
+      "utf-8",
+    );
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp"],
+      cwd: tmpVault,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+      const repair = textPayload(
+        await client.callTool({ name: "oms_doctor", arguments: { op: "build-graph" } }),
+      );
+      expect(repair).toMatchObject({ vault: tmpVault, ontologySource: "vault" });
+      expect(typeof repair.generatedAt).toBe("string");
+      expect(typeof repair.cachePath).toBe("string");
+      expect(await readFile(repair.cachePath as string, "utf-8")).toContain("\"generatedAt\"");
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
     }
   });
 

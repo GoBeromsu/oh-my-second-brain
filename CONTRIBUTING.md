@@ -10,7 +10,7 @@ Keep implementation and contributor-facing documentation in the same change. The
 | `src/cli/` | `oms` commands, flags, and terminal output | `docs/install.md`, `docs/architecture.md` when command behavior or setup flow changes | [CHANGELOG-cli.md](./CHANGELOG-cli.md) |
 | `src/mcp/` | MCP server, public tools, schemas, and host-facing behavior | `docs/adapters.md`, `docs/install.md`, `docs/architecture.md` | [CHANGELOG-mcp.md](./CHANGELOG-mcp.md) |
 | `src/vendors/` | Optional third-party integrations and their boundary adapters | `docs/adapters.md`, relevant ADRs in `docs/decisions/` | [CHANGELOG-vendors.md](./CHANGELOG-vendors.md) |
-| `src/assets/` | Packaged skills, host manifests, hooks, and static runtime assets | `docs/install.md`, `docs/adapters.md`, `docs/conventions.md` | [CHANGELOG-assets.md](./CHANGELOG-assets.md) |
+| `assets/` | Packaged skills, host manifests, hooks, and static runtime assets | `docs/install.md`, `docs/adapters.md`, `docs/conventions.md` | [CHANGELOG-assets.md](./CHANGELOG-assets.md) |
 
 ### New command or flag checklist
 

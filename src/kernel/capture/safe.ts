@@ -478,7 +478,7 @@ export function prepareCapture(input: CapturePrepareInput): CapturePlan {
  * without an ontology presence check so the bundled-ontology fallback keeps
  * working.
  */
-async function admitTarget(target: WriteTarget): Promise<WriteRejection | undefined> {
+export async function admitWriteTarget(target: WriteTarget): Promise<WriteRejection | undefined> {
   if (target.source === "cwd") {
     return rejection(
       "admission",
@@ -714,7 +714,7 @@ export async function writeNote(input: WriteNoteInput): Promise<WriteNoteResult>
   const frontmatter = input.frontmatter ?? {};
   const strictZones = routingLawStrictFolders(input.ontology);
 
-  const targetRejection = await admitTarget(input.target);
+  const targetRejection = await admitWriteTarget(input.target);
   if (targetRejection) {
     return targetRejectedResult(input.mode, input, frontmatter, targetRejection);
   }

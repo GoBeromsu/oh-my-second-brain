@@ -12,6 +12,7 @@ import { parseNote } from "../kernel/conventions/frontmatter.js";
 import { validateFrontmatter } from "../kernel/conventions/validate.js";
 import { lintVault } from "../kernel/engine/conventions/vault-lint.js";
 import {
+  admitWriteTarget,
   safeVaultNotePath,
   writeNote,
   type WriteMode,
@@ -50,7 +51,7 @@ import {
 const SERVER_VERSION = readBundledPackageVersion();
 
 export const BASE_SERVER_INSTRUCTIONS =
-  "Oh My Second Brain exposes write, search, link, status, and doctor tools. oms_write is gated by a verified vault target (a vault inferred from the current directory is refused), vault confinement, and contract validation.";
+  "Oh My Second Brain exposes write, search, link, status, and doctor tools. oms_write and doctor repair operations are gated by a verified vault target (a vault inferred from the current directory is refused); oms_write also enforces vault confinement and contract validation.";
 
 function jsonText(value: unknown): CallToolResult {
   return {
@@ -112,9 +113,9 @@ export const omsMcpTools: Tool[] = [
   },
   {
     name: "oms_search", title: "Oh My Second Brain search",
-    description: "Read vault retrieval, semantic search, ontology, and selected documents. `op` selects the operation.",
-    inputSchema: { type: "object", properties: { op: { type: "string", enum: ["axis", "context", "lazy-load", "concepts", "semantic-query", "semantic-collections", "semantic-contexts", "semantic-status", "get-document", "multi-get-documents"] }, query: { type: "string" }, searches: { type: "array", maxItems: 10, items: { type: "object", properties: { type: { type: "string", enum: ["lex", "vec", "hyde"] }, query: { type: "string" } }, required: ["type", "query"] } }, limit: { type: "number", default: 10 }, minScore: { type: "number", default: 0 }, collections: { type: "array", items: { type: "string" } }, intent: { type: "string" }, concept: { type: "string" }, folder: { type: "string" }, property: { type: "string" }, value: { type: "string" }, wikilink: { type: "string" }, notePath: { type: "string" }, target: { type: "string" }, targets: { type: "array", items: { type: "string" } }, maxNeighbors: { type: "number" }, useCache: { type: "boolean" }, ...retrieveContextSemanticInputProperties }, required: ["op"] },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description: "Retrieve vault context, semantic search, ontology, and selected documents. `op` selects the operation.",
+    inputSchema: { type: "object", properties: { op: { type: "string", enum: ["axis", "context", "lazy-load", "concepts", "semantic-query", "semantic-collections", "semantic-contexts", "semantic-status", "get-document", "multi-get-documents"] }, query: { type: "string" }, searches: { type: "array", maxItems: 10, items: { type: "object", properties: { type: { type: "string", enum: ["lex", "vec", "hyde"] }, query: { type: "string" } }, required: ["type", "query"] } }, limit: { type: "number", default: 10 }, minScore: { type: "number", default: 0 }, collections: { type: "array", items: { type: "string" } }, intent: { type: "string" }, concept: { type: "string" }, folder: { type: "string" }, property: { type: "string" }, value: { type: "string" }, wikilink: { type: "string" }, notePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" }, maxBytes: { type: "number" }, targets: { type: "array", maxItems: 20, items: { type: "object", properties: { notePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" }, maxBytes: { type: "number" } }, required: ["notePath"] } }, semanticMinScore: { type: "number" }, candidateLimit: { type: "number" }, maxNeighbors: { type: "number" }, useCache: { type: "boolean" } } },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "oms_link", title: "Oh My Second Brain link",
@@ -313,6 +314,22 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     try {
+    if (
+      name === "oms_graph_build" ||
+      name === "oms_semantic_cleanup" ||
+      name === "oms_sync_embeddings"
+    ) {
+      const rejection = await admitWriteTarget({ vault, source });
+      if (rejection) {
+        return jsonText({
+          status: "rejected",
+          rejection,
+          resolvedVault: vault,
+          resolutionSource: source,
+        });
+      }
+    }
+
     if (name === "oms_graph_build") {
       const { ontology, source } = await resolveActiveOntology(vault);
       const cache = await buildGraphCache({ vault, ontology, write: true });

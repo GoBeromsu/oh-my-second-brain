@@ -6,6 +6,7 @@ import {
   SOFT_CAP,
   assertPolicyLiterals,
   ceilingFor,
+  comparePolicySources,
   countLines,
   evaluate,
 } from "../../scripts/check-module-size.mjs";
@@ -61,16 +62,39 @@ describe("module-size ratchet", () => {
     expect(() => assertPolicyLiterals(tampered)).toThrow(/SOFT_CAP is not a literal assignment/);
   });
 
-  it("rejects a swapped policy sentinel", () => {
-    const tampered = [
-      'export const MODULE_SIZE_POLICY_ID = "oms.module-size.v0-relaxed";',
+  it("rejects a raised cap even when the policy sentinel changes with it", () => {
+    const base = [
+      'export const MODULE_SIZE_POLICY_ID = "oms.module-size.v1";',
       'export const SOURCE_ROOT = "src";',
       'export const SOURCE_EXTENSIONS = [".ts"];',
       "export const SOFT_CAP = 2000;",
       "export const RESEED_SLACK = 200;",
     ].join("\n");
+    const head = [
+      'export const MODULE_SIZE_POLICY_ID = "oms.module-size.v2-relaxed";',
+      'export const SOURCE_ROOT = "src";',
+      'export const SOURCE_EXTENSIONS = [".ts"];',
+      "export const SOFT_CAP = 2500;",
+      "export const RESEED_SLACK = 200;",
+    ].join("\n");
 
-    expect(() => assertPolicyLiterals(tampered)).toThrow(/does not match the loaded value/);
+    expect(comparePolicySources(base, head)).toEqual([
+      'MODULE_SIZE_POLICY_ID changed from "oms.module-size.v1" to "oms.module-size.v2-relaxed"',
+      "SOFT_CAP rose from 2000 to 2500",
+    ]);
+  });
+
+  it("accepts a lower cap", () => {
+    const base = [
+      'export const MODULE_SIZE_POLICY_ID = "oms.module-size.v1";',
+      'export const SOURCE_ROOT = "src";',
+      'export const SOURCE_EXTENSIONS = [".ts"];',
+      "export const SOFT_CAP = 2000;",
+      "export const RESEED_SLACK = 200;",
+    ].join("\n");
+    const head = base.replace("SOFT_CAP = 2000", "SOFT_CAP = 1900");
+
+    expect(comparePolicySources(base, head)).toEqual([]);
   });
 
   it("accepts its own current source as policy-clean", async () => {
@@ -86,16 +110,20 @@ describe("module-size ratchet", () => {
   });
 
   it("keeps the real tree under the cap", async () => {
-    const { execFileSync } = await import("node:child_process");
-    const output = execFileSync("node", [absolute("scripts/check-module-size.mjs"), "--json"], {
+    const { spawnSync } = await import("node:child_process");
+    const result = spawnSync("node", [absolute("scripts/check-module-size.mjs"), "--json"], {
       cwd: absolute("."),
       encoding: "utf8",
     });
-    const report = JSON.parse(output) as {
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("no baseline ref supplied; policy comparison was skipped");
+    const report = JSON.parse(result.stdout) as {
+      baselineStatus: string;
       scanned: number;
       violations: readonly unknown[];
     };
 
+    expect(report.baselineStatus).toBe("unavailable");
     expect(report.scanned).toBeGreaterThan(0);
     expect(report.violations).toEqual([]);
   });

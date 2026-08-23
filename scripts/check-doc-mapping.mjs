@@ -56,8 +56,11 @@ function checkMarkdownLinks(file, text) {
   }
 }
 
-function checkContributingSourcePaths(file, text) {
-  const sourcePath = /`((?:src|scripts|test|core|assets)\/[A-Za-z0-9_./-]+(?:\.[A-Za-z0-9_-]+)?)/g;
+function checkInlineSourcePaths(file, text) {
+  // Inspect explicit paths rooted in this repository's live source topology,
+  // in prose or code spans. This deliberately excludes unqualified `src/...`
+  // citations in research notes, which commonly name another project's tree.
+  const sourcePath = /\b((?:src\/(?:assets|cli|kernel|mcp|vendors)|scripts|test|core|assets)(?:\/[A-Za-z0-9_.-]+)+\/?)/g;
   for (const match of text.matchAll(sourcePath)) {
     const candidate = resolve(root, match[1]);
     if (!existsSync(candidate)) report(file, lineNumber(text, match.index), match[1]);
@@ -72,7 +75,9 @@ const files = [
 for (const file of files) {
   const text = readFileSync(file, "utf8");
   checkMarkdownLinks(file, text);
-  if (relative(root, file) === "CONTRIBUTING.md") checkContributingSourcePaths(file, text);
+  // Research notes quote paths from upstream projects; those are citations,
+  // not assertions about this repository's tree.
+  if (!relative(root, file).startsWith("docs/research/")) checkInlineSourcePaths(file, text);
 }
 
 if (violations.length > 0) {

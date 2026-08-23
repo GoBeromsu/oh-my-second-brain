@@ -1,7 +1,8 @@
-import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { absolute, pathExists, readJson } from "./repo-root.js";
 
 /**
@@ -33,6 +34,7 @@ interface CodexManifest {
 }
 
 const temporaries: string[] = [];
+const SKILL_FRONTMATTER_KEYS = ["name", "description", "aliases", "mcp_tool", "mcp_args"] as const;
 
 afterEach(async () => {
   while (temporaries.length > 0) {
@@ -57,8 +59,28 @@ async function resolvesToDirectory(manifestRoot: string, declared: string): Prom
   const relative = path.relative(manifestRoot, target);
   if (relative.startsWith("..") || path.isAbsolute(relative)) return false;
   try {
-    const entries = await readFile(path.join(target, "SKILL.md"), "utf8").then(() => true);
-    return entries;
+    return hasValidSkillFrontmatter(await readFile(path.join(target, "SKILL.md"), "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+function hasValidSkillFrontmatter(document: string): boolean {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(document);
+  if (match === null) return false;
+  try {
+    const frontmatter = parse(match[1]);
+    return typeof frontmatter === "object" && frontmatter !== null && !Array.isArray(frontmatter);
+  } catch {
+    return false;
+  }
+}
+
+async function hermesHasInstallableSkills(root: string): Promise<boolean> {
+  if (!await pathExists(path.join(root, "assets", "hermes-manifest.json"))) return false;
+  try {
+    const entries = await readdir(path.join(root, "assets", "skills"), { withFileTypes: true });
+    return entries.some((entry) => entry.isDirectory());
   } catch {
     return false;
   }
@@ -120,6 +142,30 @@ describe("packaged vendor discovery", () => {
     expect(typeof manifest.name).toBe("string");
   });
 
+  it("parses every live skill frontmatter with its allowed surface", async () => {
+    let mcpSkillCount = 0;
+    for (const skill of CANONICAL_SKILLS) {
+      const document = await readFile(absolute(`assets/skills/${skill}/SKILL.md`), "utf8");
+      const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(document);
+      expect(match, skill).not.toBeNull();
+      const frontmatter = parse(match![1]) as Record<string, unknown>;
+
+      expect(frontmatter.name, `${skill}.name`).toBe(skill);
+      expect(typeof frontmatter.description, `${skill}.description`).toBe("string");
+      expect(frontmatter.description, `${skill}.description`).not.toHaveLength(0);
+      expect(Object.keys(frontmatter).every((key) => (SKILL_FRONTMATTER_KEYS as readonly string[]).includes(key)), skill).toBe(true);
+      if (skill === "distill") {
+        expect(frontmatter.mcp_tool).toBeUndefined();
+        expect(frontmatter.mcp_args).toBeUndefined();
+      } else {
+        mcpSkillCount += 1;
+        expect(typeof frontmatter.mcp_tool, `${skill}.mcp_tool`).toBe("string");
+        expect(frontmatter.mcp_args, `${skill}.mcp_args`).toBeDefined();
+      }
+    }
+    expect(mcpSkillCount).toBe(5);
+  });
+
   // Manifest completeness. A host silently drops a plugin whose metadata is
   // blank, so emptiness has to be rejected explicitly rather than assumed.
   it.each([".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "assets/hermes-manifest.json"])(
@@ -164,6 +210,15 @@ describe("packaged vendor discovery", () => {
     await expect(resolvesToDirectory(root, "./assets/skills/hollow/")).resolves.toBe(false);
   });
 
+  it("rejects a Codex skill whose SKILL.md has no YAML frontmatter", async () => {
+    const root = await scratch();
+    const skill = path.join(root, "assets", "skills", "write");
+    await mkdir(skill, { recursive: true });
+    await writeFile(path.join(skill, "SKILL.md"), "# write\n");
+
+    await expect(resolvesToDirectory(root, "./assets/skills/write/")).resolves.toBe(false);
+  });
+
   it("rejects a manifest reference that escapes the plugin root", async () => {
     const root = await scratch();
     const outside = path.join(root, "outside", "skills", "write");
@@ -175,5 +230,13 @@ describe("packaged vendor discovery", () => {
     // This is exactly the arrangement the repo-root move exists to avoid: a
     // vendor-directory plugin root reaching back out to a shared tree.
     await expect(resolvesToDirectory(pluginRoot, "../outside/skills/write/")).resolves.toBe(false);
+  });
+
+  it("rejects a Hermes manifest with an empty shared assets/skills source", async () => {
+    const root = await scratch();
+    await mkdir(path.join(root, "assets", "skills"), { recursive: true });
+    await writeFile(path.join(root, "assets", "hermes-manifest.json"), '{"name":"oms"}\n');
+
+    await expect(hermesHasInstallableSkills(root)).resolves.toBe(false);
   });
 });
