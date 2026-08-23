@@ -211,6 +211,72 @@ export function missingReleasedHeadings(baseContent, headContent) {
 }
 
 /**
+ * Split content into released sections keyed by heading.
+ *
+ * A section runs from its `## [X.Y.Z]` heading to the next `## ` heading, so the
+ * body travels with the heading it belongs to.
+ *
+ * @param {string} content
+ * @returns {Map<string, string>}
+ */
+function releasedSections(content) {
+  const sections = new Map();
+  const lines = (content ?? "").split("\n");
+  const headingPattern = new RegExp(`^${RELEASED_HEADING.source.replace(/^\^/, "")}`);
+
+  let current = null;
+  let buffer = [];
+  for (const line of lines) {
+    const match = headingPattern.exec(line);
+    if (match !== null) {
+      if (current !== null) sections.set(current, buffer.join("\n"));
+      current = `## [${match[1]}]`;
+      buffer = [];
+      continue;
+    }
+    // ANY heading ends the section, not just `## `. The guard concatenates all
+    // six changelog files, so the next file's `# Title` must close the previous
+    // file's last released section - otherwise it absorbs that header and the
+    // section falsely reads as edited.
+    if (/^#{1,6} /.test(line)) {
+      if (current !== null) sections.set(current, buffer.join("\n"));
+      current = null;
+      buffer = [];
+      continue;
+    }
+    if (current !== null) buffer.push(line);
+  }
+  if (current !== null) sections.set(current, buffer.join("\n"));
+  return sections;
+}
+
+/**
+ * Released sections whose CONTENT changed between base and head.
+ *
+ * Comparing heading sets alone lets a released section's entire body be
+ * rewritten as long as its heading survives, which is exactly the mutation the
+ * immutability rule exists to prevent. Normalises trailing whitespace so a
+ * formatter cannot trip the guard on a no-op change.
+ *
+ * @param {string} baseContent
+ * @param {string} headContent
+ * @returns {string[]} headings whose section content differs
+ */
+export function alteredReleasedSections(baseContent, headContent) {
+  const normalise = (text) => text.replace(/[ \t]+$/gm, "").replace(/\n+$/, "");
+  const head = releasedSections(headContent);
+  const altered = [];
+
+  for (const [heading, body] of releasedSections(baseContent)) {
+    const headBody = head.get(heading);
+    // A heading that disappeared is reported by missingReleasedHeadings.
+    if (headBody === undefined) continue;
+    if (normalise(body) !== normalise(headBody)) altered.push(heading);
+  }
+  return altered;
+}
+
+/**
  * @param {string} content
  * @returns {string[]} `## [X.Y.Z]` headings in document order (never `## [Unreleased]`)
  */

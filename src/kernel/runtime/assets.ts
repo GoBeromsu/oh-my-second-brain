@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { harnessSurfaceRegistry, type HarnessRuntimeAssetRoot } from "../../kernel/harness/surface-registry.js";
+import { harnessSurfaceRegistry, type HarnessRuntimeAssetRoot } from "../harness/surface-registry.js";
 
 export interface BundledAssetPaths {
   readonly packageRoot: string;

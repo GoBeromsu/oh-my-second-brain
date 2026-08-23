@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { isSemanticCliCommand } from "../../cli/semantic.js";
 import { omsMcpTools } from "../../mcp/server.js";
-import { resolveBundledAssetPaths } from "../../assets/runtime/assets.js";
+import { resolveBundledAssetPaths } from "../runtime/assets.js";
 import { SHARED_SKILLS_SOURCE } from "../../assets/shared-skills.js";
 import { harnessSurfaceRegistry } from "./surface-registry.js";
 

@@ -1,6 +1,6 @@
 
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
-import { assembleSemanticEngine } from "../mcp/semantic-engine.js";
+import { assembleSemanticEngine } from "../kernel/semantic/semantic-engine.js";
 import {
   booleanOption,
   numberOption,
@@ -8,7 +8,6 @@ import {
   printJson,
   semanticQueryOptions,
   stringOption,
-  targetList,
 } from "./semantic-args.js";
 import { startSemanticHttpServer } from "./semantic-http.js";
 import { semanticUsageText } from "./semantic-usage.js";
@@ -22,12 +21,7 @@ export interface SemanticCliRunOptions {
 
 const TOP_LEVEL_COMMANDS = new Set([
   "semantic",
-  "query",
   "search",
-  "vsearch",
-  "get",
-  "multi-get",
-  "status",
   "embed",
   "collection",
   "context",
@@ -95,14 +89,6 @@ export async function runSemanticCli(options: SemanticCliRunOptions): Promise<nu
     });
   }
 
-  if (command === "status") {
-    return withSemanticAdapter(vault, (adapter) => {
-      const status = adapter.semanticStatus({ vault, index: stringOption(parsed, "index") });
-      printJson(write, status);
-      return Promise.resolve(status.available ? 0 : 1);
-    });
-  }
-
   if (command === "cleanup") {
     return withSemanticAdapter(vault, async (adapter) => {
       const result = await adapter.cleanup({ vault, index: stringOption(parsed, "index") });
@@ -111,76 +97,19 @@ export async function runSemanticCli(options: SemanticCliRunOptions): Promise<nu
     });
   }
 
-  if (command === "query" || command === "search" || command === "vsearch") {
-    const mode = command === "search" ? "search" : command === "vsearch" ? "vsearch" : "query";
+  if (command === "search") {
     return withSemanticAdapter(vault, async (adapter) => {
-      const result = await adapter.semanticQuery(semanticQueryOptions(mode, vault, parsed, rest.join(" ")));
+      const result = await adapter.semanticQuery(semanticQueryOptions("search", vault, parsed, rest.join(" ")));
       printJson(write, result);
       return result.available ? 0 : 1;
     });
   }
 
-  if (command === "get") return runGetCommand(rest, parsed, vault, write, writeError);
-  if (command === "multi-get") return runMultiGetCommand(rest, parsed, vault, write, writeError);
   if (command === "collection") return runCollectionCommand(rest[0], rest[1], parsed, vault, write);
   if (command === "context") return runContextCommand(rest[0], parsed, vault, write);
 
   writeError(semanticUsageText());
   return 1;
-}
-
-async function runGetCommand(
-  rest: readonly string[],
-  parsed: ReturnType<typeof parseSemanticArgs>,
-  vault: string,
-  write: (message: string) => void,
-  writeError: (message: string) => void,
-): Promise<number> {
-  const target = rest[0];
-  if (!target) {
-    writeError("Usage: oms semantic get <target>");
-    return 1;
-  }
-  return withSemanticAdapter(vault, async (adapter) => {
-    const result = await adapter.getDocument({
-      vault,
-      target,
-      collection: stringOption(parsed, "collection"),
-      fromLine: numberOption(parsed, "fromLine"),
-      lineCount: numberOption(parsed, "lineCount"),
-      lineNumbers: booleanOption(parsed, "lineNumbers"),
-      fullPath: booleanOption(parsed, "fullPath"),
-    });
-    printJson(write, result);
-    return result.available ? 0 : 1;
-  });
-}
-
-async function runMultiGetCommand(
-  rest: readonly string[],
-  parsed: ReturnType<typeof parseSemanticArgs>,
-  vault: string,
-  write: (message: string) => void,
-  writeError: (message: string) => void,
-): Promise<number> {
-  const targets = targetList(rest);
-  if (targets.length === 0) {
-    writeError("Usage: oms semantic multi-get <target...>");
-    return 1;
-  }
-  return withSemanticAdapter(vault, async (adapter) => {
-    const result = await adapter.multiGetDocuments({
-      vault,
-      targets: [...targets],
-      collection: stringOption(parsed, "collection"),
-      lineLimit: numberOption(parsed, "lineLimit"),
-      maxBytes: numberOption(parsed, "maxBytes"),
-      lineNumbers: booleanOption(parsed, "lineNumbers"),
-      fullPath: booleanOption(parsed, "fullPath"),
-    });
-    printJson(write, result);
-    return result.available ? 0 : 1;
-  });
 }
 
 async function runCollectionCommand(

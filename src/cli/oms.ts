@@ -7,7 +7,7 @@ import { runPreToolUse } from "../vendors/claude/hook/pre-tool-use.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { runMcpServer } from "../mcp/server.js";
-import { resolveBundledAssetPaths } from "../assets/runtime/assets.js";
+import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
 import { parseCliArgs } from "./args.js";
 import { runAudit } from "./audit.js";
 import { runDoctor, runLint } from "./doctor-lint.js";
@@ -162,9 +162,17 @@ async function main(): Promise<void> {
       console.error("Usage: oms hook <pre-tool-use|post-tool-use> [--vault <path>]");
       process.exitCode = 1;
     }
-  } else {
+  } else if (command === undefined) {
+    // No command at all is a request for help, not an error.
     printUsage();
     process.exitCode = 0;
+  } else {
+    // An unrecognised command must fail. Printing usage and exiting 0 makes a
+    // typo look like success, and makes a removed command indistinguishable
+    // from a working one - which is how the retired qmd aliases went unnoticed.
+    console.error(`[oms] Unknown command: ${command}`);
+    printUsage();
+    process.exitCode = 1;
   }
 
   function hostContext(): HostCommandContext {

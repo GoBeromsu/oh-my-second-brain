@@ -190,9 +190,29 @@ function main(argv) {
     return 2;
   }
 
+  // `git ls-files` reports tracked paths, which during a rename still includes
+  // files already removed from disk. Skip those rather than crashing: a checker
+  // that dies on a mid-rename tree cannot be run while doing the work it exists
+  // to police.
   const currentLines = {};
+  const present = [];
   for (const file of files) {
-    currentLines[file] = countLines(readFileSync(path.join(REPO_ROOT, file), "utf8"));
+    let contents;
+    try {
+      contents = readFileSync(path.join(REPO_ROOT, file), "utf8");
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") continue;
+      throw error;
+    }
+    currentLines[file] = countLines(contents);
+    present.push(file);
+  }
+
+  if (present.length === 0) {
+    process.stderr.write(
+      `[module-size] every tracked file under ${SOURCE_ROOT}/ is missing from disk. Refusing to pass vacuously.\n`,
+    );
+    return 2;
   }
 
   let baselineLines = null;
@@ -201,8 +221,8 @@ function main(argv) {
     for (const file of files) baselineLines[file] = baselineLineCount(options.baselineRef, file);
   }
 
-  const violations = evaluate({ files, currentLines, baselineLines });
-  const nearCap = files
+  const violations = evaluate({ files: present, currentLines, baselineLines });
+  const nearCap = present
     .filter((file) => {
       const current = currentLines[file];
       const ceiling = ceilingFor(file);
@@ -212,10 +232,10 @@ function main(argv) {
 
   if (options.json) {
     process.stdout.write(
-      `${JSON.stringify({ policyId: MODULE_SIZE_POLICY_ID, scanned: files.length, violations, nearCap }, null, 2)}\n`,
+      `${JSON.stringify({ policyId: MODULE_SIZE_POLICY_ID, scanned: present.length, violations, nearCap }, null, 2)}\n`,
     );
   } else {
-    process.stdout.write(`[module-size] scanned ${files.length} files under ${SOURCE_ROOT}/\n`);
+    process.stdout.write(`[module-size] scanned ${present.length} files under ${SOURCE_ROOT}/\n`);
     for (const entry of nearCap) {
       process.stdout.write(
         `[module-size] warning: ${entry.file} is ${entry.lines} lines, within ${RESEED_SLACK} of its ${entry.ceiling} ceiling\n`,

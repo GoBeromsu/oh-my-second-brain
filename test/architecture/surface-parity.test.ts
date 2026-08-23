@@ -1,4 +1,9 @@
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parseNote } from "../../src/kernel/conventions/frontmatter.js";
 import { harnessSurfaceRegistry } from "../../src/kernel/harness/surface-registry.js";
 
 /**
@@ -26,10 +31,14 @@ import { harnessSurfaceRegistry } from "../../src/kernel/harness/surface-registr
 
 interface SurfaceSets {
   readonly skills: readonly string[];
-  /** Skills that declare an `mcp_tool` in their frontmatter. */
+  /** Skill directories whose frontmatter declares an MCP tool. */
   readonly skillsWithTool: readonly string[];
+  /** MCP tool names declared by skill frontmatter. */
+  readonly declaredMcpTools: readonly string[];
   readonly mcpTools: readonly string[];
   readonly cliCommands: readonly string[];
+  /** Commands accepted by the CLI dispatcher. */
+  readonly dispatcherCliCommands: readonly string[];
 }
 
 export interface ParityViolation {
@@ -49,8 +58,9 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
     }
   }
 
+  const declaredTools = new Set(sets.declaredMcpTools);
   for (const tool of sets.mcpTools) {
-    if (!withTool.has(tool)) {
+    if (!declaredTools.has(tool)) {
       violations.push({
         rule: "tools-subset-of-skills",
         detail: `MCP tool ${tool} has no skill declaring it via mcp_tool`,
@@ -58,10 +68,10 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
     }
   }
 
-  if (sets.mcpTools.length !== withTool.size) {
+  if (sets.mcpTools.length !== declaredTools.size) {
     violations.push({
       rule: "tool-count-matches-declarations",
-      detail: `${sets.mcpTools.length} MCP tools registered but ${withTool.size} skills declare mcp_tool`,
+      detail: `${sets.mcpTools.length} MCP tools registered but ${declaredTools.size} tools are declared by skills`,
     });
   }
 
@@ -79,8 +89,34 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
     });
   }
 
+  if (sets.skills.length === 0) {
+    violations.push({ rule: "skills-populated", detail: "Skill directory scan is empty" });
+  }
+
+  if (sets.mcpTools.length === 0) {
+    violations.push({ rule: "mcp-tools-populated", detail: "MCP tool registry is empty" });
+  }
+
   if (sets.cliCommands.length === 0) {
     violations.push({ rule: "cli-allowlist-populated", detail: "CLI command allowlist is empty" });
+  }
+
+  const dispatcherCommands = new Set(sets.dispatcherCliCommands);
+  for (const command of sets.cliCommands) {
+    if (!dispatcherCommands.has(command)) {
+      violations.push({
+        rule: "cli-allowlist-matches-dispatcher",
+        detail: `Registry command ${command} is not accepted by the CLI dispatcher`,
+      });
+    }
+  }
+  for (const command of dispatcherCommands) {
+    if (!sets.cliCommands.includes(command)) {
+      violations.push({
+        rule: "cli-allowlist-matches-dispatcher",
+        detail: `CLI dispatcher command ${command} is absent from the registry`,
+      });
+    }
   }
 
   return violations;
@@ -95,6 +131,8 @@ const CLEAN: SurfaceSets = {
   // naming convention is verified separately by the registry parity suite.
   mcpTools: ["write", "search", "link", "status", "doctor"],
   cliCommands: ["mcp", "setup", "install", "update", "audit", "lint", "hook"],
+  declaredMcpTools: ["write", "search", "link", "status", "doctor"],
+  dispatcherCliCommands: ["mcp", "setup", "install", "update", "audit", "lint", "hook"],
 };
 
 describe("surface-set parity gate (phase A rules)", () => {
@@ -129,7 +167,11 @@ describe("surface-set parity gate (phase A rules)", () => {
 
   it("fails when a skill declares a tool that is never registered", () => {
     const violations = checkSurfaceSets(
-      { ...CLEAN, skillsWithTool: [...CLEAN.skillsWithTool, "distill"] },
+      {
+        ...CLEAN,
+        skillsWithTool: [...CLEAN.skillsWithTool, "distill"],
+        declaredMcpTools: [...CLEAN.declaredMcpTools, "distill"],
+      },
       TARGET,
     );
     expect(violations.map((v) => v.rule)).toContain("tool-count-matches-declarations");
@@ -153,19 +195,84 @@ describe("surface-set parity gate (phase A rules)", () => {
   });
 });
 
-describe("surface-set parity gate (live registry, pre-cutover)", () => {
-  it("reads a populated CLI allowlist from the registry", () => {
-    expect(harnessSurfaceRegistry.cliCommands.length).toBeGreaterThan(0);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const allowedSkillFrontmatterKeys = new Set(["name", "description", "aliases", "mcp_tool", "mcp_args"]);
+
+function realDispatcherCommands(): string[] {
+  const omsSource = readFileSync(path.join(repoRoot, "src/cli/oms.ts"), "utf-8");
+  const semanticSource = readFileSync(path.join(repoRoot, "src/cli/semantic.ts"), "utf-8");
+  const directCommands = [...omsSource.matchAll(/\bcommand === "([^"]+)"/g)].map((match) => match[1]!);
+  const semanticCommands = semanticSource.match(/const TOP_LEVEL_COMMANDS = new Set\(\[([\s\S]*?)\]\);/);
+  expect(semanticCommands, "semantic dispatcher command set must be statically declared").not.toBeNull();
+  const semantic = [...semanticCommands![1].matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+  return [...new Set([...directCommands, ...semantic])].sort();
+}
+
+function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): SurfaceSets {
+  const skillDirs = readdirSync(skillRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  expect(skillDirs, "assets/skills scan must not be empty").not.toEqual([]);
+
+  const parsedSkills = skillDirs.map((skill) => {
+    const parsed = parseNote(readFileSync(path.join(skillRoot, skill, "SKILL.md"), "utf-8"));
+    expect(parsed.hasFrontmatter, `${skill}/SKILL.md must have frontmatter`).toBe(true);
+    expect(parsed.diagnostics, `${skill}/SKILL.md frontmatter must parse`).toEqual([]);
+    expect(Object.keys(parsed.frontmatter).every((key) => allowedSkillFrontmatterKeys.has(key))).toBe(true);
+    return { skill, frontmatter: parsed.frontmatter };
   });
 
-  it("declares CLI commands that are not skills, proving the sets are independent", () => {
-    const cliNames = harnessSurfaceRegistry.cliCommands.map((command) => command.name);
-    const coreSkills = new Set(harnessSurfaceRegistry.coreSkillDirs);
-    const cliOnly = cliNames.filter((name) => !coreSkills.has(name));
-    expect(cliOnly.length).toBeGreaterThan(0);
+  expect(parsedSkills).toHaveLength(TARGET.skills);
+  const skillsWithTool = parsedSkills.filter(({ frontmatter }) => frontmatter["mcp_tool"] !== undefined);
+  expect(skillsWithTool).toHaveLength(TARGET.tools);
+  for (const { frontmatter } of skillsWithTool) {
+    expect(typeof frontmatter["mcp_tool"]).toBe("string");
+    expect(frontmatter["mcp_args"]).toBeDefined();
+  }
+  const distill = parsedSkills.find(({ skill }) => skill === "distill");
+  expect(distill, "distill skill must exist").toBeDefined();
+  expect(distill!.frontmatter["mcp_tool"]).toBeUndefined();
+  expect(distill!.frontmatter["mcp_args"]).toBeUndefined();
+
+  const declaredMcpTools = skillsWithTool.map(({ frontmatter }) => frontmatter["mcp_tool"] as string).sort();
+  const mcpTools = harnessSurfaceRegistry.mcpTools.map((tool) => tool.name).sort();
+  expect(mcpTools, "MCP tool registry must not be empty").not.toEqual([]);
+  expect(mcpTools).toEqual(declaredMcpTools);
+
+  const cliCommands = harnessSurfaceRegistry.cliCommands.map((command) => command.name).sort();
+  return {
+    skills: skillDirs,
+    skillsWithTool: skillsWithTool.map(({ skill }) => skill),
+    declaredMcpTools,
+    mcpTools,
+    cliCommands,
+    dispatcherCliCommands: realDispatcherCommands(),
+  };
+}
+
+describe("surface-set parity gate (live surface)", () => {
+  it("reads the six disk-authored skills, MCP registry, and CLI dispatcher", () => {
+    expect(checkSurfaceSets(liveSurfaceSets(), TARGET)).toEqual([]);
   });
 
-  it("declares a non-empty MCP tool surface", () => {
-    expect(harnessSurfaceRegistry.mcpTools.length).toBeGreaterThan(0);
+  it("fails when a registry CLI command is renamed without updating the dispatcher", () => {
+    const live = liveSurfaceSets();
+    const original = live.cliCommands[0];
+    expect(original).toBeDefined();
+    const violations = checkSurfaceSets(
+      { ...live, cliCommands: [`${original}-renamed`, ...live.cliCommands.slice(1)] },
+      TARGET,
+    );
+    expect(violations.map((violation) => violation.rule)).toContain("cli-allowlist-matches-dispatcher");
+  });
+
+  it("fails closed when the skill directory scan is empty", () => {
+    const emptySkillRoot = mkdtempSync(path.join(tmpdir(), "oms-empty-skills-"));
+    try {
+      expect(() => liveSurfaceSets(emptySkillRoot)).toThrow("assets/skills scan must not be empty");
+    } finally {
+      rmSync(emptySkillRoot, { recursive: true, force: true });
+    }
   });
 });

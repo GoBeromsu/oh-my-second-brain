@@ -30,6 +30,46 @@ const KERNEL = "src/kernel";
 const CLI = "src/cli";
 const MCP = "src/mcp";
 const VENDORS = "src/vendors";
+const ASSETS = "src/assets";
+
+/**
+ * CLI commands are host-facing entrypoints. These imports deliberately select
+ * the host-owned adapter implementation or start the MCP stdio entrypoint;
+ * neither belongs in kernel because kernel must remain independent of both
+ * vendors and MCP transport.
+ */
+const CLI_ENTRYPOINT_EXCEPTIONS = [
+  {
+    file: "src/cli/host-commands.ts",
+    resolved: "src/vendors/claude/claude",
+    reason: "Selects the Claude host adapter for install and uninstall.",
+  },
+  {
+    file: "src/cli/host-commands.ts",
+    resolved: "src/vendors/codex/codex",
+    reason: "Selects the Codex host adapter for install and uninstall.",
+  },
+  {
+    file: "src/cli/host-commands.ts",
+    resolved: "src/vendors/hermes/hermes",
+    reason: "Selects the Hermes host adapter for install and uninstall.",
+  },
+  {
+    file: "src/cli/oms.ts",
+    resolved: "src/vendors/claude/hook/post-tool-use",
+    reason: "The `oms hook post-tool-use` command invokes the Claude hook entrypoint.",
+  },
+  {
+    file: "src/cli/oms.ts",
+    resolved: "src/vendors/claude/hook/pre-tool-use",
+    reason: "The `oms hook pre-tool-use` command invokes the Claude hook entrypoint.",
+  },
+  {
+    file: "src/cli/oms.ts",
+    resolved: "src/mcp/server",
+    reason: "The `oms mcp` command starts the MCP stdio entrypoint.",
+  },
+] as const;
 
 /** Legacy roots that behave as domain/kernel code until the migration moves them. */
 const LEGACY_DOMAIN_DIRS = [
@@ -101,10 +141,33 @@ describe("import-direction gate", () => {
     expect(isCrossVendor("src/kernel/x", "src/vendors/codex/y.ts")).toBe(false);
   });
 
-  it("keeps kernel free of cli, mcp, and vendors imports", async () => {
+  it("keeps kernel free of cli, mcp, vendors, and assets imports", async () => {
     const files = await collectFiles(KERNEL, isProductionTs);
     if (files.length === 0) return; // kernel/ does not exist until PR 7a
     assertNonVacuous(files, KERNEL);
+    expect(await findImports(files, (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS]))).toEqual([]);
+  });
+
+  it("keeps cli imports within cli and kernel", async () => {
+    const files = await collectFiles(CLI, isProductionTs);
+    assertNonVacuous(files, CLI);
+    const imports = await findImports(files, (resolved) => !underAny(resolved, [CLI, KERNEL]));
+    expect(imports.map(({ file, resolved }) => ({ file, resolved }))).toEqual(
+      CLI_ENTRYPOINT_EXCEPTIONS.map(({ file, resolved }) => ({ file, resolved })),
+    );
+  });
+
+  it("keeps mcp imports within mcp and kernel", async () => {
+    const files = await collectFiles(MCP, isProductionTs);
+    assertNonVacuous(files, MCP);
+    expect(
+      await findImports(files, (resolved) => !underAny(resolved, [MCP, KERNEL])),
+    ).toEqual([]);
+  });
+
+  it("keeps assets free of cli, mcp, and vendors imports", async () => {
+    const files = await collectFiles(ASSETS, isProductionTs);
+    assertNonVacuous(files, ASSETS);
     expect(await findImports(files, (resolved) => underAny(resolved, [CLI, MCP, VENDORS]))).toEqual([]);
   });
 

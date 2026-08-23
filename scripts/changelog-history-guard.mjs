@@ -4,7 +4,7 @@
 // config failure (exit 2), never a silent pass.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { missingReleasedHeadings } from "./release-lib.mjs";
+import { alteredReleasedSections, missingReleasedHeadings } from "./release-lib.mjs";
 
 const CHANGELOG_FILES = [
   "CHANGELOG.md",
@@ -54,5 +54,14 @@ if (missing.length > 0) {
   fail(message, 1);
 }
 
-console.log("changelog-history-guard: ok - no released headings were removed.");
+// Heading survival is not immutability: a released section's entire body can be
+// rewritten while its heading stays put. Compare the section content too.
+const altered = alteredReleasedSections(baseContent, headContent);
+
+if (altered.length > 0) {
+  const message = `${altered.length} released section(s) were edited relative to '${base}'. Released sections are immutable; fix forward with a new version instead:\n${altered.map((h) => `  - ${h}`).join("\n")}`;
+  fail(message, 1);
+}
+
+console.log("changelog-history-guard: ok - released headings and section content are unchanged.");
 process.exit(0);

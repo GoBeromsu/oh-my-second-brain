@@ -23,7 +23,7 @@ import {
   lazyLoadNoteBody,
 } from "../kernel/graph/cache.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { readBundledPackageVersion } from "../assets/runtime/assets.js";
+import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { resolveActiveOntology } from "../kernel/ontology/active.js";
 import { resolveConcept } from "../kernel/ontology/resolver.js";
 import { retrieveMorningContext } from "../kernel/search/morning.js";
@@ -36,9 +36,9 @@ import {
   isModelOptionalSemanticQueryOp,
   semanticOptionsFromArgs,
   retrieveContextSemanticInputProperties,
-} from "./semantic-retrieve.js";
+} from "../kernel/semantic/semantic-retrieve.js";
 import { assembleCoreSemanticEngine, assembleGraphOnlyEngine, type AssembledEngine } from "../kernel/engine/assemble.js";
-import { assembleFullSemanticEngine, embeddingConfigPresent } from "./semantic-engine.js";
+import { assembleFullSemanticEngine, embeddingConfigPresent } from "../kernel/semantic/semantic-engine.js";
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import {

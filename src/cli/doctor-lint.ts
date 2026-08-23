@@ -13,7 +13,7 @@ import { validateFrontmatter } from "../kernel/conventions/validate.js";
 import { loadOntology } from "../kernel/ontology/loader.js";
 import { resolveConcept } from "../kernel/ontology/resolver.js";
 import type { Concept } from "../kernel/ontology/types.js";
-import { resolveBundledAssetPaths } from "../assets/runtime/assets.js";
+import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
 
 const bundledAssets = resolveBundledAssetPaths();
 

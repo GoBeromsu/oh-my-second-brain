@@ -164,15 +164,13 @@ describe("oms CLI dispatch", () => {
     expect(audit.stderr).toContain("Local .oms ontology is incomplete");
   });
 
-  it("supports semantic status as both nested command and top-level alias", async () => {
+  it("rejects retired semantic status commands", async () => {
     const vault = await makeVault();
     const nested = runCli(["semantic", "status", "--vault", vault]);
     const alias = runCli(["status", "--vault", vault]);
 
-    expect(nested.status).toBe(0);
-    expect(alias.status).toBe(0);
-    expect(jsonObject(nested.stdout)).toEqual(expect.objectContaining({ available: true, storage: "oms-native-json" }));
-    expect(jsonObject(alias.stdout)).toEqual(expect.objectContaining({ available: true, storage: "oms-native-json" }));
+    expect(nested.status).toBe(1);
+    expect(alias.status).toBe(1);
   });
 
   it("creates a vault bridge and resolves doctor through it", async () => {

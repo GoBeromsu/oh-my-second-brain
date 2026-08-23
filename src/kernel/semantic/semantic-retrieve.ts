@@ -7,8 +7,8 @@ import {
   semanticQueryOptionsFromArgs,
   type ParseResult,
 } from "./semantic-retrieve-args.js";
-import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
-import { queryOptionsToSubQueries } from "../kernel/engine/mcp/query-mapper.js";
+import type { McpEngineAdapter } from "../engine/mcp/facade.js";
+import { queryOptionsToSubQueries } from "../engine/mcp/query-mapper.js";
 
 export { semanticMcpTools, retrieveContextSemanticInputProperties } from "./semantic-schemas.js";
 export { semanticOptionsFromArgs };

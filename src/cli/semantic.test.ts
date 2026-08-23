@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runSemanticCli } from "./semantic.js";
+import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
+import { semanticUsageText } from "./semantic-usage.js";
 
 let tmpVault: string | undefined;
 
@@ -41,7 +42,7 @@ function jsonOutput(output: readonly string[]): Record<string, unknown> {
 }
 
 describe("semantic CLI", () => {
-  it("runs a lex-only sync, lexical query, and document get through the native engine", async () => {
+  it("runs a lex-only sync and lexical search through the native engine", async () => {
     tmpVault = await writeVault();
     const output: string[] = [];
 
@@ -54,53 +55,23 @@ describe("semantic CLI", () => {
     expect(syncCode).toBe(0);
     expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true, storage: "oms-native-json" }));
 
-    const queryCode = await runSemanticCli({
-      argv: ["query", "--lex", "agent retrieval", "-c", "obsidian", "-n", "1"],
+    const searchCode = await runSemanticCli({
+      argv: ["semantic", "search", "--lex", "agent retrieval", "-c", "obsidian", "-n", "1"],
       vault: tmpVault,
       write: (message) => output.push(message),
     });
-    expect(queryCode).toBe(0);
-    const query = jsonOutput(output);
-    const hits = query["hits"];
+    expect(searchCode).toBe(0);
+    const search = jsonOutput(output);
+    const hits = search["hits"];
     expect(Array.isArray(hits)).toBe(true);
     const hit = Array.isArray(hits) ? hits[0] : undefined;
     if (typeof hit !== "object" || hit === null || Array.isArray(hit)) throw new Error("Expected hit object.");
     expect(hit).toEqual(expect.objectContaining({ path: "references/Agent Retrieval.md" }));
-    const docid = hit["docid"];
-    if (typeof docid !== "string") throw new Error("Expected docid.");
-
-    const getCode = await runSemanticCli({
-      argv: ["semantic", "get", `${docid}:4:2`, "--line-numbers"],
-      vault: tmpVault,
-      write: (message) => output.push(message),
-    });
-    expect(getCode).toBe(0);
-    const single = jsonOutput(output);
-    expect(single).toEqual(
-      expect.objectContaining({
-        available: true,
-        documents: [
-          expect.objectContaining({
-            path: "references/Agent Retrieval.md",
-            content: expect.stringContaining("# Agent Retrieval"),
-          }),
-        ],
-      }),
-    );
   });
 
-  it("reports status, lists the engine collection, and lists contexts", async () => {
+  it("lists the engine collection and contexts", async () => {
     tmpVault = await writeVault();
     const output: string[] = [];
-
-    expect(
-      await runSemanticCli({
-        argv: ["semantic", "status"],
-        vault: tmpVault,
-        write: (message) => output.push(message),
-      }),
-    ).toBe(0);
-    expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true, storage: "oms-native-json" }));
 
     expect(
       await runSemanticCli({
@@ -130,5 +101,18 @@ describe("semantic CLI", () => {
       }),
     ).toBe(0);
     expect(jsonOutput(output)).toEqual(expect.objectContaining({ available: true }));
+  });
+
+  it.each(["query", "vsearch", "get", "multi-get", "status"])("rejects retired qmd alias %s", async (command) => {
+    const errors: string[] = [];
+    expect(isSemanticCliCommand(command)).toBe(false);
+    await expect(
+      runSemanticCli({
+        argv: [command],
+        vault: "/unused",
+        writeError: (message) => errors.push(message),
+      }),
+    ).resolves.toBe(1);
+    expect(errors).toEqual([semanticUsageText()]);
   });
 });

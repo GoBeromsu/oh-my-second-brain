@@ -4,7 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { stringify as yamlStringify } from "yaml";
 import { loadOntology } from "../kernel/ontology/loader.js";
 import type { FolderBinding, OntologyField, OntologyLens, Taxonomy } from "../kernel/ontology/types.js";
-import { resolveBundledAssetPaths } from "../assets/runtime/assets.js";
+import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
 import {
   collectObservedFields,
   mergeObservedFieldsIntoConcept,

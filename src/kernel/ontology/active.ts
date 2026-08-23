@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { resolveBundledAssetPaths } from "../../assets/runtime/assets.js";
+import { resolveBundledAssetPaths } from "../runtime/assets.js";
 import { loadOntology } from "./loader.js";
 import type { Ontology } from "./types.js";
 

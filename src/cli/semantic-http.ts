@@ -1,10 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
-import { assembleSemanticEngine } from "../mcp/semantic-engine.js";
+import { assembleSemanticEngine } from "../kernel/semantic/semantic-engine.js";
 import type { SemanticQueryOptions, SemanticSearchMode } from "../kernel/search/semantic-contract.js";
-import { handleSemanticTool } from "../mcp/semantic-retrieve.js";
-import { semanticMcpTools } from "../mcp/semantic-schemas.js";
+import { handleSemanticTool } from "../kernel/semantic/semantic-retrieve.js";
+import { semanticMcpTools } from "../kernel/semantic/semantic-schemas.js";
 
 export interface SemanticHttpServer {
   readonly url: string;
