@@ -1,0 +1,15 @@
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/vendor-discovery.test.ts
+
+
+ RUN  v2.1.9 /Users/beomsu/Documents/01_Project/oh-my-second-brain
+
+ ✓ test/architecture/vendor-discovery.test.ts (17 tests) 24ms
+
+ Test Files  1 passed (1)
+      Tests  17 passed (17)
+   Start at  03:08:39
+   Duration  293ms (transform 34ms, setup 0ms, collect 55ms, tests 24ms, environment 0ms, prepare 45ms)
+
+exit=0

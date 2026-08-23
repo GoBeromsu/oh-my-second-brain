@@ -13,7 +13,7 @@ import {
 import { absolute } from "./repo-root.js";
 
 function policySource({
-  sourceExtensions = [".ts"],
+  sourceExtensions = [".ts", ".mts"],
   grandfathered = {},
   excluded = [],
   softCap = 2000,
@@ -167,6 +167,16 @@ describe("module-size ratchet", () => {
         policySource({ sourceExtensions: [".ts", ".tsx"] }),
       ),
     ).toEqual([]);
+  });
+
+  it("scans an oversized .mts production module", () => {
+    expect(
+      evaluate({
+        files: ["src/kernel/oversize.mts"],
+        currentLines: { "src/kernel/oversize.mts": SOFT_CAP + 205 },
+        baselineLines: null,
+      }),
+    ).toMatchObject([{ file: "src/kernel/oversize.mts", kind: "over-ceiling" }]);
   });
 
   it("accepts its own current source as policy-clean", async () => {

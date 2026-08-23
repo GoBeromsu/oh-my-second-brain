@@ -126,13 +126,37 @@ Index note for graph neighborhoods and semantic lookup.
           expect.objectContaining({ path: "references/Agent Retrieval.md" }),
         );
       } else {
-        // Loud-guard path: sync and default hybrid query still require explicit
-        // embedding config, but lex-only query is model-free BM25/FTS.
+        // Model-free path. Two different contracts apply here and the test
+        // asserts both, because collapsing them is how ADR-007 gets eroded.
+        //
+        // Sync REQUIRES embeddings, so it must fail loudly and name what to
+        // configure. A plain query does NOT: since the SearchBackend seam was
+        // wired into production it expands to lexical only, so it returns real
+        // hits rather than failing. Before that wiring this assertion read
+        // `expect(queryRaw.isError).toBe(true)` - it encoded the pre-seam
+        // hybrid behaviour, and the seam landing is what changed it.
         expect(syncRaw.isError).toBe(true);
         const syncText = syncRaw.content[0]?.type === "text" ? syncRaw.content[0].text : "";
         expect(syncText).toMatch(/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/);
-        const queryRaw = await client.callTool(queryCall);
-        expect(queryRaw.isError).toBe(true);
+
+        const plainQuery = textPayload(await client.callTool(queryCall));
+        expect(plainQuery.available).toBe(true);
+        expect((plainQuery.hits as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+
+        // An EXPLICIT vector request still fails loudly. Lexical expansion is a
+        // default for callers who did not choose a strategy, never a substitute
+        // for one that was asked for and cannot run.
+        const explicitVec = await client.callTool({
+          name: "oms_search",
+          arguments: {
+            op: "semantic-query",
+            searches: [{ type: "vec", query: "agent retrieval" }],
+            collection: "obsidian",
+            limit: 1,
+          },
+        });
+        const vecText = explicitVec.content[0]?.type === "text" ? explicitVec.content[0].text : "";
+        expect(vecText).toMatch(/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/);
 
         const lexOnlyQuery = textPayload(
           await client.callTool({

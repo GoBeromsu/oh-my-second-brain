@@ -62,6 +62,7 @@ export function rolledChangelog(content, version, date, options = {}) {
   const bodyStart = headingEnd === -1 ? content.length : headingEnd + 1;
   const nextSection = content.indexOf("\n## [", bodyStart - 1);
   const bodyEnd = nextSection === -1 ? content.length : nextSection + 1;
+  const prefix = content.slice(0, unreleasedStart + 1);
   const body = content.slice(bodyStart, bodyEnd);
   const rest = content.slice(bodyEnd);
   const releaseHeading = `## [${version}] - ${date}`;
@@ -70,10 +71,10 @@ export function rolledChangelog(content, version, date, options = {}) {
     if (!allowEmpty) {
       throw new Error("empty [Unreleased] - write release notes before releasing");
     }
-    return `${CHANGELOG_HEADER}\n\n${UNRELEASED_HEADING}\n\n${releaseHeading}\n\n${rest}`;
+    return `${prefix}${UNRELEASED_HEADING}\n\n${releaseHeading}\n\n${rest}`;
   }
 
-  return `${CHANGELOG_HEADER}\n\n${UNRELEASED_HEADING}\n\n${releaseHeading}\n${body}${rest}`;
+  return `${prefix}${UNRELEASED_HEADING}\n\n${releaseHeading}\n${body}${rest}`;
 }
 
 /**

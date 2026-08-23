@@ -1,0 +1,73 @@
+{
+  "kind": "package-consumer-test-report",
+  "schemaVersion": 1,
+  "tarball": "oh-my-second-brain-0.2.0.tgz",
+  "fileCount": 338,
+  "skills": [
+    "assets/skills/distill/SKILL.md",
+    "assets/skills/doctor/SKILL.md",
+    "assets/skills/link/SKILL.md",
+    "assets/skills/search/SKILL.md",
+    "assets/skills/status/SKILL.md",
+    "assets/skills/write/SKILL.md"
+  ],
+  "adapters": [],
+  "required": [
+    {
+      "path": "core/AGENTS.md",
+      "present": true
+    },
+    {
+      "path": "core/ontology",
+      "present": true
+    },
+    {
+      "path": "assets/skills/write/SKILL.md",
+      "present": true
+    },
+    {
+      "path": "assets/skills/search/SKILL.md",
+      "present": true
+    },
+    {
+      "path": "assets/skills/link/SKILL.md",
+      "present": true
+    },
+    {
+      "path": "assets/skills/distill/SKILL.md",
+      "present": true
+    },
+    {
+      "path": "assets/skills/status/SKILL.md",
+      "present": true
+    },
+    {
+      "path": "assets/skills/doctor/SKILL.md",
+      "present": true
+    }
+  ],
+  "bins": {
+    "oh-my-second-brain": "dist/cli/oms.js",
+    "oms": "dist/cli/oms.js",
+    "oms-guard": "assets/claude/hooks/oms-guard.mjs",
+    "oms-post-guard": "assets/claude/hooks/oms-post-guard.mjs"
+  },
+  "binTargets": [
+    {
+      "path": "dist/cli/oms.js",
+      "packed": true
+    },
+    {
+      "path": "dist/cli/oms.js",
+      "packed": true
+    },
+    {
+      "path": "assets/claude/hooks/oms-guard.mjs",
+      "packed": true
+    },
+    {
+      "path": "assets/claude/hooks/oms-post-guard.mjs",
+      "packed": true
+    }
+  ]
+}

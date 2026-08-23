@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 
 export const MODULE_SIZE_POLICY_ID = "oms.module-size.v1";
 export const SOURCE_ROOT = "src";
-export const SOURCE_EXTENSIONS = [".ts"];
+export const SOURCE_EXTENSIONS = [".ts", ".mts"];
 export const SOFT_CAP = 2000;
 export const RESEED_SLACK = 200;
 

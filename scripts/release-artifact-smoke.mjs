@@ -211,7 +211,7 @@ async function mcpSmoke(packageRoot, vault) {
     };
     const queryCall = {
       name: "oms_search",
-      arguments: { op: "semantic-query", query: "lex: agent retr", collection: "vault", limit: 1 },
+      arguments: { op: "semantic-query", query: "agent retr", collection: "vault", limit: 1 },
     };
     // Model-less, the refusal surfaces either as an isError tool envelope or as a
     // thrown protocol McpError, depending on how far the call gets before the
@@ -240,9 +240,13 @@ async function mcpSmoke(packageRoot, vault) {
       if (!sync.guarded || !/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/.test(sync.text)) {
         fail("MCP semantic sync did not loud-guard the missing embedding model (ADR-007)");
       }
-      // query must likewise refuse to falsely succeed without a model/store.
-      const query = await callGuarded(queryCall);
-      if (!query.guarded) fail("MCP semantic query falsely succeeded without an embedding model (ADR-007)");
+      // Plain query expands to lexical retrieval, so a model-less packaged vault
+      // still returns the smoke note. Explicit vec remains guarded by ADR-007.
+      const query = await client.callTool(queryCall);
+      const queryPayload = JSON.parse(textOf(query) || "{}");
+      if (query.isError || queryPayload.hits?.[0]?.path !== "Literature/semantic-retrieval.md") {
+        fail("MCP plain semantic query did not return the packaged smoke note without an embedding model");
+      }
     }
     // ADR-009 D2 retired the qmd-compatible surface, so the packaged server
     // must NOT advertise it. Asserting its absence keeps a retired surface from

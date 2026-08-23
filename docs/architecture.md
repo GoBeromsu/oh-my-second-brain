@@ -27,7 +27,9 @@ The full terminology lock is in the harness architecture doc. In short: Oh My Se
 
 ## The 3-Host Handshake: Kernel + Root Host Surfaces
 
-All knowledge logic (validation, ontology loading, folder resolution, graph/cache retrieval, and gated capture) is written **once** in `src/kernel/` and exposed through `src/cli/` and `src/mcp/`. Host differences are represented by root plugin manifests, `assets/`, and `src/vendors/`; they do not require an `adapters/` tree.
+Validation, ontology loading, folder resolution, graph and cache retrieval, and gated capture are written **once** in `src/kernel/` and exposed through `src/cli/` and `src/mcp/`. Host differences are represented by root plugin manifests, `assets/`, and `src/vendors/`; they do not require an `adapters/` tree.
+
+**Known gap, stated rather than implied.** Some application workflows still live in the surface layers rather than the kernel: setup's ontology adoption and persistence (`src/cli/setup-command.ts`), linkify's vault scan and batch write orchestration (`src/cli/linkify.ts`), and link discovery and apply (`src/mcp/link-tools.ts`), which duplicates part of the linkify walk. The import-direction gate enforces that `kernel/` does not depend on the surfaces; it does not and cannot enforce where behaviour lives. The practical consequence is that a third transport could not reuse those workflows without importing surface code. Extracting them into kernel services is tracked follow-up work, deliberately not folded into the restructure that established the layout.
 
 | | Claude Code | Codex | Hermes |
 |---|---|---|---|

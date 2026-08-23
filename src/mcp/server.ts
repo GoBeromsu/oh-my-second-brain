@@ -44,6 +44,8 @@ import { assembleCoreSemanticEngine, assembleGraphOnlyEngine, type AssembledEngi
 import { assembleFullSemanticEngine, embeddingConfigPresent } from "../kernel/semantic/semantic-engine.js";
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
+import type { McpSemanticTypedSearch } from "../kernel/engine/mcp/types.js";
+import { EngineSearchBackend } from "../kernel/searchbackend/engine-search-backend.js";
 import {
   buildServerInstructions,
   cachedUpdateNotice,
@@ -156,37 +158,39 @@ async function semanticIndexPostcondition(vault: string): Promise<SemanticIndexP
   }
 }
 
+type Operation = { readonly op: string; readonly name: string; readonly properties?: Record<string, unknown>; readonly required?: readonly string[] };
+const string = { type: "string" };
+const number = { type: "number" };
+const boolean = { type: "boolean" };
+const stringArray = { type: "array", items: string };
+const searchProperties = {
+  query: string, searches: { type: "array", maxItems: 10, items: { type: "object", properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } },
+  collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: number, minScore: number, intent: string, lex: string, vec: string, hyde: string, index: string,
+  target: string, targets: stringArray, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean,
+} as const;
+const contextProperties = { concept: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: number, maxNeighbors: number, useCache: boolean,
+  semanticEnabled: boolean, semanticCollection: string, semanticLimit: number, semanticScope: { ...string, enum: ["global", "graph"] }, semanticMode: searchProperties.mode, semanticIntent: string, semanticSearches: searchProperties.searches, semanticLex: string, semanticVec: string, semanticHyde: string, semanticMinScore: number, semanticAll: boolean, semanticFormat: { ...string, enum: ["json", "files"] }, semanticFull: boolean, semanticLineNumbers: boolean, semanticFullPath: boolean, semanticIndex: string, semanticChunkStrategy: string, semanticCandidateLimit: number, semanticNoRerank: boolean, semanticHydrate: { ...string, enum: ["none", "top", "all", "targets"] }, semanticHydrateTargets: stringArray, semanticHydrateLineLimit: number, semanticHydrateMaxBytes: number, semanticHydrateFromLine: number, semanticHydrateLineCount: number, embeddingSyncBeforeSearch: boolean, embeddingSyncEnsureCollection: boolean, embeddingSyncUpdate: boolean, embeddingSyncEmbed: boolean, embeddingSyncForce: boolean, embeddingSyncPull: boolean, embeddingSyncMaxDocsPerBatch: number, embeddingSyncMaxBatchMb: number } as const;
+const operations: Record<string, readonly Operation[]> = {
+  oms_write: [{ op: "create", name: "write" }, { op: "append", name: "write" }, { op: "update", name: "write" }],
+  oms_search: [{ op: "axis", name: "oms_retrieve_by_axis", properties: contextProperties }, { op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "lazy-load", name: "oms_lazy_load_note", properties: { notePath: string }, required: ["notePath"] }, { op: "concepts", name: "oms_list_concepts" }, { op: "semantic-query", name: "oms_semantic_query", properties: searchProperties }, { op: "semantic-collections", name: "oms_semantic_collections", properties: { index: string } }, { op: "semantic-contexts", name: "oms_semantic_contexts", properties: { index: string } }, { op: "semantic-status", name: "oms_semantic_status", properties: { index: string } }, { op: "get-document", name: "oms_get_document", properties: searchProperties, required: ["target"] }, { op: "multi-get-documents", name: "oms_multi_get_documents", properties: searchProperties }],
+  oms_link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
+  oms_status: [{ op: "status", name: "oms_graph_status" }],
+  oms_doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_contract", properties: { notePath: string }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "semantic-cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { collection: string, ensureCollection: boolean, update: boolean, embed: boolean, force: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number } }],
+};
+function operationSchema(tool: string): Tool["inputSchema"] {
+  const toolOperations = operations[tool];
+  if (!toolOperations) throw new Error(`Missing MCP operation definition for ${tool}.`);
+  return { type: "object", oneOf: toolOperations.map(({ op, properties = {}, required = [] }) => ({ additionalProperties: false, properties: { op: { ...string, const: op }, ...properties }, required: ["op", ...required] })) } as Tool["inputSchema"];
+}
+function resolveOperation(tool: string, op: string | undefined): string | undefined {
+  return operations[tool]?.find((operation) => operation.op === op)?.name;
+}
 export const omsMcpTools: Tool[] = [
-  {
-    name: "oms_write", title: "Oh My Second Brain write",
-    description: "Write a vault note through the kernel-owned .oms contract.",
-    inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["create", "append", "update"] }, notePath: { type: "string" }, concept: { type: "string" }, folder: { type: "string" }, filename: { type: "string" }, frontmatter: { type: "object" }, body: { type: "string" } } },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  },
-  {
-    name: "oms_search", title: "Oh My Second Brain search",
-    description: "Retrieve vault context, semantic search, ontology, and selected documents. `op` selects the operation.",
-    inputSchema: { type: "object", properties: { op: { type: "string", enum: ["axis", "context", "lazy-load", "concepts", "semantic-query", "semantic-collections", "semantic-contexts", "semantic-status", "get-document", "multi-get-documents"] }, query: { type: "string" }, searches: { type: "array", maxItems: 10, items: { type: "object", properties: { type: { type: "string", enum: ["lex", "vec", "hyde"] }, query: { type: "string" } }, required: ["type", "query"] } }, limit: { type: "number", default: 10 }, minScore: { type: "number", default: 0 }, collections: { type: "array", items: { type: "string" } }, intent: { type: "string" }, concept: { type: "string" }, folder: { type: "string" }, property: { type: "string" }, value: { type: "string" }, wikilink: { type: "string" }, notePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" }, maxBytes: { type: "number" }, targets: { type: "array", maxItems: 20, items: { type: "object", properties: { notePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" }, maxBytes: { type: "number" } }, required: ["notePath"] } }, semanticMinScore: { type: "number" }, candidateLimit: { type: "number" }, maxNeighbors: { type: "number" }, useCache: { type: "boolean" } } },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  },
-  {
-    name: "oms_link", title: "Oh My Second Brain link",
-    description: "Suggest or apply wikilinks; `op` is suggest or apply.",
-    inputSchema: { type: "object", properties: { op: { type: "string", enum: ["suggest", "apply"] }, notePath: { type: "string" }, folder: { type: "string" }, baseContentHash: { type: "string" }, candidateIds: { type: "array", items: { type: "string" } } }, required: ["op", "notePath"] },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-  },
-  {
-    name: "oms_status", title: "Oh My Second Brain status",
-    description: "Read-only health and statistics for the active vault.",
-    inputSchema: { type: "object", properties: {} },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  },
-  {
-    name: "oms_doctor", title: "Oh My Second Brain doctor",
-    description: "Diagnose or repair the vault; `op` selects the operation.",
-    inputSchema: { type: "object", properties: { op: { type: "string", enum: ["audit", "validate", "build-graph", "semantic-cleanup", "sync-embeddings"] }, notePath: { type: "string" }, folder: { type: "string" }, collection: { type: "string" }, index: { type: "string" }, ensureCollection: { type: "boolean" }, update: { type: "boolean" }, embed: { type: "boolean" }, force: { type: "boolean" }, pull: { type: "boolean" } }, required: ["op"] },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  },
+  { name: "oms_write", title: "Oh My Second Brain write", description: "Write a vault note through the kernel-owned .oms contract.", inputSchema: operationSchema("oms_write"), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
+  { name: "oms_search", title: "Oh My Second Brain search", description: "Retrieve vault context, semantic search, ontology, and selected documents. `op` selects the operation.", inputSchema: operationSchema("oms_search"), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
+  { name: "oms_link", title: "Oh My Second Brain link", description: "Suggest or apply wikilinks; `op` selects the operation.", inputSchema: operationSchema("oms_link"), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
+  { name: "oms_status", title: "Oh My Second Brain status", description: "Read-only health and statistics for the active vault.", inputSchema: operationSchema("oms_status"), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+  { name: "oms_doctor", title: "Oh My Second Brain doctor", description: "Diagnose or repair the vault; `op` selects the operation.", inputSchema: operationSchema("oms_doctor"), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
 ];
 
 export interface OMSMcpServerOptions {
@@ -253,6 +257,12 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   // strictly for the absent-config case.
   const resolveDocumentAdapter = (): McpEngineAdapter =>
     hasEmbeddingModel() ? getSemanticEngine().adapter : getCoreSemanticEngine().adapter;
+  const searchBackend = new EngineSearchBackend(
+    (searches) => searches.some((search) => search.type === "vec" || search.type === "hyde")
+      ? getSemanticEngine().adapter
+      : resolveDocumentAdapter(),
+    vault,
+  );
 
   const server = new Server(
     { name: "oms", version: SERVER_VERSION },
@@ -284,31 +294,18 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
-    const op = stringArg(args, "op");
-    const name = publicName === "oms_status" ? "oms_graph_status"
-      : publicName === "oms_write" ? "write"
-      : publicName === "oms_link" && op === "suggest" ? "oms_link_suggest"
-      : publicName === "oms_link" && op === "apply" ? "oms_link_apply"
-      : publicName === "oms_doctor" ? ({ audit: "oms_vault_audit", validate: "oms_validate_contract", "build-graph": "oms_graph_build", "semantic-cleanup": "oms_semantic_cleanup", "sync-embeddings": "oms_sync_embeddings" } as Record<string, string>)[op ?? ""]
-      : publicName === "oms_search" ? ({ axis: "oms_retrieve_by_axis", context: "oms_retrieve_context", "lazy-load": "oms_lazy_load_note", concepts: "oms_list_concepts", "semantic-query": "oms_semantic_query", "semantic-collections": "oms_semantic_collections", "semantic-contexts": "oms_semantic_contexts", "semantic-status": "oms_semantic_status", "get-document": "oms_get_document", "multi-get-documents": "oms_multi_get_documents" } as Record<string, string>)[op ?? ""]
-      : undefined;
+    const op = publicName === "oms_write"
+      ? stringArg(args, "op") ?? stringArg(args, "mode") ?? "create"
+      : publicName === "oms_status"
+        ? stringArg(args, "op") ?? "status"
+        : stringArg(args, "op");
+    const name = resolveOperation(publicName, op);
     if (!name) return errorText(`Unknown Oh My Second Brain tool: ${publicName}`);
+    if (publicName === "oms_write") args = { ...args, mode: op };
     if (publicName === "oms_search" && op === "semantic-query") {
       const searches = args?.["searches"];
       if ((typeof args?.["query"] === "string") === Array.isArray(searches)) {
         return errorText('Provide exactly one of "query" or "searches" for semantic-query.');
-      }
-      if (Array.isArray(searches)) {
-        const mapped = Object.fromEntries(searches.flatMap((search) =>
-          isRecord(search) && typeof search.type === "string" && typeof search.query === "string"
-            ? [[search.type, search.query]]
-            : [],
-        ));
-        args = { ...args, ...mapped, query: "" };
-      }
-      const collections = args?.["collections"];
-      if (Array.isArray(collections) && collections.every((value) => typeof value === "string")) {
-        args = { ...args, collection: collections[0] };
       }
     }
 
@@ -509,6 +506,26 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     //     model-free BM25/FTS feature, not an ADR-007 fake vector fallback.
     // Every other tool never touches the engine here.
     if (isEngineSemanticOp(name) || isEngineDocumentOp(name)) {
+      if (name === "oms_semantic_query") {
+        const requestOptions = {
+          limit: typeof args?.["limit"] === "number" ? args["limit"] : undefined,
+          minScore: typeof args?.["minScore"] === "number" ? args["minScore"] : undefined,
+          intent: stringArg(args, "intent"),
+          collection: stringArg(args, "collection"),
+          mode: stringArg(args, "mode") as "query" | "search" | "vsearch" | undefined,
+          index: stringArg(args, "index"),
+        };
+        const explicitSearches = (["lex", "vec", "hyde"] as const).flatMap((type) => {
+          const query = stringArg(args, type);
+          return query ? [{ type, query }] : [];
+        });
+        const result = Array.isArray(args?.["searches"])
+          ? await searchBackend.search({ ...requestOptions, searches: args["searches"] as McpSemanticTypedSearch[] })
+          : explicitSearches.length > 0
+            ? await searchBackend.search({ ...requestOptions, searches: explicitSearches })
+            : await searchBackend.search({ ...requestOptions, query: stringArg(args, "query") ?? "" });
+        return jsonText(result);
+      }
       const semanticAdapter =
         isEngineSemanticOp(name) &&
         name !== "oms_semantic_cleanup" &&

@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readdir, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { absolute, pathExists, readJson } from "./repo-root.js";
@@ -35,6 +37,7 @@ interface CodexManifest {
 
 const temporaries: string[] = [];
 const SKILL_FRONTMATTER_KEYS = ["name", "description", "aliases", "mcp_tool", "mcp_args"] as const;
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   while (temporaries.length > 0) {
@@ -84,6 +87,22 @@ async function hermesHasInstallableSkills(root: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+interface NpmPackReport {
+  readonly files: readonly { readonly path: string }[];
+}
+
+async function packedFiles(root: string): Promise<readonly string[]> {
+  const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], {
+    cwd: root,
+    maxBuffer: 1024 * 1024,
+  });
+  const report = JSON.parse(stdout) as readonly NpmPackReport[];
+  const files = report[0]?.files.map((file) => file.path).sort();
+  expect(files, "npm pack --dry-run must report packed files").toBeDefined();
+  expect(files).not.toEqual([]);
+  return files!;
 }
 
 describe("packaged vendor discovery", () => {
@@ -192,6 +211,13 @@ describe("packaged vendor discovery", () => {
     }
   });
 
+  it("includes every canonical skill in the npm package, not only the working tree", async () => {
+    const files = await packedFiles(absolute("."));
+    for (const skill of CANONICAL_SKILLS) {
+      expect(files).toContain(`assets/skills/${skill}/SKILL.md`);
+    }
+  });
+
   // Negative cases. Each names a concrete bad input the gate must reject, so a
   // green result cannot mean "the check did nothing".
 
@@ -238,5 +264,20 @@ describe("packaged vendor discovery", () => {
     await writeFile(path.join(root, "assets", "hermes-manifest.json"), '{"name":"oms"}\n');
 
     await expect(hermesHasInstallableSkills(root)).resolves.toBe(false);
+  });
+
+  it("rejects package.json files that omit assets even when skills exist in the working tree", async () => {
+    const root = await scratch();
+    await mkdir(path.join(root, "assets", "skills", "write"), { recursive: true });
+    await writeFile(path.join(root, "assets", "skills", "write", "SKILL.md"), "---\nname: write\n---\n");
+    await mkdir(path.join(root, "dist"), { recursive: true });
+    await writeFile(path.join(root, "dist", "index.js"), "export {};\n");
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "oms-pack-evasion", version: "1.0.0", files: ["dist"] }),
+    );
+
+    await expect(readFile(path.join(root, "assets", "skills", "write", "SKILL.md"), "utf8")).resolves.toContain("name: write");
+    expect(await packedFiles(root)).not.toContain("assets/skills/write/SKILL.md");
   });
 });

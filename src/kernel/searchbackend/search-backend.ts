@@ -1,5 +1,6 @@
 import type {
   McpSemanticQueryResult,
+  McpSemanticSearchMode,
   McpSemanticTypedSearch,
 } from "../engine/mcp/types.js";
 
@@ -12,6 +13,9 @@ export type SearchRequest =
       readonly minScore?: number;
       /** Context that disambiguates a query without becoming a sub-query. */
       readonly intent?: string;
+      readonly collection?: string;
+      readonly mode?: McpSemanticSearchMode;
+      readonly index?: string;
     }
   | {
       readonly query?: never;
@@ -20,6 +24,9 @@ export type SearchRequest =
       readonly minScore?: number;
       /** Context that disambiguates a query without becoming a sub-query. */
       readonly intent?: string;
+      readonly collection?: string;
+      readonly mode?: McpSemanticSearchMode;
+      readonly index?: string;
     };
 
 /** The portable search capability exposed by an OMS retrieval backend. */

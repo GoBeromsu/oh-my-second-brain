@@ -127,6 +127,23 @@ export function importSpecifiers(source: string): string[] {
 }
 
 /**
+ * Dynamic imports must have a string-literal specifier so boundary checks can
+ * resolve them. Computed imports are deliberately rejected rather than skipped:
+ * an import boundary that cannot inspect an edge is not a boundary.
+ */
+export function nonLiteralDynamicImports(source: string): string[] {
+  const violations: string[] = [];
+  const dynamicImport = /\bimport\s*\(([\s\S]*?)\)/g;
+  for (const match of source.matchAll(dynamicImport)) {
+    const expression = match[1]?.trim() ?? "";
+    if (!/^"[^"]*"$/s.test(expression) && !/^'[^']*'$/s.test(expression)) {
+      violations.push(match[0]);
+    }
+  }
+  return violations;
+}
+
+/**
  * Resolve a relative import to a repo-relative, extension-stripped path.
  * Returns null for bare package specifiers.
  *
@@ -155,6 +172,12 @@ export async function findImports(
   const found: ImportViolation[] = [];
   for (const file of files) {
     const source = await readFile(absolute(file), "utf8");
+    const dynamicViolations = nonLiteralDynamicImports(source);
+    if (dynamicViolations.length > 0) {
+      throw new Error(
+        `${file} contains non-literal dynamic import(s): ${dynamicViolations.join(", ")}`,
+      );
+    }
     for (const specifier of importSpecifiers(source)) {
       const resolved = resolveImportSource(file, specifier);
       if (resolved === null) continue;

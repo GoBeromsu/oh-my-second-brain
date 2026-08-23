@@ -41,7 +41,7 @@ function expandPlainQuery(query: string): readonly McpSemanticTypedSearch[] {
 /** SearchBackend adapter for the in-repository OMS engine. */
 export class EngineSearchBackend implements SearchBackend {
   constructor(
-    private readonly adapter: McpEngineAdapter,
+    private readonly adapterOrResolver: McpEngineAdapter | ((searches: readonly McpSemanticTypedSearch[]) => McpEngineAdapter),
     private readonly vault: string,
   ) {}
 
@@ -64,13 +64,19 @@ export class EngineSearchBackend implements SearchBackend {
       ? (request.searches as readonly McpSemanticTypedSearch[])
       : expandPlainQuery((request.query as string).trim());
 
-    return this.adapter.semanticQuery({
+    const adapter = typeof this.adapterOrResolver === "function"
+      ? this.adapterOrResolver(searches)
+      : this.adapterOrResolver;
+    return adapter.semanticQuery({
       vault: this.vault,
       query: "",
       searches,
       limit: request.limit,
       minScore: request.minScore,
       intent: request.intent,
+      collection: request.collection,
+      mode: request.mode,
+      index: request.index,
     });
   }
 }

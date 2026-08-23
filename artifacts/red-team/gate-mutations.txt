@@ -1,0 +1,379 @@
+import-static-violation-detected: FAIL
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/import-boundary.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ❯ test/architecture/import-boundary.test.ts (12 tests | 1 failed) 32ms
+   × import-direction gate > keeps kernel free of cli, mcp, vendors, and assets imports 22ms
+     → expected [ { …(3) } ] to deeply equal []
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 11 passed (12)
+   Start at  03:06:34
+   Duration  289ms (transform 32ms, setup 0ms, collect 29ms, tests 32ms, environment 0ms, prepare 55ms)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/architecture/import-boundary.test.ts > import-direction gate > keeps kernel free of cli, mcp, vendors, and assets imports
+AssertionError: expected [ { …(3) } ] to deeply equal []
+
+- Expected
++ Received
+
+- Array []
++ Array [
++   Object {
++     "file": "src/kernel/index.ts",
++     "resolved": "src/mcp/server",
++     "specifier": "../mcp/server.js",
++   },
++ ]
+
+ ❯ test/architecture/import-boundary.test.ts:148:101
+    146|     if (files.length === 0) return; // kernel/ does not exist until PR…
+    147|     assertNonVacuous(files, KERNEL);
+    148|     expect(await findImports(files, (resolved) => underAny(resolved, […
+       |                                                                                                     ^
+    149|   });
+    150| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+import-computed-dynamic-evasion-passes: PASS
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/import-boundary.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ✓ test/architecture/import-boundary.test.ts (12 tests) 24ms
+
+ Test Files  1 passed (1)
+      Tests  12 passed (12)
+   Start at  03:06:34
+   Duration  276ms (transform 27ms, setup 0ms, collect 27ms, tests 24ms, environment 0ms, prepare 39ms)
+
+
+surface-skill-removal-detected: FAIL
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/surface-parity.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ❯ test/architecture/surface-parity.test.ts (10 tests | 2 failed) 15ms
+   × surface-set parity gate (live surface) > reads the six disk-authored skills, MCP registry, and CLI dispatcher 10ms
+     → expected [ { skill: 'distill', …(1) }, …(4) ] to have a length of 6 but got 5
+   × surface-set parity gate (live surface) > fails when a registry CLI command is renamed without updating the dispatcher 2ms
+     → expected [ { skill: 'distill', …(1) }, …(4) ] to have a length of 6 but got 5
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 8 passed (10)
+   Start at  03:06:35
+   Duration  286ms (transform 36ms, setup 0ms, collect 61ms, tests 15ms, environment 0ms, prepare 48ms)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/architecture/surface-parity.test.ts > surface-set parity gate (live surface) > reads the six disk-authored skills, MCP registry, and CLI dispatcher
+AssertionError: expected [ { skill: 'distill', …(1) }, …(4) ] to have a length of 6 but got 5
+
+- Expected
++ Received
+
+- 6
++ 5
+
+ ❯ liveSurfaceSets test/architecture/surface-parity.test.ts:226:24
+    224|   });
+    225| 
+    226|   expect(parsedSkills).toHaveLength(TARGET.skills);
+       |                        ^
+    227|   const skillsWithTool = parsedSkills.filter(({ frontmatter }) => fron…
+    228|   expect(skillsWithTool).toHaveLength(TARGET.tools);
+ ❯ test/architecture/surface-parity.test.ts:256:29
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  test/architecture/surface-parity.test.ts > surface-set parity gate (live surface) > fails when a registry CLI command is renamed without updating the dispatcher
+AssertionError: expected [ { skill: 'distill', …(1) }, …(4) ] to have a length of 6 but got 5
+
+- Expected
++ Received
+
+- 6
++ 5
+
+ ❯ liveSurfaceSets test/architecture/surface-parity.test.ts:226:24
+    224|   });
+    225| 
+    226|   expect(parsedSkills).toHaveLength(TARGET.skills);
+       |                        ^
+    227|   const skillsWithTool = parsedSkills.filter(({ frontmatter }) => fron…
+    228|   expect(skillsWithTool).toHaveLength(TARGET.tools);
+ ❯ test/architecture/surface-parity.test.ts:260:18
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+surface-server-extra-tool-evasion-passes: PASS
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/surface-parity.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ✓ test/architecture/surface-parity.test.ts (10 tests) 14ms
+
+ Test Files  1 passed (1)
+      Tests  10 passed (10)
+   Start at  03:06:36
+   Duration  301ms (transform 38ms, setup 0ms, collect 58ms, tests 14ms, environment 0ms, prepare 55ms)
+
+
+module-size-ts-violation-detected: FAIL
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/check-module-size.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ❯ test/architecture/check-module-size.test.ts (17 tests | 1 failed) 90ms
+   × module-size ratchet > keeps the real tree under the cap 85ms
+     → expected 1 to be +0 // Object.is equality
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 16 passed (17)
+   Start at  03:06:37
+   Duration  323ms (transform 40ms, setup 0ms, collect 36ms, tests 90ms, environment 0ms, prepare 43ms)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/architecture/check-module-size.test.ts > module-size ratchet > keeps the real tree under the cap
+AssertionError: expected 1 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ test/architecture/check-module-size.test.ts:190:27
+    188|       encoding: "utf8",
+    189|     });
+    190|     expect(result.status).toBe(0);
+       |                           ^
+    191|     expect(result.stderr).toContain("no baseline ref supplied; policy …
+    192|     const report = JSON.parse(result.stdout) as {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+module-size-mts-evasion-passes: PASS
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/check-module-size.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ✓ test/architecture/check-module-size.test.ts (17 tests) 83ms
+
+ Test Files  1 passed (1)
+      Tests  17 passed (17)
+   Start at  03:06:37
+   Duration  321ms (transform 32ms, setup 0ms, collect 35ms, tests 83ms, environment 0ms, prepare 44ms)
+
+
+vendor-skill-removal-detected: FAIL
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/vendor-discovery.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ❯ test/architecture/vendor-discovery.test.ts (17 tests | 5 failed) 30ms
+   × packaged vendor discovery > keeps exactly the six canonical skills in one authored location 6ms
+     → write: expected false to be true // Object.is equality
+   × packaged vendor discovery > resolves every Claude manifest skill entry to a real skill inside the plugin root 7ms
+     → ./assets/skills/write/: expected false to be true // Object.is equality
+   × packaged vendor discovery > resolves the Codex manifest skill directory to the shared tree 2ms
+     → promise rejected "Error: ENOENT: no such file or directory,… { …(4) }" instead of resolving
+   × packaged vendor discovery > parses every live skill frontmatter with its allowed surface 3ms
+     → ENOENT: no such file or directory, open '/private/tmp/oms-red-team-gates/assets/skills/write/SKILL.md'
+   × packaged vendor discovery > ships both Claude hook binaries that package.json bin points at 0ms
+     → oh-my-second-brain -> dist/cli/oms.js: expected false to be true // Object.is equality
+
+ Test Files  1 failed (1)
+      Tests  5 failed | 12 passed (17)
+   Start at  03:06:38
+   Duration  310ms (transform 31ms, setup 0ms, collect 48ms, tests 30ms, environment 0ms, prepare 50ms)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/architecture/vendor-discovery.test.ts > packaged vendor discovery > keeps exactly the six canonical skills in one authored location
+AssertionError: write: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ test/architecture/vendor-discovery.test.ts:92:7
+     90|   it("keeps exactly the six canonical skills in one authored location"…
+     91|     for (const skill of CANONICAL_SKILLS) {
+     92|       await expect(pathExists(`assets/skills/${skill}/SKILL.md`), skil…
+       |       ^
+     93|     }
+     94|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  test/architecture/vendor-discovery.test.ts > packaged vendor discovery > resolves every Claude manifest skill entry to a real skill inside the plugin root
+AssertionError: ./assets/skills/write/: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ test/architecture/vendor-discovery.test.ts:102:7
+    100|     expect(manifest.skills.length).toBe(CANONICAL_SKILLS.length);
+    101|     for (const declared of manifest.skills) {
+    102|       await expect(resolvesToDirectory(root, declared), declared).reso…
+       |       ^
+    103|     }
+    104|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  test/architecture/vendor-discovery.test.ts > packaged vendor discovery > resolves the Codex manifest skill directory to the shared tree
+AssertionError: promise rejected "Error: ENOENT: no such file or directory,… { …(4) }" instead of resolving
+ ❯ test/architecture/vendor-discovery.test.ts:116:7
+    114|         readFile(path.join(target, skill, "SKILL.md"), "utf8").then(()…
+    115|         skill,
+    116|       ).resolves.toBe(true);
+       |       ^
+    117|     }
+    118|   });
+
+Caused by: Error: ENOENT: no such file or directory, open '/private/tmp/oms-red-team-gates/assets/skills/write/SKILL.md'
+ ❯ test/architecture/vendor-discovery.test.ts:113:7
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { errno: -2, code: 'ENOENT', syscall: 'open', path: '/private/tmp/oms-red-team-gates/assets/skills/write/SKILL.md' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  test/architecture/vendor-discovery.test.ts > packaged vendor discovery > parses every live skill frontmatter with its allowed surface
+Error: ENOENT: no such file or directory, open '/private/tmp/oms-red-team-gates/assets/skills/write/SKILL.md'
+ ❯ test/architecture/vendor-discovery.test.ts:148:24
+    146|     let mcpSkillCount = 0;
+    147|     for (const skill of CANONICAL_SKILLS) {
+    148|       const document = await readFile(absolute(`assets/skills/${skill}…
+       |                        ^
+    149|       const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(docu…
+    150|       expect(match, skill).not.toBeNull();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  test/architecture/vendor-discovery.test.ts > packaged vendor discovery > ships both Claude hook binaries that package.json bin points at
+AssertionError: oh-my-second-brain -> dist/cli/oms.js: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ test/architecture/vendor-discovery.test.ts:191:7
+    189|     const pkg = await readJson<{ bin: Record<string, string> }>("packa…
+    190|     for (const [name, target] of Object.entries(pkg.bin)) {
+    191|       await expect(pathExists(target), `${name} -> ${target}`).resolve…
+       |       ^
+    192|     }
+    193|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+
+vendor-package-assets-omission-evasion-passes: FAIL
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/vendor-discovery.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ❯ test/architecture/vendor-discovery.test.ts (17 tests | 1 failed) 26ms
+   × packaged vendor discovery > ships both Claude hook binaries that package.json bin points at 4ms
+     → oh-my-second-brain -> dist/cli/oms.js: expected false to be true // Object.is equality
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 16 passed (17)
+   Start at  03:06:39
+   Duration  280ms (transform 30ms, setup 0ms, collect 46ms, tests 26ms, environment 0ms, prepare 41ms)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/architecture/vendor-discovery.test.ts > packaged vendor discovery > ships both Claude hook binaries that package.json bin points at
+AssertionError: oh-my-second-brain -> dist/cli/oms.js: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ test/architecture/vendor-discovery.test.ts:191:7
+    189|     const pkg = await readJson<{ bin: Record<string, string> }>("packa…
+    190|     for (const [name, target] of Object.entries(pkg.bin)) {
+    191|       await expect(pathExists(target), `${name} -> ${target}`).resolve…
+       |       ^
+    192|     }
+    193|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+doc-mapping-dangling-reference-detected: PASS
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/doc-mapping.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ✓ test/architecture/doc-mapping.test.ts (4 tests) 211ms
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  03:06:40
+   Duration  463ms (transform 27ms, setup 0ms, collect 31ms, tests 211ms, environment 0ms, prepare 61ms)
+
+
+doc-unmapped-stale-path-evasion-passes: PASS
+
+> oh-my-second-brain@0.2.0 test
+> vitest run --run test/architecture/doc-mapping.test.ts
+
+
+ RUN  v2.1.9 /private/tmp/oms-red-team-gates
+
+ ✓ test/architecture/doc-mapping.test.ts (4 tests) 312ms
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  03:06:41
+   Duration  693ms (transform 30ms, setup 0ms, collect 31ms, tests 312ms, environment 0ms, prepare 65ms)
+
+

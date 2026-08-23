@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "kind": "cli-replay",
+  "replaySafe": true,
+  "command": "node dist/cli/oms.js",
+  "argvSets": [
+    [
+      "query"
+    ],
+    [
+      "status"
+    ],
+    [
+      "get"
+    ],
+    [
+      "multi-get"
+    ],
+    [
+      "vsearch"
+    ],
+    [
+      "semantic",
+      "query",
+      "--vault",
+      "test/fixtures/vault"
+    ],
+    [
+      "semantic",
+      "status",
+      "--vault",
+      "test/fixtures/vault"
+    ],
+    [
+      "semantic",
+      "get",
+      "--vault",
+      "test/fixtures/vault"
+    ],
+    [
+      "semantic",
+      "multi-get",
+      "--vault",
+      "test/fixtures/vault"
+    ],
+    [
+      "semantic",
+      "vsearch",
+      "--vault",
+      "test/fixtures/vault"
+    ]
+  ],
+  "output": "artifacts/red-team/cli-command-contract.txt"
+}

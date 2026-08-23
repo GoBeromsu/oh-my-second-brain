@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseNote } from "../../src/kernel/conventions/frontmatter.js";
 import { harnessSurfaceRegistry } from "../../src/kernel/harness/surface-registry.js";
+import { omsMcpTools } from "../../src/mcp/server.js";
 
 /**
  * Surface-set parity gate, Phase A.
@@ -36,9 +37,21 @@ interface SurfaceSets {
   /** MCP tool names declared by skill frontmatter. */
   readonly declaredMcpTools: readonly string[];
   readonly mcpTools: readonly string[];
+  /** Posture metadata declared by the harness registry. */
+  readonly registryMcpTools: readonly McpToolPosture[];
+  /** Tool definitions the MCP server actually returns from tools/list. */
+  readonly registeredMcpTools: readonly McpToolPosture[];
   readonly cliCommands: readonly string[];
   /** Commands accepted by the CLI dispatcher. */
   readonly dispatcherCliCommands: readonly string[];
+}
+
+interface McpToolPosture {
+  readonly name: string;
+  readonly posture: "read" | "write";
+  readonly destructive: boolean;
+  readonly idempotent: boolean;
+  readonly openWorld: boolean;
 }
 
 export interface ParityViolation {
@@ -73,6 +86,27 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
       rule: "tool-count-matches-declarations",
       detail: `${sets.mcpTools.length} MCP tools registered but ${declaredTools.size} tools are declared by skills`,
     });
+  }
+
+  const registryTools = new Map(sets.registryMcpTools.map((tool) => [tool.name, tool]));
+  const registeredTools = new Map(sets.registeredMcpTools.map((tool) => [tool.name, tool]));
+  for (const [name, registryTool] of registryTools) {
+    const registeredTool = registeredTools.get(name);
+    if (registeredTool === undefined) {
+      violations.push({ rule: "server-tools-match-registry", detail: `Registry tool ${name} is not registered by the MCP server` });
+    } else if (
+      registeredTool.posture !== registryTool.posture
+      || registeredTool.destructive !== registryTool.destructive
+      || registeredTool.idempotent !== registryTool.idempotent
+      || registeredTool.openWorld !== registryTool.openWorld
+    ) {
+      violations.push({ rule: "server-tools-match-registry", detail: `MCP server tool ${name} annotations differ from the registry` });
+    }
+  }
+  for (const name of registeredTools.keys()) {
+    if (!registryTools.has(name)) {
+      violations.push({ rule: "server-tools-match-registry", detail: `MCP server registers ${name} without a registry entry` });
+    }
   }
 
   if (sets.skills.length !== expected.skills) {
@@ -130,6 +164,20 @@ const CLEAN: SurfaceSets = {
   // Within Phase A, a tool is identified by its declaring skill; the `oms_`
   // naming convention is verified separately by the registry parity suite.
   mcpTools: ["write", "search", "link", "status", "doctor"],
+  registryMcpTools: [
+    { name: "write", posture: "write", destructive: false, idempotent: false, openWorld: false },
+    { name: "search", posture: "write", destructive: false, idempotent: false, openWorld: false },
+    { name: "link", posture: "write", destructive: true, idempotent: false, openWorld: false },
+    { name: "status", posture: "read", destructive: false, idempotent: true, openWorld: false },
+    { name: "doctor", posture: "write", destructive: false, idempotent: false, openWorld: false },
+  ],
+  registeredMcpTools: [
+    { name: "write", posture: "write", destructive: false, idempotent: false, openWorld: false },
+    { name: "search", posture: "write", destructive: false, idempotent: false, openWorld: false },
+    { name: "link", posture: "write", destructive: true, idempotent: false, openWorld: false },
+    { name: "status", posture: "read", destructive: false, idempotent: true, openWorld: false },
+    { name: "doctor", posture: "write", destructive: false, idempotent: false, openWorld: false },
+  ],
   cliCommands: ["mcp", "setup", "install", "update", "audit", "lint", "hook"],
   declaredMcpTools: ["write", "search", "link", "status", "doctor"],
   dispatcherCliCommands: ["mcp", "setup", "install", "update", "audit", "lint", "hook"],
@@ -163,6 +211,33 @@ describe("surface-set parity gate (phase A rules)", () => {
       TARGET,
     );
     expect(violations.map((v) => v.rule)).toContain("tools-subset-of-skills");
+  });
+
+  it("fails when the MCP server registers an extra tool absent from the registry", () => {
+    const violations = checkSurfaceSets(
+      {
+        ...CLEAN,
+        registeredMcpTools: [
+          ...CLEAN.registeredMcpTools,
+          { name: "oms_extra", posture: "read", destructive: false, idempotent: true, openWorld: false },
+        ],
+      },
+      TARGET,
+    );
+    expect(violations.map((v) => v.rule)).toContain("server-tools-match-registry");
+  });
+
+  it("fails when a registered tool annotation differs from the registry", () => {
+    const violations = checkSurfaceSets(
+      {
+        ...CLEAN,
+        registeredMcpTools: CLEAN.registeredMcpTools.map((tool) =>
+          tool.name === "status" ? { ...tool, posture: "write" as const } : tool,
+        ),
+      },
+      TARGET,
+    );
+    expect(violations.map((v) => v.rule)).toContain("server-tools-match-registry");
   });
 
   it("fails when a skill declares a tool that is never registered", () => {
@@ -239,6 +314,20 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
   const mcpTools = harnessSurfaceRegistry.mcpTools.map((tool) => tool.name).sort();
   expect(mcpTools, "MCP tool registry must not be empty").not.toEqual([]);
   expect(mcpTools).toEqual(declaredMcpTools);
+  const registeredMcpTools = omsMcpTools.map((tool) => ({
+    name: tool.name,
+    posture: tool.annotations?.readOnlyHint === true ? "read" : "write" as const,
+    destructive: tool.annotations?.destructiveHint === true,
+    idempotent: tool.annotations?.idempotentHint === true,
+    openWorld: tool.annotations?.openWorldHint === true,
+  })).sort((left, right) => left.name.localeCompare(right.name));
+  const registryPostures = harnessSurfaceRegistry.mcpTools.map((tool) => ({
+    name: tool.name,
+    posture: tool.posture,
+    destructive: tool.destructive,
+    idempotent: tool.idempotent,
+    openWorld: tool.openWorld,
+  })).sort((left, right) => left.name.localeCompare(right.name));
 
   const cliCommands = harnessSurfaceRegistry.cliCommands.map((command) => command.name).sort();
   return {
@@ -246,6 +335,8 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     skillsWithTool: skillsWithTool.map(({ skill }) => skill),
     declaredMcpTools,
     mcpTools,
+    registryMcpTools: registryPostures,
+    registeredMcpTools,
     cliCommands,
     dispatcherCliCommands: realDispatcherCommands(),
   };

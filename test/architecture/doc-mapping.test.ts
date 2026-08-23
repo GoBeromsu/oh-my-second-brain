@@ -49,6 +49,28 @@ describe("documentation mapping checker", () => {
     expect(result.output).toContain("docs/architecture.md:1: missing reference src/kernel/missing.ts");
   });
 
+  it("reports a stale source path in any user-facing documentation file", () => {
+    const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
+    fixtures.push(fixture);
+    mkdirSync(resolve(fixture, "docs"), { recursive: true });
+    writeFileSync(resolve(fixture, "docs", "release.md"), "The release tool is `src/ontology/loader.ts`.\n");
+
+    const result = runChecker(fixture);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("docs/release.md:1: missing reference src/ontology/loader.ts");
+  });
+
+  it("fails closed when no user-facing documentation files are scanned", () => {
+    const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
+    fixtures.push(fixture);
+
+    const result = runChecker(fixture);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('architecture gate scanned zero files for "user-facing documentation"');
+  });
+
   it("does not treat upstream research citations as repository paths", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);

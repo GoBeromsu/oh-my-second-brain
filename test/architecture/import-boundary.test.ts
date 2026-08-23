@@ -7,6 +7,7 @@ import {
   findImports,
   importSpecifiers,
   isProductionTs,
+  nonLiteralDynamicImports,
   pathExists,
   underAny,
 } from "./repo-root.js";
@@ -116,6 +117,12 @@ describe("import-direction gate", () => {
 
     // Static specifiers are collected first, then dynamic ones - not source order.
     expect(importSpecifiers(source)).toEqual(["./thing.js", "./y.js", "../kernel/x.js"]);
+  });
+
+  it("rejects a computed dynamic import rather than silently skipping the boundary edge", () => {
+    expect(nonLiteralDynamicImports('void import("../mcp/" + "server.js");')).toEqual([
+      'import("../mcp/" + "server.js")',
+    ]);
   });
 
   it("classifies a kernel import of a surface layer as forbidden", () => {
