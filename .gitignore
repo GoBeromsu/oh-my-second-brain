@@ -41,4 +41,8 @@ private/
 # not source, and a probe vault carrying a generated sqlite store does not
 # belong in the product repository.
 artifacts/
-test/fixtures/vault/
+
+# Engine stores are generated at runtime. The markdown fixtures under
+# test/fixtures/ are test INPUT and must stay tracked - ignoring the whole
+# directory once removed them and broke every test that depends on the fixture.
+test/fixtures/**/.oms/
