@@ -18,6 +18,7 @@ import { makeDeferredProvider, makeDeferredStore } from "./embed/deferred.js";
 import type { DispatcherDeps } from "./retrieval/dispatcher.js";
 import type { EngineStore } from "./embed/store.js";
 import type { EmbeddingProvider } from "./types.js";
+import type { Reranker } from "./retrieval/reranker.js";
 
 // ---------------------------------------------------------------------------
 // Public config type
@@ -42,6 +43,13 @@ export interface AssembleConfig {
 
   /** Default BFS hop depth for graph sub-queries (default 2). */
   graphDepth?: number;
+
+  /**
+   * Optional real cross-encoder reranker. Reranking is disabled unless a
+   * request explicitly sets `rerank: true`; such a request fails loudly when
+   * this is absent.
+   */
+  reranker?: Reranker;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +113,7 @@ export function assembleEngine(config: AssembleConfig): AssembledEngine {
   const adapter = new McpEngineAdapter(deps, vault, {
     embeddingProvider: config.embeddingProvider,
     embeddingModel: config.embeddingModel,
-  });
+  }, config.reranker);
 
   return {
     adapter,
@@ -164,7 +172,7 @@ export function assembleCoreSemanticEngine(config: AssembleConfig): AssembledEng
   const adapter = new McpEngineAdapter(deps, vault, {
     embeddingProvider: config.embeddingProvider,
     embeddingModel: config.embeddingModel,
-  });
+  }, config.reranker);
 
   return {
     adapter,
@@ -215,7 +223,7 @@ export function assembleGraphOnlyEngine(config: AssembleConfig): AssembledEngine
     ...(config.graphDepth !== undefined ? { graphDepth: config.graphDepth } : {}),
   };
 
-  const adapter = new McpEngineAdapter(deps, vault);
+  const adapter = new McpEngineAdapter(deps, vault, undefined, config.reranker);
 
   return {
     adapter,

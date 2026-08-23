@@ -19,7 +19,7 @@ export interface SearchRequest {
   readonly hyde?: string;
   readonly limit?: number;
   readonly candidateLimit?: number;
-  /** Apply the configured reranker (default true). */
+  /** Apply the configured reranker (default false). */
   readonly rerank?: boolean;
   readonly minScore?: number;
   /** Context that disambiguates a query without becoming a sub-query. */
@@ -30,6 +30,8 @@ export interface SearchRequest {
 }
 
 export interface NormalizedSearchRequest {
+  /** Plain natural-language query retained for an optional reranker. */
+  readonly query?: string;
   readonly searches: readonly McpSemanticTypedSearch[];
   readonly limit?: number;
   readonly candidateLimit?: number;
@@ -83,6 +85,7 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
 
   const collections = (request.collections ?? []).filter((collection) => collection.trim() !== "");
   return {
+    query,
     searches: hasExplicitSearches
       ? [...searches, ...shorthands]
       : [{ type: request.mode === "vsearch" ? "vec" : "lex", query: query! }],

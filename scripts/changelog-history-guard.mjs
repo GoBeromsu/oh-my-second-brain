@@ -4,7 +4,12 @@
 // config failure (exit 2), never a silent pass.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { alteredReleasedSections, missingReleasedHeadings, relocatedReleasedSections } from "./release-lib.mjs";
+import {
+  alteredReleasedSections,
+  duplicateChangelogHeadings,
+  missingReleasedHeadings,
+  relocatedReleasedSections,
+} from "./release-lib.mjs";
 
 const CHANGELOG_FILES = [
   "CHANGELOG.md",
@@ -46,6 +51,19 @@ const headChangelogs = Object.fromEntries(CHANGELOG_FILES.map((file) => {
     return [file, ""];
   }
 }));
+
+const duplicates = [
+  ...Object.entries(baseChangelogs).flatMap(([file, content]) =>
+    duplicateChangelogHeadings(content).map((heading) => `${file}: ${heading} at '${base}'`),
+  ),
+  ...Object.entries(headChangelogs).flatMap(([file, content]) =>
+    duplicateChangelogHeadings(content).map((heading) => `${file}: ${heading} in the working tree`),
+  ),
+];
+
+if (duplicates.length > 0) {
+  fail(`duplicate changelog heading(s) are malformed:\n${duplicates.map((heading) => `  - ${heading}`).join("\n")}`);
+}
 
 const missing = missingReleasedHeadings(baseChangelogs, headChangelogs);
 

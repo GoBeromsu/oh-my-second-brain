@@ -4,6 +4,11 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Collection scoping now constrains the candidate set before result limiting. A filtered query previously ran against already-truncated results, so it could return nothing while matching in-collection documents sat below the limit.
+- Collection names are matched literally. They were interpolated into a SQL `LIKE` pattern unescaped, so `_` and `%` acted as wildcards and a request for `my_notes` also matched `myXnotes`.
+
 ### Added
 
 - A `SearchBackend` seam names the retrieval capability OMS actually ships, so a second backend has something to implement against instead of reaching into the engine's own types. A request is either a plain `query` or typed `searches` sub-queries — never both — plus `limit`, `minScore`, and an `intent` field that disambiguates without itself searching. That exclusive choice is enforced at runtime as well as in the type, because a request parsed from JSON at the MCP boundary arrives unchecked.

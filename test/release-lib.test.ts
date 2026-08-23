@@ -32,7 +32,7 @@ interface ReleaseLib {
   extractReleaseNotes(content: string, version: string): string;
   bumpedJsonVersion(jsonText: string, version: string): string;
   bumpedPackageLock(jsonText: string, version: string): string;
-  bumpedMarketplace(jsonText: string, version: string): string;
+  bumpedMarketplace(jsonText: string): string;
   versionMismatches(carriers: VersionCarriers): string[];
   missingReleasedHeadings(baseChangelogs: Record<string, string>, headChangelogs: Record<string, string>): string[];
   alteredReleasedSections(baseChangelogs: Record<string, string>, headChangelogs: Record<string, string>): string[];
@@ -169,6 +169,11 @@ describe("rolledChangelog", () => {
     expect(() => rolledChangelog(`# Changelog\n\n${RELEASED_0_1_9}`, "1.0.0", "2026-01-01")).toThrow(
       /\[Unreleased\]/,
     );
+  });
+
+  it("rejects duplicate [Unreleased] headings rather than rolling an ambiguous section", () => {
+    const duplicateUnreleased = "# Changelog\n\n## [Unreleased]\n\n- first\n\n## [Unreleased]\n\n- second\n";
+    expect(() => rolledChangelog(duplicateUnreleased, "0.1.0", "2026-01-01")).toThrow(/duplicate heading.*Unreleased/);
   });
 
   it("rolls a changelog whose only section is [Unreleased]", () => {

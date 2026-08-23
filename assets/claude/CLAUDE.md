@@ -17,7 +17,7 @@ All knowledge capture and retrieval must follow the declared semantic convention
 - The kernel fills and checks frontmatter from `.oms`. `ask` or `rejected` means fix and call `oms_write` again.
 
 **When retrieving knowledge:**
-- Use the `/search` skill or follow the retriever persona (`core/agents/retriever.md`).
+- Use the `/search` skill.
 - Apply the concept's declared lens for the retrieval purpose (synthesis, audit, etc.).
 - Return only the fields the lens specifies — do not dump full frontmatter.
 

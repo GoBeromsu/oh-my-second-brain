@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, expect } from "vitest";
-import { openEngineStore } from "./store.js";
+import { openEngineStore, openEngineStoreCore } from "./store.js";
 import type { EngineStore } from "./store.js";
 import { createHashProjectionProvider } from "./hash-stub.test-helper.js";
 
@@ -31,6 +31,16 @@ async function makeRow(docPath: string, ordinal: number, text: string) {
     headingPath: [] as string[],
     sha: "aabbcc",
     vector,
+  };
+}
+
+function makeLexRow(docPath: string, text: string) {
+  return {
+    docPath,
+    ordinal: 0,
+    text,
+    headingPath: [] as string[],
+    sha: docPath,
   };
 }
 
@@ -92,6 +102,66 @@ describe("openEngineStore — queryVec", () => {
       expect(h.score).toBeGreaterThan(0);
       expect(h.score).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe.each([
+  ["vector-capable store", (dbPath: string) => openEngineStore(dbPath, DIMS)],
+  ["core-only store", (dbPath: string) => openEngineStoreCore(dbPath)],
+])("collection-scoped lexical search (%s)", (_mode, openStore) => {
+  let collectionDir: string;
+  let collectionStore: EngineStore;
+
+  beforeAll(() => {
+    collectionDir = mkdtempSync(path.join(tmpdir(), "oms-store-collection-test-"));
+    collectionStore = openStore(path.join(collectionDir, "test.db"));
+  });
+
+  afterAll(() => {
+    collectionStore.close();
+    rmSync(collectionDir, { recursive: true, force: true });
+  });
+
+  it("does not treat an underscore in a collection name as a wildcard", () => {
+    collectionStore.upsertLex([
+      makeLexRow("my_notes/kept.md", "collection underscore literal token"),
+      makeLexRow("myXnotes/leaked.md", "collection underscore literal token"),
+    ]);
+
+    expect(collectionStore.queryLex("collection underscore literal", 10, "my_notes").map((hit) => hit.docPath))
+      .toEqual(["my_notes/kept.md"]);
+  });
+
+  it("does not treat a percent sign in a collection name as a wildcard", () => {
+    collectionStore.upsertLex([
+      makeLexRow("my%notes/kept.md", "collection percent literal token"),
+      makeLexRow("myZZnotes/leaked.md", "collection percent literal token"),
+    ]);
+
+    expect(collectionStore.queryLex("collection percent literal", 10, "my%notes").map((hit) => hit.docPath))
+      .toEqual(["my%notes/kept.md"]);
+  });
+
+  it("keeps overlapping collection names separate while including descendants", () => {
+    collectionStore.upsertLex([
+      makeLexRow("notes/root.md", "collection overlap literal token"),
+      makeLexRow("notes/sub/child.md", "collection overlap literal token"),
+      makeLexRow("notes-archive/leaked.md", "collection overlap literal token"),
+    ]);
+
+    expect(collectionStore.queryLex("collection overlap literal", 10, "notes").map((hit) => hit.docPath).sort())
+      .toEqual(["notes/root.md", "notes/sub/child.md"]);
+    expect(collectionStore.queryLex("collection overlap literal", 10, "notes/sub").map((hit) => hit.docPath))
+      .toEqual(["notes/sub/child.md"]);
+  });
+
+  it("returns documents from an ordinary collection", () => {
+    collectionStore.upsertLex([
+      makeLexRow("ordinary/document.md", "collection ordinary literal token"),
+    ]);
+
+    expect(collectionStore.queryLex("collection ordinary literal", 10, "ordinary").map((hit) => hit.docPath))
+      .toEqual(["ordinary/document.md"]);
   });
 });
 

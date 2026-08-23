@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { assembleCoreSemanticEngine, type AssembledEngine } from "../engine/assemble.js";
 import { EngineSearchBackend, requiresEmbeddings } from "./engine-search-backend.js";
 import type { SearchBackend } from "./search-backend.js";
+import type { Reranker } from "../engine/retrieval/reranker.js";
+import type { ScoredHit } from "../engine/types.js";
 
 const vaults: string[] = [];
 
@@ -22,7 +24,7 @@ async function fixtureVault(): Promise<string> {
   );
   await writeFile(
     path.join(vault, "recipe.md"),
-    "# Recipe\nKnead bread dough before baking.\n",
+    "# Recipe\nA telescope observes planets in orbit while a baker kneads bread dough.\n",
     "utf8",
   );
   return vault;
@@ -261,4 +263,40 @@ searchBackendConformance("in-repository engine", (vault) => {
     backend: new EngineSearchBackend(engine.adapter, vault),
     dispose: () => engine.dispose(),
   };
+});
+
+describe("EngineSearchBackend reranking", () => {
+  it("passes the real query to a configured reranker and returns its changed ordering", async () => {
+    const vault = await fixtureVault();
+    const rerank = vi.fn(async (_query: string, hits: ScoredHit[]) =>
+      [...hits].reverse().map((hit, index) => ({ ...hit, score: hits.length - index })),
+    );
+    const reranker: Reranker = { rerank };
+    const engine = assembleCoreSemanticEngine({ vault, reranker });
+    const backend = new EngineSearchBackend(engine.adapter, vault);
+    try {
+      const result = await backend.search({
+        query: "telescope planets orbit",
+        candidateLimit: 10,
+        rerank: true,
+      });
+
+      expect(result.available).toBe(true);
+      expect(rerank).toHaveBeenCalledTimes(1);
+      expect(rerank).toHaveBeenCalledWith(
+        "telescope planets orbit",
+        expect.any(Array),
+      );
+      const candidates = rerank.mock.calls[0]![1]!;
+      expect(candidates.length).toBeGreaterThan(1);
+      expect(result.hits.map((hit) => hit.path)).toEqual(
+        candidates.map((hit) => hit.docPath).reverse(),
+      );
+
+      await backend.search({ query: "telescope planets orbit", rerank: false });
+      expect(rerank).toHaveBeenCalledTimes(1);
+    } finally {
+      await engine.dispose();
+    }
+  });
 });

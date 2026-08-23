@@ -130,7 +130,7 @@ describe("McpEngineAdapter.semanticQuery", () => {
     expect(result.hits.every((h) => h.score >= 0.5)).toBe(true);
   });
 
-  it("uses the configured reranker by default and skips it when rerank is false", async () => {
+  it("uses the configured reranker when requested and skips it when rerank is false", async () => {
     const first: ScoredHit = { docPath: "notes/first.md", chunkOrdinal: 0, score: 0.9 };
     const second: ScoredHit = { docPath: "notes/second.md", chunkOrdinal: 0, score: 0.8 };
     const rerank = vi.fn().mockResolvedValue([
@@ -144,17 +144,27 @@ describe("McpEngineAdapter.semanticQuery", () => {
       { rerank },
     );
 
-    const defaultResult = await adapter.semanticQuery({
+    const rerankedResult = await adapter.semanticQuery({
       query: "test",
+      rerank: true,
     });
     const skippedResult = await adapter.semanticQuery({
       query: "test",
       rerank: false,
     });
 
-    expect(defaultResult.hits.map((hit) => hit.path)).toEqual([second.docPath, first.docPath]);
+    expect(rerankedResult.hits.map((hit) => hit.path)).toEqual([second.docPath, first.docPath]);
     expect(skippedResult.hits.map((hit) => hit.path)).toEqual([first.docPath, second.docPath]);
     expect(rerank).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects requested reranking when no real reranker is configured", async () => {
+    const adapter = new McpEngineAdapter(makeDeps([LEX_HIT], []), "/vault");
+
+    const result = await adapter.semanticQuery({ query: "test", rerank: true });
+
+    expect(result.available).toBe(false);
+    expect(result.reason).toMatch(/configured Reranker/i);
   });
 
   it("returns available=true with empty hits for an empty store", async () => {

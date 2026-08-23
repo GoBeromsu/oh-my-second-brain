@@ -41,7 +41,7 @@ export class EngineSearchBackend implements SearchBackend {
       : this.adapterOrResolver;
     const searchCollection = async (collectionPath?: string): Promise<McpSemanticQueryResult> => adapter.semanticQuery({
       vault: this.vault,
-      query: "",
+      query: normalized.query ?? "",
       searches: normalized.searches,
       limit: normalized.limit,
       candidateLimit: normalized.candidateLimit,

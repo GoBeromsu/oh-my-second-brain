@@ -53,6 +53,10 @@ export function rolledChangelog(content, version, date, options = {}) {
   if (typeof content !== "string" || !content.startsWith(`${CHANGELOG_HEADER}\n`)) {
     throw new Error(`malformed changelog: missing '${CHANGELOG_HEADER}' header on the first line`);
   }
+  const duplicates = duplicateChangelogHeadings(content);
+  if (duplicates.length > 0) {
+    throw new Error(`malformed changelog: duplicate heading(s): ${duplicates.join(", ")}`);
+  }
   const unreleasedStart = content.indexOf(`\n${UNRELEASED_HEADING}`);
   if (unreleasedStart === -1) {
     throw new Error(`malformed changelog: missing '${UNRELEASED_HEADING}' section`);
@@ -199,6 +203,31 @@ export function versionMismatches({
   return checks
     .filter(([, actual]) => actual !== version)
     .map(([name, actual]) => `${name}=${actual === undefined ? "missing" : actual} (expected ${version})`);
+}
+
+/**
+ * Return duplicate top-level changelog headings. Release versions and
+ * [Unreleased] each have exactly one authoritative section.
+ *
+ * @param {string} content
+ * @returns {string[]} duplicate headings, once each, in document order
+ */
+export function duplicateChangelogHeadings(content) {
+  const duplicates = [];
+  const seen = new Set();
+  const lines = (content ?? "").split("\n");
+
+  for (const line of lines) {
+    const released = /^## \[(\d+\.\d+\.\d+)\](?: - .*)?$/.exec(line);
+    const heading = released ? `## [${released[1]}]` : line === UNRELEASED_HEADING ? UNRELEASED_HEADING : null;
+    if (heading === null) continue;
+    if (seen.has(heading)) {
+      if (!duplicates.includes(heading)) duplicates.push(heading);
+    } else {
+      seen.add(heading);
+    }
+  }
+  return duplicates;
 }
 
 /**

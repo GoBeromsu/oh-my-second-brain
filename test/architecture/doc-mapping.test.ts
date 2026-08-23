@@ -25,10 +25,18 @@ function runChecker(root: string): { status: number; output: string } {
   }
 }
 
+function writePackage(root: string, files?: string[]): void {
+  writeFileSync(
+    resolve(root, "package.json"),
+    JSON.stringify({ name: "fixture", version: "1.0.0", ...(files ? { files } : {}) }),
+  );
+}
+
 describe("documentation mapping checker", () => {
   it("reports a deliberately broken relative reference", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);
+    writePackage(fixture);
     writeFileSync(resolve(fixture, "CONTRIBUTING.md"), "[broken](./missing.md)\n");
 
     const result = runChecker(fixture);
@@ -40,6 +48,7 @@ describe("documentation mapping checker", () => {
   it("reports a missing inline source path in a docs markdown file", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);
+    writePackage(fixture);
     mkdirSync(resolve(fixture, "docs"), { recursive: true });
     writeFileSync(resolve(fixture, "docs", "architecture.md"), "The loader is `src/kernel/missing.ts`.\n");
 
@@ -52,6 +61,7 @@ describe("documentation mapping checker", () => {
   it("reports a stale source path in any user-facing documentation file", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);
+    writePackage(fixture);
     mkdirSync(resolve(fixture, "docs"), { recursive: true });
     writeFileSync(resolve(fixture, "docs", "release.md"), "The release tool is `src/ontology/loader.ts`.\n");
 
@@ -64,6 +74,7 @@ describe("documentation mapping checker", () => {
   it("reports a missing inline source path in packaged host guidance", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);
+    writePackage(fixture);
     mkdirSync(resolve(fixture, "assets", "codex"), { recursive: true });
     writeFileSync(resolve(fixture, "assets", "codex", "AGENTS.md"), "The loader is `src/kernel/missing.ts`.\n");
 
@@ -73,9 +84,39 @@ describe("documentation mapping checker", () => {
     expect(result.output).toContain("assets/codex/AGENTS.md:1: missing reference src/kernel/missing.ts");
   });
 
+  it("reports a path that exists locally but is absent from the package", () => {
+    const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
+    fixtures.push(fixture);
+    mkdirSync(resolve(fixture, "assets", "claude"), { recursive: true });
+    mkdirSync(resolve(fixture, "core", "agents"), { recursive: true });
+    writePackage(fixture, ["assets"]);
+    writeFileSync(resolve(fixture, "assets", "claude", "CLAUDE.md"), "Use `core/agents/retriever.md`.\n");
+    writeFileSync(resolve(fixture, "core", "agents", "retriever.md"), "Retriever.\n");
+
+    const result = runChecker(fixture);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("assets/claude/CLAUDE.md:1: unpackaged reference core/agents/retriever.md");
+  });
+
+  it("reports an unnamespaced Codex skill invocation", () => {
+    const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
+    fixtures.push(fixture);
+    writePackage(fixture);
+    mkdirSync(resolve(fixture, "assets", "codex"), { recursive: true });
+    mkdirSync(resolve(fixture, "assets", "skills", "write"), { recursive: true });
+    writeFileSync(resolve(fixture, "assets", "codex", "AGENTS.md"), "Use `$write`.\n");
+
+    const result = runChecker(fixture);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("assets/codex/AGENTS.md:1: unknown Codex skill $write");
+  });
+
   it("excludes separately-owned core/AGENTS.md from mapping checks", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);
+    writePackage(fixture);
     mkdirSync(resolve(fixture, "core"), { recursive: true });
     writeFileSync(resolve(fixture, "CONTRIBUTING.md"), "Contributor guidance.\n");
     writeFileSync(resolve(fixture, "core", "AGENTS.md"), "[broken](./missing.md)\n");
@@ -99,6 +140,7 @@ describe("documentation mapping checker", () => {
   it("does not treat upstream research citations as repository paths", () => {
     const fixture = mkdtempSync(resolve(tmpdir(), "oms-doc-mapping-"));
     fixtures.push(fixture);
+    writePackage(fixture);
     mkdirSync(resolve(fixture, "docs", "research"), { recursive: true });
     writeFileSync(resolve(fixture, "docs", "research", "upstream.md"), "Upstream uses `src/cli/qmd.ts`.\n");
 

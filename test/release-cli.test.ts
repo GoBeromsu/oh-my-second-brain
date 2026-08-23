@@ -186,4 +186,52 @@ describe("changelog-history-guard", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("rejects duplicate released versions in either baseline or working tree", () => {
+    const directory = mkdtempSync(join(tmpdir(), "oms-changelog-history-guard-"));
+    const version = "0.2.0";
+    const baseline =
+      `# Changelog\n\n## [Unreleased]\n\n## [${version}] - 2026-08-24\n\n### Changed\n\n- preserved historical entry\n`;
+    const duplicateBaseline = `${baseline}\n## [${version}] - 2026-08-24\n\n### Changed\n\n- preserved historical entry\n`;
+    const bypassAttempt = baseline
+      .replace("preserved historical entry", "rewritten historical entry")
+      .concat(`\n## [${version}] - 2026-08-24\n\n### Changed\n\n- preserved historical entry\n`);
+    const runGuard = () =>
+      spawnSync(process.execPath, [CHANGELOG_HISTORY_GUARD], {
+        cwd: directory,
+        encoding: "utf-8",
+        env: { ...process.env, CHANGELOG_GUARD_BASE: "HEAD" },
+      });
+
+    try {
+      for (const file of CHANGELOG_FILES) writeFileSync(join(directory, file), baseline);
+      execFileSync("git", ["init"], { cwd: directory });
+      execFileSync("git", ["add", "."], { cwd: directory });
+      execFileSync(
+        "git",
+        ["-c", "user.name=OMS test", "-c", "user.email=oms@example.test", "commit", "-m", "baseline"],
+        { cwd: directory },
+      );
+
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), bypassAttempt);
+      const duplicateHead = runGuard();
+      expect(duplicateHead.status).toBe(1);
+      expect(duplicateHead.stderr).toContain("CHANGELOG-cli.md: ## [0.2.0]");
+
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), duplicateBaseline);
+      execFileSync("git", ["add", "."], { cwd: directory });
+      execFileSync(
+        "git",
+        ["-c", "user.name=OMS test", "-c", "user.email=oms@example.test", "commit", "-m", "duplicate baseline"],
+        { cwd: directory },
+      );
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), baseline);
+      const duplicateBase = runGuard();
+      expect(duplicateBase.status).toBe(1);
+      expect(duplicateBase.stderr).toContain("CHANGELOG-cli.md: ## [0.2.0]");
+      expect(duplicateBase.stderr).toContain("at 'HEAD'");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

@@ -90,6 +90,10 @@ function makeFtsQuery(text: string): string {
   return terms.map((t) => `${t.replace(/"/g, "")}*`).join(" OR ");
 }
 
+function collectionDescendantLikePattern(collection: string): string {
+  return `${collection.replace(/[!%_]/g, "!$&")}/%`;
+}
+
 function ensureCoreSchema(db: Database.Database): void {
   db.pragma("journal_mode = WAL");
 
@@ -208,7 +212,7 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
      JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
-     WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ?)
+     WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ? ESCAPE '!')
      ORDER BY rank
      LIMIT ?`,
   );
@@ -289,7 +293,7 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
       try {
         rows = collection === undefined
           ? stmtQueryLex.all(ftsQ, k)
-          : stmtQueryLexInCollection.all(ftsQ, collection, `${collection}/%`, k);
+          : stmtQueryLexInCollection.all(ftsQ, collection, collectionDescendantLikePattern(collection), k);
       } catch {
         return [];
       }
@@ -417,7 +421,7 @@ export function openEngineStore(
     `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
      JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
-     WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ?)
+     WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ? ESCAPE '!')
      ORDER BY rank
      LIMIT ?`,
   );
@@ -585,7 +589,7 @@ export function openEngineStore(
       try {
         rows = collection === undefined
           ? stmtQueryLex.all(ftsQ, k)
-          : stmtQueryLexInCollection.all(ftsQ, collection, `${collection}/%`, k);
+          : stmtQueryLexInCollection.all(ftsQ, collection, collectionDescendantLikePattern(collection), k);
       } catch {
         return [];
       }

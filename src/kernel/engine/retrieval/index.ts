@@ -80,7 +80,10 @@ export async function retrieve(opts: RetrieveOptions): Promise<RetrievalResult[]
     score: r.score,
   }));
 
-  const reranked = await opts.reranker.rerank(opts.query ?? "", hits);
+  if (!opts.query?.trim()) {
+    throw new Error("reranking requires a non-empty natural-language query.");
+  }
+  const reranked = await opts.reranker.rerank(opts.query, hits);
 
   // Reconstruct RetrievalResult[] in the reranker's order with new scores
   const resultByPath = new Map(results.map((r) => [r.docPath, r]));

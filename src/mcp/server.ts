@@ -42,6 +42,7 @@ import { assembleFullSemanticEngine, embeddingConfigPresent } from "../kernel/se
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { McpSemanticTypedSearch } from "../kernel/engine/mcp/types.js";
+import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend } from "../kernel/searchbackend/engine-search-backend.js";
 import {
   buildServerInstructions,
@@ -169,6 +170,12 @@ export const omsMcpTools: Tool[] = [
 export interface OMSMcpServerOptions {
   vault: string;
   /**
+   * Real cross-encoder used only for requests that explicitly set
+   * `rerank: true`. Without one, those requests fail rather than silently
+   * returning the unranked result.
+   */
+  reranker?: Reranker;
+  /**
    * How the vault was resolved. The write surface trusts every source except
    * `cwd` (the server may have booted in an arbitrary directory - issue #58).
    */
@@ -195,7 +202,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   let semanticEngine: AssembledEngine | null = null;
   const getSemanticEngine = (): AssembledEngine => {
     if (semanticEngine === null) {
-      semanticEngine = assembleFullSemanticEngine(vault);
+      semanticEngine = assembleFullSemanticEngine(vault, opts.reranker);
     }
     return semanticEngine;
   };
@@ -206,7 +213,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   let coreSemanticEngine: AssembledEngine | null = null;
   const getCoreSemanticEngine = (): AssembledEngine => {
     if (coreSemanticEngine === null) {
-      coreSemanticEngine = assembleCoreSemanticEngine({ vault });
+      coreSemanticEngine = assembleCoreSemanticEngine({ vault, reranker: opts.reranker });
     }
     return coreSemanticEngine;
   };

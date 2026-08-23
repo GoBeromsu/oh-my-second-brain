@@ -22,6 +22,7 @@ import {
   assembleEngine,
   type AssembledEngine,
 } from "../engine/assemble.js";
+import type { Reranker } from "../engine/retrieval/reranker.js";
 
 /** True when both canonical embedding-config env vars are set (ADR-007). */
 export function embeddingConfigPresent(): boolean {
@@ -45,16 +46,16 @@ function embeddingConfig(vault: string): Parameters<typeof assembleEngine>[0] {
  * when OMS_EMBEDDING_PROVIDER / OMS_EMBEDDING_MODEL are absent — no auto-detect,
  * no hash/fake fallback.
  */
-export function assembleFullSemanticEngine(vault: string): AssembledEngine {
-  return assembleEngine(embeddingConfig(vault));
+export function assembleFullSemanticEngine(vault: string, reranker?: Reranker): AssembledEngine {
+  return assembleEngine({ ...embeddingConfig(vault), reranker });
 }
 
 /**
  * Vec-capable engine when embeddings are configured, else a core engine that
  * serves lexical search and file-based document reads while vec/HyDE fail fast.
  */
-export function assembleSemanticEngine(vault: string): AssembledEngine {
+export function assembleSemanticEngine(vault: string, reranker?: Reranker): AssembledEngine {
   return embeddingConfigPresent()
-    ? assembleEngine(embeddingConfig(vault))
-    : assembleCoreSemanticEngine(embeddingConfig(vault));
+    ? assembleEngine({ ...embeddingConfig(vault), reranker })
+    : assembleCoreSemanticEngine({ ...embeddingConfig(vault), reranker });
 }

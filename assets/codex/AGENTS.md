@@ -10,7 +10,7 @@ This vault is governed by Oh My Second Brain conventions stored in `.oms/`.
 - Run `oms doctor` to validate notes against the convention (exits 0, non-blocking).
 - Read `.oms/taxonomy.yaml` and `.oms/concepts/*.yaml` for folder and field declarations.
 
-**Write:** Use `$write`. Call MCP `oms_write`. Do not use host Write/Edit for vault `.md` files.
-**Retrieve:** Use `$search` skill or follow the retriever persona with declared lenses.
+**Write:** Use `$oms-write`. Call MCP `oms_write`. Do not use host Write/Edit for vault `.md` files.
+**Retrieve:** Use the `$oms-search` skill with declared lenses.
 
-> **v0 native install:** `oms install --runtime codex` installs Codex rules, the `write`, `search`, `link`, `distill`, `status`, and `doctor` skills, and a managed Codex MCP config. Use Oh My Second Brain MCP tools for vault operations and CLI commands for lifecycle.
+> **v0 native install:** `oms install --runtime codex` installs Codex rules, the `$oms-write`, `$oms-search`, `$oms-link`, `$oms-distill`, `$oms-status`, and `$oms-doctor` skills, and a managed Codex MCP config. Use Oh My Second Brain MCP tools for vault operations and CLI commands for lifecycle.

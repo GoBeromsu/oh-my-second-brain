@@ -23,7 +23,7 @@
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
-import { passthroughReranker, retrieve } from "../retrieval/index.js";
+import { retrieve } from "../retrieval/index.js";
 import type { Reranker } from "../retrieval/reranker.js";
 import { syncEngineStore, walkMarkdown } from "../embed/sync.js";
 import type { EngineStore } from "../embed/store.js";
@@ -293,7 +293,7 @@ export class McpEngineAdapter {
     private readonly deps: DispatcherDeps,
     private readonly vaultPath: string,
     private readonly config?: { readonly embeddingProvider?: string; readonly embeddingModel?: string },
-    private readonly reranker: Reranker = passthroughReranker,
+    private readonly reranker?: Reranker,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -340,13 +340,22 @@ export class McpEngineAdapter {
         }
       }
       const k = opts.candidateLimit ?? 20;
+      const shouldRerank = opts.rerank === true && opts.noRerank !== true;
+      if (shouldRerank && this.reranker === undefined) {
+        return queryResultUnavailable(
+          "reranking requires a configured Reranker; pass one to assembleEngine() or createOMSMcpServer().",
+        );
+      }
+      if (shouldRerank && !opts.query?.trim()) {
+        return queryResultUnavailable("reranking requires a non-empty natural-language query.");
+      }
       const results = await retrieve({
         subQueries,
         deps: this.deps,
         k,
         collection: opts.collectionPath,
         query: opts.query,
-        reranker: opts.rerank === false || opts.noRerank === true ? undefined : this.reranker,
+        reranker: shouldRerank ? this.reranker : undefined,
       });
       const mapped = retrievalResultsToQueryResult(results, opts);
       // Fill title + doc-head snippet from disk so engine hits reach practical
