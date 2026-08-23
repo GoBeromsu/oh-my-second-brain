@@ -1,2 +1,0 @@
-docs/architecture.md:108: missing reference src/kernel/not-real.ts
-exit=1

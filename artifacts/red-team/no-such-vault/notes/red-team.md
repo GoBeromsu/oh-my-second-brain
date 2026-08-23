@@ -1,5 +1,0 @@
----
-{}
----
-
-should not write

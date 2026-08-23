@@ -35,3 +35,10 @@ vendor/reference-repos/
 # Private personal overlay — vault paths, names, personal recipes (R19/R20)
 # .oms/ itself is committed (ADR-006); only private/ is excluded here.
 private/
+
+# QA and red-team run evidence. These are produced by a gate lane at review
+# time and read from disk when the quality gate is assembled; they are outputs,
+# not source, and a probe vault carrying a generated sqlite store does not
+# belong in the product repository.
+artifacts/
+test/fixtures/vault/
