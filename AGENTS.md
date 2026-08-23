@@ -111,7 +111,7 @@ after editing imports.
 
 ## Commit, changelog, release
 
-- **Changelog entries first.** Every user-facing change goes under `## [Unreleased]` in CHANGELOG.md in the same PR as the code change. Write prose describing what changed and why it matters—not a copy-paste of the commit message.
+- **Changelog entries first.** Every user-facing change goes under `## [Unreleased]` in the layer changelog matching the change: `CHANGELOG-kernel.md` (domain logic), `CHANGELOG-cli.md` (the `oms` command surface), `CHANGELOG-mcp.md` (MCP server tools and resources), `CHANGELOG-vendors.md` (per-host adapters and installers), or `CHANGELOG-assets.md` (skills, agents, and ontology data), in the same PR as the code change. Write prose describing what changed and why it matters—not a copy-paste of the commit message.
 - **NEVER edit or remove released sections.** Released `## [X.Y.Z]` sections are immutable. CI enforces this via `scripts/changelog-history-guard.mjs`. If you need to correct a past release's notes, fix forward by shipping a patch version.
 - **Rebase conflicts in [Unreleased].** When merging PRs cause conflicts in the [Unreleased] section, resolve by keeping BOTH entries. Do not discard either contributor's changelog entry.
 - **Release flow.** Run `npm run release -- <X.Y.Z>` on main to coordinate version bumps, changelog rollover, and tag creation. See [docs/release.md](./docs/release.md) for full details.

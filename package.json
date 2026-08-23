@@ -20,7 +20,12 @@
     "docs/release.md",
     "scripts/install.sh",
     "scripts/uninstall.sh",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "CHANGELOG-kernel.md",
+    "CHANGELOG-cli.md",
+    "CHANGELOG-mcp.md",
+    "CHANGELOG-vendors.md",
+    "CHANGELOG-assets.md"
   ],
   "engines": {
     "node": ">=20"
