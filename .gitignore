@@ -46,3 +46,7 @@ artifacts/
 # test/fixtures/ are test INPUT and must stay tracked - ignoring the whole
 # directory once removed them and broke every test that depends on the fixture.
 test/fixtures/**/.oms/
+
+# GJC agent session state (goals, ledger, plans). Local tooling scratch, not
+# project content, and it is written by the GJC CLI rather than by hand.
+.gjc/
