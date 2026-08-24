@@ -96,7 +96,7 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
   ],
   mcpTools: [
     { name: "oms_write", owner: "capture", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
-    { name: "oms_search", owner: "retrieval", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
+    { name: "oms_search", owner: "retrieval", posture: "read", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
     { name: "oms_link", owner: "capture", posture: "write", destructive: true, idempotent: false, openWorld: false, stability: "stable" },
     { name: "oms_status", owner: "mcp", posture: "read", destructive: false, idempotent: true, openWorld: false, stability: "stable" },
     { name: "oms_doctor", owner: "mcp", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },

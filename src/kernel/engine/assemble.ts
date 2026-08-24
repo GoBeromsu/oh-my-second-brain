@@ -11,7 +11,13 @@
  */
 
 import { requireRealEmbeddingProvider } from "./embed/provider.js";
-import { openEngineStore, openEngineStoreCore } from "./embed/store.js";
+import {
+  openEngineStore,
+  openEngineStoreCore,
+  openInMemoryEngineStoreCore,
+  openEngineStoreCoreReadOnly,
+  openEngineStoreReadOnly,
+} from "./embed/store.js";
 import { syncEngineStore } from "./embed/sync.js";
 import { McpEngineAdapter } from "./mcp/facade.js";
 import { makeDeferredProvider, makeDeferredStore } from "./embed/deferred.js";
@@ -61,6 +67,8 @@ export interface AssembledEngine {
   deps: DispatcherDeps;
   store: EngineStore;
   provider: EmbeddingProvider;
+  /** Whether lex-only queries refresh this engine's selected lexical store. */
+  implicitLexicalSync: boolean;
   syncVault(opts?: SyncVaultOptions): Promise<SyncVaultResult>;
   dispose(): Promise<void>;
 }
@@ -113,13 +121,14 @@ export function assembleEngine(config: AssembleConfig): AssembledEngine {
   const adapter = new McpEngineAdapter(deps, vault, {
     embeddingProvider: config.embeddingProvider,
     embeddingModel: config.embeddingModel,
-  }, config.reranker);
+  }, config.reranker, true);
 
   return {
     adapter,
     deps,
     store,
     provider,
+    implicitLexicalSync: true,
 
     async syncVault(opts: SyncVaultOptions = {}): Promise<SyncVaultResult> {
       const result = await syncEngineStore({
@@ -172,13 +181,14 @@ export function assembleCoreSemanticEngine(config: AssembleConfig): AssembledEng
   const adapter = new McpEngineAdapter(deps, vault, {
     embeddingProvider: config.embeddingProvider,
     embeddingModel: config.embeddingModel,
-  }, config.reranker);
+  }, config.reranker, true);
 
   return {
     adapter,
     deps,
     store,
     provider,
+    implicitLexicalSync: true,
 
     async syncVault(opts: SyncVaultOptions = {}): Promise<SyncVaultResult> {
       const result = await syncEngineStore({
@@ -208,6 +218,148 @@ export function assembleCoreSemanticEngine(config: AssembleConfig): AssembledEng
 }
 
 /**
+ * Assemble a core-only semantic engine whose lexical index is process-local.
+ * Lex-only queries populate this store on demand without touching the vault.
+ */
+export function assembleEphemeralCoreSemanticEngine(config: AssembleConfig): AssembledEngine {
+  const vault = config.vault;
+  const provider = makeDeferredProvider();
+  const store = openInMemoryEngineStoreCore();
+  const deps: DispatcherDeps = {
+    store,
+    embed: provider,
+    ...(config.rrfK !== undefined ? { rrfK: config.rrfK } : {}),
+    ...(config.graphDepth !== undefined ? { graphDepth: config.graphDepth } : {}),
+  };
+  const adapter = new McpEngineAdapter(deps, vault, {
+    embeddingProvider: config.embeddingProvider,
+    embeddingModel: config.embeddingModel,
+  }, config.reranker, true);
+
+  return {
+    adapter,
+    deps,
+    store,
+    provider,
+    implicitLexicalSync: true,
+    async syncVault(opts: SyncVaultOptions = {}): Promise<SyncVaultResult> {
+      const result = await syncEngineStore({
+        vault,
+        collectionPath: opts.collectionPath,
+        embed: false,
+        force: opts.force,
+        embeddingProvider: config.embeddingProvider,
+        embeddingModel: config.embeddingModel,
+        store,
+      });
+      return {
+        scanned: result.scanned,
+        added: result.added,
+        updated: result.updated,
+        skipped: result.skipped,
+        available: result.available,
+        reason: result.reason,
+      };
+    },
+    async dispose(): Promise<void> {
+      await provider.dispose().catch(() => undefined);
+      store.close();
+    },
+  };
+}
+
+/**
+ * Assemble an existing CORE-ONLY semantic engine without creating a store.
+ * Returns null when the semantic index is absent or cannot be read safely.
+ */
+export function assembleCoreSemanticEngineReadOnly(config: AssembleConfig): AssembledEngine | null {
+  const vault = config.vault;
+  const dbPath = config.dbPath ?? `${vault}/.oms/engine-store.sqlite`;
+  const provider = makeDeferredProvider();
+  const store = openEngineStoreCoreReadOnly(dbPath);
+  if (store === null) {
+    void provider.dispose().catch(() => undefined);
+    return null;
+  }
+
+  const deps: DispatcherDeps = {
+    store,
+    embed: provider,
+    ...(config.rrfK !== undefined ? { rrfK: config.rrfK } : {}),
+    ...(config.graphDepth !== undefined ? { graphDepth: config.graphDepth } : {}),
+  };
+  const adapter = new McpEngineAdapter(deps, vault, {
+    embeddingProvider: config.embeddingProvider,
+    embeddingModel: config.embeddingModel,
+  }, config.reranker, false);
+
+  return {
+    adapter,
+    deps,
+    store,
+    provider,
+    implicitLexicalSync: false,
+    async syncVault(): Promise<SyncVaultResult> {
+      throw new Error("AssembledEngine: syncVault is unavailable because the store is open read-only.");
+    },
+    async dispose(): Promise<void> {
+      await provider.dispose().catch(() => undefined);
+      store.close();
+    },
+  };
+}
+
+/**
+ * Assemble an existing vector-capable semantic engine without creating a store.
+ * Returns null when the semantic index is absent or cannot be read safely.
+ */
+export function assembleEngineReadOnly(config: AssembleConfig): AssembledEngine | null {
+  const vault = config.vault;
+  const dbPath = config.dbPath ?? `${vault}/.oms/engine-store.sqlite`;
+  // The readonly store opener does not use dimensions. Open it before loading
+  // the configured provider so an absent index is always an unavailable result.
+  const store = openEngineStoreReadOnly(dbPath, 0);
+  if (store === null) return null;
+
+  let provider: EmbeddingProvider;
+  try {
+    provider = requireRealEmbeddingProvider({
+      provider: config.embeddingProvider,
+      model: config.embeddingModel,
+    });
+  } catch (error) {
+    store.close();
+    throw error;
+  }
+
+  const deps: DispatcherDeps = {
+    store,
+    embed: provider,
+    ...(config.rrfK !== undefined ? { rrfK: config.rrfK } : {}),
+    ...(config.graphDepth !== undefined ? { graphDepth: config.graphDepth } : {}),
+  };
+  const adapter = new McpEngineAdapter(deps, vault, {
+    embeddingProvider: config.embeddingProvider,
+    embeddingModel: config.embeddingModel,
+  }, config.reranker, false);
+
+  return {
+    adapter,
+    deps,
+    store,
+    provider,
+    implicitLexicalSync: false,
+    async syncVault(): Promise<SyncVaultResult> {
+      throw new Error("AssembledEngine: syncVault is unavailable because the store is open read-only.");
+    },
+    async dispose(): Promise<void> {
+      await provider.dispose().catch(() => undefined);
+      store.close();
+    },
+  };
+}
+
+/**
  * Assemble a GRAPH-ONLY engine: graph ops run model-free; semantic store/embed
  * are throw-on-use guards.
  */
@@ -223,13 +375,14 @@ export function assembleGraphOnlyEngine(config: AssembleConfig): AssembledEngine
     ...(config.graphDepth !== undefined ? { graphDepth: config.graphDepth } : {}),
   };
 
-  const adapter = new McpEngineAdapter(deps, vault, undefined, config.reranker);
+  const adapter = new McpEngineAdapter(deps, vault, undefined, config.reranker, false);
 
   return {
     adapter,
     deps,
     store,
     provider,
+    implicitLexicalSync: false,
 
     async syncVault(): Promise<SyncVaultResult> {
       return {

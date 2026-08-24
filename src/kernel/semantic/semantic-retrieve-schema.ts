@@ -35,12 +35,4 @@ export const retrieveContextSemanticInputProperties = {
   semanticHydrateMaxBytes: { type: "number" },
   semanticHydrateFromLine: { type: "number" },
   semanticHydrateLineCount: { type: "number" },
-  embeddingSyncBeforeSearch: { type: "boolean" },
-  embeddingSyncEnsureCollection: { type: "boolean" },
-  embeddingSyncUpdate: { type: "boolean" },
-  embeddingSyncEmbed: { type: "boolean" },
-  embeddingSyncForce: { type: "boolean" },
-  embeddingSyncPull: { type: "boolean" },
-  embeddingSyncMaxDocsPerBatch: { type: "number" },
-  embeddingSyncMaxBatchMb: { type: "number" },
 } as const;
