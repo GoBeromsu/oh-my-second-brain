@@ -10,8 +10,17 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Breaking
+
+- **The MCP surface is five tools.** `oms_write`, `oms_search`, `oms_link`, `oms_status` and `oms_doctor` replace the previous twenty-three. The eighteen detail tools were not deleted: each is reachable through an `op` parameter on the tool that owns it, so no capability was lost. A client that calls a detail tool by its old name must switch to the owning tool plus `op`. See [CHANGELOG-mcp.md](./CHANGELOG-mcp.md) for the operation map.
+- **The qmd-compatible aliases are gone.** The `query`, `get`, `multi_get` and `status` commands and the `qmd://` resource were retired; ADR-009's D2 is superseded by ADR-010, while D1 remains in force. The canonical nested commands `oms semantic query|status|get|multi-get|vsearch` are unaffected.
+- **`oms_search` no longer accepts sync parameters.** `embeddingSyncBeforeSearch` and its siblings let a caller turn a search into a write, which is incompatible with the read-only guarantee the tool now makes. Preparing index data on disk is `oms_doctor { op: "sync-embeddings" }`, which is annotated as writing.
+
 ### Changed
 
+- **`src/` is five role layers.** `kernel`, `cli`, `mcp`, `vendors` and `assets` replace twenty-one top-level entries, and `adapters/` is dissolved. The domain library is the kernel; the CLI and MCP server are thin entrypoints over it. Three import-direction, module-size and surface-parity gates enforce the boundaries, and all of them fail closed rather than passing on an empty scan.
+- **Skills exist once.** `assets/skills/` holds exactly six — `write`, `search`, `link`, `distill`, `status`, `doctor` — replacing near-duplicate copies that had drifted across four vendor trees. This works because the plugin root is the repository root, so every host manifest points at the same directory; there is no copy step and no generated manifest.
+- **`oms_search` is genuinely read-only** and is annotated as such. It previously created `.oms/` and an SQLite store on a plain search. Searching an unindexed vault still returns results, now from an index built in memory for the session, so the vault is left byte-identical. This matters because MCP hosts may auto-approve tools that declare themselves read-only.
 - The published package now ships `ACKNOWLEDGMENTS.md`, because the licence section links to it and shipping the note without its target left a dangling reference in the artifact.
 - `docs/release.md` no longer ships. It documents how to release this package, which an installed consumer cannot do; the READMEs link to the repository copy instead.
 
