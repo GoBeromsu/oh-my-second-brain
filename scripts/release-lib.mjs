@@ -3,6 +3,8 @@
 
 const STABLE_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const CHANGELOG_HEADER = "# Changelog";
+/** Matches `# Changelog` and layer titles like `# Kernel Changelog` on line one. */
+const CHANGELOG_HEADER_PATTERN = /^# (?:[A-Za-z][\w-]* )*Changelog\n/;
 const UNRELEASED_HEADING = "## [Unreleased]";
 const RELEASED_HEADING = /^(## \[(\d+\.\d+\.\d+)\](?: - .*)?)$/gm;
 
@@ -50,8 +52,17 @@ function versionSegments(version) {
  */
 export function rolledChangelog(content, version, date, options = {}) {
   const allowEmpty = options.allowEmpty === true;
-  if (typeof content !== "string" || !content.startsWith(`${CHANGELOG_HEADER}\n`)) {
-    throw new Error(`malformed changelog: missing '${CHANGELOG_HEADER}' header on the first line`);
+  // The aggregate is titled `# Changelog`; each layer file carries a
+  // descriptive title such as `# Kernel Changelog`. Requiring the aggregate's
+  // exact wording meant no layer file could ever be rolled, so the five-layer
+  // split shipped with a release path that aborted on the first layer it read.
+  // The guard still earns its place: line one must be a level-one heading that
+  // names the file as a changelog, which is what distinguishes a changelog from
+  // whatever else a path might point at.
+  if (typeof content !== "string" || !CHANGELOG_HEADER_PATTERN.test(content)) {
+    throw new Error(
+      `malformed changelog: first line must be a level-one heading ending in 'Changelog' (for example '${CHANGELOG_HEADER}' or '# Kernel Changelog')`,
+    );
   }
   const duplicates = duplicateChangelogHeadings(content);
   if (duplicates.length > 0) {

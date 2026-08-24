@@ -427,3 +427,55 @@ describe("released section relocations", () => {
     expect(relocatedReleasedSections(base, head)).toEqual([]);
   });
 });
+
+/**
+ * The five-layer changelog split gave each layer file a descriptive title:
+ * `# Kernel Changelog`, `# MCP Changelog`, and so on. The roller validated the
+ * aggregate's exact wording, `# Changelog`, so it rejected every layer file it
+ * was handed and the release aborted before writing anything.
+ *
+ * Nothing caught it because every fixture in this suite used the aggregate
+ * title. The real release was the first thing to read a layer file, which is
+ * the worst place to discover it.
+ */
+describe("rolledChangelog across the layer changelog titles", () => {
+  const LAYER_TITLES = [
+    "# Changelog",
+    "# Kernel Changelog",
+    "# CLI Changelog",
+    "# MCP Changelog",
+    "# Vendors Changelog",
+    "# Assets Changelog",
+  ];
+
+  it("rolls every layer title the repository actually ships", () => {
+    for (const title of LAYER_TITLES) {
+      const content = `${title}\n\n## [Unreleased]\n\n- a change worth releasing\n\n${RELEASED_0_1_9}`;
+      const rolled = rolledChangelog(content, "0.3.0", "2026-08-24");
+
+      expect(rolled.startsWith(`${title}\n`), title).toBe(true);
+      expect(rolled, title).toContain("## [0.3.0] - 2026-08-24");
+      expect(rolled, title).toContain("- a change worth releasing");
+      // A fresh empty Unreleased must be reinstated above the new release.
+      expect(rolled.indexOf("## [Unreleased]"), title).toBeLessThan(
+        rolled.indexOf("## [0.3.0]"),
+      );
+      // Released history passes through untouched.
+      expect(rolled, title).toContain(RELEASED_0_1_9.trim());
+    }
+  });
+
+  it("still rejects a file that is not a changelog", () => {
+    // The guard must keep meaning something. These are the shapes it exists to
+    // catch: a heading that does not name a changelog, a deeper heading, and
+    // a body with no heading at all.
+    for (const bad of [
+      "# Kernel Notes\n\n## [Unreleased]\n\n- x\n",
+      "## Changelog\n\n## [Unreleased]\n\n- x\n",
+      "Some prose\n\n## [Unreleased]\n\n- x\n",
+      "",
+    ]) {
+      expect(() => rolledChangelog(bad, "0.3.0", "2026-08-24")).toThrow(/malformed changelog/);
+    }
+  });
+});
