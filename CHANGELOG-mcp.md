@@ -6,6 +6,11 @@ MCP server tools and resources belong here.
 
 ### Changed
 
+- `oms_search` is genuinely read-only and is now annotated as such. It previously advertised `readOnlyHint: false`, and truthfully so: searching a vault with no index silently created `.oms/` and initialised an SQLite store, and the `embeddingSyncBeforeSearch` family of parameters let any caller turn a search into a write by passing a flag. Neither is possible now. This matters beyond tidiness, because MCP hosts may auto-approve tools that declare themselves read-only.
+
+  Searching an unindexed vault still returns results. Rather than refusing until you run a command, the server builds the lexical index in memory for the life of the session and answers from that, so a first search on a fresh vault behaves as it always did while leaving the vault byte-identical. Once a persistent index exists it is used as-is and a search never rewrites it; refreshing it is `oms semantic sync`'s job.
+
+  Preparing lexical or embedding data on disk is now exclusively `oms_doctor { op: "sync-embeddings" }`, which is annotated as writing and routes through the verified-target kernel. Asking for vector retrieval on a vault with no vectors still fails loudly rather than quietly degrading to lexical.
 - `oms_search` advertises `limit` (default 10), `minScore` (default 0) and `rerank` (default false). The first two are applied at the normalizer, so an options-free query is bounded rather than unlimited. `rerank` is opt-in per ADR-011: `true` reranks only when startup was given a real reranker and otherwise fails loudly with configuration guidance, rather than silently returning unreranked results as if the request had been honoured.
 
 - The public MCP surface is now five tools — `oms_write`, `oms_search`, `oms_link`, `oms_status`, `oms_doctor` — down from twenty-three. The eighteen detail tools are reachable through an `op` parameter on the tool that owns them; nothing was deleted, so no capability is lost, but any client calling a detail tool by its old name must switch to the owning tool plus `op`.

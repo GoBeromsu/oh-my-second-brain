@@ -103,14 +103,6 @@ export function semanticOptionsFromArgs(
     hydrateMaxBytes: numberArg(args, "semanticHydrateMaxBytes"),
     hydrateFromLine: numberArg(args, "semanticHydrateFromLine"),
     hydrateLineCount: numberArg(args, "semanticHydrateLineCount"),
-    syncBeforeSearch: booleanArg(args, "embeddingSyncBeforeSearch"),
-    syncEnsureCollection: booleanArg(args, "embeddingSyncEnsureCollection"),
-    syncUpdate: booleanArg(args, "embeddingSyncUpdate"),
-    syncEmbed: booleanArg(args, "embeddingSyncEmbed"),
-    syncForce: booleanArg(args, "embeddingSyncForce"),
-    syncPull: booleanArg(args, "embeddingSyncPull"),
-    syncMaxDocsPerBatch: numberArg(args, "embeddingSyncMaxDocsPerBatch"),
-    syncMaxBatchMb: numberArg(args, "embeddingSyncMaxBatchMb"),
   };
 }
 

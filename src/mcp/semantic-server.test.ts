@@ -76,6 +76,10 @@ Index note for graph neighborhoods and semantic lookup.
 
     try {
       await client.connect(transport);
+      await client.callTool({
+        name: "oms_doctor",
+        arguments: { op: "sync-embeddings", embed: false },
+      });
       const retrieve = textPayload(
         await client.callTool({
           name: "oms_search",
@@ -95,8 +99,6 @@ Index note for graph neighborhoods and semantic lookup.
             semanticVec: "semantic notes about retrieval integration",
             semanticHyde: "A note explaining how OMS semantic search is available from retrieve.",
             semanticMinScore: 0.01,
-            embeddingSyncBeforeSearch: true,
-            embeddingSyncForce: true,
           },
         }),
       );

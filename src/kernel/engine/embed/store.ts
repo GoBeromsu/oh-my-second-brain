@@ -162,7 +162,9 @@ function createVecTable(db: Database.Database, dimensions: number): void {
  * - upsert() throws
  */
 export function openEngineStoreCore(dbPath: string): EngineStore {
-  mkdirSync(path.dirname(dbPath), { recursive: true });
+  if (dbPath !== ":memory:") {
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+  }
   const db = new Database(dbPath);
 
   ensureCoreSchema(db);
@@ -348,6 +350,11 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
       return stmtListDocPaths.all().map((r) => r.doc_path);
     },
   };
+}
+
+/** Open a core-only store held entirely in SQLite memory. */
+export function openInMemoryEngineStoreCore(): EngineStore {
+  return openEngineStoreCore(":memory:");
 }
 
 /**
@@ -621,4 +628,209 @@ export function openEngineStore(
       return stmtListDocPaths.all().map((r) => r.doc_path);
     },
   };
+}
+
+const REQUIRED_CORE_TABLES = [
+  "engine_meta",
+  "engine_chunk_meta",
+  "engine_chunk_fts",
+] as const;
+
+/**
+ * Open an engine store that already exists, creating nothing.
+ *
+ * `fileMustExist` is what enforces the read-only guarantee that matters: a
+ * search on a vault with no index must not bring one into being. The connection
+ * itself is writable, and that is deliberate.
+ *
+ * SQLite's `readonly: true` was tried first and rejected. The store runs in WAL
+ * mode, and a read-only connection to a WAL database still needs the `-shm`
+ * shared-memory index. SQLite creates it, and a read-only connection cannot
+ * check-point or remove it on close, so every search left `engine-store.sqlite-shm`
+ * and `-wal` behind in the user's vault. A writable connection creates the same
+ * sidecars transiently and cleans them up when it closes, so it leaves the vault
+ * genuinely untouched. Refusing to create beats being unable to tidy up.
+ *
+ * Write protection is therefore enforced above this line, not by SQLite: the
+ * store returned by `openReadOnlyStore` prepares only SELECT statements and every
+ * mutator throws.
+ */
+function openExistingCoreStore(dbPath: string): Database.Database | null {
+  let db: Database.Database;
+  try {
+    db = new Database(dbPath, { fileMustExist: true });
+  } catch {
+    return null;
+  }
+
+  try {
+    const rows = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?)",
+    ).all(...REQUIRED_CORE_TABLES) as Array<{ name: string }>;
+    if (rows.length !== REQUIRED_CORE_TABLES.length) {
+      db.close();
+      return null;
+    }
+    return db;
+  } catch {
+    // A store that exists but cannot be read (corrupt, truncated, or written by
+    // an incompatible build) is treated exactly like an absent index: search
+    // reports it as unavailable rather than crashing the caller's request.
+    db.close();
+    return null;
+  }
+}
+
+function readonlyMutation(method: string): never {
+  throw new Error(
+    `EngineStore: ${method} is unavailable because this store was opened for reading only.`,
+  );
+}
+
+function openReadOnlyStore(
+  dbPath: string,
+  opts: { readonly sqliteVecLoader?: SqliteVecLoader; readonly vectors?: boolean } = {},
+): EngineStore | null {
+  const db = openExistingCoreStore(dbPath);
+  if (db === null) return null;
+
+  const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+     FROM engine_chunk_fts
+     JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
+     WHERE engine_chunk_fts MATCH ?
+     ORDER BY rank
+     LIMIT ?`,
+  );
+  const stmtQueryLexInCollection = db.prepare<[string, string, string, number], { doc_path: string; ordinal: number; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+     FROM engine_chunk_fts
+     JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
+     WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ? ESCAPE '!')
+     ORDER BY rank
+     LIMIT ?`,
+  );
+  const stmtGetShas = db.prepare<[string], { ordinal: number; sha: string }>(
+    "SELECT ordinal, sha FROM engine_chunk_meta WHERE doc_path = ?",
+  );
+  const stmtListDocPaths = db.prepare<[], { doc_path: string }>(
+    "SELECT DISTINCT doc_path FROM engine_chunk_meta",
+  );
+  const stmtReadIdentity = db.prepare<[], {
+    embedding_provider: string | null;
+    embedding_model: string | null;
+    embedding_dimensions: number | null;
+    embedding_fingerprint: string | null;
+  }>(
+    "SELECT embedding_provider, embedding_model, embedding_dimensions, embedding_fingerprint FROM engine_meta WHERE id = 1",
+  );
+
+  // These carry their bound parameter and row types: the bare
+  // ReturnType<prepare> erases both generics, which makes `.get()` demand an
+  // argument it does not take and forces a cast on every row read.
+  let stmtQueryVec: Database.Statement<[Buffer, number], { doc_path: string; ordinal: number; distance: number }> | null = null;
+  let stmtCountChunks: Database.Statement<[], { count: number }> | null = null;
+  if (opts.vectors) {
+    try {
+      (opts.sqliteVecLoader ?? DEFAULT_SQLITE_VEC_LOADER)(db);
+      if (vecTableExists(db)) {
+        stmtQueryVec = db.prepare<[Buffer, number], { doc_path: string; ordinal: number; distance: number }>(
+          `SELECT m.doc_path, m.ordinal, v.distance
+           FROM engine_chunk_vec v
+           JOIN engine_chunk_meta m ON m.rowid = v.rowid
+           WHERE v.embedding MATCH ? AND k = ?
+           ORDER BY v.distance`,
+        );
+        stmtCountChunks = db.prepare<[], { count: number }>(
+          "SELECT COUNT(*) AS count FROM engine_chunk_meta",
+        );
+      }
+    } catch {
+      stmtQueryVec = null;
+      stmtCountChunks = null;
+    }
+  }
+
+  return {
+    capabilities(): EngineStoreCapabilities {
+      return { vecAvailable: stmtQueryVec !== null };
+    },
+    upsertLex(): void {
+      readonlyMutation("upsertLex");
+    },
+    upsert(): void {
+      readonlyMutation("upsert");
+    },
+    queryVec(vec: Float32Array, k: number, collection?: string): ScoredHit[] {
+      if (!stmtQueryVec || !stmtCountChunks) {
+        throw new Error("EngineStore: vector queries are unavailable (sqlite-vec not loaded).");
+      }
+      const candidateLimit = collection === undefined ? k : (stmtCountChunks.get()?.count ?? 0);
+      return stmtQueryVec.all(vecBuf(vec), candidateLimit)
+        .filter((row) => collection === undefined || row.doc_path === collection || row.doc_path.startsWith(`${collection}/`))
+        .slice(0, k)
+        .map((row): ScoredHit => ({
+          docPath: row.doc_path,
+          chunkOrdinal: row.ordinal,
+          score: 1 / (1 + Math.max(0, row.distance)),
+        }));
+    },
+    queryLex(text: string, k: number, collection?: string): ScoredHit[] {
+      const ftsQ = makeFtsQuery(text);
+      if (!ftsQ) return [];
+      try {
+        const rows = collection === undefined
+          ? stmtQueryLex.all(ftsQ, k)
+          : stmtQueryLexInCollection.all(ftsQ, collection, collectionDescendantLikePattern(collection), k);
+        return rows.map((row, index): ScoredHit => ({
+          docPath: row.doc_path,
+          chunkOrdinal: row.ordinal,
+          score: 1 / (1 + index),
+        }));
+      } catch {
+        return [];
+      }
+    },
+    close(): void {
+      db.close();
+    },
+    readEmbeddingIdentity(): EmbeddingIdentity | null {
+      const row = stmtReadIdentity.get();
+      if (!row || !row.embedding_provider || !row.embedding_model || row.embedding_dimensions === null || !row.embedding_fingerprint) {
+        return null;
+      }
+      return {
+        provider: row.embedding_provider,
+        model: row.embedding_model,
+        dimensions: row.embedding_dimensions,
+        fingerprint: row.embedding_fingerprint,
+      };
+    },
+    writeEmbeddingIdentity(): void {
+      readonlyMutation("writeEmbeddingIdentity");
+    },
+    getShas(docPath: string): Map<number, string> {
+      return new Map(stmtGetShas.all(docPath).map((row) => [row.ordinal, row.sha]));
+    },
+    clearDocument(): void {
+      readonlyMutation("clearDocument");
+    },
+    listDocPaths(): string[] {
+      return stmtListDocPaths.all().map((row) => row.doc_path);
+    },
+  };
+}
+
+/** Open an existing core store for reads without creating files or schema. */
+export function openEngineStoreCoreReadOnly(dbPath: string): EngineStore | null {
+  return openReadOnlyStore(dbPath);
+}
+
+/** Open an existing vector-capable store for reads without creating files or schema. */
+export function openEngineStoreReadOnly(
+  dbPath: string,
+  _dimensions: number,
+  opts: { readonly sqliteVecLoader?: SqliteVecLoader } = {},
+): EngineStore | null {
+  return openReadOnlyStore(dbPath, { ...opts, vectors: true });
 }

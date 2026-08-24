@@ -220,7 +220,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       // storage/modelPath knobs were removed from the schemas (engine uses explicit env config).
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticStorage");
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticModelPath");
-      expect(retrieveTool?.annotations?.readOnlyHint).toBe(false);
+      expect(retrieveTool?.annotations?.readOnlyHint).toBe(true);
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semantic-query");
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("get-document");
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("modelPath");

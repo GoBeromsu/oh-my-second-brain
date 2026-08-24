@@ -37,13 +37,23 @@ import {
   semanticOptionsFromArgs,
   retrieveContextSemanticInputProperties,
 } from "../kernel/semantic/semantic-retrieve.js";
-import { assembleCoreSemanticEngine, assembleGraphOnlyEngine, type AssembledEngine } from "../kernel/engine/assemble.js";
-import { assembleFullSemanticEngine, embeddingConfigPresent } from "../kernel/semantic/semantic-engine.js";
+import {
+  assembleEphemeralCoreSemanticEngine,
+  assembleCoreSemanticEngineReadOnly,
+  assembleCoreSemanticEngine,
+  assembleEngineReadOnly,
+  assembleGraphOnlyEngine,
+  type AssembledEngine,
+} from "../kernel/engine/assemble.js";
+import {
+  assembleFullSemanticEngine,
+  embeddingConfigPresent,
+} from "../kernel/semantic/semantic-engine.js";
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { McpSemanticTypedSearch } from "../kernel/engine/mcp/types.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
-import { EngineSearchBackend } from "../kernel/searchbackend/engine-search-backend.js";
+import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
 import {
   buildServerInstructions,
   cachedUpdateNotice,
@@ -76,6 +86,12 @@ function errorText(message: string): CallToolResult {
       },
     ],
   };
+}
+
+class SemanticIndexUnavailableError extends Error {
+  constructor() {
+    super("The semantic index has not been built yet. Run `oms semantic sync` to build it.");
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -123,7 +139,7 @@ const searchProperties = {
   target: string, targets: stringArray, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean,
 } as const;
 const contextProperties = { concept: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: number, maxNeighbors: number, useCache: boolean,
-  semanticEnabled: boolean, semanticCollection: string, semanticLimit: number, semanticScope: { ...string, enum: ["global", "graph"] }, semanticMode: searchProperties.mode, semanticIntent: string, semanticSearches: searchProperties.searches, semanticLex: string, semanticVec: string, semanticHyde: string, semanticMinScore: number, semanticAll: boolean, semanticFormat: { ...string, enum: ["json", "files"] }, semanticFull: boolean, semanticLineNumbers: boolean, semanticFullPath: boolean, semanticIndex: string, semanticChunkStrategy: string, semanticCandidateLimit: number, semanticNoRerank: boolean, semanticHydrate: { ...string, enum: ["none", "top", "all", "targets"] }, semanticHydrateTargets: stringArray, semanticHydrateLineLimit: number, semanticHydrateMaxBytes: number, semanticHydrateFromLine: number, semanticHydrateLineCount: number, embeddingSyncBeforeSearch: boolean, embeddingSyncEnsureCollection: boolean, embeddingSyncUpdate: boolean, embeddingSyncEmbed: boolean, embeddingSyncForce: boolean, embeddingSyncPull: boolean, embeddingSyncMaxDocsPerBatch: number, embeddingSyncMaxBatchMb: number } as const;
+  semanticEnabled: boolean, semanticCollection: string, semanticLimit: number, semanticScope: { ...string, enum: ["global", "graph"] }, semanticMode: searchProperties.mode, semanticIntent: string, semanticSearches: searchProperties.searches, semanticLex: string, semanticVec: string, semanticHyde: string, semanticMinScore: number, semanticAll: boolean, semanticFormat: { ...string, enum: ["json", "files"] }, semanticFull: boolean, semanticLineNumbers: boolean, semanticFullPath: boolean, semanticIndex: string, semanticChunkStrategy: string, semanticCandidateLimit: number, semanticNoRerank: boolean, semanticHydrate: { ...string, enum: ["none", "top", "all", "targets"] }, semanticHydrateTargets: stringArray, semanticHydrateLineLimit: number, semanticHydrateMaxBytes: number, semanticHydrateFromLine: number, semanticHydrateLineCount: number } as const;
 // `folder` + `filename` is a supported addressing form that writeNote still
 // accepts. With `additionalProperties: false` a strict schema is only as
 // complete as its property list, so omitting them silently removed a real
@@ -161,7 +177,7 @@ function resolveOperation(tool: string, op: string | undefined): string | undefi
 }
 export const omsMcpTools: Tool[] = [
   { name: "oms_write", title: "Oh My Second Brain write", description: "Write a vault note through the kernel-owned .oms contract.", inputSchema: operationSchema("oms_write"), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
-  { name: "oms_search", title: "Oh My Second Brain search", description: "Retrieve vault context, semantic search, ontology, and selected documents. `op` selects the operation.", inputSchema: operationSchema("oms_search"), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
+  { name: "oms_search", title: "Oh My Second Brain search", description: "Retrieve vault context, semantic search, ontology, and selected documents. `op` selects the operation.", inputSchema: operationSchema("oms_search"), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
   { name: "oms_link", title: "Oh My Second Brain link", description: "Suggest or apply wikilinks; `op` selects the operation.", inputSchema: operationSchema("oms_link"), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
   { name: "oms_status", title: "Oh My Second Brain status", description: "Read-only health and statistics for the active vault.", inputSchema: operationSchema("oms_status"), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
   { name: "oms_doctor", title: "Oh My Second Brain doctor", description: "Diagnose or repair the vault; `op` selects the operation.", inputSchema: operationSchema("oms_doctor"), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
@@ -192,13 +208,8 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   // No model load, no SQLite store, no watcher: side-effect-free per boot (R2).
   const engine = assembleGraphOnlyEngine({ vault });
 
-  // Native engine — semantic layer (lazy): assembled on the FIRST semantic op,
-  // not at boot, so boot stays stateless (R2). The vec-capable engine opens the
-  // engine SQLite store on construction and loads the embedding model on first
-  // embed(). Embedding selection is canonical and explicit: OMS_EMBEDDING_PROVIDER
-  // (e.g. gguf | upstage) + OMS_EMBEDDING_MODEL (path or model id). Absent either,
-  // assembleFullSemanticEngine throws a loud, actionable error (ADR-007: no
-  // hash/fake fallback, no auto-detect) that surfaces via the dispatch catch.
+  // Creating semantic engines are shared by all non-search tools, including
+  // doctor repairs which must initialize a missing store.
   let semanticEngine: AssembledEngine | null = null;
   const getSemanticEngine = (): AssembledEngine => {
     if (semanticEngine === null) {
@@ -218,6 +229,43 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     return coreSemanticEngine;
   };
 
+  // Search owns independent read-only slots so it cannot poison doctor repair.
+  let readOnlySemanticEngine: AssembledEngine | null | undefined;
+  const getReadOnlySemanticEngine = (): AssembledEngine | null => {
+    if (readOnlySemanticEngine === undefined) {
+      readOnlySemanticEngine = assembleEngineReadOnly({
+        vault,
+        embeddingProvider: process.env["OMS_EMBEDDING_PROVIDER"],
+        embeddingModel: process.env["OMS_EMBEDDING_MODEL"],
+        reranker: opts.reranker,
+      });
+    }
+    return readOnlySemanticEngine;
+  };
+  let readOnlyCoreSemanticEngine: AssembledEngine | null | undefined;
+  const getReadOnlyCoreSemanticEngine = (): AssembledEngine | null => {
+    if (readOnlyCoreSemanticEngine === undefined) {
+      readOnlyCoreSemanticEngine = assembleCoreSemanticEngineReadOnly({ vault, reranker: opts.reranker });
+    }
+    return readOnlyCoreSemanticEngine;
+  };
+  let ephemeralCoreSemanticEngine: AssembledEngine | null = null;
+  let ephemeralCoreSemanticEnginePromise: Promise<AssembledEngine> | null = null;
+  const getEphemeralCoreSemanticEngine = async (): Promise<AssembledEngine> => {
+    if (ephemeralCoreSemanticEngine !== null) return ephemeralCoreSemanticEngine;
+    if (ephemeralCoreSemanticEnginePromise === null) {
+      ephemeralCoreSemanticEnginePromise = (async () => {
+        const assembled = assembleEphemeralCoreSemanticEngine({ vault, reranker: opts.reranker });
+        ephemeralCoreSemanticEngine = assembled;
+        return assembled;
+      })().catch((error: unknown) => {
+        ephemeralCoreSemanticEnginePromise = null;
+        throw error;
+      });
+    }
+    return ephemeralCoreSemanticEnginePromise;
+  };
+
   // A real embedding provider is configured iff the canonical pair is set
   // (ADR-007). The engine's model-OPTIONAL surface (document reads,
   // retrieve_context's semantic leg, ReadResource) keys off this to decide
@@ -235,12 +283,53 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   // missing auth, store-open failure) must surface its error loudly rather than
   // silently masquerade as a model-less host (ADR-007). The core fallback is
   // strictly for the absent-config case.
-  const resolveDocumentAdapter = (): McpEngineAdapter =>
+  const resolveCreatingDocumentAdapter = (): McpEngineAdapter =>
     hasEmbeddingModel() ? getSemanticEngine().adapter : getCoreSemanticEngine().adapter;
+  const resolveReadOnlyDocumentAdapter = (): McpEngineAdapter =>
+    hasEmbeddingModel()
+      ? getReadOnlySemanticEngine()?.adapter ?? engine.adapter
+      : getReadOnlyCoreSemanticEngine()?.adapter ?? engine.adapter;
+  const resolveDocumentAdapter = (publicName: string): McpEngineAdapter => {
+    if (publicName === "oms_search") return resolveReadOnlyDocumentAdapter();
+    return resolveCreatingDocumentAdapter();
+  };
+  const resolveReadOnlyIndexAdapter = (): McpEngineAdapter => {
+    const adapter = hasEmbeddingModel()
+      ? getReadOnlySemanticEngine()?.adapter
+      : getReadOnlyCoreSemanticEngine()?.adapter;
+    if (adapter === undefined || adapter === null) throw new SemanticIndexUnavailableError();
+    return adapter;
+  };
+  const resolveReadOnlyLexicalAdapter = async (): Promise<McpEngineAdapter> => {
+    const adapter = hasEmbeddingModel()
+      ? getReadOnlySemanticEngine()?.adapter
+      : getReadOnlyCoreSemanticEngine()?.adapter;
+    return adapter ?? (await getEphemeralCoreSemanticEngine()).adapter;
+  };
+  const hasExplicitEmbeddingIntent = (args: Record<string, unknown> | undefined): boolean =>
+    requiresEmbeddings({
+      mode: args?.["mode"] === "vsearch" ? "vsearch" : undefined,
+      vec: stringArg(args, "vec"),
+      hyde: stringArg(args, "hyde"),
+      searches: Array.isArray(args?.["searches"])
+        ? args["searches"].flatMap((search) =>
+          isRecord(search) &&
+          (search["type"] === "lex" || search["type"] === "vec" || search["type"] === "hyde") &&
+          typeof search["query"] === "string"
+            ? [{ type: search["type"], query: search["query"] }]
+            : [])
+        : undefined,
+    });
   const searchBackend = new EngineSearchBackend(
     (requiresEmbeddings) => requiresEmbeddings
-      ? getSemanticEngine().adapter
-      : resolveDocumentAdapter(),
+      ? (() => {
+        // Validate ADR-007 configuration before probing the read-only store:
+        // vector intent is actionable only after its required provider/model
+        // pair is present, regardless of whether an index exists yet.
+        if (!hasEmbeddingModel()) return getSemanticEngine().adapter;
+        return resolveReadOnlyIndexAdapter();
+      })()
+      : resolveReadOnlyIndexAdapter(),
     vault,
   );
 
@@ -265,6 +354,15 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     if (coreSemanticEngine !== null) {
       void coreSemanticEngine.dispose().catch(() => undefined);
     }
+    if (readOnlySemanticEngine !== null && readOnlySemanticEngine !== undefined) {
+      void readOnlySemanticEngine.dispose().catch(() => undefined);
+    }
+    if (readOnlyCoreSemanticEngine !== null && readOnlyCoreSemanticEngine !== undefined) {
+      void readOnlyCoreSemanticEngine.dispose().catch(() => undefined);
+    }
+    if (ephemeralCoreSemanticEngine !== null) {
+      void ephemeralCoreSemanticEngine.dispose().catch(() => undefined);
+    }
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -284,7 +382,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         return errorText('Provide exactly one of "query" or "searches" for semantic-query.');
       }
     }
-
     if (name === "oms_graph_status") {
       // The src/graph derived-cache ledger (M3 5-state staleness) is the source
       // of truth for retrieve_context's optional warm cache and stays intact.
@@ -354,8 +451,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       const resolveRepairAdapter = operation === "build-graph"
         ? undefined
         : (): McpEngineAdapter =>
-            operation === "semantic-cleanup" || (operation === "sync-embeddings" && args?.["embed"] === false)
-              ? resolveDocumentAdapter()
+            publicName === "oms_search"
+              ? resolveReadOnlyDocumentAdapter()
+              : operation === "semantic-cleanup" || (operation === "sync-embeddings" && args?.["embed"] === false)
+              ? resolveCreatingDocumentAdapter()
               : getSemanticEngine().adapter;
 
       const repair = await repairDoctor({
@@ -407,7 +506,19 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       // configured (parity ranking, real-path docids) and core (lex; vec/HyDE fail
       // fast) otherwise. get/multi_get and ReadResource make the SAME choice, so a
       // docid emitted here always hydrates on the backend that produced it.
-      const semanticBackend = makeEngineMorningBackend(resolveDocumentAdapter(), vault);
+      const semantic = semanticOptionsFromArgs(args);
+      let contextAdapter = engine.adapter;
+      if (semantic?.enabled !== false) {
+        try {
+          contextAdapter = resolveDocumentAdapter(publicName);
+        } catch (error) {
+          if (!(error instanceof SemanticIndexUnavailableError)) throw error;
+        }
+      }
+      const semanticBackend = makeEngineMorningBackend(
+        contextAdapter,
+        vault,
+      );
       const { ontology, source } = await resolveActiveOntology(vault);
       const limitValue = args?.["limit"];
       const maxNeighborsValue = args?.["maxNeighbors"];
@@ -425,7 +536,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           limit: typeof limitValue === "number" ? limitValue : undefined,
           maxNeighbors: typeof maxNeighborsValue === "number" ? maxNeighborsValue : undefined,
           useCache: typeof useCacheValue === "boolean" ? useCacheValue : undefined,
-          semantic: semanticOptionsFromArgs(args),
+          semantic,
         },
         semanticBackend,
       );
@@ -446,6 +557,25 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     // Every other tool never touches the engine here.
     if (isEngineSemanticOp(name) || isEngineDocumentOp(name)) {
       if (name === "oms_semantic_query") {
+        const query = stringArg(args, "query");
+        const vec = stringArg(args, "vec");
+        const hyde = stringArg(args, "hyde");
+        const noPersistentReadOnlyIndex = hasEmbeddingModel()
+          ? getReadOnlySemanticEngine() === null
+          : getReadOnlyCoreSemanticEngine() === null;
+        if (query !== undefined && !hasExplicitEmbeddingIntent(args) && noPersistentReadOnlyIndex) {
+          const result = await (await getEphemeralCoreSemanticEngine()).adapter.semanticQuery({
+            vault,
+            query,
+            lex: stringArg(args, "lex") ?? query,
+            limit: typeof args?.["limit"] === "number" ? args["limit"] : undefined,
+            minScore: typeof args?.["minScore"] === "number" ? args["minScore"] : undefined,
+            intent: stringArg(args, "intent"),
+            collection: stringArg(args, "collection"),
+            index: stringArg(args, "index"),
+          });
+          return jsonText(result);
+        }
         const requestOptions = {
           limit: typeof args?.["limit"] === "number" ? args["limit"] : undefined,
           candidateLimit: typeof args?.["candidateLimit"] === "number" ? args["candidateLimit"] : undefined,
@@ -458,27 +588,53 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
             : undefined,
           mode: stringArg(args, "mode") as "query" | "search" | "vsearch" | undefined,
           lex: stringArg(args, "lex"),
-          vec: stringArg(args, "vec"),
-          hyde: stringArg(args, "hyde"),
+          vec,
+          hyde,
           index: stringArg(args, "index"),
         };
         const result = await searchBackend.search({
           ...requestOptions,
-          query: stringArg(args, "query"),
+          // `query` is the default lexical representation. An explicit vector
+          // or HyDE shorthand selects its own representation instead; only
+          // `query` plus typed `searches` is contradictory.
+          query: vec !== undefined || hyde !== undefined ? undefined : query,
           searches: Array.isArray(args?.["searches"])
             ? args["searches"] as McpSemanticTypedSearch[]
             : undefined,
         });
         return jsonText(result);
       }
+      const useEphemeralLexicalFallback =
+        name === "oms_semantic_query" &&
+        publicName === "oms_search" &&
+        !hasExplicitEmbeddingIntent(args) &&
+        (hasEmbeddingModel()
+          ? getReadOnlySemanticEngine() === null
+          : getReadOnlyCoreSemanticEngine() === null);
       const semanticAdapter =
+        useEphemeralLexicalFallback
+          ? await resolveReadOnlyLexicalAdapter()
+          :
         isEngineSemanticOp(name) &&
         name !== "oms_semantic_cleanup" &&
         !(name === "oms_sync_embeddings" && args?.["embed"] === false) &&
         !isModelOptionalSemanticQueryOp(name, args, vault)
-          ? getSemanticEngine().adapter
-          : resolveDocumentAdapter();
-      const semanticToolResult = await handleSemanticTool(name, args, vault, semanticAdapter);
+          ? publicName === "oms_search"
+            ? resolveReadOnlyIndexAdapter()
+            : getSemanticEngine().adapter
+          : isEngineDocumentOp(name)
+            ? resolveDocumentAdapter(publicName)
+            : publicName === "oms_search"
+              ? resolveReadOnlyIndexAdapter()
+              : resolveDocumentAdapter(publicName);
+      const semanticToolResult = await handleSemanticTool(
+        name,
+        useEphemeralLexicalFallback
+          ? { ...args, lex: stringArg(args, "query") }
+          : args,
+        vault,
+        semanticAdapter,
+      );
       if (semanticToolResult) {
         if (!semanticToolResult.ok) return errorText(semanticToolResult.message);
         return jsonText(semanticToolResult.value);
@@ -639,6 +795,12 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
     return errorText(`Unknown Oh My Second Brain tool: ${publicName}`);
     } catch (error) {
+      if (error instanceof SemanticIndexUnavailableError) {
+        return jsonText({
+          available: false,
+          reason: error.message,
+        });
+      }
       return errorText(`Oh My Second Brain MCP error: ${error instanceof Error ? error.message : String(error)}`);
     }
   });

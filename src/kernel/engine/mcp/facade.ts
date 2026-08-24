@@ -264,11 +264,10 @@ function enrichQueryHits(result: McpSemanticQueryResult, vault: string): McpSema
   });
   return { available: true, hits };
 }
+
 function isLexOnlySubQueries(subQueries: readonly { readonly type: string }[]): boolean {
   return subQueries.length > 0 && subQueries.every((subQuery) => subQuery.type === "lex");
 }
-
-
 // ---------------------------------------------------------------------------
 // Adapter facade
 // ---------------------------------------------------------------------------
@@ -294,6 +293,8 @@ export class McpEngineAdapter {
     private readonly vaultPath: string,
     private readonly config?: { readonly embeddingProvider?: string; readonly embeddingModel?: string },
     private readonly reranker?: Reranker,
+    /** Explicit assembly policy; read-only engines suppress this refresh. */
+    private readonly implicitLexicalSync = false,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -329,11 +330,12 @@ export class McpEngineAdapter {
       return queryResultUnavailable("No sub-queries derived from options");
     }
     try {
-      if (isLexOnlySubQueries(subQueries)) {
+      if (this.implicitLexicalSync && isLexOnlySubQueries(subQueries)) {
         const syncResult = await syncEngineStore({
           vault: opts.vault ?? this.vaultPath,
           collection: opts.collection,
           embed: false,
+          store: this.deps.store as EngineStore,
         });
         if (!syncResult.available) {
           return queryResultUnavailable(syncResult.reason ?? "Lexical index sync unavailable");

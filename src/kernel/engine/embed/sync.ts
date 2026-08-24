@@ -41,6 +41,8 @@ export interface EngineSyncOptions {
   embeddingModel?: string;
   /** Chunker overrides (maxTokens, overlapRatio). */
   chunkerOpts?: Partial<ChunkerOptions>;
+  /** Pre-opened store to populate. The caller retains ownership of this handle. */
+  store?: EngineStore;
 }
 
 export interface EngineSyncResult {
@@ -223,7 +225,8 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
   const warnings: string[] = [];
 
   let provider: EmbeddingProvider | null = null;
-  let store: EngineStore | null = null;
+  let store: EngineStore | null = opts.store ?? null;
+  const ownsStore = opts.store === undefined;
 
   let storedIdentity: EmbeddingIdentity | undefined;
   let configuredIdentity: EmbeddingIdentity | undefined;
@@ -231,7 +234,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
   try {
     if (!shouldEmbed) {
       // Lex-only path: no embedding provider required.
-      store = openEngineStoreCore(dbPath);
+      store ??= openEngineStoreCore(dbPath);
       warnings.push("embed=false: lexical index updated; no vectors generated");
 
       const counters: SyncCounters = { scanned: 0, added: 0, updated: 0, skipped: 0 };
@@ -408,6 +411,6 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
     };
   } finally {
     await provider?.dispose().catch(() => undefined);
-    store?.close();
+    if (ownsStore) store?.close();
   }
 }

@@ -10,7 +10,7 @@
  *
  * After the src/search teardown the morning contract types are the engine
  * contract types (re-exported via src/kernel/search/semantic-contract.ts), so this
- * wrapper only threads the sync gate and the default vault — no type bridging.
+ * wrapper only threads the default vault — no type bridging.
  */
 
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
@@ -29,21 +29,8 @@ import type { MorningRetrieveOptions, MorningSemanticBackend } from "../kernel/s
  */
 export function makeEngineMorningBackend(adapter: McpEngineAdapter, vault: string): MorningSemanticBackend {
   return {
-    sync(opts: MorningRetrieveOptions) {
-      // Same R2 gate as before: never auto-sync unless the caller explicitly
-      // asked (syncBeforeSearch). Engine sync is incremental (SHA-256 diff), so
-      // even a forced re-sync skips unchanged chunks.
-      if (opts.semantic?.syncBeforeSearch !== true) return Promise.resolve(undefined);
-      return adapter.syncEmbeddings({
-        vault: opts.vault ?? vault,
-        collection: opts.semantic.collection,
-        index: opts.semantic.index,
-        embed: opts.semantic.syncEmbed,
-        force: opts.semantic.syncForce,
-        chunkStrategy: opts.semantic.chunkStrategy,
-        maxDocsPerBatch: opts.semantic.syncMaxDocsPerBatch,
-        maxBatchMb: opts.semantic.syncMaxBatchMb,
-      });
+    sync() {
+      return Promise.resolve(undefined);
     },
 
     status(opts) {

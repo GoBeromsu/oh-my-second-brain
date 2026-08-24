@@ -50,7 +50,7 @@ export interface MorningRetrieveOptions extends GraphExploreOptions {
     readonly hydrateMaxBytes?: number;
     readonly hydrateFromLine?: number;
     readonly hydrateLineCount?: number;
-    readonly syncBeforeSearch?: boolean;
+
     readonly syncEnsureCollection?: boolean;
     readonly syncUpdate?: boolean;
     readonly syncEmbed?: boolean;
