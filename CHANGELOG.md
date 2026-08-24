@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-24
+
 ### Breaking
 
 - **The MCP surface is five tools.** `oms_write`, `oms_search`, `oms_link`, `oms_status` and `oms_doctor` replace the previous twenty-three. The eighteen detail tools were not deleted: each is reachable through an `op` parameter on the tool that owns it, so no capability was lost. A client that calls a detail tool by its old name must switch to the owning tool plus `op`. See [CHANGELOG-mcp.md](./CHANGELOG-mcp.md) for the operation map.

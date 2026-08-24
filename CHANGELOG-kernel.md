@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-24
+
 ### Fixed
 
 - Collection scoping now constrains the candidate set before result limiting. A filtered query previously ran against already-truncated results, so it could return nothing while matching in-collection documents sat below the limit.

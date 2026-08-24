@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-24
+
 ### Changed
 
 - `oms_search` is genuinely read-only and is now annotated as such. It previously advertised `readOnlyHint: false`, and truthfully so: searching a vault with no index silently created `.oms/` and initialised an SQLite store, and the `embeddingSyncBeforeSearch` family of parameters let any caller turn a search into a write by passing a flag. Neither is possible now. This matters beyond tidiness, because MCP hosts may auto-approve tools that declare themselves read-only.

@@ -4,6 +4,8 @@ Skills, agents, and ontology data changes belong here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-24
+
 ### Fixed
 
 - Packaged host guidance names the invocations each host actually installs. Codex namespaces every skill under an `oms-` prefix, so its guidance now says `$oms-write` rather than `$write`, which would fail on a real install. A reference to `core/agents/retriever.md` was also removed: that path never shipped in the npm artifact, so it was broken for every installed user while resolving fine in the repository.
