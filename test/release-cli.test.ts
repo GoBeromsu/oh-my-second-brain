@@ -1,4 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 // @ts-expect-error - release.mjs is plain ESM JavaScript shared with scripts/*.mjs (no .d.ts by design)
 import * as releaseCliModule from "../scripts/release.mjs";
 
@@ -8,9 +13,24 @@ type ParsedRelease =
 
 interface ReleaseCli {
   parseReleaseCli(argv: string[]): ParsedRelease;
+  rollChangelogs(paths: readonly string[], version: string, date: string, allowEmptyAggregate: boolean): void;
 }
 
-const { parseReleaseCli } = releaseCliModule as ReleaseCli;
+const { parseReleaseCli, rollChangelogs } = releaseCliModule as ReleaseCli;
+const CHANGELOG_FILES = [
+  "CHANGELOG.md",
+  "CHANGELOG-kernel.md",
+  "CHANGELOG-cli.md",
+  "CHANGELOG-mcp.md",
+  "CHANGELOG-vendors.md",
+  "CHANGELOG-assets.md",
+];
+const EXTRACT_RELEASE_NOTES = fileURLToPath(new URL("../scripts/extract-release-notes.mjs", import.meta.url));
+const CHANGELOG_HISTORY_GUARD = fileURLToPath(new URL("../scripts/changelog-history-guard.mjs", import.meta.url));
+
+function changelog(body: string, previous = "- preserved historical entry"): string {
+  return `# Changelog\n\n## [Unreleased]\n\n${body}\n\n## [0.1.0] - 2026-01-01\n\n${previous}\n`;
+}
 
 describe("parseReleaseCli", () => {
   it("parses a stable version into release mode", () => {
@@ -54,8 +74,164 @@ describe("parseReleaseCli", () => {
     expect(() => parseReleaseCli([])).toThrow(/usage: npm run release -- <X\.Y\.Z>/);
   });
 
-  it("exports only the pure parser (main flow stays behind the import.meta guard)", () => {
+  it("exports the parser and changelog transaction without running main on import", () => {
     // A non-guarded main would run preflight (git/gh) or exit during this import.
-    expect(Object.keys(releaseCliModule as object)).toEqual(["parseReleaseCli"]);
+    expect(Object.keys(releaseCliModule as object).sort()).toEqual(["parseReleaseCli", "rollChangelogs"]);
+  });
+});
+
+describe("rollChangelogs", () => {
+  it("rolls all layers before release-note extraction while preserving historical entries", () => {
+    const directory = mkdtempSync(join(tmpdir(), "oms-release-changelogs-"));
+    const version = "0.2.0";
+    const contents = new Map<string, string>([
+      ["CHANGELOG.md", changelog("- aggregate release note").replace("# Changelog\n\n", "# Changelog\n\nAggregate introduction.\n\n")],
+      ["CHANGELOG-kernel.md", changelog("- kernel release note")],
+      ["CHANGELOG-cli.md", changelog("- cli release note")],
+      ["CHANGELOG-mcp.md", changelog("- mcp release note")],
+      ["CHANGELOG-vendors.md", changelog("- vendors release note")],
+      ["CHANGELOG-assets.md", changelog("")],
+    ]);
+
+    try {
+      for (const [file, content] of contents) writeFileSync(join(directory, file), content);
+
+      rollChangelogs(
+        CHANGELOG_FILES.map((file) => join(directory, file)),
+        version,
+        "2026-08-24",
+        false,
+      );
+
+      for (const file of CHANGELOG_FILES) {
+        const rolled = readFileSync(join(directory, file), "utf-8");
+        const original = contents.get(file) as string;
+        const historicalStart = original.indexOf("## [0.1.0]");
+        expect(rolled).toContain(`## [${version}] - 2026-08-24`);
+        expect(rolled).toMatch(new RegExp(`## \\[Unreleased\\]\\n\\n## \\[${version}\\]`));
+        expect(rolled.slice(rolled.indexOf("## [0.1.0]"))).toBe(original.slice(historicalStart));
+      }
+
+      const notes = execFileSync(process.execPath, [EXTRACT_RELEASE_NOTES, version], {
+        cwd: directory,
+        encoding: "utf-8",
+      });
+      expect(notes).toContain("## Aggregate\n\n- aggregate release note");
+      expect(notes).toContain("## Kernel\n\n- kernel release note");
+      expect(notes).toContain("## CLI\n\n- cli release note");
+      expect(notes).toContain("## MCP\n\n- mcp release note");
+      expect(notes).toContain("## Vendors\n\n- vendors release note");
+      expect(notes).toContain("## Assets\n\n_No entries._");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not write any changelog when verification finds a malformed layer", () => {
+    const directory = mkdtempSync(join(tmpdir(), "oms-release-changelog-failure-"));
+    const paths = CHANGELOG_FILES.map((file) => join(directory, file));
+    try {
+      for (const path of paths) writeFileSync(path, changelog("- release note"));
+      writeFileSync(paths[3], "# not a changelog\n");
+      const before = paths.map((path) => readFileSync(path, "utf-8"));
+
+      expect(() => rollChangelogs(paths, "0.2.0", "2026-08-24", false)).toThrow(/before any changelog was written/);
+      expect(paths.map((path) => readFileSync(path, "utf-8"))).toEqual(before);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("changelog-history-guard", () => {
+  it("rejects one-layer edits and removals when every layer shares the release version", () => {
+    const directory = mkdtempSync(join(tmpdir(), "oms-changelog-history-guard-"));
+    const version = "0.2.0";
+    const baseline =
+      `# Changelog\n\n## [Unreleased]\n\n## [${version}] - 2026-08-24\n\n### Changed\n\n- preserved historical entry\n`;
+    const runGuard = () =>
+      spawnSync(process.execPath, [CHANGELOG_HISTORY_GUARD], {
+        cwd: directory,
+        encoding: "utf-8",
+        env: { ...process.env, CHANGELOG_GUARD_BASE: "HEAD" },
+      });
+
+    try {
+      for (const file of CHANGELOG_FILES) writeFileSync(join(directory, file), baseline);
+      execFileSync("git", ["init"], { cwd: directory });
+      execFileSync("git", ["add", "."], { cwd: directory });
+      execFileSync(
+        "git",
+        ["-c", "user.name=OMS test", "-c", "user.email=oms@example.test", "commit", "-m", "baseline"],
+        { cwd: directory },
+      );
+
+      expect(runGuard().status).toBe(0);
+
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), baseline.replace("preserved", "rewritten"));
+      const edited = runGuard();
+      expect(edited.status).toBe(1);
+      expect(edited.stderr).toContain("CHANGELOG-cli.md: ## [0.2.0]");
+
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), baseline.replace("2026-08-24", "2026-08-25"));
+      const redated = runGuard();
+      expect(redated.status).toBe(1);
+      expect(redated.stderr).toContain("CHANGELOG-cli.md: ## [0.2.0]");
+
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), "# Changelog\n\n## [Unreleased]\n");
+      const deleted = runGuard();
+      expect(deleted.status).toBe(1);
+      expect(deleted.stderr).toContain("CHANGELOG-cli.md: ## [0.2.0]");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects duplicate released versions in either baseline or working tree", () => {
+    const directory = mkdtempSync(join(tmpdir(), "oms-changelog-history-guard-"));
+    const version = "0.2.0";
+    const baseline =
+      `# Changelog\n\n## [Unreleased]\n\n## [${version}] - 2026-08-24\n\n### Changed\n\n- preserved historical entry\n`;
+    const duplicateBaseline = `${baseline}\n## [${version}] - 2026-08-24\n\n### Changed\n\n- preserved historical entry\n`;
+    const bypassAttempt = baseline
+      .replace("preserved historical entry", "rewritten historical entry")
+      .concat(`\n## [${version}] - 2026-08-24\n\n### Changed\n\n- preserved historical entry\n`);
+    const runGuard = () =>
+      spawnSync(process.execPath, [CHANGELOG_HISTORY_GUARD], {
+        cwd: directory,
+        encoding: "utf-8",
+        env: { ...process.env, CHANGELOG_GUARD_BASE: "HEAD" },
+      });
+
+    try {
+      for (const file of CHANGELOG_FILES) writeFileSync(join(directory, file), baseline);
+      execFileSync("git", ["init"], { cwd: directory });
+      execFileSync("git", ["add", "."], { cwd: directory });
+      execFileSync(
+        "git",
+        ["-c", "user.name=OMS test", "-c", "user.email=oms@example.test", "commit", "-m", "baseline"],
+        { cwd: directory },
+      );
+
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), bypassAttempt);
+      const duplicateHead = runGuard();
+      expect(duplicateHead.status).toBe(1);
+      expect(duplicateHead.stderr).toContain("CHANGELOG-cli.md: ## [0.2.0]");
+
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), duplicateBaseline);
+      execFileSync("git", ["add", "."], { cwd: directory });
+      execFileSync(
+        "git",
+        ["-c", "user.name=OMS test", "-c", "user.email=oms@example.test", "commit", "-m", "duplicate baseline"],
+        { cwd: directory },
+      );
+      writeFileSync(join(directory, "CHANGELOG-cli.md"), baseline);
+      const duplicateBase = runGuard();
+      expect(duplicateBase.status).toBe(1);
+      expect(duplicateBase.stderr).toContain("CHANGELOG-cli.md: ## [0.2.0]");
+      expect(duplicateBase.stderr).toContain("at 'HEAD'");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

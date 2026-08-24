@@ -1,0 +1,266 @@
+import { describe, expect, it } from "vitest";
+import { readdir, rm, writeFile } from "node:fs/promises";
+import {
+  REPO_ROOT,
+  absolute,
+  assertNonVacuous,
+  collectFiles,
+  findImports,
+  importSpecifiers,
+  isProductionTs,
+  nonLiteralDynamicImports,
+  pathExists,
+  underAny,
+} from "./repo-root.js";
+
+/**
+ * Import-direction gate for the five-layer target.
+ *
+ * Rules (spec Acceptance Criterion 8):
+ *   1. cli/  may import kernel/ (and kernel-transitional/ while it exists)
+ *   2. mcp/  may import kernel/ (and kernel-transitional/ while it exists)
+ *   3. kernel/ may NOT import cli/, mcp/, or vendors/
+ *   4. vendors/<a>/ may NOT import vendors/<b>/
+ *
+ * The layers do not all exist yet: this gate lands before any file moves, so
+ * every rule tolerates a missing directory but the *populated* roots are
+ * asserted non-vacuous. Legacy pre-migration boundaries are kept alongside so
+ * the gate has real teeth from day one rather than only after PR 7c.
+ */
+
+const KERNEL = "src/kernel";
+const CLI = "src/cli";
+const MCP = "src/mcp";
+const VENDORS = "src/vendors";
+const ASSETS = "src/assets";
+
+/**
+ * CLI commands are host-facing entrypoints. These imports deliberately select
+ * the host-owned adapter implementation or start the MCP stdio entrypoint;
+ * neither belongs in kernel because kernel must remain independent of both
+ * vendors and MCP transport.
+ */
+const CLI_ENTRYPOINT_EXCEPTIONS = [
+  {
+    file: "src/cli/host-commands.ts",
+    resolved: "src/vendors/claude/claude",
+    reason: "Selects the Claude host adapter for install and uninstall.",
+  },
+  {
+    file: "src/cli/host-commands.ts",
+    resolved: "src/vendors/codex/codex",
+    reason: "Selects the Codex host adapter for install and uninstall.",
+  },
+  {
+    file: "src/cli/host-commands.ts",
+    resolved: "src/vendors/hermes/hermes",
+    reason: "Selects the Hermes host adapter for install and uninstall.",
+  },
+  {
+    file: "src/cli/oms.ts",
+    resolved: "src/vendors/claude/hook/post-tool-use",
+    reason: "The `oms hook post-tool-use` command invokes the Claude hook entrypoint.",
+  },
+  {
+    file: "src/cli/oms.ts",
+    resolved: "src/vendors/claude/hook/pre-tool-use",
+    reason: "The `oms hook pre-tool-use` command invokes the Claude hook entrypoint.",
+  },
+  {
+    file: "src/cli/oms.ts",
+    resolved: "src/mcp/server",
+    reason: "The `oms mcp` command starts the MCP stdio entrypoint.",
+  },
+] as const;
+
+/** Legacy roots that behave as domain/kernel code until the migration moves them. */
+const LEGACY_DOMAIN_DIRS = [
+  "src/core",
+  "src/ontology",
+  "src/conventions",
+  "src/capture",
+  "src/graph",
+  "src/retrieve",
+  "src/engine",
+  "src/setup",
+] as const;
+
+/** Legacy roots that behave as control-plane/host surfaces. */
+const LEGACY_CONTROL_DIRS = ["src/cli", "src/install", "src/hook"] as const;
+
+const HARNESS_FORBIDDEN_DIRS = ["src/cli", "src/install", "src/hook", "src/mcp", "src/runtime"] as const;
+
+async function vendorDirs(): Promise<string[]> {
+  const files = await collectFiles(VENDORS, isProductionTs);
+  const dirs = new Set<string>();
+  for (const file of files) {
+    const rest = file.slice(`${VENDORS}/`.length);
+    const first = rest.split("/")[0];
+    if (first !== undefined) dirs.add(`${VENDORS}/${first}`);
+  }
+  return [...dirs].sort();
+}
+
+describe("import-direction gate", () => {
+  it("ends the migration at exactly the five production source layers", async () => {
+    const sourceEntries = (await readdir(`${REPO_ROOT}/src`)).sort();
+    expect(sourceEntries).toEqual(["assets", "cli", "kernel", "mcp", "vendors"]);
+    await expect(pathExists("test/architecture/kernel-transition-manifest.json")).resolves.toBe(false);
+    await expect(pathExists("test/architecture/facade-outward-imports.json")).resolves.toBe(false);
+  });
+
+  it("extracts static and dynamic relative import specifiers", () => {
+    const source = [
+      'import type { Thing } from "./thing.js";',
+      'const mod = await import("../kernel/x.js");',
+      'export { y } from "./y.js";',
+    ].join("\n");
+
+    // Static specifiers are collected first, then dynamic ones - not source order.
+    expect(importSpecifiers(source)).toEqual(["./thing.js", "./y.js", "../kernel/x.js"]);
+  });
+
+  it("extracts TypeScript import-type specifiers", () => {
+    expect(importSpecifiers('type Thing = import("./thing.js").Thing;')).toEqual(["./thing.js"]);
+  });
+
+  it("rejects a computed dynamic import rather than silently skipping the boundary edge", () => {
+    expect(nonLiteralDynamicImports('void import("../mcp/" + "server.js");')).toEqual([
+      'import("../mcp/" + "server.js")',
+    ]);
+  });
+
+  it("classifies a kernel import of a surface layer as forbidden", () => {
+    const forbiddenFromKernel = [CLI, MCP, VENDORS];
+    expect(underAny("src/cli/oms", forbiddenFromKernel)).toBe(true);
+    expect(underAny("src/mcp/server", forbiddenFromKernel)).toBe(true);
+    expect(underAny("src/vendors/codex/install", forbiddenFromKernel)).toBe(true);
+    expect(underAny("src/kernel/engine/search", forbiddenFromKernel)).toBe(false);
+    // Prefix matching must not treat a sibling with a shared prefix as a match.
+    expect(underAny("src/climate/x", forbiddenFromKernel)).toBe(false);
+  });
+
+  it("rejects a cross-vendor import while allowing same-vendor imports", () => {
+    const isCrossVendor = (resolved: string, fromFile: string): boolean => {
+      if (!underAny(resolved, [VENDORS])) return false;
+      const own = fromFile.slice(`${VENDORS}/`.length).split("/")[0];
+      const target = resolved.slice(`${VENDORS}/`.length).split("/")[0];
+      return own !== undefined && target !== undefined && own !== target;
+    };
+
+    expect(isCrossVendor("src/vendors/codex/x", "src/vendors/claude-code/y.ts")).toBe(true);
+    expect(isCrossVendor("src/vendors/codex/x", "src/vendors/codex/y.ts")).toBe(false);
+    expect(isCrossVendor("src/kernel/x", "src/vendors/codex/y.ts")).toBe(false);
+  });
+
+  it("keeps kernel free of cli, mcp, vendors, and assets imports", async () => {
+    const files = await collectFiles(KERNEL, isProductionTs);
+    if (files.length === 0) return; // kernel/ does not exist until PR 7a
+    assertNonVacuous(files, KERNEL);
+    expect(await findImports(files, (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS]))).toEqual([]);
+  });
+
+  it("rejects a .mts kernel module importing an MCP surface", async () => {
+    const fixture = "src/kernel/import-boundary-escape.mts";
+    await writeFile(absolute(fixture), 'import "../mcp/server.js";\n');
+    try {
+      expect(
+        await findImports([fixture], (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS])),
+      ).toEqual([{ file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" }]);
+    } finally {
+      await rm(absolute(fixture), { force: true });
+    }
+  });
+
+  it("detects an import-type reference to an MCP surface", async () => {
+    const fixture = "src/kernel/import-boundary-import-type-escape.ts";
+    await writeFile(absolute(fixture), 'type X = import("../mcp/server.js").Something;\n');
+    try {
+      expect(
+        await findImports([fixture], (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS])),
+      ).toEqual([{ file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" }]);
+    } finally {
+      await rm(absolute(fixture), { force: true });
+    }
+  });
+
+  it("detects comment-separated imports of an MCP surface", async () => {
+    const fixture = "src/kernel/import-boundary-comment-escape.ts";
+    await writeFile(
+      absolute(fixture),
+      [
+        'void import/* boundary-evasion */("../mcp/server.js");',
+        'import/*x*/ { server as staticServer } from "../mcp/server.js";',
+        "void import// boundary-evasion",
+        '("../mcp/server.js");',
+      ].join("\n"),
+    );
+    try {
+      expect(
+        await findImports([fixture], (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS])),
+      ).toEqual([
+        { file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" },
+        { file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" },
+        { file: fixture, specifier: "../mcp/server.js", resolved: "src/mcp/server" },
+      ]);
+    } finally {
+      await rm(absolute(fixture), { force: true });
+    }
+  });
+
+  it("keeps cli imports within cli and kernel", async () => {
+    const files = await collectFiles(CLI, isProductionTs);
+    assertNonVacuous(files, CLI);
+    const imports = await findImports(files, (resolved) => !underAny(resolved, [CLI, KERNEL]));
+    expect(imports.map(({ file, resolved }) => ({ file, resolved }))).toEqual(
+      CLI_ENTRYPOINT_EXCEPTIONS.map(({ file, resolved }) => ({ file, resolved })),
+    );
+  });
+
+  it("keeps mcp imports within mcp and kernel", async () => {
+    const files = await collectFiles(MCP, isProductionTs);
+    assertNonVacuous(files, MCP);
+    expect(
+      await findImports(files, (resolved) => !underAny(resolved, [MCP, KERNEL])),
+    ).toEqual([]);
+  });
+
+  it("keeps assets free of cli, mcp, and vendors imports", async () => {
+    const files = await collectFiles(ASSETS, isProductionTs);
+    assertNonVacuous(files, ASSETS);
+    expect(await findImports(files, (resolved) => underAny(resolved, [CLI, MCP, VENDORS]))).toEqual([]);
+  });
+
+  it("keeps vendor modules from importing each other", async () => {
+    const dirs = await vendorDirs();
+    if (dirs.length === 0) return; // vendors/ does not exist until PR 5a
+    for (const dir of dirs) {
+      const files = await collectFiles(dir, isProductionTs);
+      assertNonVacuous(files, dir);
+      const others = dirs.filter((other) => other !== dir);
+      expect(await findImports(files, (resolved) => underAny(resolved, others)), dir).toEqual([]);
+    }
+  });
+
+  it("keeps package-root core as convention assets, not runtime source", async () => {
+    const runtimeFiles = await collectFiles("core", (relativePath) =>
+      /\.(?:ts|tsx|js|mjs|cjs)$/.test(relativePath),
+    );
+    expect(runtimeFiles).toEqual([]);
+  });
+
+  it("keeps production harness declarations free of host/runtime side-effect imports", async () => {
+    const files = await collectFiles("src/kernel/harness", isProductionTs);
+    assertNonVacuous(files, "src/kernel/harness");
+    expect(await findImports(files, (resolved) => underAny(resolved, HARNESS_FORBIDDEN_DIRS))).toEqual([]);
+  });
+
+  it("keeps legacy core-domain modules from importing control-plane host surfaces", async () => {
+    const files = (
+      await Promise.all(LEGACY_DOMAIN_DIRS.map((dir) => collectFiles(dir, isProductionTs)))
+    ).flat();
+    if (files.length === 0) return; // all legacy domain dirs migrated
+    assertNonVacuous(files, "legacy core-domain dirs");
+    expect(await findImports(files, (resolved) => underAny(resolved, LEGACY_CONTROL_DIRS))).toEqual([]);
+  });
+});

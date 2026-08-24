@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { readGlobalConfig, writeGlobalConfig } from "../link/global-config.js";
+import { readGlobalConfig, writeGlobalConfig } from "../kernel/link/global-config.js";
 
 export interface RegisterGlobalVaultOptions {
   readonly vault: string;

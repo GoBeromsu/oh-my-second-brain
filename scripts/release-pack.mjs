@@ -23,7 +23,7 @@ function hasPath(files, requiredPath) {
 
 async function readHarnessRegistry() {
   try {
-    return (await import("../dist/harness/surface-registry.js")).harnessSurfaceRegistry;
+    return (await import("../dist/kernel/harness/surface-registry.js")).harnessSurfaceRegistry;
   } catch (error) {
     fail(
       `could not load built harness registry; run npm run build before release checks: ${
@@ -59,10 +59,7 @@ const forbidden = [
   "dist/cli/lexa.js",
   "dist/cli/lexa.d.ts",
   "dist/cli/lexa.js.map",
-  "adapters/codex/rules/lexa.md",
-  "adapters/codex/skills/lexa-setup/SKILL.md",
-  "adapters/codex/skills/lexa-capture/SKILL.md",
-  "adapters/codex/skills/lexa-retrieve/SKILL.md",
+  "assets/codex/rules/lexa.md",
 ].filter((forbiddenPath) => hasPath(files, forbiddenPath));
 if (forbidden.length > 0) {
   fail(`package tarball includes forbidden legacy removed assets:\n${forbidden.map((item) => `  - ${item}`).join("\n")}`);
@@ -81,15 +78,15 @@ if (packageJson.bin?.["oh-my-second-brain"] !== "dist/cli/oms.js") {
 if (packageJson.bin?.oms !== "dist/cli/oms.js") {
   fail("package bin must preserve oms compatibility alias");
 }
-const pluginJson = JSON.parse(readFileSync("adapters/claude-code/.claude-plugin/plugin.json", "utf-8"));
+const pluginJson = JSON.parse(readFileSync(".claude-plugin/plugin.json", "utf-8"));
 if (packageJson.version !== pluginJson.version) {
   fail(`version mismatch: package.json=${packageJson.version}, Claude plugin=${pluginJson.version}`);
 }
-const codexPluginJson = JSON.parse(readFileSync("adapters/codex/.codex-plugin/plugin.json", "utf-8"));
+const codexPluginJson = JSON.parse(readFileSync(".codex-plugin/plugin.json", "utf-8"));
 if (packageJson.version !== codexPluginJson.version) {
   fail(`version mismatch: package.json=${packageJson.version}, Codex plugin=${codexPluginJson.version}`);
 }
-const hermesManifestJson = JSON.parse(readFileSync("adapters/hermes/manifest.json", "utf-8"));
+const hermesManifestJson = JSON.parse(readFileSync("assets/hermes-manifest.json", "utf-8"));
 if (packageJson.version !== hermesManifestJson.version) {
   fail(`version mismatch: package.json=${packageJson.version}, Hermes manifest=${hermesManifestJson.version}`);
 }

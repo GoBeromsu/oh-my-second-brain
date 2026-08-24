@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { compareVersions, resolveLatestVersion, type UpdateRunner } from "../update/update.js";
+import { compareVersions, resolveLatestVersion, type UpdateRunner } from "../kernel/update/update.js";
 
 /**
  * Boot-time update nudge for the MCP server.

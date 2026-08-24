@@ -1,6 +1,6 @@
 import path from "node:path";
-import { harnessSurfaceRegistry } from "../harness/surface-registry.js";
-import type { RuntimeSelection } from "../install/hosts.js";
+import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
+import type { RuntimeSelection } from "../kernel/install/hosts.js";
 
 export class CliArgumentError extends Error {
   constructor(message: string) {

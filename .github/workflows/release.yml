@@ -41,9 +41,9 @@ jobs:
         run: |
           set -euo pipefail
           PKG=$(node -p "require('./package.json').version")
-          CLAUDE=$(node -p "require('./adapters/claude-code/.claude-plugin/plugin.json').version")
-          CODEX=$(node -p "require('./adapters/codex/.codex-plugin/plugin.json').version")
-          HERMES=$(node -p "require('./adapters/hermes/manifest.json').version")
+          CLAUDE=$(node -p "require('./.claude-plugin/plugin.json').version")
+          CODEX=$(node -p "require('./.codex-plugin/plugin.json').version")
+          HERMES=$(node -p "require('./assets/hermes-manifest.json').version")
           MKT_TOP=$(node -p "require('./.claude-plugin/marketplace.json').version")
           MKT_PLUGIN=$(node -p "require('./.claude-plugin/marketplace.json').plugins[0].version")
           echo "tag=$GITHUB_REF_NAME package.json=$PKG claude=$CLAUDE codex=$CODEX hermes=$HERMES marketplace=$MKT_TOP marketplace.plugins[0]=$MKT_PLUGIN"
@@ -56,9 +56,9 @@ jobs:
             echo "::error::version carriers are out of lockstep with the tag"
             echo "  tag                                          = $GITHUB_REF_NAME (expected oms-v$PKG)"
             echo "  package.json                                 = $PKG"
-            echo "  adapters/claude-code/.claude-plugin/plugin.json = $CLAUDE"
-            echo "  adapters/codex/.codex-plugin/plugin.json       = $CODEX"
-            echo "  adapters/hermes/manifest.json                  = $HERMES"
+            echo "  .claude-plugin/plugin.json = $CLAUDE"
+            echo "  .codex-plugin/plugin.json  = $CODEX"
+            echo "  assets/hermes-manifest.json = $HERMES"
             echo "  .claude-plugin/marketplace.json (version)      = $MKT_TOP"
             echo "  .claude-plugin/marketplace.json (plugins[0])   = $MKT_PLUGIN"
             exit 1
@@ -78,7 +78,7 @@ jobs:
             exit 0
           fi
           echo "::error::ENVIRONMENT failure: could not install or run the Claude CLI (@anthropic-ai/claude-code)."
-          echo "Remediation: run 'claude plugin validate adapters/claude-code' locally and either"
+          echo "Remediation: run 'claude plugin validate .' locally and either"
           echo "  (a) commit the attestation file at .oms-release/plugin-validation.json, or"
           echo "  (b) re-run this workflow via workflow_dispatch with the plugin_validation_attestation input set."
           echo "Do NOT disable OMS_REQUIRE_PLUGIN_VALIDATION."

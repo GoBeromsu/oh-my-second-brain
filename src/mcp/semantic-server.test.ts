@@ -78,8 +78,8 @@ Index note for graph neighborhoods and semantic lookup.
       await client.connect(transport);
       const retrieve = textPayload(
         await client.callTool({
-          name: "oms_retrieve_context",
-          arguments: {
+          name: "oms_search",
+          arguments: { op: "context",
             property: "tags",
             value: "agent-graph",
             query: "fallback retrieve query",
@@ -108,12 +108,12 @@ Index note for graph neighborhoods and semantic lookup.
       const docid = "references/Agent Retrieval.md";
 
       const syncRaw = await client.callTool({
-        name: "oms_sync_embeddings",
-        arguments: { collection: "obsidian", ensureCollection: true, force: true, index: "brain" },
+        name: "oms_doctor",
+        arguments: { op: "sync-embeddings", collection: "obsidian", ensureCollection: true, force: true, index: "brain" },
       });
       const queryCall = {
-        name: "oms_semantic_query",
-        arguments: { query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
+        name: "oms_search",
+        arguments: { op: "semantic-query", query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
       };
       if (hasModel) {
         // Real engine path: sync builds the native store, query retrieves from it.
@@ -126,18 +126,42 @@ Index note for graph neighborhoods and semantic lookup.
           expect.objectContaining({ path: "references/Agent Retrieval.md" }),
         );
       } else {
-        // Loud-guard path: sync and default hybrid query still require explicit
-        // embedding config, but lex-only query is model-free BM25/FTS.
+        // Model-free path. Two different contracts apply here and the test
+        // asserts both, because collapsing them is how ADR-007 gets eroded.
+        //
+        // Sync REQUIRES embeddings, so it must fail loudly and name what to
+        // configure. A plain query does NOT: since the SearchBackend seam was
+        // wired into production it expands to lexical only, so it returns real
+        // hits rather than failing. Before that wiring this assertion read
+        // `expect(queryRaw.isError).toBe(true)` - it encoded the pre-seam
+        // hybrid behaviour, and the seam landing is what changed it.
         expect(syncRaw.isError).toBe(true);
         const syncText = syncRaw.content[0]?.type === "text" ? syncRaw.content[0].text : "";
         expect(syncText).toMatch(/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/);
-        const queryRaw = await client.callTool(queryCall);
-        expect(queryRaw.isError).toBe(true);
+
+        const plainQuery = textPayload(await client.callTool(queryCall));
+        expect(plainQuery.available).toBe(true);
+        expect((plainQuery.hits as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+
+        // An EXPLICIT vector request still fails loudly. Lexical expansion is a
+        // default for callers who did not choose a strategy, never a substitute
+        // for one that was asked for and cannot run.
+        const explicitVec = await client.callTool({
+          name: "oms_search",
+          arguments: {
+            op: "semantic-query",
+            searches: [{ type: "vec", query: "agent retrieval" }],
+            collection: "obsidian",
+            limit: 1,
+          },
+        });
+        const vecText = explicitVec.content[0]?.type === "text" ? explicitVec.content[0].text : "";
+        expect(vecText).toMatch(/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/);
 
         const lexOnlyQuery = textPayload(
           await client.callTool({
-            name: "query",
-            arguments: { query: "", lex: "agent retrieval", collection: "obsidian", limit: 1 },
+            name: "oms_search",
+            arguments: { op: "semantic-query", query: "", lex: "agent retrieval", collection: "obsidian", limit: 1 },
           }),
         );
         expect((lexOnlyQuery.hits as Array<Record<string, unknown>>)[0]).toEqual(
@@ -145,27 +169,18 @@ Index note for graph neighborhoods and semantic lookup.
         );
       }
 
-      const templates = await client.listResourceTemplates();
-      expect(templates.resourceTemplates).toEqual([expect.objectContaining({ uriTemplate: "qmd://{path}" })]);
-      const resource = await client.readResource({ uri: "qmd://references/Agent%20Retrieval.md" });
-      expect(resource.contents[0]).toEqual(
-        expect.objectContaining({
-          uri: "qmd://references/Agent%20Retrieval.md",
-          mimeType: "text/markdown",
-          text: expect.stringContaining("Agent retrieval follows"),
-        }),
-      );
+      await expect(client.listResourceTemplates()).rejects.toThrow(/Method not found/);
 
       const single = textPayload(
         await client.callTool({
-          name: "oms_get_document",
-          arguments: { target: `${docid}:1:20`, collection: "obsidian", fullPath: true },
+          name: "oms_search",
+          arguments: { op: "get-document", target: `${docid}:1:20`, collection: "obsidian", fullPath: true },
         }),
       );
       const batch = textPayload(
         await client.callTool({
-          name: "oms_multi_get_documents",
-          arguments: { targets: ["references/*.md", docid], lineLimit: 40, maxBytes: 2048 },
+          name: "oms_search",
+          arguments: { op: "multi-get-documents", targets: ["references/*.md", docid], lineLimit: 40, maxBytes: 2048 },
         }),
       );
       expect((single.documents as Array<Record<string, unknown>>)[0]).toEqual(

@@ -4,7 +4,7 @@ oh-my-secondbrain은 아래 공개 작업들의 아이디어와 구현에 빚지
 만들고 아낌없이 공개해주신 모든 분들께 진심으로 감사드린다.
 
 > 우리가 무엇을 흡수했는지(설계 로직·근거)는 `docs/research/*` 에 기록한다.
-> 관리 규칙: [`docs/rules/external-attribution.md`](./docs/rules/external-attribution.md)
+> 관리 규칙: [`docs/rules/external-attribution.md`](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/rules/external-attribution.md)
 
 ## LLM-Wiki 패턴 & 구현체
 
@@ -46,7 +46,7 @@ oh-my-secondbrain은 아래 공개 작업들의 아이디어와 구현에 빚지
 
 ## M1 Retrieval Engine — Absorbed Patterns
 
-아래 패턴들은 M1 엔진(src/engine/) 구현 과정에서 아이디어/알고리즘만 흡수한 목록이다.
+아래 패턴들은 M1 엔진(`src/kernel/engine/`) 구현 과정에서 아이디어/알고리즘만 흡수한 목록이다.
 **verbatim 코드 사용 없음** — 모든 구현은 독립적으로 작성되었다.
 
 | Pattern | Source | License | Note |
@@ -57,9 +57,9 @@ oh-my-secondbrain은 아래 공개 작업들의 아이디어와 구현에 빚지
 | HyDE (Hypothetical Document Embeddings) — generate a hypothetical answer passage then embed it for retrieval | [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki) | GPL-3.0 | **IDEA-ONLY — zero verbatim code** |
 | P-08-style two-layer retry: inner immediate retry + outer 50 ms back-off, abort on CancelToken | P-08 resilience pattern (architecture concept) | idea-only | No external code |
 | Lightweight cancel token: mutable boolean wrapped in a getter+cancel() object, threaded through every async call | gajae-code patterns | MIT | idea-only, implementation is original |
-| Lazy-load + 5-minute idle unload guard (`src/engine/embed/provider.ts`): model/contexts not initialised until first `embed()` call; a `setTimeout` resets per call; no calls for 5 min → dispose pool; next `embed()` reloads lazily. The only permitted timer (plan.md:83, R2). | [qmd (tobi)](https://github.com/tobi/qmd) | MIT | **IDEA-ONLY — zero verbatim code** |
-| Hardware-adaptive parallel embed pool (`src/engine/embed/provider.ts`): `poolSize = min(4, cpuCount-1)`, round-robin context selection across the pool, `Promise.all` parallel context init, 2-stage batch distribution. | [qmd (tobi)](https://github.com/tobi/qmd) | MIT | **IDEA-ONLY — zero verbatim code** |
-| SHA-256 chunk-level incremental diff (`src/engine/embed/sync.ts`): compute SHA-256 of each chunk text; compare with stored SHA from `EngineStore.getShas()`; skip `embed()` call when SHA matches — only changed chunks are re-embedded. | [qmd (tobi)](https://github.com/tobi/qmd) | MIT | **IDEA-ONLY — zero verbatim code** |
+| Lazy-load + 5-minute idle unload guard (`src/kernel/engine/embed/provider.ts`): model/contexts not initialised until first `embed()` call; a `setTimeout` resets per call; no calls for 5 min → dispose pool; next `embed()` reloads lazily. The only permitted timer (plan.md:83, R2). | [qmd (tobi)](https://github.com/tobi/qmd) | MIT | **IDEA-ONLY — zero verbatim code** |
+| Hardware-adaptive parallel embed pool (`src/kernel/engine/embed/provider.ts`): `poolSize = min(4, cpuCount-1)`, round-robin context selection across the pool, `Promise.all` parallel context init, 2-stage batch distribution. | [qmd (tobi)](https://github.com/tobi/qmd) | MIT | **IDEA-ONLY — zero verbatim code** |
+| SHA-256 chunk-level incremental diff (`src/kernel/engine/embed/sync.ts`): compute SHA-256 of each chunk text; compare with stored SHA from `EngineStore.getShas()`; skip `embed()` call when SHA matches — only changed chunks are re-embedded. | [qmd (tobi)](https://github.com/tobi/qmd) | MIT | **IDEA-ONLY — zero verbatim code** |
 
 > **⚠ License flag — gbrain**: The gbrain project was referenced for logic/architecture patterns only. The original repo URL and license are unconfirmed (`TODO(verify)`). No code was copied. Attribution will be updated once the license is confirmed.
 
@@ -67,7 +67,7 @@ oh-my-secondbrain은 아래 공개 작업들의 아이디어와 구현에 빚지
 
 ## M2 Compile Engine — Absorbed Patterns
 
-M2 엔진(src/engine/compile/) 구현 과정에서 아이디어/알고리즘만 흡수한 목록이다.
+M2 컴파일 기능의 이전 구현 과정에서 아이디어/알고리즘만 흡수한 목록이다.
 **verbatim 코드 사용 없음** — 모든 구현은 독립적으로 작성되었다.
 
 | Pattern | Source | License | Note |
@@ -81,7 +81,7 @@ M2 엔진(src/engine/compile/) 구현 과정에서 아이디어/알고리즘만 
 
 ## M4 Distill — Absorbed Patterns
 
-M4 Distill 스킬(src/engine/distill/)은 standalone 흡수-분석기다.
+M4 Distill 스킬(`assets/skills/distill/`)은 standalone 흡수-분석기다.
 **verbatim 코드 사용 없음** — 패턴 시그니처는 self-authored mining 문서에서 도출했다.
 
 | Pattern | Source | License | Note |
@@ -95,7 +95,7 @@ M4 Distill 스킬(src/engine/distill/)은 standalone 흡수-분석기다.
 
 ## M3 Wiki Engine — Absorbed Patterns
 
-M3 위키 컬렉션(src/engine/wiki/ + core/skills/wiki/) 구현 과정에서 아이디어/알고리즘만 흡수한 목록이다.
+M3 위키 컬렉션은 이전 구현에서 아이디어/알고리즘만 흡수한 목록이다.
 **verbatim 코드 사용 없음** — 모든 구현은 독립적으로 작성되었다.
 
 | Pattern | Source | License | Note |
@@ -112,27 +112,27 @@ M3 위키 컬렉션(src/engine/wiki/ + core/skills/wiki/) 구현 과정에서 �
 M5 거버넌스/컨벤션/셋업/어댑터 레이어 구현 과정에서 아이디어/방법론만 흡수한 목록이다.
 **verbatim 코드 사용 없음** — 모든 구현은 독립적으로 작성되었다.
 
-**Conventions / vault-lint** (`src/engine/conventions/`)
+**Conventions / vault-lint** (`src/kernel/engine/conventions/`)
 
 | Pattern | Source | License | Note |
 |---------|--------|---------|------|
-| `validateFrontmatter()` + `parseNote()` delegated for required/type checks; wrapper adds checks 1/4/5 around them | `src/conventions/{validate,frontmatter}.ts` (self) | Self-authored | Direct import, read-only |
-| Directory-walk pattern (SKIP_DIRS + recursive readdir generator) reimplemented independently to avoid coupling to link-issue logic | `src/conventions/lint.ts` (self) | Self-authored | Pattern absorbed, not imported |
+| `validateFrontmatter()` + `parseNote()` delegated for required/type checks; wrapper adds checks 1/4/5 around them | `src/kernel/conventions/{validate,frontmatter}.ts` (self) | Self-authored | Direct import, read-only |
+| Directory-walk pattern (SKIP_DIRS + recursive readdir generator) reimplemented independently to avoid coupling to link-issue logic | `src/kernel/conventions/lint.ts` (self) | Self-authored | Pattern absorbed, not imported |
 
-**Setup interview** (`core/skills/setup/`)
+**Setup interview**
 
 | Pattern | Source | License | Note |
 |---------|--------|---------|------|
 | Socratic clarity loop; ambiguity scoring `1 − mean(goal, constraint, criteria, context)`; Round-0 topology gate; Contrarian / Simplifier / Ontologist challenge modes | omc deep-interview methodology | Self-reimplemented | **METHOD-ONLY — no source code copied**; loop, scoring, gate, modes independently authored in TypeScript |
 
-**Governance skills** (`core/skills/vault-scaffold/`, `core/skills/vault-decision-record/`)
+**Governance skills**
 
 | Pattern | Source | License | Note |
 |---------|--------|---------|------|
 | decisions/ zone pattern — a dedicated top-level folder for structural decision artefacts | Ataraxia vault "95. Decisions" | Private vault, no external license | CONCEPT-ONLY — no verbatim content |
 | Six-field ADR structure (context/decision/consequences/status/supersedes/superseded_by) | Michael Nygard ADR template (cognitect.com/blog/2011) | No license stated | IDEA-ONLY — format reimplemented |
-| Taxonomy seeder (read engine DEFAULT → write per-vault override) + vault-confinement guard mirroring `src/capture/safe.ts` | bstack second-brain design (self) | Self-authored | Full idea absorption |
-| Append-only/immutability → SUPERSEDE-ONLY ADR update rule; architecture.md stub follows the sub-dir README (R21) convention | M3 wiki ledger + `src/engine/compile/README.md` (self) | Self-authored | Internal reuse, same codebase |
+| Taxonomy seeder (read engine DEFAULT → write per-vault override) + vault-confinement guard mirroring `src/kernel/capture/safe.ts` | bstack second-brain design (self) | Self-authored | Full idea absorption |
+| Append-only/immutability → SUPERSEDE-ONLY ADR update rule; architecture.md stub follows the sub-dir README (R21) convention | M3 wiki ledger (self) | Self-authored | Internal reuse, same codebase |
 
 **Governance scaffold & ontology schemas** (`.oms/governance/`, `core/ontology/schemas/`)
 
@@ -142,11 +142,11 @@ M5 거버넌스/컨벤션/셋업/어댑터 레이어 구현 과정에서 아이�
 | Thick-router (private) + generic-leaf (public) topology; monorepo + `private/` gitignore isolation | deep-interview R19 / R20 (self) | N/A — internal | No external code; user-ratified design decisions |
 | Layer-1 CONTRACT / Layer-2 GOVERNANCE separation invariants | ADR-006 (self) | N/A — internal | User-ratified 2026-06-13 |
 
-**Skill adapters** (`adapters/`)
+**Shared skills** (`assets/skills/`)
 
 | Work | Source | License | Note |
 |------|--------|---------|------|
-| Thin adapter mirrors for compile / distill / vault-lint / vault-scaffold / vault-decision-record / wiki across claude-code, codex, hermes; retrieve mirrors updated to surface the typed lex/vec/hyde/graph query interface + gph mode | core skill SKILL.md files (self, prior M5 steps) | Self-authored | No external sources absorbed |
+| Shared skill source consumed by Claude, Codex, and Hermes | `assets/skills/*/SKILL.md` (self) | Self-authored | No external sources absorbed |
 
 ---
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { maybePrintUpdateNotice } from "./oms.js";
-import type { UpdateRunnerCall } from "../update/update.js";
+import type { UpdateRunnerCall } from "../kernel/update/update.js";
 
 function okCall(stdout = ""): UpdateRunnerCall {
   return { exitCode: 0, stdout, stderr: "" };

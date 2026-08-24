@@ -1,6 +1,19 @@
 # Changelog
 
+This aggregate changelog contains changes that span multiple layers.
+
+- [Kernel changelog](./CHANGELOG-kernel.md) — domain logic
+- [CLI changelog](./CHANGELOG-cli.md) — the `oms` command surface
+- [MCP changelog](./CHANGELOG-mcp.md) — MCP server tools and resources
+- [Vendors changelog](./CHANGELOG-vendors.md) — per-host adapters and installers
+- [Assets changelog](./CHANGELOG-assets.md) — skills, agents, and ontology data
+
 ## [Unreleased]
+
+### Changed
+
+- The published package now ships `ACKNOWLEDGMENTS.md`, because the licence section links to it and shipping the note without its target left a dangling reference in the artifact.
+- `docs/release.md` no longer ships. It documents how to release this package, which an installed consumer cannot do; the READMEs link to the repository copy instead.
 
 ## [0.2.0] - 2026-08-19
 
@@ -73,13 +86,6 @@
 
 ### Fixed
 - Frontmatter diagnostics are tolerant: malformed frontmatter no longer blocks retrieve or build paths.
-
-## [0.1.6] - 2026-06-02
-
-### Changed
-- The project is published to npm as `oh-my-second-brain`, while `oms` stays the CLI, MCP, skill, and repo slug.
-- The installer defaults to the published npm package instead of `npx` against GitHub release URLs.
-- Host MCP registration now points at the installed `oms mcp --vault ...` command.
 
 ## [0.1.5] - 2026-06-02
 

@@ -65,7 +65,7 @@ oms install --runtime all --vault /path/to/vault --yes       # 적용
 | **codex** | `.codex-plugin/plugin.json` | `AGENTS.md` | `$` | 네이티브 스킬 + MCP |
 | **hermes** | `manifest.json` | `SOUL.md` | (MCP/tools) | 네이티브 스킬 + MCP |
 
-`oms install`은 호스트 네이티브 규칙/스킬과 관리형 `oms` MCP 등록을 작성하며, `oms uninstall`로 되돌릴 수 있다. 호스트별 상세: [adapters/README.md](./adapters/README.md).
+`oms install`은 호스트 네이티브 규칙/스킬과 관리형 `oms` MCP 등록을 작성하며, `oms uninstall`로 되돌릴 수 있다.
 
 ## CLI
 
@@ -120,7 +120,7 @@ npm test
 npm run release:check   # lint + build + test + audit + pack + artifact-smoke + plugin 검증
 ```
 
-릴리스 절차: [docs/release.md](./docs/release.md).
+릴리스 절차: [docs/release.md](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/release.md).
 
 ## 라이선스
 

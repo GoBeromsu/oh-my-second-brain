@@ -1,6 +1,6 @@
 
-import type { McpEngineAdapter } from "../engine/mcp/facade.js";
-import { assembleSemanticEngine } from "../mcp/semantic-engine.js";
+import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
+import { assembleSemanticEngine } from "../kernel/semantic/semantic-engine.js";
 import {
   booleanOption,
   numberOption,
@@ -22,12 +22,7 @@ export interface SemanticCliRunOptions {
 
 const TOP_LEVEL_COMMANDS = new Set([
   "semantic",
-  "query",
   "search",
-  "vsearch",
-  "get",
-  "multi-get",
-  "status",
   "embed",
   "collection",
   "context",

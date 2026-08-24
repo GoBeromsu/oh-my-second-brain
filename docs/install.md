@@ -1,6 +1,6 @@
 # Install Oh My Second Brain
 
-Oh My Second Brain v0 is distributed as one npm/GitHub-release package that contains the CLI/runtime, the default ontology, host adapter assets, host-native skill/rule bundles, and shell installers. Claude Code, Codex, and Hermes install Oh My Second Brain host surfaces backed by the same MCP write/retrieve runtime. Legacy runtime IDs remain `oms` for compatibility.
+Oh My Second Brain v0 is distributed as one npm/GitHub-release package that contains the CLI/runtime, the default ontology, root host assets, host-native skill/rule bundles, and shell installers. Claude Code, Codex, and Hermes install Oh My Second Brain host surfaces backed by the same MCP runtime. Legacy runtime IDs remain `oms` for compatibility.
 
 ## Prerequisites
 
@@ -56,14 +56,14 @@ Runtime selection follows the Ouroboros pattern:
 1. Explicit `--runtime` wins.
 2. `auto` detects `claude`, `codex`, and `hermes` on `PATH`.
 3. If nothing is detected, `auto` defaults to Claude Code for conservative first-run behavior; use `--runtime all` to install every host surface.
-4. `all` installs every known adapter surface.
+4. `all` installs every known host surface.
 
 ## What install writes
 
 | Host | Install behavior |
 | --- | --- |
 | Claude Code | Installs the plugin-owned `.mcp.json` surface; removes stale `oms` registrations across local/project/user scopes; with `--execute`, adds the OMS marketplace and installs `oms@oms` through it, falling back to the local plugin path when the marketplace flow can't complete. |
-| Codex | Installs `~/.codex/rules/oms.md`, `~/.codex/skills/oms-*`, copies adapter files to `~/.codex/plugins/oms`, and writes a managed `[mcp_servers.oms]` block plus `OMS_AGENT_RUNTIME=codex` env in `~/.codex/config.toml`. |
+| Codex | Installs `~/.codex/rules/oms.md`, `~/.codex/skills/oms-*`, installs guidance to `~/.codex/plugins/oms`, and writes a managed `[mcp_servers.oms]` block plus `OMS_AGENT_RUNTIME=codex` env in `~/.codex/config.toml`. |
 | Hermes | Installs `~/.hermes/skills/knowledge-management/oms/`, copies adapter files to `~/.hermes/adapters/oms`, and writes `mcp_servers.oms` in `~/.hermes/config.yaml`. |
 
 Host writes keep the legacy `oms` namespace for backward-compatible MCP/skill IDs and are reversible with `oh-my-second-brain uninstall` (or the `oms` alias). Each runtime is installed independently: if one host fails, the others still complete.
@@ -122,8 +122,8 @@ Setup does not modify vault notes. It writes `.oms/taxonomy.yaml`, preserves exi
 Typical printed commands look like:
 
 ```bash
-claude plugin install /path/to/oh-my-second-brain/adapters/claude-code
-# MCP is declared by the installed plugin in adapters/claude-code/.mcp.json.
+claude plugin install /path/to/oh-my-second-brain
+# MCP is declared by the installed plugin in .mcp.json.
 ```
 
 ## Uninstall
@@ -165,7 +165,7 @@ oh-my-second-brain linkify --vault /path/to/vault --folder notes
 oh-my-second-brain linkify --vault /path/to/vault --apply --yes
 ```
 
-Hosts can do the same note by note through the `oms_link_suggest` (read-only) and `oms_link_apply` (writes accepted candidates) MCP tools. Nothing is linked behind your back: new notes are composed already linked, and existing notes change only when you ask.
+Hosts can do the same note by note through `oms_link`: its `suggest` operation is read-only and its `apply` operation writes accepted candidates. Nothing is linked behind your back: new notes are composed already linked, and existing notes change only when you ask.
 
 ## Verify the install
 
@@ -173,11 +173,10 @@ Hosts can do the same note by note through the `oms_link_suggest` (read-only) an
 oh-my-second-brain doctor --vault /path/to/vault
 oh-my-second-brain semantic sync --vault /path/to/vault --collection vault
 oh-my-second-brain semantic query "what should I retrieve?" --vault /path/to/vault
-oh-my-second-brain semantic context add vault "Prefer durable notes with reusable evidence." --vault /path/to/vault
-oh-my-second-brain semantic ls vault --vault /path/to/vault
-oh-my-second-brain semantic doctor --vault /path/to/vault
+oh-my-second-brain semantic context list --vault /path/to/vault
+oh-my-second-brain semantic status --vault /path/to/vault
 oh-my-second-brain install --runtime all --vault /path/to/vault --dry-run
-claude plugin validate adapters/claude-code
+claude plugin validate .
 ```
 
-Inside a host runtime, verify the MCP server by listing MCP tools or asking for Oh My Second Brain graph/status. The server exposes status, graph build, context retrieval, native OMS semantic-index sync, qmd-compatible semantic query/status aliases, `qmd://` document resources, semantic document rehydration, axis retrieval, lazy note loading, contract validation, and gated write tools. OMS does not require the `qmd` binary; `oms semantic doctor` now reports the built-in SQLite/FTS/vector backend and optional GGUF model path diagnostics.
+Inside a host runtime, verify the MCP server by listing its five tools: `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`. `oms_search` provides retrieval operations, `oms_status` is read-only health/statistics, and `oms_doctor` provides diagnosis or repair operations. OMS does not require the `qmd` binary; `oms semantic status` reports semantic-engine availability.

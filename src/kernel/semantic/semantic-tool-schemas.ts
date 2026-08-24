@@ -1,0 +1,136 @@
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+
+const readOnlyAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+const writeAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+const queryInputSchema: Tool["inputSchema"] = {
+  type: "object",
+  properties: {
+    query: { type: "string" },
+    collection: { type: "string" },
+    mode: { type: "string", enum: ["query", "search", "vsearch"] },
+    limit: { type: "number" },
+    minScore: { type: "number" },
+    intent: { type: "string" },
+    lex: { type: "string" },
+    vec: { type: "string" },
+    hyde: { type: "string" },
+    index: { type: "string" },
+  },
+  required: ["query"],
+};
+
+const getDocumentInputSchema: Tool["inputSchema"] = {
+  type: "object",
+  properties: {
+    target: {
+      type: "string",
+      description: "OMS semantic target, path, docid, or line range such as #abc123:120:40.",
+    },
+    collection: { type: "string" },
+    fromLine: { type: "number" },
+    lineCount: { type: "number" },
+    lineNumbers: { type: "boolean" },
+    fullPath: { type: "boolean" },
+    index: { type: "string" },
+  },
+  required: ["target"],
+};
+
+const multiGetInputSchema: Tool["inputSchema"] = {
+  type: "object",
+  properties: {
+    target: { type: "string" },
+    targets: { type: "array", items: { type: "string" } },
+    lineLimit: { type: "number" },
+    maxBytes: { type: "number" },
+    lineNumbers: { type: "boolean" },
+    fullPath: { type: "boolean" },
+    index: { type: "string" },
+  },
+};
+
+export const semanticMcpTools: Tool[] = [
+  {
+    name: "oms_sync_embeddings",
+    title: "Oh My Second Brain embedding sync",
+    description: "Synchronize the active vault into the OMS embedding store before semantic retrieval.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        collection: { type: "string" },
+        ensureCollection: { type: "boolean" },
+        update: { type: "boolean" },
+        embed: { type: "boolean" },
+        force: { type: "boolean" },
+        pull: { type: "boolean" },
+        index: { type: "string" },
+        chunkStrategy: { type: "string" },
+        maxDocsPerBatch: { type: "number" },
+        maxBatchMb: { type: "number" },
+      },
+    },
+    annotations: writeAnnotations,
+  },
+  {
+    name: "oms_semantic_query",
+    title: "Oh My Second Brain semantic query",
+    description: "Run native OMS semantic query/search/vsearch over the active vault without depending on qmd.",
+    inputSchema: queryInputSchema,
+    annotations: readOnlyAnnotations,
+  },
+  {
+    name: "oms_semantic_status",
+    title: "Oh My Second Brain semantic status",
+    description: "Report native OMS semantic index status and embedding model metadata.",
+    inputSchema: { type: "object", properties: { index: { type: "string" } } },
+    annotations: readOnlyAnnotations,
+  },
+  {
+    name: "oms_semantic_collections",
+    title: "Oh My Second Brain semantic collections",
+    description: "List native OMS semantic collections and stored collection metadata.",
+    inputSchema: { type: "object", properties: { index: { type: "string" } } },
+    annotations: readOnlyAnnotations,
+  },
+  {
+    name: "oms_semantic_contexts",
+    title: "Oh My Second Brain semantic contexts",
+    description: "List native OMS semantic global, collection, and path-prefix contexts.",
+    inputSchema: { type: "object", properties: { index: { type: "string" } } },
+    annotations: readOnlyAnnotations,
+  },
+  {
+    name: "oms_semantic_cleanup",
+    title: "Oh My Second Brain semantic cleanup",
+    description: "Remove stale native OMS semantic index entries whose files no longer exist.",
+    inputSchema: { type: "object", properties: { index: { type: "string" } } },
+    annotations: writeAnnotations,
+  },
+  {
+    name: "oms_get_document",
+    title: "Oh My Second Brain get document",
+    description: "Read one selected semantic document target, docid, path, or line range without writing to the vault.",
+    inputSchema: getDocumentInputSchema,
+    annotations: readOnlyAnnotations,
+  },
+
+  {
+    name: "oms_multi_get_documents",
+    title: "Oh My Second Brain multi-get documents",
+    description: "Read multiple selected semantic paths, globs, or docids in one batch without writing to the vault.",
+    inputSchema: multiGetInputSchema,
+    annotations: readOnlyAnnotations,
+  },
+];

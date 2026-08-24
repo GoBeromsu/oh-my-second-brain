@@ -25,18 +25,24 @@ Oh My Second Brain's product posture is an **axis graph harness**:
 
 The full terminology lock is in the harness architecture doc. In short: Oh My Second Brain helps the user operate their own knowledge system so notes can be retrieved and reused later; it does not fill the body content for them.
 
-## The 3-Host Handshake: Shared CORE + Host ADAPTERS
+## The 3-Host Handshake: Kernel + Root Host Surfaces
 
-All knowledge logic (validation, ontology loading, folder resolution, graph/cache retrieval, and gated capture) is written **once** inside the shared CORE and exposed via the canonical `oh-my-second-brain` CLI (`oms` compatibility alias) plus the shared MCP server. Host differences (manifest schema, skill layout, invocation sigil, convention-file name) are absorbed by per-host ADAPTERS. Adding a fourth host means writing one more adapter, not touching the core.
+Validation, ontology loading, folder resolution, graph and cache retrieval, and gated capture are written **once** in `src/kernel/` and exposed through `src/cli/` and `src/mcp/`. Host differences are represented by root plugin manifests, `assets/`, and `src/vendors/`; they do not require an `adapters/` tree.
+
+Application workflows are kernel services, not surface code. `src/kernel/setup/service.ts` owns setup as inspect / decide / apply, so the decision of what setup *would* do is computable without prompting anyone. `src/kernel/link/workflow.ts` owns vault scanning, term discovery, candidate identity and apply orchestration; that logic previously existed twice, in the CLI's linkify and the MCP link tools, drifting independently. `src/kernel/doctor/service.ts` owns repair admission, execution, persisted-state read-back and receipt construction.
+
+The surfaces keep what is genuinely theirs: argv parsing, interactive prompting, console formatting, MCP request and response envelopes, and exit-code mapping. A third transport can drive any of these workflows without importing `cli/` or `mcp/`.
+
+The import-direction gate enforces that `kernel/` does not depend on the surfaces. It cannot enforce where behaviour *lives* — that boundary is held by review, and it was review that caught it sitting on the wrong side.
 
 | | Claude Code | Codex | Hermes |
 |---|---|---|---|
-| MCP backbone | `.mcp.json` | `.mcp.json` | "any MCP server" |
+| MCP backbone | `.mcp.json` | `.mcp.codex.json` | "any MCP server" |
 | Skills sigil | `/skill` | `$skill` | agentskills.io |
 | Convention file | `CLAUDE.md` / `AGENTS.md` | `AGENTS.md` | `SOUL.md` + context files |
 | Local vault access | yes | yes | yes |
 
-`adapters/claude-code/`, `adapters/codex/`, and `adapters/hermes/` all ship installable v0 host surfaces. `oh-my-second-brain install` copies host assets, installs Codex/Hermes skills or rules where the host expects them, and writes host MCP registration.
+Root plugin manifests and `assets/` ship installable host surfaces. Claude hooks are in `assets/claude/hooks/`, Codex rules are in `assets/codex/rules/`, and Hermes metadata is `assets/hermes-manifest.json`. The six skills live once in `assets/skills/`: write, search, link, distill, status, and doctor.
 
 ## Flow Diagram
 
@@ -45,20 +51,20 @@ All knowledge logic (validation, ontology loading, folder resolution, graph/cach
 │  Host agent                                                      │
 │  (Claude Code | Codex | Hermes)                                  │
 │                                                                  │
-│  host ADAPTER                                                    │
+│  root host surface                                               │
 │  ├─ plugin.json / rule+skill bundle / SOUL.md fragment              │
 │  └─ shells out to: oh-my-second-brain setup | doctor | lint   │
 └───────────────────────────┬──────────────────────────────────────┘
                             │ invokes
                             ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  Oh My Second Brain convention layer  (src/ — TypeScript, Node ≥20)            │
+│  Oh My Second Brain convention layer  (src/ — TypeScript, Node ≥20) │
 │                                                                  │
-│  src/cli/oms.ts          CLI verbs: setup / doctor / semantic   │
-│  src/core/ontology/       load concepts/*.yaml + taxonomy.yaml   │
-│  src/ontology/active.ts   resolve vault vs bundled ontology      │
-│  src/conventions/         validateFrontmatter → ValidationResult │
-│  src/mcp/server.ts        stdio MCP: retrieve/semantic/read/capture │
+│  src/cli/                CLI entry point and commands           │
+│  src/kernel/             ontology, conventions, graph, engine   │
+│  src/mcp/server.ts       stdio MCP: five public OMS tools        │
+│  src/vendors/            per-host installation code             │
+│  src/assets/             shared skill-source location contract  │
 └───────────────────────────┬──────────────────────────────────────┘
                             │ reads bundled static package assets
                             ▼
@@ -66,8 +72,8 @@ All knowledge logic (validation, ontology loading, folder resolution, graph/cach
 │  Package-root assets  (not TypeScript source)                    │
 │                                                                  │
 │  core/ontology/          shipped default ontology copied to vault │
-│  core/skills/, core/agents/ host-agnostic skill/persona text       │
-│  adapters/*              host-native plugin/rule/skill bundles    │
+│  assets/skills/          host-agnostic skill text                  │
+│  assets/{claude,codex,hermes}/ host-native guidance, hooks, rules │
 └───────────────────────────┬──────────────────────────────────────┘
                             │ reads / writes
                             ▼
@@ -90,10 +96,8 @@ MCP is the shared cross-host transport for retrieve, graph/status, validation, c
 The correct runtime framing is:
 
 1. **Now**: CLI setup/doctor and convention engine are real; Claude Code skills exist as installable/guided surfaces.
-2. **Next**: install shell can print exact dry-run Claude plugin and MCP registration commands (`oh-my-second-brain setup --install-claude`) without claiming a live runtime.
-3. **Now in Phase 2**: real stdio MCP read/status tools are available through `oms mcp`.
-4. **Now in Phase 3**: derived graph/search cache tools are available for axis-first retrieval, live context retrieval, native OMS semantic-index sync, semantic document rehydration, and lazy body load.
-5. **Now in Phase 4**: the `write` tool is available after path-safety and vault-confinement tests.
+2. **Now**: `oms mcp` exposes exactly `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`.
+3. **Now**: `oms_write` is available after verified-target, path-safety, vault-confinement, and contract checks.
 
 ## Retrieval View Compatibility
 
@@ -101,8 +105,8 @@ Existing concept YAML may use `lenses`. Keep that key backward-compatible, but e
 
 ## Stack
 
-- **TypeScript** (`module: NodeNext`, Node ≥ 20) — runtime for the CLI, convention engine, and adapter interfaces.
-- **Markdown** — conventions, skills, agents, and adapter documentation.
+- **TypeScript** (`module: NodeNext`, Node ≥ 20) — runtime for the CLI, kernel, MCP server, and vendor installation code.
+- **Markdown** — conventions, skills, agents, and host guidance.
 - **YAML** — ontology data files (`concepts/*.yaml`, `taxonomy.yaml`); parsed by the `yaml` npm package. Runtime dependencies are tracked in `package.json`.
 - **No Obsidian app dependency** — a vault is just a folder of markdown files. Oh My Second Brain reads and writes it directly via the filesystem.
 - **No new heavy dependencies** — any additional dep requires explicit approval (spec constraint).

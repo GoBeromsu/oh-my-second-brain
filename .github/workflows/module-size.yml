@@ -1,0 +1,37 @@
+name: module-size
+
+on:
+  # No base-branch filter. Stacked pull requests are the normal shape of
+  # parallel work here, and a filter of [main] gave them no ratchet at all --
+  # a module could grow across a stack and only be measured once the whole
+  # stack landed. The baseline below is the pull request's own base, so this
+  # is correct for any target branch.
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ratchet:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 is required. The checker compares against the pull
+      # request's merge base and re-reads its own policy literals; without full
+      # history a pull request could grow a module and loosen the policy in the
+      # same commit with nothing to compare against.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+      # No npm ci: the checker is dependency-free so it cannot be blocked by an
+      # install failure, and it runs once rather than across the Node matrix.
+      - name: Module-size ratchet
+        env:
+          BASELINE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASELINE_REF" ] || [ "$BASELINE_REF" = "0000000000000000000000000000000000000000" ]; then
+            echo "::error::Module-size ratchet has no usable baseline (push before SHA is unavailable or this is a new branch)."
+            exit 2
+          fi
+          node scripts/check-module-size.mjs --baseline-ref "$BASELINE_REF"

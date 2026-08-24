@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { harnessSurfaceRegistry } from "../harness/surface-registry.js";
+import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import { cliUsageText, mainUsageCommandNames } from "./usage.js";
 
 describe("CLI usage text", () => {

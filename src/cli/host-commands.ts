@@ -12,9 +12,15 @@ import {
   formatHostOperationResults,
   formatHostOperationResultsJson,
   runHostOperation,
+  hostSurfaceForRuntime,
+  type HostOperationResult,
+  type HostRuntime,
   type RuntimeSelection,
-} from "../install/hosts.js";
-import { formatUpdateResult, runUpdate } from "../update/update.js";
+} from "../kernel/install/hosts.js";
+import { formatUpdateResult, runUpdate } from "../kernel/update/update.js";
+import { installClaude, uninstallClaude } from "../vendors/claude/claude.js";
+import { installCodex, uninstallCodex } from "../vendors/codex/codex.js";
+import { installHermes, uninstallHermes } from "../vendors/hermes/hermes.js";
 import {
   backfillGlobalVaultFromEnv,
   nonFatalGlobalWriteback,
@@ -38,6 +44,21 @@ export interface HostCommandContext {
   readonly adapterRoot: string;
 }
 
+async function runVendorHostOperation(
+  options: Parameters<typeof runHostOperation>[0],
+  runtime: HostRuntime,
+): Promise<HostOperationResult> {
+  const host = hostSurfaceForRuntime(runtime);
+  if (options.action === "install") {
+    if (runtime === "claude") return installClaude(options, host);
+    if (runtime === "codex") return installCodex(options, host);
+    return installHermes(options, host);
+  }
+  if (runtime === "claude") return uninstallClaude(options);
+  if (runtime === "codex") return uninstallCodex(options);
+  return uninstallHermes(options);
+}
+
 /** Persist the vault the install just configured into the global record. */
 async function recordInstalledVault(context: HostCommandContext): Promise<void> {
   if (context.vaultExplicit) {
@@ -59,16 +80,19 @@ export async function runInstallOrUninstall(
     return 1;
   }
 
-  const results = await runHostOperation({
-    action,
-    runtime: context.runtime ?? (action === "install" ? "auto" : "all"),
-    vault: context.vault,
-    agentVault: context.agentVault,
-    dryRun: context.dryRun,
-    executeExternal: context.executeExternal,
-    yes: context.yes,
-    adapterRoot: context.adapterRoot,
-  });
+  const results = await runHostOperation(
+    {
+      action,
+      runtime: context.runtime ?? (action === "install" ? "auto" : "all"),
+      vault: context.vault,
+      agentVault: context.agentVault,
+      dryRun: context.dryRun,
+      executeExternal: context.executeExternal,
+      yes: context.yes,
+      adapterRoot: context.adapterRoot,
+    },
+    runVendorHostOperation,
+  );
   console.log(
     context.json
       ? formatHostOperationResultsJson(results, context.dryRun)
@@ -112,15 +136,18 @@ export async function runUpdateReconcile(context: HostCommandContext): Promise<n
     return 1;
   }
 
-  const results = await runHostOperation({
-    action: "install",
-    runtime: context.runtime ?? "all",
-    vault: context.vault,
-    dryRun: context.dryRun,
-    executeExternal: context.executeExternal,
-    yes: true,
-    adapterRoot: context.adapterRoot,
-  });
+  const results = await runHostOperation(
+    {
+      action: "install",
+      runtime: context.runtime ?? "all",
+      vault: context.vault,
+      dryRun: context.dryRun,
+      executeExternal: context.executeExternal,
+      yes: true,
+      adapterRoot: context.adapterRoot,
+    },
+    runVendorHostOperation,
+  );
   console.log(
     context.json
       ? formatHostOperationResultsJson(results, context.dryRun)

@@ -2,7 +2,7 @@
 
 Reading a vault is safe from anywhere. Writing is not. If an MCP server boots in `~/Documents` and an agent asks it to capture a note, "wherever the process happens to be" is the wrong answer. Oh My Second Brain's write surface therefore refuses to guess: a note is persisted only into a vault that was resolved from a trusted source, and only after the note that landed on disk has been read back and re-checked.
 
-This page describes the write kernel, the global vault registry it leans on, and every rejection it can return. Read tools and CLI read commands (`audit`, `doctor`, `lint`, semantic search) are unchanged and still run anywhere.
+This page describes the write kernel, the global vault registry it leans on, and every rejection it can return. Read tools and the read-only `status` surface still run anywhere. `doctor` diagnoses and repairs, so its repair operations follow the same verified-target rule as `write`.
 
 ## The write loop
 
@@ -84,7 +84,7 @@ There is one primary vault. Multiple registered vaults are not implemented.
 
 The first two `.oms` profiles never collide because resolution is content-based: a directory holding concepts or a taxonomy is a vault, a directory holding `links.yaml` is a bridge.
 
-`cwd` is a read-only fallback. Every read tool works fine on it. The `write` tool rejects with `target-unverified` rather than creating a note in whatever directory the server booted from. `oms mcp` still starts normally on a `cwd` target, since refusing to boot would break the read tools; only the write surface is gated. You can see the posture in the `oms_graph_status` response, whose `writeTools` field reads `write-disabled-target-unverified` on a `cwd` target and `write-gated-by-verified-target-and-contract` otherwise.
+`cwd` is a read-only fallback. Every read tool and `oms_doctor` diagnosis works fine on it. `oms_write` and `oms_doctor` repair operations reject with `target-unverified` rather than modifying whichever directory the server booted from. `oms mcp` still starts normally on a `cwd` target because `oms_status`, `oms_search`, and diagnosis remain available.
 
 ## Rejection codes
 
@@ -159,8 +159,8 @@ cat ~/.oms/config.yaml
 
 The fix is entirely server-side. **No adapter files change.**
 
-- `adapters/claude-code` keeps `.mcp.json` with `args: ["mcp"]`. The server now resolves the vault from the global registry instead of the launch directory, which is exactly the behavior this registration always wanted.
-- `adapters/codex` keeps its `--vault .` registration, which resolves as `explicit` and was never affected.
-- `adapters/hermes` registers the same `oms mcp` command through `~/.hermes/config.yaml`; nothing to change.
+- Root `.mcp.json` keeps `args: ["mcp"]`. The server now resolves the vault from the global registry instead of the launch directory, which is exactly the behavior this registration always wanted.
+- Root `.mcp.codex.json` keeps its `--vault .` registration, which resolves as `explicit` and was never affected.
+- Hermes registers the same `oms mcp` command through `~/.hermes/config.yaml`; nothing to change.
 
 Related but not fixed here: issue #56, where the Claude plugin registers a bare user-scoped MCP server rather than a plugin-owned one and ships no usable write skill. That's a packaging and skill-surface problem in the adapter layer. Verified-target writes make the bare registration behave correctly at runtime, but they don't turn it into a plugin-owned server or add the missing write skill.

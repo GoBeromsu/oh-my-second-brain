@@ -8,10 +8,10 @@ Releasing is one operator command. Everything after the tag push belongs to CI.
 
 Six rules shape this pipeline. They're adopted from [gajae-code](https://github.com/Yeachan-Heo/gajae-code), which the project owner picked as the reference release discipline.
 
-1. **CHANGELOG-first release messages.** Contributors write user-facing notes under `## [Unreleased]` in `CHANGELOG.md` in the same PR as the change. Release notes are never reconstructed from git log at release time. `scripts/changelog-history-guard.mjs` runs in `ci.yml` and fails the build if a released `## [X.Y.Z]` heading that exists on `origin/main` disappears from the working tree.
+1. **CHANGELOG-first release messages.** Contributors write user-facing notes in the matching layer changelog: `CHANGELOG-kernel.md`, `CHANGELOG-cli.md`, `CHANGELOG-mcp.md`, `CHANGELOG-vendors.md`, or `CHANGELOG-assets.md`. `CHANGELOG.md` is the aggregate index, with entries only for changes spanning layers. Release notes are never reconstructed from git log at release time. `scripts/changelog-history-guard.mjs` runs in `ci.yml` and fails the build if a released `## [X.Y.Z]` heading that exists on `origin/main` disappears from the working tree.
 2. **One-command operator release.** `npm run release -- <X.Y.Z>` does preflight, lockstep version bump, changelog roll, `release:check`, commit, tag, atomic push, and CI watch. There's no checklist to follow by hand.
 3. **Tag immutability and fix-forward.** An `oms-v*` tag is never retagged, deleted, or force-pushed. A bad release is corrected by committing the fix on `main` and releasing a newer version.
-4. **Tag equals version.** The tag `oms-vX.Y.Z` must match `package.json` and all three adapter manifests. CI checks this before anything else and refuses to publish when the carriers drift.
+4. **Tag equals version.** The tag `oms-vX.Y.Z` must match `package.json`, the two root plugin manifests, and `assets/hermes-manifest.json`. Release CI checks this before anything else and refuses to publish when the carriers drift.
 5. **CI-only publish.** `npm publish` runs inside `.github/workflows/release.yml` and nowhere else. There is no local publish path, and the operator script never invokes npm publish.
 6. **Tested release logic.** All non-trivial release logic lives in `scripts/release-lib.mjs` as pure functions (changelog roll, notes extraction, version bump, lockstep comparison, semver checks) covered by vitest. The scripts around it stay thin.
 
@@ -23,20 +23,25 @@ The npm package root is the runtime asset root. A releasable tarball must includ
 - `dist/mcp/server.js`
 - `core/ontology/taxonomy.yaml`
 - `core/ontology/concepts/`
-- `adapters/claude-code/.claude-plugin/plugin.json`
-- every Claude adapter `skills/*/SKILL.md`
-- Codex and Hermes adapter skill bundles, including the update skill surface
+- `.claude-plugin/plugin.json`
+- `assets/skills/*/SKILL.md`
+- `assets/codex/rules/oms.md` and `assets/hermes-manifest.json`
 - `docs/install.md`
-- `docs/release.md`
 - `scripts/install.sh`
 - `scripts/uninstall.sh`
-- `CHANGELOG.md`
+- `CHANGELOG.md` and the five layer changelogs
+- `ACKNOWLEDGMENTS.md`, because the licence section links to it
+
+This document is deliberately NOT in that list. It tells the reader how to
+release this package, which an installed consumer cannot do; shipping it would
+put instructions in the artifact that only apply to the repository. The READMEs
+link to the repository copy instead.
 
 `src/` is TypeScript source only. Bundled host/ontology assets intentionally stay
 at the package root so the built CLI can read the same package-root layout in
 source checkouts and in published tarballs.
 
-Codex and Hermes adapter files are packaged as host-native skill/rule bundles plus MCP registrations; release notes must describe the exact installed paths and avoid claiming behavior beyond the shipped skills and MCP tools.
+Codex and Hermes host assets are packaged as host-native skill/rule bundles plus MCP registrations; release notes must describe the exact installed paths and avoid claiming behavior beyond the shipped skills and MCP tools.
 
 ## Operator flow
 
@@ -60,11 +65,15 @@ Every check below runs before a single file or git ref changes, so a failed pref
 
 ### 2. Lockstep version bump
 
-Five files get the new version: `package.json`, `package-lock.json` (root `version` plus `packages[""].version`), `adapters/claude-code/.claude-plugin/plugin.json`, `adapters/codex/.codex-plugin/plugin.json`, and `adapters/hermes/manifest.json`. The script then re-reads all of them and asserts consistency. If anything is off, it stops and tells you to run `git checkout -- .`, since nothing has been committed yet.
+Five files get the new version: `package.json`, `package-lock.json` (root `version` plus `packages[""].version`), `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `assets/hermes-manifest.json`. The script then re-reads all of them and asserts consistency. If anything is off, it stops and tells you to run `git checkout -- .`, since nothing has been committed yet.
 
 ### 3. Changelog roll
 
-In `CHANGELOG.md`, `## [Unreleased]` becomes `## [<version>] - <UTC date>`, and a fresh empty `## [Unreleased]` is reinstated on top. Released sections pass through byte-identical.
+The release process rolls all six changelogs — the aggregate `CHANGELOG.md` and the five layer files — in one transaction. Each file's `## [Unreleased]` section becomes `## [<version>] - <UTC date>` and a fresh empty `## [Unreleased]` is reinstated above it. Every roll is precomputed before anything is written, so a malformed file fails the release before any other changelog is touched rather than leaving some layers released and others not.
+
+A layer with nothing under `[Unreleased]` is normal — most releases touch a subset of layers — and is not an error.
+
+Released sections pass through byte-identical. The immutability guard identifies a section by `{file, version}`, not by version alone: after a release every layer carries the same version heading, so keying on the version would let an edit to one layer hide behind another layer that still holds it.
 
 An empty `## [Unreleased]` body is a hard error: *empty [Unreleased] - write release notes before releasing*. Write the notes, or pass the escape hatch when a release genuinely carries nothing user-facing:
 
@@ -106,9 +115,9 @@ npm run release -- watch
 
 ## CI flow
 
-Pushing an `oms-v*` tag triggers `.github/workflows/release.yml`. Steps, in order:
+Pushing an `oms-v*` tag triggers `.github/workflows/release.yml`; release verification does not run per pull request. Steps, in order:
 
-1. **Guard tag matches every version carrier** (tag runs only). Reads `package.json` plus all three adapter manifests and compares them against `$GITHUB_REF_NAME`. Any drift fails the job and prints each value, so you see exactly which carrier is out of lockstep.
+1. **Guard tag matches every version carrier** (tag runs only). Reads `package.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `assets/hermes-manifest.json` and compares them against `$GITHUB_REF_NAME`. Any drift fails the job and prints each value, so you see exactly which carrier is out of lockstep.
 2. `npm ci`.
 3. **Install Claude CLI for plugin validation**. Installs `@anthropic-ai/claude-code` globally and runs `claude --version`. Success means the later gate performs real plugin validation. Failure is an environment failure and stops the job with remediation text, unless an attestation input was supplied on a dispatch run.
 4. `npm run release:check`. Same gate you ran locally, this time with `OMS_REQUIRE_PLUGIN_VALIDATION=1` set, so `release:plugin` cannot silently skip validation.
@@ -138,10 +147,10 @@ Run a rehearsal on any branch that changes the release pipeline itself.
 Validation is CI-first. The workflow installs the Claude CLI and `scripts/release-plugin.mjs` runs the real check:
 
 ```bash
-claude plugin validate adapters/claude-code
+claude plugin validate .
 ```
 
-That's also the command to run locally when debugging an adapter failure. A `claude plugin validate` failure inside `release:check` is a plugin content error: fix `adapters/claude-code`, don't work around the pipeline. Never disable `OMS_REQUIRE_PLUGIN_VALIDATION`.
+That's also the command to run locally when debugging an adapter failure. A `claude plugin validate` failure inside `release:check` is a plugin content error: fix the root plugin assets, don't work around the pipeline. Never disable `OMS_REQUIRE_PLUGIN_VALIDATION`.
 
 Only when the CLI itself can't run (install or `claude --version` fails, an environment failure) does the attestation fallback apply. `release-plugin.mjs` reads `OMS_PLUGIN_VALIDATION_ATTESTATION` as inline JSON or as a path to a JSON file, requires `actor`, `timestamp`, `command`, `pluginPath`, and `exitCode`, and rejects anything with a non-zero `exitCode`.
 
@@ -149,8 +158,8 @@ Only when the CLI itself can't run (install or `claude --version` fails, an envi
 {
   "actor": "person-or-bot",
   "timestamp": "2026-06-02T00:00:00Z",
-  "command": "claude plugin validate adapters/claude-code",
-  "pluginPath": "adapters/claude-code",
+  "command": "claude plugin validate .",
+  "pluginPath": ".",
   "claudeVersion": "optional version string",
   "exitCode": 0,
   "warnings": ["optional warning text"],
@@ -176,7 +185,7 @@ Before the first public release:
 
 1. Verify that the `oh-my-second-brain` npm package is publishable by the current publisher.
 2. Bump `package.json` to a real semver release.
-3. Keep `adapters/claude-code/.claude-plugin/plugin.json` version in sync with `package.json` unless a future ADR deliberately splits package/plugin versioning.
+3. Keep `.claude-plugin/plugin.json` version in sync with `package.json` unless a future ADR deliberately splits package/plugin versioning.
 4. Confirm release notes list Codex rules/skills and Hermes skill-bundle install paths, plus the MCP registration files that make capture/retrieve tools available.
 
 The operator script handles items 2 and 3 automatically on every release by bumping all version carriers in lockstep.

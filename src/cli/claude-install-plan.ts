@@ -1,4 +1,4 @@
-import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
+import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
 
 const bundledAssets = resolveBundledAssetPaths();
 
@@ -17,7 +17,7 @@ function shellQuote(value: string): string {
 }
 
 export function buildClaudeInstallPlan(_opts: { vault: string }): ClaudeInstallPlan {
-  const pluginPath = bundledAssets.claudeAdapterDir;
+  const pluginPath = bundledAssets.packageRoot;
   return {
     pluginPath,
     pluginInstallCommand: `claude plugin install ${shellQuote(pluginPath)}`,

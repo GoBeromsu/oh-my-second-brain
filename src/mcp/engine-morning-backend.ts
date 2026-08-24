@@ -9,12 +9,12 @@
  * (graph-only context) rather than throwing.
  *
  * After the src/search teardown the morning contract types are the engine
- * contract types (re-exported via src/retrieve/semantic-contract.ts), so this
+ * contract types (re-exported via src/kernel/search/semantic-contract.ts), so this
  * wrapper only threads the sync gate and the default vault — no type bridging.
  */
 
-import type { McpEngineAdapter } from "../engine/mcp/facade.js";
-import type { MorningRetrieveOptions, MorningSemanticBackend } from "../retrieve/morning.js";
+import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
+import type { MorningRetrieveOptions, MorningSemanticBackend } from "../kernel/search/morning.js";
 
 /**
  * Build a MorningSemanticBackend that routes the five semantic leaf operations

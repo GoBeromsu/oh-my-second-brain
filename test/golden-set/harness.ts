@@ -22,7 +22,7 @@
 import path from "node:path";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { runTracer, makeTracerConfig, type TracerConfig } from "../../src/engine/tracer.js";
+import { runTracer, makeTracerConfig, type TracerConfig } from "../../src/kernel/engine/tracer.js";
 import { GOLDEN_QUERIES, type GoldenQuery, type QueryType } from "./queries.js";
 
 // ---------------------------------------------------------------------------

@@ -15,5 +15,5 @@ export function semanticUsageText(): string {
 Embeddings are explicit: set OMS_EMBEDDING_PROVIDER (gguf|upstage) and OMS_EMBEDDING_MODEL.
 Without them, lexical search and document reads work; vector/HyDE fail fast.
 
-Compatibility aliases: oms query|search|vsearch|get|multi-get|status|embed|collection|context|cleanup`;
+Top-level semantic commands: oms search|embed|collection|context|cleanup|serve|http`;
 }

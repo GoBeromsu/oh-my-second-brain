@@ -1,0 +1,25 @@
+{
+  "name": "oms",
+  "version": "0.2.0",
+  "description": "Oh My Second Brain convention layer for Obsidian vaults — capture, retrieve, and validate knowledge under a declared semantic convention.",
+  "author": {
+    "name": "gobeumsu"
+  },
+  "license": "MIT",
+  "mcpServers": "./.mcp.json",
+  "keywords": [
+    "obsidian",
+    "knowledge-base",
+    "convention",
+    "frontmatter",
+    "vault"
+  ],
+  "skills": [
+    "./assets/skills/distill/",
+    "./assets/skills/doctor/",
+    "./assets/skills/link/",
+    "./assets/skills/search/",
+    "./assets/skills/status/",
+    "./assets/skills/write/"
+  ]
+}

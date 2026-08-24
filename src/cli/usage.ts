@@ -1,5 +1,5 @@
-import { harnessSurfaceRegistry } from "../harness/surface-registry.js";
-import type { HarnessSurfaceRegistry } from "../harness/surface-registry.js";
+import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
+import type { HarnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 
 interface MainUsageCommand {
   readonly name: string;
@@ -81,7 +81,7 @@ Usage:
   oh-my-second-brain lint [--vault <path>] [--verbose] [--json]
   oh-my-second-brain link --vault <path> --folder <name> [--folder <name> ...] [--no-convention-note]
   oh-my-second-brain linkify [--vault <path>] [--folder <name>] [--apply --yes]
-  oh-my-second-brain semantic <status|sync|query|search|vsearch|get|multi-get|collection> [options]
+  oh-my-second-brain semantic <query|status|get|multi-get|vsearch|search|sync|update|embed|collection|context|cleanup|serve|http> [options]
   oh-my-second-brain mcp [--vault <path>]
   oh-my-second-brain hook pre-tool-use [--vault <path>]
   oh-my-second-brain hook post-tool-use [--vault <path>]

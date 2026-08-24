@@ -4,7 +4,7 @@
 const STABLE_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const CHANGELOG_HEADER = "# Changelog";
 const UNRELEASED_HEADING = "## [Unreleased]";
-const RELEASED_HEADING = /^## \[(\d+\.\d+\.\d+)\]/gm;
+const RELEASED_HEADING = /^(## \[(\d+\.\d+\.\d+)\](?: - .*)?)$/gm;
 
 /**
  * @param {string} version
@@ -53,6 +53,10 @@ export function rolledChangelog(content, version, date, options = {}) {
   if (typeof content !== "string" || !content.startsWith(`${CHANGELOG_HEADER}\n`)) {
     throw new Error(`malformed changelog: missing '${CHANGELOG_HEADER}' header on the first line`);
   }
+  const duplicates = duplicateChangelogHeadings(content);
+  if (duplicates.length > 0) {
+    throw new Error(`malformed changelog: duplicate heading(s): ${duplicates.join(", ")}`);
+  }
   const unreleasedStart = content.indexOf(`\n${UNRELEASED_HEADING}`);
   if (unreleasedStart === -1) {
     throw new Error(`malformed changelog: missing '${UNRELEASED_HEADING}' section`);
@@ -62,6 +66,7 @@ export function rolledChangelog(content, version, date, options = {}) {
   const bodyStart = headingEnd === -1 ? content.length : headingEnd + 1;
   const nextSection = content.indexOf("\n## [", bodyStart - 1);
   const bodyEnd = nextSection === -1 ? content.length : nextSection + 1;
+  const prefix = content.slice(0, unreleasedStart + 1);
   const body = content.slice(bodyStart, bodyEnd);
   const rest = content.slice(bodyEnd);
   const releaseHeading = `## [${version}] - ${date}`;
@@ -70,10 +75,10 @@ export function rolledChangelog(content, version, date, options = {}) {
     if (!allowEmpty) {
       throw new Error("empty [Unreleased] - write release notes before releasing");
     }
-    return `${CHANGELOG_HEADER}\n\n${UNRELEASED_HEADING}\n\n${releaseHeading}\n\n${rest}`;
+    return `${prefix}${UNRELEASED_HEADING}\n\n${releaseHeading}\n\n${rest}`;
   }
 
-  return `${CHANGELOG_HEADER}\n\n${UNRELEASED_HEADING}\n\n${releaseHeading}\n${body}${rest}`;
+  return `${prefix}${UNRELEASED_HEADING}\n\n${releaseHeading}\n${body}${rest}`;
 }
 
 /**
@@ -189,9 +194,9 @@ export function versionMismatches({
     ["package.json", packageJson?.version],
     ["package-lock.json", packageLock?.version],
     ['package-lock.json packages[""]', packageLock?.packages?.[""]?.version],
-    ["adapters/claude-code/.claude-plugin/plugin.json", claudePluginJson?.version],
-    ["adapters/codex/.codex-plugin/plugin.json", codexPluginJson?.version],
-    ["adapters/hermes/manifest.json", hermesManifestJson?.version],
+    [".claude-plugin/plugin.json", claudePluginJson?.version],
+    [".codex-plugin/plugin.json", codexPluginJson?.version],
+    ["assets/hermes-manifest.json", hermesManifestJson?.version],
     [".claude-plugin/marketplace.json", marketplaceJson?.version],
     ['.claude-plugin/marketplace.json plugins[0]', marketplaceJson?.plugins?.[0]?.version],
   ];
@@ -201,13 +206,158 @@ export function versionMismatches({
 }
 
 /**
- * @param {string} baseContent CHANGELOG.md at the merge base
- * @param {string} headContent CHANGELOG.md at HEAD
- * @returns {string[]} released headings present in base but absent in head
+ * Return duplicate top-level changelog headings. Release versions and
+ * [Unreleased] each have exactly one authoritative section.
+ *
+ * @param {string} content
+ * @returns {string[]} duplicate headings, once each, in document order
  */
-export function missingReleasedHeadings(baseContent, headContent) {
-  const headHeadings = new Set(releasedHeadings(headContent));
-  return releasedHeadings(baseContent).filter((heading) => !headHeadings.has(heading));
+export function duplicateChangelogHeadings(content) {
+  const duplicates = [];
+  const seen = new Set();
+  const lines = (content ?? "").split("\n");
+
+  for (const line of lines) {
+    const released = /^## \[(\d+\.\d+\.\d+)\](?: - .*)?$/.exec(line);
+    const heading = released ? `## [${released[1]}]` : line === UNRELEASED_HEADING ? UNRELEASED_HEADING : null;
+    if (heading === null) continue;
+    if (seen.has(heading)) {
+      if (!duplicates.includes(heading)) duplicates.push(heading);
+    } else {
+      seen.add(heading);
+    }
+  }
+  return duplicates;
+}
+
+/**
+ * @param {Record<string, string>} baseChangelogs changelog text by file at the merge base
+ * @param {Record<string, string>} headChangelogs changelog text by file at HEAD
+ * @returns {string[]} file-qualified released headings present in base but absent in the same file at head
+ */
+export function missingReleasedHeadings(baseChangelogs, headChangelogs) {
+  const missing = [];
+  for (const [file, baseContent] of Object.entries(baseChangelogs)) {
+    const baseSections = releasedSections(baseContent);
+    const headHeadings = new Set(releasedHeadings(headChangelogs[file] ?? ""));
+    for (const [heading, body] of baseSections) {
+      if (headHeadings.has(heading)) continue;
+      const destination = relocatedSection(file, heading, body, baseChangelogs, headChangelogs);
+      if (destination === null) {
+        missing.push(`${file}: ${heading}`);
+      } else if (!destination.identical) {
+        missing.push(`${file}: ${heading} moved to ${destination.file} with altered content`);
+      }
+    }
+  }
+  return missing;
+}
+
+/**
+ * Return released sections moved to a changelog that did not hold that version
+ * at base, preserving their content byte-for-byte (apart from trailing space).
+ *
+ * @param {Record<string, string>} baseChangelogs changelog text by file at the merge base
+ * @param {Record<string, string>} headChangelogs changelog text by file at HEAD
+ * @returns {{ fromFile: string, toFile: string, heading: string }[]}
+ */
+export function relocatedReleasedSections(baseChangelogs, headChangelogs) {
+  const relocations = [];
+  for (const [file, baseContent] of Object.entries(baseChangelogs)) {
+    const head = releasedSections(headChangelogs[file] ?? "");
+    for (const [heading, body] of releasedSections(baseContent)) {
+      if (head.has(heading)) continue;
+      const destination = relocatedSection(file, heading, body, baseChangelogs, headChangelogs);
+      if (destination?.identical) relocations.push({ fromFile: file, toFile: destination.file, heading });
+    }
+  }
+  return relocations;
+}
+
+/**
+ * @param {string} sourceFile
+ * @param {string} heading
+ * @param {string} body
+ * @param {Record<string, string>} baseChangelogs
+ * @param {Record<string, string>} headChangelogs
+ * @returns {{ file: string, identical: boolean } | null}
+ */
+function relocatedSection(sourceFile, heading, body, baseChangelogs, headChangelogs) {
+  const normalise = (text) => text.replace(/[ \t]+$/gm, "").replace(/\n+$/, "");
+  for (const [file, headContent] of Object.entries(headChangelogs)) {
+    if (file === sourceFile) continue;
+    const destinationBody = releasedSections(headContent).get(heading);
+    if (destinationBody === undefined) continue;
+    // A duplicate that already existed at base is not a move. This distinction
+    // keeps deleting one of six same-version layer sections from being masked.
+    if (releasedSections(baseChangelogs[file] ?? "").has(heading)) continue;
+    return { file, identical: normalise(body) === normalise(destinationBody) };
+  }
+  return null;
+}
+
+/**
+ * Split a changelog into released sections keyed by version heading.
+ *
+ * A section runs from its full `## [X.Y.Z] - date` heading to the next `## `
+ * heading. Nested headings belong to that section.
+ *
+ * @param {string} content
+ * @returns {Map<string, string>}
+ */
+function releasedSections(content) {
+  const sections = new Map();
+  const lines = (content ?? "").split("\n");
+  const headingPattern = new RegExp(RELEASED_HEADING.source);
+
+  let current = null;
+  let buffer = [];
+  for (const line of lines) {
+    const match = headingPattern.exec(line);
+    if (match !== null) {
+      if (current !== null) sections.set(current, buffer.join("\n"));
+      current = `## [${match[2]}]`;
+      buffer = [match[1]];
+      continue;
+    }
+    if (/^## /.test(line)) {
+      if (current !== null) sections.set(current, buffer.join("\n"));
+      current = null;
+      buffer = [];
+      continue;
+    }
+    if (current !== null) buffer.push(line);
+  }
+  if (current !== null) sections.set(current, buffer.join("\n"));
+  return sections;
+}
+
+/**
+ * Released sections whose CONTENT changed between base and head.
+ *
+ * Comparing heading sets alone lets a released section's entire body be
+ * rewritten as long as its heading survives, which is exactly the mutation the
+ * immutability rule exists to prevent. Normalises trailing whitespace so a
+ * formatter cannot trip the guard on a no-op change.
+ *
+ * @param {Record<string, string>} baseChangelogs changelog text by file at the merge base
+ * @param {Record<string, string>} headChangelogs changelog text by file at HEAD
+ * @returns {string[]} file-qualified headings whose section content differs
+ */
+export function alteredReleasedSections(baseChangelogs, headChangelogs) {
+  const normalise = (text) => text.replace(/[ \t]+$/gm, "").replace(/\n+$/, "");
+  const altered = [];
+
+  for (const [file, baseContent] of Object.entries(baseChangelogs)) {
+    const head = releasedSections(headChangelogs[file] ?? "");
+    for (const [heading, body] of releasedSections(baseContent)) {
+      const headBody = head.get(heading);
+      // A heading that disappeared is reported by missingReleasedHeadings.
+      if (headBody === undefined) continue;
+      if (normalise(body) !== normalise(headBody)) altered.push(`${file}: ${heading}`);
+    }
+  }
+  return altered;
 }
 
 /**
@@ -219,7 +369,7 @@ function releasedHeadings(content) {
   const pattern = new RegExp(RELEASED_HEADING.source, RELEASED_HEADING.flags);
   let match = pattern.exec(content ?? "");
   while (match !== null) {
-    headings.push(`## [${match[1]}]`);
+    headings.push(`## [${match[2]}]`);
     match = pattern.exec(content);
   }
   return headings;

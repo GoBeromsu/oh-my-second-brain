@@ -23,14 +23,21 @@ const USAGE = "usage: npm run release -- <X.Y.Z> [--allow-empty-changelog] | npm
 
 const JSON_CARRIERS = {
   packageJson: "package.json",
-  claudePluginJson: "adapters/claude-code/.claude-plugin/plugin.json",
-  codexPluginJson: "adapters/codex/.codex-plugin/plugin.json",
-  hermesManifestJson: "adapters/hermes/manifest.json",
+  claudePluginJson: ".claude-plugin/plugin.json",
+  codexPluginJson: ".codex-plugin/plugin.json",
+  hermesManifestJson: "assets/hermes-manifest.json",
 };
 const PACKAGE_LOCK = "package-lock.json";
 // Carries the version twice (top-level + plugins[0]), so it is bumped by parse-and-set.
 const MARKETPLACE_JSON = ".claude-plugin/marketplace.json";
-const CHANGELOG = "CHANGELOG.md";
+const CHANGELOG_FILES = [
+  "CHANGELOG.md",
+  "CHANGELOG-kernel.md",
+  "CHANGELOG-cli.md",
+  "CHANGELOG-mcp.md",
+  "CHANGELOG-vendors.md",
+  "CHANGELOG-assets.md",
+];
 
 const FIX_FORWARD = [
   "fix-forward guidance:",
@@ -215,23 +222,46 @@ function bumpVersionCarriers(version) {
 }
 
 /**
+ * Verify every changelog can roll before writing any of them. Filesystem
+ * operations cannot atomically update six independent paths, so this prevents
+ * malformed changelogs from leaving a partial roll.
+ *
+ * Empty layer changelogs always receive an empty versioned section: the release
+ * notes extractor expects every layer to have the version and renders that
+ * section as "_No entries._". The aggregate remains the release-level signal
+ * and honors the operator's explicit allow-empty flag.
+ *
+ * @param {readonly string[]} paths
+ * @param {string} version
+ * @param {string} date
+ * @param {boolean} allowEmptyAggregate
+ */
+export function rollChangelogs(paths, version, date, allowEmptyAggregate) {
+  const rolled = [];
+  try {
+    for (const [index, path] of paths.entries()) {
+      const allowEmpty = index === 0 ? allowEmptyAggregate : true;
+      rolled.push([path, rolledChangelog(readFileSync(path, "utf-8"), version, date, { allowEmpty })]);
+    }
+  } catch (error) {
+    throw new Error(`changelog roll failed before any changelog was written: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  for (const [path, content] of rolled) {
+    writeFileSync(path, content);
+  }
+}
+
+/**
  * @param {string} version
  * @param {boolean} allowEmpty
  */
 function rollChangelog(version, allowEmpty) {
-  const content = readFileSync(CHANGELOG, "utf-8");
-  let rolled;
   try {
-    rolled = rolledChangelog(content, version, utcDate(), { allowEmpty });
+    rollChangelogs(CHANGELOG_FILES, version, utcDate(), allowEmpty);
   } catch (error) {
-    fail(
-      `changelog roll failed (nothing committed; run \`git checkout -- .\` to restore): ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    fail(`${error instanceof Error ? error.message : String(error)} (nothing committed; run \`git checkout -- .\` to restore).`);
   }
-  writeFileSync(CHANGELOG, rolled);
-  console.log(`[release] rolled ${CHANGELOG} into [${version}].`);
+  console.log(`[release] rolled all changelogs into [${version}].`);
 }
 
 /**

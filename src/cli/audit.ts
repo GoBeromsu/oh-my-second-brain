@@ -3,10 +3,10 @@ import {
   collectObservedFieldValues,
   type ObservedField,
   type ObservedFieldValueDrift,
-} from "../setup/axis.js";
-import { lintVault, type VaultLintViolation } from "../engine/conventions/vault-lint.js";
-import { resolveActiveOntology } from "../ontology/active.js";
-import type { Ontology } from "../core/ontology/types.js";
+} from "../kernel/setup/axis.js";
+import { lintVault, type VaultLintViolation } from "../kernel/engine/conventions/vault-lint.js";
+import { resolveActiveOntology } from "../kernel/ontology/active.js";
+import type { Ontology } from "../kernel/ontology/types.js";
 
 /** Fields observed in a folder that its bound concept(s) do not declare. */
 function undeclaredObservedFields(

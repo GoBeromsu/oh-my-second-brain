@@ -7,7 +7,7 @@ import {
   refreshUpdateNoticeCache,
   updateNoticeCachePath,
 } from "./update-notice.js";
-import type { UpdateRunnerCall } from "../update/update.js";
+import type { UpdateRunnerCall } from "../kernel/update/update.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = 1_800_000_000_000;

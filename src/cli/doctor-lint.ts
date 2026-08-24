@@ -1,19 +1,19 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { parseNote } from "../conventions/frontmatter.js";
-import { detectLinkIssues } from "../conventions/lint.js";
+import { parseNote } from "../kernel/conventions/frontmatter.js";
+import { detectLinkIssues } from "../kernel/conventions/lint.js";
 import {
   aggregateDoctor,
   formatDoctorReport,
   formatLintReport,
   type NoteReport,
-} from "../conventions/report.js";
-import { mapWithConcurrency, walkVaultMarkdown } from "../conventions/vault-walk.js";
-import { validateFrontmatter } from "../conventions/validate.js";
-import { loadOntology } from "../core/ontology/loader.js";
-import { resolveConcept } from "../core/ontology/resolver.js";
-import type { Concept } from "../core/ontology/types.js";
-import { resolveBundledAssetPaths } from "../core/runtime/assets.js";
+} from "../kernel/conventions/report.js";
+import { mapWithConcurrency, walkVaultMarkdown } from "../kernel/conventions/vault-walk.js";
+import { validateFrontmatter } from "../kernel/conventions/validate.js";
+import { loadOntology } from "../kernel/ontology/loader.js";
+import { resolveConcept } from "../kernel/ontology/resolver.js";
+import type { Concept } from "../kernel/ontology/types.js";
+import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
 
 const bundledAssets = resolveBundledAssetPaths();
 

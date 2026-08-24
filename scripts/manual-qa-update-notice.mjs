@@ -14,7 +14,7 @@ const dist = (rel) => path.join(repoRoot, "dist", rel);
 const { cachedUpdateNotice, updateNoticeCachePath, buildServerInstructions } = await import(
   dist("mcp/update-notice.js")
 );
-const { readBundledPackageVersion } = await import(dist("core/runtime/assets.js"));
+const { readBundledPackageVersion } = await import(dist("assets/runtime/assets.js"));
 
 const installed = readBundledPackageVersion();
 const line = (s) => console.error(s);

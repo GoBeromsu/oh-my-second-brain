@@ -13,7 +13,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { runHarness, runEngine, printHarnessReport } from "./harness.js";
 import { QUERY_COUNT, QUERIES_BY_TYPE } from "./queries.js";
 import type { GoldenQuery } from "./queries.js";
-import { makeTracerConfig } from "../../src/engine/tracer.js";
+import { makeTracerConfig } from "../../src/kernel/engine/tracer.js";
 
 // ---------------------------------------------------------------------------
 // Static structural assertions (run unconditionally — no vault required)
