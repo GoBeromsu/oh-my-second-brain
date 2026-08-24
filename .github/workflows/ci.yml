@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # No base-branch filter. A pull request stacked on another feature branch is
+  # still a pull request that must build and pass tests; filtering to [main]
+  # meant every intermediate PR in a stack merged with no signal at all.
   pull_request:
-    branches: [main]
 
 jobs:
   # Pull-request lane only. Release verification (pack, artifact smoke, plugin

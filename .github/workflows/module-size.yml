@@ -1,8 +1,12 @@
 name: module-size
 
 on:
+  # No base-branch filter. Stacked pull requests are the normal shape of
+  # parallel work here, and a filter of [main] gave them no ratchet at all --
+  # a module could grow across a stack and only be measured once the whole
+  # stack landed. The baseline below is the pull request's own base, so this
+  # is correct for any target branch.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
