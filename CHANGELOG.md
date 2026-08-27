@@ -14,6 +14,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 - **A single unparseable note no longer disables the entire vault.** Two independent whole-vault aborts meant that one bad file anywhere made `oms_search` return no results and `oms_status` report `ontologySource: "vault-invalid"` with write tools disabled. Both are fixed: `taxonomy.yaml: exclude` is now honoured by the walkers that feed retrieval, and a frontmatter field set to an empty string is treated as unset rather than as an error. Vaults that hit this will start returning results again with no configuration change.
 
+- **A search for a kind of note now reaches that kind.** Asking for a person, a meeting, or a project matched only notes whose text happened to repeat the word, because the `search` skill described a text query and never mentioned the axes the engine already supports. The skill now routes a named kind onto a frontmatter axis and discovers the available axis keys from the response itself, so the vault's own declared structure is used instead of guessed at.
+
 ## [0.6.1] - 2026-08-27
 
 ### Fixed
