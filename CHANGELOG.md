@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-27
+
 ### Fixed
 
 - **0.6.1 is the first published build of the 0.6.0 changes.** The `oms-v0.6.0` tag was cut but its release job failed before publishing, so that version reached neither npm nor a GitHub Release. Tags are immutable here, so the fix ships forward rather than by retagging. Everything listed under 0.6.0 below is delivered by this release.

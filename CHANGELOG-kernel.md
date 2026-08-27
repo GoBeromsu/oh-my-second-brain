@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-27
+
 ### Fixed
 
 - Measurement environment variables now treat empty or whitespace-only values as unset. This preserves CI behavior when an unset GitHub Actions variable expands to an empty string, while non-empty malformed digests, attestations, arms, and other measurement values still fail loudly.
