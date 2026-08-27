@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CONTRACT_SCHEMA, loadContract, loadObsidianTypes, parseContract, serializeContract, writeContract } from "../../contracts/index.js";
 import { buildNodeIndex } from "../graph/builder.js";
 import { filterNodesByQueryAxes, type EngineGraphNode } from "../graph/node.js";
-import { collectVaultAxisObservations, openAxisStore } from "./store.js";
+import { collectVaultAxisObservations, normalizeAxisValue, openAxisStore } from "./store.js";
 
 let roots: string[] = [];
 
@@ -134,5 +134,66 @@ describe("R4 contract and axis primitives", () => {
 
     await expect(collectVaultAxisObservations(root)).rejects.toThrow(/malformed frontmatter/i);
     await expect(readdir(path.join(root, ".oms"))).rejects.toThrow();
+  });
+
+  it("honors taxonomy.yaml: exclude instead of aborting the EAV scan on invalid frontmatter", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oms-r4-axis-exclude-"));
+    roots.push(root);
+    await mkdir(path.join(root, ".oms"), { recursive: true });
+    await writeFile(
+      path.join(root, ".oms", "taxonomy.yaml"),
+      "folders: {}\nexclude:\n  - \"templates/**\"\n",
+      "utf8",
+    );
+    // Template source frontmatter is intentionally not valid YAML.
+    await mkdir(path.join(root, "templates"), { recursive: true });
+    await writeFile(path.join(root, "templates", "daily.md"), "---\ndate: {{date}}\n---\n", "utf8");
+    await writeFile(path.join(root, "live.md"), "---\nstatus: live\n---\n", "utf8");
+
+    const store = await collectVaultAxisObservations(root);
+    expect(store.list().map((row) => row.notePath)).toEqual(["live.md"]);
+    store.close();
+  });
+
+  it("skips empty/whitespace-only string values while recording non-empty ones", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oms-r4-axis-empty-string-"));
+    roots.push(root);
+    const store = openAxisStore(path.join(root, "axes.sqlite"));
+
+    // `moc:` (null) is already dropped by flattenValue; `moc: ""` must be
+    // dropped the same way instead of throwing "Axis string value must be
+    // non-empty.".
+    expect(() =>
+      store.replaceNote("note.md", { moc: "", spacer: "   ", title: "Real Title" }),
+    ).not.toThrow();
+    const rows = store.list({ notePath: "note.md" });
+    expect(rows.map((row) => row.axisKey)).toEqual(["title"]);
+    // canonicalScalar trims + lowercases every recorded string value.
+    expect(rows[0]?.value).toBe("real title");
+
+    store.close();
+  });
+
+  it("canonicalScalar's invariant still rejects an empty string when called directly", () => {
+    // insertValues only skips blank strings before they reach
+    // normalizeAxisValue/canonicalScalar; the underlying invariant itself is
+    // untouched and must still reject an empty string for any direct caller.
+    expect(() => normalizeAxisValue("")).toThrow(/Axis string value must be non-empty\./);
+    expect(() => normalizeAxisValue("   ")).toThrow(/Axis string value must be non-empty\./);
+    expect(normalizeAxisValue("kept").value).toBe("kept");
+  });
+
+  it("wraps a canonicalScalar-style throw with the offending note path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oms-r4-axis-note-path-"));
+    roots.push(root);
+    const store = openAxisStore(path.join(root, "axes.sqlite"));
+
+    // An invalid Date value reaches canonicalScalar's "Axis date value must
+    // be valid." throw; insertValues must prefix it with the note path.
+    expect(() =>
+      store.replaceNote("references/broken-date.md", { published: new Date(NaN) }),
+    ).toThrow(/references\/broken-date\.md: Axis date value must be valid\./);
+
+    store.close();
   });
 });

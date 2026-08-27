@@ -16,6 +16,7 @@ import { validateFrontmatter } from "../conventions/validate.js";
 import { safeVaultNotePath } from "../capture/safe.js";
 import { resolveConcept } from "../ontology/resolver.js";
 import type { Concept, Ontology } from "../ontology/types.js";
+import { matchesAnyGlob, resolveExcludeGlobs } from "../engine/conventions/vault-lint.js";
 
 export type GraphEdgeType = "folder-concept" | "property-axis" | "property-value" | "wikilink";
 
@@ -190,6 +191,7 @@ function isGraphCacheShape(value: unknown): value is OMSGraphCache {
 async function* walkMarkdown(
   dir: string,
   base: string,
+  excludeGlobs: readonly string[],
   rootRealPath?: string,
   visitedDirectories: Set<string> = new Set(),
 ): AsyncGenerator<string> {
@@ -220,9 +222,12 @@ async function* walkMarkdown(
     }
     const entryStat = await stat(full);
     if (entryStat.isDirectory()) {
-      yield* walkMarkdown(full, base, root, visitedDirectories);
+      yield* walkMarkdown(full, base, excludeGlobs, root, visitedDirectories);
     } else if (entryStat.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-      yield path.relative(base, full).replace(/\\/g, "/");
+      const notePath = path.relative(base, full).replace(/\\/g, "/");
+      // Taxonomy-declared non-notes never reach parseGraphFrontmatter, whose
+      // malformed-YAML throw would otherwise abort the entire cache rebuild.
+      if (!matchesAnyGlob(notePath, excludeGlobs)) yield notePath;
     }
   }
 }
@@ -299,7 +304,8 @@ function parseGraphFrontmatter(raw: string, notePath: string): ReturnType<typeof
 
 async function buildSourceSignatures(vault: string, ontology: Ontology): Promise<SourceSignatures> {
   const notes: Record<string, NoteSignature> = {};
-  for await (const notePath of walkMarkdown(vault, vault)) {
+  const excludeGlobs = resolveExcludeGlobs(ontology);
+  for await (const notePath of walkMarkdown(vault, vault, excludeGlobs)) {
     const fullPath = path.join(vault, notePath);
     const [raw, fileStat] = await Promise.all([readFile(fullPath, "utf-8"), stat(fullPath)]);
     const parsed = parseGraphFrontmatter(raw, notePath);
@@ -402,8 +408,9 @@ export async function buildGraphCache(opts: {
   const notes: GraphNote[] = [];
   const edges: GraphEdge[] = [];
   const search: SearchDocument[] = [];
+  const excludeGlobs = resolveExcludeGlobs(opts.ontology);
 
-  for await (const notePath of walkMarkdown(vault, vault)) {
+  for await (const notePath of walkMarkdown(vault, vault, excludeGlobs)) {
     const raw = await readFile(path.join(vault, notePath), "utf-8");
     const built = buildNoteGraph(notePath, raw, opts.ontology);
     notes.push(built.note);

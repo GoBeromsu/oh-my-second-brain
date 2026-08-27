@@ -4,6 +4,12 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`taxonomy.yaml: exclude` now applies to retrieval, not just linting.** The exclude list was parsed into the ontology and resolved into globs for the lint and setup lanes, but the three walkers behind search, axis observation, and graph caching never consulted it and each threw on the first note whose frontmatter would not parse as YAML. Declaring a template source in `exclude` — the documented remedy, and necessary because pre-substitution template frontmatter is intentionally not valid YAML — therefore had no effect on those lanes. All three now filter their yielded paths against the resolved exclude list before parsing, so an excluded file is skipped instead of aborting the scan. Because excluded files no longer contribute to the node-index source signature, the first run after upgrading rebuilds that cache once.
+- **A frontmatter field set to an empty string no longer aborts the axis scan.** `field: ""` states that a field is declared but unset, which is what `field:` already meant; only the explicit empty string was fatal, because empty strings were rejected while `null` and `undefined` were skipped silently. Empty and whitespace-only strings are now skipped the same way. The non-empty invariant still holds for every value that is actually recorded.
+- **Axis value errors now name the note that caused them.** A rejected value threw with no path attached, so a whole-vault scan failure gave no indication of which of thousands of notes was responsible. These errors are now prefixed with the note path and preserve the original error as `cause`.
+
 ## [0.6.1] - 2026-08-27
 
 ### Fixed

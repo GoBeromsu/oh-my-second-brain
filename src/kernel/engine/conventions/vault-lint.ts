@@ -28,6 +28,7 @@ import {
   routingLawViolations,
 } from "../../conventions/write-contract.js";
 import { walkVaultMarkdown } from "../../conventions/vault-walk.js";
+import { DEFAULT_EXCLUDE_GLOBS, matchesAnyGlob } from "../../conventions/note-exclude.js";
 import { resolveConcept } from "../../ontology/resolver.js";
 import type { Concept, Ontology } from "../../ontology/types.js";
 
@@ -89,30 +90,13 @@ export interface VaultLintOptions {
 /**
  * Default audit exemptions — deliberately not contract violations: build artifacts,
  * self-documenting templates, and skill files that intentionally carry no frontmatter.
+ *
+ * Defined in `../../conventions/note-exclude.js` (below the engine layer) and
+ * re-exported here so existing importers of this module are unaffected; the
+ * scanning walkers that also need this policy (graph builder, EAV axis scan,
+ * graph cache) import it from there directly instead of duplicating it.
  */
-export const DEFAULT_EXCLUDE_GLOBS: readonly string[] = [
-  "25. Digital Garden/.deploy-staging/**",
-  "**/*.template.md",
-  "**/SKILL.md",
-  ".obsidian/**",
-  ".trash/**",
-  ".oms/**",
-  "_attachments/**",
-];
-
-/** Convert a `*`/`**` glob into an anchored RegExp. `**` matches across `/`, `*` does not. */
-function globToRegExp(glob: string): RegExp {
-  const GLOBSTAR = "\u0000";
-  const withPlaceholder = glob.replace(/\*\*/g, GLOBSTAR);
-  const escaped = withPlaceholder.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const withStar = escaped.replace(/\*/g, "[^/]*");
-  const pattern = withStar.split(GLOBSTAR).join(".*");
-  return new RegExp(`^${pattern}$`);
-}
-
-export function matchesAnyGlob(notePath: string, globs: readonly string[]): boolean {
-  return globs.some((glob) => globToRegExp(glob).test(notePath));
-}
+export { DEFAULT_EXCLUDE_GLOBS, matchesAnyGlob };
 
 /** Merge built-in defaults with vault-declared and caller-supplied exclude globs. */
 export function resolveExcludeGlobs(ontology: Ontology, extra: readonly string[] = []): string[] {

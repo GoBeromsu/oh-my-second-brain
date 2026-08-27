@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { loadOntology } from "../ontology/loader.js";
+import type { Ontology } from "../ontology/types.js";
 import {
   buildGraphCache,
   graphCacheStatus,
@@ -125,6 +126,32 @@ describe("derived graph cache", () => {
 
     await writeFile(path.join(cacheDirectory, "graph.json"), JSON.stringify({ version: 999 }), "utf8");
     await expect(readGraphCache(tmpVault)).rejects.toThrow(/invalid format/i);
+  });
+
+  it("honors ontology.taxonomy.exclude instead of aborting the cache build on invalid frontmatter", async () => {
+    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-graph-exclude-"));
+    await cp(fixtureVault, tmpVault, { recursive: true });
+    const bundled = await loadOntology(ontologyDir);
+    const ontology: Ontology = {
+      ...bundled,
+      taxonomy: { ...bundled.taxonomy, exclude: ["templates/**"] },
+    };
+    // Template source frontmatter is intentionally not valid YAML.
+    await mkdir(path.join(tmpVault, "templates"), { recursive: true });
+    await writeFile(path.join(tmpVault, "templates", "daily.md"), "---\ndate: {{date}}\n---\n", "utf-8");
+
+    const cache = await buildGraphCache({ vault: tmpVault, ontology });
+    expect(cache.notes.map((note) => note.path)).not.toContain("templates/daily.md");
+    expect(cache.notes.map((note) => note.path)).toContain("references/clean-architecture.md");
+  });
+
+  it("still throws for malformed frontmatter on a note that is not excluded", async () => {
+    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-graph-exclude-throw-"));
+    const ontology = await loadOntology(ontologyDir);
+    await writeFile(path.join(tmpVault, "broken.md"), "---\nstatus: [broken\n---\n", "utf8");
+    await expect(buildGraphCache({ vault: tmpVault, ontology })).rejects.toThrow(
+      /malformed frontmatter/i,
+    );
   });
 
   it("keeps engine graph and node cache IO failures loud", async () => {
