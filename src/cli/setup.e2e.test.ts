@@ -1,4 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, rm, cp, readFile, writeFile } from "node:fs/promises";
@@ -78,6 +79,67 @@ describe("runSetup --yes E2E", () => {
 
     await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf-8")).rejects.toThrow();
     await rm(vault, { recursive: true, force: true });
+  });
+
+  it("acquires a canonical descriptor outside the vault and accepts an explicit no-default waiver", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-test-model-"));
+    const cacheDir = await mkdtemp(path.join(tmpdir(), "oms-test-model-cache-"));
+    const bytes = new TextEncoder().encode("verified model bytes");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    try {
+      await runSetup({
+        vault,
+        yes: true,
+        embeddingCacheDir: cacheDir,
+        embeddingDescriptor: {
+          provider: "gguf",
+          model: "descriptor-model",
+          dimensions: 384,
+          context: 1024,
+          mrlDim: 384,
+          normalization: "l2",
+          prefixScheme: "none",
+          url: "https://models.invalid/descriptor.gguf",
+          sha256,
+        },
+        embeddingFetchImpl: async () => new Response(bytes),
+      });
+      const installed = JSON.parse(
+        await readFile(path.join(cacheDir, "default-model.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      expect(installed).toMatchObject({
+        provider: "gguf",
+        model: "descriptor-model",
+        dimensions: 384,
+        context: 1024,
+        mrlDim: 384,
+        normalization: "l2",
+        prefixScheme: "none",
+        sha256,
+      });
+      expect(String(installed.path)).not.toContain(path.resolve(vault));
+      await expect(
+        readFile(String(installed.path), "utf-8"),
+      ).resolves.toBe("verified model bytes");
+
+      const waivedVault = await mkdtemp(path.join(tmpdir(), "oms-test-no-default-"));
+      try {
+        await runSetup({
+          vault: waivedVault,
+          yes: true,
+          embeddingCacheDir: path.join(waivedVault, "cache"),
+          embeddingNoDefault: true,
+        });
+        await expect(
+          readFile(path.join(waivedVault, "cache", "default-model.json"), "utf-8"),
+        ).rejects.toThrow();
+      } finally {
+        await rm(waivedVault, { recursive: true, force: true });
+      }
+    } finally {
+      await rm(vault, { recursive: true, force: true });
+      await rm(cacheDir, { recursive: true, force: true });
+    }
   });
 
   it("doctor runs against the freshly set-up vault and exits 0", async () => {

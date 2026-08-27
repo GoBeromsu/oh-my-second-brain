@@ -6,6 +6,8 @@ import { McpEngineAdapter } from "./facade.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import type { EmbeddingProvider, ScoredHit, VectorStore } from "../types.js";
 import type { EngineStore } from "../embed/store.js";
+import { openAxisStore } from "../axes/store.js";
+import { nodeSourceSignature } from "../graph/builder.js";
 
 // ---------------------------------------------------------------------------
 // Fake backends
@@ -102,6 +104,19 @@ describe("McpEngineAdapter — construction", () => {
 // ---------------------------------------------------------------------------
 
 describe("McpEngineAdapter.semanticQuery", () => {
+  it("does not download a model while serving an MCP query", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const adapter = new McpEngineAdapter(makeDeps([LEX_HIT], []), "/vault");
+      const result = await adapter.semanticQuery({ query: "test", mode: "query" });
+      expect(result).toMatchObject({ available: true });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("returns available=true with mapped hits for a lex query", async () => {
     const adapter = new McpEngineAdapter(makeDeps([LEX_HIT], []), "/vault");
     const result = await adapter.semanticQuery({ query: "test", mode: "query" });
@@ -175,6 +190,61 @@ describe("McpEngineAdapter.semanticQuery", () => {
     expect(result.hits).toHaveLength(0);
   });
 
+  it("keeps totalCount and offset cursors accurate beyond the first 50 candidates", async () => {
+    const allHits: ScoredHit[] = Array.from({ length: 75 }, (_, index) => ({
+      docPath: `notes/note-${index}.md`,
+      chunkOrdinal: 0,
+      score: 1 / (index + 1),
+    }));
+    const queryLex = vi.fn((_query: string, k: number) => allHits.slice(0, k));
+    const adapter = new McpEngineAdapter({
+      store: {
+        upsert: vi.fn(),
+        queryLex,
+        queryVec: vi.fn().mockReturnValue([]),
+        close: vi.fn(),
+      },
+      embed: makeEmbed(),
+    }, "/vault");
+
+    const first = await adapter.semanticQuery({
+      searches: [{ type: "lex", query: "notes" }],
+      limit: 10,
+    });
+    expect(first).toMatchObject({ available: true, totalCount: 75, cursor: "10" });
+    expect(first.hits).toHaveLength(10);
+    expect(queryLex).toHaveBeenCalledWith("notes", Number.MAX_SAFE_INTEGER);
+
+    const page = await adapter.semanticQuery({
+      searches: [{ type: "lex", query: "notes" }],
+      limit: 10,
+      cursor: "60",
+    });
+    expect(page).toMatchObject({ available: true, totalCount: 75, cursor: "70" });
+    expect(page.hits.map((hit) => hit.path)).toEqual(
+      allHits.slice(60, 70).map((hit) => hit.docPath),
+    );
+  });
+
+  it.each([
+    ["vec shorthand", { vec: "alpha" }],
+    ["hyde shorthand", { hyde: "alpha" }],
+    ["typed vec", { searches: [{ type: "vec" as const, query: "alpha" }] }],
+    ["typed hyde", { searches: [{ type: "hyde" as const, query: "alpha" }] }],
+    ["vsearch mode", { query: "alpha", mode: "vsearch" as const }],
+  ])("rejects explicit %s retrieval on model-free axes", async (_name, search) => {
+    const adapter = new McpEngineAdapter(makeDeps(), freshVault());
+    const result = await adapter.semanticQuery({
+      ...search,
+      axes: { folder: "notes" },
+    });
+
+    expect(result.available).toBe(false);
+    expect(result.reason).toMatch(/OMS_EMBEDDING_PROVIDER/);
+    expect(result.reason).toMatch(/OMS_EMBEDDING_MODEL/);
+    expect(result.reason).toMatch(/vector\/HyDE/i);
+  });
+
   it("returns unavailable on dispatch error", async () => {
     const badStore: VectorStore = {
       upsert: vi.fn(),
@@ -189,6 +259,89 @@ describe("McpEngineAdapter.semanticQuery", () => {
     expect(result.available).toBe(false);
     if (result.available) return;
     expect(result.reason).toContain("db locked");
+  });
+
+  it("uses the read-only EAV snapshot for typed axis filtering", async () => {
+    const v = freshVault();
+    mkdirSync(path.join(v, ".oms", "cache"), { recursive: true });
+    const axisStore = openAxisStore(path.join(v, ".oms", "cache", "axes.sqlite"));
+    axisStore.replaceNote("notes/alpha.md", { rating: 9, done: false }, { folder: "notes" });
+    axisStore.replaceNote("notes/beta.md", { rating: 2, done: true }, { folder: "notes" });
+    axisStore.setSourceSignature(await nodeSourceSignature(v));
+    axisStore.close();
+    const adapter = new McpEngineAdapter(makeDeps(), v, undefined, undefined, false, false);
+
+    const result = await adapter.semanticQuery({
+      query: "alpha",
+      axes: { field: { rating: { gte: 8 }, done: false } },
+      limit: 1,
+      intent: "typed axis lookup",
+    });
+
+    expect(result).toMatchObject({
+      available: true,
+      totalCount: 1,
+      intent: "typed axis lookup",
+      receipt: { usedChannels: ["lex"], approximated: true },
+    });
+    expect(result.facets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ axis: "field", key: "rating", value: "9", count: 1 }),
+    ]));
+    if (result.available) expect(result.hits[0]?.path).toBe("notes/alpha.md");
+  });
+
+  it("applies the query envelope after axis filtering without returning zero-score nonmatches", async () => {
+    const v = mkdtempSync(path.join(tmpdir(), "oms-axis-envelope-"));
+    tempDirs.push(v);
+    mkdirSync(path.join(v, "notes"), { recursive: true });
+    writeFileSync(path.join(v, "notes", "first.md"), "# Needle\nneedle needle\n");
+    writeFileSync(path.join(v, "notes", "second.md"), "# Needle\nneedle\n");
+    writeFileSync(path.join(v, "notes", "nonmatch.md"), "# Other\nunrelated text\n");
+    const rerank = vi.fn().mockResolvedValue([
+      { docPath: "notes/second.md", chunkOrdinal: 0, score: 2 },
+      { docPath: "notes/first.md", chunkOrdinal: 0, score: 1 },
+    ]);
+    const adapter = new McpEngineAdapter(
+      makeDeps(),
+      v,
+      undefined,
+      { rerank },
+      false,
+      false,
+    );
+
+    const result = await adapter.semanticQuery({
+      query: "needle",
+      axes: { folder: "notes" },
+      candidateLimit: 2,
+      rerank: true,
+      limit: 1,
+    });
+
+    expect(result).toMatchObject({ available: true, totalCount: 2, cursor: "1" });
+    if (!result.available) return;
+    expect(result.hits.map((hit) => hit.path)).toEqual(["notes/second.md"]);
+    expect(rerank).toHaveBeenCalledWith("needle", [
+      expect.objectContaining({ docPath: "notes/first.md" }),
+      expect.objectContaining({ docPath: "notes/second.md" }),
+    ]);
+  });
+
+  it("does not report lexical or vector evidence for an axis-only query", async () => {
+    const v = freshVault();
+    const adapter = new McpEngineAdapter(makeDeps(), v, undefined, undefined, false, false);
+
+    const result = await adapter.semanticQuery({
+      axes: { folder: "notes" },
+      limit: 10,
+    });
+
+    expect(result).toMatchObject({
+      available: true,
+      receipt: { usedChannels: [], approximated: false },
+    });
+    if (!result.available) return;
+    expect(result.hits.every((hit) => hit.evidence.lexical === false && hit.evidence.vector === false)).toBe(true);
   });
 });
 
@@ -286,6 +439,21 @@ describe("McpEngineAdapter.cleanup", () => {
     expect(result.removedDocuments).toBe(0);
     expect(result.remainingDocuments).toBe(2);
     expect(store.clearDocument).not.toHaveBeenCalled();
+  });
+
+  it("rejects cleanup while another writer holds the engine lock", async () => {
+    const v = freshVault();
+    const dbPath = path.join(v, ".oms", "engine-store.sqlite");
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    writeFileSync(`${dbPath}.lock`, `${process.pid}\n`, "utf8");
+    const store = makeEngineStore(["ghost/removed.md"]);
+    const adapter = new McpEngineAdapter({ store, embed: makeEmbed() }, v, { dbPath });
+
+    const result = await adapter.cleanup({});
+
+    expect(result.available).toBe(false);
+    if (result.available) return;
+    expect(result.reason).toMatch(/already in progress|lock/i);
   });
 });
 

@@ -37,6 +37,7 @@ import {
   semanticOptionsFromArgs,
   retrieveContextSemanticInputProperties,
 } from "../kernel/semantic/semantic-retrieve.js";
+import { semanticQueryOptionsFromArgs } from "../kernel/semantic/semantic-retrieve-args.js";
 import {
   assembleEphemeralCoreSemanticEngine,
   assembleCoreSemanticEngineReadOnly,
@@ -51,7 +52,6 @@ import {
 } from "../kernel/semantic/semantic-engine.js";
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
-import type { McpSemanticTypedSearch } from "../kernel/engine/mcp/types.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
 import {
@@ -133,9 +133,39 @@ const string = { type: "string" };
 const number = { type: "number" };
 const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
+const axisScalar = { anyOf: [string, number, boolean] };
+const axisValue = { anyOf: [axisScalar, { type: "array", items: axisScalar }] };
+const fieldPredicate = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    contains: axisValue,
+    containsAll: { type: "array", items: axisScalar },
+    in: { type: "array", items: axisScalar },
+    between: { type: "array", items: axisScalar, minItems: 2, maxItems: 2 },
+    gte: axisScalar,
+    gt: axisScalar,
+    lte: axisScalar,
+    lt: axisScalar,
+    from: axisScalar,
+    to: axisScalar,
+  },
+};
+const queryAxes = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    folder: axisValue,
+    field: {
+      type: "object",
+      additionalProperties: { anyOf: [axisValue, fieldPredicate] },
+    },
+    link: axisValue,
+  },
+};
 const searchProperties = {
   query: string, searches: { type: "array", maxItems: 10, items: { type: "object", properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } },
-  collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { ...number, default: 10 }, candidateLimit: number, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, intent: string, lex: string, vec: string, hyde: string, index: string,
+  collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { ...number, minimum: 0, default: 10 }, candidateLimit: { ...number, minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, intent: string, lex: string, vec: string, hyde: string, index: string,
   target: string, targets: stringArray, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean,
 } as const;
 const contextProperties = { concept: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: number, maxNeighbors: number, useCache: boolean,
@@ -158,10 +188,10 @@ const operations: Record<string, readonly Operation[]> = {
     { op: "append", name: "write", properties: writeProperties },
     { op: "update", name: "write", properties: writeProperties },
   ],
-  oms_search: [{ op: "axis", name: "oms_retrieve_by_axis", properties: contextProperties }, { op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "lazy-load", name: "oms_lazy_load_note", properties: { notePath: string }, required: ["notePath"] }, { op: "concepts", name: "oms_list_concepts" }, { op: "semantic-query", name: "oms_semantic_query", properties: searchProperties }, { op: "semantic-collections", name: "oms_semantic_collections", properties: { index: string } }, { op: "semantic-contexts", name: "oms_semantic_contexts", properties: { index: string } }, { op: "semantic-status", name: "oms_semantic_status", properties: { index: string } }, { op: "get-document", name: "oms_get_document", properties: searchProperties, required: ["target"] }, { op: "multi-get-documents", name: "oms_multi_get_documents", properties: searchProperties }],
+  oms_search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "lazy-load", name: "oms_lazy_load_note", properties: { notePath: string }, required: ["notePath"] }, { op: "concepts", name: "oms_list_concepts" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "collections", name: "oms_semantic_collections", properties: { index: string } }, { op: "contexts", name: "oms_semantic_contexts", properties: { index: string } }, { op: "status", name: "oms_semantic_status", properties: { index: string } }, { op: "get-document", name: "oms_get_document", properties: searchProperties, required: ["target"] }, { op: "multi-get-documents", name: "oms_multi_get_documents", properties: searchProperties }],
   oms_link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
   oms_status: [{ name: "oms_graph_status", direct: true }],
-  oms_doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_contract", properties: { notePath: string }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "semantic-cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { collection: string, ensureCollection: boolean, update: boolean, embed: boolean, force: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number } }],
+  oms_doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_contract", properties: { notePath: string }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { collection: string, ensureCollection: boolean, update: boolean, embed: boolean, force: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number } }],
 };
 function operationSchema(tool: string): Tool["inputSchema"] {
   const toolOperations = operations[tool];
@@ -374,12 +404,12 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     const publicName = request.params.name;
     const op = publicName === "oms_write" ? stringArg(args, "op") ?? "create" : stringArg(args, "op");
     const name = resolveOperation(publicName, op);
-    if (!name) return errorText(`Unknown Oh My Second Brain tool: ${publicName}`);
+    if (!name) return errorText(`Unknown operation "${op ?? "(missing)"}" for ${publicName}.`);
     if (publicName === "oms_write") args = { ...args, mode: op };
-    if (publicName === "oms_search" && op === "semantic-query") {
+    if (publicName === "oms_search" && op === "query") {
       const searches = args?.["searches"];
       if (typeof args?.["query"] === "string" && Array.isArray(searches)) {
-        return errorText('Provide exactly one of "query" or "searches" for semantic-query.');
+        return errorText('Provide exactly one of "query" or "searches" for query.');
       }
     }
     if (name === "oms_graph_status") {
@@ -557,50 +587,75 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     // Every other tool never touches the engine here.
     if (isEngineSemanticOp(name) || isEngineDocumentOp(name)) {
       if (name === "oms_semantic_query") {
+        const hasQueryAxes =
+          isRecord(args?.["axes"]) ||
+          args?.["folder"] !== undefined ||
+          args?.["field"] !== undefined ||
+          args?.["link"] !== undefined;
+        if (hasQueryAxes) {
+          const axisAdapter = hasExplicitEmbeddingIntent(args)
+            ? resolveReadOnlyIndexAdapter()
+            : await resolveReadOnlyLexicalAdapter();
+          const axisOptions = semanticQueryOptionsFromArgs(vault, args);
+          const axisResult = await new EngineSearchBackend(axisAdapter, vault).search({
+            ...axisOptions,
+            query: axisOptions.lex !== undefined ||
+              axisOptions.vec !== undefined ||
+              axisOptions.hyde !== undefined
+              ? undefined
+              : axisOptions.query ?? "",
+          });
+          return jsonText(axisResult);
+        }
         const query = stringArg(args, "query");
         const vec = stringArg(args, "vec");
         const hyde = stringArg(args, "hyde");
+        const queryOptions = semanticQueryOptionsFromArgs(vault, args);
         const noPersistentReadOnlyIndex = hasEmbeddingModel()
           ? getReadOnlySemanticEngine() === null
           : getReadOnlyCoreSemanticEngine() === null;
-        if (query !== undefined && !hasExplicitEmbeddingIntent(args) && noPersistentReadOnlyIndex) {
-          const result = await (await getEphemeralCoreSemanticEngine()).adapter.semanticQuery({
+        const hasExplicitLexicalIntent =
+          query !== undefined ||
+          stringArg(args, "lex") !== undefined ||
+          (queryOptions.searches ?? []).some((search) => search.type === "lex");
+        const isOverviewRequest =
+          query === undefined &&
+          (queryOptions.searches ?? []).length === 0 &&
+          queryOptions.lex === undefined &&
+          queryOptions.vec === undefined &&
+          queryOptions.hyde === undefined &&
+          queryOptions.axes === undefined;
+        if (!hasExplicitEmbeddingIntent(args) && noPersistentReadOnlyIndex && (hasExplicitLexicalIntent || isOverviewRequest)) {
+          // Reuse the SearchBackend seam for model-free fallback as well. This
+          // keeps overview, cursor, axes, and collection aggregation semantics
+          // identical to the indexed path; its normalized default is lexical,
+          // so no vector intent is fabricated when the model is absent.
+          const fallbackBackend = new EngineSearchBackend(
+            await resolveReadOnlyLexicalAdapter(),
             vault,
-            query,
-            lex: stringArg(args, "lex") ?? query,
-            limit: typeof args?.["limit"] === "number" ? args["limit"] : undefined,
-            minScore: typeof args?.["minScore"] === "number" ? args["minScore"] : undefined,
-            intent: stringArg(args, "intent"),
-            collection: stringArg(args, "collection"),
-            index: stringArg(args, "index"),
+          );
+          const result = await fallbackBackend.search({
+            ...queryOptions,
+            // `lex` is an explicit lexical representation. Do not send it
+            // alongside `query`, which would make the two equivalent forms
+            // look contradictory to the SearchBackend normalizer.
+            query: queryOptions.lex === undefined ? query ?? "" : undefined,
           });
           return jsonText(result);
         }
         const requestOptions = {
-          limit: typeof args?.["limit"] === "number" ? args["limit"] : undefined,
-          candidateLimit: typeof args?.["candidateLimit"] === "number" ? args["candidateLimit"] : undefined,
-          rerank: typeof args?.["rerank"] === "boolean" ? args["rerank"] : undefined,
-          minScore: typeof args?.["minScore"] === "number" ? args["minScore"] : undefined,
-          intent: stringArg(args, "intent"),
-          collection: stringArg(args, "collection"),
-          collections: Array.isArray(args?.["collections"])
-            ? args["collections"].filter((collection): collection is string => typeof collection === "string")
-            : undefined,
-          mode: stringArg(args, "mode") as "query" | "search" | "vsearch" | undefined,
-          lex: stringArg(args, "lex"),
-          vec,
-          hyde,
-          index: stringArg(args, "index"),
+          ...queryOptions,
+          collections: queryOptions.collections,
         };
         const result = await searchBackend.search({
           ...requestOptions,
           // `query` is the default lexical representation. An explicit vector
           // or HyDE shorthand selects its own representation instead; only
           // `query` plus typed `searches` is contradictory.
-          query: vec !== undefined || hyde !== undefined ? undefined : query,
-          searches: Array.isArray(args?.["searches"])
-            ? args["searches"] as McpSemanticTypedSearch[]
-            : undefined,
+          query: vec !== undefined || hyde !== undefined || queryOptions.lex !== undefined
+            ? undefined
+            : query ?? "",
+          searches: queryOptions.searches,
         });
         return jsonText(result);
       }

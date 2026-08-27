@@ -26,6 +26,13 @@ jobs:
     env:
       OMS_REQUIRE_PLUGIN_VALIDATION: "1"
       OMS_PLUGIN_VALIDATION_ATTESTATION: ${{ inputs.plugin_validation_attestation }}
+      OMS_MEASUREMENT_REQUIRED: "1"
+      OMS_MEASUREMENT_ATTESTATION_REQUIRED: "1"
+      OMS_MEASUREMENT_RELEASE: "1"
+      OMS_MEASUREMENT_PROFILE: "boost-c040"
+      OMS_MEASUREMENT_MANIFEST: "docs/measurements/boost-c040.json"
+      OMS_PREREG_QRELS_HASH: ${{ vars.OMS_PREREG_QRELS_HASH }}
+      OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY: ${{ secrets.OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -85,6 +92,9 @@ jobs:
           exit 1
         env:
           ATTESTATION: ${{ inputs.plugin_validation_attestation }}
+
+      - name: Required R2 Phase D measurement gate (boost-c040)
+        run: npm run check:measurement
 
       - run: npm run release:check
 

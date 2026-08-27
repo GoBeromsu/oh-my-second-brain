@@ -4,7 +4,7 @@ description: Retrieve vault knowledge through declared retrieval lenses.
 aliases: [retrieve]
 mcp_tool: oms_search
 mcp_args:
-  op: "semantic-query"
+  op: "query"
   query: "$1"
 ---
 

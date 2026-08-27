@@ -61,7 +61,7 @@ describe("read-only engine store", () => {
     foreign.close();
     const before = readdirSync(dir).sort();
 
-    expect(openEngineStoreCoreReadOnly(dbPath)).toBeNull();
+    expect(() => openEngineStoreCoreReadOnly(dbPath)).toThrow(/corrupt or incompatible/i);
     expect(readdirSync(dir).sort()).toEqual(before);
 
     // Declining must be about the schema, not about the path: a genuine store

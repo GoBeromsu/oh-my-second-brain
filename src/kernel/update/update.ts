@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 import type { RuntimeSelection } from "../install/hosts.js";
 
 export interface UpdateRunnerCall {
@@ -32,6 +33,13 @@ export interface RunUpdateOptions {
   readonly check?: boolean;
   readonly dryRun?: boolean;
   readonly yes?: boolean;
+  /**
+   * Whether this invocation has an interactive TTY available for confirmation.
+   * Callers that do not provide this option remain non-interactive.
+   */
+  readonly interactive?: boolean;
+  /** Confirmation hook used by the CLI and deterministic tests. */
+  readonly confirm?: () => boolean | Promise<boolean>;
   readonly executeExternal?: boolean;
   readonly timeoutMs?: number;
   readonly runner?: UpdateRunner;
@@ -93,16 +101,77 @@ function cleanVersion(raw: string): string {
 }
 
 export function compareVersions(left: string, right: string): number {
-  const leftParts = cleanVersion(left).split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const rightParts = cleanVersion(right).split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const length = Math.max(leftParts.length, rightParts.length);
+  const leftVersion = parseVersion(left);
+  const rightVersion = parseVersion(right);
+
+  for (let index = 0; index < 3; index++) {
+    const comparison = compareNumericStrings(leftVersion.core[index] ?? "0", rightVersion.core[index] ?? "0");
+    if (comparison !== 0) return comparison;
+  }
+
+  if (leftVersion.prerelease.length === 0 && rightVersion.prerelease.length === 0) return 0;
+  if (leftVersion.prerelease.length === 0) return 1;
+  if (rightVersion.prerelease.length === 0) return -1;
+
+  const length = Math.max(leftVersion.prerelease.length, rightVersion.prerelease.length);
   for (let index = 0; index < length; index++) {
-    const leftPart = leftParts[index] ?? 0;
-    const rightPart = rightParts[index] ?? 0;
-    if (leftPart < rightPart) return -1;
-    if (leftPart > rightPart) return 1;
+    const leftIdentifier = leftVersion.prerelease[index];
+    const rightIdentifier = rightVersion.prerelease[index];
+    if (leftIdentifier === undefined) return -1;
+    if (rightIdentifier === undefined) return 1;
+
+    const leftNumeric = /^\d+$/.test(leftIdentifier);
+    const rightNumeric = /^\d+$/.test(rightIdentifier);
+    if (leftNumeric && rightNumeric) {
+      const comparison = compareNumericStrings(leftIdentifier, rightIdentifier);
+      if (comparison !== 0) return comparison;
+      continue;
+    }
+    if (leftNumeric) return -1;
+    if (rightNumeric) return 1;
+    if (leftIdentifier < rightIdentifier) return -1;
+    if (leftIdentifier > rightIdentifier) return 1;
   }
   return 0;
+}
+
+interface ParsedVersion {
+  readonly core: readonly string[];
+  readonly prerelease: readonly string[];
+}
+
+function parseVersion(raw: string): ParsedVersion {
+  const cleaned = cleanVersion(raw);
+  const match = /^(\d+(?:\.\d+){0,2})(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(cleaned);
+  if (match === null) {
+    return { core: ["0", "0", "0"], prerelease: [] };
+  }
+  return {
+    core: (match[1] ?? "0").split("."),
+    prerelease: match[2]?.split(".") ?? [],
+  };
+}
+
+function compareNumericStrings(left: string, right: string): number {
+  const normalizedLeft = left.replace(/^0+(?=\d)/, "");
+  const normalizedRight = right.replace(/^0+(?=\d)/, "");
+  if (normalizedLeft.length < normalizedRight.length) return -1;
+  if (normalizedLeft.length > normalizedRight.length) return 1;
+  if (normalizedLeft < normalizedRight) return -1;
+  if (normalizedLeft > normalizedRight) return 1;
+  return 0;
+}
+
+async function confirmUpdate(): Promise<boolean> {
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await readline.question("[oms] Update package and refresh host adapters? [y/N] ");
+    return /^(?:y|yes)$/i.test(answer.trim());
+  } catch {
+    return false;
+  } finally {
+    readline.close();
+  }
 }
 
 function formatCommand(command: string, args: readonly string[]): string {
@@ -210,7 +279,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
     };
   }
 
-  if (options.dryRun === true || options.check === true || options.yes !== true) {
+  if (options.dryRun === true || options.check === true) {
     return {
       success: true,
       currentVersion,
@@ -221,6 +290,40 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       commands,
       errors: [],
     };
+  }
+
+  if (options.yes !== true) {
+    if (options.interactive !== true) {
+      return {
+        success: false,
+        currentVersion,
+        latestVersion: latest.version,
+        updateAvailable: true,
+        mutated: false,
+        message: `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}. Refusing to update without --yes when stdin is not a TTY.`,
+        commands,
+        errors: ["Interactive confirmation is required for update execution."],
+      };
+    }
+
+    let confirmed = false;
+    try {
+      confirmed = await (options.confirm ?? confirmUpdate)();
+    } catch {
+      confirmed = false;
+    }
+    if (!confirmed) {
+      return {
+        success: false,
+        currentVersion,
+        latestVersion: latest.version,
+        updateAvailable: true,
+        mutated: false,
+        message: "Update cancelled; no changes were made.",
+        commands,
+        errors: ["Update confirmation was not received."],
+      };
+    }
   }
 
   const npmResult = await runner("npm", npmArgs, { timeoutMs });

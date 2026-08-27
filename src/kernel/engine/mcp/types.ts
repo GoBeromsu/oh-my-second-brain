@@ -32,6 +32,38 @@ export interface McpSemanticTypedSearch {
   readonly query: string;
 }
 
+/** Scalar frontmatter value accepted by the public query-axis contract. */
+export type McpSemanticAxisValue = string | number | boolean;
+
+export interface McpSemanticFieldPredicate {
+  readonly contains?: McpSemanticAxisValue | readonly McpSemanticAxisValue[];
+  readonly containsAll?: readonly McpSemanticAxisValue[];
+  readonly in?: readonly McpSemanticAxisValue[];
+  readonly between?: readonly [McpSemanticAxisValue, McpSemanticAxisValue];
+  readonly gte?: McpSemanticAxisValue;
+  readonly gt?: McpSemanticAxisValue;
+  readonly lte?: McpSemanticAxisValue;
+  readonly lt?: McpSemanticAxisValue;
+  readonly from?: McpSemanticAxisValue;
+  readonly to?: McpSemanticAxisValue;
+}
+
+/**
+ * Query axes are intentionally closed: folder, field, and link only.
+ * Values in one axis are OR'ed; distinct field keys and distinct axis kinds
+ * are AND'ed.
+ */
+export interface McpSemanticQueryAxes {
+  readonly folder?: McpSemanticAxisValue | readonly McpSemanticAxisValue[];
+  readonly field?: Readonly<
+    Record<
+      string,
+      McpSemanticAxisValue | readonly McpSemanticAxisValue[] | McpSemanticFieldPredicate
+    >
+  >;
+  readonly link?: McpSemanticAxisValue | readonly McpSemanticAxisValue[];
+}
+
 // ---------------------------------------------------------------------------
 // Shared status / identity options
 // ---------------------------------------------------------------------------
@@ -50,7 +82,7 @@ export interface McpStatusOptions {
 
 /** Full query options for oms_semantic_query (mirrors SemanticQueryOptions). */
 export interface McpSemanticQueryOptions extends McpStatusOptions {
-  readonly query: string;
+  readonly query?: string;
   readonly collection?: string;
   /** Vault-relative path prefix that constrains retrieval candidates. */
   readonly collectionPath?: string;
@@ -73,6 +105,14 @@ export interface McpSemanticQueryOptions extends McpStatusOptions {
   readonly rerank?: boolean;
   /** Internal inverse spelling used by morning retrieval options. */
   readonly noRerank?: boolean;
+  /** Optional axis-first narrowing over folder, frontmatter fields, and links. */
+  readonly axes?: McpSemanticQueryAxes;
+  /** Opaque offset cursor returned by a previous query. */
+  readonly cursor?: string;
+  /** Request explicit total-count metadata (responses include it regardless). */
+  readonly count?: boolean;
+  /** Request explicit facet metadata (responses include it regardless). */
+  readonly facets?: boolean;
 }
 
 /** Per-hit evidence flags indicating which retrieval modality matched. */
@@ -94,10 +134,49 @@ export interface McpSemanticSearchHit {
   readonly evidence: McpSemanticHitEvidence;
 }
 
-/** Output of oms_semantic_query (mirrors SemanticQueryResult). */
+/** A facet count computed after axis filtering and before result limiting. */
+export interface McpSemanticFacet {
+  readonly axis: "folder" | "field" | "link";
+  readonly value: string;
+  readonly count: number;
+  readonly key?: string;
+  readonly intent: string;
+}
+
+/** Small, deterministic receipt attached to every query response. */
+export interface McpSemanticReceipt {
+  readonly usedChannels: readonly McpSemanticTypedSearchType[];
+  readonly approximated: boolean;
+  readonly drift: boolean;
+}
+
+/**
+ * Output of oms_semantic_query (mirrors SemanticQueryResult).
+ *
+ * Every response carries the complete envelope metadata, including failures.
+ * Callers can therefore consume counts, facets, cursors, and receipts without
+ * optional-field branching on the transport result.
+ */
 export type McpSemanticQueryResult =
-  | { readonly available: true; readonly hits: readonly McpSemanticSearchHit[] }
-  | { readonly available: false; readonly reason: string; readonly hits: readonly McpSemanticSearchHit[] };
+  | {
+      readonly available: true;
+      readonly hits: readonly McpSemanticSearchHit[];
+      readonly totalCount: number;
+      readonly facets: readonly McpSemanticFacet[];
+      readonly cursor: string | null;
+      readonly intent?: string;
+      readonly receipt: McpSemanticReceipt;
+    }
+  | {
+      readonly available: false;
+      readonly reason: string;
+      readonly hits: readonly McpSemanticSearchHit[];
+      readonly totalCount: number;
+      readonly facets: readonly McpSemanticFacet[];
+      readonly cursor: string | null;
+      readonly intent?: string;
+      readonly receipt: McpSemanticReceipt;
+    };
 
 // ---------------------------------------------------------------------------
 // oms_sync_embeddings — options + result

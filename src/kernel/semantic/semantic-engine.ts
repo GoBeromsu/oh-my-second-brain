@@ -22,21 +22,47 @@ import {
   assembleEngine,
   type AssembledEngine,
 } from "../engine/assemble.js";
+import { resolveEmbeddingModel } from "../engine/embed/model.js";
 import type { Reranker } from "../engine/retrieval/reranker.js";
 
 /** True when both canonical embedding-config env vars are set (ADR-007). */
 export function embeddingConfigPresent(): boolean {
-  return Boolean(process.env["OMS_EMBEDDING_PROVIDER"] && process.env["OMS_EMBEDDING_MODEL"]);
+  return resolveEmbeddingModel().available;
 }
 
 function embeddingConfig(vault: string): Parameters<typeof assembleEngine>[0] {
+  const resolved = resolveEmbeddingModel();
+  const descriptor = resolved.descriptor;
   return {
     vault,
-    ...(process.env["OMS_EMBEDDING_PROVIDER"]
-      ? { embeddingProvider: process.env["OMS_EMBEDDING_PROVIDER"] }
+    ...(resolved.available && resolved.provider !== undefined
+      ? { embeddingProvider: resolved.provider }
       : {}),
-    ...(process.env["OMS_EMBEDDING_MODEL"]
-      ? { embeddingModel: process.env["OMS_EMBEDDING_MODEL"] }
+    ...(resolved.available && resolved.model !== undefined
+      ? { embeddingModel: resolved.modelPath ?? resolved.model }
+      : {}),
+    // Keep the setup descriptor intact as it crosses the semantic assembly
+    // seam.  Flattening only provider/model loses width, context, MRL, and
+    // normalization metadata needed by the provider, store, and MCP sync.
+    ...(descriptor !== undefined
+      ? {
+        embeddingDescriptor: descriptor,
+        ...(descriptor.dimensions !== undefined ? { embeddingDimensions: descriptor.dimensions } : {}),
+        ...(descriptor.context !== undefined ? { embeddingContext: descriptor.context } : {}),
+        ...(descriptor.contextLength !== undefined
+          ? { embeddingContextLength: descriptor.contextLength }
+          : {}),
+        ...(descriptor.contextTokens !== undefined
+          ? { embeddingContextTokens: descriptor.contextTokens }
+          : {}),
+        ...(descriptor.mrlDim !== undefined ? { embeddingMrlDim: descriptor.mrlDim } : {}),
+        ...(descriptor.normalization !== undefined
+          ? { embeddingNormalization: descriptor.normalization }
+          : {}),
+        ...(descriptor.prefixScheme !== undefined
+          ? { embeddingPrefixScheme: descriptor.prefixScheme }
+          : {}),
+      }
       : {}),
   };
 }

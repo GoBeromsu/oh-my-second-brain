@@ -21,12 +21,21 @@
  */
 
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { parse as parseYaml } from "yaml";
+import { resolveBundledAssetPaths } from "../../runtime/assets.js";
+import { loadContract } from "../../contracts/index.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import { retrieve } from "../retrieval/index.js";
 import type { Reranker } from "../retrieval/reranker.js";
-import { syncEngineStore, walkMarkdown } from "../embed/sync.js";
+import {
+  acquireEngineStoreWriterLock,
+  syncEngineStore,
+  walkMarkdown,
+} from "../embed/sync.js";
+import { openEngineStore } from "../embed/store.js";
 import type { EngineStore } from "../embed/store.js";
+import type { EmbeddingModelDescriptor } from "../embed/model.js";
 import {
   buildGraph,
   saveCachedGraph,
@@ -34,9 +43,22 @@ import {
   buildNodeIndex,
   saveNodeIndex,
   loadNodeIndex,
+  nodeSourceSignature,
 } from "../graph/builder.js";
 import type { EngineGraphNode } from "../graph/node.js";
-import { filterNodesByAxis, searchScore } from "../graph/node.js";
+import {
+  filterNodesByAxis,
+  filterNodesByQueryAxes,
+  queryFacets,
+  searchScore,
+} from "../graph/node.js";
+import type { QueryAxes } from "../graph/node.js";
+import {
+  axisStorePath,
+  collectVaultAxisObservations,
+  openAxisStore,
+} from "../axes/store.js";
+import type { AxisObservation } from "../axes/store.js";
 import type {
   McpSemanticQueryOptions,
   McpSemanticQueryResult,
@@ -52,6 +74,7 @@ import type {
   McpGraphStatusResult,
   McpAxisFilters,
   McpSemanticSearchHit,
+  McpSemanticFacet,
   EngineSyncResult,
   McpSemanticGetOptions,
   McpSemanticMultiGetOptions,
@@ -59,7 +82,7 @@ import type {
   McpSemanticDocument,
 } from "./types.js";
 import {
-  queryOptionsToSubQueries,
+  normalizeQueryOptions,
   retrievalResultsToQueryResult,
   queryResultUnavailable,
 } from "./query-mapper.js";
@@ -76,14 +99,6 @@ import {
   engineGraphBuildResultToMcp,
   engineGraphBuildToStatusResult,
 } from "./op-mappers.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function clamp(n: number, lo: number, hi: number): number {
-  return Math.min(Math.max(n, lo), hi);
-}
 
 // ---------------------------------------------------------------------------
 // Document-hydration helpers (file-based, R18-clean — no src/search imports)
@@ -262,11 +277,305 @@ function enrichQueryHits(result: McpSemanticQueryResult, vault: string): McpSema
     const title = extractDocTitle(raw);
     return { ...hit, snippet: docHeadSnippet(raw), ...(title !== undefined ? { title } : {}) };
   });
-  return { available: true, hits };
+  return { ...result, available: true, hits };
+}
+
+/** Read folder intent declarations without creating or updating vault state. */
+function folderIntents(vault: string): Map<string, string> {
+  const candidates = [
+    path.join(vault, ".oms", "taxonomy.yaml"),
+    path.join(vault, "taxonomy.yaml"),
+  ];
+  try {
+    candidates.push(path.join(resolveBundledAssetPaths().ontologyDir, "taxonomy.yaml"));
+  } catch {
+    // A package without bundled ontology still serves axis results; intents
+    // remain optional metadata.
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = parseYaml(readFileSync(candidate, "utf-8")) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      const folders = (parsed as Record<string, unknown>)["folders"];
+      if (!folders || typeof folders !== "object" || Array.isArray(folders)) continue;
+      const intents = new Map<string, string>();
+      for (const [folder, value] of Object.entries(folders as Record<string, unknown>)) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        const intent = (value as Record<string, unknown>)["intent"];
+        if (typeof intent === "string" && intent.trim()) intents.set(folder, intent.trim());
+      }
+      return intents;
+    } catch {
+      // A missing optional taxonomy is not an error; a malformed one simply
+      // contributes no intent and never causes a write.
+    }
+  }
+  return new Map();
+}
+
+function facetIntent(
+  facet: { readonly axis: McpSemanticFacet["axis"]; readonly key?: string; readonly value: string },
+  intents: ReadonlyMap<string, string>,
+  queryIntent: string | undefined,
+): string {
+  if (facet.axis === "folder") return intents.get(facet.value) ?? `Folder axis: ${facet.value}`;
+  if (queryIntent !== undefined && queryIntent.trim().length > 0) return queryIntent.trim();
+  if (facet.axis === "field") return `Frontmatter field axis: ${facet.key ?? "unknown"}`;
+  return `Link axis: ${facet.value}`;
 }
 
 function isLexOnlySubQueries(subQueries: readonly { readonly type: string }[]): boolean {
   return subQueries.length > 0 && subQueries.every((subQuery) => subQuery.type === "lex");
+}
+
+/** Return true when the caller explicitly requested an embedding channel. */
+function hasExplicitEmbeddingSearch(
+  opts: McpSemanticQueryOptions,
+): boolean {
+  if (opts.mode === "vsearch") return true;
+  if (typeof opts.vec === "string" && opts.vec.trim().length > 0) return true;
+  if (typeof opts.hyde === "string" && opts.hyde.trim().length > 0) return true;
+  return (opts.searches ?? []).some((search) => search.type === "vec" || search.type === "hyde");
+}
+
+const UNBOUNDED_CANDIDATE_LIMIT = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Collection aggregation asks each child query for every candidate and applies
+ * one global page after merging. A direct query without a limit still keeps
+ * the public ten-hit default.
+ */
+function resultPageLimit(opts: McpSemanticQueryOptions): number | undefined {
+  return opts.limit ?? (opts.collectionPath === undefined ? undefined : UNBOUNDED_CANDIDATE_LIMIT);
+}
+
+/** Read the dedicated EAV snapshot without creating `.oms` state. */
+async function loadAxisSnapshot(vault: string): Promise<AxisObservation[] | null> {
+  const dbPath = axisStorePath(vault);
+  if (!existsSync(dbPath)) return null;
+  const store = openAxisStore(dbPath, { readOnly: true });
+  try {
+    const storedSignature = store.sourceSignature();
+    if (storedSignature === null || storedSignature !== await nodeSourceSignature(vault)) return null;
+    return store.list();
+  } finally {
+    store.close();
+  }
+}
+
+function observationValue(value: unknown): string {
+  if (value instanceof Date) return value.toISOString().toLowerCase();
+  return String(value).trim().toLowerCase();
+}
+
+function contractAxisType(type: string): AxisObservation["valueType"] | undefined {
+  switch (type) {
+    case "number":
+      return "number";
+    case "boolean":
+    case "checkbox":
+      return "boolean";
+    case "date":
+    case "datetime":
+      return "date";
+    case "text":
+    case "string":
+    case "select":
+    case "list":
+    case "multitext":
+    case "multi":
+    case "tags":
+    case "aliases":
+    case "file":
+      return "string";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Compare live frontmatter/EAV observations with the tracked JSON contract.
+ * Missing fields are allowed (required-field validation owns that concern);
+ * an observed undeclared key, type, or closed-vocabulary value is drift.
+ */
+function hasContractObservationDrift(
+  contract: Awaited<ReturnType<typeof loadContract>>,
+  nodes: readonly EngineGraphNode[],
+  observations: readonly AxisObservation[] | null,
+): boolean {
+  if (contract === null) return false;
+
+  const declared = new Set<string>();
+  const types = new Map<string, string>();
+  const allowed = new Map<string, Set<string>>();
+  const addAllowed = (key: string, values: readonly unknown[] | undefined): void => {
+    if (values === undefined) return;
+    const normalizedKey = key.trim().toLowerCase();
+    const target = allowed.get(normalizedKey) ?? new Set<string>();
+    for (const item of values) {
+      const value = typeof item === "string"
+        ? item
+        : item && typeof item === "object" && typeof (item as { readonly value?: unknown }).value === "string"
+          ? (item as { readonly value: string }).value
+          : undefined;
+      if (value !== undefined) target.add(observationValue(value));
+    }
+    allowed.set(normalizedKey, target);
+  };
+
+  for (const axis of contract.axes) {
+    if (axis.kind !== "field") continue;
+    const key = axis.key.trim().toLowerCase();
+    if (key === "concept") continue;
+    declared.add(key);
+    types.set(key, axis.type);
+    addAllowed(key, axis.allowedValues);
+  }
+  for (const [key, type] of Object.entries(contract.types)) {
+    const normalizedKey = key.trim().toLowerCase();
+    if (normalizedKey === "concept") continue;
+    declared.add(normalizedKey);
+    types.set(normalizedKey, type);
+  }
+  for (const [key, values] of Object.entries(contract.allowedValues)) {
+    const normalizedKey = key.trim().toLowerCase();
+    if (normalizedKey === "concept") continue;
+    declared.add(normalizedKey);
+    addAllowed(normalizedKey, values);
+  }
+
+  const observedKeys = new Set<string>();
+  const observedValues: Array<{
+    readonly key: string;
+    readonly value: unknown;
+    readonly valueType?: AxisObservation["valueType"];
+    readonly normalizedValue?: string;
+  }> = [];
+  // Node axes are the live source of truth even when no EAV snapshot exists.
+  for (const node of nodes) {
+    for (const [key, rawValues] of Object.entries(node.axes)) {
+      const normalizedKey = key.trim().toLowerCase();
+      if (normalizedKey === "concept") continue;
+      observedKeys.add(normalizedKey);
+      const values = Array.isArray(rawValues) ? rawValues : [rawValues];
+      for (const value of values) {
+        // String values can also represent YAML dates after node-cache
+        // serialisation, so only infer unambiguous primitive types here.
+        const valueType = typeof value === "number"
+          ? "number"
+          : typeof value === "boolean"
+            ? "boolean"
+            : undefined;
+        observedValues.push({ key: normalizedKey, value, valueType });
+      }
+    }
+  }
+  for (const row of observations ?? []) {
+    const normalizedKey = row.axisKey.trim().toLowerCase();
+    if (row.axisKind !== "field" || normalizedKey === "concept") continue;
+    observedKeys.add(normalizedKey);
+    observedValues.push({
+      key: normalizedKey,
+      value: row.value,
+      valueType: row.valueType,
+      normalizedValue: row.normalizedValue,
+    });
+  }
+  for (const observed of observedValues) {
+    if (!declared.has(observed.key)) return true;
+    const expectedType = contractAxisType(types.get(observed.key) ?? "");
+    if (expectedType !== undefined && observed.valueType !== undefined && expectedType !== observed.valueType) {
+      return true;
+    }
+    const values = allowed.get(observed.key);
+    if (values !== undefined && !values.has(observed.normalizedValue ?? observationValue(observed.value))) {
+      return true;
+    }
+  }
+  for (const key of observedKeys) {
+    if (!declared.has(key)) return true;
+  }
+  return false;
+}
+
+async function contractObservationDrift(
+  vault: string,
+  nodes: readonly EngineGraphNode[],
+  observations: readonly AxisObservation[] | null,
+): Promise<boolean> {
+  return hasContractObservationDrift(await loadContract(vault), nodes, observations);
+}
+
+/** Overlay typed EAV values onto the lexical node snapshot. */
+function applyAxisSnapshot(
+  nodes: readonly EngineGraphNode[],
+  observations: readonly AxisObservation[],
+): EngineGraphNode[] {
+  const byNote = new Map<string, AxisObservation[]>();
+  for (const observation of observations) {
+    const rows = byNote.get(observation.notePath) ?? [];
+    rows.push(observation);
+    byNote.set(observation.notePath, rows);
+  }
+  return nodes.map((node) => {
+    const rows = byNote.get(node.path);
+    if (rows === undefined) return node;
+    const fields: Record<string, (string | number | boolean)[]> = {};
+    const links: string[] = [];
+    let folder = node.folder;
+    for (const row of rows) {
+      const value = row.value instanceof Date ? row.value.toISOString() : row.value;
+      if (row.axisKind === "folder" && typeof value === "string") {
+        folder = value;
+      } else if (row.axisKind === "link" && typeof value === "string") {
+        links.push(value);
+      } else if (row.axisKind === "field") {
+        const values = fields[row.axisKey] ?? [];
+        values.push(value);
+        fields[row.axisKey] = values;
+      }
+    }
+    return {
+      ...node,
+      folder,
+      // The node DTO keeps its legacy string-array declaration, while this
+      // runtime overlay deliberately carries typed EAV scalars.
+      axes: fields as unknown as Record<string, string[]>,
+      // An existing snapshot is authoritative: an empty link/field set must
+      // clear stale values from an older JSON node-index cache.
+      wikilinks: [...new Set(links)],
+    };
+  });
+}
+
+/** Contract field names are the allow-list for public field-axis queries. */
+async function loadContractFieldKeys(vault: string): Promise<ReadonlySet<string> | undefined> {
+  const contract = await loadContract(vault);
+  if (contract === null) return undefined;
+  const keys = new Set<string>();
+  for (const axis of contract.axes) {
+    if (axis.kind === "field") keys.add(axis.key.trim().toLowerCase());
+  }
+  for (const key of Object.keys(contract.types)) keys.add(key.trim().toLowerCase());
+  return keys;
+}
+
+function validateKnownFieldAxes(
+  axes: QueryAxes | undefined,
+  knownFields: ReadonlySet<string> | undefined,
+): void {
+  if (axes === undefined || knownFields === undefined || axes.field === undefined) return;
+  if (axes.field === null || typeof axes.field !== "object" || Array.isArray(axes.field)) {
+    throw new Error("Field axis must be an object mapping field names to values.");
+  }
+  for (const key of Object.keys(axes.field)) {
+    if (key.trim().toLocaleLowerCase() === "concept") {
+      throw new Error('Unknown query field axis "concept".');
+    }
+    if (!knownFields.has(key.trim().toLowerCase())) {
+      throw new Error(`Unknown field axis "${key}" (not declared by the JSON contract).`);
+    }
+  }
 }
 // ---------------------------------------------------------------------------
 // Adapter facade
@@ -291,10 +600,24 @@ export class McpEngineAdapter {
   constructor(
     private readonly deps: DispatcherDeps,
     private readonly vaultPath: string,
-    private readonly config?: { readonly embeddingProvider?: string; readonly embeddingModel?: string },
+    private readonly config?: {
+      readonly embeddingProvider?: string;
+      readonly embeddingModel?: string;
+      readonly embeddingDescriptor?: EmbeddingModelDescriptor;
+      readonly embeddingDimensions?: number;
+      readonly embeddingContext?: number;
+      readonly embeddingContextLength?: number;
+      readonly embeddingContextTokens?: number;
+      readonly embeddingMrlDim?: number;
+      readonly embeddingNormalization?: string;
+      readonly embeddingPrefixScheme?: string;
+      readonly dbPath?: string;
+      readonly onStoreRebind?: (store: EngineStore) => void;
+    },
     private readonly reranker?: Reranker,
     /** Explicit assembly policy; read-only engines suppress this refresh. */
     private readonly implicitLexicalSync = false,
+    private readonly persistLexicalSync = true,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -310,10 +633,17 @@ export class McpEngineAdapter {
   }
 
   /** Load the node index from cache, building it live on a cache miss. */
-  private async loadOrBuildNodes(): Promise<EngineGraphNode[]> {
-    const cached = await loadNodeIndex(this.nodeCachePath(this.vaultPath));
+  private async loadOrBuildNodes(vault = this.vaultPath): Promise<EngineGraphNode[]> {
+    // A direct adapter caller may supply a store-backed query without a
+    // filesystem vault (for example an MCP transport test). Node enrichment is
+    // optional in that case; never turn a valid retrieval result into an ENOENT.
+    if (!existsSync(vault)) return [];
+    const cached = await loadNodeIndex(
+      this.nodeCachePath(vault),
+      await nodeSourceSignature(vault),
+    );
     if (cached !== null) return cached;
-    return buildNodeIndex({ vaultPath: this.vaultPath });
+    return buildNodeIndex({ vaultPath: vault });
   }
 
   // -------------------------------------------------------------------------
@@ -321,27 +651,162 @@ export class McpEngineAdapter {
   // -------------------------------------------------------------------------
 
   /**
+   * Evaluate an overview/axis query directly from the read-only node index.
+   * This path is intentionally model-free and does not open the embedding
+   * store, so a query issued outside a vault or against an empty vault cannot
+   * create `.oms/` state as a side effect.
+   */
+  private async queryNodeAxes(
+    opts: McpSemanticQueryOptions,
+    subQueries: readonly { readonly type: string; readonly query: string }[],
+  ): Promise<McpSemanticQueryResult> {
+    const vault = opts.vault ?? this.vaultPath;
+    const baseNodes = await this.loadOrBuildNodes(vault);
+    const snapshot = await loadAxisSnapshot(vault);
+    const drift = await contractObservationDrift(vault, baseNodes, snapshot);
+    const observedFields = snapshot === null
+      ? undefined
+      : new Set(snapshot.filter((row) => row.axisKind === "field").map((row) => row.axisKey.toLowerCase()));
+    const liveObservedFields = new Set(
+      baseNodes.flatMap((node) => Object.keys(node.axes).map((key) => key.toLowerCase())),
+    );
+    const knownFields = await loadContractFieldKeys(vault)
+      ?? (observedFields === undefined ? liveObservedFields : new Set([...observedFields, ...liveObservedFields]));
+    validateKnownFieldAxes(opts.axes as QueryAxes | undefined, knownFields);
+    const nodes = snapshot === null ? baseNodes : applyAxisSnapshot(baseNodes, snapshot);
+    const axisFiltered = opts.axes === undefined
+      ? nodes
+      : filterNodesByQueryAxes(nodes, opts.axes as QueryAxes);
+    const collection = opts.collectionPath;
+    const filtered = collection === undefined
+      ? axisFiltered
+      : axisFiltered.filter((node) => node.path === collection || node.path.startsWith(`${collection}/`));
+    const query = subQueries.find((subQuery) => subQuery.type === "lex")?.query
+      ?? (subQueries.length === 0 ? opts.query ?? "" : "");
+    const scored = filtered
+      .map((node) => {
+        const score = searchScore(node, query);
+        return {
+          docPath: node.path,
+          score,
+          ...(query.trim().length > 0 ? { perTypeScores: { lex: score } } : {}),
+        };
+      })
+      // An axis constraint narrows the corpus; it is not lexical evidence.
+      // Once a lexical query is supplied, do not return axis-only zero-score
+      // documents as query hits.
+      .filter((result) => query.trim().length === 0 || result.score > 0)
+      .sort((left, right) => right.score - left.score || left.docPath.localeCompare(right.docPath));
+    const facetNodes = opts.minScore === undefined
+      ? filtered
+      : filtered.filter((node) => searchScore(node, query) >= opts.minScore!);
+    const intents = folderIntents(vault);
+    const facets: McpSemanticFacet[] = queryFacets(facetNodes).map((facet) => ({
+      ...facet,
+      intent: facetIntent(facet, intents, opts.intent),
+    }));
+    const candidateLimit = opts.candidateLimit ?? UNBOUNDED_CANDIDATE_LIMIT;
+    const candidates = scored.slice(0, candidateLimit);
+    const shouldRerank = opts.rerank === true && opts.noRerank !== true;
+    if (shouldRerank && this.reranker === undefined) {
+      return queryResultUnavailable(
+        "reranking requires a configured Reranker; pass one to assembleEngine() or createOMSMcpServer().",
+      );
+    }
+    if (shouldRerank && query.trim().length === 0) {
+      return queryResultUnavailable("reranking requires a non-empty natural-language query.");
+    }
+    const reranker = this.reranker;
+    const ranked = shouldRerank
+      ? await reranker!.rerank(query, candidates.map((result) => ({
+        docPath: result.docPath,
+        chunkOrdinal: 0,
+        score: result.score,
+      }))).then((reranked) => {
+        const candidateByPath = new Map(candidates.map((candidate) => [candidate.docPath, candidate]));
+        return reranked.flatMap((hit) => {
+          const candidate = candidateByPath.get(hit.docPath);
+          return candidate === undefined
+            ? []
+            : [{ ...candidate, score: hit.score, perTypeScores: { lex: hit.score } }];
+        });
+      })
+      : candidates;
+    const hasNonLexSearch = subQueries.some((search) => search.type !== "lex");
+    const result = retrievalResultsToQueryResult(ranked, {
+      minScore: opts.minScore,
+      limit: resultPageLimit(opts),
+      cursor: opts.cursor,
+      intent: opts.intent,
+      facetValues: facets,
+      // Axis queries are evaluated by the model-free node matcher. A vector
+      // request is reported as approximated rather than falsely claiming vec
+      // evidence in the receipt.
+      usedChannels: query.trim().length > 0 ? ["lex"] : [],
+      approximated: hasNonLexSearch,
+      drift,
+    });
+    return enrichQueryHits(result, vault);
+  }
+
+  /**
    * Execute a semantic query and return MCP-shaped results.
    * Maps opts → TypedSubQuery[] → dispatch() → McpSemanticQueryResult.
    */
   async semanticQuery(opts: McpSemanticQueryOptions): Promise<McpSemanticQueryResult> {
-    const subQueries = queryOptionsToSubQueries(opts);
-    if (subQueries.length === 0) {
-      return queryResultUnavailable("No sub-queries derived from options");
+    let normalized: ReturnType<typeof normalizeQueryOptions>;
+    try {
+      normalized = normalizeQueryOptions(opts);
+    } catch (err) {
+      return queryResultUnavailable(err instanceof Error ? err.message : String(err));
+    }
+    const { subQueries } = normalized;
+    if (opts.axes !== undefined && hasExplicitEmbeddingSearch(opts)) {
+      return queryResultUnavailable(
+        "Axis queries support lexical matching only; explicit vector/HyDE retrieval requires " +
+          "OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL.",
+      );
+    }
+    if (opts.axes !== undefined || normalized.overview) {
+      try {
+        return await this.queryNodeAxes(opts, subQueries);
+      } catch (err) {
+        return queryResultUnavailable(err instanceof Error ? err.message : String(err));
+      }
     }
     try {
-      if (this.implicitLexicalSync && isLexOnlySubQueries(subQueries)) {
+      // A core engine has a real lexical store but deliberately no embedding
+      // provider. The default query mode is hybrid for vector-capable engines;
+      // on a model-less engine, retain the useful lexical half unless the
+      // caller explicitly asked for vec/HyDE (which must fail loudly).
+      const vecAvailable = typeof (this.deps.store as Partial<EngineStore>).capabilities === "function"
+        ? (this.deps.store as EngineStore).capabilities().vecAvailable
+        : true;
+      const modelLessFallback =
+        !vecAvailable &&
+        !hasExplicitEmbeddingSearch(opts) &&
+        subQueries.some((subQuery) => subQuery.type === "vec");
+      const effectiveSubQueries = modelLessFallback
+        ? subQueries.filter((subQuery) => subQuery.type === "lex")
+        : subQueries;
+
+      if (this.implicitLexicalSync && isLexOnlySubQueries(effectiveSubQueries)) {
         const syncResult = await syncEngineStore({
           vault: opts.vault ?? this.vaultPath,
           collection: opts.collection,
           embed: false,
           store: this.deps.store as EngineStore,
+          persist: this.persistLexicalSync,
         });
         if (!syncResult.available) {
           return queryResultUnavailable(syncResult.reason ?? "Lexical index sync unavailable");
         }
       }
-      const k = opts.candidateLimit ?? 20;
+      // Without an explicit candidate limit, retrieve the complete ranked
+      // stream so totalCount and offset cursors remain accurate on pages past
+      // the first 50 results. A caller-supplied candidateLimit remains an
+      // intentional cap (not an implementation truncation).
+      const k = opts.candidateLimit ?? UNBOUNDED_CANDIDATE_LIMIT;
       const shouldRerank = opts.rerank === true && opts.noRerank !== true;
       if (shouldRerank && this.reranker === undefined) {
         return queryResultUnavailable(
@@ -352,14 +817,40 @@ export class McpEngineAdapter {
         return queryResultUnavailable("reranking requires a non-empty natural-language query.");
       }
       const results = await retrieve({
-        subQueries,
+        subQueries: [...effectiveSubQueries],
         deps: this.deps,
         k,
         collection: opts.collectionPath,
         query: opts.query,
         reranker: shouldRerank ? this.reranker : undefined,
       });
-      const mapped = retrievalResultsToQueryResult(results, opts);
+      let facetValues: McpSemanticFacet[] | undefined;
+      const vault = opts.vault ?? this.vaultPath;
+      const baseNodes = await this.loadOrBuildNodes(vault);
+      const snapshot = await loadAxisSnapshot(vault);
+      const nodes = snapshot === null ? baseNodes : applyAxisSnapshot(baseNodes, snapshot);
+      const drift = await contractObservationDrift(vault, baseNodes, snapshot);
+      const scoped = opts.collectionPath === undefined
+        ? nodes
+        : nodes.filter((node) =>
+          node.path === opts.collectionPath || node.path.startsWith(`${opts.collectionPath}/`));
+      const intents = folderIntents(vault);
+      facetValues = queryFacets(scoped).map((facet) => ({
+        ...facet,
+        intent: facetIntent(facet, intents, opts.intent),
+      }));
+      const requestedChannels = [...new Set(effectiveSubQueries.map((search) => search.type))]
+        .filter((type): type is "lex" | "vec" | "hyde" => type === "lex" || type === "vec" || type === "hyde");
+      const mapped = retrievalResultsToQueryResult(results, {
+        ...opts,
+        limit: resultPageLimit(opts),
+        facetValues,
+        usedChannels: requestedChannels,
+        approximated:
+          modelLessFallback ||
+          effectiveSubQueries.some((search) => search.type !== "lex" && search.type !== "vec"),
+        drift,
+      });
       // Fill title + doc-head snippet from disk so engine hits reach practical
       // parity with the src/search preview (the pure mapper stays text-free).
       return enrichQueryHits(mapped, opts.vault ?? this.vaultPath);
@@ -385,6 +876,9 @@ export class McpEngineAdapter {
   async syncEmbeddings(
     opts: McpSemanticEmbeddingSyncOptions,
   ): Promise<McpSemanticEmbeddingSyncResult> {
+    const activeDbPath = this.config?.dbPath ??
+      path.join(path.resolve(opts.vault), ".oms", "engine-store.sqlite");
+    let swapHandleClosed = false;
     try {
       const syncResult = await syncEngineStore({
         vault: opts.vault,
@@ -396,8 +890,30 @@ export class McpEngineAdapter {
         // resolves the real provider and fails fast (ADR-007) if it is missing.
         embeddingProvider: this.config?.embeddingProvider,
         embeddingModel: this.config?.embeddingModel,
+        embeddingDescriptor: this.config?.embeddingDescriptor,
+        embeddingDimensions: this.config?.embeddingDimensions,
+        embeddingContext: this.config?.embeddingContext,
+        embeddingContextLength: this.config?.embeddingContextLength,
+        embeddingContextTokens: this.config?.embeddingContextTokens,
+        embeddingMrlDim: this.config?.embeddingMrlDim,
+        embeddingNormalization: this.config?.embeddingNormalization,
+        embeddingPrefixScheme: this.config?.embeddingPrefixScheme,
+        dbPath: this.config?.dbPath,
         embed: opts.embed ?? true,
         force: opts.force ?? false,
+        onGenerationSwapPrepare: () => {
+          // The adapter's store outlives one sync call. Close it before the
+          // active WAL/SHM sidecars are removed, not after rename.
+          swapHandleClosed = true;
+          this.deps.store.close();
+        },
+        onGenerationSwapComplete: () => {
+          if (!swapHandleClosed) return;
+          const reboundStore = openEngineStore(activeDbPath, this.deps.embed.dimensions);
+          this.deps.store = reboundStore;
+          this.config?.onStoreRebind?.(reboundStore);
+          swapHandleClosed = false;
+        },
       });
       if (!syncResult.available) {
         return syncResultUnavailable(syncResult.reason ?? "sync unavailable", opts);
@@ -486,7 +1002,11 @@ export class McpEngineAdapter {
    * longer exists in the live vault is cleared (meta + vec + FTS).
    */
   async cleanup(_opts: McpStatusOptions): Promise<McpSemanticCleanupResult> {
+    let releaseLock: (() => void) | undefined;
     try {
+      const dbPath = this.config?.dbPath ??
+        path.join(path.resolve(this.vaultPath), ".oms", "engine-store.sqlite");
+      releaseLock = acquireEngineStoreWriterLock(dbPath);
       const store = this.deps.store as EngineStore;
       const livePaths = new Set<string>();
       for await (const rel of walkMarkdown(this.vaultPath, this.vaultPath)) {
@@ -509,6 +1029,8 @@ export class McpEngineAdapter {
       };
     } catch (err) {
       return cleanupResultUnavailable(err instanceof Error ? err.message : String(err));
+    } finally {
+      releaseLock?.();
     }
   }
 
@@ -545,7 +1067,13 @@ export class McpEngineAdapter {
     await saveCachedGraph(graphCachePath, edges);
 
     const nodes = await buildNodeIndex({ vaultPath: args.vaultPath });
-    await saveNodeIndex(this.nodeCachePath(args.vaultPath), nodes);
+    const sourceSignature = await nodeSourceSignature(args.vaultPath);
+    await saveNodeIndex(this.nodeCachePath(args.vaultPath), nodes, sourceSignature);
+
+    // Graph build is the explicit writable refresh boundary for the typed
+    // EAV snapshot. Reconcile it atomically with the current markdown set.
+    const axisStore = await collectVaultAxisObservations(args.vaultPath);
+    axisStore.close();
 
     const noteSet = new Set(edges.flatMap((e) => [e.from, e.to]));
     return engineGraphBuildResultToMcp({
@@ -583,8 +1111,11 @@ export class McpEngineAdapter {
    */
   async retrieveByAxis(filters: McpAxisFilters): Promise<McpSemanticQueryResult> {
     try {
-      const nodes = await this.loadOrBuildNodes();
-      const limit = clamp(filters.limit ?? 10, 1, 50);
+      const baseNodes = await this.loadOrBuildNodes();
+      const snapshot = await loadAxisSnapshot(this.vaultPath);
+      const drift = await contractObservationDrift(this.vaultPath, baseNodes, snapshot);
+      const nodes = snapshot === null ? baseNodes : applyAxisSnapshot(baseNodes, snapshot);
+      const limit = Math.max(1, filters.limit ?? 10);
       const filtered = filterNodesByAxis(nodes, {
         concept: filters.concept,
         folder: filters.folder,
@@ -611,9 +1142,21 @@ export class McpEngineAdapter {
         }),
         evidence: { lexical: true, vector: false },
       }));
-      return { available: true, hits };
+      const intents = folderIntents(this.vaultPath);
+      const facets: McpSemanticFacet[] = queryFacets(filtered).map((facet) => ({
+        ...facet,
+        intent: facetIntent(facet, intents, undefined),
+      }));
+      return {
+        available: true,
+        hits,
+        totalCount: filtered.length,
+        facets,
+        cursor: scored.length < filtered.length ? String(scored.length) : null,
+        receipt: { usedChannels: ["lex"], approximated: false, drift },
+      };
     } catch (err) {
-      return { available: false, reason: err instanceof Error ? err.message : String(err), hits: [] };
+      return queryResultUnavailable(err instanceof Error ? err.message : String(err));
     }
   }
 

@@ -10,6 +10,24 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Breaking
+
+- **MCP search and doctor operation names have changed.** Use `oms_search` with `op: "query"` for axis retrieval; the retired `axis` and `semantic-query` names now fail loudly. Collection, context, and status operations have likewise dropped their `semantic-` prefixes, and `oms_doctor` cleanup is now `op: "cleanup"` rather than `semantic-cleanup`. There are no compatibility aliases, so update MCP clients to these names. Every query response now includes `hits`, `totalCount`, `facets`, a cursor, and a receipt.
+- **Existing vector indexes must be rebuilt.** The embedding metadata version is now `oms-embed-meta-v2`, and the index identity includes dimensions, context length, MRL dimension, normalization, and prefix scheme. OMS rejects an index whose metadata or identity does not match rather than using vectors produced under a different contract. Rebuild it with `oms semantic sync --force`.
+
+### Added
+
+- **Frontmatter axes are now typed and queryable.** The user-owned JSON contract lives at `.oms/types.json`; `.obsidian/types.json` is read as a read-only type authority. Legacy YAML is ignored without migration. Search can filter typed frontmatter axes, return their facets, and page results with a cursor.
+
+### Changed
+
+- **Released ranking stays evidence-backed.** The default remains the v0.3.0 additive provenance baseline, with no unmeasured ranking change in this release. The `boost-k-scale`, `boost-per-list`, and `boost-zero` arms remain candidates pending the C040 experiment.
+- **Embedding setup remains explicit.** Default model acquisition is still deferred: configure `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL` as before. To install an operator-supplied model, use `oms setup --embedding-descriptor <path>`; OMS verifies its SHA-256 before accepting it.
+
+### Fixed
+
+- **`oms update` is safer in interactive and automated use.** It asks for confirmation from a TTY, requires `--yes` without one, and keeps `--dry-run` and `--check` read-only. Version comparison now follows SemVer precedence, failed host reconciliation returns a non-zero exit status, and an unverified current-directory target is refused rather than updated.
+
 ## [0.3.0] - 2026-08-24
 
 ### Breaking

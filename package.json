@@ -42,6 +42,7 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "check:docs": "node scripts/check-doc-mapping.mjs",
+    "check:measurement": "OMS_MEASUREMENT_REQUIRED=1 OMS_MEASUREMENT_ATTESTATION_REQUIRED=1 OMS_MEASUREMENT_RELEASE=1 OMS_MEASUREMENT_PROFILE=boost-c040 OMS_MEASUREMENT_MANIFEST=docs/measurements/boost-c040.json node scripts/check-measurement-manifest.mjs",
     "audit": "npm audit --omit=dev",
     "release": "node scripts/release.mjs",
     "release:pack": "node scripts/release-pack.mjs",
@@ -49,7 +50,7 @@
     "release:mcp-smoke": "node scripts/release-artifact-smoke.mjs --mcp-only",
     "release:artifact-smoke": "node scripts/release-artifact-smoke.mjs",
     "release:plugin": "node scripts/release-plugin.mjs",
-    "release:check": "npm run lint && npm run build && npm test && npm run audit && npm run release:pack && npm run release:artifact-smoke && npm run release:plugin"
+    "release:check": "npm run lint && npm run build && npm test && npm run audit && npm run check:docs && npm run check:measurement && npm run release:pack && npm run release:artifact-smoke && npm run release:plugin"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

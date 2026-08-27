@@ -1,11 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
+  normalizeQueryOptions,
   queryOptionsToSubQueries,
   queryResultUnavailable,
   retrievalResultsToQueryResult,
 } from "./query-mapper.js";
 import type { McpSemanticQueryOptions } from "./types.js";
+import { semanticQueryOptionsFromArgs } from "../../semantic/semantic-retrieve-args.js";
+import { parseSemanticArgs, semanticQueryOptions } from "../../../cli/semantic-args.js";
 import type { RetrievalResult } from "../types.js";
+import { filterNodesByQueryAxes } from "../graph/node.js";
+import type { EngineGraphNode } from "../graph/node.js";
+import { McpEngineAdapter } from "./facade.js";
+import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -19,6 +29,23 @@ function makeResult(
   perTypeScores?: Record<string, number>,
 ): RetrievalResult {
   return { docPath, score, perTypeScores };
+}
+
+function makeNode(
+  pathName: string,
+  folder: string,
+  axes: Record<string, string[]> = {},
+  wikilinks: string[] = [],
+): EngineGraphNode {
+  return {
+    path: pathName,
+    folder,
+    concept: null,
+    axes,
+    wikilinks,
+    bodyPreview: "",
+    searchTerms: new Set(),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +170,114 @@ describe("queryOptionsToSubQueries — mode-driven defaults", () => {
       { type: "vec", query: "hello world" },
     ]);
   });
+
+  it("normalizes overview and explicit channel requests through one seam", () => {
+    expect(normalizeQueryOptions({ query: "" })).toMatchObject({
+      overview: true,
+      subQueries: [],
+      lexicalQuery: "",
+    });
+    expect(normalizeQueryOptions({
+      query: "fallback",
+      mode: "vsearch",
+      searches: [{ type: "lex", query: "explicit" }],
+    })).toMatchObject({
+      overview: false,
+      subQueries: [{ type: "lex", query: "explicit" }],
+      lexicalQuery: "explicit",
+    });
+  });
+
+  it("distinguishes an explicit empty axes object from a true overview", () => {
+    expect(normalizeQueryOptions({}).overview).toBe(true);
+    expect(normalizeQueryOptions({ axes: {} })).toMatchObject({
+      overview: false,
+      limit: 10,
+      options: { axes: {}, limit: 10 },
+    });
+  });
+
+  it("keeps cursor and collection fields while applying the default page size", () => {
+    const normalized = normalizeQueryOptions({
+      query: "query",
+      collection: "notes",
+      cursor: "10",
+    });
+    expect(normalized).toMatchObject({
+      limit: 10,
+      options: { collection: "notes", cursor: "10", limit: 10 },
+    });
+    expect(
+      retrievalResultsToQueryResult(
+        Array.from({ length: 12 }, (_, index) => makeResult(`note-${index}.md`, 1)),
+        { cursor: "10" },
+      ),
+    ).toMatchObject({
+      totalCount: 12,
+      hits: [{ path: "note-10.md" }, { path: "note-11.md" }],
+      cursor: null,
+    });
+  });
+
+  it("retains typed searches and axes through the runtime argument parser", () => {
+    const parsed = semanticQueryOptionsFromArgs("/vault", {
+      searches: [{ type: "lex", query: "exact lexical" }],
+      axes: { folder: ["notes"], field: { done: true }, link: "target" },
+      collection: "notes",
+      cursor: "3",
+    });
+    expect(parsed).toMatchObject({
+      searches: [{ type: "lex", query: "exact lexical" }],
+      axes: { folder: ["notes"], field: { done: true }, link: "target" },
+      collection: "notes",
+      cursor: "3",
+    });
+  });
+
+  it("builds folder/field/link axes from CLI flags without dropping the query", () => {
+    const args = parseSemanticArgs([
+      "semantic",
+      "query",
+      "retrieval",
+      "--folder",
+      "notes",
+      "--field",
+      "done=true",
+      "--link",
+      "target",
+    ]);
+    expect(semanticQueryOptions("query", "/vault", args, "retrieval")).toMatchObject({
+      query: "retrieval",
+      axes: { folder: "notes", field: { done: true }, link: "target" },
+    });
+  });
+
+  it("keeps repeated field flags separate from comma-delimited values", () => {
+    const args = parseSemanticArgs([
+      "semantic",
+      "query",
+      "--field",
+      "tag=one,two",
+      "--field",
+      "status=open",
+    ]);
+    expect(semanticQueryOptions("query", "/vault", args, "")).toMatchObject({
+      axes: { field: { tag: ["one", "two"], status: "open" } },
+    });
+  });
+
+  it("does not silently discard a contradictory CLI mode", () => {
+    const args = parseSemanticArgs(["semantic", "query", "--mode", "vsearch"]);
+    expect(() => semanticQueryOptions("query", "/vault", args, "retrieval")).toThrow(/contradict/i);
+  });
+
+  it("rejects malformed cursor and typed-search input instead of falling back", () => {
+    expect(() => normalizeQueryOptions({ query: "query", cursor: "page-two" })).toThrow(/cursor/i);
+    expect(() => queryOptionsToSubQueries({
+      searches: [{ type: "vector", query: "query" }],
+    } as never)).toThrow(/searches/i);
+    expect(() => queryOptionsToSubQueries({ mode: "unexpected" } as never)).toThrow(/mode/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -151,7 +286,27 @@ describe("queryOptionsToSubQueries — mode-driven defaults", () => {
 
 describe("retrievalResultsToQueryResult — shape", () => {
   it("empty results → available=true with empty hits", () => {
-    expect(retrievalResultsToQueryResult([], {})).toEqual({ available: true, hits: [] });
+    expect(retrievalResultsToQueryResult([], {})).toMatchObject({
+      available: true,
+      hits: [],
+      totalCount: 0,
+      facets: [],
+      cursor: null,
+      receipt: { usedChannels: [], approximated: false, drift: false },
+    });
+  });
+
+  it("unavailable results retain the complete query envelope", () => {
+    const result = queryResultUnavailable("semantic index unavailable");
+    expect(result).toEqual({
+      available: false,
+      reason: "semantic index unavailable",
+      hits: [],
+      totalCount: 0,
+      facets: [],
+      cursor: null,
+      receipt: { usedChannels: [], approximated: false, drift: false },
+    });
   });
 
   it("maps docPath to docid, path, and vault:// uri", () => {
@@ -168,6 +323,7 @@ describe("retrievalResultsToQueryResult — shape", () => {
     expect(hit.score).toBe(0.9);
     expect(hit.snippet).toBe("");
   });
+
 });
 
 describe("retrievalResultsToQueryResult — evidence flags", () => {
@@ -255,6 +411,116 @@ describe("retrievalResultsToQueryResult — filtering and limits", () => {
     if (!result.available) return;
     expect(result.hits).toHaveLength(2);
   });
+
+  it("reports totalCount before the limit and round-trips a cursor", () => {
+    const results = Array.from({ length: 55 }, (_, index) => makeResult(`note-${index}.md`, 1));
+    const first = retrievalResultsToQueryResult(results, { limit: 2 });
+    expect(first).toMatchObject({ totalCount: 55, cursor: "2" });
+    if (!first.available || first.cursor === null || first.cursor === undefined) return;
+    const second = retrievalResultsToQueryResult(results, { limit: 2, cursor: first.cursor });
+    expect(second).toMatchObject({ totalCount: 55, cursor: "4" });
+    if (!second.available) return;
+    expect(second.hits.map((hit) => hit.path)).toEqual(["note-2.md", "note-3.md"]);
+  });
+
+  it("keeps facet counts separate from hits and preserves intent", () => {
+    const result = retrievalResultsToQueryResult(
+      [makeResult("notes/a.md", 1), makeResult("notes/b.md", 0.5)],
+      {
+        limit: 1,
+        intent: "reference lookup",
+        facetValues: [{ axis: "folder", value: "notes", count: 2, intent: "Reference notes" }],
+      },
+    );
+    expect(result).toMatchObject({
+      totalCount: 2,
+      intent: "reference lookup",
+      facets: [{ axis: "folder", value: "notes", count: 2, intent: "Reference notes" }],
+    });
+    if (result.available) expect(result.hits).toHaveLength(1);
+  });
+});
+
+describe("query axes — closed predicate algebra", () => {
+  const nodes = [
+    makeNode("a.md", "notes", { status: ["Open"], tags: ["one"] }, ["target.md"]),
+    makeNode("b.md", "archive", { status: ["closed"], tags: ["one", "two"] }, ["other.md"]),
+    makeNode("c.md", "projects", { status: ["Open"], tags: ["three"] }, ["target.md"]),
+  ];
+
+  it("ORs values within an axis and ANDs different axes", () => {
+    const result = filterNodesByQueryAxes(nodes, {
+      folder: ["notes", "projects"],
+      field: { status: ["open", "pending"] },
+      link: "target",
+    });
+    expect(result.map((node) => node.path)).toEqual(["a.md", "c.md"]);
+  });
+
+  it("rejects an unknown public axis instead of silently broadening", () => {
+    expect(() => filterNodesByQueryAxes(nodes, { concept: "secret" } as never)).toThrow(/Unknown query axis/i);
+  });
+
+  it("supports date ranges and multi-value inclusion on field axes", () => {
+    const dated = [
+      makeNode("old.md", "notes", { date: ["2024-01-01"], tags: ["one"] }),
+      makeNode("new.md", "notes", { date: ["2024-06-01"], tags: ["one", "two"] }),
+    ];
+    const result = filterNodesByQueryAxes(dated, {
+      field: {
+        date: { gte: "2024-05-01", lte: "2024-12-31" },
+        tags: { contains: "two" },
+      },
+    });
+    expect(result.map((node) => node.path)).toEqual(["new.md"]);
+  });
+
+  it("keeps numeric and boolean frontmatter values typed for predicates", () => {
+    const typed = [
+      makeNode("high.md", "notes", {
+        rating: [5] as unknown as string[],
+        done: [true] as unknown as string[],
+      }),
+      makeNode("low.md", "notes", {
+        rating: [2] as unknown as string[],
+        done: [false] as unknown as string[],
+      }),
+    ];
+    expect(filterNodesByQueryAxes(typed, {
+      field: { rating: { gte: 4 }, done: true },
+    }).map((node) => node.path)).toEqual(["high.md"]);
+    expect(filterNodesByQueryAxes(typed, {
+      field: { done: false },
+    }).map((node) => node.path)).toEqual(["low.md"]);
+  });
+});
+
+describe("read-only overview on an empty vault", () => {
+  it("returns an empty envelope without creating .oms state", async () => {
+    const vault = mkdtempSync(path.join(tmpdir(), "oms-query-empty-"));
+    const deps: DispatcherDeps = {
+      store: {
+        upsert: vi.fn(),
+        queryLex: vi.fn().mockReturnValue([]),
+        queryVec: vi.fn().mockReturnValue([]),
+        close: vi.fn(),
+      },
+      embed: {
+        model: "test",
+        dimensions: 1,
+        embed: vi.fn(),
+        dispose: vi.fn(),
+      },
+    };
+    try {
+      const adapter = new McpEngineAdapter(deps, vault, undefined, undefined, false, false);
+      const result = await adapter.semanticQuery({ vault, axes: {} });
+      expect(result).toMatchObject({ available: true, hits: [], totalCount: 0, facets: [], cursor: null });
+      expect(readdirSync(vault)).toEqual([]);
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -264,6 +530,14 @@ describe("retrievalResultsToQueryResult — filtering and limits", () => {
 describe("queryResultUnavailable", () => {
   it("returns available=false with the given reason and empty hits", () => {
     const result = queryResultUnavailable("store offline");
-    expect(result).toEqual({ available: false, reason: "store offline", hits: [] });
+    expect(result).toMatchObject({
+      available: false,
+      reason: "store offline",
+      hits: [],
+      totalCount: 0,
+      facets: [],
+      cursor: null,
+      receipt: { usedChannels: [], approximated: false, drift: false },
+    });
   });
 });

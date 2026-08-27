@@ -115,7 +115,7 @@ Index note for graph neighborhoods and semantic lookup.
       });
       const queryCall = {
         name: "oms_search",
-        arguments: { op: "semantic-query", query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
+        arguments: { op: "query", query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
       };
       if (hasModel) {
         // Real engine path: sync builds the native store, query retrieves from it.
@@ -151,7 +151,7 @@ Index note for graph neighborhoods and semantic lookup.
         const explicitVec = await client.callTool({
           name: "oms_search",
           arguments: {
-            op: "semantic-query",
+            op: "query",
             searches: [{ type: "vec", query: "agent retrieval" }],
             collection: "obsidian",
             limit: 1,
@@ -163,7 +163,7 @@ Index note for graph neighborhoods and semantic lookup.
         const lexOnlyQuery = textPayload(
           await client.callTool({
             name: "oms_search",
-            arguments: { op: "semantic-query", query: "", lex: "agent retrieval", collection: "obsidian", limit: 1 },
+            arguments: { op: "query", query: "", lex: "agent retrieval", collection: "obsidian", limit: 1 },
           }),
         );
         expect((lexOnlyQuery.hits as Array<Record<string, unknown>>)[0]).toEqual(

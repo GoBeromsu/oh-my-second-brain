@@ -85,6 +85,10 @@ describe("openEngineStore — upsert + queryLex", () => {
 });
 
 describe("openEngineStore — queryVec", () => {
+  it("rejects non-finite query vectors at the store boundary", () => {
+    expect(() => store.queryVec(new Float32Array([Number.NaN]), 5)).toThrow(/non-finite/i);
+  });
+
   it("queryVec returns an array (may be empty if sqlite-vec unavailable)", async () => {
     const provider = createHashProjectionProvider(DIMS);
     const vec = await provider.embed("retrieval graph embedding");

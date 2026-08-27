@@ -6,7 +6,7 @@ Releasing is one operator command. Everything after the tag push belongs to CI.
 
 ## Principles
 
-Six rules shape this pipeline. They're adopted from [gajae-code](https://github.com/Yeachan-Heo/gajae-code), which the project owner picked as the reference release discipline.
+Seven rules shape this pipeline. They're adopted from [gajae-code](https://github.com/Yeachan-Heo/gajae-code), which the project owner picked as the reference release discipline.
 
 1. **CHANGELOG-first release messages.** Contributors write user-facing notes in the matching layer changelog: `CHANGELOG-kernel.md`, `CHANGELOG-cli.md`, `CHANGELOG-mcp.md`, `CHANGELOG-vendors.md`, or `CHANGELOG-assets.md`. `CHANGELOG.md` is the aggregate index, with entries only for changes spanning layers. Release notes are never reconstructed from git log at release time. `scripts/changelog-history-guard.mjs` runs in `ci.yml` and fails the build if a released `## [X.Y.Z]` heading that exists on `origin/main` disappears from the working tree.
 2. **One-command operator release.** `npm run release -- <X.Y.Z>` does preflight, lockstep version bump, changelog roll, `release:check`, commit, tag, atomic push, and CI watch. There's no checklist to follow by hand.
@@ -14,6 +14,18 @@ Six rules shape this pipeline. They're adopted from [gajae-code](https://github.
 4. **Tag equals version.** The tag `oms-vX.Y.Z` must match `package.json`, the two root plugin manifests, and `assets/hermes-manifest.json`. Release CI checks this before anything else and refuses to publish when the carriers drift.
 5. **CI-only publish.** `npm publish` runs inside `.github/workflows/release.yml` and nowhere else. There is no local publish path, and the operator script never invokes npm publish.
 6. **Tested release logic.** All non-trivial release logic lives in `scripts/release-lib.mjs` as pure functions (changelog roll, notes extraction, version bump, lockstep comparison, semver checks) covered by vitest. The scripts around it stay thin.
+7. **Attested measurement evidence for ranking-default changes.** The shipped
+   default is the released v0.3.0 `boost-additive` baseline: RRF score plus
+   provenance boost (`score: hit.score + boost`), with no per-list reordering. `boost-k-scale`,
+   `boost-per-list`, and `boost-zero` are frozen experiment arms, not the
+   current default. A release that ships the baseline passes the
+   `boost-c040` gate with a receipt and needs no manifest. A release that
+   changes the default away from that baseline must validate the exact
+   human-supplied manifest at `docs/measurements/boost-c040.json`, including
+   the externally preregistered qrels digest, trusted Ed25519 key, valid
+   attestation, and paired raw evidence. In particular, adopting an experiment
+   arm requires that manifest. No fixture, synthetic manifest, or waiver can
+   satisfy that requirement.
 
 ## Release contract
 
@@ -91,11 +103,32 @@ With that flag the version heading is inserted below an intact empty `## [Unrele
 2. `npm run build`
 3. `npm test`
 4. `npm run audit`
-5. `npm run release:pack`
-6. `npm run release:artifact-smoke`
-7. `npm run release:plugin`
+5. `npm run check:docs`
+6. `npm run check:measurement`
+7. `npm run release:pack`
+8. `npm run release:artifact-smoke`
+9. `npm run release:plugin`
 
 `release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and runs setup, host install dry-run, update dry-run, and MCP smoke from the extracted package root.
+
+When the release ships the `boost-additive` baseline, `check:measurement`
+passes the `boost-c040` gate with a receipt and does not require
+`docs/measurements/boost-c040.json`. When the release changes the shipped
+ranking default, `check:measurement` selects `boost-c040` and validates that
+exact manifest. Before that check, configure `OMS_PREREG_QRELS_HASH` (or
+`OMS_PREREG_QRELS`) with the frozen external qrels evidence and
+`OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY` with the trusted Ed25519 release key.
+`OMS_MEASUREMENT_ATTESTATION_REQUIRED=1` requires a signed attestation over
+the immutable manifest payload, and required release checks also require
+paired raw evidence for each of the three preregistered arms. All three arms
+are measured; the calculated C040 result compares the selected candidate
+(`boost-k-scale` or `boost-per-list`) against the `boost-zero` control under
+the preregistered thresholds. A claimed verdict or hard-coded winner is never
+accepted, and the shipped ranking default must equal the arm the evidence
+selects as the winner: authentic evidence for one arm never authorises
+shipping another. There is no `boost-c040` waiver. See [measurement
+evidence](./measurements/README.md) for the profile-specific invocation and
+evidence contract.
 
 If the gate fails, the bump and changelog roll are still sitting uncommitted in your working tree. Fix the failure and re-run, or `git checkout -- .` to restore.
 
@@ -120,7 +153,7 @@ Pushing an `oms-v*` tag triggers `.github/workflows/release.yml`; release verifi
 1. **Guard tag matches every version carrier** (tag runs only). Reads `package.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `assets/hermes-manifest.json` and compares them against `$GITHUB_REF_NAME`. Any drift fails the job and prints each value, so you see exactly which carrier is out of lockstep.
 2. `npm ci`.
 3. **Install Claude CLI for plugin validation**. Installs `@anthropic-ai/claude-code` globally and runs `claude --version`. Success means the later gate performs real plugin validation. Failure is an environment failure and stops the job with remediation text, unless an attestation input was supplied on a dispatch run.
-4. `npm run release:check`. Same gate you ran locally, this time with `OMS_REQUIRE_PLUGIN_VALIDATION=1` set, so `release:plugin` cannot silently skip validation.
+4. `npm run release:check`. Same gate you ran locally, this time with `OMS_REQUIRE_PLUGIN_VALIDATION=1` set, so `release:plugin` cannot silently skip validation. When the shipped ranking default changes from `boost-additive`, the job's `boost-c040` measurement environment points at `docs/measurements/boost-c040.json`, supplies the external qrels hash and trusted key, and requires attestation and paired raw evidence. A baseline release uses the gate receipt and needs no manifest.
 5. **Publish to npm with provenance** (tag runs only). Calls `node scripts/npm-version-exists.mjs <version>` first: exit 1 (absent) leads to `npm publish --provenance --access public`; exit 0 (already published) logs an idempotent-re-run skip; any other exit means the registry check itself failed, and the job refuses to publish on an inconclusive result.
 6. **Create GitHub Release** (tag runs only). `node scripts/extract-release-notes.mjs <version>` reads `CHANGELOG.md` and writes that version's section body to `/tmp/notes.md`, then `gh release view "$GITHUB_REF_NAME" || gh release create ... --notes-file /tmp/notes.md --verify-tag`. An existing release is left untouched. An empty or missing changelog section fails the step rather than shipping blank notes.
 

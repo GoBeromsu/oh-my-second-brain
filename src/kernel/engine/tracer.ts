@@ -19,6 +19,7 @@ import type { EngineConfig, RetrievalResult, TypedSubQuery } from "./types.js";
 import { chunkDocument } from "./embed/chunker.js";
 import { requireRealEmbeddingProvider } from "./embed/provider.js";
 import { openEngineStore } from "./embed/store.js";
+import type { EmbeddingModelDescriptor } from "./embed/model.js";
 import { buildGraph, loadCachedGraph, saveCachedGraph } from "./graph/builder.js";
 import { buildAdjacency, traverseGraph } from "./graph/traverse.js";
 import { retrieve, createCancelToken } from "./retrieval/index.js";
@@ -32,6 +33,18 @@ import { retrieve, createCancelToken } from "./retrieval/index.js";
  * Extends the shared EngineConfig with tracer-specific options.
  */
 export interface TracerConfig extends EngineConfig {
+  /**
+   * Canonical setup descriptor.  The descriptor is carried alongside the
+   * scalar config so model width/context and preprocessing metadata are not
+   * discarded when the tracer composes the provider.
+   */
+  embeddingDescriptor?: EmbeddingModelDescriptor | null;
+  embeddingContext?: number;
+  embeddingContextLength?: number;
+  embeddingContextTokens?: number;
+  embeddingMrlDim?: number;
+  embeddingNormalization?: string;
+  embeddingPrefixScheme?: string;
   /**
    * Vault-relative file paths to process in this run.
    * When absent, the entire vault is walked recursively.
@@ -106,12 +119,30 @@ export async function runTracer(
   const files = await resolveFiles(vaultPath, config.files);
 
   // ── Step 2: create embed provider + store ─────────────────────────────────
+  const descriptor = config.embeddingDescriptor ?? undefined;
+  const embeddingProvider = config.embeddingProvider ?? descriptor?.provider;
+  const embeddingModel =
+    config.embeddingModel ??
+    descriptor?.path ??
+    descriptor?.modelPath ??
+    descriptor?.model;
   const embedProvider = requireRealEmbeddingProvider({
-    provider: config.embeddingProvider,
-    model: config.embeddingModel,
+    provider: embeddingProvider,
+    model: embeddingModel,
+    dimensions: config.embeddingDimensions ?? descriptor?.dimensions,
+    context: config.embeddingContext ?? descriptor?.context,
+    contextLength: config.embeddingContextLength ?? descriptor?.contextLength,
+    contextTokens: config.embeddingContextTokens ?? descriptor?.contextTokens,
+    mrlDim: config.embeddingMrlDim ?? descriptor?.mrlDim,
+    normalization: config.embeddingNormalization ?? descriptor?.normalization,
+    prefixScheme: config.embeddingPrefixScheme ?? descriptor?.prefixScheme,
   });
   await mkdir(path.dirname(config.dbPath), { recursive: true });
-  const store = openEngineStore(config.dbPath, config.embeddingDimensions);
+  // A descriptor is authoritative for its vector width when no scalar
+  // override was supplied.  Falling back to the provider width keeps custom
+  // providers usable without inventing a dimension in the tracer.
+  const dimensions = config.embeddingDimensions ?? descriptor?.dimensions ?? embedProvider.dimensions;
+  const store = openEngineStore(config.dbPath, dimensions);
 
   try {
     // Chunk + embed + upsert every resolved file
@@ -197,12 +228,54 @@ export function resolveVault(): string {
  */
 export function makeTracerConfig(overrides: Partial<TracerConfig> = {}): TracerConfig {
   const vaultPath = overrides.vaultPath ?? resolveVault();
+  const descriptor = overrides.embeddingDescriptor ?? undefined;
   return {
     vaultPath,
     dbPath: overrides.dbPath ?? path.join(vaultPath, ".oms", "cache", "engine", "engine.db"),
-    embeddingDimensions: overrides.embeddingDimensions ?? 768,
-    embeddingProvider: overrides.embeddingProvider ?? process.env["OMS_EMBEDDING_PROVIDER"],
-    embeddingModel: overrides.embeddingModel ?? process.env["OMS_EMBEDDING_MODEL"],
+    embeddingDimensions: overrides.embeddingDimensions ?? descriptor?.dimensions ?? 768,
+    embeddingProvider:
+      overrides.embeddingProvider ??
+      descriptor?.provider ??
+      process.env["OMS_EMBEDDING_PROVIDER"],
+    embeddingModel:
+      overrides.embeddingModel ??
+      descriptor?.path ??
+      descriptor?.modelPath ??
+      descriptor?.model ??
+      process.env["OMS_EMBEDDING_MODEL"],
+    ...(overrides.embeddingDescriptor !== undefined
+      ? { embeddingDescriptor: overrides.embeddingDescriptor }
+      : {}),
+    ...(overrides.embeddingContext !== undefined
+      ? { embeddingContext: overrides.embeddingContext }
+      : descriptor?.context !== undefined
+        ? { embeddingContext: descriptor.context }
+        : {}),
+    ...(overrides.embeddingContextLength !== undefined
+      ? { embeddingContextLength: overrides.embeddingContextLength }
+      : descriptor?.contextLength !== undefined
+        ? { embeddingContextLength: descriptor.contextLength }
+        : {}),
+    ...(overrides.embeddingContextTokens !== undefined
+      ? { embeddingContextTokens: overrides.embeddingContextTokens }
+      : descriptor?.contextTokens !== undefined
+        ? { embeddingContextTokens: descriptor.contextTokens }
+        : {}),
+    ...(overrides.embeddingMrlDim !== undefined
+      ? { embeddingMrlDim: overrides.embeddingMrlDim }
+      : descriptor?.mrlDim !== undefined
+        ? { embeddingMrlDim: descriptor.mrlDim }
+        : {}),
+    ...(overrides.embeddingNormalization !== undefined
+      ? { embeddingNormalization: overrides.embeddingNormalization }
+      : descriptor?.normalization !== undefined
+        ? { embeddingNormalization: descriptor.normalization }
+        : {}),
+    ...(overrides.embeddingPrefixScheme !== undefined
+      ? { embeddingPrefixScheme: overrides.embeddingPrefixScheme }
+      : descriptor?.prefixScheme !== undefined
+        ? { embeddingPrefixScheme: descriptor.prefixScheme }
+        : {}),
     files: overrides.files,
     cacheDir: overrides.cacheDir,
     topK: overrides.topK ?? 10,

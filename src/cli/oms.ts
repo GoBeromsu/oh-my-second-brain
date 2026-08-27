@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPostToolUse } from "../vendors/claude/hook/post-tool-use.js";
@@ -21,7 +21,7 @@ import { nonFatalGlobalWriteback, registerGlobalVault } from "./global-writeback
 import { runLink } from "./link-command.js";
 import { runLinkify } from "./linkify.js";
 import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
-import { runSetup } from "./setup-command.js";
+import { runSetup, type SetupEmbeddingDescriptor } from "./setup-command.js";
 import { maybePrintUpdateNotice } from "./update-notice.js";
 import { printUsage } from "./usage.js";
 
@@ -37,6 +37,7 @@ export { runLinkify } from "./linkify.js";
 export {
   runSetup,
   type SetupPrompt,
+  type SetupEmbeddingDescriptor,
 } from "./setup-command.js";
 export { maybePrintUpdateNotice } from "./update-notice.js";
 
@@ -81,23 +82,46 @@ async function main(): Promise<void> {
     maxPerConcept,
     folders,
     conventionNote,
+    embeddingDescriptorPath,
+    embeddingNoDefault,
     unknownFlags,
   } = parsedArgs;
 
   // `mcp` keeps the FULL resolution result: the write surface trusts every
   // source except `cwd`, so the server needs the source, not just the path.
   let mcpTarget: { vault: string; scope: string[] | null; source: WriteTargetSource } | undefined;
+  if ((command === "update" || command === "update-reconcile") && unknownFlags.length > 0) {
+    console.error(`[oms] Unsupported update option: ${unknownFlags.join(", ")}`);
+    process.exitCode = 1;
+    return;
+  }
   if (command === "mcp") {
     mcpTarget = vaultExplicit
       ? { vault, scope: null, source: "explicit" }
       : await resolveEffectiveVault(process.cwd(), process.env);
     vault = mcpTarget.vault;
+  } else if (command === "update" || command === "update-reconcile") {
+    if (!vaultExplicit) {
+      const resolved = await resolveEffectiveVault(process.cwd(), process.env);
+      if (resolved.source === "cwd") {
+        console.error("[oms] Refusing update: target-unverified; no verified vault target was resolved from the current directory. Pass --vault or configure OMS_VAULT instead.");
+        process.exitCode = 1;
+        return;
+      }
+      vault = resolved.vault;
+    }
   } else if (shouldResolveBridgeVault(command, vaultExplicit)) {
     vault = (await resolveEffectiveVault(process.cwd(), process.env)).vault;
   }
 
   if (command === "setup") {
-    await runSetup({ vault, yes, installClaude, suggestFields, dryRun });
+    let embeddingDescriptor: SetupEmbeddingDescriptor | null | undefined;
+    if (embeddingDescriptorPath !== undefined) {
+      embeddingDescriptor = JSON.parse(readFileSync(embeddingDescriptorPath, "utf8")) as SetupEmbeddingDescriptor;
+    } else if (embeddingNoDefault) {
+      embeddingDescriptor = null;
+    }
+    await runSetup({ vault, yes, installClaude, suggestFields, dryRun, embeddingDescriptor });
     if (!dryRun) await nonFatalGlobalWriteback(() =>
       registerGlobalVault({ vault: path.resolve(vault), homeDir: undefined, overwrite: true }),
     );

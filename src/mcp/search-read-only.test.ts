@@ -63,10 +63,9 @@ function advertisedSearchOperations(): { op: string; args: Record<string, unknow
   // listed here takes the bare `{ op }` form.
   const argsByOp: Record<string, Record<string, unknown>> = {
     "lazy-load": { notePath: "notes/alpha.md" },
-    "semantic-query": { query: "alpha" },
-    "get-document": { docId: "notes/alpha.md" },
-    "multi-get-documents": { docIds: ["notes/alpha.md"] },
-    axis: { axis: "concept" },
+    query: { query: "alpha" },
+    "get-document": { target: "notes/alpha.md" },
+    "multi-get-documents": { targets: ["notes/alpha.md"] },
     context: { query: "alpha" },
   };
 
@@ -200,7 +199,9 @@ describe("oms_search read-only guarantee", () => {
     }
 
     // Guard against a vacuous pass: the schema must still be the real one.
-    expect(schema).toContain("semantic-query");
+    expect(schema).toContain('"const":"query"');
+    expect(schema).not.toContain('"const":"semantic-query"');
+    expect(schema).not.toContain('"const":"axis"');
     expect(schema).toContain("get-document");
 
     // The capability moved rather than vanished, so doctor must still offer it.
@@ -216,7 +217,7 @@ describe("oms_search read-only guarantee", () => {
     const operations = advertisedSearchOperations();
     // Guard against a vacuous pass: if the schema stops advertising operations,
     // an empty loop would trivially leave the tree unchanged.
-    expect(operations.length).toBeGreaterThanOrEqual(10);
+    expect(operations.length).toBeGreaterThanOrEqual(9);
 
     const before = await snapshotTree(vault);
 
@@ -258,12 +259,22 @@ describe("oms_search read-only guarantee", () => {
       textPayload(
         await client.callTool({
           name: "oms_search",
-          arguments: { op: "semantic-query", query: "retrieval", limit: 5 },
+          arguments: { op: "query", query: "retrieval", axes: { folder: "notes" }, limit: 1 },
         }),
       ),
     );
 
     expect(payload["available"]).toBe(true);
+    expect(payload["totalCount"]).toBeGreaterThan(0);
+    expect(payload["facets"]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ axis: "folder", value: "notes" }),
+    ]));
+    expect(payload["cursor"] === null || typeof payload["cursor"] === "string").toBe(true);
+    expect(payload["receipt"]).toEqual(expect.objectContaining({
+      usedChannels: expect.any(Array),
+      approximated: expect.any(Boolean),
+      drift: expect.any(Boolean),
+    }));
     const hits = (payload["hits"] as { path?: string }[] | undefined) ?? [];
     expect(hits.length).toBeGreaterThan(0);
     expect(hits.some((hit) => hit.path === "notes/alpha.md")).toBe(true);
@@ -294,7 +305,7 @@ describe("oms_search read-only guarantee", () => {
     // and memoised its engine, not what it returned: the defect being guarded
     // is a read-only engine landing in a slot the repair then reuses.
     const served = await withClient(vault, (client) =>
-      client.callTool({ name: "oms_search", arguments: { op: "semantic-query", query: "alpha" } }),
+      client.callTool({ name: "oms_search", arguments: { op: "query", query: "alpha" } }),
     );
     expect(textPayload(served)["available"]).toBe(true);
 
@@ -311,7 +322,7 @@ describe("oms_search read-only guarantee", () => {
     expect([...tree.keys()].some((rel) => rel.includes("engine-store.sqlite"))).toBe(true);
 
     const hits = await withClient(vault, (client) =>
-      client.callTool({ name: "oms_search", arguments: { op: "semantic-query", query: "alpha" } }),
+      client.callTool({ name: "oms_search", arguments: { op: "query", query: "alpha" } }),
     );
     const hitPayload = textPayload(hits);
     expect(hitPayload["available"]).toBe(true);
@@ -342,7 +353,7 @@ describe("oms_search read-only guarantee", () => {
       return textPayload(
         await client.callTool({
           name: "oms_search",
-          arguments: { op: "semantic-query", query: "alpha" },
+          arguments: { op: "query", query: "alpha" },
         }),
       );
     });

@@ -34,6 +34,13 @@ oh-my-secondbrain은 아래 공개 작업들의 아이디어와 구현에 빚지
 
 - https://github.com/safishamsi/graphify  (후원: https://github.com/sponsors/safishamsi)
 
+## Obsidian 플러그인
+
+- [obsidian-linter](https://github.com/platers/obsidian-linter) — MIT, Victor Tao.
+- [metadata-menu](https://github.com/mdelobelle/metadatamenu)
+
+이 프로젝트의 convention contract에는 typed frontmatter fields, allowed values, 그리고 field-level metadata를 1급 계약으로 다루는 **개념만** 흡수했다. 서식화 및 lint 규칙은 의도적으로 obsidian-linter에 남겨두며, 여기서 재구현하지 않는다.
+
 ## Agent Skills 생태계
 
 - https://github.com/anthropics/skills
@@ -60,6 +67,7 @@ oh-my-secondbrain은 아래 공개 작업들의 아이디어와 구현에 빚지
 | Lazy-load + 5-minute idle unload guard (`src/kernel/engine/embed/provider.ts`): model/contexts not initialised until first `embed()` call; a `setTimeout` resets per call; no calls for 5 min → dispose pool; next `embed()` reloads lazily. The only permitted timer (plan.md:83, R2). | [qmd (tobi)](https://github.com/tobi/qmd) | MIT | **IDEA-ONLY — zero verbatim code** |
 | Hardware-adaptive parallel embed pool (`src/kernel/engine/embed/provider.ts`): `poolSize = min(4, cpuCount-1)`, round-robin context selection across the pool, `Promise.all` parallel context init, 2-stage batch distribution. | [qmd (tobi)](https://github.com/tobi/qmd) | MIT | **IDEA-ONLY — zero verbatim code** |
 | SHA-256 chunk-level incremental diff (`src/kernel/engine/embed/sync.ts`): compute SHA-256 of each chunk text; compare with stored SHA from `EngineStore.getShas()`; skip `embed()` call when SHA matches — only changed chunks are re-embedded. | [qmd (tobi)](https://github.com/tobi/qmd) | MIT | **IDEA-ONLY — zero verbatim code** |
+| Axis-aware `query` fold (same-axis OR / cross-axis AND), bounded cursor pagination, facet counts, and deterministic query receipts (R4 FM-9 / SU-1..SU-6). | Oh My Second Brain R4 surface contract | Internal | **SELF-AUTHORED — no external code** |
 
 > **⚠ License flag — gbrain**: The gbrain project was referenced for logic/architecture patterns only. The original repo URL and license are unconfirmed (`TODO(verify)`). No code was copied. Attribution will be updated once the license is confirmed.
 

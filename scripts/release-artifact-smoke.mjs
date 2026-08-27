@@ -211,8 +211,37 @@ async function mcpSmoke(packageRoot, vault) {
     };
     const queryCall = {
       name: "oms_search",
-      arguments: { op: "semantic-query", query: "agent retr", collection: "vault", limit: 1 },
+      arguments: { op: "query", query: "agent retr", collection: "vault", limit: 1 },
     };
+    // R4's public envelope keeps axis narrowing under the renamed `query` op;
+    // this is deliberately a model-free lexical call so every release runner
+    // exercises axes, paging, candidates, rerank selection, and receipt DTOs.
+    const axisQuery = await client.callTool({
+      name: "oms_search",
+      arguments: {
+        op: "query",
+        query: "agent retrieval",
+        axes: { folder: "Literature" },
+        limit: 1,
+        candidateLimit: 5,
+        rerank: false,
+        minScore: 0,
+        cursor: "0",
+        intent: "verify the R4 axis query envelope",
+      },
+    });
+    const axisPayload = JSON.parse(textOf(axisQuery) || "{}");
+    if (
+      axisQuery.isError ||
+      axisPayload.available !== true ||
+      axisPayload.totalCount !== 1 ||
+      axisPayload.hits?.[0]?.path !== "Literature/semantic-retrieval.md" ||
+      axisPayload.cursor !== null ||
+      axisPayload.intent !== "verify the R4 axis query envelope" ||
+      axisPayload.receipt?.usedChannels?.join(",") !== "lex"
+    ) {
+      fail("MCP R4 axis query did not return the full renamed query-op envelope");
+    }
     // Model-less, the refusal surfaces either as an isError tool envelope or as a
     // thrown protocol McpError, depending on how far the call gets before the
     // missing model/store stops it (e.g. an unsynced store dir throws on open).

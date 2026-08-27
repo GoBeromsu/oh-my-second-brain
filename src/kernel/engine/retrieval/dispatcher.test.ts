@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { dispatch, createCancelToken } from "./dispatcher.js";
-import type { DispatcherDeps } from "./dispatcher.js";
+import {
+  DEFAULT_DISPATCHER_POLICY,
+  DISPATCHER_POLICIES,
+  PREREGISTERED_ARM_POLICIES,
+  dispatch,
+  createCancelToken,
+} from "./dispatcher.js";
+import type { DispatcherDeps, DispatcherPolicy } from "./dispatcher.js";
 import type { EmbeddingProvider, GphQuery, ScoredHit, VectorStore } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -62,6 +68,17 @@ describe("dispatch — routing", () => {
     expect(store.queryVec).toHaveBeenCalled();
     expect(store.queryLex).not.toHaveBeenCalled();
     expect(results[0]!.docPath).toBe("vec-result.md");
+  });
+
+  it("rejects non-finite vectors before they reach the vector store", async () => {
+    const store = makeStore([], [VEC_HIT]);
+    const embed = makeEmbed(new Float32Array([0.1, Number.NaN, 0.3, 0.4]));
+    const deps: DispatcherDeps = { store, embed };
+
+    await expect(dispatch([{ type: "vec", query: "semantic query" }], deps)).rejects.toThrow(
+      /non-finite/i,
+    );
+    expect(store.queryVec).not.toHaveBeenCalled();
   });
 
   it("hyde sub-query calls hydeGenerator then embed then store.queryVec", async () => {
@@ -156,7 +173,7 @@ describe("dispatch — RRF fusion", () => {
     expect(results[0]!.perTypeScores).toEqual({ lex: 0.88 });
   });
 
-  it("provenance boost is applied and provenance field is set", async () => {
+  it("default policy applies the shipped additive provenance boost", async () => {
     const store = makeStore([{ docPath: "my-note.md", chunkOrdinal: 0, score: 0.5 }], []);
     const embed = makeEmbed();
     const provenanceMap = vi.fn().mockReturnValue("authored");
@@ -165,8 +182,7 @@ describe("dispatch — RRF fusion", () => {
     const results = await dispatch([{ type: "lex", query: "q" }], deps);
 
     expect(results[0]!.provenance).toBe("authored");
-    // base RRF score 1/61 + authored boost 0.02
-    expect(results[0]!.score).toBeCloseTo(1 / 61 + 0.02, 10);
+    expect(results[0]!.score).toBeCloseTo((1 / 61) + 0.02, 10);
   });
 
   it("results are sorted descending by final score", async () => {
@@ -185,6 +201,83 @@ describe("dispatch — RRF fusion", () => {
 
     expect(results[0]!.docPath).toBe("high.md");
     expect(results[1]!.docPath).toBe("low.md");
+  });
+
+  it("boost-per-list uses the provenance-weighted order for RRF rank", async () => {
+    const rawHigherScore: ScoredHit = {
+      docPath: "raw-higher.md",
+      chunkOrdinal: 0,
+      score: 0.81,
+    };
+    const authoredLowerScore: ScoredHit = {
+      docPath: "authored-lower.md",
+      chunkOrdinal: 0,
+      score: 0.8,
+    };
+    const store = makeStore([rawHigherScore, authoredLowerScore], []);
+    const embed = makeEmbed();
+    const provenanceMap = (docPath: string) =>
+      docPath === "authored-lower.md" ? "authored" as const : "external-raw" as const;
+    const deps: DispatcherDeps = {
+      store,
+      embed,
+      provenanceMap,
+      policy: "boost-per-list",
+    };
+
+    const results = await dispatch([{ type: "lex", query: "q" }], deps);
+
+    expect(results.map((result) => result.docPath)).toEqual([
+      "authored-lower.md",
+      "raw-higher.md",
+    ]);
+    expect(results[0]!.score).toBe(1 / 61);
+    expect(results[1]!.score).toBe(1 / 62);
+  });
+
+  it("selects all policies and keeps the three experiment arms preregistered", async () => {
+    const rawHigherScore: ScoredHit = {
+      docPath: "raw-higher.md",
+      chunkOrdinal: 0,
+      score: 0.81,
+    };
+    const authoredLowerScore: ScoredHit = {
+      docPath: "authored-lower.md",
+      chunkOrdinal: 0,
+      score: 0.8,
+    };
+    const provenanceMap = (docPath: string) =>
+      docPath === "authored-lower.md" ? "authored" as const : "external-raw" as const;
+    const policies: readonly DispatcherPolicy[] = DISPATCHER_POLICIES;
+
+    expect(DEFAULT_DISPATCHER_POLICY).toBe("boost-additive");
+    expect(PREREGISTERED_ARM_POLICIES).toEqual([
+      "boost-k-scale",
+      "boost-per-list",
+      "boost-zero",
+    ]);
+
+    const rankings = await Promise.all(policies.map(async (policy) => {
+      const results = await dispatch(
+        [{ type: "lex", query: "q" }],
+        { store: makeStore([rawHigherScore, authoredLowerScore]), embed: makeEmbed(), provenanceMap, policy },
+      );
+      return results.map(({ docPath, score }) => [docPath, score] as const);
+    }));
+
+    expect(new Set(rankings.map((ranking) => JSON.stringify(ranking))).size).toBe(4);
+  });
+
+  it("rejects an unknown policy at runtime", async () => {
+    const deps: DispatcherDeps = {
+      store: makeStore([LEX_HIT]),
+      embed: makeEmbed(),
+      policy: "unknown" as DispatcherPolicy,
+    };
+
+    await expect(dispatch([{ type: "lex", query: "q" }], deps)).rejects.toThrow(
+      "Unknown dispatcher policy: unknown",
+    );
   });
 });
 

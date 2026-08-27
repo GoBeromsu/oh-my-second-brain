@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildGraph, loadCachedGraph, saveCachedGraph } from "./builder.js";
+import { buildGraph, buildNodeIndex, loadCachedGraph, saveCachedGraph } from "./builder.js";
 import type { GraphEdge } from "../types.js";
 
 let tmpVault: string;
@@ -203,6 +203,16 @@ describe("Tier 4 – type-affinity edges", () => {
 // ---------------------------------------------------------------------------
 
 describe("cache helpers", () => {
+  it("preserves numeric and boolean frontmatter values in the node snapshot", async () => {
+    await writeVaultFile(
+      "notes/typed.md",
+      "---\nrating: 5\ndone: false\n---\n# Typed\n",
+    );
+    const [node] = await buildNodeIndex({ vaultPath: tmpVault });
+    expect(node?.axes.rating).toEqual([5]);
+    expect(node?.axes.done).toEqual([false]);
+  });
+
   it("saveCachedGraph and loadCachedGraph round-trip GraphEdge[]", async () => {
     const cachePath = path.join(tmpVault, ".oms", "cache", "engine", "graph.json");
     const original: GraphEdge[] = [

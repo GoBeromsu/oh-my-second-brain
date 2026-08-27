@@ -8,12 +8,10 @@ import { harnessSurfaceRegistry } from "../../src/kernel/harness/surface-registr
 import { omsMcpTools } from "../../src/mcp/server.js";
 
 /**
- * Surface-set parity gate, Phase A.
+ * Surface-set parity gate.
  *
- * Phase A proves the *rules* reject concrete bad inputs, using fixtures. The
- * live target set (6 skills / 5 tools) is switched on in the canonical-skill
- * cutover PR; asserting it here would fail on `main` from the moment this gate
- * lands, because the registry still declares the pre-migration surface.
+ * The live target set (6 skills / 5 tools) is asserted directly. The fixture
+ * cases below prove that the rules also fail closed when a surface drifts.
  *
  * The rule set is deliberately NOT "all three lists are equal". The three
  * surfaces are related but distinct:
@@ -161,7 +159,7 @@ const TARGET = { skills: 6, tools: 5 } as const;
 const CLEAN: SurfaceSets = {
   skills: ["write", "search", "link", "distill", "status", "doctor"],
   skillsWithTool: ["write", "search", "link", "status", "doctor"],
-  // Within Phase A, a tool is identified by its declaring skill; the `oms_`
+  // In this fixture, a tool is identified by its declaring skill; the `oms_`
   // naming convention is verified separately by the registry parity suite.
   mcpTools: ["write", "search", "link", "status", "doctor"],
   registryMcpTools: [
@@ -183,7 +181,7 @@ const CLEAN: SurfaceSets = {
   dispatcherCliCommands: ["mcp", "setup", "install", "update", "audit", "lint", "hook"],
 };
 
-describe("surface-set parity gate (phase A rules)", () => {
+describe("surface-set parity gate (rules)", () => {
   it("passes on the target surface", () => {
     expect(checkSurfaceSets(CLEAN, TARGET)).toEqual([]);
   });
@@ -297,6 +295,9 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     expect(Object.keys(parsed.frontmatter).every((key) => allowedSkillFrontmatterKeys.has(key))).toBe(true);
     return { skill, frontmatter: parsed.frontmatter };
   });
+  // Inspect authored files, not merely directory names, so an empty or
+  // stubbed skill tree cannot satisfy the parity gate.
+  expect(parsedSkills.length, "authored skill file scan must be nonzero").toBeGreaterThan(0);
 
   expect(parsedSkills).toHaveLength(TARGET.skills);
   const skillsWithTool = parsedSkills.filter(({ frontmatter }) => frontmatter["mcp_tool"] !== undefined);
@@ -314,6 +315,70 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
   const mcpTools = harnessSurfaceRegistry.mcpTools.map((tool) => tool.name).sort();
   expect(mcpTools, "MCP tool registry must not be empty").not.toEqual([]);
   expect(mcpTools).toEqual(declaredMcpTools);
+  const searchTool = omsMcpTools.find((tool) => tool.name === "oms_search");
+  const searchOperations = (
+    (searchTool?.inputSchema as {
+      readonly oneOf?: readonly {
+        readonly properties?: Record<string, { readonly const?: string }>;
+      }[];
+    }).oneOf ?? []
+  )
+    .map((branch) => branch.properties?.["op"]?.const)
+    .filter((op): op is string => typeof op === "string");
+  expect(searchOperations.sort()).toEqual([
+    "collections",
+    "concepts",
+    "context",
+    "contexts",
+    "get-document",
+    "lazy-load",
+    "multi-get-documents",
+    "query",
+    "status",
+  ]);
+  const queryBranch = (
+    (searchTool?.inputSchema as {
+      readonly oneOf?: readonly {
+        readonly properties?: Record<string, unknown>;
+      }[];
+    }).oneOf ?? []
+  ).find((branch) => (
+    (branch.properties?.["op"] as { readonly const?: string } | undefined)?.const === "query"
+  ));
+  const queryProperties = queryBranch?.properties;
+  expect(queryProperties).toMatchObject({
+    axes: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        folder: expect.any(Object),
+        field: expect.any(Object),
+        link: expect.any(Object),
+      },
+    },
+    limit: { type: "number", minimum: 0, default: 10 },
+    candidateLimit: { type: "number", minimum: 1 },
+    rerank: { type: "boolean", default: false },
+    minScore: { type: "number", default: 0 },
+    cursor: { type: "string" },
+  });
+  const doctorTool = omsMcpTools.find((tool) => tool.name === "oms_doctor");
+  const doctorOperations = (
+    (doctorTool?.inputSchema as {
+      readonly oneOf?: readonly {
+        readonly properties?: Record<string, { readonly const?: string }>;
+      }[];
+    }).oneOf ?? []
+  )
+    .map((branch) => branch.properties?.["op"]?.const)
+    .filter((op): op is string => typeof op === "string");
+  expect(doctorOperations.sort()).toEqual([
+    "audit",
+    "build-graph",
+    "cleanup",
+    "sync-embeddings",
+    "validate",
+  ]);
   const registeredMcpTools = omsMcpTools.map((tool) => ({
     name: tool.name,
     posture: tool.annotations?.readOnlyHint === true ? "read" : "write" as const,

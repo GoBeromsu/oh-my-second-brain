@@ -24,20 +24,48 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 }
 
 describe("Oh My Second Brain MCP stdio server", () => {
-  it("advertises semantic-query defaults that match the SearchBackend contract", () => {
+  it("advertises query defaults that match the SearchBackend contract", () => {
     const search = omsMcpTools.find((tool) => tool.name === "oms_search");
     const schema = search?.inputSchema as {
       readonly oneOf?: readonly {
         readonly properties?: Record<string, { readonly const?: string; readonly default?: unknown }>;
       }[];
     };
-    const semanticQuery = schema.oneOf?.find(
-      (operation) => operation.properties?.["op"]?.const === "semantic-query",
+    const query = schema.oneOf?.find(
+      (operation) => operation.properties?.["op"]?.const === "query",
     );
 
-    expect(semanticQuery?.properties?.["limit"]?.default).toBe(10);
-    expect(semanticQuery?.properties?.["minScore"]?.default).toBe(0);
-    expect(semanticQuery?.properties?.["rerank"]?.default).toBe(false);
+    expect(query?.properties?.["limit"]?.default).toBe(10);
+    expect(query?.properties?.["minScore"]?.default).toBe(0);
+    expect(query?.properties?.["rerank"]?.default).toBe(false);
+    const operationNames = schema.oneOf
+      ?.map((operation) => operation.properties?.["op"]?.const)
+      .filter((operation): operation is string => typeof operation === "string");
+    expect(operationNames).toEqual(expect.arrayContaining(["query", "collections", "contexts", "status"]));
+    for (const retired of ["axis", "semantic-query", "semantic-collections", "semantic-contexts", "semantic-status"]) {
+      expect(operationNames).not.toContain(retired);
+    }
+  });
+
+  it("fails loudly for retired semantic-query and axis operation names", async () => {
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", fixtureVault],
+      cwd: repoRoot,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-query-surface-test", version: "0.0.0" });
+    try {
+      await client.connect(transport);
+      for (const op of ["semantic-query", "axis"]) {
+        const result = await client.callTool({ name: "oms_search", arguments: { op, query: "architecture" } });
+        expect(result.isError, op).toBe(true);
+        const message = result.content[0]?.type === "text" ? result.content[0].text : "";
+        expect(message).toContain(`Unknown operation "${op}"`);
+      }
+    } finally {
+      await client.close();
+    }
   });
 
   it("keeps every tool-declaring skill's MCP arguments valid for its advertised schema", async () => {
@@ -58,7 +86,56 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const tool = toolByName.get(frontmatter["mcp_tool"] as string);
       expect(tool, `${skill} declares an advertised MCP tool`).toBeDefined();
       expect(validator.getValidator(tool!.inputSchema)(frontmatter["mcp_args"]).valid, skill).toBe(true);
+
+      const schema = tool!.inputSchema as {
+        readonly oneOf?: readonly {
+          readonly properties?: Record<string, { readonly const?: unknown }>;
+        }[];
+      };
+      const operation = (frontmatter["mcp_args"] as Record<string, unknown>)["op"];
+      const declaredOperations = (schema.oneOf ?? [])
+        .map((branch) => branch.properties?.["op"]?.const)
+        .filter((value): value is string => typeof value === "string");
+      if (schema.oneOf === undefined) {
+        expect(operation, `${skill} must not declare an op for a direct tool`).toBeUndefined();
+      } else {
+        expect(typeof operation, `${skill}.mcp_args.op must be a string`).toBe("string");
+        expect(declaredOperations, `${skill}.mcp_args.op must match its tool operation`).toContain(operation);
+      }
     }
+  });
+
+  it("advertises containsAll and between field predicates with strict tuple shapes", () => {
+    const validator = new AjvJsonSchemaValidator();
+    const search = omsMcpTools.find((tool) => tool.name === "oms_search");
+    const schema = search?.inputSchema;
+    const validate = validator.getValidator(schema!);
+
+    expect(validate({
+      op: "query",
+      query: "typed axes",
+      axes: {
+        field: {
+          tags: { containsAll: ["one", "two"] },
+          score: { between: [1, 10] },
+        },
+      },
+    }).valid).toBe(true);
+    expect(validate({
+      op: "query",
+      query: "typed axes",
+      axes: { field: { tags: { containsAll: "one" } } },
+    }).valid).toBe(false);
+    expect(validate({
+      op: "query",
+      query: "typed axes",
+      axes: { field: { score: { between: [1] } } },
+    }).valid).toBe(false);
+    expect(validate({
+      op: "query",
+      query: "typed axes",
+      axes: { field: { score: { between: [1, 10, 20] } } },
+    }).valid).toBe(false);
   });
 
   it("advertises the complete write payload and zero-argument status contract", () => {
@@ -100,10 +177,10 @@ describe("Oh My Second Brain MCP stdio server", () => {
   });
 
   it.each([
-    ["typed vec searches", { op: "semantic-query", searches: [{ type: "vec", query: "telescope" }] }],
-    ["vec field", { op: "semantic-query", vec: "telescope" }],
-    ["hyde field", { op: "semantic-query", hyde: "hypothetical telescope answer" }],
-    ["vsearch mode", { op: "semantic-query", query: "telescope", mode: "vsearch" }],
+    ["typed vec searches", { op: "query", searches: [{ type: "vec", query: "telescope" }] }],
+    ["vec field", { op: "query", vec: "telescope" }],
+    ["hyde field", { op: "query", hyde: "hypothetical telescope answer" }],
+    ["vsearch mode", { op: "query", query: "telescope", mode: "vsearch" }],
   ])("fails loudly for explicit vector retrieval via %s without embedding configuration", async (_strategy, arguments_) => {
     const env = { ...process.env };
     delete env.OMS_EMBEDDING_PROVIDER;
@@ -145,7 +222,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const result = await client.callTool({
         name: "oms_search",
         arguments: {
-          op: "semantic-query",
+          op: "query",
           searches: [{ type: "lex", query: "architecture" }],
           vec: "explicit vector",
         },
@@ -221,7 +298,8 @@ describe("Oh My Second Brain MCP stdio server", () => {
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticStorage");
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semanticModelPath");
       expect(retrieveTool?.annotations?.readOnlyHint).toBe(true);
-      expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("semantic-query");
+      expect(JSON.stringify(retrieveTool?.inputSchema)).toContain('"query"');
+      expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("semantic-query");
       expect(JSON.stringify(retrieveTool?.inputSchema)).toContain("get-document");
       expect(JSON.stringify(retrieveTool?.inputSchema)).not.toContain("modelPath");
       const doctorTool = tools.tools.find((tool) => tool.name === "oms_doctor");
@@ -304,9 +382,11 @@ Index note.
     await writeFile(
       path.join(tmpVault, "references", "Malformed.md"),
       `---
-title: [broken
+title: valid
+tags:
+  - graph
 ---
-Malformed frontmatter must not block retrieve.
+Valid frontmatter remains available to retrieve.
 `,
       "utf-8",
     );
@@ -800,7 +880,7 @@ Malformed frontmatter must not block retrieve.
     try {
       await client.connect(transport);
 
-      for (const op of ["build-graph", "semantic-cleanup", "sync-embeddings"]) {
+      for (const op of ["build-graph", "cleanup", "sync-embeddings"]) {
         const repair = textPayload(await client.callTool({ name: "oms_doctor", arguments: { op } }));
         expect(repair).toMatchObject({
           status: "rejected",
@@ -947,7 +1027,7 @@ Malformed frontmatter must not block retrieve.
       );
       await rm(path.join(tmpVault, "removed.md"));
       const repair = textPayload(
-        await client.callTool({ name: "oms_doctor", arguments: { op: "semantic-cleanup" } }),
+        await client.callTool({ name: "oms_doctor", arguments: { op: "cleanup" } }),
       );
       const receipt = repair.receipt as Record<string, unknown>;
       const postcondition = receipt.postcondition as Record<string, unknown>;

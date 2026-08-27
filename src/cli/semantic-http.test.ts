@@ -75,6 +75,18 @@ describe("semantic HTTP transport", () => {
     expect(Array.isArray(hits)).toBe(true);
     expect(hits).toEqual([expect.objectContaining({ path: "references/Agent Retrieval.md" })]);
 
+    // The ordinary query mode is hybrid when a model is available. A
+    // model-less HTTP server must still serve its lexical half rather than
+    // failing because the deferred vector provider is unavailable.
+    const modelLessQuery = await jsonFetch(`${httpServer.url}/query`, {
+      query: "agent retrieval",
+      limit: 1,
+    });
+    expect(modelLessQuery).toEqual(expect.objectContaining({ available: true }));
+    expect(modelLessQuery["hits"]).toEqual([
+      expect.objectContaining({ path: "references/Agent Retrieval.md" }),
+    ]);
+
     const search = await jsonFetch(`${httpServer.url}/search`, {
       lex: "agent retrieval",
       collection: "obsidian",

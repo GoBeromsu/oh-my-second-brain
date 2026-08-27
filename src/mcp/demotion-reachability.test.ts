@@ -60,7 +60,6 @@ describe("MCP detail-tool demotion", () => {
       expect(payload(await call("oms_doctor", { op: "validate", notePath: "references/clean-architecture.md" })).valid).toBe(true);
       expect(payload(await call("oms_doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
       expect(payload(await call("oms_search", { op: "concepts" })).concepts).toBeInstanceOf(Array);
-      expect(payload(await call("oms_search", { op: "axis", folder: "references" })).hits).toBeInstanceOf(Array);
       expect(payload(await call("oms_search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
       expect(payload(await call("oms_search", { op: "lazy-load", notePath: "references/clean-architecture.md" })).body).toBeTypeOf("string");
       expect(payload(await call("oms_search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);
@@ -69,14 +68,14 @@ describe("MCP detail-tool demotion", () => {
       expect(suggested.baseContentHash).toBeTypeOf("string");
       const apply = await call("oms_link", { op: "apply", notePath: "references/clean-architecture.md", baseContentHash: "0".repeat(64), candidateIds: [] });
       expect(apply.content[0]?.type).toBe("text");
-      for (const op of ["semantic-query", "semantic-collections", "semantic-contexts", "semantic-status"]) {
-        const result = await call("oms_search", { op, ...(op === "semantic-query" ? { query: "architecture" } : {}) });
+      for (const op of ["query", "collections", "contexts", "status"]) {
+        const result = await call("oms_search", { op, ...(op === "query" ? { query: "architecture" } : {}) });
         expect(result.content[0]?.type).toBe("text");
         expect(result.content[0]?.type === "text" ? result.content[0].text : "").toMatch(
           /OMS_EMBEDDING_PROVIDER|available|collections|contexts/,
         );
       }
-      for (const op of ["semantic-cleanup", "sync-embeddings"]) {
+      for (const op of ["cleanup", "sync-embeddings"]) {
         const result = await call("oms_doctor", { op });
         expect(result.content[0]?.type).toBe("text");
         expect(result.content[0]?.type === "text" ? result.content[0].text : "").toMatch(

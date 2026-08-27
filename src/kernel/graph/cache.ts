@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  lstat,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { parseNote } from "../conventions/frontmatter.js";
 import { validateFrontmatter } from "../conventions/validate.js";
@@ -95,29 +105,123 @@ export interface RetrieveByAxisOptions {
 const CACHE_VERSION = 1;
 
 export function graphCachePath(vault: string): string {
-  return path.join(vault, ".oms", "cache", "graph.json");
+  return path.resolve(vault, ".oms", "cache", "graph.json");
 }
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function* walkMarkdown(dir: string, base: string): AsyncGenerator<string> {
+function ensureInsideRoot(root: string, candidate: string, label: string): void {
+  const relative = path.relative(root, candidate);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} escapes the configured vault root.`);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isGraphCacheShape(value: unknown): value is OMSGraphCache {
+  if (!isRecord(value)) return false;
+  if (
+    value.version !== CACHE_VERSION ||
+    typeof value.generatedAt !== "string" ||
+    !Array.isArray(value.sourceOfTruth) ||
+    !value.sourceOfTruth.every((item) => typeof item === "string") ||
+    !Array.isArray(value.notes) ||
+    !Array.isArray(value.edges) ||
+    !Array.isArray(value.search) ||
+    !isRecord(value.signatures)
+  ) {
+    return false;
+  }
+  const signatures = value.signatures;
+  if (
+    typeof signatures.taxonomyHash !== "string" ||
+    !isRecord(signatures.conceptHashes) ||
+    !isRecord(signatures.notes)
+  ) {
+    return false;
+  }
+  for (const note of value.notes) {
+    if (
+      !isRecord(note) ||
+      typeof note.path !== "string" ||
+      typeof note.folder !== "string" ||
+      !(typeof note.concept === "string" || note.concept === null) ||
+      !isRecord(note.frontmatter) ||
+      !isRecord(note.axes) ||
+      !Array.isArray(note.wikilinks) ||
+      !note.wikilinks.every((item) => typeof item === "string") ||
+      note.bodyLoaded !== false ||
+      !isRecord(note.validation) ||
+      typeof note.validation.valid !== "boolean" ||
+      typeof note.validation.violations !== "number"
+    ) {
+      return false;
+    }
+  }
+  for (const edge of value.edges) {
+    if (
+      !isRecord(edge) ||
+      typeof edge.type !== "string" ||
+      typeof edge.from !== "string" ||
+      typeof edge.to !== "string"
+    ) {
+      return false;
+    }
+  }
+  for (const document of value.search) {
+    if (
+      !isRecord(document) ||
+      typeof document.path !== "string" ||
+      !Array.isArray(document.terms) ||
+      !document.terms.every((item) => typeof item === "string") ||
+      typeof document.bodyPreview !== "string"
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function* walkMarkdown(
+  dir: string,
+  base: string,
+  rootRealPath?: string,
+  visitedDirectories: Set<string> = new Set(),
+): AsyncGenerator<string> {
+  const root = rootRealPath ?? await realpath(base);
+  const realDir = await realpath(dir);
+  ensureInsideRoot(root, realDir, `Vault directory "${dir}"`);
+  if (visitedDirectories.has(realDir)) return;
+  visitedDirectories.add(realDir);
+
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
+  } catch (error) {
+    throw new Error(
+      `Unable to scan vault directory "${dir}": ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 
   for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    // Resolve every entry, including skipped dot-directories, so an escape
+    // cannot hide behind the scanner's exclusion policy.
+    const realEntry = await realpath(full);
+    ensureInsideRoot(root, realEntry, `Vault entry "${full}"`);
     if (entry.name === ".oms" || entry.name === "node_modules" || entry.name.startsWith(".")) {
       continue;
     }
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      yield* walkMarkdown(full, base);
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+    const entryStat = await stat(full);
+    if (entryStat.isDirectory()) {
+      yield* walkMarkdown(full, base, root, visitedDirectories);
+    } else if (entryStat.isFile() && entry.name.toLowerCase().endsWith(".md")) {
       yield path.relative(base, full).replace(/\\/g, "/");
     }
   }
@@ -183,12 +287,22 @@ function taxonomyHash(ontology: Ontology): string {
   return hash(jsonStable(ontology.taxonomy));
 }
 
+function parseGraphFrontmatter(raw: string, notePath: string): ReturnType<typeof parseNote> {
+  const parsed = parseNote(raw);
+  if (parsed.diagnostics.length > 0) {
+    throw new Error(
+      `${notePath}: malformed frontmatter (${parsed.diagnostics.map((item) => item.message).join("; ")})`,
+    );
+  }
+  return parsed;
+}
+
 async function buildSourceSignatures(vault: string, ontology: Ontology): Promise<SourceSignatures> {
   const notes: Record<string, NoteSignature> = {};
   for await (const notePath of walkMarkdown(vault, vault)) {
     const fullPath = path.join(vault, notePath);
     const [raw, fileStat] = await Promise.all([readFile(fullPath, "utf-8"), stat(fullPath)]);
-    const parsed = parseNote(raw);
+    const parsed = parseGraphFrontmatter(raw, notePath);
     const wikilinks = extractWikilinks(parsed.body);
     notes[notePath] = {
       mtimeMs: fileStat.mtimeMs,
@@ -216,7 +330,7 @@ function buildNoteGraph(notePath: string, raw: string, ontology: Ontology): {
   edges: GraphEdge[];
   search: SearchDocument;
 } {
-  const parsed = parseNote(raw);
+  const parsed = parseGraphFrontmatter(raw, notePath);
   const folder = firstFolder(notePath);
   const concept = resolveConcept(ontology, notePath);
   const axes: Record<string, string[]> = {};
@@ -309,21 +423,73 @@ export async function buildGraphCache(opts: {
 
   if (opts.write) {
     const outPath = graphCachePath(vault);
-    await mkdir(path.dirname(outPath), { recursive: true });
-    await writeFile(outPath, `${JSON.stringify(cache, null, 2)}\n`, "utf-8");
+    const cacheDirectory = path.dirname(outPath);
+    await mkdir(cacheDirectory, { recursive: true });
+    const rootRealPath = await realpath(vault);
+    const cacheDirectoryRealPath = await realpath(cacheDirectory);
+    ensureInsideRoot(rootRealPath, cacheDirectoryRealPath, "Graph cache directory");
+    const temporaryPath = path.join(
+      cacheDirectory,
+      `.${path.basename(outPath)}.${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`,
+    );
+    try {
+      await writeFile(temporaryPath, `${JSON.stringify(cache, null, 2)}\n`, {
+        encoding: "utf-8",
+        flag: "wx",
+      });
+      await rename(temporaryPath, outPath);
+    } finally {
+      try {
+        await unlink(temporaryPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
   }
 
   return cache;
 }
 
 export async function readGraphCache(vault: string): Promise<OMSGraphCache | null> {
+  const root = path.resolve(vault);
+  const rootRealPath = await realpath(root);
+  const cachePath = graphCachePath(root);
+  let cacheDirectoryRealPath: string;
   try {
-    const raw = await readFile(graphCachePath(vault), "utf-8");
-    const parsed = JSON.parse(raw) as OMSGraphCache;
-    return parsed.version === CACHE_VERSION ? parsed : null;
-  } catch {
-    return null;
+    cacheDirectoryRealPath = await realpath(path.dirname(cachePath));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
+  ensureInsideRoot(rootRealPath, cacheDirectoryRealPath, "Graph cache directory");
+  let cacheRealPath: string;
+  try {
+    cacheRealPath = await realpath(cachePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        await lstat(cachePath);
+      } catch (missingError) {
+        if ((missingError as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw missingError;
+      }
+      throw new Error(`Graph cache "${cachePath}" is a broken symbolic link.`, { cause: error });
+    }
+    throw error;
+  }
+  ensureInsideRoot(rootRealPath, cacheRealPath, "Graph cache");
+
+  const raw = await readFile(cachePath, "utf-8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(`Graph cache "${cachePath}" is not valid JSON.`, { cause: error });
+  }
+  if (!isGraphCacheShape(parsed)) {
+    throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
+  }
+  return parsed;
 }
 
 function compareSignatures(previous: SourceSignatures, current: SourceSignatures): GraphStaleness {
@@ -391,6 +557,9 @@ export async function graphCacheStatus(vault: string, ontology: Ontology): Promi
   const cache = await readGraphCache(vault);
   const cachePath = graphCachePath(vault);
   if (!cache) {
+    // Even without a persisted cache, validate source notes so malformed YAML
+    // cannot be silently reported as an ordinary cache miss.
+    await buildSourceSignatures(vault, ontology);
     return {
       cachePath,
       exists: false,
@@ -421,8 +590,12 @@ export async function graphCacheStatus(vault: string, ontology: Ontology): Promi
 }
 
 export async function lazyLoadNoteBody(vault: string, notePath: string): Promise<{ path: string; body: string }> {
-  const resolved = safeVaultNotePath(vault, notePath);
-  const relative = path.relative(vault, resolved);
+  const root = path.resolve(vault);
+  const rootRealPath = await realpath(root);
+  const resolved = safeVaultNotePath(root, notePath);
+  const realResolved = await realpath(resolved);
+  ensureInsideRoot(rootRealPath, realResolved, `Vault note "${notePath}"`);
+  const relative = path.relative(root, resolved);
   const raw = await readFile(resolved, "utf-8");
   return { path: relative.replace(/\\/g, "/"), body: parseNote(raw).body };
 }

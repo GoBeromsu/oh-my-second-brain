@@ -1,6 +1,7 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   createGGUFEmbeddingProvider,
+  createUpstageProvider,
   requireRealEmbeddingProvider,
   GGUF_EMBEDDING_DIMENSIONS,
 } from "./provider.js";
@@ -58,6 +59,47 @@ describe("createHashProjectionProvider", () => {
   it("dispose resolves without error", async () => {
     const p = createHashProjectionProvider(64);
     await expect(p.dispose()).resolves.toBeUndefined();
+  });
+});
+
+describe("embedding provider runtime guards", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("honors query/passage prefixes for the Upstage provider", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ embedding: [3, 4] }] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createUpstageProvider("test-key", "test-model", 2, {
+      prefixScheme: "query=Q:,passage=P:",
+    }) as ReturnType<typeof createUpstageProvider> & {
+      readonly embedQuery: (text: string) => Promise<Float32Array>;
+    };
+
+    await provider.embed("document");
+    await provider.embedQuery("question");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://api.upstage.ai/v1/embeddings",
+      expect.objectContaining({ body: JSON.stringify({ input: "P:document", model: "test-model" }) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://api.upstage.ai/v1/embeddings",
+      expect.objectContaining({ body: JSON.stringify({ input: "Q:question", model: "test-model" }) }),
+    );
+  });
+
+  it("rejects a non-finite model vector instead of coercing it to zero", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ embedding: [1, Number.NaN] }] }),
+    }));
+    const provider = createUpstageProvider("test-key", "test-model", 2);
+    await expect(provider.embed("text")).rejects.toThrow(/non-finite/i);
   });
 });
 

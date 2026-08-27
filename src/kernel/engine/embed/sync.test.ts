@@ -74,6 +74,41 @@ describe("syncEngineStore — embed=false (lex-only)", () => {
       store.close();
     }
   });
+
+  it("indexes only the explicit file slice", async () => {
+    writeDoc("notes/alpha.md", "# Alpha\nretrieval augmented generation");
+    writeDoc("notes/beta.md", "# Beta\nunrelated database migration");
+
+    const result = await syncEngineStore({
+      vault,
+      dbPath,
+      files: ["notes/alpha.md"],
+      embed: false,
+    });
+
+    expect(result.available).toBe(true);
+    expect(result.scanned).toBe(1);
+    const store = openEngineStoreCore(dbPath);
+    try {
+      expect(store.listDocPaths()).toEqual(["notes/alpha.md"]);
+      expect(store.queryLex("retrieval augmented", 5).map((hit) => hit.docPath))
+        .toEqual(["notes/alpha.md"]);
+      expect(store.queryLex("database migration", 5)).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("rejects explicit files that escape the vault", async () => {
+    const result = await syncEngineStore({
+      vault,
+      dbPath,
+      files: ["../outside.md"],
+      embed: false,
+    });
+    expect(result.available).toBe(false);
+    expect(result.reason).toMatch(/inside the vault|markdown path/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -127,7 +162,15 @@ describe("syncEngineStore — fingerprint mismatch policy", () => {
     const seeded = openEngineStore(dbPath, 768);
     try {
       seeded.writeEmbeddingIdentity(
-        makeEmbeddingIdentity({ provider: "gguf", model, dimensions: 768 }),
+        makeEmbeddingIdentity({
+          provider: "gguf",
+          model,
+          dimensions: 768,
+          contextLength: 2048,
+          mrlDim: 768,
+          normalization: "l2",
+          prefixScheme: "none",
+        }),
       );
     } finally {
       seeded.close();
@@ -144,6 +187,10 @@ describe("syncEngineStore — fingerprint mismatch policy", () => {
       embed: true,
       embeddingProvider: "gguf",
       embeddingModel: "new-model",
+      embeddingContextLength: 2048,
+      embeddingMrlDim: 768,
+      embeddingNormalization: "l2",
+      embeddingPrefixScheme: "none",
     });
 
     expect(result.available).toBe(false);
@@ -162,6 +209,10 @@ describe("syncEngineStore — fingerprint mismatch policy", () => {
       force: true,
       embeddingProvider: "gguf",
       embeddingModel: "new-model",
+      embeddingContextLength: 2048,
+      embeddingMrlDim: 768,
+      embeddingNormalization: "l2",
+      embeddingPrefixScheme: "none",
     });
     expect(result.available).toBe(true);
 

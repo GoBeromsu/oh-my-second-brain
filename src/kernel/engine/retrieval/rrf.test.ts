@@ -15,6 +15,12 @@ describe("fuseRRF", () => {
     expect(fuseRRF([[], []])).toEqual([]);
   });
 
+  it("rejects non-finite smoothing constants and hit scores", () => {
+    expect(() => fuseRRF([hit("a.md", 0, 1)], Number.NaN)).toThrow(/finite/i);
+    expect(() => fuseRRF([hit("a.md", 0, 1)], Number.POSITIVE_INFINITY)).toThrow(/finite/i);
+    expect(() => fuseRRF([[hit("a.md", 0, Number.NaN)]])).toThrow(/finite/i);
+  });
+
   it("single list: scores equal 1/(k+rank) with k=60", () => {
     const list = [hit("a.md", 0, 10), hit("b.md", 0, 5), hit("c.md", 0, 1)];
     const result = fuseRRF([list]);
@@ -26,6 +32,28 @@ describe("fuseRRF", () => {
     expect(result[1]!.score).toBe(1 / 62);
     expect(result[2]!.docPath).toBe("c.md");
     expect(result[2]!.score).toBe(1 / 63);
+  });
+
+  it("preserves an explicitly supplied list order", () => {
+    const list = [hit("policy-first.md", 0, 1), hit("raw-score-first.md", 0, 2)];
+    const result = fuseRRF([list], 60, { preserveInputOrder: true });
+
+    expect(result.map((item) => item.docPath)).toEqual([
+      "policy-first.md",
+      "raw-score-first.md",
+    ]);
+    expect(result[0]!.score).toBe(1 / 61);
+    expect(result[1]!.score).toBe(1 / 62);
+  });
+
+  it("sorts an unsorted list by raw score by default", () => {
+    const list = [hit("raw-score-second.md", 0, 1), hit("raw-score-first.md", 0, 2)];
+    const result = fuseRRF([list]);
+
+    expect(result.map((item) => item.docPath)).toEqual([
+      "raw-score-first.md",
+      "raw-score-second.md",
+    ]);
   });
 
   it("two lists: exact RRF fusion with hand-computed values (k=60)", () => {

@@ -29,6 +29,8 @@ export interface ParsedCliArgs {
   readonly maxPerConcept: number | undefined;
   readonly folders: readonly string[];
   readonly conventionNote: boolean;
+  readonly embeddingDescriptorPath: string | undefined;
+  readonly embeddingNoDefault: boolean;
   readonly unknownFlags: readonly string[];
   readonly error: CliArgumentError | undefined;
 }
@@ -57,6 +59,8 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   let maxPerConcept: number | undefined;
   const folders: string[] = [];
   let conventionNote = true;
+  let embeddingDescriptorPath: string | undefined;
+  let embeddingNoDefault = false;
   const unknownFlags: string[] = [];
 
   for (let i = 1; i < argv.length; i++) {
@@ -113,6 +117,11 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       i++;
     } else if (arg === "--no-convention-note") {
       conventionNote = false;
+    } else if (arg === "--embedding-descriptor" && next) {
+      embeddingDescriptorPath = path.resolve(cwd, next);
+      i++;
+    } else if (arg === "--embedding-no-default") {
+      embeddingNoDefault = true;
     } else if (arg !== undefined) {
       unknownFlags.push(arg);
     }
@@ -137,6 +146,8 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     maxPerConcept,
     folders,
     conventionNote,
+    embeddingDescriptorPath,
+    embeddingNoDefault,
     unknownFlags,
     error: undefined,
   };
@@ -161,6 +172,8 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       maxPerConcept,
       folders,
       conventionNote,
+      embeddingDescriptorPath,
+      embeddingNoDefault,
       unknownFlags,
       error: new CliArgumentError(message),
     };

@@ -22,6 +22,34 @@ import type {
 } from "../types.js";
 import { fuseRRF } from "./rrf.js";
 
+type QueryEmbeddingProvider = EmbeddingProvider & {
+  readonly embedQuery?: (text: string) => Promise<Float32Array>;
+};
+
+function assertFiniteVector(vector: unknown, expectedDimensions: number): asserts vector is Float32Array {
+  if (!(vector instanceof Float32Array)) {
+    throw new Error("Embedding provider returned a vector that is not a Float32Array.");
+  }
+  if (vector.length !== expectedDimensions) {
+    throw new Error(
+      `Embedding provider returned ${vector.length} dimensions; expected ${expectedDimensions}.`,
+    );
+  }
+  for (let index = 0; index < vector.length; index += 1) {
+    if (!Number.isFinite(vector[index])) {
+      throw new Error(`Embedding provider returned a non-finite vector value at index ${index}.`);
+    }
+  }
+}
+
+async function embedQuery(
+  provider: EmbeddingProvider,
+  text: string,
+): Promise<Float32Array> {
+  const queryProvider = provider as QueryEmbeddingProvider;
+  return queryProvider.embedQuery?.(text) ?? provider.embed(text);
+}
+
 // ---------------------------------------------------------------------------
 // Cancel token
 // ---------------------------------------------------------------------------
@@ -104,9 +132,39 @@ const PROVENANCE_BOOST: Record<Provenance, number> = {
   "external-raw": 0, // raw external content — no boost
 };
 
+/**
+ * Apply the provenance signal without putting it on a different scale from
+ * RRF. RRF scores are bounded by the number of lists and `rrfK` (roughly
+ * 0.016 for one rank-1 list with k=60), so adding a raw 0.02 would let a
+ * low-ranked authored hit leap over a stronger multi-list result. A
+ * multiplicative adjustment keeps the signal monotonic and proportional to
+ * the fused score.
+ */
+export function applyProvenanceBoost(score: number, provenance?: Provenance): number {
+  const boost = provenance === undefined ? 0 : PROVENANCE_BOOST[provenance];
+  return score * (1 + boost);
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher dependencies (injectable for testing and wiring)
 // ---------------------------------------------------------------------------
+
+/**
+ * Preregistered retrieval policies used by the measurement harness.
+ *
+ * The policy is deliberately part of the production dispatcher dependency
+ * graph rather than a harness-only score transform: every arm therefore
+ * exercises the same retrieval implementation that ships to callers.
+ */
+export type DispatcherPolicy = "boost-additive" | "boost-k-scale" | "boost-per-list" | "boost-zero";
+export const DISPATCHER_POLICIES = Object.freeze([
+  "boost-additive",
+  "boost-k-scale",
+  "boost-per-list",
+  "boost-zero",
+] as const);
+export const PREREGISTERED_ARM_POLICIES = Object.freeze(["boost-k-scale", "boost-per-list", "boost-zero"] as const);
+export const DEFAULT_DISPATCHER_POLICY: DispatcherPolicy = "boost-additive";
 
 export interface DispatcherDeps {
   /** SQLite-backed vector + lexical store (C1). */
@@ -130,6 +188,8 @@ export interface DispatcherDeps {
   provenanceMap?: (docPath: string) => Provenance;
   /** RRF smoothing constant (default 60). */
   rrfK?: number;
+  /** Production policy defaults to the shipped boost-additive baseline; the other three are preregistered experiment arms. */
+  policy?: DispatcherPolicy;
   /** Default BFS hop depth for graph sub-queries (default 2). */
   graphDepth?: number;
 }
@@ -158,7 +218,8 @@ async function dispatchOne(
     }
 
     case "vec": {
-      const vec = await withRetry(() => deps.embed.embed(sub.query), cancel);
+      const vec = await withRetry(() => embedQuery(deps.embed, sub.query), cancel);
+      assertFiniteVector(vec, deps.embed.dimensions);
       return withRetry(
         () => Promise.resolve(
           collection === undefined ? deps.store.queryVec(vec, k) : deps.store.queryVec(vec, k, collection),
@@ -170,7 +231,8 @@ async function dispatchOne(
     case "hyde": {
       const generator = deps.hydeGenerator ?? defaultHydeGenerator;
       const hypoDoc = await withRetry(() => generator(sub.query), cancel);
-      const vec = await withRetry(() => deps.embed.embed(hypoDoc), cancel);
+      const vec = await withRetry(() => embedQuery(deps.embed, hypoDoc), cancel);
+      assertFiniteVector(vec, deps.embed.dimensions);
       return withRetry(
         () => Promise.resolve(
           collection === undefined ? deps.store.queryVec(vec, k) : deps.store.queryVec(vec, k, collection),
@@ -189,6 +251,26 @@ async function dispatchOne(
       return withRetry(() => deps.graphTraverse!(gphQuery), cancel);
     }
   }
+}
+
+/**
+ * Apply the per-list policy before RRF ranking. RRF consumes rank positions,
+ * so the weighted score must be used to establish each list's order rather
+ * than applied after fusion (which would be the k-scale policy).
+ */
+function rankListForPolicy(
+  list: ScoredHit[],
+  deps: DispatcherDeps,
+  policy: DispatcherPolicy,
+): ScoredHit[] {
+  if (policy !== "boost-per-list") return list;
+  return [...list].sort((left, right) => {
+    const leftScore = applyProvenanceBoost(left.score, deps.provenanceMap?.(left.docPath));
+    const rightScore = applyProvenanceBoost(right.score, deps.provenanceMap?.(right.docPath));
+    return rightScore - leftScore ||
+      left.docPath.localeCompare(right.docPath) ||
+      left.chunkOrdinal - right.chunkOrdinal;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +295,16 @@ export async function dispatch(
 ): Promise<RetrievalResult[]> {
   const token = cancel ?? createCancelToken();
   const rrfK = deps.rrfK ?? 60;
+  const policy = deps.policy ?? DEFAULT_DISPATCHER_POLICY;
+  if (!Number.isSafeInteger(k) || k < 0) {
+    throw new Error("Retrieval candidate count k must be a non-negative safe integer.");
+  }
+  if (!Number.isFinite(rrfK) || rrfK < 0) {
+    throw new Error("RRF smoothing constant k must be a finite non-negative number.");
+  }
+  if (!(DISPATCHER_POLICIES as readonly string[]).includes(policy)) {
+    throw new Error(`Unknown dispatcher policy: ${String(policy)}`);
+  }
 
   if (subQueries.length === 0) return [];
 
@@ -220,13 +312,16 @@ export async function dispatch(
   const rankedLists = await Promise.all(
     subQueries.map((sub) => dispatchOne(sub, deps, k, token, collection)),
   );
+  const policyLists = rankedLists.map((list) =>
+    rankListForPolicy(list, deps, policy),
+  );
 
   // Build per-type score index for the perTypeScores field
   // key = "docPath\0chunkOrdinal" → type → max raw score from that type
   const typeScores = new Map<string, Map<string, number>>();
   for (let i = 0; i < subQueries.length; i++) {
     const type = subQueries[i]!.type;
-    const list = rankedLists[i]!;
+    const list = policyLists[i]!;
     for (const hit of list) {
       const key = `${hit.docPath}\x00${hit.chunkOrdinal}`;
       const perType = typeScores.get(key) ?? new Map<string, number>();
@@ -237,13 +332,15 @@ export async function dispatch(
   }
 
   // Fuse with RRF
-  const fused = fuseRRF(rankedLists, rrfK);
+  const fused = fuseRRF(policyLists, rrfK, {
+    preserveInputOrder: policy === "boost-per-list",
+  });
 
-  // Build final results with provenance boost and per-type breakdown
-  return fused.map((hit) => {
+  // Build final results with provenance boost and per-type breakdown.
+  const results = fused.map((hit) => {
     const key = `${hit.docPath}\x00${hit.chunkOrdinal}`;
     const provenance = deps.provenanceMap?.(hit.docPath);
-    const boost = provenance !== undefined ? PROVENANCE_BOOST[provenance] : 0;
+    const boost = provenance === undefined ? 0 : PROVENANCE_BOOST[provenance];
 
     const perTypeMap = typeScores.get(key);
     const perTypeScores: Record<string, number> | undefined =
@@ -253,9 +350,20 @@ export async function dispatch(
 
     return {
       docPath: hit.docPath,
-      score: hit.score + boost,
+      score: policy === "boost-additive"
+        ? hit.score + boost
+        : policy === "boost-k-scale"
+          ? applyProvenanceBoost(hit.score, provenance)
+          : hit.score,
       provenance,
       perTypeScores,
     };
   });
+  if (policy === "boost-additive") return results;
+
+  return results.sort(
+    (a, b) =>
+      b.score - a.score ||
+      a.docPath.localeCompare(b.docPath),
+  );
 }

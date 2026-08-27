@@ -4,6 +4,11 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- `oms update` now requires confirmation before mutating from a TTY, refuses to mutate without `--yes` in non-TTY environments, and keeps `--dry-run`/`--check` read-only.
+- Update reconciliation now propagates host installation failures to a non-zero exit status and resolves implicit vault targets through the verified vault chain, refusing an unverified current-directory target.
+
 ## [0.3.0] - 2026-08-24
 
 ### Changed

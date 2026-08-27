@@ -12,7 +12,19 @@
 
 export { fuseRRF } from "./rrf.js";
 export type { Reranker } from "./reranker.js";
-export { PassthroughReranker, passthroughReranker } from "./reranker.js";
+export {
+  createLlamaReranker,
+  DEFAULT_RERANKER_CANDIDATE_CAP,
+  LlamaReranker,
+  PassthroughReranker,
+  passthroughReranker,
+} from "./reranker.js";
+export type {
+  LlamaModelLoader,
+  LlamaRerankerOptions,
+  RankingContext,
+  RankingModel,
+} from "./reranker.js";
 export {
   dispatch,
   createCancelToken,

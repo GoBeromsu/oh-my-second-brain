@@ -7,6 +7,7 @@ import { EngineSearchBackend, requiresEmbeddings } from "./engine-search-backend
 import type { SearchBackend } from "./search-backend.js";
 import type { Reranker } from "../engine/retrieval/reranker.js";
 import type { ScoredHit } from "../engine/types.js";
+import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 
 const vaults: string[] = [];
 
@@ -34,7 +35,7 @@ async function defaultLimitFixtureVault(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-search-backend-default-limit-"));
   vaults.push(vault);
   await Promise.all(
-    Array.from({ length: 12 }, (_, index) => writeFile(
+    Array.from({ length: 75 }, (_, index) => writeFile(
       path.join(vault, `common-${index}.md`),
       `# Common ${index}\ncommon retrieval fixture ${index}\n`,
       "utf8",
@@ -122,6 +123,25 @@ function searchBackendConformance(
 
         expect(result.available).toBe(true);
         expect(result.hits).toHaveLength(10);
+        expect(result.totalCount).toBe(75);
+        expect(result.cursor).toBe("10");
+
+        const all = await backend.search({
+          query: "common retrieval fixture",
+          limit: 75,
+        });
+        expect(all.available).toBe(true);
+        if (!all.available) return;
+
+        const page = await backend.search({
+          query: "common retrieval fixture",
+          cursor: result.cursor ?? undefined,
+        });
+        expect(page.available).toBe(true);
+        expect(page.totalCount).toBe(75);
+        expect(page.hits.map((hit) => hit.path)).toEqual(
+          all.hits.slice(10, 20).map((hit) => hit.path),
+        );
       } finally {
         await dispose();
       }
@@ -185,6 +205,21 @@ function searchBackendConformance(
         // would force every caller to distinguish "no matches" from "broken".
         expect(result.available).toBe(true);
         expect(result.hits).toEqual([]);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("serves an explicit empty query as a portable overview envelope", async () => {
+      const vault = await fixtureVault();
+      const { backend, dispose } = create(vault);
+      try {
+        const result = await backend.search({ query: "", limit: 1 });
+
+        expect(result.available).toBe(true);
+        expect(result.totalCount).toBe(2);
+        expect(result.hits).toHaveLength(1);
+        expect(result.cursor).toBe("1");
       } finally {
         await dispose();
       }
@@ -282,6 +317,108 @@ function searchBackendConformance(
     });
   });
 }
+
+describe("EngineSearchBackend collection envelope", () => {
+  it("merges facets and receipts instead of dropping metadata", async () => {
+    const adapter = {
+      semanticQuery: vi.fn(async ({ collectionPath }: { readonly collectionPath?: string }) => {
+        const path = collectionPath ?? "all";
+        const score = path === "first" ? 0.4 : 0.9;
+        return {
+          available: true as const,
+          hits: [{
+            docid: `${path}.md`,
+            score,
+            uri: `vault://${path}.md`,
+            path: `${path}.md`,
+            snippet: "",
+            evidence: { lexical: true, vector: false },
+          }],
+          totalCount: 1,
+          facets: [{
+            axis: "folder" as const,
+            value: path,
+            count: 1,
+            intent: `${path} intent`,
+          }],
+          cursor: null,
+          intent: "adapter intent",
+          receipt: {
+            usedChannels: [path === "first" ? "lex" as const : "vec" as const],
+            approximated: path !== "first",
+            drift: path === "first",
+          },
+        };
+      }),
+    } as unknown as McpEngineAdapter;
+    const backend = new EngineSearchBackend(adapter, "/vault");
+
+    const result = await backend.search({
+      query: "query",
+      collections: ["first", "second"],
+      limit: 1,
+      intent: "request intent",
+    });
+
+    expect(result).toMatchObject({
+      available: true,
+      totalCount: 2,
+      cursor: "1",
+      intent: "request intent",
+      facets: [
+        { axis: "folder", value: "first", count: 1, intent: "first intent" },
+        { axis: "folder", value: "second", count: 1, intent: "second intent" },
+      ],
+      receipt: {
+        usedChannels: ["lex", "vec"],
+        approximated: true,
+        drift: true,
+      },
+    });
+    if (result.available) expect(result.hits).toHaveLength(1);
+  });
+
+  it("deduplicates document hits before global cursor paging", async () => {
+    const adapter = {
+      semanticQuery: vi.fn(async ({ collectionPath }: { readonly collectionPath?: string }) => ({
+        available: true as const,
+        hits: [{
+          docid: "shared.md",
+          score: collectionPath === "first" ? 0.4 : 0.9,
+          uri: "vault://shared.md",
+          path: "shared.md",
+          snippet: "",
+          evidence: {
+            lexical: collectionPath === "first",
+            vector: collectionPath !== "first",
+          },
+        }],
+        totalCount: 1,
+        facets: [],
+        cursor: null,
+        receipt: { usedChannels: ["lex" as const], approximated: false, drift: false },
+      })),
+    } as unknown as McpEngineAdapter;
+    const backend = new EngineSearchBackend(adapter, "/vault");
+
+    const result = await backend.search({
+      query: "query",
+      collections: ["first", "second"],
+      limit: 1,
+    });
+
+    expect(result).toMatchObject({
+      available: true,
+      totalCount: 1,
+      cursor: null,
+      hits: [{
+        path: "shared.md",
+        score: 0.9,
+        evidence: { lexical: true, vector: true },
+      }],
+    });
+  });
+});
 
 searchBackendConformance("in-repository engine", (vault) => {
   const engine: AssembledEngine = assembleCoreSemanticEngine({ vault });

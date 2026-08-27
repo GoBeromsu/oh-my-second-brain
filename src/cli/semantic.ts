@@ -2,6 +2,13 @@
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import { assembleSemanticEngine } from "../kernel/semantic/semantic-engine.js";
 import {
+  assembleCoreSemanticEngineReadOnly,
+  assembleEngineReadOnly,
+  assembleEphemeralCoreSemanticEngine,
+  type AssembledEngine,
+} from "../kernel/engine/assemble.js";
+import { embeddingConfigPresent } from "../kernel/semantic/semantic-engine.js";
+import {
   booleanOption,
   numberOption,
   parseSemanticArgs,
@@ -40,6 +47,31 @@ export { semanticUsageText } from "./semantic-usage.js";
 /** Assemble the engine adapter (vec-capable when configured, else lex + docs), run, dispose. */
 async function withSemanticAdapter<T>(vault: string, fn: (adapter: McpEngineAdapter) => Promise<T>): Promise<T> {
   const engine = assembleSemanticEngine(vault);
+  try {
+    return await fn(engine.adapter);
+  } finally {
+    await engine.dispose();
+  }
+}
+
+/**
+ * Assemble a read path without creating a vault index. Existing indexes use a
+ * SELECT-only engine; a missing index gets an in-memory lexical engine so
+ * document reads and first lexical searches remain useful without touching
+ * `<vault>/.oms`.
+ */
+async function withReadOnlySemanticAdapter<T>(
+  vault: string,
+  fn: (adapter: McpEngineAdapter) => Promise<T>,
+): Promise<T> {
+  const readOnly: AssembledEngine | null = embeddingConfigPresent()
+    ? assembleEngineReadOnly({
+      vault,
+      embeddingProvider: process.env["OMS_EMBEDDING_PROVIDER"],
+      embeddingModel: process.env["OMS_EMBEDDING_MODEL"],
+    })
+    : assembleCoreSemanticEngineReadOnly({ vault });
+  const engine = readOnly ?? assembleEphemeralCoreSemanticEngine({ vault });
   try {
     return await fn(engine.adapter);
   } finally {
@@ -91,7 +123,7 @@ export async function runSemanticCli(options: SemanticCliRunOptions): Promise<nu
   }
 
   if (command === "status") {
-    return withSemanticAdapter(vault, (adapter) => {
+    return withReadOnlySemanticAdapter(vault, (adapter) => {
       const status = adapter.semanticStatus({ vault, index: stringOption(parsed, "index") });
       printJson(write, status);
       return Promise.resolve(status.available ? 0 : 1);
@@ -108,7 +140,7 @@ export async function runSemanticCli(options: SemanticCliRunOptions): Promise<nu
 
   if (command === "query" || command === "search" || command === "vsearch") {
     const mode = command === "search" ? "search" : command === "vsearch" ? "vsearch" : "query";
-    return withSemanticAdapter(vault, async (adapter) => {
+    return withReadOnlySemanticAdapter(vault, async (adapter) => {
       const result = await adapter.semanticQuery(semanticQueryOptions(mode, vault, parsed, rest.join(" ")));
       printJson(write, result);
       return result.available ? 0 : 1;
@@ -136,7 +168,7 @@ async function runGetCommand(
     writeError("Usage: oms semantic get <target>");
     return 1;
   }
-  return withSemanticAdapter(vault, async (adapter) => {
+  return withReadOnlySemanticAdapter(vault, async (adapter) => {
     const result = await adapter.getDocument({
       vault,
       target,
@@ -163,7 +195,7 @@ async function runMultiGetCommand(
     writeError("Usage: oms semantic multi-get <target...>");
     return 1;
   }
-  return withSemanticAdapter(vault, async (adapter) => {
+  return withReadOnlySemanticAdapter(vault, async (adapter) => {
     const result = await adapter.multiGetDocuments({
       vault,
       targets: [...targets],
@@ -185,7 +217,7 @@ async function runCollectionCommand(
   vault: string,
   write: (message: string) => void,
 ): Promise<number> {
-  return withSemanticAdapter(vault, (adapter) => {
+  return withReadOnlySemanticAdapter(vault, (adapter) => {
     const result = adapter.listCollections({ vault, index: stringOption(parsed, "index") });
     if (!result.available) {
       printJson(write, result);
@@ -208,7 +240,7 @@ async function runContextCommand(
     write(semanticUsageText());
     return 1;
   }
-  return withSemanticAdapter(vault, (adapter) => {
+  return withReadOnlySemanticAdapter(vault, (adapter) => {
     const result = adapter.listContexts({ vault, index: stringOption(parsed, "index") });
     printJson(write, result);
     return Promise.resolve(result.available ? 0 : 1);

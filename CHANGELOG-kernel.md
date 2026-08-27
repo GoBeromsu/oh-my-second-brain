@@ -4,6 +4,21 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- The shipped ranking default remains the released v0.3.0 `boost-additive` baseline — RRF score plus provenance boost with no per-list reordering — instead of an unmeasured multiplicative boost. The frozen `boost-k-scale`, `boost-per-list`, and `boost-zero` arms remain experiments, so released ranking behavior stays evidence-backed and reproducible.
+- The `boost-c040` measurement gate now applies only when a release changes the shipped ranking default from that baseline. Baseline releases pass with a receipt and need no manifest, while adopting an experiment arm still requires the real-vault signed manifest with no waiver; this targets the strict evidence requirement at the decision that can change user results.
+- Default embedding-model acquisition is deferred to a later release. No real-vault `model-default` measurement exists, so the vault owner invoked the preregistered E-1 Rule 1 fallback when authorising this release: no new default embedding model ships here. Explicit `OMS_EMBEDDING_PROVIDER` / `OMS_EMBEDDING_MODEL` behavior is unchanged, and `oms setup --embedding-descriptor <path>` accepts an operator-supplied descriptor with SHA-256 verification. The no-default contract is machine-verified and fails closed: it checks at runtime that no default descriptor pointer is introduced, that the explicit environment pair resolves identically with and without the fallback while a half pair still fails loudly naming both variables, and that the fallback and MCP paths perform zero downloads. `boost-c040` remains a separate required, never-waivable measurement. Choosing a different model would be a contract change requiring replanning, and the deferral closes only with a validator-accepted, green `model-default` manifest from the real vault owner. The repository records that decision under `docs/measurements/`.
+
+### Fixed
+
+- `oms update` now compares versions with SemVer prerelease and build-metadata precedence instead of treating every dotted component as a number.
+- Embedding reindexing now builds and validates a complete shadow generation before an atomic swap, with cross-process writer locking and crash-point recovery coverage; a failed rebuild preserves the active generation.
+- Embedding model resolution now rejects half-configured environment pairs, verifies setup artifacts by SHA-256 outside the vault, and reports unavailable vector capability with actionable `OMS_EMBEDDING_PROVIDER` / `OMS_EMBEDDING_MODEL` guidance.
+- Lex-only retrieval remains available without a configured embedding provider, while the opt-in reranker lazy-loads with a bounded candidate set and no fake model fallback.
+- Added the JSON frontmatter contract and typed EAV axis store with read-only `.obsidian/types.json` authority; legacy YAML remains ignored and unknown contract properties are preserved.
+- Search query envelopes now expose total counts, cursors, facets, intent metadata, and folder/field/link axis filtering with same-axis OR and cross-axis AND semantics.
+
 ## [0.3.0] - 2026-08-24
 
 ### Fixed

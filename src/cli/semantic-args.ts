@@ -1,8 +1,22 @@
 import type { SemanticQueryOptions, SemanticSearchMode } from "../kernel/search/semantic-contract.js";
+import type { McpSemanticAxisValue, McpSemanticQueryAxes } from "../kernel/engine/mcp/types.js";
 
 export interface ParsedSemanticArgs {
   readonly positional: readonly string[];
   readonly options: Readonly<Record<string, string | boolean>>;
+}
+
+function appendStringOption(
+  options: Record<string, string | boolean>,
+  key: string,
+  value: string,
+): void {
+  const prior = options[key];
+  // A NUL separator distinguishes repeated flags from comma-delimited axis
+  // values (`--field tags=one,two --field status=open`). It never appears in a
+  // shell argument, so the representation remains unambiguous until the axis
+  // object is built below.
+  options[key] = typeof prior === "string" && prior.length > 0 ? `${prior}\u0000${value}` : value;
 }
 
 export function parseSemanticArgs(argv: readonly string[]): ParsedSemanticArgs {
@@ -23,6 +37,16 @@ export function parseSemanticArgs(argv: readonly string[]): ParsedSemanticArgs {
       i++;
     } else if (arg === "--index" || arg === "--min-score" || arg === "--chunk-strategy") {
       options[camelOption(arg)] = argv[i + 1] ?? "";
+      i++;
+    } else if (
+      arg === "--cursor"
+      || arg === "--collection-path"
+      || arg === "--mode"
+      || arg === "--folder"
+      || arg === "--field"
+      || arg === "--link"
+    ) {
+      appendStringOption(options, camelOption(arg), argv[i + 1] ?? "");
       i++;
     } else if (arg === "--intent" || arg === "--lex" || arg === "--vec" || arg === "--hyde") {
       options[arg.slice(2)] = argv[i + 1] ?? "";
@@ -89,6 +113,21 @@ export function semanticQueryOptions(
   args: ParsedSemanticArgs,
   query: string,
 ): SemanticQueryOptions {
+  const requestedMode = stringOption(args, "mode");
+  if (requestedMode !== undefined && requestedMode !== mode) {
+    throw new Error(`CLI mode "${requestedMode}" contradicts the "${mode}" query command.`);
+  }
+  const axes = queryAxesFromCli(args);
+  const vec = stringOption(args, "vec");
+  const hyde = stringOption(args, "hyde");
+  // The query/search CLI commands are intentionally lexical by default. A
+  // model is only consulted when the caller opts into --vec, --hyde, or the
+  // dedicated vsearch command; this keeps plain searches useful on a
+  // model-less vault without approximating a vector result.
+  const lex = stringOption(args, "lex")
+    ?? (mode === "vsearch" || vec !== undefined || hyde !== undefined || query.trim().length === 0
+      ? undefined
+      : query);
   return {
     vault,
     query,
@@ -98,13 +137,78 @@ export function semanticQueryOptions(
     limit: numberOption(args, "limit"),
     minScore: numberOption(args, "minScore"),
     intent: stringOption(args, "intent"),
-    lex: stringOption(args, "lex"),
-    vec: stringOption(args, "vec"),
-    hyde: stringOption(args, "hyde"),
+    lex,
+    vec,
+    hyde,
+    cursor: stringOption(args, "cursor"),
+    collectionPath: stringOption(args, "collectionPath"),
+    ...(axes === undefined ? {} : { axes }),
     all: booleanOption(args, "all"),
     full: booleanOption(args, "full"),
     fullPath: booleanOption(args, "fullPath"),
     candidateLimit: numberOption(args, "candidateLimit"),
+  };
+}
+
+function axisScalar(value: string): McpSemanticAxisValue {
+  const trimmed = value.trim();
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  // Keep values such as "001" as strings; they are commonly identifiers, not
+  // numbers. Decimal and signed integer forms retain their typed axis meaning.
+  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(trimmed)) {
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return trimmed;
+}
+
+function axisList(
+  value: string | undefined,
+): McpSemanticAxisValue | readonly McpSemanticAxisValue[] | undefined {
+  if (value === undefined) return undefined;
+  const values = value
+    .split(/[,\u0000]/u)
+    .map((item) => axisScalar(item))
+    .filter((item) => typeof item !== "string" || item.length > 0);
+  if (values.length === 0) return undefined;
+  return values.length === 1 ? values[0] : values;
+}
+
+function queryAxesFromCli(args: ParsedSemanticArgs): McpSemanticQueryAxes | undefined {
+  const folder = axisList(stringOption(args, "folder"));
+  const link = axisList(stringOption(args, "link"));
+  const fieldsRaw = stringOption(args, "field");
+  let field: Record<string, McpSemanticAxisValue | readonly McpSemanticAxisValue[]> | undefined;
+  if (fieldsRaw !== undefined) {
+    field = {};
+    for (const entry of fieldsRaw.split("\u0000")) {
+      const separator = entry.indexOf("=");
+      const colon = entry.indexOf(":");
+      const splitAt = separator >= 0 ? separator : colon;
+      if (splitAt <= 0) {
+        throw new Error(`Invalid --field "${entry}". Use --field name=value.`);
+      }
+      const key = entry.slice(0, splitAt).trim();
+      const value = axisList(entry.slice(splitAt + 1));
+      if (!key || value === undefined) {
+        throw new Error(`Invalid --field "${entry}". Use --field name=value.`);
+      }
+      const prior = field[key];
+      if (prior === undefined) {
+        field[key] = value;
+      } else {
+        const priorValues = Array.isArray(prior) ? prior : [prior];
+        const nextValues = Array.isArray(value) ? value : [value];
+        field[key] = [...priorValues, ...nextValues];
+      }
+    }
+  }
+  if (folder === undefined && link === undefined && field === undefined) return undefined;
+  return {
+    ...(folder === undefined ? {} : { folder }),
+    ...(field === undefined ? {} : { field }),
+    ...(link === undefined ? {} : { link }),
   };
 }
 

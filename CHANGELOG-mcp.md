@@ -4,6 +4,12 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- MCP semantic retrieval now forwards explicit rerank and candidate-limit requests through ephemeral lexical fallback paths without downloading models or silently dropping rerank behavior.
+- **Breaking:** `oms_search` folds axis retrieval into the `query` operation. The retired `axis` and `semantic-query` operation names now fail loudly; collection, context, and status operations likewise drop their `semantic-` prefixes. Query responses expose `hits`, `totalCount`, `facets`, a cursor, and a deterministic receipt.
+- **Breaking:** `oms_doctor` uses `op: "cleanup"` instead of the removed `semantic-cleanup` spelling. No compatibility aliases are retained.
+
 ## [0.3.0] - 2026-08-24
 
 ### Changed

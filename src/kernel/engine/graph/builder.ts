@@ -1,51 +1,94 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
-import { parse as parseYaml } from "yaml";
+import { parseNote } from "../../conventions/frontmatter.js";
 import type { GraphEdge } from "../types.js";
-import type { EngineGraphNode } from "./node.js";
-import { tokenize } from "./node.js";
+import type { AxisScalar, EngineGraphNode } from "./node.js";
+import { toAxisScalars, tokenize } from "./node.js";
 import { buildWikilinkIndex, resolveWikilink } from "./resolver.js";
 
 // ---------------------------------------------------------------------------
 // Internal file-system helpers
 // ---------------------------------------------------------------------------
 
-async function* walkMarkdown(dir: string, base: string): AsyncGenerator<string> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
+function ensureInsideRoot(root: string, candidate: string, label: string): void {
+  const relative = path.relative(root, candidate);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} escapes the configured vault root.`);
   }
+}
+
+async function* walkMarkdown(
+  dir: string,
+  base: string,
+  rootRealPath?: string,
+  visitedDirectories: Set<string> = new Set(),
+): AsyncGenerator<string> {
+  const root = rootRealPath ?? await realpath(base);
+  const realDir = await realpath(dir);
+  ensureInsideRoot(root, realDir, `Vault directory "${dir}"`);
+  if (visitedDirectories.has(realDir)) return;
+  visitedDirectories.add(realDir);
+
+  const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const name = entry.name;
-    if (name === ".oms" || name === "node_modules" || name.startsWith(".")) continue;
     const full = path.join(dir, name);
-    if (entry.isDirectory()) {
-      yield* walkMarkdown(full, base);
-    } else if (entry.isFile() && name.endsWith(".md")) {
+    // Resolve skipped entries too: an excluded symlink must not conceal an
+    // escape or a dangling path from a strict graph build.
+    const realEntry = await realpath(full);
+    ensureInsideRoot(root, realEntry, `Vault entry "${full}"`);
+    if (name === ".oms" || name === "node_modules" || name.startsWith(".")) continue;
+    const entryStat = await stat(full);
+    if (entryStat.isDirectory()) {
+      yield* walkMarkdown(full, base, root, visitedDirectories);
+    } else if (entryStat.isFile() && name.toLowerCase().endsWith(".md")) {
       yield path.relative(base, full).replace(/\\/g, "/");
     }
   }
 }
 
+async function validateExplicitFiles(vault: string, files: readonly string[]): Promise<void> {
+  const lexicalRoot = path.resolve(vault);
+  const root = await realpath(lexicalRoot);
+  for (const docPath of files) {
+    if (path.isAbsolute(docPath)) {
+      throw new Error(`Graph file path must be vault-relative: ${docPath}`);
+    }
+    const fullPath = path.resolve(vault, docPath);
+    ensureInsideRoot(lexicalRoot, fullPath, `Graph file "${docPath}"`);
+    const realPath = await realpath(fullPath);
+    ensureInsideRoot(root, realPath, `Graph file "${docPath}"`);
+    const fileStat = await stat(fullPath);
+    if (!fileStat.isFile()) throw new Error(`Graph file path is not a regular file: ${docPath}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Markdown parsing helpers (self-contained; uses yaml dep directly)
+// Markdown parsing helpers (shared frontmatter contract parser)
 // ---------------------------------------------------------------------------
 
-/** Parse YAML frontmatter from raw markdown. Returns `{}` on missing or invalid FM. */
-function parseFrontmatter(raw: string): Record<string, unknown> {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(raw);
-  if (!match) return {};
-  try {
-    const parsed = parseYaml(match[1] ?? "") as unknown;
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    /* ignore YAML parse errors */
+/** Parse YAML frontmatter from raw markdown. Invalid YAML is a loud contract error. */
+function parseFrontmatter(raw: string, docPath?: string): Record<string, unknown> {
+  // Keep this parser at the graph boundary, but use the shared frontmatter
+  // contract diagnostics so malformed notes cannot become an indistinguishable
+  // empty map.
+  const parsed = parseNote(raw);
+  if (parsed.diagnostics.length > 0) {
+    const location = docPath === undefined ? "" : ` in ${docPath}`;
+    throw new Error(`Malformed frontmatter${location}: ${parsed.diagnostics.map((item) => item.message).join("; ")}`);
   }
-  return {};
+  return parsed.frontmatter;
 }
 
 /** Return the markdown body after the frontmatter fence (or the whole doc). */
@@ -111,7 +154,7 @@ async function parseDocs(vaultPath: string, files: readonly string[]): Promise<P
       const raw = await readFile(path.join(vaultPath, docPath), "utf-8");
       return {
         docPath,
-        frontmatter: parseFrontmatter(raw),
+        frontmatter: parseFrontmatter(raw, docPath),
         rawWikilinks: extractRawWikilinks(extractBody(raw)),
       };
     }),
@@ -150,6 +193,7 @@ export async function buildGraph(opts: {
   let files: readonly string[];
   if (opts.files !== undefined) {
     files = opts.files;
+    await validateExplicitFiles(vaultPath, files);
   } else {
     const collected: string[] = [];
     for await (const f of walkMarkdown(vaultPath, vaultPath)) collected.push(f);
@@ -273,19 +317,78 @@ interface EngineCacheFile {
   readonly edges: GraphEdge[];
 }
 
+async function readCacheFile(cachePath: string): Promise<string | null> {
+  try {
+    return await readFile(cachePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    try {
+      await lstat(cachePath);
+    } catch (missingError) {
+      if ((missingError as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw missingError;
+    }
+    throw new Error(`Graph cache "${cachePath}" is a broken symbolic link.`, { cause: error });
+  }
+}
+
+function parseCacheJson(raw: string, cachePath: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(`Graph cache "${cachePath}" is not valid JSON.`, { cause: error });
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function writeCacheAtomically(cachePath: string, contents: string): Promise<void> {
+  const outputPath = path.resolve(cachePath);
+  const directory = path.dirname(outputPath);
+  await mkdir(directory, { recursive: true });
+  const temporaryPath = path.join(
+    directory,
+    `.${path.basename(outputPath)}.${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`,
+  );
+  try {
+    await writeFile(temporaryPath, contents, { encoding: "utf-8", flag: "wx" });
+    await rename(temporaryPath, outputPath);
+  } finally {
+    try {
+      await unlink(temporaryPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 /**
  * Load the persisted full-graph cache from `cachePath`.
- * Returns `null` when the file is absent, unreadable, or at a stale version.
+ * Returns `null` only when the file is absent or at a stale version.
  */
 export async function loadCachedGraph(cachePath: string): Promise<GraphEdge[] | null> {
-  try {
-    const raw = await readFile(cachePath, "utf-8");
-    const file = JSON.parse(raw) as EngineCacheFile;
-    if (file.version !== CACHE_VERSION) return null;
-    return file.edges;
-  } catch {
-    return null;
+  const raw = await readCacheFile(cachePath);
+  if (raw === null) return null;
+  const parsed = parseCacheJson(raw, cachePath);
+  if (!isRecord(parsed)) {
+    throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
   }
+  if (parsed.version !== CACHE_VERSION) return null;
+  if (
+    !Array.isArray(parsed.edges) ||
+    !parsed.edges.every((edge) =>
+      isRecord(edge) &&
+      typeof edge.from === "string" &&
+      typeof edge.to === "string" &&
+      typeof edge.weight === "number" &&
+      typeof edge.kind === "string"
+    )
+  ) {
+    throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
+  }
+  return parsed.edges as GraphEdge[];
 }
 
 /**
@@ -293,46 +396,58 @@ export async function loadCachedGraph(cachePath: string): Promise<GraphEdge[] | 
  * Parent directories are created automatically.
  */
 export async function saveCachedGraph(cachePath: string, edges: GraphEdge[]): Promise<void> {
-  await mkdir(path.dirname(cachePath), { recursive: true });
   const file: EngineCacheFile = {
     version: CACHE_VERSION,
     generatedAt: new Date().toISOString(),
     edges,
   };
-  await writeFile(cachePath, `${JSON.stringify(file, null, 2)}\n`, "utf-8");
+  await writeCacheAtomically(cachePath, `${JSON.stringify(file, null, 2)}\n`);
 }
 
 /**
  * Load the persisted full-graph cache, returning both edges and the build
  * timestamp.  Unlike {@link loadCachedGraph} (which drops `generatedAt`), this
  * is used by oms_graph_status to report when the cache was built.
- * Returns `null` when the file is absent, unreadable, or at a stale version.
+ * Returns `null` only when the file is absent or at a stale version.
  */
 export async function loadCachedGraphMeta(
   cachePath: string,
 ): Promise<{ edges: GraphEdge[]; generatedAt: string } | null> {
-  try {
-    const raw = await readFile(cachePath, "utf-8");
-    const file = JSON.parse(raw) as EngineCacheFile;
-    if (file.version !== CACHE_VERSION) return null;
-    return { edges: file.edges, generatedAt: file.generatedAt };
-  } catch {
-    return null;
+  const raw = await readCacheFile(cachePath);
+  if (raw === null) return null;
+  const parsed = parseCacheJson(raw, cachePath);
+  if (!isRecord(parsed)) {
+    throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
   }
+  if (parsed.version !== CACHE_VERSION) return null;
+  if (
+    typeof parsed.generatedAt !== "string" ||
+    !Array.isArray(parsed.edges) ||
+    !parsed.edges.every((edge) =>
+      isRecord(edge) &&
+      typeof edge.from === "string" &&
+      typeof edge.to === "string" &&
+      typeof edge.weight === "number" &&
+      typeof edge.kind === "string"
+    )
+  ) {
+    throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
+  }
+  return { edges: parsed.edges as GraphEdge[], generatedAt: parsed.generatedAt };
 }
 
 // ---------------------------------------------------------------------------
 // Node index — per-note metadata for axis-filtered retrieval (C2)
 // ---------------------------------------------------------------------------
 
-const NODE_CACHE_VERSION = 1;
+const NODE_CACHE_VERSION = 2;
 
 /** JSON-serialisable form of EngineGraphNode (Set → string[] for searchTerms). */
 interface SerializedNode {
   readonly path: string;
   readonly concept: string | null;
   readonly folder: string;
-  readonly axes: Record<string, string[]>;
+  readonly axes: Record<string, AxisScalar[]>;
   readonly wikilinks: string[];
   readonly bodyPreview: string;
   readonly searchTerms: string[];
@@ -341,7 +456,36 @@ interface SerializedNode {
 interface NodeCacheFile {
   readonly version: number;
   readonly generatedAt: string;
+  readonly sourceSignature: string;
   readonly nodes: SerializedNode[];
+}
+
+/** Hash sorted markdown paths and bytes so add/edit/delete invalidates a cache. */
+export async function nodeSourceSignature(vaultPath: string): Promise<string> {
+  const vault = path.resolve(vaultPath);
+  const files: string[] = [];
+  for await (const file of walkMarkdown(vault, vault)) files.push(file);
+  files.sort();
+
+  const digest = createHash("sha256");
+  for (const file of files) {
+    digest.update(file);
+    digest.update("\0");
+    digest.update(await readFile(path.join(vault, file)));
+    digest.update("\0");
+  }
+  return digest.digest("hex");
+}
+
+function inferNodeCacheVault(cachePath: string): string {
+  const absolute = path.resolve(cachePath);
+  const engineDir = path.basename(path.dirname(absolute));
+  const cacheDir = path.basename(path.dirname(path.dirname(absolute)));
+  const omsDir = path.basename(path.dirname(path.dirname(path.dirname(absolute))));
+  if (engineDir === "engine" && cacheDir === "cache" && omsDir === ".oms") {
+    return path.dirname(path.dirname(path.dirname(path.dirname(absolute))));
+  }
+  return path.dirname(absolute);
 }
 
 /**
@@ -363,6 +507,7 @@ export async function buildNodeIndex(opts: {
   let files: readonly string[];
   if (opts.files !== undefined) {
     files = opts.files;
+    await validateExplicitFiles(vaultPath, files);
   } else {
     const collected: string[] = [];
     for await (const f of walkMarkdown(vaultPath, vaultPath)) collected.push(f);
@@ -373,26 +518,21 @@ export async function buildNodeIndex(opts: {
   const nodes: EngineGraphNode[] = [];
 
   for (const docPath of files) {
-    let raw: string;
-    try {
-      raw = await readFile(path.join(vaultPath, docPath), "utf-8");
-    } catch {
-      continue; // unreadable file — skip silently
-    }
+    const raw = await readFile(path.join(vaultPath, docPath), "utf-8");
 
-    const frontmatter = parseFrontmatter(raw);
+    const frontmatter = parseFrontmatter(raw, docPath);
     const body = extractBody(raw);
 
     const conceptRaw = frontmatter["concept"];
     const concept = typeof conceptRaw === "string" ? conceptRaw : null;
 
-    const axes: Record<string, string[]> = {};
+    const axes: Record<string, AxisScalar[]> = {};
     const fmStrings: string[] = [];
     for (const [key, value] of Object.entries(frontmatter)) {
-      const arr = toStringArray(value);
+      const arr = toAxisScalars(value);
       if (arr.length > 0) {
         axes[key] = arr;
-        fmStrings.push(...arr);
+        fmStrings.push(...arr.map((item) => String(item)));
       }
     }
 
@@ -411,7 +551,9 @@ export async function buildNodeIndex(opts: {
       path: docPath,
       concept,
       folder: noteType(docPath),
-      axes,
+      // Keep the node-index DTO compatible with legacy graph renderers. The
+      // runtime values remain typed (the cast only documents the old surface).
+      axes: axes as unknown as Record<string, string[]>,
       wikilinks,
       bodyPreview: body.slice(0, 240),
       searchTerms,
@@ -425,11 +567,12 @@ export async function buildNodeIndex(opts: {
 export async function saveNodeIndex(
   cachePath: string,
   nodes: readonly EngineGraphNode[],
+  sourceSignature?: string,
 ): Promise<void> {
-  await mkdir(path.dirname(cachePath), { recursive: true });
   const file: NodeCacheFile = {
     version: NODE_CACHE_VERSION,
     generatedAt: new Date().toISOString(),
+    sourceSignature: sourceSignature ?? await nodeSourceSignature(inferNodeCacheVault(cachePath)),
     nodes: nodes.map((n) => ({
       path: n.path,
       concept: n.concept,
@@ -440,28 +583,56 @@ export async function saveNodeIndex(
       searchTerms: Array.from(n.searchTerms),
     })),
   };
-  await writeFile(cachePath, `${JSON.stringify(file)}\n`, "utf-8");
+  await writeCacheAtomically(cachePath, `${JSON.stringify(file)}\n`);
 }
 
 /**
  * Load the node index from `cachePath`, rebuilding each searchTerms Set from
- * its serialised array form.  Returns `null` when absent / unreadable / stale.
+ * its serialised array form. Returns `null` when absent, stale, or when the
+ * markdown source signature no longer matches the cache. Corrupt or
+ * unreadable files fail loudly so a partial snapshot is never accepted.
  */
-export async function loadNodeIndex(cachePath: string): Promise<EngineGraphNode[] | null> {
-  try {
-    const raw = await readFile(cachePath, "utf-8");
-    const file = JSON.parse(raw) as NodeCacheFile;
-    if (file.version !== NODE_CACHE_VERSION) return null;
-    return file.nodes.map((n) => ({
-      path: n.path,
-      concept: n.concept,
-      folder: n.folder,
-      axes: n.axes,
-      wikilinks: n.wikilinks,
-      bodyPreview: n.bodyPreview,
-      searchTerms: new Set(n.searchTerms),
-    }));
-  } catch {
-    return null;
+export async function loadNodeIndex(
+  cachePath: string,
+  sourceSignature?: string,
+): Promise<EngineGraphNode[] | null> {
+  const raw = await readCacheFile(cachePath);
+  if (raw === null) return null;
+  const parsed = parseCacheJson(raw, cachePath);
+  if (!isRecord(parsed)) {
+    throw new Error(`Node cache "${cachePath}" has an invalid format.`);
   }
+  if (parsed.version !== NODE_CACHE_VERSION) return null;
+  if (
+    typeof parsed.sourceSignature !== "string" ||
+    typeof parsed.generatedAt !== "string" ||
+    !Array.isArray(parsed.nodes) ||
+    !parsed.nodes.every((node) =>
+      isRecord(node) &&
+      typeof node.path === "string" &&
+      (typeof node.concept === "string" || node.concept === null) &&
+      typeof node.folder === "string" &&
+      isRecord(node.axes) &&
+      Array.isArray(node.wikilinks) &&
+      node.wikilinks.every((item) => typeof item === "string") &&
+      typeof node.bodyPreview === "string" &&
+      Array.isArray(node.searchTerms) &&
+      node.searchTerms.every((item) => typeof item === "string")
+    )
+  ) {
+    throw new Error(`Node cache "${cachePath}" has an invalid format.`);
+  }
+  const expectedSignature = sourceSignature ?? await nodeSourceSignature(inferNodeCacheVault(cachePath));
+  if (parsed.sourceSignature !== expectedSignature) return null;
+  return (parsed.nodes as SerializedNode[]).map((n) => ({
+    path: n.path,
+    concept: n.concept,
+    folder: n.folder,
+    // Typed values survive JSON round-tripping; retain the legacy DTO
+    // declaration for graph consumers.
+    axes: n.axes as unknown as Record<string, string[]>,
+    wikilinks: n.wikilinks,
+    bodyPreview: n.bodyPreview,
+    searchTerms: new Set(n.searchTerms),
+  }));
 }

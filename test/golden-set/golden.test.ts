@@ -11,7 +11,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { runHarness, runEngine, printHarnessReport } from "./harness.js";
-import { QUERY_COUNT, QUERIES_BY_TYPE } from "./queries.js";
+import { GOLDEN_QUERY_CLASSES, QUERY_COUNT, QUERIES_BY_TYPE, QUERIES_BY_CLASS } from "./queries.js";
 import type { GoldenQuery } from "./queries.js";
 import { makeTracerConfig } from "../../src/kernel/engine/tracer.js";
 
@@ -20,8 +20,18 @@ import { makeTracerConfig } from "../../src/kernel/engine/tracer.js";
 // ---------------------------------------------------------------------------
 
 describe("golden query set — structural validation", () => {
-  it("has at least 20 queries", () => {
-    expect(QUERY_COUNT).toBeGreaterThanOrEqual(20);
+  it("has at least 25 curated queries", () => {
+    expect(QUERY_COUNT).toBeGreaterThanOrEqual(25);
+    expect(QUERY_COUNT).toBe(
+      Object.values(QUERIES_BY_CLASS).reduce((total, rows) => total + rows.length, 0),
+    );
+  });
+
+  it("covers all nine preregistered classes", () => {
+    for (const queryClass of GOLDEN_QUERY_CLASSES) {
+      expect(QUERIES_BY_CLASS[queryClass].length, queryClass).toBeGreaterThan(0);
+      expect(QUERIES_BY_CLASS[queryClass].every((query) => query.curated)).toBe(true);
+    }
   });
 
   it("has at least 4 lex queries", () => {
@@ -109,12 +119,12 @@ describe("golden harness — fail-loud behaviour (unit)", () => {
   it(
     "(a) engine recall is computed only for curated queries; uncurated never silently scored",
     async () => {
-      // The engine-only harness has no src/search baseline anymore. The fail-loud
-      // invariant that remains: uncurated queries are skipped (asserted in (c)),
-      // and a scored run with zero curated queries can never be vacuously green.
-      const report = await runHarness({ vaultPath: "/tmp", files: [] });
+      // An explicit empty slice is still a real scored run: no rows are
+      // silently dropped, and the overall gate cannot be vacuously green.
+      const report = await runHarness({ vaultPath: "test/fixtures/vault" });
       const scored = report.queries.filter((r) => !r.skipped);
-      expect(scored.length).toBe(0);
+      expect(scored.length).toBeGreaterThan(0);
+      expect(report.scoredRows.scored).toBeGreaterThan(0);
       expect(report.overallPass).toBe(false);
     },
   );
@@ -138,6 +148,7 @@ describe("golden harness — fail-loud behaviour (unit)", () => {
           query: "test query for engine throw",
           expectedNotes: [],
           curated: true,
+          queryClass: "en",
         };
         // No provider/model configured + no UPSTAGE_API_KEY → requireRealEmbeddingProvider throws
         const config = makeTracerConfig({
@@ -155,36 +166,15 @@ describe("golden harness — fail-loud behaviour (unit)", () => {
     },
   );
 
-  it(
-    "(c) uncurated queries are excluded from scoring with a warning; never silently scored 0",
-    async () => {
-      // All GOLDEN_QUERIES currently have curated:undefined (falsy).
-      // runHarness must warn and mark them skipped — engine/baseline are never
-      // invoked for uncurated queries, so no I/O needed for this test.
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      // Pass files:[] so that if (incorrectly) the engine were called, it
-      // would process 0 files and not hit the filesystem.
-      const report = await runHarness({ vaultPath: "/tmp", files: [] });
-
-      // Every report row must be skipped (no curated queries in the current set)
-      const scoredRows = report.queries.filter((r) => !r.skipped);
-      expect(scoredRows.length).toBe(0);
-
-      // Skipped rows are still present for count-consistency
-      expect(report.queries.length).toBe(QUERY_COUNT);
-
-      // A warning was emitted for each uncurated query — never silently omitted
-      expect(warnSpy).toHaveBeenCalledTimes(QUERY_COUNT);
-
-      // Skipped queries carry sentinel values and pass:false (not vacuously green)
-      for (const row of report.queries) {
-        expect(row.skipped, `query ${row.id} should be skipped`).toBe(true);
-        expect(row.pass, `query ${row.id} skipped row must not be vacuously pass:true`).toBe(false);
-        expect(row.engineTop10).toEqual([]);
-      }
-    },
-  );
+  it("(c) the built-in fixture produces scored rows through the production seam", async () => {
+    const report = await runHarness();
+    expect(report.scoredRows.valid).toBe(true);
+    expect(report.scoredRows.scored).toBeGreaterThan(0);
+    expect(report.armIds).toEqual(["boost-k-scale", "boost-per-list", "boost-zero"]);
+    expect(Object.keys(report.arms)).toHaveLength(3);
+    expect(report.productionSeam).toBe(true);
+    expect(report.download).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

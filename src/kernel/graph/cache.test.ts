@@ -1,14 +1,16 @@
 import { describe, it, expect, afterEach } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { loadOntology } from "../ontology/loader.js";
 import {
   buildGraphCache,
   graphCacheStatus,
   lazyLoadNoteBody,
+  readGraphCache,
 } from "./cache.js";
+import { buildGraph, loadCachedGraph, loadNodeIndex } from "../engine/graph/builder.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -98,5 +100,42 @@ describe("derived graph cache", () => {
     expect(status.staleness.graphStale).toBe(true);
     expect(status.staleness.searchStale).toBe(true);
     expect(status.staleness.validationStale).toBe(true);
+  });
+
+  it("fails loudly for a missing vault and for symlink escapes", async () => {
+    const missing = path.join(await mkdtemp(path.join(tmpdir(), "oms-graph-")), "missing");
+    tmpVault = path.dirname(missing);
+    const ontology = await loadOntology(ontologyDir);
+    await expect(buildGraphCache({ vault: missing, ontology })).rejects.toThrow(/ENOENT|vault/i);
+
+    const outside = await mkdtemp(path.join(tmpdir(), "oms-graph-outside-"));
+    await writeFile(path.join(outside, "escape.md"), "# outside\n", "utf8");
+    await mkdir(path.join(tmpVault, "notes"));
+    await symlink(outside, path.join(tmpVault, "notes", "linked"));
+    await expect(buildGraphCache({ vault: tmpVault, ontology })).rejects.toThrow(/escapes.*vault root/i);
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("rejects malformed persisted cache instead of treating it as absent", async () => {
+    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-graph-"));
+    const cacheDirectory = path.join(tmpVault, ".oms", "cache");
+    await mkdir(cacheDirectory, { recursive: true });
+    await writeFile(path.join(cacheDirectory, "graph.json"), "{not-json", "utf8");
+    await expect(readGraphCache(tmpVault)).rejects.toThrow(/not valid JSON/i);
+
+    await writeFile(path.join(cacheDirectory, "graph.json"), JSON.stringify({ version: 999 }), "utf8");
+    await expect(readGraphCache(tmpVault)).rejects.toThrow(/invalid format/i);
+  });
+
+  it("keeps engine graph and node cache IO failures loud", async () => {
+    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-graph-engine-"));
+    await mkdir(path.join(tmpVault, ".oms", "cache", "engine"), { recursive: true });
+    const graphPath = path.join(tmpVault, ".oms", "cache", "engine", "graph.json");
+    await writeFile(graphPath, "{not-json", "utf8");
+    await expect(loadCachedGraph(graphPath)).rejects.toThrow(/not valid JSON/i);
+    await expect(loadNodeIndex(graphPath)).rejects.toThrow(/not valid JSON/i);
+
+    const missing = path.join(tmpVault, "missing");
+    await expect(buildGraph({ vaultPath: missing })).rejects.toThrow(/ENOENT|vault/i);
   });
 });

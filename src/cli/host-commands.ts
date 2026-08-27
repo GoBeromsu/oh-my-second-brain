@@ -118,6 +118,7 @@ export async function runUpdateCommand(context: HostCommandContext): Promise<num
     check: context.checkUpdate,
     dryRun: context.dryRun,
     yes: context.yes,
+    interactive: process.stdin.isTTY === true && process.env["OMS_NON_INTERACTIVE"] !== "1",
     executeExternal: context.executeExternal,
     timeoutMs: context.timeoutMs,
     reconcileCommand: {
@@ -153,5 +154,5 @@ export async function runUpdateReconcile(context: HostCommandContext): Promise<n
       ? formatHostOperationResultsJson(results, context.dryRun)
       : formatHostOperationResults(results, context.dryRun),
   );
-  return 0;
+  return results.some((result) => result.messages.some((message) => message.startsWith("FAILED:"))) ? 1 : 0;
 }

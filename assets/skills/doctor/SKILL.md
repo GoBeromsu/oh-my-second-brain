@@ -17,7 +17,7 @@ Use this skill when a vault has convention violations, an unhealthy graph or sem
 ## Usage
 
 ```text
-/doctor <audit|validate|build-graph|semantic-cleanup|sync-embeddings>
+/doctor <audit|validate|build-graph|cleanup|sync-embeddings>
 ```
 
-`audit` and `validate` inspect notes against their declared concept schemas. `build-graph`, `semantic-cleanup`, and `sync-embeddings` are repair operations and may write generated graph or semantic-index state. Review the diagnosis, then invoke only the repair needed.
+`audit` and `validate` inspect notes against their declared concept schemas. `build-graph`, `cleanup`, and `sync-embeddings` are repair operations and may write generated graph or semantic-index state. Review the diagnosis, then invoke only the repair needed.

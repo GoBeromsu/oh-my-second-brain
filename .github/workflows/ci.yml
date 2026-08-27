@@ -15,6 +15,14 @@ jobs:
   # duplicated that work three times over the Node matrix for no added signal.
   check:
     runs-on: ubuntu-latest
+    env:
+      OMS_MEASUREMENT_REQUIRED: "1"
+      OMS_MEASUREMENT_ATTESTATION_REQUIRED: "1"
+      OMS_MEASUREMENT_RELEASE: "1"
+      OMS_MEASUREMENT_PROFILE: "boost-c040"
+      OMS_MEASUREMENT_MANIFEST: "docs/measurements/boost-c040.json"
+      OMS_PREREG_QRELS_HASH: ${{ vars.OMS_PREREG_QRELS_HASH }}
+      OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY: ${{ secrets.OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY }}
     strategy:
       # Don't let one version's failure cancel the others -- we want the full
       # per-version signal, not a fail-fast cancellation that masks real results.
@@ -37,4 +45,6 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run check:docs
+      - name: Required R2 Phase D measurement gate (boost-c040)
+        run: npm run check:measurement
       - run: npm run audit
