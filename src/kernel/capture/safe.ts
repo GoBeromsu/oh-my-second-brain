@@ -1,4 +1,4 @@
-import { access, appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stringify as yamlStringify } from "yaml";
 import { parseNote } from "../conventions/frontmatter.js";
@@ -401,17 +401,6 @@ async function fileExists(fullPath: string): Promise<boolean> {
   }
 }
 
-async function isDirectory(fullPath: string): Promise<boolean> {
-  try {
-    return (await stat(fullPath)).isDirectory();
-  } catch (error) {
-    if (hasErrorCode(error, "ENOENT") || hasErrorCode(error, "ENOTDIR")) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 export function prepareCapture(input: CapturePrepareInput): CapturePlan {
   const frontmatter = input.frontmatter ?? {};
   const planned = planCreatePlacement(
@@ -473,10 +462,9 @@ export function prepareCapture(input: CapturePrepareInput): CapturePlan {
  * Admission Rules - target verification.
  *
  * Runs before ANY disk mutation. `cwd` resolution is unverified for the write
- * surface (the process may have booted anywhere). A `global` registry pointer
- * must still point at a real `.oms` ontology; every other source is trusted
- * without an ontology presence check so the bundled-ontology fallback keeps
- * working.
+ * surface (the process may have booted anywhere); every other source is
+ * trusted without an ontology presence check so the bundled-ontology
+ * fallback keeps working.
  */
 export async function admitWriteTarget(target: WriteTarget): Promise<WriteRejection | undefined> {
   if (target.source === "cwd") {
@@ -484,22 +472,8 @@ export async function admitWriteTarget(target: WriteTarget): Promise<WriteReject
       "admission",
       "target-unverified",
       `Refusing to write: the target vault was inferred from the current directory (${target.vault}), which is not a verified Oh My Second Brain vault`,
-      "run `oms setup` in your Obsidian vault (or set OMS_VAULT / register the vault in ~/.oms/config.yaml), then retry",
+      "run `oms setup` in your Obsidian vault (or set OMS_VAULT), then retry",
     );
-  }
-
-  if (target.source === "global") {
-    const hasOntology =
-      (await isDirectory(path.join(target.vault, ".oms", "concepts"))) ||
-      (await fileExists(path.join(target.vault, ".oms", "taxonomy.yaml")));
-    if (!hasOntology) {
-      return rejection(
-        "admission",
-        "target-invalid",
-        `Refusing to write: the registered global vault target has no .oms ontology: ${target.vault}`,
-        "update ~/.oms/config.yaml to point at your vault, or run `oms setup` in that vault, then retry",
-      );
-    }
   }
 
   return undefined;

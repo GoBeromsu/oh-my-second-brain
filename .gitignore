@@ -5,10 +5,13 @@ dist/
 *.tsbuildinfo
 coverage/
 
-# Local agent-orchestration tooling state (oh-my-claudecode / oh-my-codex)
+# Local agent-orchestration tooling state (oh-my-claudecode / oh-my-codex),
+# plus Codex CLI session state (.codex/) and its codegraph cache (.codegraph)
 .omc/
 .omx/
 .omo/
+.codegraph
+.codex/
 
 # Logs & OS / editor noise
 *.log

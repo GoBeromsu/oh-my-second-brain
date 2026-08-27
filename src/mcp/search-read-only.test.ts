@@ -132,10 +132,10 @@ async function makeVault(): Promise<string> {
 /**
  * Runs the real `oms mcp` binary against `vault`.
  *
- * HOME is redirected to an empty directory so an operator's `~/.oms/config.yaml`
- * cannot decide where this test points. Without it the server resolves a global
- * vault from the developer's machine and refuses to boot, which would make every
- * assertion below pass or fail for reasons unrelated to writing.
+ * HOME is redirected to an empty directory so this test's resolution is
+ * self-contained and doesn't depend on anything in the developer's environment,
+ * which would make every assertion below pass or fail for reasons unrelated to
+ * writing.
  *
  * `OMS_VAULT` makes the vault a verified write target. That is deliberate: it
  * means the search path is permitted to write and still must not. A cwd-inferred

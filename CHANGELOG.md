@@ -10,6 +10,20 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Breaking
+
+- **The global vault registry at `~/.oms/config.yaml` is gone.** OMS no longer reads or writes a machine-wide vault pointer, and `oms setup` / `oms install` no longer create one. A command run outside a vault, with no bridge and no `OMS_VAULT`, now resolves to the current directory and refuses to write, instead of silently falling back to whatever vault happened to be registered once. Run the command from inside your vault, pass `--vault`, set `OMS_VAULT`, or bridge the directory with `oms link`. An existing `~/.oms/config.yaml` is ignored and can be deleted.
+
+  **If you use an MCP host, check its server configuration.** Any host that launches `oms mcp` with no `--vault` and no `OMS_VAULT` in its env block was relying on the registry and will stop resolving a vault. Claude is handled for you — see below — but hand-written host configurations need the vault passed explicitly.
+
+### Changed
+
+- **The Claude installer now records your vault, the way the Codex and Hermes installers always have.** `oms install --runtime claude` registers `oms` as a user-scope MCP server in `~/.claude.json` with the resolved vault baked in as an absolute `--vault` argument, and `oms uninstall` removes it again. Claude was the one adapter that shipped no vault of its own: its plugin `.mcp.json` is owned and rewritten by npm on every update, so it can never hold a per-machine path, and it leaned on the global registry to cover the difference. That file is left untouched as a fallback for anyone who prefers to set `OMS_VAULT` themselves, and unrelated entries already in `~/.claude.json` are preserved byte for byte.
+
+### Fixed
+
+- **Running this repository's test suite or release smoke script no longer writes into your real home directory.** Both spawned the packaged `oms` CLI with the developer's own `HOME` inherited, so `oms setup` wrote a global vault registry pointing at a temporary directory that the run then deleted — leaving the next real `oms` command to fail on a vault path that no longer existed. Child processes now run against a throwaway home, and the suites assert that real home state is untouched. Installed users were never affected; this only ever hit people running the repository's own tests.
+
 ## [0.6.2] - 2026-08-27
 
 ### Fixed

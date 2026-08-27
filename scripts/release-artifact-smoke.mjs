@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -42,6 +42,11 @@ function run(command, commandArgs, options = {}) {
   return result;
 }
 
+// packTarball/extractPackage/installRuntimeDependencies below spawn `npm`
+// and `tar`, but never the packaged `oms` CLI, so they cannot touch a global
+// HOME-scoped config. Deliberately NOT wrapped in smokeEnv(): overriding HOME
+// for `npm install` would risk losing `.npmrc`/npm-cache resolution for
+// anyone behind a private registry or proxy, for zero isolation benefit.
 function packTarball() {
   const result = run("npm", ["pack", "--json"]);
   let packs;
@@ -66,6 +71,44 @@ function assertPath(target, label = target) {
   if (!existsSync(target)) fail(`missing ${label}: ${target}`);
 }
 
+// The packaged CLI reads/writes host state under `<HOME>` (today that is just
+// `~/.oms/config.yaml`, see src/cli/global-writeback.ts, but nothing here
+// should depend on that staying true). Every child process this script spawns
+// that runs the packaged CLI must get a throwaway HOME inside this run's own
+// temp root, or a future write there lands on the real developer's home
+// directory instead of a vault that is deleted the moment this script exits.
+// USERPROFILE is set alongside HOME so the same isolation holds if this ever
+// runs on Windows, where `os.homedir()` reads USERPROFILE instead.
+function smokeEnv(smokeHome, overrides = {}) {
+  return { ...process.env, HOME: smokeHome, USERPROFILE: smokeHome, ...overrides };
+}
+
+// A cheap (metadata-only, no file content read) recursive snapshot of a
+// directory tree, used to prove a real home directory was left untouched.
+// Reading full file content would be correct too, but `~/.oms` can hold
+// large downloaded embedding models, and hashing those on every release
+// check would make the smoke test needlessly slow; size + mtime already
+// changes on any write a real CLI invocation could make.
+function snapshotDir(dir) {
+  if (!existsSync(dir)) return null;
+  const entries = [];
+  const walk = (current, rel) => {
+    for (const name of readdirSync(current).sort()) {
+      const absChild = path.join(current, name);
+      const relChild = rel === "" ? name : `${rel}/${name}`;
+      const st = statSync(absChild);
+      if (st.isDirectory()) {
+        entries.push(`${relChild}/`);
+        walk(absChild, relChild);
+      } else {
+        entries.push(`${relChild}:${st.size}:${st.mtimeMs}`);
+      }
+    }
+  };
+  walk(dir, "");
+  return entries.join("\n");
+}
+
 function installRuntimeDependencies(packageRoot) {
   run("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], {
     cwd: packageRoot,
@@ -85,11 +128,11 @@ function makeVault(tempRoot) {
   return vault;
 }
 
-function setupSmoke(packageRoot, vault) {
+function setupSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
   const result = run(process.execPath, [cli, "setup", "--vault", vault, "--yes", "--install-claude"], {
     cwd: packageRoot,
-    env: { ...process.env, OMS_UPDATE_NOTICE: "0" },
+    env: smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" }),
   });
   const output = `${result.stdout}\n${result.stderr}`;
   assertPath(path.join(vault, ".oms/taxonomy.yaml"), "vault taxonomy");
@@ -109,11 +152,11 @@ function setupSmoke(packageRoot, vault) {
   console.log("[release:artifact-smoke] ok: setup dry-run works from unpacked package.");
 }
 
-function hostInstallSmoke(packageRoot, vault) {
+function hostInstallSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
   const result = run(process.execPath, [cli, "install", "--runtime", "all", "--vault", vault, "--dry-run"], {
     cwd: packageRoot,
-    env: { ...process.env, OMS_UPDATE_NOTICE: "0" },
+    env: smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" }),
   });
   const output = `${result.stdout}\n${result.stderr}`;
   for (const expected of ["[claude] install", "[codex] install", "[hermes] install", "rules/oms.md", "skills/knowledge-management/oms"]) {
@@ -122,11 +165,11 @@ function hostInstallSmoke(packageRoot, vault) {
   console.log("[release:artifact-smoke] ok: host install dry-run works from unpacked package.");
 }
 
-function updateSmoke(packageRoot, vault) {
+function updateSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
   const result = run(process.execPath, [cli, "update", "--runtime", "all", "--vault", vault, "--dry-run"], {
     cwd: packageRoot,
-    env: { ...process.env, OMS_UPDATE_LATEST_VERSION: "999.0.0" },
+    env: smokeEnv(smokeHome, { OMS_UPDATE_LATEST_VERSION: "999.0.0" }),
   });
   const output = `${result.stdout}\n${result.stderr}`;
   for (const expected of [
@@ -139,15 +182,17 @@ function updateSmoke(packageRoot, vault) {
   console.log("[release:artifact-smoke] ok: update dry-run works from unpacked package.");
 }
 
-async function mcpSmoke(packageRoot, vault) {
+async function mcpSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
   // StdioClientTransport sandboxes the child env to a safe default subset, so the
   // embedding-model path must be forwarded explicitly or the child is always
   // model-less regardless of this process's env -- which would desync it from the
   // hasModel gate below. Forward the canonical OMS_EMBEDDING_PROVIDER +
   // OMS_EMBEDDING_MODEL pair (ADR-007: explicit config, no auto-detect),
-  // matching src/mcp/semantic-server.test.ts.
-  const childEnv = { ...getDefaultEnvironment() };
+  // matching src/mcp/semantic-server.test.ts. HOME/USERPROFILE are likewise
+  // forwarded explicitly (the sandboxed default subset drops them) so this
+  // child's global write-back also lands in the isolated HOME, not the real one.
+  const childEnv = { ...getDefaultEnvironment(), HOME: smokeHome, USERPROFILE: smokeHome };
   if (process.env.OMS_EMBEDDING_PROVIDER) childEnv.OMS_EMBEDDING_PROVIDER = process.env.OMS_EMBEDDING_PROVIDER;
   if (process.env.OMS_EMBEDDING_MODEL) childEnv.OMS_EMBEDDING_MODEL = process.env.OMS_EMBEDDING_MODEL;
   const transport = new StdioClientTransport({
@@ -300,6 +345,12 @@ async function mcpSmoke(packageRoot, vault) {
 }
 
 const tempRoot = mkdtempSync(path.join(tmpdir(), "oms-release-smoke-"));
+// Every packaged-CLI child this script spawns gets HOME pointed here instead
+// of the real user's HOME, so nothing that CLI does can reach the real `~/.oms`.
+const smokeHome = path.join(tempRoot, "Home");
+mkdirSync(smokeHome, { recursive: true });
+const realOmsDir = path.join(homedir(), ".oms");
+const realOmsBefore = snapshotDir(realOmsDir);
 let tarball;
 try {
   tarball = packTarball();
@@ -310,11 +361,19 @@ try {
   installRuntimeDependencies(packageRoot);
   const vault = makeVault(tempRoot);
   if (runSetup) {
-    setupSmoke(packageRoot, vault);
-    hostInstallSmoke(packageRoot, vault);
-    updateSmoke(packageRoot, vault);
+    setupSmoke(packageRoot, vault, smokeHome);
+    hostInstallSmoke(packageRoot, vault, smokeHome);
+    updateSmoke(packageRoot, vault, smokeHome);
   }
-  if (runMcp) await mcpSmoke(packageRoot, vault);
+  if (runMcp) await mcpSmoke(packageRoot, vault, smokeHome);
+  // The whole point of smokeHome: prove the real HOME's `.oms` directory was
+  // never touched by any of the above, however many CLI/MCP children ran.
+  // No `.oms` before must mean no `.oms` after; an existing one must be
+  // byte-identical (per the snapshotDir metadata comparison above).
+  const realOmsAfter = snapshotDir(realOmsDir);
+  if (realOmsAfter !== realOmsBefore) {
+    fail(`real HOME .oms directory changed during the smoke run: ${realOmsDir}`);
+  }
 } finally {
   if (tarball && existsSync(tarball)) rmSync(tarball, { force: true });
   rmSync(tempRoot, { recursive: true, force: true });

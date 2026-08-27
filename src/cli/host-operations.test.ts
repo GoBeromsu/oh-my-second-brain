@@ -446,6 +446,74 @@ describe("host installer/uninstaller", () => {
     expect(parsed.custom).toBe("  unmanaged spacing  ");
   });
 
+  it("registers a user-scope Claude MCP entry with the resolved vault baked in as an absolute path", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-user-scope-"));
+    const claudeJsonPath = path.join(home, ".claude.json");
+
+    await runHostOperation({ action: "install", runtime: "claude", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+
+    const written = JSON.parse(await readFile(claudeJsonPath, "utf-8")) as {
+      mcpServers: { oms: { command: string; args: string[] } };
+    };
+    expect(written.mcpServers.oms).toEqual({ command: "oms", args: ["mcp", "--vault", "/tmp/Vault"] });
+    // Claude Code's user scope is the dotfile `~/.claude.json`. The dotless
+    // sibling `~/claude.json` is read by nothing, so writing there would leave
+    // the registration inert while every assertion above still passed.
+    expect(existsSync(path.join(home, "claude.json"))).toBe(false);
+  });
+
+  it("re-installing the Claude user-scope MCP entry does not duplicate it", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-user-scope-idempotent-"));
+    const claudeJsonPath = path.join(home, ".claude.json");
+
+    await runHostOperation({ action: "install", runtime: "claude", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+    await runHostOperation({ action: "install", runtime: "claude", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+
+    const raw = await readFile(claudeJsonPath, "utf-8");
+    expect(raw.match(/"oms"\s*:/g)).toHaveLength(1);
+    const written = JSON.parse(raw) as { mcpServers: { oms: { command: string; args: string[] } } };
+    expect(written.mcpServers.oms).toEqual({ command: "oms", args: ["mcp", "--vault", "/tmp/Vault"] });
+  });
+
+  it("uninstall removes the Claude user-scope MCP entry", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-user-scope-uninstall-"));
+    const claudeJsonPath = path.join(home, ".claude.json");
+
+    await runHostOperation({ action: "install", runtime: "claude", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+    await runHostOperation({ action: "uninstall", runtime: "claude", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+
+    const written = JSON.parse(await readFile(claudeJsonPath, "utf-8")) as { mcpServers: Record<string, unknown> };
+    expect(written.mcpServers.oms).toBeUndefined();
+  });
+
+  it("leaves a pre-existing unrelated Claude user-scope MCP entry untouched through install and uninstall", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-user-scope-preserve-"));
+    const claudeJsonPath = path.join(home, ".claude.json");
+    const original = JSON.stringify({
+      custom: "  unmanaged spacing  ",
+      mcpServers: { other: { command: "keep", args: ["stay"] } },
+    });
+    await writeFile(claudeJsonPath, original, "utf-8");
+
+    await runHostOperation({ action: "install", runtime: "claude", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+    const afterInstall = JSON.parse(await readFile(claudeJsonPath, "utf-8")) as {
+      custom: string;
+      mcpServers: { other: { command: string; args: string[] }; oms: unknown };
+    };
+    expect(afterInstall.custom).toBe("  unmanaged spacing  ");
+    expect(afterInstall.mcpServers.other).toEqual({ command: "keep", args: ["stay"] });
+    expect(afterInstall.mcpServers.oms).toBeDefined();
+
+    await runHostOperation({ action: "uninstall", runtime: "claude", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+    const afterUninstall = JSON.parse(await readFile(claudeJsonPath, "utf-8")) as {
+      custom: string;
+      mcpServers: { other: { command: string; args: string[] }; oms?: unknown };
+    };
+    expect(afterUninstall.custom).toBe("  unmanaged spacing  ");
+    expect(afterUninstall.mcpServers.other).toEqual({ command: "keep", args: ["stay"] });
+    expect(afterUninstall.mcpServers.oms).toBeUndefined();
+  });
+
   it("installs and uninstalls Hermes native skill bundle and MCP config", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-install-hermes-"));
     await runHostOperation({ action: "install", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
