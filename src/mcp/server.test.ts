@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterAll, beforeAll, describe, it, expect } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
@@ -16,6 +16,19 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../");
 const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
+
+// The two `{ ...process.env }`-built envs below (search for `smokeHome` usage)
+// otherwise inherit the real HOME. Isolated the same way
+// src/cli/oms-dispatch.test.ts isolates its CLI child processes.
+let smokeHome = "";
+
+beforeAll(async () => {
+  smokeHome = await mkdtemp(path.join(tmpdir(), "oms-mcp-server-home-"));
+});
+
+afterAll(async () => {
+  if (smokeHome) await rm(smokeHome, { recursive: true, force: true });
+});
 
 function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   const block = result.content[0];
@@ -185,6 +198,8 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const env = { ...process.env };
     delete env.OMS_EMBEDDING_PROVIDER;
     delete env.OMS_EMBEDDING_MODEL;
+    env.HOME = smokeHome;
+    env.USERPROFILE = smokeHome;
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [distCli, "mcp", "--vault", fixtureVault],
@@ -209,6 +224,8 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const env = { ...process.env };
     delete env.OMS_EMBEDDING_PROVIDER;
     delete env.OMS_EMBEDDING_MODEL;
+    env.HOME = smokeHome;
+    env.USERPROFILE = smokeHome;
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [distCli, "mcp", "--vault", fixtureVault],

@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -10,6 +11,51 @@ import { updateNoticeCachePath } from "./update-notice.js";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../");
 const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
+
+// `oms mcp` doesn't write a global vault registry today, but nothing here
+// should rely on that staying true - HOME/USERPROFILE are pointed at a
+// throwaway directory instead of the real inherited one, the same way
+// src/cli/oms-dispatch.test.ts isolates its CLI child processes.
+let smokeHome = "";
+const realOmsDir = path.join(homedir(), ".oms");
+
+// Metadata-only (size + mtime, not content) recursive snapshot, used to prove
+// this suite never touches the real home directory. Reading full file
+// content would be correct too, but `~/.oms` can hold a large downloaded
+// embedding model, and hashing that on every test run would make the suite
+// needlessly slow; size + mtime already changes on any write a real CLI
+// invocation could make.
+function snapshotDir(dir: string): string | null {
+  if (!existsSync(dir)) return null;
+  const entries: string[] = [];
+  const walk = (current: string, rel: string) => {
+    for (const name of readdirSync(current).sort()) {
+      const absChild = path.join(current, name);
+      const relChild = rel === "" ? name : `${rel}/${name}`;
+      const st = statSync(absChild);
+      if (st.isDirectory()) {
+        entries.push(`${relChild}/`);
+        walk(absChild, relChild);
+      } else {
+        entries.push(`${relChild}:${st.size}:${st.mtimeMs}`);
+      }
+    }
+  };
+  walk(dir, "");
+  return entries.join("\n");
+}
+
+let realOmsBefore: string | null = null;
+
+beforeAll(async () => {
+  realOmsBefore = snapshotDir(realOmsDir);
+  smokeHome = await mkdtemp(path.join(tmpdir(), "oms-mcp-update-notice-home-"));
+});
+
+afterAll(async () => {
+  expect(snapshotDir(realOmsDir)).toBe(realOmsBefore);
+  if (smokeHome) await rm(smokeHome, { recursive: true, force: true });
+});
 
 async function installedVersion(): Promise<string> {
   const manifest: unknown = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf-8"));
@@ -29,7 +75,8 @@ async function instructionsWithStateDir(stateDir: string): Promise<string | unde
     stderr: "pipe",
     env: {
       PATH: process.env["PATH"] ?? "",
-      HOME: process.env["HOME"] ?? "",
+      HOME: smokeHome,
+      USERPROFILE: smokeHome,
       OMS_AUTO_UPDATE_STATE_DIR: stateDir,
       // No registry reachable through this stub: the boot path must not need one.
       OMS_UPDATE_LATEST_VERSION: "99.0.0",

@@ -11,9 +11,12 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../..");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
-// This suite calls `runCli(["setup", ...])` without `--dry-run`, which drives
-// the real global write-back (see src/cli/global-writeback.ts) into
-// `<HOME>/.oms/config.yaml`. Every runCli() call gets HOME/USERPROFILE
+// This suite calls `runCli(["setup", ...])` without `--dry-run`. `oms setup`
+// no longer writes a global vault registry, but it still writes host state
+// under `$HOME` - e.g. `--install-claude` wires hook entries into
+// `$HOME/.claude/settings.json` (see upsertClaudeHooks in
+// src/vendors/claude/claude-hooks.ts) - so the isolation below is load-bearing
+// today, not merely precautionary. Every runCli() call gets HOME/USERPROFILE
 // pointed at `smokeHome` (a throwaway directory, see beforeAll below) instead
 // of the real inherited one, so a command that writes host state cannot
 // reach the real developer's home directory no matter which command a future
