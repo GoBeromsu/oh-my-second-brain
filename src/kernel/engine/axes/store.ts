@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { parseNote } from "../../conventions/frontmatter.js";
+import { excludedNoteMatcher } from "../../conventions/note-exclude.js";
 
 export type AxisKind = "folder" | "field" | "link";
 export type AxisValueType = "string" | "number" | "boolean" | "date";
@@ -194,7 +195,21 @@ export class AxisObservationStore {
     statement: Database.Statement<unknown[]>,
   ): void {
     for (const original of flattenValue(value)) {
-      const normalized = normalizeAxisValue(original);
+      // An empty or whitespace-only string carries no axis information, so
+      // it is dropped exactly like the null/undefined that flattenValue
+      // already discards. `field: ""` is a normal "declared but unset"
+      // frontmatter state, not vault corruption; it must not abort the
+      // whole vault scan.
+      if (typeof original === "string" && original.trim().length === 0) continue;
+      let normalized: ReturnType<typeof normalizeAxisValue>;
+      try {
+        normalized = normalizeAxisValue(original);
+      } catch (error) {
+        // canonicalScalar's own errors carry no note path, which makes them
+        // undiagnosable from the message alone during a whole-vault scan.
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${notePath}: ${message}`, { cause: error });
+      }
       statement.run(notePath, axisKind, axisKey, normalized.type, JSON.stringify(normalized.value), normalized.normalizedValue);
     }
   }
@@ -374,6 +389,7 @@ function ensureInsideVault(root: string, candidate: string, label: string): void
 async function* walkVaultMarkdownStrict(
   dir: string,
   base: string,
+  isExcluded: (notePath: string) => boolean,
   rootRealPath?: string,
   visitedDirectories: Set<string> = new Set(),
 ): AsyncGenerator<string> {
@@ -391,9 +407,12 @@ async function* walkVaultMarkdownStrict(
     if (AXIS_SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
     const entryStat = await stat(fullPath);
     if (entryStat.isDirectory()) {
-      yield* walkVaultMarkdownStrict(fullPath, base, root, visitedDirectories);
+      yield* walkVaultMarkdownStrict(fullPath, base, isExcluded, root, visitedDirectories);
     } else if (entryStat.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-      yield path.relative(base, fullPath).replace(/\\/g, "/");
+      const notePath = path.relative(base, fullPath).replace(/\\/g, "/");
+      // Taxonomy-declared non-notes (template sources above all) never enter
+      // the EAV scan: their frontmatter is intentionally not valid YAML.
+      if (!isExcluded(notePath)) yield notePath;
     }
   }
 }
@@ -412,9 +431,10 @@ export async function collectVaultAxisObservations(
     parsed: ReturnType<typeof parseNote>;
   }> = [];
   try {
+    const isExcluded = await excludedNoteMatcher(vault);
     // Read and parse the complete source set before touching the existing
     // snapshot. This keeps read/parse failures from exposing a partial scan.
-    for await (const notePath of walkVaultMarkdownStrict(vault, vault)) {
+    for await (const notePath of walkVaultMarkdownStrict(vault, vault, isExcluded)) {
       const raw = await readFile(path.join(vault, notePath), "utf-8");
       sourceFiles.set(notePath, Buffer.from(raw, "utf8"));
       const parsed = parseNote(raw);

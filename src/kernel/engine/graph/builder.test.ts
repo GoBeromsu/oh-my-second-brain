@@ -202,6 +202,37 @@ describe("Tier 4 – type-affinity edges", () => {
 // Cache round-trip
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// taxonomy.yaml: exclude — malformed frontmatter must not abort the scan
+// ---------------------------------------------------------------------------
+
+describe("taxonomy-declared exclusions", () => {
+  it("honors taxonomy.yaml: exclude instead of aborting on invalid frontmatter", async () => {
+    await writeVaultFile(
+      ".oms/taxonomy.yaml",
+      "folders: {}\nexclude:\n  - \"templates/**\"\n",
+    );
+    // A template source's pre-substitution frontmatter is intentionally not
+    // valid YAML — this must be skipped, not thrown on.
+    await writeVaultFile("templates/daily.md", "---\ndate: {{date}}\n---\n# {{title}}\n");
+    await writeVaultFile("notes/idea.md", "# Idea\n");
+
+    const nodes = await buildNodeIndex({ vaultPath: tmpVault });
+    expect(nodes.map((n) => n.path)).toEqual(["notes/idea.md"]);
+
+    const edges = await buildGraph({ vaultPath: tmpVault });
+    expect(edges.every((e) => e.from !== "templates/daily.md" && e.to !== "templates/daily.md")).toBe(
+      true,
+    );
+  });
+
+  it("still throws for malformed frontmatter on a note that is not excluded", async () => {
+    await writeVaultFile(".oms/taxonomy.yaml", "folders: {}\n");
+    await writeVaultFile("broken.md", "---\nstatus: [broken\n---\nBody\n");
+    await expect(buildNodeIndex({ vaultPath: tmpVault })).rejects.toThrow(/Malformed frontmatter/);
+  });
+});
+
 describe("cache helpers", () => {
   it("preserves numeric and boolean frontmatter values in the node snapshot", async () => {
     await writeVaultFile(

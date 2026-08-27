@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { parseNote } from "../../conventions/frontmatter.js";
+import { excludedNoteMatcher } from "../../conventions/note-exclude.js";
 import type { GraphEdge } from "../types.js";
 import type { AxisScalar, EngineGraphNode } from "./node.js";
 import { toAxisScalars, tokenize } from "./node.js";
@@ -31,6 +32,7 @@ function ensureInsideRoot(root: string, candidate: string, label: string): void 
 async function* walkMarkdown(
   dir: string,
   base: string,
+  isExcluded: (notePath: string) => boolean,
   rootRealPath?: string,
   visitedDirectories: Set<string> = new Set(),
 ): AsyncGenerator<string> {
@@ -51,9 +53,13 @@ async function* walkMarkdown(
     if (name === ".oms" || name === "node_modules" || name.startsWith(".")) continue;
     const entryStat = await stat(full);
     if (entryStat.isDirectory()) {
-      yield* walkMarkdown(full, base, root, visitedDirectories);
+      yield* walkMarkdown(full, base, isExcluded, root, visitedDirectories);
     } else if (entryStat.isFile() && name.toLowerCase().endsWith(".md")) {
-      yield path.relative(base, full).replace(/\\/g, "/");
+      const notePath = path.relative(base, full).replace(/\\/g, "/");
+      // Template sources and other taxonomy-declared non-notes are skipped
+      // here: their pre-substitution frontmatter is intentionally invalid
+      // YAML, and a single one of them must not abort the whole vault scan.
+      if (!isExcluded(notePath)) yield notePath;
     }
   }
 }
@@ -195,8 +201,9 @@ export async function buildGraph(opts: {
     files = opts.files;
     await validateExplicitFiles(vaultPath, files);
   } else {
+    const isExcluded = await excludedNoteMatcher(vaultPath);
     const collected: string[] = [];
-    for await (const f of walkMarkdown(vaultPath, vaultPath)) collected.push(f);
+    for await (const f of walkMarkdown(vaultPath, vaultPath, isExcluded)) collected.push(f);
     files = collected;
   }
 
@@ -463,8 +470,9 @@ interface NodeCacheFile {
 /** Hash sorted markdown paths and bytes so add/edit/delete invalidates a cache. */
 export async function nodeSourceSignature(vaultPath: string): Promise<string> {
   const vault = path.resolve(vaultPath);
+  const isExcluded = await excludedNoteMatcher(vault);
   const files: string[] = [];
-  for await (const file of walkMarkdown(vault, vault)) files.push(file);
+  for await (const file of walkMarkdown(vault, vault, isExcluded)) files.push(file);
   files.sort();
 
   const digest = createHash("sha256");
@@ -509,8 +517,9 @@ export async function buildNodeIndex(opts: {
     files = opts.files;
     await validateExplicitFiles(vaultPath, files);
   } else {
+    const isExcluded = await excludedNoteMatcher(vaultPath);
     const collected: string[] = [];
-    for await (const f of walkMarkdown(vaultPath, vaultPath)) collected.push(f);
+    for await (const f of walkMarkdown(vaultPath, vaultPath, isExcluded)) collected.push(f);
     files = collected;
   }
 
