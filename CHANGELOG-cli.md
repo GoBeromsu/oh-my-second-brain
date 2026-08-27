@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-27
+
 ### Breaking
 
 - `oms setup` and `oms install --vault` no longer register the vault in `~/.oms/config.yaml`. The write-back and its `OMS_VAULT` migration backfill are removed entirely.

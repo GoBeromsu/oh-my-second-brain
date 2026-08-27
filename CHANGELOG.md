@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-27
+
 ### Breaking
 
 - **The global vault registry at `~/.oms/config.yaml` is gone.** OMS no longer reads or writes a machine-wide vault pointer, and `oms setup` / `oms install` no longer create one. A command run outside a vault, with no bridge and no `OMS_VAULT`, now resolves to the current directory and refuses to write, instead of silently falling back to whatever vault happened to be registered once. Run the command from inside your vault, pass `--vault`, set `OMS_VAULT`, or bridge the directory with `oms link`. An existing `~/.oms/config.yaml` is ignored and can be deleted.

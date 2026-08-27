@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-27
+
 ### Breaking
 
 - `resolveEffectiveVault` no longer consults `~/.oms/config.yaml`. The `"global"` member is removed from `VaultSource`, and the write kernel's `admitWriteTarget` drops the branch that trusted it. The remaining precedence is unchanged in relative order: `explicit` > local `.oms` vault ontology > bridge `links.yaml` > `OMS_VAULT`, falling back to `cwd` (unverified, writes rejected).
