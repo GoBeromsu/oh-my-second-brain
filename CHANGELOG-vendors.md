@@ -4,6 +4,11 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- The Claude adapter registers the resolved vault itself instead of depending on the removed global registry. `installClaude` writes a user-scope `oms` MCP server entry into `~/.claude.json` built from the shared `mcpServerEntry()` helper — the same helper and the same `["mcp", "--vault", <absolute path>]` shape the Codex and Hermes adapters already use — and `uninstallClaude` removes it. The write is a byte-preserving JSON splice, so unrelated `mcpServers` entries and unmanaged formatting in that file survive untouched, and re-installing is idempotent. The npm-owned plugin `.mcp.json` is deliberately left as a bare `args: ["mcp"]` fallback; a user-scope entry shadows it, since Claude resolves scopes Local > Project > User > Plugin-provided without merging fields.
+- This does not close issue #56, which asks for a plugin-owned, `plugin:<id>:<server>`-namespaced MCP surface with no separate user registration. A plugin-owned manifest is rewritten by npm on every update and cannot carry a per-machine vault path, so the user-scope entry is currently the only place the vault can live. What changes here is that the registration is no longer vault-less.
+
 ## [0.6.2] - 2026-08-27
 
 ## [0.6.1] - 2026-08-27

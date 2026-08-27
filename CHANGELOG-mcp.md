@@ -4,6 +4,10 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+### Breaking
+
+- An MCP host that launches `oms mcp` with no `--vault` argument and no `OMS_VAULT` in its env block no longer resolves a vault from the global registry. Such a server resolves to its launch directory and rejects writes with `target-unverified`; host configurations must pass the vault explicitly. The Claude installer now does this on your behalf (see the vendors changelog); other hosts need the configuration updated by hand.
+
 ## [0.6.2] - 2026-08-27
 
 ## [0.6.1] - 2026-08-27
