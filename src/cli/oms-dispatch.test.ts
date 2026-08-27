@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { lstat, mkdir, readFile, readlink, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,13 +10,61 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../..");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
-const baseEnv = {
-  ...process.env,
-  OMS_UPDATE_NOTICE: "0",
-  OMS_NO_UPDATE_NOTICE: "1",
-};
 
+// This suite calls `runCli(["setup", ...])` without `--dry-run`, which drives
+// the real global write-back (see src/cli/global-writeback.ts) into
+// `<HOME>/.oms/config.yaml`. Every runCli() call gets HOME/USERPROFILE
+// pointed at `smokeHome` (a throwaway directory, see beforeAll below) instead
+// of the real inherited one, so a command that writes host state cannot
+// reach the real developer's home directory no matter which command a future
+// test exercises. USERPROFILE is set alongside HOME so the same isolation
+// holds on Windows, where os.homedir() reads USERPROFILE instead.
+let smokeHome = "";
+
+const realOmsDir = path.join(homedir(), ".oms");
+
+// Metadata-only (size + mtime, not content) recursive snapshot, used to prove
+// this suite never touches the real home directory. Reading full file
+// content would be correct too, but `~/.oms` can hold a large downloaded
+// embedding model, and hashing that on every test run would make the suite
+// needlessly slow; size + mtime already changes on any write a real CLI
+// invocation could make.
+function snapshotDir(dir: string): string | null {
+  if (!existsSync(dir)) return null;
+  const entries: string[] = [];
+  const walk = (current: string, rel: string) => {
+    for (const name of readdirSync(current).sort()) {
+      const absChild = path.join(current, name);
+      const relChild = rel === "" ? name : `${rel}/${name}`;
+      const st = statSync(absChild);
+      if (st.isDirectory()) {
+        entries.push(`${relChild}/`);
+        walk(absChild, relChild);
+      } else {
+        entries.push(`${relChild}:${st.size}:${st.mtimeMs}`);
+      }
+    }
+  };
+  walk(dir, "");
+  return entries.join("\n");
+}
+
+let realOmsBefore: string | null = null;
 let tempRoots: string[] = [];
+
+beforeAll(async () => {
+  realOmsBefore = snapshotDir(realOmsDir);
+  smokeHome = await mkdtemp(path.join(tmpdir(), "oms-cli-dispatch-home-"));
+});
+
+afterAll(async () => {
+  // The whole point of smokeHome: prove the real HOME's `.oms` directory was
+  // never touched by any runCli() call above, however many ran. No `.oms`
+  // before must mean no `.oms` after; an existing one must be byte-identical
+  // (per the snapshotDir metadata comparison above).
+  expect(snapshotDir(realOmsDir)).toBe(realOmsBefore);
+  if (smokeHome) await rm(smokeHome, { recursive: true, force: true });
+});
 
 afterEach(async () => {
   await Promise.all(tempRoots.map((root) => rm(root, { recursive: true, force: true })));
@@ -40,7 +88,14 @@ function runCli(
   }
   return spawnSync(process.execPath, [distCli, ...args], {
     cwd,
-    env: { ...baseEnv, ...env },
+    env: {
+      ...process.env,
+      OMS_UPDATE_NOTICE: "0",
+      OMS_NO_UPDATE_NOTICE: "1",
+      HOME: smokeHome,
+      USERPROFILE: smokeHome,
+      ...env,
+    },
     input,
     encoding: "utf-8",
   });
