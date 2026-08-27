@@ -5,8 +5,6 @@ import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { resolveEffectiveVault } from "../kernel/link/link.js";
-import { writeGlobalConfig } from "../kernel/link/global-config.js";
 import { writeNote } from "../kernel/capture/safe.js";
 import { resolveActiveOntology } from "../kernel/ontology/active.js";
 
@@ -65,90 +63,11 @@ describe("Issue #58: Verified-target write kernel", () => {
     }
   });
 
-  it("(1) resolveEffectiveVault from fake Documents cwd with global config returns vault + source:global", async () => {
-    tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
-    tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
-    tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-vault-")));
-
-    // Create minimal ontology in vault
-    await createMinimalOntology(tmpVault);
-
-    // Write global config pointing to vault
-    await writeGlobalConfig({ version: 1, vault: tmpVault }, tmpHome);
-
-    // Resolve from Documents cwd (has no .oms) with tmp homeDir
-    const resolved = await resolveEffectiveVault(tmpDocuments, {}, { homeDir: tmpHome });
-
-    expect(resolved.vault).toBe(tmpVault);
-    expect(resolved.source).toBe("global");
-    expect(resolved.scope).toBeNull();
-  });
-
-  it("(2) MCP write via server with global config lands note in vault, zero files in Documents", async () => {
-    tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
-    tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
-    tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-vault-")));
-
-    // Create minimal ontology in vault
-    await createMinimalOntology(tmpVault);
-
-    // Write global config pointing to vault
-    await writeGlobalConfig({ version: 1, vault: tmpVault }, tmpHome);
-
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [distCli, "mcp"],
-      cwd: tmpDocuments,
-      env: { HOME: tmpHome, PATH: process.env.PATH ?? "" },
-      stderr: "pipe",
-    });
-    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
-
-    try {
-      const docsBefore = await readdir(tmpDocuments);
-      expect(docsBefore.length).toBe(0);
-
-      await client.connect(transport);
-
-      const write = textPayload(
-        await client.callTool({
-          name: "oms_write",
-          arguments: {
-            mode: "create",
-            notePath: "references/verified-note.md",
-            frontmatter: {
-              title: "Verified Global Route",
-              "source-url": "https://example.com/verified",
-            },
-            body: "Written via global config, lands in vault, not Documents.",
-          },
-        }),
-      );
-
-      expect(write.status).toBe("written");
-      expect(write.resolvedVault).toBe(tmpVault);
-      expect(write.resolutionSource).toBe("global");
-      expect(write.receipt).toBeDefined();
-      expect((write.receipt as Record<string, unknown>).postconditionVerified).toBe(true);
-
-      // Assert note exists in vault
-      const noteInVault = path.join(tmpVault, "references", "verified-note.md");
-      const vaultRefs = await readdir(path.join(tmpVault, "references"));
-      expect(vaultRefs).toContain("verified-note.md");
-
-      // Assert Documents dir gained zero files
-      const docsAfter = await readdir(tmpDocuments);
-      expect(docsAfter.length).toBe(0);
-    } finally {
-      await client.close();
-    }
-  });
-
-  it("(3) no global config + Documents cwd: write rejected with target-unverified, zero files", async () => {
+  it("(3) Documents cwd with no vault, bridge, or OMS_VAULT: write rejected with target-unverified, zero files", async () => {
     tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
     tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
 
-    // No vault, no global config, empty HOME
+    // No vault, no bridge, no OMS_VAULT, empty HOME
 
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -196,83 +115,11 @@ describe("Issue #58: Verified-target write kernel", () => {
     }
   });
 
-  it("(3b) global config pointing at directory WITHOUT .oms ontology: rejected with target-invalid", async () => {
-    tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
-    tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
-    tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-vault-")));
-
-    // Create vault directory WITHOUT .oms ontology (stale registry pointer)
-    // tmpVault exists but has no .oms/
-
-    // Write global config pointing to vault without .oms
-    await writeGlobalConfig({ version: 1, vault: tmpVault }, tmpHome);
-
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [distCli, "mcp"],
-      cwd: tmpDocuments,
-      env: { HOME: tmpHome, PATH: process.env.PATH ?? "" },
-      stderr: "pipe",
-    });
-    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
-
-    try {
-      const docsBefore = await readdir(tmpDocuments);
-      expect(docsBefore.length).toBe(0);
-
-      await client.connect(transport);
-
-      const write = textPayload(
-        await client.callTool({
-          name: "oms_write",
-          arguments: {
-            mode: "create",
-            notePath: "references/invalid-target.md",
-            frontmatter: {
-              title: "Invalid Target",
-              "source-url": "https://example.com/invalid",
-            },
-            body: "Must not be written.",
-          },
-        }),
-      );
-
-      expect(write.status).toBe("rejected");
-      expect(write.rejection).toBeDefined();
-      expect((write.rejection as Record<string, unknown>).stage).toBe("admission");
-      expect((write.rejection as Record<string, unknown>).code).toBe("target-invalid");
-      expect((write.rejection as Record<string, unknown>).recoverable).toBe(false);
-      expect(write.receipt).toBeUndefined();
-
-      // Assert zero files created anywhere
-      const docsAfter = await readdir(tmpDocuments);
-      expect(docsAfter.length).toBe(0);
-      const vaultAfter = await readdir(tmpVault);
-      expect(vaultAfter.length).toBe(0);
-    } finally {
-      await client.close();
-    }
-  });
-
-  it("(4) precedence: OMS_VAULT env beats global; explicit source passthrough via writeNote", async () => {
-    tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
-    tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
-    const globalVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-global-")));
+  it("(4) explicit source passthrough via writeNote", async () => {
     const envVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-env-")));
-
-    // Create ontologies in both
-    await createMinimalOntology(globalVault);
     await createMinimalOntology(envVault);
 
-    // Write global config pointing to globalVault
-    await writeGlobalConfig({ version: 1, vault: globalVault }, tmpHome);
-
-    // Case A: Env beats global via resolveEffectiveVault
-    const envResolved = await resolveEffectiveVault(tmpDocuments, { OMS_VAULT: envVault }, { homeDir: tmpHome });
-    expect(envResolved.source).toBe("env");
-    expect(envResolved.vault).toBe(envVault);
-
-    // Case B: Explicit source passthrough in writeNote accepts bare tmpdir with source:explicit
+    // Explicit source passthrough in writeNote accepts bare tmpdir with source:explicit
     const bareDir = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-bare-")));
     const activeOntology = await resolveActiveOntology(envVault);
     const result = await writeNote({
@@ -293,7 +140,6 @@ describe("Issue #58: Verified-target write kernel", () => {
     expect((result.receipt as Record<string, unknown>).resolutionSource).toBe("explicit");
 
     // Cleanup extra vaults
-    await rm(globalVault, { recursive: true, force: true });
     await rm(bareDir, { recursive: true, force: true });
     tmpVault = envVault;
   });
@@ -306,14 +152,11 @@ describe("Issue #58: Verified-target write kernel", () => {
     // Create minimal ontology in vault
     await createMinimalOntology(tmpVault);
 
-    // Write global config pointing to vault
-    await writeGlobalConfig({ version: 1, vault: tmpVault }, tmpHome);
-
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [distCli, "mcp"],
       cwd: tmpDocuments,
-      env: { HOME: tmpHome, PATH: process.env.PATH ?? "" },
+      env: { HOME: tmpHome, OMS_VAULT: tmpVault, PATH: process.env.PATH ?? "" },
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -339,10 +182,10 @@ describe("Issue #58: Verified-target write kernel", () => {
 
       expect(written.status).toBe("written");
       expect(written.resolvedVault).toBe(tmpVault);
-      expect(written.resolutionSource).toBe("global");
+      expect(written.resolutionSource).toBe("env");
       expect(written.receipt).toBeDefined();
       expect((written.receipt as Record<string, unknown>).resolvedVault).toBe(tmpVault);
-      expect((written.receipt as Record<string, unknown>).resolutionSource).toBe("global");
+      expect((written.receipt as Record<string, unknown>).resolutionSource).toBe("env");
 
       // Case B: Rejected response (ask status - contract violation)
       const rejected = textPayload(
@@ -362,7 +205,7 @@ describe("Issue #58: Verified-target write kernel", () => {
 
       expect(rejected.status).toBe("ask");
       expect(rejected.resolvedVault).toBe(tmpVault);
-      expect(rejected.resolutionSource).toBe("global");
+      expect(rejected.resolutionSource).toBe("env");
       expect(rejected.missingFields).toContain("source-url");
     } finally {
       await client.close();

@@ -14,7 +14,6 @@ import {
   resolveEffectiveVault,
   writeLinkRecord,
 } from "./link.js";
-import { readGlobalConfig, writeGlobalConfig } from "./global-config.js";
 
 let tmp: string;
 let vault: string;
@@ -136,14 +135,8 @@ describe("resolveEffectiveVault", () => {
   });
 
   it("falls back to the start dir when nothing else resolves", async () => {
-    // Inject a tmp homeDir with no config to avoid leaking the developer's real ~/.oms/config.yaml
-    const tmpHome = mkdtempSync(path.join(os.tmpdir(), "oms-home-test-"));
-    try {
-      const resolved = await resolveEffectiveVault(repo, {}, { homeDir: tmpHome });
-      expect(resolved).toEqual({ vault: path.resolve(repo), scope: null, source: "cwd" });
-    } finally {
-      rmSync(tmpHome, { recursive: true, force: true });
-    }
+    const resolved = await resolveEffectiveVault(repo, {});
+    expect(resolved).toEqual({ vault: path.resolve(repo), scope: null, source: "cwd" });
   });
 
   it("prefers a local vault ontology over a bridge record", async () => {
@@ -182,65 +175,6 @@ describe("resolveEffectiveVault", () => {
     await expect(resolveEffectiveVault(repo, { OMS_VAULT: vault })).rejects.toThrow(/Linked vault path does not exist/);
   });
 
-  it("resolves global config when no local vault, bridge, or env", async () => {
-    const tmpHome = mkdtempSync(path.join(os.tmpdir(), "oms-home-test-"));
-    try {
-      await writeGlobalConfig({ version: 1, vault: path.resolve(vault) }, tmpHome);
-      const resolved = await resolveEffectiveVault(repo, {}, { homeDir: tmpHome });
-      expect(resolved).toEqual({ vault: path.resolve(vault), scope: null, source: "global" });
-    } finally {
-      rmSync(tmpHome, { recursive: true, force: true });
-    }
-  });
-
-  it("prefers env over global config", async () => {
-    const tmpHome = mkdtempSync(path.join(os.tmpdir(), "oms-home-test-"));
-    const envVault = path.join(tmp, "env-vault");
-    await mkdir(envVault, { recursive: true });
-    try {
-      await writeGlobalConfig({ version: 1, vault: path.resolve(vault) }, tmpHome);
-      const resolved = await resolveEffectiveVault(repo, { OMS_VAULT: envVault }, { homeDir: tmpHome });
-      expect(resolved.source).toBe("env");
-      expect(resolved.vault).toBe(path.resolve(envVault));
-    } finally {
-      rmSync(tmpHome, { recursive: true, force: true });
-    }
-  });
-
-  it("prefers bridge over global config", async () => {
-    const tmpHome = mkdtempSync(path.join(os.tmpdir(), "oms-home-test-"));
-    try {
-      const omsDir = path.join(repo, ".oms");
-      await writeLinkRecord(omsDir, { version: 1, vault: path.resolve(vault), scope: ["notes"] });
-      await writeGlobalConfig({ version: 1, vault: path.join(tmp, "other") }, tmpHome);
-      const resolved = await resolveEffectiveVault(repo, {}, { homeDir: tmpHome });
-      expect(resolved.source).toBe("bridge");
-      expect(resolved.vault).toBe(path.resolve(vault));
-    } finally {
-      rmSync(tmpHome, { recursive: true, force: true });
-    }
-  });
-
-  it("throws an actionable error when global config points at a non-directory", async () => {
-    const tmpHome = mkdtempSync(path.join(os.tmpdir(), "oms-home-test-"));
-    const nonExistentVault = path.join(tmp, "does-not-exist");
-    try {
-      await writeGlobalConfig({ version: 1, vault: nonExistentVault }, tmpHome);
-      await expect(resolveEffectiveVault(repo, {}, { homeDir: tmpHome })).rejects.toThrow(/does not exist or is not a directory/);
-    } finally {
-      rmSync(tmpHome, { recursive: true, force: true });
-    }
-  });
-
-  it("falls back to cwd when global config is absent (tmp homeDir)", async () => {
-    const tmpHome = mkdtempSync(path.join(os.tmpdir(), "oms-home-test-"));
-    try {
-      const resolved = await resolveEffectiveVault(repo, {}, { homeDir: tmpHome });
-      expect(resolved).toEqual({ vault: path.resolve(repo), scope: null, source: "cwd" });
-    } finally {
-      rmSync(tmpHome, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("createVaultLink", () => {

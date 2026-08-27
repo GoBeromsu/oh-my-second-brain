@@ -7,7 +7,6 @@
  * router, which owns dispatch alone.
  */
 
-import path from "node:path";
 import {
   formatHostOperationResults,
   formatHostOperationResultsJson,
@@ -21,11 +20,6 @@ import { formatUpdateResult, runUpdate } from "../kernel/update/update.js";
 import { installClaude, uninstallClaude } from "../vendors/claude/claude.js";
 import { installCodex, uninstallCodex } from "../vendors/codex/codex.js";
 import { installHermes, uninstallHermes } from "../vendors/hermes/hermes.js";
-import {
-  backfillGlobalVaultFromEnv,
-  nonFatalGlobalWriteback,
-  registerGlobalVault,
-} from "./global-writeback.js";
 import { readCurrentPackageVersion } from "./update-notice.js";
 
 /** Everything the host commands need from the parsed argv, plus the adapter root. */
@@ -59,17 +53,6 @@ async function runVendorHostOperation(
   return uninstallHermes(options);
 }
 
-/** Persist the vault the install just configured into the global record. */
-async function recordInstalledVault(context: HostCommandContext): Promise<void> {
-  if (context.vaultExplicit) {
-    await nonFatalGlobalWriteback(() =>
-      registerGlobalVault({ vault: path.resolve(context.vault), homeDir: undefined, overwrite: true }),
-    );
-    return;
-  }
-  await nonFatalGlobalWriteback(() => backfillGlobalVaultFromEnv({ env: process.env, homeDir: undefined }));
-}
-
 /** `oms install` / `oms uninstall`. Returns the process exit code. */
 export async function runInstallOrUninstall(
   action: "install" | "uninstall",
@@ -99,7 +82,6 @@ export async function runInstallOrUninstall(
       : formatHostOperationResults(results, context.dryRun),
   );
 
-  if (action === "install" && !context.dryRun) await recordInstalledVault(context);
   return 0;
 }
 

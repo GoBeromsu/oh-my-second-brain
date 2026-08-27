@@ -17,7 +17,6 @@ import {
   runUpdateReconcile,
   type HostCommandContext,
 } from "./host-commands.js";
-import { nonFatalGlobalWriteback, registerGlobalVault } from "./global-writeback.js";
 import { runLink } from "./link-command.js";
 import { runLinkify } from "./linkify.js";
 import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
@@ -122,9 +121,6 @@ async function main(): Promise<void> {
       embeddingDescriptor = null;
     }
     await runSetup({ vault, yes, installClaude, suggestFields, dryRun, embeddingDescriptor });
-    if (!dryRun) await nonFatalGlobalWriteback(() =>
-      registerGlobalVault({ vault: path.resolve(vault), homeDir: undefined, overwrite: true }),
-    );
     if (!dryRun) await maybePrintUpdateNotice();
   } else if (command === "link") {
     process.exitCode = await runLink({

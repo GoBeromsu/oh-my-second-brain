@@ -364,65 +364,6 @@ describe("writeNote admission rules", () => {
     expect(await readdir(tmpVault)).toEqual([]);
   });
 
-  it("rejects a global target whose vault lacks a .oms ontology", async () => {
-    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-admit-global-stale-"));
-    const result = await writeNote({
-      target: { vault: tmpVault, source: "global" },
-      ontology: testOntology(),
-      mode: "create",
-      dryRun: false,
-      notePath: "references/stale.md",
-      frontmatter: goodFrontmatter,
-      body: "Body.",
-    });
-
-    expect(result.status).toBe("rejected");
-    expect(result.rejection?.stage).toBe("admission");
-    expect(result.rejection?.code).toBe("target-invalid");
-    expect(result.rejection?.recoverable).toBe(false);
-    expect(await readdir(tmpVault)).toEqual([]);
-  });
-
-  it("admits a global target whose vault carries a .oms ontology", async () => {
-    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-admit-global-ok-"));
-    await mkdir(path.join(tmpVault, ".oms"), { recursive: true });
-    await writeFile(path.join(tmpVault, ".oms", "taxonomy.yaml"), "version: 1\n", "utf-8");
-
-    const result = await writeNote({
-      target: { vault: tmpVault, source: "global" },
-      ontology: testOntology(),
-      mode: "create",
-      dryRun: false,
-      notePath: "references/global-ok.md",
-      frontmatter: goodFrontmatter,
-      body: "Body.",
-    });
-
-    expect(result.status).toBe("written");
-    expect(result.rejection).toBeUndefined();
-    expect(await readFile(path.join(tmpVault, "references/global-ok.md"), "utf-8")).toContain(
-      "Body.",
-    );
-  });
-
-  it("admits a global target whose vault carries a .oms concepts dir", async () => {
-    tmpVault = await mkdtemp(path.join(tmpdir(), "oms-admit-global-concepts-"));
-    await mkdir(path.join(tmpVault, ".oms", "concepts"), { recursive: true });
-
-    const result = await writeNote({
-      target: { vault: tmpVault, source: "global" },
-      ontology: testOntology(),
-      mode: "create",
-      dryRun: false,
-      notePath: "references/global-concepts.md",
-      frontmatter: goodFrontmatter,
-      body: "Body.",
-    });
-
-    expect(result.status).toBe("written");
-    expect(result.rejection).toBeUndefined();
-  });
-
   it("trusts vault/bridge/env/explicit sources without an ontology presence check", async () => {
     tmpVault = await mkdtemp(path.join(tmpdir(), "oms-admit-trusted-"));
     const ontology = testOntology();

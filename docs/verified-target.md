@@ -2,7 +2,7 @@
 
 Reading a vault is safe from anywhere. Writing is not. If an MCP server boots in `~/Documents` and an agent asks it to capture a note, "wherever the process happens to be" is the wrong answer. Oh My Second Brain's write surface therefore refuses to guess: a note is persisted only into a vault that was resolved from a trusted source, and only after the note that landed on disk has been read back and re-checked.
 
-This page describes the write kernel, the global vault registry it leans on, and every rejection it can return. Read tools and the read-only `status` surface still run anywhere. `doctor` diagnoses and repairs, so its repair operations follow the same verified-target rule as `write`.
+This page describes the write kernel and every rejection it can return. Read tools and the read-only `status` surface still run anywhere. `doctor` diagnoses and repairs, so its repair operations follow the same verified-target rule as `write`.
 
 ## The write loop
 
@@ -30,7 +30,7 @@ Admission answers "may I write?". Acceptance answers "did it come out right?". S
 
 Concretely, admission verifies:
 
-- **Target** the vault came from a trusted resolution source, and a globally registered vault still holds a `.oms` ontology.
+- **Target** the vault came from a trusted resolution source.
 - **Path** the note path is vault-relative, ends in `.md`, stays inside the vault, and avoids hidden or internal folders.
 - **Mode** `append` and `update` carry a `notePath`; `update` carries frontmatter, a body, or both; `create` carries a body.
 - **Overwrite** `create` refuses an existing note; `append` and `update` refuse a missing one.
@@ -43,32 +43,6 @@ Acceptance verifies:
 - The staged body isn't empty.
 - The persisted file, re-read from disk, still satisfies the contract and contains the intended body.
 
-## The global vault registry
-
-`~/.oms/config.yaml` remembers which vault is yours, so an MCP server started outside a vault still has a verified target.
-
-```yaml
-version: 1
-vault: /Users/you/Obsidian/second-brain
-```
-
-Two fields, both required in practice:
-
-- `version` an integer, currently `1`. Defaults to `1` when absent.
-- `vault` an absolute path, or a `~/...` path that gets expanded at read time. A bare relative value like `../notes` is rejected loudly, because it would resolve against whatever directory the process started in, which is the exact bug this file exists to prevent.
-
-A missing file is fine and simply means "no global target". A file that exists but is malformed (bad YAML, not a mapping, missing `vault`, relative `vault`) is a hard error naming the config path and telling you to run `oms setup`.
-
-**Who writes it:**
-
-- `oms setup` registers the vault it set up, overwriting any previous entry. This is the explicit "this is my vault" command.
-- `oms install --vault <path>` registers that vault the same way.
-- `oms install` without `--vault` backfills from `OMS_VAULT` when that variable points at a real directory, and only when no config exists yet. It never overwrites an existing entry, not even a corrupt one.
-
-Registry write-back is never fatal. If it fails, you get an `[oms] warning:` line on stderr and the command continues.
-
-There is one primary vault. Multiple registered vaults are not implemented.
-
 ## Resolution precedence
 
 `resolveEffectiveVault` picks the target in this order, first match wins:
@@ -79,8 +53,7 @@ There is one primary vault. Multiple registered vaults are not implemented.
 | 2 | `vault` | Local vault ontology: `.oms/concepts/` or `.oms/taxonomy.yaml` in the current directory | Verified |
 | 3 | `bridge` | Local bridge record: `.oms/links.yaml` | Verified |
 | 4 | `env` | `OMS_VAULT` environment variable | Verified |
-| 5 | `global` | `~/.oms/config.yaml` | Verified, if the registered path still holds a `.oms` ontology |
-| 6 | `cwd` | Fallback to the starting directory | **Unverified**, writes rejected |
+| 5 | `cwd` | Fallback to the starting directory | **Unverified**, writes rejected |
 
 The first two `.oms` profiles never collide because resolution is content-based: a directory holding concepts or a taxonomy is a vault, a directory holding `links.yaml` is a bridge.
 
@@ -96,7 +69,7 @@ Every refusal returns a structured payload:
   "code": "target-unverified",
   "message": "Refusing to write: the target vault was inferred from the current directory ...",
   "recoverable": true,
-  "remediation": "run `oms setup` in your Obsidian vault (or set OMS_VAULT / register the vault in ~/.oms/config.yaml), then retry"
+  "remediation": "run `oms setup` in your Obsidian vault (or set OMS_VAULT), then retry"
 }
 ```
 
@@ -104,8 +77,7 @@ Every refusal returns a structured payload:
 
 | Code | Stage | Recoverable | What happened | Remediation |
 | --- | --- | --- | --- | --- |
-| `target-unverified` | admission | `true` | The vault was inferred from the current directory, which is not a verified target | Run `oms setup` in your vault, set `OMS_VAULT`, or register the vault in `~/.oms/config.yaml`, then retry |
-| `target-invalid` | admission | `false` | The globally registered vault has no `.oms` ontology (stale pointer) | Point `~/.oms/config.yaml` at your real vault, or run `oms setup` in that vault |
+| `target-unverified` | admission | `true` | The vault was inferred from the current directory, which is not a verified target | Run `oms setup` in your vault, pass `--vault`, set `OMS_VAULT`, or bridge with `oms link` |
 | `path-unsafe` | admission | `true` | The note path escapes the vault, isn't `.md`, or targets a hidden or internal folder | Pass a vault-relative `notePath` ending in `.md` that stays inside the vault |
 | `note-exists` | admission | `false` | `create` was asked to overwrite an existing note | Use mode `append` or `update`, or choose a different filename |
 | `note-missing` | admission | `false` | `append` or `update` targeted a note that isn't there | Create the note first with mode `create`, or correct `notePath` |
@@ -124,7 +96,7 @@ A successful write carries a receipt. It's how you confirm where the note actual
 | Field | Meaning |
 | --- | --- |
 | `resolvedVault` | Absolute path of the vault the note was written into |
-| `resolutionSource` | Which rule picked that vault: `explicit`, `vault`, `bridge`, `env`, or `global` |
+| `resolutionSource` | Which rule picked that vault: `explicit`, `vault`, `bridge`, or `env` |
 | `notePath` | Vault-relative path of the note |
 | `mode` | `create`, `append`, or `update` |
 | `concept` | The bound concept name, or `null` |
@@ -134,33 +106,17 @@ Receipts are issued only for persisted, postcondition-verified writes. A `dryRun
 
 Independently of the receipt, every MCP `write` response also carries top-level `resolvedVault` and `resolutionSource` keys, so even a rejection tells you which vault the server was aiming at.
 
-## Migration
+## Breaking change: the global vault registry is gone
 
-If you installed Oh My Second Brain before verified-target writes shipped, you have no `~/.oms/config.yaml`. Reads keep working, and writes from inside your vault keep working. Writes from an MCP server started outside a vault will be rejected with `target-unverified` until you register the vault once:
+Earlier versions of Oh My Second Brain also resolved a target from a global registry at `~/.oms/config.yaml`, written automatically by `oms setup` or `oms install --vault`. That tier has been removed entirely — there is no longer a sixth fallback behind `env`.
 
-```bash
-cd /path/to/your/vault
-oms setup
-```
+If you run `oms` (CLI or `oms mcp`) from a directory that is **not** a vault, with no bridge and no `OMS_VAULT`, and you previously relied on `~/.oms/config.yaml` to resolve your vault: that no longer happens. The invocation now resolves to `cwd`, and every write is rejected with `target-unverified`.
 
-Or let the installer backfill from your existing environment variable:
+The remedies:
 
-```bash
-OMS_VAULT=/path/to/your/vault oms install
-```
+- Run the command from inside the vault (a directory holding `.oms/concepts/` or `.oms/taxonomy.yaml`).
+- Pass `--vault <path>` explicitly.
+- Set the `OMS_VAULT` environment variable.
+- Bridge the calling directory to the vault with `oms link`, which writes `.oms/links.yaml`.
 
-The backfill only fires when no global config exists yet, so re-running install won't clobber a vault you registered deliberately. Verify either way:
-
-```bash
-cat ~/.oms/config.yaml
-```
-
-## Adapter parity
-
-The fix is entirely server-side. **No adapter files change.**
-
-- Root `.mcp.json` keeps `args: ["mcp"]`. The server now resolves the vault from the global registry instead of the launch directory, which is exactly the behavior this registration always wanted.
-- Root `.mcp.codex.json` keeps its `--vault .` registration, which resolves as `explicit` and was never affected.
-- Hermes registers the same `oms mcp` command through `~/.hermes/config.yaml`; nothing to change.
-
-Related but not fixed here: issue #56, where the Claude plugin registers a bare user-scoped MCP server rather than a plugin-owned one and ships no usable write skill. That's a packaging and skill-surface problem in the adapter layer. Verified-target writes make the bare registration behave correctly at runtime, but they don't turn it into a plugin-owned server or add the missing write skill.
+**MCP hosts are the most likely place this bites.** Any host configuration that launches `oms mcp` with no `--vault` argument and no `OMS_VAULT` in its env block was relying on the registry to resolve a vault. Those configurations will stop resolving a vault and must be updated to pass `--vault` or set `OMS_VAULT` in the server's env block.

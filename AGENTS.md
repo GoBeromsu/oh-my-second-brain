@@ -71,7 +71,7 @@ Related trap: `tsconfig.json` excludes `**/*.test.ts`, so `npm run lint` does **
 
 The active convention is user-owned, resolved from `vault/.oms/` at runtime; `core/ontology/` ships read-only defaults. Enforcement is `onViolation: warn` for doctor and audit reporting, while MCP `write` rejects contract violations and leaves disk untouched. Schema policy is `additionalProperties: preserve` — unknown fields are kept, not stripped. Do not change these to blocking without an explicit product decision.
 
-`write` demands a verified target vault, resolved `explicit` > local `.oms` > bridge `links.yaml` > `OMS_VAULT` > `~/.oms/config.yaml`. A `cwd`-inferred target is read-only and writes are rejected. See [docs/verified-target.md](./docs/verified-target.md).
+`write` demands a verified target vault, resolved `explicit` > local `.oms` > bridge `links.yaml` > `OMS_VAULT`. A `cwd`-inferred target is read-only and writes are rejected. See [docs/verified-target.md](./docs/verified-target.md).
 
 ## Search Backends
 

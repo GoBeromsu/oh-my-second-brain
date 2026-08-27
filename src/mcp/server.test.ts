@@ -810,9 +810,9 @@ Valid frontmatter remains available to retrieve.
   });
 
   it("rejects writes and reports an unverified posture when the target came from cwd", async () => {
-    // No --vault, a non-vault cwd, an empty HOME (no ~/.oms/config.yaml) and no
-    // OMS_VAULT: resolution falls all the way through to the `cwd` source, which
-    // is unverified for the write surface (issue #58).
+    // No --vault, a non-vault cwd, no bridge, and no OMS_VAULT: resolution
+    // falls all the way through to the `cwd` source, which is unverified for
+    // the write surface (issue #58).
     const tmpHome = await mkdtemp(path.join(tmpdir(), "oms-mcp-cwd-home-"));
     // realpath: a spawned process reports the canonical cwd (macOS /tmp is a symlink),
     // and the server resolves its target from that cwd.
