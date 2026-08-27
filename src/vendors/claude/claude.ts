@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { HarnessHostSurface } from "../../kernel/harness/surface-registry.js";
 import { resolveHostAdapterSource } from "../../kernel/install/adapter-source.js";
-import { commandExists, hostHome, isRecord, runExternal } from "../../kernel/install/common.js";
+import { commandExists, hostHome, isRecord, mcpServerEntry, runExternal } from "../../kernel/install/common.js";
 import { removeClaudeHooks, replaceRootJsonPropertyPreservingBytes, upsertClaudeHooks } from "./claude-hooks.js";
 import {
   MARKETPLACE_AUTO_UPDATE_MESSAGE,
@@ -150,8 +150,109 @@ async function removeClaudeMcp(
   return { changed: !options.dryRun };
 }
 
+/**
+ * `~/.claude.json`'s root `mcpServers` key is Claude Code's user scope: it
+ * shadows the plugin-provided `.mcp.json` fallback (scope precedence is
+ * Local > Project > User > Plugin-provided, fields are never merged), and
+ * unlike `.mcp.json` it is never overwritten by `oms update` because npm
+ * does not own it. This is the only place the resolved vault can be baked
+ * in as an absolute path ahead of time, so registering it here is what lets
+ * `oms_search`/`oms_write` resolve a vault without the user exporting
+ * `OMS_VAULT` themselves.
+ */
+async function upsertClaudeUserScopeMcp(
+  options: HostOperationOptions,
+  claudeJsonPath: string,
+): Promise<{ changed: boolean; message?: string }> {
+  let raw = "{}";
+  try {
+    raw = await readFile(claudeJsonPath, "utf-8");
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      return { changed: false, message: `WARNING: Could not read ${claudeJsonPath}; user-scope MCP registration skipped.` };
+    }
+  }
+  let data: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      return { changed: false, message: `WARNING: ${claudeJsonPath} is not a JSON object; user-scope MCP registration skipped.` };
+    }
+    data = parsed;
+  } catch {
+    return { changed: false, message: `WARNING: ${claudeJsonPath} is malformed JSON; user-scope MCP registration skipped.` };
+  }
+  const existingServers = data["mcpServers"];
+  if (existingServers !== undefined && !isRecord(existingServers)) {
+    return { changed: false, message: `WARNING: ${claudeJsonPath} has unsupported mcpServers metadata; user-scope MCP registration skipped.` };
+  }
+  const nextServers = isRecord(existingServers) ? existingServers : {};
+  const desired = mcpServerEntry(options);
+  const alreadyCurrent = JSON.stringify(nextServers["oms"]) === JSON.stringify(desired);
+  if (alreadyCurrent) {
+    return { changed: false };
+  }
+  nextServers["oms"] = desired;
+  const next = replaceRootJsonPropertyPreservingBytes(raw, "mcpServers", nextServers);
+  if (next === null) {
+    return { changed: false, message: `WARNING: Could not preserve unmanaged config bytes in ${claudeJsonPath}; user-scope MCP registration skipped.` };
+  }
+  if (!options.dryRun) {
+    try {
+      await writeFile(claudeJsonPath, next, "utf-8");
+    } catch {
+      return { changed: false, message: `WARNING: Could not write ${claudeJsonPath}; user-scope MCP registration skipped.` };
+    }
+  }
+  return { changed: !options.dryRun };
+}
+
+async function removeClaudeUserScopeMcp(
+  options: HostOperationOptions,
+  claudeJsonPath: string,
+): Promise<{ changed: boolean; message?: string }> {
+  let raw: string;
+  try {
+    raw = await readFile(claudeJsonPath, "utf-8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return { changed: false };
+    return { changed: false, message: `WARNING: Could not read ${claudeJsonPath}; user-scope MCP cleanup skipped.` };
+  }
+  let data: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      return { changed: false, message: `WARNING: ${claudeJsonPath} is not a JSON object; user-scope MCP cleanup skipped.` };
+    }
+    data = parsed;
+  } catch {
+    return { changed: false, message: `WARNING: ${claudeJsonPath} is malformed JSON; user-scope MCP cleanup skipped.` };
+  }
+  const existingServers = data["mcpServers"];
+  if (existingServers !== undefined && !isRecord(existingServers)) {
+    return { changed: false, message: `WARNING: ${claudeJsonPath} has unsupported mcpServers metadata; user-scope MCP cleanup skipped.` };
+  }
+  if (!isRecord(existingServers) || !("oms" in existingServers)) {
+    return { changed: false };
+  }
+  delete existingServers["oms"];
+  const next = replaceRootJsonPropertyPreservingBytes(raw, "mcpServers", existingServers);
+  if (next === null) {
+    return { changed: false, message: `WARNING: Could not preserve unmanaged config bytes in ${claudeJsonPath}; user-scope MCP cleanup skipped.` };
+  }
+  if (!options.dryRun) {
+    try {
+      await writeFile(claudeJsonPath, next, "utf-8");
+    } catch {
+      return { changed: false, message: `WARNING: Could not write ${claudeJsonPath}; user-scope MCP cleanup skipped.` };
+    }
+  }
+  return { changed: !options.dryRun };
+}
+
 export async function installClaude(options: HostOperationOptions, host: HarnessHostSurface): Promise<HostOperationResult> {
   const claudeDir = hostHome(options.homeDir, ".claude", "OMS_CLAUDE_HOME");
+  const claudeJsonPath = path.join(path.dirname(claudeDir), ".claude.json");
   const pluginPath = resolveHostAdapterSource(options.adapterRoot, host);
   const marketplace = await resolveClaudeMarketplaceSource(pluginPath);
   const commands = [
@@ -161,7 +262,7 @@ export async function installClaude(options: HostOperationOptions, host: Harness
     `claude plugin install ${pluginPath}`,
   ];
   const messages = [
-    "Claude Code adapter is installed through the plugin-owned MCP surface declared in .mcp.json.",
+    "Claude Code adapter registers oms as a user-scope MCP server (in ~/.claude.json) with the resolved vault baked in, which shadows the bare plugin-owned .mcp.json fallback declared for anyone who sets OMS_VAULT themselves.",
     `Claude marketplace source: ${marketplace.source} (${marketplace.kind}); the local plugin path stays available as an offline fallback.`,
     MARKETPLACE_AUTO_UPDATE_MESSAGE,
   ];
@@ -174,6 +275,13 @@ export async function installClaude(options: HostOperationOptions, host: Harness
   const cleanup = runClaudeMcpCleanup(options);
   messages.push(...cleanup.messages);
   changed = cleanup.changed || changed;
+
+  // Runs after the CLI-driven `--scope user` cleanup above so a real
+  // `--execute` install cannot immediately strip out the entry this writes.
+  const userScopeUpsert = await upsertClaudeUserScopeMcp(options, claudeJsonPath);
+  changed = userScopeUpsert.changed || changed;
+  if (userScopeUpsert.changed) messages.push(`Registered oms as a user-scope MCP server in ${claudeJsonPath}.`);
+  if (userScopeUpsert.message) messages.push(userScopeUpsert.message);
 
   if (options.executeExternal) {
     if (!commandExists("claude")) {
@@ -200,7 +308,7 @@ export async function installClaude(options: HostOperationOptions, host: Harness
     action: "install",
     changed: changed && !options.dryRun,
     skipped: false,
-    paths: [pluginPath, path.join(claudeDir, "settings.json")],
+    paths: [pluginPath, path.join(claudeDir, "settings.json"), claudeJsonPath],
     commands,
     messages,
     cleanup: cleanup.results,
@@ -209,6 +317,7 @@ export async function installClaude(options: HostOperationOptions, host: Harness
 
 export async function uninstallClaude(options: HostOperationOptions): Promise<HostOperationResult> {
   const claudeDir = hostHome(options.homeDir, ".claude", "OMS_CLAUDE_HOME");
+  const claudeJsonPath = path.join(path.dirname(claudeDir), ".claude.json");
   const commands = [
     ...CLAUDE_MCP_SCOPES.map(claudeMcpRemoveCommand),
     "claude plugin uninstall oms",
@@ -221,6 +330,11 @@ export async function uninstallClaude(options: HostOperationOptions): Promise<Ho
   const cleanup = runClaudeMcpCleanup(options);
   messages.push(...cleanup.messages);
   changed = cleanup.changed || changed;
+
+  const userScopeRemoval = await removeClaudeUserScopeMcp(options, claudeJsonPath);
+  changed = userScopeRemoval.changed || changed;
+  if (userScopeRemoval.changed) messages.push(`Removed the oms user-scope MCP registration from ${claudeJsonPath}.`);
+  if (userScopeRemoval.message) messages.push(userScopeRemoval.message);
 
   const hookResult = await removeClaudeHooks(options, claudeDir);
   changed = hookResult.changed || changed;
@@ -240,7 +354,7 @@ export async function uninstallClaude(options: HostOperationOptions): Promise<Ho
     action: "uninstall",
     changed: changed && !options.dryRun,
     skipped: false,
-    paths: [path.join(claudeDir, "mcp.json")],
+    paths: [path.join(claudeDir, "mcp.json"), claudeJsonPath],
     commands,
     messages,
     cleanup: cleanup.results,
