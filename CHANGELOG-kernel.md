@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-08-27
+
 ### Fixed
 
 - **`taxonomy.yaml: exclude` now applies to retrieval, not just linting.** The exclude list was parsed into the ontology and resolved into globs for the lint and setup lanes, but the three walkers behind search, axis observation, and graph caching never consulted it and each threw on the first note whose frontmatter would not parse as YAML. Declaring a template source in `exclude` — the documented remedy, and necessary because pre-substitution template frontmatter is intentionally not valid YAML — therefore had no effect on those lanes. All three now filter their yielded paths against the resolved exclude list before parsing, so an excluded file is skipped instead of aborting the scan. Because excluded files no longer contribute to the node-index source signature, the first run after upgrading rebuilds that cache once.
