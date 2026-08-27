@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, it, expect } from "vitest";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -17,16 +18,70 @@ const repoRoot = path.resolve(__dirname, "../../");
 const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
-// The two `{ ...process.env }`-built envs below (search for `smokeHome` usage)
-// otherwise inherit the real HOME. Isolated the same way
-// src/cli/oms-dispatch.test.ts isolates its CLI child processes.
+// Every StdioClientTransport in this file must build its env through
+// stdioEnv() below rather than omitting the `env` key. Omitting it is NOT
+// "no override": the SDK's own fallback (getDefaultEnvironment() in
+// @modelcontextprotocol/sdk/client/stdio.js) inherits the real HOME (and, on
+// Windows, USERPROFILE) from this process whenever `env` is left unset - a
+// second, easy-to-miss leak path distinct from the `{ ...process.env }`
+// spreads this suite already isolates. `oms mcp` performs no global write
+// today, so this is a latent hazard rather than a live bug, but nothing here
+// should rely on that staying true.
 let smokeHome = "";
+const realOmsDir = path.join(homedir(), ".oms");
+
+/**
+ * Env for a StdioClientTransport-spawned CLI child, isolated the same way
+ * scripts/release-artifact-smoke.mjs's smokeEnv() isolates its own child
+ * processes: inherit real process.env for everything else, but always point
+ * HOME/USERPROFILE at the throwaway `smokeHome` instead of the real one.
+ */
+function stdioEnv(
+  overrides?: Readonly<Record<string, string | undefined>>,
+): Record<string, string | undefined> {
+  return { ...process.env, HOME: smokeHome, USERPROFILE: smokeHome, ...overrides };
+}
+
+// Metadata-only (size + mtime, not content) recursive snapshot, used to prove
+// this suite never touches the real home directory. Reading full file
+// content would be correct too, but `~/.oms` can hold a large downloaded
+// embedding model, and hashing that on every test run would make the suite
+// needlessly slow; size + mtime already changes on any write a real CLI
+// invocation could make.
+function snapshotDir(dir: string): string | null {
+  if (!existsSync(dir)) return null;
+  const entries: string[] = [];
+  const walk = (current: string, rel: string) => {
+    for (const name of readdirSync(current).sort()) {
+      const absChild = path.join(current, name);
+      const relChild = rel === "" ? name : `${rel}/${name}`;
+      const st = statSync(absChild);
+      if (st.isDirectory()) {
+        entries.push(`${relChild}/`);
+        walk(absChild, relChild);
+      } else {
+        entries.push(`${relChild}:${st.size}:${st.mtimeMs}`);
+      }
+    }
+  };
+  walk(dir, "");
+  return entries.join("\n");
+}
+
+let realOmsBefore: string | null = null;
 
 beforeAll(async () => {
+  realOmsBefore = snapshotDir(realOmsDir);
   smokeHome = await mkdtemp(path.join(tmpdir(), "oms-mcp-server-home-"));
 });
 
 afterAll(async () => {
+  // Three sites in this file (the cwd-resolution and doctor-cwd tests) build
+  // their own per-test `tmpHome` instead of using smokeHome - they already
+  // isolate correctly and are left as-is rather than unified for its own
+  // sake. Every other StdioClientTransport in the file now goes through
+  // stdioEnv(), so this assertion is an honest claim about the whole suite.
+  expect(snapshotDir(realOmsDir)).toBe(realOmsBefore);
   if (smokeHome) await rm(smokeHome, { recursive: true, force: true });
 });
 
@@ -65,6 +120,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       command: process.execPath,
       args: [distCli, "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-query-surface-test", version: "0.0.0" });
@@ -195,16 +251,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
     ["hyde field", { op: "query", hyde: "hypothetical telescope answer" }],
     ["vsearch mode", { op: "query", query: "telescope", mode: "vsearch" }],
   ])("fails loudly for explicit vector retrieval via %s without embedding configuration", async (_strategy, arguments_) => {
-    const env = { ...process.env };
-    delete env.OMS_EMBEDDING_PROVIDER;
-    delete env.OMS_EMBEDDING_MODEL;
-    env.HOME = smokeHome;
-    env.USERPROFILE = smokeHome;
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [distCli, "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
-      env,
+      env: stdioEnv({ OMS_EMBEDDING_PROVIDER: undefined, OMS_EMBEDDING_MODEL: undefined }),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -221,16 +272,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
   });
 
   it("does not discard vec shorthand when typed searches are also supplied", async () => {
-    const env = { ...process.env };
-    delete env.OMS_EMBEDDING_PROVIDER;
-    delete env.OMS_EMBEDDING_MODEL;
-    env.HOME = smokeHome;
-    env.USERPROFILE = smokeHome;
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [distCli, "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
-      env,
+      env: stdioEnv({ OMS_EMBEDDING_PROVIDER: undefined, OMS_EMBEDDING_MODEL: undefined }),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -268,6 +314,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       command: process.execPath,
       args: [distCli, "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -291,6 +338,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       command: process.execPath,
       args: [distCli, "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -412,6 +460,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp", "--vault", tmpVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -456,6 +505,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp", "--vault", tmpVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -495,6 +545,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp", "--vault", tmpVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -524,6 +575,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp", "--vault", tmpVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -560,6 +612,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp", "--vault", tmpVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -597,6 +650,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp", "--vault", tmpVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -693,6 +747,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp", "--vault", tmpVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -791,6 +846,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp", "--vault", tmpVault],
       cwd: repoRoot,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -946,6 +1002,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp"],
       cwd: tmpVault,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -987,6 +1044,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp"],
       cwd: tmpVault,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -1033,6 +1091,7 @@ Valid frontmatter remains available to retrieve.
       command: process.execPath,
       args: [distCli, "mcp"],
       cwd: tmpVault,
+      env: stdioEnv(),
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
