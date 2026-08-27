@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-27
+
 ### Breaking
 
 - **MCP search and doctor operation names have changed.** Use `oms_search` with `op: "query"` for axis retrieval; the retired `axis` and `semantic-query` names now fail loudly. Collection, context, and status operations have likewise dropped their `semantic-` prefixes, and `oms_doctor` cleanup is now `op: "cleanup"` rather than `semantic-cleanup`. There are no compatibility aliases, so update MCP clients to these names. Every query response now includes `hits`, `totalCount`, `facets`, a cursor, and a receipt.

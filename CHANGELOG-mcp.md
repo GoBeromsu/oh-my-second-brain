@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-27
+
 ### Changed
 
 - MCP semantic retrieval now forwards explicit rerank and candidate-limit requests through ephemeral lexical fallback paths without downloading models or silently dropping rerank behavior.

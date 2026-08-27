@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-27
+
 ### Changed
 
 - The shipped ranking default remains the released v0.3.0 `boost-additive` baseline — RRF score plus provenance boost with no per-list reordering — instead of an unmeasured multiplicative boost. The frozen `boost-k-scale`, `boost-per-list`, and `boost-zero` arms remain experiments, so released ranking behavior stays evidence-backed and reproducible.
