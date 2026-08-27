@@ -43,6 +43,11 @@ import {
 // External golden-set loader (privacy-preserving)
 // ---------------------------------------------------------------------------
 
+function envValue(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
 /**
  * Load golden queries from OMS_GOLDEN_QUERIES env path if set,
  * otherwise fall back to the built-in synthetic GOLDEN_QUERIES.
@@ -51,7 +56,7 @@ import {
  * 0 scored => inconclusive => fail: an empty or unresolvable path is an error.
  */
 function loadGoldenQueries(): GoldenQuery[] {
-  const p = process.env["OMS_GOLDEN_QUERIES"];
+  const p = envValue("OMS_GOLDEN_QUERIES");
   if (!p) return GOLDEN_QUERIES;
   const raw = JSON.parse(readFileSync(p, "utf8"));
   if (!Array.isArray(raw)) throw new Error("OMS_GOLDEN_QUERIES at " + p + " is not a JSON array");
@@ -159,14 +164,14 @@ function qrelsForQueries(queries: readonly GoldenQuery[]): Qrels {
 }
 
 function loadQrels(queries: readonly GoldenQuery[]): Qrels {
-  const p = process.env["OMS_GOLDEN_QRELS"] ?? process.env["OMS_PREREG_QRELS"];
+  const p = envValue("OMS_GOLDEN_QRELS") ?? envValue("OMS_PREREG_QRELS");
   if (!p) return qrelsForQueries(queries);
   return validateQrels(JSON.parse(readFileSync(p, "utf8")), `preregistered qrels at ${p}`);
 }
 
 /** Minimum per-type engine recall@10 average required to pass (default 0.5). */
 function recallFloor(): number {
-  const raw = process.env["OMS_GOLDEN_MIN_RECALL"];
+  const raw = envValue("OMS_GOLDEN_MIN_RECALL");
   if (!raw) return 0.5;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : 0.5;
@@ -902,7 +907,7 @@ function fixtureProvenanceMap(vaultPath: string): ((docPath: string) => Provenan
 const PROVENANCE_VALUES: readonly Provenance[] = ["authored", "curated", "external-raw"];
 
 function loadExternalProvenance(): Readonly<Record<string, Provenance>> | undefined {
-  const provenancePath = process.env["OMS_GOLDEN_PROVENANCE"];
+  const provenancePath = envValue("OMS_GOLDEN_PROVENANCE");
   if (!provenancePath) return undefined;
   const raw: unknown = JSON.parse(readFileSync(provenancePath, "utf8"));
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -934,9 +939,9 @@ function sha256Json(value: unknown): string {
 }
 
 function emitMeasurementManifest(report: HarnessReport, options: HarnessOptions): void {
-  const manifestPath = options.measurementManifestPath ?? process.env["OMS_MEASUREMENT_MANIFEST_OUTPUT"];
+  const manifestPath = options.measurementManifestPath ?? envValue("OMS_MEASUREMENT_MANIFEST_OUTPUT");
   if (!manifestPath) return;
-  const measuredVault = options.vaultPath ?? process.env["OMS_VAULT"] ?? path.resolve("test/fixtures/vault");
+  const measuredVault = options.vaultPath ?? envValue("OMS_VAULT") ?? path.resolve("test/fixtures/vault");
   if (path.resolve(measuredVault) === path.resolve("test/fixtures/vault")) {
     throw new Error("measurement manifest emission requires a real-vault run; fixture evidence cannot be published");
   }
@@ -952,8 +957,8 @@ function emitMeasurementManifest(report: HarnessReport, options: HarnessOptions)
     throw new Error("boost-c040 measurement manifest must be written to docs/measurements/boost-c040.json");
   }
   if (existsSync(resolvedPath)) throw new Error(`measurement manifest is immutable and already exists: ${manifestPath}`);
-  const datasetId = options.datasetId ?? process.env["OMS_MEASUREMENT_DATASET_ID"];
-  const harnessCommit = options.harnessCommit ?? process.env["OMS_MEASUREMENT_HARNESS_COMMIT"];
+  const datasetId = options.datasetId ?? envValue("OMS_MEASUREMENT_DATASET_ID");
+  const harnessCommit = options.harnessCommit ?? envValue("OMS_MEASUREMENT_HARNESS_COMMIT");
   if (!datasetId?.trim() || !harnessCommit?.trim()) {
     throw new Error("measurement manifest emission requires OMS_MEASUREMENT_DATASET_ID and OMS_MEASUREMENT_HARNESS_COMMIT");
   }
@@ -1012,7 +1017,7 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
   if (opts.download !== undefined && opts.download !== false) {
     throw new Error("R2 harness only supports download:false; acquire models during setup");
   }
-  const vaultPath = opts.vaultPath ?? process.env["OMS_VAULT"] ?? path.resolve("test/fixtures/vault");
+  const vaultPath = opts.vaultPath ?? envValue("OMS_VAULT") ?? path.resolve("test/fixtures/vault");
   const floor = recallFloor();
   const loadedQueries = loadGoldenQueries();
   const qrels = validateQrels(opts.qrels ?? loadQrels(loadedQueries), "golden qrels");
@@ -1039,13 +1044,13 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
   const expectedQrelsHash =
     opts.qrelsHash ??
     opts.preregisteredQrelsHash ??
-    process.env["OMS_GOLDEN_QRELS_HASH"] ??
-    process.env["OMS_GOLDEN_QRELS_SHA256"] ??
-    process.env["OMS_PREREG_QRELS_HASH"];
+    envValue("OMS_GOLDEN_QRELS_HASH") ??
+    envValue("OMS_GOLDEN_QRELS_SHA256") ??
+    envValue("OMS_PREREG_QRELS_HASH");
   const usesInjectedQrels =
     opts.qrels !== undefined ||
-    process.env["OMS_GOLDEN_QRELS"] !== undefined ||
-    process.env["OMS_PREREG_QRELS"] !== undefined ||
+    envValue("OMS_GOLDEN_QRELS") !== undefined ||
+    envValue("OMS_PREREG_QRELS") !== undefined ||
     loadedQueries !== GOLDEN_QUERIES;
   if (usesInjectedQrels && expectedQrelsHash === undefined) {
     throw new Error(
@@ -1072,7 +1077,7 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
       "production-seam external measurements require OMS_GOLDEN_PROVENANCE; provenance labels are human input and are never inferred",
     );
   }
-  const resolvedDbPath = opts.dbPath ?? process.env["OMS_GOLDEN_DB"] ?? opts.configOverrides?.dbPath;
+  const resolvedDbPath = opts.dbPath ?? envValue("OMS_GOLDEN_DB") ?? opts.configOverrides?.dbPath;
   const useTempDb = resolvedDbPath === undefined;
   const tmpDir = useTempDb ? mkdtempSync(path.join(tmpdir(), "oms-golden-")) : undefined;
   const dbPath = resolvedDbPath ?? path.join(tmpDir!, "golden.db");
@@ -1354,7 +1359,7 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
     pairedBootstrap: bootstrap,
     overallPass: overallPass && c040.pass,
   };
-  const reportPath = process.env["OMS_GOLDEN_REPORT"];
+  const reportPath = envValue("OMS_GOLDEN_REPORT");
   if (reportPath) {
     try {
       writeFileSync(reportPath, JSON.stringify(report, null, 2));

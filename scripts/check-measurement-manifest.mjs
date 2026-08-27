@@ -48,6 +48,11 @@ function fail(message) {
   throw new Error(`[measurement] ${message}`);
 }
 
+function envValue(name) {
+  const value = process.env[name]?.trim();
+  return value || undefined;
+}
+
 /**
  * Read the source declaration rather than importing it: this check must work
  * before the TypeScript build exists and must not guess a missing default.
@@ -777,7 +782,7 @@ function checkModelDefaultEvidence(manifest, expected, options = {}) {
 }
 
 function expectedArmsFromEnv() {
-  const raw = process.env.OMS_PREREG_ARM_IDS;
+  const raw = envValue("OMS_PREREG_ARM_IDS");
   if (!raw) return [...DEFAULT_REQUIRED_ARM_IDS];
   let values;
   try {
@@ -793,8 +798,8 @@ function expectedArmsFromEnv() {
   return [...DEFAULT_REQUIRED_ARM_IDS];
 }
 function expectedQrelsHashFromEnv() {
-  const declaredHash = process.env.OMS_PREREG_QRELS_HASH;
-  const qrelsPath = process.env.OMS_PREREG_QRELS;
+  const declaredHash = envValue("OMS_PREREG_QRELS_HASH");
+  const qrelsPath = envValue("OMS_PREREG_QRELS");
   if (!qrelsPath) return declaredHash;
   try {
     const computedHash = qrelsSha256(JSON.parse(readFileSync(qrelsPath, "utf8")));
@@ -809,7 +814,7 @@ function expectedQrelsHashFromEnv() {
 }
 
 function preregisteredQrelsFromEnv() {
-  const qrelsPath = process.env.OMS_PREREG_QRELS;
+  const qrelsPath = envValue("OMS_PREREG_QRELS");
   if (!qrelsPath) return undefined;
   try {
     return JSON.parse(readFileSync(qrelsPath, "utf8"));
@@ -826,7 +831,7 @@ export function validateMeasurementManifest(manifest, options = {}) {
   }
   const profileValue = (
     options.profile ??
-    process.env.OMS_MEASUREMENT_PROFILE ??
+    envValue("OMS_MEASUREMENT_PROFILE") ??
     manifest.profile ??
     "boost-c040"
   );
@@ -902,7 +907,7 @@ export function validateMeasurementManifest(manifest, options = {}) {
     const rawDigestValue = manifest.rawDigest ?? modelDefault.rawDigest;
     if (rawDigestValue !== undefined) {
       const rawDigest = normalizedDigest(rawDigestValue, "rawDigest");
-      checkAttestation(manifest, options.requireAttestation === true, options.trustedAttestationPublicKey ?? process.env.OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY);
+      checkAttestation(manifest, options.requireAttestation === true, options.trustedAttestationPublicKey ?? envValue("OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY"));
       return {
         ...manifest,
         profile,
@@ -911,7 +916,7 @@ export function validateMeasurementManifest(manifest, options = {}) {
         modelDefault,
       };
     }
-    checkAttestation(manifest, options.requireAttestation === true, options.trustedAttestationPublicKey ?? process.env.OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY);
+    checkAttestation(manifest, options.requireAttestation === true, options.trustedAttestationPublicKey ?? envValue("OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY"));
     return {
       ...manifest,
       profile,
@@ -959,7 +964,7 @@ export function validateMeasurementManifest(manifest, options = {}) {
   checkAttestation(
     manifest,
     options.requireAttestation === true,
-    options.trustedAttestationPublicKey ?? process.env.OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY,
+    options.trustedAttestationPublicKey ?? envValue("OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY"),
     armResults,
   );
   return {
@@ -1094,16 +1099,16 @@ export function verifyNoDefaultContract(contract) {
 
 /** Run the checker from environment configuration. */
 export function checkMeasurementManifest(options = {}) {
-  const manifestPath = options.manifestPath ?? process.env.OMS_MEASUREMENT_MANIFEST;
+  const manifestPath = options.manifestPath ?? envValue("OMS_MEASUREMENT_MANIFEST");
   const required = options.required ?? process.env.OMS_MEASUREMENT_REQUIRED === "1";
   const configuredArmIds = options.requiredArmIds ?? expectedArmsFromEnv();
   const waiverPath =
     options.waiverPath ??
-    process.env.OMS_MEASUREMENT_WAIVER_PATH ??
-    process.env.OMS_MEASUREMENT_WAIVER;
+    envValue("OMS_MEASUREMENT_WAIVER_PATH") ??
+    envValue("OMS_MEASUREMENT_WAIVER");
   const selectedProfile = (
     options.profile ??
-    process.env.OMS_MEASUREMENT_PROFILE ??
+    envValue("OMS_MEASUREMENT_PROFILE") ??
     "boost-c040"
   );
   if (!MEASUREMENT_PROFILES.includes(selectedProfile)) fail(`unknown measurement profile: ${selectedProfile}`);
@@ -1174,7 +1179,7 @@ export function checkMeasurementManifest(options = {}) {
     qrels: options.qrels,
     preregisteredQrels,
     requiredArmIds: configuredArmIds,
-    profile: options.profile ?? process.env.OMS_MEASUREMENT_PROFILE ?? manifest.profile ?? "boost-c040",
+    profile: options.profile ?? envValue("OMS_MEASUREMENT_PROFILE") ?? manifest.profile ?? "boost-c040",
     required,
     requirePairedEvidence: required,
     requireAttestation: options.requireAttestation ?? process.env.OMS_MEASUREMENT_ATTESTATION_REQUIRED === "1",
@@ -1232,7 +1237,7 @@ async function main() {
       );
     }
     else if (!result.present) console.log("[measurement] manifest not configured (advisory until required sentinel is enabled)");
-    else console.log(`[measurement] ok: ${process.env.OMS_MEASUREMENT_MANIFEST}`);
+    else console.log(`[measurement] ok: ${envValue("OMS_MEASUREMENT_MANIFEST")}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -151,7 +151,35 @@ function stubRepoWithPolicy(policy: string): string {
   return root;
 }
 
+/**
+ * Measurement configuration is read from the process environment by design, so
+ * these tests must not inherit it. CI sets `OMS_MEASUREMENT_*` at job scope,
+ * which previously made the suite resolve a profile and trust anchors from the
+ * ambient job instead of from the case under test.
+ */
+function isolateMeasurementEnv(): void {
+  let saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    saved = {};
+    for (const name of Object.keys(process.env)) {
+      if (/^OMS_(MEASUREMENT|PREREG|GOLDEN)_/u.test(name)) {
+        saved[name] = process.env[name];
+        delete process.env[name];
+      }
+    }
+  });
+  afterEach(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    saved = {};
+  });
+}
+
 describe("R2 golden harness measurement core", () => {
+  isolateMeasurementEnv();
+
   it("computes nDCG@10 with graded relevance and returns one for ideal order", () => {
     const qrels = { "high.md": 3, "medium.md": 2, "low.md": 1 };
     expect(ndcgAt10(["high.md", "medium.md", "low.md"], qrels)).toBe(1);
@@ -459,6 +487,47 @@ describe("R2 golden harness measurement core", () => {
       qrelsHash: qrelsSha256(GOLDEN_QRELS),
     });
     expect(report.qrelsHash).toBe(qrelsSha256(GOLDEN_QRELS));
+  });
+
+  it.each(["", " \t "])(
+    "treats a %j preregistered qrels hash and empty injected qrels path as unset",
+    async (emptyValue) => {
+      const names = [
+        "OMS_GOLDEN_QUERIES",
+        "OMS_GOLDEN_QRELS",
+        "OMS_PREREG_QRELS",
+        "OMS_GOLDEN_QRELS_HASH",
+        "OMS_GOLDEN_QRELS_SHA256",
+        "OMS_PREREG_QRELS_HASH",
+      ];
+      const previous = new Map(names.map((name) => [name, process.env[name]]));
+      try {
+        delete process.env.OMS_GOLDEN_QUERIES;
+        process.env.OMS_GOLDEN_QRELS = "";
+        delete process.env.OMS_PREREG_QRELS;
+        delete process.env.OMS_GOLDEN_QRELS_HASH;
+        delete process.env.OMS_GOLDEN_QRELS_SHA256;
+        process.env.OMS_PREREG_QRELS_HASH = emptyValue;
+
+        await expect(runHarness()).resolves.toMatchObject({ qrelsHash: qrelsSha256(GOLDEN_QRELS) });
+      } finally {
+        for (const [name, value] of previous) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+    },
+  );
+
+  it("still rejects a non-empty malformed preregistered qrels hash", async () => {
+    const previous = process.env.OMS_PREREG_QRELS_HASH;
+    try {
+      process.env.OMS_PREREG_QRELS_HASH = "not-a-digest";
+      await expect(runHarness()).rejects.toThrow(/qrels hash must be a sha256 digest/);
+    } finally {
+      if (previous === undefined) delete process.env.OMS_PREREG_QRELS_HASH;
+      else process.env.OMS_PREREG_QRELS_HASH = previous;
+    }
   });
 
   it("refuses a shape-valid no-default waiver with an invalid runtime contract", () => {

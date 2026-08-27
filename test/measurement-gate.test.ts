@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -51,7 +51,35 @@ function noDefaultContract(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * Measurement configuration is read from the process environment by design, so
+ * these tests must not inherit it. CI sets `OMS_MEASUREMENT_*` at job scope,
+ * which previously made the suite resolve a profile and trust anchors from the
+ * ambient job instead of from the case under test.
+ */
+function isolateMeasurementEnv(): void {
+  let saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    saved = {};
+    for (const name of Object.keys(process.env)) {
+      if (/^OMS_(MEASUREMENT|PREREG|GOLDEN)_/u.test(name)) {
+        saved[name] = process.env[name];
+        delete process.env[name];
+      }
+    }
+  });
+  afterEach(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    saved = {};
+  });
+}
+
 describe("R2 Phase D measurement gate", () => {
+  isolateMeasurementEnv();
+
   it("makes the local release check required, attested, and artifact-supplied", async () => {
     const packageJson = JSON.parse(await readRepositoryFile("package.json")) as {
       scripts: Record<string, string>;
@@ -119,6 +147,22 @@ describe("R2 Phase D measurement gate", () => {
       })).toThrow(/could not read/);
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("treats empty measurement manifest and trust-anchor environment values as unset", () => {
+    const previousManifest = process.env.OMS_MEASUREMENT_MANIFEST;
+    const previousTrustedKey = process.env.OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY;
+    try {
+      process.env.OMS_MEASUREMENT_MANIFEST = "";
+      process.env.OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY = "";
+
+      expect(checkMeasurementManifest({ required: false })).toEqual({ present: false, advisory: true });
+    } finally {
+      if (previousManifest === undefined) delete process.env.OMS_MEASUREMENT_MANIFEST;
+      else process.env.OMS_MEASUREMENT_MANIFEST = previousManifest;
+      if (previousTrustedKey === undefined) delete process.env.OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY;
+      else process.env.OMS_MEASUREMENT_TRUSTED_PUBLIC_KEY = previousTrustedKey;
     }
   });
 
