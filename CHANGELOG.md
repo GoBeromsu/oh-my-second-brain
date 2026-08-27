@@ -10,6 +10,11 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Fixed
+
+- **0.6.1 is the first published build of the 0.6.0 changes.** The `oms-v0.6.0` tag was cut but its release job failed before publishing, so that version reached neither npm nor a GitHub Release. Tags are immutable here, so the fix ships forward rather than by retagging. Everything listed under 0.6.0 below is delivered by this release.
+- **Measurement configuration no longer misreads an unset CI variable.** An unset GitHub Actions variable expands to an empty string, so the release job supplied an empty preregistered qrels digest and the evaluation harness rejected it as malformed. Empty and whitespace-only measurement environment values now mean not configured; a non-empty malformed value still fails loudly. The measurement test suites also read that ambient job configuration instead of the case under test, and are now isolated from it.
+
 ## [0.6.0] - 2026-08-27
 
 ### Breaking
