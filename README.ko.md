@@ -102,14 +102,21 @@ oms hook       볼트 가드 훅 (Claude Code pre/post tool-use)
 
 ## 시맨틱 검색 (선택)
 
-시맨틱 검색에는 실제 임베딩 모델이 필요하다 — 프로덕션 경로에 가짜/해시 폴백은 없다(ADR-007). 로컬 GGUF 모델(`OMS_MODEL_PATH`) **또는** 임베딩 API 키(`UPSTAGE_API_KEY`) 중 하나를 설정한 뒤 동기화·질의한다:
+시맨틱 검색에는 실제 임베딩 모델이 필요하다 — 프로덕션 경로에 가짜/해시 폴백은 없다(ADR-007). 가장 간단한 경로는 핀 고정된 로컬 기본 모델이다:
 
 ```bash
-oms semantic sync  --vault /path/to/vault --collection vault
-oms semantic query "무엇을 찾아야 하나?" --vault /path/to/vault
+oms setup --vault /path/to/vault --yes --embedding-default
+oms embed  --vault /path/to/vault
+oms semantic vsearch "무엇을 찾아야 하나?" --vault /path/to/vault
 ```
 
-모델을 설정하지 않아도 그래프 기반 검색과 컨벤션 검증은 그대로 동작한다.
+`--embedding-default`는 EmbeddingGemma-300M(약 318 MB)을 내려받아 핀 고정된 SHA-256으로 검증한 뒤, 볼트가 아니라 사용자 캐시 디렉터리에 설치한다. `node-llama-cpp`로 로컬 실행되므로 API 키가 필요 없고, 모델 원본 768차원을 폴딩 없이 그대로 사용한다. 이후 `oms embed`와 벡터 검색은 환경변수 없이 동작한다.
+
+의존하기 전에 알아둘 점이 하나 있다. 이 모델과 프롬프트 형식은 [qmd](https://github.com/tobi/qmd)가 기본으로 쓰는 것과 동일하지만, 이 프로젝트의 자체 검색 하네스에서 측정된 적은 한 번도 없다. 여기서의 랭킹 품질은 대안과의 측정 비교가 아니라 그 동일성에 근거한다. 그 이유와, 해당 측정이 단순히 '보류 중'이 아닌 이유는 [결정 기록](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/measurements/model-default-deferral.md)에 적혀 있다.
+
+직접 고른 모델을 쓰려면 `OMS_EMBEDDING_PROVIDER`와 `OMS_EMBEDDING_MODEL`을 함께 지정한다(`gguf`에 로컬 GGUF 경로, 또는 `upstage`에 모델 id와 `UPSTAGE_API_KEY`). 둘 중 하나만 지정하면 두 변수 이름을 모두 알려주며 실패한다. 조용한 폴백은 없다.
+
+모델이 없어도 어휘 검색, 그래프 기반 검색, 컨벤션 검증은 그대로 동작한다. 벡터와 HyDE 요청만 거부되며, 그때 어떤 변수를 설정해야 하는지 알려준다.
 
 ## 개발
 

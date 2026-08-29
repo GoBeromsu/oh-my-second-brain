@@ -10,6 +10,14 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Korean README told you to set an environment variable that does nothing.** It documented `OMS_MODEL_PATH` as the way to point OMS at a local GGUF model, but that name was retired and is read nowhere in the codebase — anyone following those instructions got no embeddings and no explanation why. It also never mentioned `oms setup --embedding-default`, so the one-step path that has shipped since 0.8.0 was invisible to Korean readers. Both READMEs now describe the same setup, and both name `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` as the way to choose your own model.
+
+### Documentation
+
+- **Both READMEs now say the default embedding model is unmeasured.** `--embedding-default` installs the same model and prompt format qmd resolves by default, and its ranking quality here rests on that equivalence — not on a measured comparison in this project's own retrieval harness. That caveat existed only in a repository decision record, which npm users never see. It is now stated where the feature is recommended, alongside a link explaining why the measurement is not simply pending.
+
 ## [0.8.1] - 2026-08-29
 
 ### Fixed
