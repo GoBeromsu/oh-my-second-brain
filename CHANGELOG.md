@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-08-29
+
 ### Fixed
 
 - **The Korean README told you to set an environment variable that does nothing.** It documented `OMS_MODEL_PATH` as the way to point OMS at a local GGUF model, but that name was retired and is read nowhere in the codebase — anyone following those instructions got no embeddings and no explanation why. It also never mentioned `oms setup --embedding-default`, so the one-step path that has shipped since 0.8.0 was invisible to Korean readers. Both READMEs now describe the same setup, and both name `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` as the way to choose your own model.
