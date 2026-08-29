@@ -123,3 +123,41 @@ default ships, this document must keep stating that the model is unmeasured.
 That stops the tradeoff from going silent through a routine edit. Withdrawing
 the default lifts the requirement, so a genuine removal is not obstructed. The
 gate holds the disclosure, not the measurement.
+
+## The closing condition currently names an artifact nothing can produce
+
+The condition above asks for a validator-accepted `model-default` manifest. The
+validator can check one: `scripts/check-measurement-manifest.mjs` lists
+`model-default` in `MEASUREMENT_PROFILES`, and in strict mode it demands a
+complete descriptor, `armId: "model-default"`, paired raw evidence with an
+A-embed `kind` and `outputDigest`, a green verdict, and a timestamp.
+
+Nothing can produce one. Three pieces are missing, and they are missing
+structurally rather than by oversight:
+
+- **No A-embed arm exists.** The validator reads `aEmbedMetrics`, but
+  `test/golden-set/harness.ts` knows only the three boost arms
+  (`boost-k-scale`, `boost-per-list`, `boost-zero`). There is no arm that
+  measures an embedding model.
+- **No preregistered protocol defines the measurement.**
+  `docs/preregistration/` contains `boost-arms.md` and nothing for
+  `model-default`: no query classes, no comparison, no pass rule.
+- **No manifest producer exists for any profile.** Nothing in `scripts/`,
+  `test/`, or `src/` emits a manifest. `boost-c040` never needed one, because
+  the shipped ranking default is the released baseline and that gate passes with
+  a receipt.
+
+So "produce the measurement" is not a data-entry task on the owner's vault. It
+is: preregister a protocol, add the arm, add a producer, then run it against a
+real vault with curated labels.
+
+The first of those must not be written by an agent, and deliberately was not.
+Preregistration is the commitment device that stops the metric from being chosen
+after the fact. An agent that authors the protocol, implements the arm, and then
+reports a pass has proved nothing except that it picked a rule its own candidate
+satisfies. Whoever defines this measurement must do so before knowing how
+EmbeddingGemma-300M scores under it.
+
+Until that exists, the closing condition is aspirational, and the honest reading
+of this document is that the installable default ships unmeasured with no dated
+commitment to measuring it.
