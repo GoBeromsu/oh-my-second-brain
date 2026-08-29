@@ -101,3 +101,25 @@ selecting it is adopting that unmeasured assertion.
 The deferral above still closes only on a validator-accepted, green
 `model-default` manifest produced from a real vault by that vault's owner.
 Until then, automatic or implicit default-model acquisition stays withheld.
+
+## What enforces this, and what does not
+
+Nothing automated asks for the `model-default` manifest. `npm run
+check:measurement` runs the `boost-c040` profile only, and no workflow requests
+any other profile. So this deferral can remain open indefinitely while an
+installable default ships, and no build will object.
+
+That is deliberate rather than an oversight to fix in code. Only the vault owner
+can produce the manifest, from a real vault with curated labels, and the
+preregistration forbids satisfying it with fabricated relevance. A gate
+demanding it would therefore fail every run for a reason no contributor could
+fix. Whether to accept the drift, commit to producing the measurement, or
+withdraw the installable default is an owner decision, not something a test can
+settle.
+
+One narrower invariant *is* enforced, by
+`test/architecture/model-default-disclosure.test.ts`: while an installable
+default ships, this document must keep stating that the model is unmeasured.
+That stops the tradeoff from going silent through a routine edit. Withdrawing
+the default lifts the requirement, so a genuine removal is not obstructed. The
+gate holds the disclosure, not the measurement.
