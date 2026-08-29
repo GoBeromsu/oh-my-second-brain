@@ -115,6 +115,29 @@ describe("installable default embedding model discloses its unmeasured status", 
     ).toEqual([]);
   });
 
+  it("keeps the unconfigured-vault guidance consistent with whether the flag exists", async () => {
+    // The guidance a model-less vault prints is the one place that tells a user
+    // how to get embeddings. If the pinned default is ever withdrawn, guidance
+    // still naming `--embedding-default` would send users to a command that no
+    // longer exists -- the same defect as the Korean README's long-dead
+    // `OMS_MODEL_PATH`, which shipped for two releases telling people to set a
+    // variable nothing reads. Enforced symmetrically: wired but unmentioned
+    // hides the one-step path, mentioned but unwired is an outright lie.
+    const [model, ships] = await Promise.all([read(MODEL_SOURCE), shipsInstallableDefault()]);
+    const guidanceMentionsFlag = /No embedding model is configured[\s\S]{0,400}?--embedding-default/u.test(
+      model,
+    );
+
+    expect(
+      guidanceMentionsFlag,
+      ships
+        ? `${MODEL_SOURCE} ships ${DEFAULT_FLAG} but its unconfigured-vault guidance does not name it, ` +
+          "so users are not told the one-step path exists."
+        : `${MODEL_SOURCE} no longer wires ${DEFAULT_FLAG}, but its unconfigured-vault guidance still ` +
+          "names it. Update the guidance so it does not point at a command that no longer exists.",
+    ).toBe(ships);
+  });
+
   it("records that no pipeline demands the model-default measurement", async () => {
     // The gap itself is a governance decision for the vault owner, but it must
     // not be possible to believe it was closed. If some pipeline later does
