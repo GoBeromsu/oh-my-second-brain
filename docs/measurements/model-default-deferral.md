@@ -161,3 +161,9 @@ EmbeddingGemma-300M scores under it.
 Until that exists, the closing condition is aspirational, and the honest reading
 of this document is that the installable default ships unmeasured with no dated
 commitment to measuring it.
+
+That gap is an open decision, not a settled position:
+[#78](https://github.com/GoBeromsu/oh-my-second-brain/issues/78) carries the
+three options (accept the drift on the record, commit to producing the
+measurement, or withdraw the installable default) along with the measured cost of
+each. Read it before treating anything above as final.
