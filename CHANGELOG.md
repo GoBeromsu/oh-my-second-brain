@@ -10,6 +10,11 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Korean README documented an MCP surface that no longer exists.** It listed eleven tools — `oms_graph_status`, `oms_retrieve_by_axis`, `oms_lazy_load_note`, and eight more — as what `oms mcp` exposes. Those are the retired detail operations, which now route through the five public tools by an `op` parameter. It also named the write tool `write` rather than `oms_write`. Anyone wiring an MCP client from that list would have called tools the server does not advertise — `ListTools` returns exactly the five. It now states the same five tools the English README does: `oms_write`, `oms_search`, `oms_link`, `oms_status`, `oms_doctor`.
+- **The Korean README credited `oms doctor` with `oms lint`'s job and omitted `lint` entirely.** `doctor` was described as broken-link and orphan detection, which is what `lint` does; `doctor` validates note frontmatter against the ontology. Both commands are now listed with their actual responsibilities.
+
 ## [0.8.2] - 2026-08-29
 
 ### Fixed

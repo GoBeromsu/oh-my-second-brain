@@ -74,7 +74,8 @@ oms setup      기존 볼트를 컨벤션으로 채택 (.oms/taxonomy.yaml 작�
 oms install    호스트 어댑터 + MCP 등록 설치
 oms uninstall  호스트 어댑터 + MCP 등록 제거
 oms update     패키지 업데이트 확인/적용 후 어댑터 재조정
-oms doctor     온톨로지 기준 노트 검증 (broken-link + orphan 탐지)
+oms doctor     온톨로지 기준으로 노트 frontmatter 검증 (필드/컨셉별 집계)
+oms lint       볼트 링크 건강도 점검: 깨진 [[wikilink]] + 고아 노트
 oms semantic   네이티브 마크다운 시맨틱 인덱스 / 검색 / 조회
 oms mcp        stdio MCP 서버 시작
 oms hook       볼트 가드 훅 (Claude Code pre/post tool-use)
@@ -84,11 +85,11 @@ oms hook       볼트 가드 훅 (Claude Code pre/post tool-use)
 
 ## MCP 도구
 
-`oms mcp`는 상태, 읽기, 검색, 검증, 게이트된 write 도구를 노출한다:
+`oms mcp`는 정확히 다섯 개의 공개 도구를 노출한다:
 
-`oms_graph_status` · `oms_graph_build` · `oms_list_concepts` · `oms_retrieve_context` · `oms_retrieve_by_axis` · `oms_sync_embeddings` · `oms_semantic_query` · `oms_get_document` · `oms_multi_get_documents` · `oms_lazy_load_note` · `oms_validate_contract` · `write`
+`oms_write` · `oms_search` · `oms_link` · `oms_status` · `oms_doctor`
 
-`write`는 경로 안전성, 볼트 격리, 커널이 소유한 컨셉 계약으로 게이트된다.
+`oms_write`는 경로 안전성, 볼트 격리, 커널이 소유한 컨셉 계약으로 게이트된다.
 
 ## 볼트 구조 (`.oms/`)
 
