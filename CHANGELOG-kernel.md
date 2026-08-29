@@ -4,6 +4,14 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Frontmatter YAML comments and fenced-code headings are no longer mistaken for a document title.** `documentTitle` fell back to scanning the raw document for the first ATX H1, which reads the frontmatter block too — where a YAML comment (`# rewrite this later`) is byte-identical to an H1. The same unguarded regex matched an `# heading` inside a fenced code block, so a note demonstrating markdown was titled by its own example. Because the title is prepended to *every* chunk's embedding input, one wrong title skews the vectors for the whole note, not just the chunk containing that line. The H1 scan is now confined to `parsed.body` and tracks backtick and tilde fences, closing a fence only on a run at least as long as the opener per CommonMark. A document whose frontmatter fence never closes has an empty body and is therefore untitled, which is the honest answer for a malformed document rather than a guess drawn from non-body text.
+
+  This is a title-selection fix, not a redaction: `chunkDocument` receives the raw document, so frontmatter text was and remains part of the indexed chunk text. The bug was which text got treated as the title.
+- **The chunk digest can no longer be made to collide across the title boundary.** The digest joined title and text with a bare NUL separator and claimed that made the pair unambiguous. Nothing forbids a NUL in note text, so `("a", "\0b")` and `("a\0", "b")` hashed identically — meaning a crafted retitle could impersonate a body edit and suppress re-embedding. The title is now length-prefixed, making the encoding injective for every input. **This changes the digest formula again, so the first `oms embed` after upgrading re-embeds once**, on top of 0.8.0's own one-time reindex.
+- **A `NaN` vector-query width is rejected instead of silently becoming the widest possible scan.** `clampVecK` treated every non-finite value alike via `!Number.isFinite(k)`, so `NaN` and `-Infinity` both saturated to the 4096 ceiling. For `NaN` that ran the most expensive ANN scan available and then returned nothing, because the subsequent `.slice(0, NaN)` yields an empty array — hiding a caller bug behind an empty page. `NaN` now throws, matching how `vecBuf` rejects a non-finite vector component; `Infinity` still saturates, since it is the honest spelling of "every candidate"; and a negative or zero request still floors to 1.
+
 ## [0.8.0] - 2026-08-29
 
 ### Added

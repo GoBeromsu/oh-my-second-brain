@@ -92,6 +92,55 @@ describe("chunkDocument", () => {
     expect(chunks[0]?.title).toBe("Real Heading");
   });
 
+  it("never mistakes a YAML frontmatter comment for the document title", () => {
+    // A YAML comment is syntactically identical to an ATX H1. Scanning the raw
+    // document for a heading would embed private metadata as the note's title,
+    // making an internal remark searchable content.
+    const chunks = chunkDocument(
+      "notes/comment.md",
+      "---\n# Internal note, do not ship\nstatus: draft\n---\nBody text here.",
+    );
+    expect(chunks[0]?.title).toBe(UNTITLED_DOCUMENT_TITLE);
+  });
+
+  it("ignores an H1 inside a fenced code block", () => {
+    const backticks = chunkDocument(
+      "notes/fence.md",
+      "Intro.\n\n```markdown\n# Sample Heading\n```\n\nMore body.",
+    );
+    const tildes = chunkDocument("notes/tilde.md", "Intro.\n\n~~~\n# Sample Heading\n~~~\n\nBody.");
+
+    expect(backticks[0]?.title).toBe(UNTITLED_DOCUMENT_TITLE);
+    expect(tildes[0]?.title).toBe(UNTITLED_DOCUMENT_TITLE);
+  });
+
+  it("finds a real H1 that follows a fenced code block", () => {
+    const chunks = chunkDocument(
+      "notes/after-fence.md",
+      "Intro.\n\n```\n# Sample\n```\n\n# Real Title\nBody.",
+    );
+    expect(chunks[0]?.title).toBe("Real Title");
+  });
+
+  it("keeps a fence open across a shorter inner run", () => {
+    // CommonMark closes a fence only on a run at least as long as the opener,
+    // so the inner ``` does not end a ```` block and the heading stays sample text.
+    const chunks = chunkDocument(
+      "notes/nested-fence.md",
+      "Intro.\n\n````\n```\n# Still Inside\n````\n\nBody.",
+    );
+    expect(chunks[0]?.title).toBe(UNTITLED_DOCUMENT_TITLE);
+  });
+
+  it("ignores a non-string frontmatter title instead of coercing it", () => {
+    expect(chunkDocument("n.md", "---\ntitle: 12345\n---\nBody.")[0]?.title)
+      .toBe(UNTITLED_DOCUMENT_TITLE);
+    expect(chunkDocument("l.md", "---\ntitle:\n  - A\n  - B\n---\nBody.")[0]?.title)
+      .toBe(UNTITLED_DOCUMENT_TITLE);
+    expect(chunkDocument("z.md", "---\ntitle: null\n---\n# Real H1\nBody.")[0]?.title)
+      .toBe("Real H1");
+  });
+
   it("changes the sha of body-only chunks when only the title changes", () => {
     // The title reaches every chunk's embedding input, so a retitle must
     // invalidate chunks that do not themselves contain the title line.
@@ -112,6 +161,19 @@ describe("chunkDocument", () => {
   it("keeps the sha stable when neither title nor text changes", () => {
     const raw = "---\ntitle: Stable\n---\nUnchanged body.";
     expect(chunkDocument("a.md", raw)[0]?.sha).toBe(chunkDocument("b.md", raw)[0]?.sha);
+  });
+
+  it("cannot be made to collide by moving a NUL across the title boundary", () => {
+    // A bare separator is only unambiguous while the inputs cannot contain it.
+    // Nothing forbids a NUL in note text, so ("a", "\0b") and ("a\0", "b") would
+    // hash identically under plain concatenation, letting a crafted retitle
+    // impersonate a body edit and suppress re-embedding.
+    const left = chunkDocument("x.md", "---\ntitle: \"a\"\n---\n\u0000b");
+    const right = chunkDocument("x.md", "---\ntitle: \"a\\u0000\"\n---\nb");
+
+    expect(left[0]?.title).toBe("a");
+    expect(right[0]?.title).toBe("a\u0000");
+    expect(left[0]?.sha).not.toBe(right[0]?.sha);
   });
 
   it("respects maxTokens option by splitting large docs", () => {

@@ -113,6 +113,26 @@ describe("openEngineStore — queryVec", () => {
     expect(store.queryVec(vec, Number.MAX_SAFE_INTEGER).length).toBeLessThanOrEqual(SQLITE_VEC_MAX_K);
   });
 
+  it("rejects NaN rather than turning a caller bug into the widest possible scan", async () => {
+    // NaN is not a width. Saturating it to the ceiling would run the most
+    // expensive ANN scan available and then return nothing from slice(0, NaN),
+    // hiding the caller's bug behind an empty page.
+    const provider = createHashProjectionProvider(DIMS);
+    const vec = await provider.embed("retrieval augmented generation");
+    await provider.dispose();
+
+    expect(() => store.queryVec(vec, Number.NaN)).toThrow(/NaN/);
+  });
+
+  it("floors a negative-infinity request to a single candidate", async () => {
+    const provider = createHashProjectionProvider(DIMS);
+    const vec = await provider.embed("retrieval augmented generation");
+    await provider.dispose();
+
+    expect(() => store.queryVec(vec, Number.NEGATIVE_INFINITY)).not.toThrow();
+    expect(store.queryVec(vec, Number.NEGATIVE_INFINITY).length).toBeLessThanOrEqual(1);
+  });
+
   it("returns at least one candidate for a non-positive k rather than an empty page", async () => {
     const provider = createHashProjectionProvider(DIMS);
     const vec = await provider.embed("retrieval augmented generation");

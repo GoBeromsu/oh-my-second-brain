@@ -48,3 +48,56 @@ measurement and model measurement are different measurements; a
 
 The deferral closes only when a validator-accepted, green `model-default`
 manifest exists and was produced from a real vault by that vault's owner.
+
+---
+
+# Explicit-acquisition decision record (v0.8.0)
+
+> **Decision: ship an explicit, opt-in acquisition command; do not ship an
+> implicit or automatic default.** Recorded 2026-08-30 by the vault owner when
+> authorising v0.8.0. This record does **not** close the deferral above, does
+> not select a default model for any unconfigured vault, and consumes no
+> waiver.
+
+## What was decided
+
+v0.8.0 adds `oms setup --embedding-default`, which acquires a pinned
+EmbeddingGemma-300M descriptor, verifies the downloaded bytes against a pinned
+SHA-256, and publishes it as the installed default for that machine.
+
+The owner was presented with the tension against the deferral above and chose
+the explicit-install path over both waiting for a real-vault `model-default`
+measurement and shipping an automatic first-run download.
+
+## Why this is not the capability the deferral withheld
+
+Rule 1's substance is that a release "introduces no new default embedding
+model" and leaves "explicit configuration behaviour unchanged". Both hold:
+
+- No unconfigured vault gains a default. With no environment pair and an empty
+  cache, `resolveEmbeddingModel` still returns `available: false`,
+  `source: "none"`. The pinned constant is unreachable from resolution; its only
+  production consumer is the explicit setup branch.
+- The machine-verified no-default contract still passes unchanged, including its
+  zero-download assertion over the MCP surface.
+- Explicit `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` behaviour is
+  untouched, and a half pair still fails loudly naming both variables.
+
+The user names the model by running a command; the runtime never chooses one.
+That is the distinction this record turns on.
+
+## What remains unproven
+
+No real-vault `model-default` measurement exists for this model. Its retrieval
+quality is therefore asserted on the basis that it is the same model and prompt
+format the reference toolchain (qmd) uses by default, not on a measured
+comparison against an alternative in this project's own harness. Anyone
+selecting it is adopting that unmeasured assertion.
+
+`boost-c040` is unaffected and remains required and never waivable.
+
+## Closing condition (unchanged)
+
+The deferral above still closes only on a validator-accepted, green
+`model-default` manifest produced from a real vault by that vault's owner.
+Until then, automatic or implicit default-model acquisition stays withheld.

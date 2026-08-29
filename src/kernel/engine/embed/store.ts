@@ -93,8 +93,13 @@ export const SQLITE_VEC_MAX_K = 4096;
 /**
  * Clamp a requested knn width into sqlite-vec's supported range.
  *
- * A non-positive or non-finite request collapses to 1 rather than 0 so a caller
- * that asks for "some" results never silently receives an empty page.
+ * `Infinity` is the honest spelling of "every candidate", so it saturates to the
+ * ceiling. `NaN` is not a width at all — it is a caller bug, and silently
+ * turning it into the most expensive possible ANN scan would hide that bug while
+ * `.slice(0, NaN)` returned nothing — so it is rejected, matching how `vecBuf`
+ * rejects a non-finite vector component. A negative or zero request floors to 1
+ * rather than 0 so a caller asking for "some" results never silently receives an
+ * empty page.
  *
  * Clamping is a real ceiling, not a formality. In a vault with more than
  * `SQLITE_VEC_MAX_K` indexed chunks the vector candidate stream is truncated, so
@@ -106,7 +111,10 @@ export const SQLITE_VEC_MAX_K = 4096;
  * vector query outright, which is what shipped before this clamp.
  */
 function clampVecK(k: number): number {
-  if (!Number.isFinite(k)) return SQLITE_VEC_MAX_K;
+  if (Number.isNaN(k)) {
+    throw new Error("EngineStore vector query k must be a number, got NaN.");
+  }
+  if (k === Number.POSITIVE_INFINITY) return SQLITE_VEC_MAX_K;
   return Math.max(1, Math.min(SQLITE_VEC_MAX_K, Math.floor(k)));
 }
 
