@@ -471,7 +471,7 @@ async function syncDocument(opts: {
     opts.store.clearDocument(opts.relPath);
     const toUpsert: Array<Chunk & { vector: Float32Array }> = [];
     for (const chunk of chunks) {
-      const vector = await opts.provider.embed(chunk.text);
+      const vector = await opts.provider.embed(chunk.text, chunk.title);
       toUpsert.push({ ...chunk, vector });
       opts.counters.added++;
     }
@@ -486,7 +486,7 @@ async function syncDocument(opts: {
       opts.counters.skipped++;
       continue;
     }
-    const vector = await opts.provider.embed(chunk.text);
+    const vector = await opts.provider.embed(chunk.text, chunk.title);
     toUpsert.push({ ...chunk, vector });
     if (storedSha === undefined) opts.counters.added++;
     else opts.counters.updated++;

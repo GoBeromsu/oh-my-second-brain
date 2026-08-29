@@ -34,6 +34,14 @@ export interface EngineConfig {
 // Chunking
 // ---------------------------------------------------------------------------
 
+/**
+ * Title used for a document that declares none.
+ *
+ * The literal matches what qmd substitutes for an untitled document, so the
+ * same file yields the same embedding input under either toolchain.
+ */
+export const UNTITLED_DOCUMENT_TITLE = "none";
+
 /** Options controlling how documents are split into chunks. */
 export interface ChunkerOptions {
   /** Maximum token budget per chunk. Default 900. */
@@ -53,9 +61,14 @@ export interface Chunk {
   ordinal: number;
   /** Raw text content of the chunk. */
   text: string;
+  /**
+   * The source document's title, prepended to this chunk's embedding input so a
+   * chunk that is ambiguous on its own still carries document context.
+   */
+  title: string;
   /** Breadcrumb of heading text from the document root to this chunk's section. */
   headingPath: string[];
-  /** SHA-256 hex digest of `text`, used for change-detection. */
+  /** SHA-256 digest of `title` + `text`, used for change-detection. */
   sha: string;
 }
 
@@ -75,8 +88,14 @@ export interface EmbeddingProvider {
   readonly model: string;
   /** Dimensionality of the Float32Array returned by `embed`. */
   readonly dimensions: number;
-  /** Produce a normalised embedding vector for `text`. */
-  embed(text: string): Promise<Float32Array>;
+  /**
+   * Produce a normalised embedding vector for `text`.
+   *
+   * `title` is the source document's title. Providers whose prefix scheme
+   * declares a `{title}` slot substitute it; the others ignore it, so passing
+   * it is always safe.
+   */
+  embed(text: string, title?: string): Promise<Float32Array>;
   /** Release any native resources held by the provider. */
   dispose(): Promise<void>;
 }

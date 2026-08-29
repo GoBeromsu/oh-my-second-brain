@@ -10,6 +10,47 @@ export const EMBEDDING_MODEL_ENV = "OMS_EMBEDDING_MODEL" as const;
 export const INSTALLED_DEFAULT_DESCRIPTOR = "default-model.json";
 export const CAPABILITY_RECEIPT = "capability-receipt.json";
 
+/**
+ * The one pinned default embedding model, offered by `oms setup --embedding-default`.
+ *
+ * This is the same model qmd resolves from its own `DEFAULT_EMBED_MODEL_URI`
+ * (`hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf`), so a
+ * vault indexed by `oms embed` gets that toolchain's retrieval quality rather
+ * than a lesser stand-in. `dimensions` is the model's native width and is
+ * stored unfolded (ADR-007 P-A); `mrlDim: 0` records that no Matryoshka
+ * truncation is applied.
+ *
+ * This constant is NOT a fallback. `resolveEmbeddingModel` never reaches for
+ * it, because an implicit default would defeat the E-1 no-default contract in
+ * `src/kernel/measurement/no-default-contract.ts`: with no environment pair and
+ * an empty cache, embedding capability must stay honestly unavailable. The only
+ * consumer is the explicit setup acquisition path, which verifies `sha256`
+ * against the downloaded bytes before publishing them.
+ *
+ * `prefixScheme` reproduces EmbeddingGemma's asymmetric prompts byte-for-byte
+ * as qmd formats them in `formatQueryForEmbedding` / `formatDocForEmbedding`,
+ * including the document title: `{title}` is substituted per chunk, matching
+ * qmd's `title: <title> | text: <text>` document prompt.
+ */
+export const PINNED_DEFAULT_EMBEDDING_MODEL: EmbeddingModelDescriptor & {
+  readonly url: string;
+  readonly sha256: string;
+} = {
+  provider: "gguf",
+  model: "embeddinggemma-300M-Q8_0.gguf",
+  filename: "embeddinggemma-300M-Q8_0.gguf",
+  url: "https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M-Q8_0.gguf",
+  sha256: "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
+  dimensions: 768,
+  context: 2048,
+  mrlDim: 0,
+  normalization: "l2",
+  prefixScheme: JSON.stringify({
+    query: "task: search result | query: ",
+    passage: "title: {title} | text: ",
+  }),
+};
+
 /** Metadata needed to use an installed embedding model. */
 export interface EmbeddingModelDescriptor {
   readonly provider: string;
@@ -84,8 +125,9 @@ export interface ResolveEmbeddingModelOptions {
 const INCOMPLETE_CONFIG_ERROR =
   `Embedding configuration is incomplete. Set both ${EMBEDDING_PROVIDER_ENV} and ${EMBEDDING_MODEL_ENV}.`;
 const NO_MODEL_GUIDANCE =
-  `No embedding model is configured. Set ${EMBEDDING_PROVIDER_ENV} and ${EMBEDDING_MODEL_ENV}, ` +
-  "or install a local model with `oms setup --embedding-descriptor <descriptor>`.";
+  "No embedding model is configured. Run `oms setup --embedding-default` to install the pinned " +
+  `local model, or set ${EMBEDDING_PROVIDER_ENV} and ${EMBEDDING_MODEL_ENV} to choose your own ` +
+  "(`oms setup --embedding-descriptor <path>` installs an operator-supplied descriptor).";
 
 function trim(value: string | undefined): string {
   return (value ?? "").trim();

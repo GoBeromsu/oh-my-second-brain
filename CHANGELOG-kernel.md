@@ -4,6 +4,19 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Added
+
+- **A pinned default embedding model is now available for explicit one-step install.** `PINNED_DEFAULT_EMBEDDING_MODEL` describes EmbeddingGemma-300M (`embeddinggemma-300M-Q8_0.gguf`, 768d, 2048-token context) with its source URL and a verified SHA-256 of `b5ce9d77…90d63`. This is the same model qmd resolves from its own `DEFAULT_EMBED_MODEL_URI`, so a vault indexed by `oms embed` gets that toolchain's retrieval quality instead of a lesser stand-in. The constant is deliberately **not** a fallback: `resolveEmbeddingModel` never reaches for it, because an implicit default would defeat the E-1 no-default contract, which verifies at runtime that embedding capability stays honestly unavailable with no environment pair and an empty cache. Its only consumer is the explicit setup acquisition path, which verifies the downloaded bytes against the pinned digest before publishing them. ADR-007 P-B is unaffected — a real, explicitly installed model was never the fake fallback that principle forbids.
+- **Chunks now carry their document title into the embedding input.** `Chunk.title` is resolved from frontmatter `title`, then the first ATX H1, then the literal `none`, and `EmbeddingProvider.embed(text, title?)` accepts it. A passage prefix may declare a `{title}` slot, which the GGUF and Upstage providers substitute per chunk; the pinned descriptor uses `title: {title} | text: `, reproducing qmd's `formatDocForEmbedding` byte-for-byte. This matters for retrieval rather than cosmetics: a chunk from the middle of a note is frequently ambiguous on its own, and the document title is the cheapest available disambiguating context. A prefix without the slot is prepended exactly as before, so every existing descriptor keeps its current behavior.
+
+### Changed
+
+- **Chunk change-detection digests now cover the document title as well as the chunk text.** The title reaches every chunk's embedding input, so a digest over text alone reported "unchanged" for each chunk that did not itself contain the title line — leaving stored vectors that still encoded the *old* title after a retitle. The digest is now taken over title and text with a NUL separator, so no retitle can collide with a body edit. The cost is explicit: because the digest formula changed, the first `oms embed` after upgrading re-embeds every chunk once. We chose that over making the digest conditional on provider configuration, which would have coupled chunking to embedding settings and left the stale-vector bug reachable.
+
+### Fixed
+
+- **Vector queries no longer fail outright on an unbounded candidate limit.** The MCP facade requests `Number.MAX_SAFE_INTEGER` candidates so collection aggregation can page globally. FTS tolerates that, but sqlite-vec rejects any knn `k` above its own 4096 ceiling, so every vector query failed with `k value in knn query too large`. The collection-scoped branch had the same defect from the opposite direction: it passed the *total* chunk count, which fails on any vault with more than 4096 chunks. The store — the only layer that knows the extension's constraint — now clamps `k` into the supported range, and a non-positive request collapses to 1 rather than 0 so a caller asking for "some" results never silently gets an empty page. This was unreachable in practice until now, because a vault with no embedding model never got as far as a vector query; configuring a local model exposed it immediately. The clamp is a genuine ceiling, not a cure-all: in a vault with more than 4096 chunks, a collection-scoped vector query still ranks within the global top-4096 before filtering, so a collection whose chunks all fall outside that band can be starved. That is inherent to ANN-before-predicate search in sqlite-vec; the alternative was failing every vector query.
+
 ## [0.7.0] - 2026-08-27
 
 ### Breaking

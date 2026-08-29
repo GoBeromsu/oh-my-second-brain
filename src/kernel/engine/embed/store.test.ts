@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, expect } from "vitest";
-import { openEngineStore, openEngineStoreCore } from "./store.js";
+import { openEngineStore, openEngineStoreCore, SQLITE_VEC_MAX_K } from "./store.js";
 import type { EngineStore } from "./store.js";
 import { createHashProjectionProvider } from "./hash-stub.test-helper.js";
 
@@ -28,6 +28,7 @@ async function makeRow(docPath: string, ordinal: number, text: string) {
     docPath,
     ordinal,
     text,
+    title: "Test Document",
     headingPath: [] as string[],
     sha: "aabbcc",
     vector,
@@ -39,6 +40,7 @@ function makeLexRow(docPath: string, text: string) {
     docPath,
     ordinal: 0,
     text,
+    title: "Test Document",
     headingPath: [] as string[],
     sha: docPath,
   };
@@ -95,6 +97,29 @@ describe("openEngineStore — queryVec", () => {
     await provider.dispose();
     const hits = store.queryVec(vec, 5);
     expect(Array.isArray(hits)).toBe(true);
+  });
+
+  it("clamps an unbounded k instead of failing the sqlite-vec knn query", async () => {
+    // The MCP facade passes Number.MAX_SAFE_INTEGER as its unbounded candidate
+    // limit. FTS tolerates that, but sqlite-vec rejects any k above its own
+    // ceiling, which made every vector query fail once a real embedding model
+    // made the path reachable.
+    const provider = createHashProjectionProvider(DIMS);
+    const vec = await provider.embed("retrieval augmented generation");
+    await provider.dispose();
+
+    expect(() => store.queryVec(vec, Number.MAX_SAFE_INTEGER)).not.toThrow();
+    expect(() => store.queryVec(vec, Number.POSITIVE_INFINITY)).not.toThrow();
+    expect(store.queryVec(vec, Number.MAX_SAFE_INTEGER).length).toBeLessThanOrEqual(SQLITE_VEC_MAX_K);
+  });
+
+  it("returns at least one candidate for a non-positive k rather than an empty page", async () => {
+    const provider = createHashProjectionProvider(DIMS);
+    const vec = await provider.embed("retrieval augmented generation");
+    await provider.dispose();
+
+    expect(() => store.queryVec(vec, 0)).not.toThrow();
+    expect(() => store.queryVec(vec, -5)).not.toThrow();
   });
 
   it("queryVec scores are in (0, 1] range", async () => {

@@ -103,14 +103,19 @@ oms hook       Vault guard hooks (Claude Code pre/post tool-use)
 
 ## Semantic search (optional)
 
-Semantic retrieval requires a real embedding model — there is no fake/hash fallback (ADR-007). Configure embeddings explicitly with `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` (`gguf` with a local GGUF model path, or `upstage` with a model id and `UPSTAGE_API_KEY`), then sync and query:
+Semantic retrieval requires a real embedding model — there is no fake/hash fallback (ADR-007). The quickest path is the pinned local default:
 
 ```bash
-oms semantic sync  --vault /path/to/vault --collection vault
-oms semantic query "what should I retrieve?" --vault /path/to/vault
+oms setup --vault /path/to/vault --yes --embedding-default
+oms embed  --vault /path/to/vault
+oms semantic vsearch "what should I retrieve?" --vault /path/to/vault
 ```
 
-Without a configured model, graph-based retrieval and convention validation still work.
+`--embedding-default` downloads EmbeddingGemma-300M (~318 MB), verifies it against a pinned SHA-256, and installs it under your user cache — not in the vault. It runs locally through `node-llama-cpp`, needs no API key, and embeds at the model's full 768 dimensions with no folding. After that, `oms embed` and vector search need no environment variables.
+
+To choose your own model instead, set `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` (`gguf` with a local GGUF path, or `upstage` with a model id and `UPSTAGE_API_KEY`). Setting only one of the pair is an error naming both, never a silent fallback.
+
+Without any model, lexical search, graph-based retrieval, and convention validation all still work; only vector and HyDE requests are refused, and they say which variables to set.
 
 ## Development
 

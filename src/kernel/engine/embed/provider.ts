@@ -18,6 +18,7 @@
  */
 
 import { cpus } from "node:os";
+import { UNTITLED_DOCUMENT_TITLE } from "../types.js";
 import type { EmbeddingProvider } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -91,6 +92,29 @@ function normalizeVector(values: readonly number[]): Float32Array {
 interface EmbeddingPrefixes {
   readonly query: string;
   readonly passage: string;
+}
+
+/**
+ * Placeholder a passage prefix uses to request the document title.
+ *
+ * EmbeddingGemma's document prompt is `title: <title> | text: <text>`, so the
+ * title sits INSIDE the prefix rather than before it. A prefix declaring this
+ * slot gets the real title substituted; a prefix without it is prepended
+ * unchanged, which keeps every existing descriptor byte-identical.
+ */
+const TITLE_PLACEHOLDER = "{title}";
+
+/**
+ * Build the full passage embedding input.
+ *
+ * Substitutes the title slot when the scheme declares one. An absent or blank
+ * title falls back to the shared untitled literal so the emitted prompt never
+ * contains an empty title field.
+ */
+function passageInput(prefix: string, text: string, title: string | undefined): string {
+  const resolved = title?.trim() ? title.trim() : UNTITLED_DOCUMENT_TITLE;
+  if (!prefix.includes(TITLE_PLACEHOLDER)) return `${prefix}${text}`;
+  return `${prefix.split(TITLE_PLACEHOLDER).join(resolved)}${text}`;
 }
 
 /** Embedding provider seam for callers that need the query-side prefix. */
@@ -295,8 +319,8 @@ export function createGGUFEmbeddingProvider(
       ? { prefixScheme: dimensionsOrOptions.prefixScheme }
       : {}),
 
-    async embed(text: string): Promise<Float32Array> {
-      return embedPassage(text);
+    async embed(text: string, title?: string): Promise<Float32Array> {
+      return embedPassage(text, title);
     },
 
     async embedQuery(text: string): Promise<Float32Array> {
@@ -335,8 +359,8 @@ export function createGGUFEmbeddingProvider(
     return vector;
   }
 
-  async function embedPassage(text: string): Promise<Float32Array> {
-    return embedText(`${prefixes.passage}${text}`);
+  async function embedPassage(text: string, title?: string): Promise<Float32Array> {
+    return embedText(passageInput(prefixes.passage, text, title));
   }
 
   async function disposeProvider(): Promise<void> {
@@ -395,8 +419,8 @@ export function createUpstageProvider(
     ...(metadata.normalization === undefined ? {} : { normalization: metadata.normalization }),
     ...(metadata.prefixScheme === undefined ? {} : { prefixScheme: metadata.prefixScheme }),
 
-    async embed(text: string): Promise<Float32Array> {
-      return embedPassage(text);
+    async embed(text: string, title?: string): Promise<Float32Array> {
+      return embedPassage(text, title);
     },
 
     async embedQuery(text: string): Promise<Float32Array> {
@@ -412,8 +436,8 @@ export function createUpstageProvider(
     readonly embedQuery: (text: string) => Promise<Float32Array>;
   }>;
 
-  async function embedPassage(text: string): Promise<Float32Array> {
-    return embedText(`${prefixes.passage}${text}`);
+  async function embedPassage(text: string, title?: string): Promise<Float32Array> {
+    return embedText(passageInput(prefixes.passage, text, title));
   }
 
   async function embedText(text: string): Promise<Float32Array> {
