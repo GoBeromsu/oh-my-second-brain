@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-29
+
 ### Fixed
 
 - **A note could be given the wrong title, degrading semantic search across that whole note.** 0.8.0 started mixing each note's title into every one of its chunks when embedding, which is what makes a mid-note passage findable by what the note is *about*. But the title was picked from the first `#` line anywhere in the file, and `#` means "comment" in frontmatter and "heading" in Markdown. So a frontmatter comment like `# rewrite this later`, or an `# Example` heading shown inside a fenced code block, could be adopted as the note's title and then mixed into every chunk of it — pulling the entire note toward the wrong topic. Titles are now read only from frontmatter `title` or a real heading in the note body, with code fences skipped. A note affected by either case had no real title to begin with, so it is now correctly untitled.

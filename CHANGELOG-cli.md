@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-29
+
 ## [0.8.0] - 2026-08-29
 
 ### Added

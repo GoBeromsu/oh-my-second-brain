@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-29
+
 ### Fixed
 
 - **Frontmatter YAML comments and fenced-code headings are no longer mistaken for a document title.** `documentTitle` fell back to scanning the raw document for the first ATX H1, which reads the frontmatter block too — where a YAML comment (`# rewrite this later`) is byte-identical to an H1. The same unguarded regex matched an `# heading` inside a fenced code block, so a note demonstrating markdown was titled by its own example. Because the title is prepended to *every* chunk's embedding input, one wrong title skews the vectors for the whole note, not just the chunk containing that line. The H1 scan is now confined to `parsed.body` and tracks backtick and tilde fences, closing a fence only on a run at least as long as the opener per CommonMark. A document whose frontmatter fence never closes has an empty body and is therefore untitled, which is the honest answer for a malformed document rather than a guess drawn from non-body text.
