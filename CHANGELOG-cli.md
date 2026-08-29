@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-29
+
 ### Added
 
 - **`oms setup --embedding-default` installs a working local embedding model in one step.** It downloads the pinned EmbeddingGemma-300M model, verifies it against the shipped SHA-256, and publishes it to the user-level cache. After that, `oms embed` and vector search work without setting `OMS_EMBEDDING_PROVIDER` or `OMS_EMBEDDING_MODEL` at all — the gap that previously forced anyone wanting native semantic search to hand-author a descriptor JSON or export a matching environment pair. Nothing changes for a vault that does not run it: with no model installed, lexical search keeps working and vector requests still fail loudly naming both variables, and the guidance now names this command as the one-step remedy.

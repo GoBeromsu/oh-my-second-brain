@@ -4,6 +4,8 @@ Skills, agents, and ontology data changes belong here.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-29
+
 ## [0.7.0] - 2026-08-27
 
 ## [0.6.2] - 2026-08-27

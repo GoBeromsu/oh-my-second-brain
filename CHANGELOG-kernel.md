@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-29
+
 ### Added
 
 - **A pinned default embedding model is now available for explicit one-step install.** `PINNED_DEFAULT_EMBEDDING_MODEL` describes EmbeddingGemma-300M (`embeddinggemma-300M-Q8_0.gguf`, 768d, 2048-token context) with its source URL and a verified SHA-256 of `b5ce9d77…90d63`. This is the same model qmd resolves from its own `DEFAULT_EMBED_MODEL_URI`, so a vault indexed by `oms embed` gets that toolchain's retrieval quality instead of a lesser stand-in. The constant is deliberately **not** a fallback: `resolveEmbeddingModel` never reaches for it, because an implicit default would defeat the E-1 no-default contract, which verifies at runtime that embedding capability stays honestly unavailable with no environment pair and an empty cache. Its only consumer is the explicit setup acquisition path, which verifies the downloaded bytes against the pinned digest before publishing them. ADR-007 P-B is unaffected — a real, explicitly installed model was never the fake fallback that principle forbids.

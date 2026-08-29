@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-29
+
 ### Added
 
 - **Semantic search now has a one-step setup.** `oms setup --embedding-default` downloads EmbeddingGemma-300M, verifies it against a pinned SHA-256, and installs it under your user cache — not in the vault. After that, `oms embed` and vector search work with no environment variables at all:
