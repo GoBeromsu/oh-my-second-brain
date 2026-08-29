@@ -10,6 +10,30 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Added
+
+- **Semantic search now has a one-step setup.** `oms setup --embedding-default` downloads EmbeddingGemma-300M, verifies it against a pinned SHA-256, and installs it under your user cache — not in the vault. After that, `oms embed` and vector search work with no environment variables at all:
+
+  ```bash
+  oms setup --embedding-default
+  oms embed
+  oms semantic vsearch "what should I retrieve?"
+  ```
+
+  Until now, native semantic search worked only if you hand-authored a model descriptor JSON or exported a matching `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` pair. The model runs locally through `node-llama-cpp`, needs no API key, and embeds at its full 768 dimensions with no folding.
+
+  Choosing your own model is unchanged: set both environment variables, or pass `oms setup --embedding-descriptor <path>`. Setting only one of the pair is still an error naming both, never a silent fallback. Installing no model is still fine — lexical search, graph retrieval, and convention validation all keep working, and only vector and HyDE requests are refused.
+
+### Changed
+
+- **Note titles now inform semantic search results.** A chunk from the middle of a note is often ambiguous on its own, so each chunk's embedding now includes its document title (frontmatter `title`, else the first `# heading`). A note titled "Kubernetes Pod Scheduling" whose body only says "the controller assigns each pending item to the best-fit node" is now findable by searching for Kubernetes.
+
+  **One-time cost when you upgrade:** because the title is part of what gets embedded, it is also part of how OMS detects changes — otherwise renaming a note would leave most of its chunks holding vectors that still encode the old title. That changes the change-detection digest, so the first `oms embed` after upgrading re-embeds your vault once. Subsequent runs are incremental again.
+
+### Fixed
+
+- **Vector search was completely broken and now works.** Every vector or HyDE query failed with `k value in knn query too large`, because the search layer asks for an unbounded candidate set and the vector index rejects any request above its own 4096-result ceiling. Collection-scoped vector queries had the same defect from the other direction, failing on any vault with more than 4096 chunks. This affected anyone who had configured an embedding model; without one, queries never reached the vector path at all. No reindex is needed for this fix.
+
 ## [0.7.0] - 2026-08-27
 
 ### Breaking

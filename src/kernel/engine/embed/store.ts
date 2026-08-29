@@ -77,10 +77,12 @@ export const ENGINE_EMBED_META_VERSION = "oms-embed-meta-v2";
  * Largest `k` sqlite-vec accepts in a knn query.
  *
  * Above this the extension rejects the statement outright ("k value in knn
- * query too large"). Callers legitimately ask for an unbounded candidate set -
- * the MCP facade passes `Number.MAX_SAFE_INTEGER` so collection aggregation can
- * page globally, and FTS tolerates that - so the vector store clamps instead of
- * propagating a limit the extension cannot honour.
+ * query too large"). Callers legitimately ask for an unbounded candidate set:
+ * without an explicit `candidateLimit` the MCP facade requests
+ * `Number.MAX_SAFE_INTEGER` so it retrieves the complete ranked stream and keeps
+ * `totalCount` and offset cursors accurate past the first page. FTS tolerates
+ * that; sqlite-vec does not, so the vector store clamps rather than propagate a
+ * limit the extension cannot honour.
  */
 export const SQLITE_VEC_MAX_K = 4096;
 
@@ -94,12 +96,14 @@ export const SQLITE_VEC_MAX_K = 4096;
  * A non-positive or non-finite request collapses to 1 rather than 0 so a caller
  * that asks for "some" results never silently receives an empty page.
  *
- * Clamping is a real ceiling, not a formality: in a vault with more than
- * `SQLITE_VEC_MAX_K` indexed chunks, a collection-scoped vector query ranks
- * within the global top-`SQLITE_VEC_MAX_K` before filtering, so a collection
- * whose chunks all fall outside that band can still be starved. That is a
- * property of ANN-before-predicate search in sqlite-vec; the alternative here
- * was a hard failure on every vector query.
+ * Clamping is a real ceiling, not a formality. In a vault with more than
+ * `SQLITE_VEC_MAX_K` indexed chunks the vector candidate stream is truncated, so
+ * a vector-derived `totalCount` and any deep page past that band are bounded by
+ * it; a collection-scoped query is affected more sharply, because sqlite-vec
+ * ranks before the collection predicate is applied and a collection whose chunks
+ * all fall outside the band can be starved. Both are properties of
+ * ANN-before-predicate search in sqlite-vec. The alternative was failing every
+ * vector query outright, which is what shipped before this clamp.
  */
 function clampVecK(k: number): number {
   if (!Number.isFinite(k)) return SQLITE_VEC_MAX_K;
