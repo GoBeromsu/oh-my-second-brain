@@ -93,6 +93,73 @@ describe("embedding provider runtime guards", () => {
     );
   });
 
+  it("substitutes the document title into a passage prefix that declares the slot", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ embedding: [3, 4] }] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createUpstageProvider("test-key", "test-model", 2, {
+      prefixScheme: JSON.stringify({
+        query: "task: search result | query: ",
+        passage: "title: {title} | text: ",
+      }),
+    });
+
+    await provider.embed("body text", "Stellar Nucleosynthesis");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://api.upstage.ai/v1/embeddings",
+      expect.objectContaining({
+        body: JSON.stringify({
+          input: "title: Stellar Nucleosynthesis | text: body text",
+          model: "test-model",
+        }),
+      }),
+    );
+  });
+
+  it("falls back to the untitled literal for a missing or blank title", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ embedding: [3, 4] }] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createUpstageProvider("test-key", "test-model", 2, {
+      prefixScheme: JSON.stringify({ passage: "title: {title} | text: " }),
+    });
+
+    await provider.embed("body");
+    await provider.embed("body", "   ");
+    for (const call of [1, 2]) {
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        call,
+        "https://api.upstage.ai/v1/embeddings",
+        expect.objectContaining({
+          body: JSON.stringify({ input: "title: none | text: body", model: "test-model" }),
+        }),
+      );
+    }
+  });
+
+  it("leaves a prefix without a title slot byte-identical when a title is supplied", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ embedding: [3, 4] }] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createUpstageProvider("test-key", "test-model", 2, {
+      prefixScheme: "query=Q:,passage=P:",
+    });
+
+    await provider.embed("document", "Ignored Title");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://api.upstage.ai/v1/embeddings",
+      expect.objectContaining({ body: JSON.stringify({ input: "P:document", model: "test-model" }) }),
+    );
+  });
+
   it("rejects a non-finite model vector instead of coercing it to zero", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,

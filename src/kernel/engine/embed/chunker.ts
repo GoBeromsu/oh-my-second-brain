@@ -7,6 +7,8 @@
  */
 
 import { createHash } from "node:crypto";
+import { parseNote } from "../../conventions/frontmatter.js";
+import { UNTITLED_DOCUMENT_TITLE } from "../types.js";
 import type { Chunk, ChunkerOptions } from "../types.js";
 
 const DEFAULT_MAX_TOKENS = 900;
@@ -53,9 +55,36 @@ function isCjk(cp: number): boolean {
   );
 }
 
-/** SHA-256 hex digest of text for change-detection. */
-function sha256(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
+/**
+ * SHA-256 change-detection digest over everything that reaches the embedding
+ * input: the document title AND the chunk text.
+ *
+ * The title must be inside the digest. It is prepended to every chunk's
+ * embedding input, so a digest over `text` alone would report "unchanged" for
+ * each chunk that does not itself contain the title line — leaving vectors that
+ * still encode the OLD title after a retitle. The NUL separator keeps
+ * (title, text) unambiguous so no retitle can collide with a body edit.
+ */
+function chunkDigest(title: string, text: string): string {
+  return createHash("sha256").update(`${title}\u0000${text}`).digest("hex");
+}
+
+/**
+ * The document title carried into every chunk's embedding input.
+ *
+ * Frontmatter `title` wins, then the first ATX H1, else the untitled literal.
+ * Reuses the shared convention parser rather than re-deriving frontmatter here.
+ * A malformed-frontmatter document still yields a title: `parseNote` reports
+ * diagnostics instead of throwing, and the H1 scan covers the body.
+ */
+function documentTitle(rawText: string): string {
+  const parsed = parseNote(rawText);
+  const declared = parsed.frontmatter["title"];
+  if (typeof declared === "string" && declared.trim() !== "") return declared.trim();
+  const heading = /^#\s+(.+)$/m.exec(parsed.body) ?? /^#\s+(.+)$/m.exec(rawText);
+  const headingTitle = heading?.[1]?.trim();
+  if (headingTitle !== undefined && headingTitle !== "") return headingTitle;
+  return UNTITLED_DOCUMENT_TITLE;
 }
 
 /**
@@ -80,8 +109,9 @@ function applyHeading(current: string[], level: number, title: string): string[]
  *   - vault-relative `docPath`
  *   - zero-based `ordinal` within the document
  *   - raw `text`
+ *   - `title` — the document title, prepended to this chunk's embedding input
  *   - `headingPath` — breadcrumb from doc root to the chunk's section
- *   - `sha` — SHA-256 hex digest of `text` for change-detection
+ *   - `sha` — SHA-256 digest of `title` + `text` for change-detection
  *
  * When a section exceeds `maxTokens`, it is further split line by line until
  * each emitted chunk fits the budget. Overlap lines from the previous flush
@@ -99,6 +129,7 @@ export function chunkDocument(
 
   const lines = rawText.split("\n");
   const chunks: Chunk[] = [];
+  const title = documentTitle(rawText);
   let ordinal = 0;
   let buffer: string[] = [];
   let headingPath: string[] = [];
@@ -113,8 +144,9 @@ export function chunkDocument(
       docPath,
       ordinal: ordinal++,
       text,
+      title,
       headingPath: headingPath.slice(),
-      sha: sha256(text),
+      sha: chunkDigest(title, text),
     });
     // Carry the last N lines as overlap into the next chunk
     buffer = buffer.slice(-overlapLineCount);
@@ -143,8 +175,9 @@ export function chunkDocument(
       docPath,
       ordinal: ordinal++,
       text: remaining,
+      title,
       headingPath: headingPath.slice(),
-      sha: sha256(remaining),
+      sha: chunkDigest(title, remaining),
     });
   }
 

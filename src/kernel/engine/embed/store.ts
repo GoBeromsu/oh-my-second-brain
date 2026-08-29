@@ -73,9 +73,38 @@ export interface EngineStore extends VectorStore {
 
 export const ENGINE_EMBED_META_VERSION = "oms-embed-meta-v2";
 
+/**
+ * Largest `k` sqlite-vec accepts in a knn query.
+ *
+ * Above this the extension rejects the statement outright ("k value in knn
+ * query too large"). Callers legitimately ask for an unbounded candidate set -
+ * the MCP facade passes `Number.MAX_SAFE_INTEGER` so collection aggregation can
+ * page globally, and FTS tolerates that - so the vector store clamps instead of
+ * propagating a limit the extension cannot honour.
+ */
+export const SQLITE_VEC_MAX_K = 4096;
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Clamp a requested knn width into sqlite-vec's supported range.
+ *
+ * A non-positive or non-finite request collapses to 1 rather than 0 so a caller
+ * that asks for "some" results never silently receives an empty page.
+ *
+ * Clamping is a real ceiling, not a formality: in a vault with more than
+ * `SQLITE_VEC_MAX_K` indexed chunks, a collection-scoped vector query ranks
+ * within the global top-`SQLITE_VEC_MAX_K` before filtering, so a collection
+ * whose chunks all fall outside that band can still be starved. That is a
+ * property of ANN-before-predicate search in sqlite-vec; the alternative here
+ * was a hard failure on every vector query.
+ */
+function clampVecK(k: number): number {
+  if (!Number.isFinite(k)) return SQLITE_VEC_MAX_K;
+  return Math.max(1, Math.min(SQLITE_VEC_MAX_K, Math.floor(k)));
+}
 
 /** Pack a finite Float32Array as raw bytes for sqlite-vec operations. */
 function vecBuf(vector: Float32Array): Buffer {
@@ -686,11 +715,13 @@ export function openEngineStore(
       if (!stmtQueryVec) {
         throw new Error("EngineStore: vector queries are unavailable (sqlite-vec not loaded).");
       }
-      // sqlite-vec cannot apply a metadata predicate to ANN search. Fetch every
-      // indexed chunk before filtering so collection scoping cannot be starved
-      // by globally higher-ranked candidates, then restore the requested limit.
-      const candidateLimit = collection === undefined ? k : (stmtCountChunks.get()?.count ?? 0);
-      const rows = stmtQueryVec.all(buf, candidateLimit);
+      // sqlite-vec cannot apply a metadata predicate to ANN search. Widen the
+      // candidate set to every indexed chunk before filtering so collection
+      // scoping is not starved by globally higher-ranked candidates, then
+      // restore the requested limit. Both branches clamp: the extension caps
+      // knn `k`, and callers may legitimately request an unbounded page.
+      const requested = collection === undefined ? k : (stmtCountChunks.get()?.count ?? 0);
+      const rows = stmtQueryVec.all(buf, clampVecK(requested));
       return rows
         .filter((r) => collection === undefined || r.doc_path === collection || r.doc_path.startsWith(`${collection}/`))
         .slice(0, k)
@@ -904,8 +935,8 @@ function openReadOnlyStore(
       if (!stmtQueryVec || !stmtCountChunks) {
         throw new Error("EngineStore: vector queries are unavailable (sqlite-vec not loaded).");
       }
-      const candidateLimit = collection === undefined ? k : (stmtCountChunks.get()?.count ?? 0);
-      return stmtQueryVec.all(buf, candidateLimit)
+      const requested = collection === undefined ? k : (stmtCountChunks.get()?.count ?? 0);
+      return stmtQueryVec.all(buf, clampVecK(requested))
         .filter((row) => collection === undefined || row.doc_path === collection || row.doc_path.startsWith(`${collection}/`))
         .slice(0, k)
         .map((row): ScoredHit => ({

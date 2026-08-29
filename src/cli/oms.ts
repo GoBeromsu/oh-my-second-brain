@@ -8,6 +8,7 @@ import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js"
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { runMcpServer } from "../mcp/server.js";
 import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
+import { PINNED_DEFAULT_EMBEDDING_MODEL } from "../kernel/engine/embed/model.js";
 import { parseCliArgs } from "./args.js";
 import { runAudit } from "./audit.js";
 import { runDoctor, runLint } from "./doctor-lint.js";
@@ -83,6 +84,7 @@ async function main(): Promise<void> {
     conventionNote,
     embeddingDescriptorPath,
     embeddingNoDefault,
+    embeddingDefault,
     unknownFlags,
   } = parsedArgs;
 
@@ -114,9 +116,21 @@ async function main(): Promise<void> {
   }
 
   if (command === "setup") {
+    const embeddingChoices = [
+      embeddingDescriptorPath !== undefined ? "--embedding-descriptor" : undefined,
+      embeddingDefault ? "--embedding-default" : undefined,
+      embeddingNoDefault ? "--embedding-no-default" : undefined,
+    ].filter((flag): flag is string => flag !== undefined);
+    if (embeddingChoices.length > 1) {
+      console.error(`[oms] Choose one embedding option, not ${embeddingChoices.join(" and ")}.`);
+      process.exitCode = 1;
+      return;
+    }
     let embeddingDescriptor: SetupEmbeddingDescriptor | null | undefined;
     if (embeddingDescriptorPath !== undefined) {
       embeddingDescriptor = JSON.parse(readFileSync(embeddingDescriptorPath, "utf8")) as SetupEmbeddingDescriptor;
+    } else if (embeddingDefault) {
+      embeddingDescriptor = PINNED_DEFAULT_EMBEDDING_MODEL;
     } else if (embeddingNoDefault) {
       embeddingDescriptor = null;
     }

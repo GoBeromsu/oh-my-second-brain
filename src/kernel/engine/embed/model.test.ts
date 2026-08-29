@@ -10,6 +10,7 @@ import {
   EMBEDDING_PROVIDER_ENV,
   embeddingModelCacheDir,
   INSTALLED_DEFAULT_DESCRIPTOR,
+  PINNED_DEFAULT_EMBEDDING_MODEL,
   readInstalledEmbeddingDefault,
   resolveEmbeddingModel,
 } from "./model.js";
@@ -114,6 +115,67 @@ describe("resolveEmbeddingModel", () => {
     } finally {
       await rm(cacheDir, { recursive: true, force: true });
     }
+  });
+
+  it("never resolves the pinned default implicitly", async () => {
+    // The E-1 no-default contract verifies at runtime that embedding capability
+    // stays honestly unavailable with no env pair and an empty cache. Shipping a
+    // pinned descriptor must not become an implicit fallback, or that contract
+    // and ADR-007 P-B both break. The constant is for explicit acquisition only.
+    const cacheDir = await mkdtemp(path.join(tmpdir(), "oms-pinned-implicit-"));
+    try {
+      const resolved = resolveEmbeddingModel({ env: {}, cacheDir });
+      expect(resolved).toMatchObject({ available: false, source: "none" });
+      expect(resolved.provider).toBeUndefined();
+      expect(resolved.model).toBeUndefined();
+      expect(resolved.descriptor).toBeUndefined();
+      // Resolution is read-only: it must not publish the pinned descriptor.
+      await expect(readFile(path.join(cacheDir, INSTALLED_DEFAULT_DESCRIPTOR))).rejects.toThrow();
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("points an unconfigured vault at the one-step default install", async () => {
+    const cacheDir = await mkdtemp(path.join(tmpdir(), "oms-pinned-guidance-"));
+    try {
+      const guidance = resolveEmbeddingModel({ env: {}, cacheDir }).receipt.guidance;
+      expect(guidance).toContain("oms setup --embedding-default");
+      expect(guidance).toContain(EMBEDDING_PROVIDER_ENV);
+      expect(guidance).toContain(EMBEDDING_MODEL_ENV);
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ships a pinned descriptor complete enough to resolve and sync", () => {
+    // An incomplete descriptor throws in assertCompleteDescriptor / vector sync,
+    // so the shipped constant must carry every identity field up front.
+    const resolved = resolveEmbeddingModel({
+      env: {
+        [EMBEDDING_PROVIDER_ENV]: PINNED_DEFAULT_EMBEDDING_MODEL.provider,
+        [EMBEDDING_MODEL_ENV]: PINNED_DEFAULT_EMBEDDING_MODEL.model,
+      },
+      installedDefault: PINNED_DEFAULT_EMBEDDING_MODEL,
+    });
+
+    expect(resolved.available).toBe(true);
+    expect(resolved.descriptor?.dimensions).toBe(768);
+    expect(PINNED_DEFAULT_EMBEDDING_MODEL.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(PINNED_DEFAULT_EMBEDDING_MODEL.url).toContain("embeddinggemma-300M-Q8_0.gguf");
+  });
+
+  it("declares qmd's EmbeddingGemma prompts with a per-chunk title slot", () => {
+    // Byte-compatible with qmd's formatQueryForEmbedding /
+    // formatDocForEmbedding so the same note embeds identically under either
+    // toolchain. `{title}` is what carries the document title per chunk.
+    const scheme = JSON.parse(PINNED_DEFAULT_EMBEDDING_MODEL.prefixScheme!) as {
+      query: string;
+      passage: string;
+    };
+
+    expect(scheme.query).toBe("task: search result | query: ");
+    expect(scheme.passage).toBe("title: {title} | text: ");
   });
 
   it("rejects a half-configured pair and names both canonical variables", () => {

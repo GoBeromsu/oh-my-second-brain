@@ -31,6 +31,8 @@ export interface ParsedCliArgs {
   readonly conventionNote: boolean;
   readonly embeddingDescriptorPath: string | undefined;
   readonly embeddingNoDefault: boolean;
+  /** setup: install the pinned default embedding model. */
+  readonly embeddingDefault: boolean;
   readonly unknownFlags: readonly string[];
   readonly error: CliArgumentError | undefined;
 }
@@ -61,6 +63,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   let conventionNote = true;
   let embeddingDescriptorPath: string | undefined;
   let embeddingNoDefault = false;
+  let embeddingDefault = false;
   const unknownFlags: string[] = [];
 
   for (let i = 1; i < argv.length; i++) {
@@ -122,6 +125,8 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       i++;
     } else if (arg === "--embedding-no-default") {
       embeddingNoDefault = true;
+    } else if (arg === "--embedding-default") {
+      embeddingDefault = true;
     } else if (arg !== undefined) {
       unknownFlags.push(arg);
     }
@@ -148,6 +153,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     conventionNote,
     embeddingDescriptorPath,
     embeddingNoDefault,
+    embeddingDefault,
     unknownFlags,
     error: undefined,
   };
@@ -174,6 +180,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       conventionNote,
       embeddingDescriptorPath,
       embeddingNoDefault,
+      embeddingDefault,
       unknownFlags,
       error: new CliArgumentError(message),
     };

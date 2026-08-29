@@ -36,7 +36,7 @@ function writeDoc(rel: string, content: string): void {
 }
 
 function lexChunk(docPath: string, text: string): Chunk {
-  return { docPath, ordinal: 0, text, headingPath: [], sha: `${docPath}:0` };
+  return { docPath, ordinal: 0, text, title: "Test Document", headingPath: [], sha: `${docPath}:0` };
 }
 
 beforeEach(() => {

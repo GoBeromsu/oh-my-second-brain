@@ -67,6 +67,34 @@ describe("CLI argument parser", () => {
     expect(linked.conventionNote).toBe(false);
   });
 
+  it("parses the three mutually exclusive setup embedding options independently", () => {
+    const pinned = parseCliArgs(["setup", "--embedding-default"], "/tmp/oms-cli");
+    const supplied = parseCliArgs(
+      ["setup", "--embedding-descriptor", "model.json"],
+      "/tmp/oms-cli",
+    );
+    const waived = parseCliArgs(["setup", "--embedding-no-default"], "/tmp/oms-cli");
+
+    expect(pinned.embeddingDefault).toBe(true);
+    expect(pinned.embeddingDescriptorPath).toBeUndefined();
+    expect(pinned.embeddingNoDefault).toBe(false);
+    expect(pinned.unknownFlags).toEqual([]);
+
+    expect(supplied.embeddingDescriptorPath).toBe("/tmp/oms-cli/model.json");
+    expect(supplied.embeddingDefault).toBe(false);
+
+    expect(waived.embeddingNoDefault).toBe(true);
+    expect(waived.embeddingDefault).toBe(false);
+  });
+
+  it("defaults every setup embedding option to unselected", () => {
+    const parsed = parseCliArgs(["setup"], "/tmp/oms-cli");
+
+    expect(parsed.embeddingDefault).toBe(false);
+    expect(parsed.embeddingNoDefault).toBe(false);
+    expect(parsed.embeddingDescriptorPath).toBeUndefined();
+  });
+
   it("parses audit flags", () => {
     const parsed = parseCliArgs(
       ["audit", "--vault", "Vault", "--folder", "references", "--json", "--suggest-fields"],
