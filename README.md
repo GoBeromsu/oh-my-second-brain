@@ -113,6 +113,8 @@ oms semantic vsearch "what should I retrieve?" --vault /path/to/vault
 
 `--embedding-default` downloads EmbeddingGemma-300M (~318 MB), verifies it against a pinned SHA-256, and installs it under your user cache — not in the vault. It runs locally through `node-llama-cpp`, needs no API key, and embeds at the model's full 768 dimensions with no folding. After that, `oms embed` and vector search need no environment variables.
 
+One thing to know before you rely on it: this is the same model and prompt format [qmd](https://github.com/tobi/qmd) resolves by default, but it has never been measured in this project's own retrieval harness. Its ranking quality here rests on that equivalence, not on a measured comparison against alternatives. [The decision record](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/measurements/model-default-deferral.md) explains why, and why the measurement is not merely pending.
+
 To choose your own model instead, set `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` (`gguf` with a local GGUF path, or `upstage` with a model id and `UPSTAGE_API_KEY`). Setting only one of the pair is an error naming both, never a silent fallback.
 
 Without any model, lexical search, graph-based retrieval, and convention validation all still work; only vector and HyDE requests are refused, and they say which variables to set.
