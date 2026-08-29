@@ -62,29 +62,72 @@ function isCjk(cp: number): boolean {
  * The title must be inside the digest. It is prepended to every chunk's
  * embedding input, so a digest over `text` alone would report "unchanged" for
  * each chunk that does not itself contain the title line — leaving vectors that
- * still encode the OLD title after a retitle. The NUL separator keeps
- * (title, text) unambiguous so no retitle can collide with a body edit.
+ * still encode the OLD title after a retitle.
+ *
+ * The title is length-prefixed rather than merely separated. A bare separator is
+ * only unambiguous while the inputs cannot contain it, and nothing forbids a NUL
+ * in note text: with a plain separator, `("a", "\0b")` and `("a\0", "b")` hash
+ * identically, so a crafted retitle could impersonate a body edit and suppress
+ * re-embedding. The length prefix makes the encoding injective for every input.
  */
 function chunkDigest(title: string, text: string): string {
-  return createHash("sha256").update(`${title}\u0000${text}`).digest("hex");
+  return createHash("sha256")
+    .update(`${title.length}\u0000${title}\u0000${text}`)
+    .digest("hex");
+}
+
+/**
+ * Find the first ATX H1 in a markdown body, ignoring fenced code blocks.
+ *
+ * A `# ...` line inside a fence is sample content, not the document's heading.
+ * Scanning without fence tracking would let a README-style note that shows a
+ * markdown example be titled by that example. Both backtick and tilde fences
+ * count, and a fence closes only on a run of the same character at least as
+ * long as the one that opened it, so a fence containing a shorter run stays
+ * open as CommonMark specifies.
+ */
+function firstHeadingTitle(body: string): string | undefined {
+  let fence: { char: string; length: number } | null = null;
+  for (const line of body.split("\n")) {
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch !== null) {
+      const run = fenceMatch[1]!;
+      const char = run[0]!;
+      if (fence === null) {
+        fence = { char, length: run.length };
+      } else if (char === fence.char && run.length >= fence.length) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fence !== null) continue;
+    const heading = /^#\s+(.+)$/.exec(line);
+    const title = heading?.[1]?.trim();
+    if (title !== undefined && title !== "") return title;
+  }
+  return undefined;
 }
 
 /**
  * The document title carried into every chunk's embedding input.
  *
- * Frontmatter `title` wins, then the first ATX H1, else the untitled literal.
- * Reuses the shared convention parser rather than re-deriving frontmatter here.
- * A malformed-frontmatter document still yields a title: `parseNote` reports
- * diagnostics instead of throwing, and the H1 scan covers the body.
+ * Frontmatter `title` wins, then the first ATX H1 in the body, else the
+ * untitled literal. Reuses the shared convention parser rather than
+ * re-deriving frontmatter here.
+ *
+ * The H1 scan is deliberately confined to `parsed.body`. Scanning the raw
+ * document would read frontmatter too, where a YAML comment (`# note to self`)
+ * is syntactically indistinguishable from an H1 — which would embed private
+ * metadata as though it were the note's title. A document whose frontmatter
+ * fence never closes therefore has an empty body and is untitled: `none` is the
+ * honest answer for a malformed document, and preferable to guessing from a
+ * region that is not body text.
  */
 function documentTitle(rawText: string): string {
   const parsed = parseNote(rawText);
   const declared = parsed.frontmatter["title"];
   if (typeof declared === "string" && declared.trim() !== "") return declared.trim();
-  const heading = /^#\s+(.+)$/m.exec(parsed.body) ?? /^#\s+(.+)$/m.exec(rawText);
-  const headingTitle = heading?.[1]?.trim();
-  if (headingTitle !== undefined && headingTitle !== "") return headingTitle;
-  return UNTITLED_DOCUMENT_TITLE;
+  return firstHeadingTitle(parsed.body) ?? UNTITLED_DOCUMENT_TITLE;
 }
 
 /**

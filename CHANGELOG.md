@@ -10,6 +10,23 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A note could be given the wrong title, degrading semantic search across that whole note.** 0.8.0 started mixing each note's title into every one of its chunks when embedding, which is what makes a mid-note passage findable by what the note is *about*. But the title was picked from the first `#` line anywhere in the file, and `#` means "comment" in frontmatter and "heading" in Markdown. So a frontmatter comment like `# rewrite this later`, or an `# Example` heading shown inside a fenced code block, could be adopted as the note's title and then mixed into every chunk of it — pulling the entire note toward the wrong topic. Titles are now read only from frontmatter `title` or a real heading in the note body, with code fences skipped. A note affected by either case had no real title to begin with, so it is now correctly untitled.
+
+  To be clear about what this does and does not change: frontmatter text has always been part of what gets indexed, and still is. This fixes which text is treated as the *title*, not what is stored.
+
+  **If you ran `oms embed` on 0.8.0, re-run it.** Affected notes are corrected automatically, but only once you sync again.
+
+### Changed
+
+- **This release re-embeds your vault once, for the last time in this series.** Fixing the title bug above required changing how OMS fingerprints a chunk, which invalidates the fingerprints written by 0.8.0. Combined with 0.8.0's own one-time reindex, that is two full re-embeds across two consecutive releases — not a pattern, and worth taking now while the affected code is one release old rather than carrying a known-wrong fingerprint forward.
+
+### Documentation
+
+- **The limits of the 0.8.0 vector-search fix are now stated where users read.** That release described vector search as fixed without noting the ceiling it works under: results come from at most 4096 candidates, so on a vault larger than that a vector-derived result count and any deep page are bounded by it, and a collection-scoped vector search can miss matches whose documents rank outside that band globally. This is a property of how the vector index ranks before filtering, not something the fix introduced — but it belonged in the release note and was only in the kernel changelog.
+- The pinned default model's decision record now documents why an explicit, opt-in `--embedding-default` command is not the automatic default-model acquisition that `docs/measurements/model-default-deferral.md` withholds, and states plainly that the model's retrieval quality rests on matching the reference toolchain rather than on a measurement in this project's own harness.
+
 ## [0.8.0] - 2026-08-29
 
 ### Added
