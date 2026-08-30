@@ -10,6 +10,10 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Documentation
+
+- **The default embedding model's unmeasured status is now a recorded decision rather than an open question.** `--embedding-default` installs the same model and prompt format qmd resolves by default, and its ranking quality here has always rested on that equivalence rather than on a measurement in this project's own retrieval harness. That caveat stands unchanged and both READMEs still state it where the feature is recommended. What changed is its standing: the vault owner reviewed the gap and accepted it on the record, declining both alternatives (committing to produce the measurement, and withdrawing the feature until one exists). `docs/measurements/model-default-deferral.md` carries the dated record, and its history of overlapping addenda is consolidated into one readable account.
+
 ## [0.8.3] - 2026-08-29
 
 ### Fixed

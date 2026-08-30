@@ -105,65 +105,63 @@ Until then, automatic or implicit default-model acquisition stays withheld.
 ## What enforces this, and what does not
 
 Nothing automated asks for the `model-default` manifest. `npm run
-check:measurement` runs the `boost-c040` profile only, and no workflow requests
-any other profile. So this deferral can remain open indefinitely while an
-installable default ships, and no build will object.
+check:measurement` runs the `boost-c040` profile only and no workflow requests
+another, so no build objects while an installable default ships.
 
-That is deliberate rather than an oversight to fix in code. Only the vault owner
-can produce the manifest, from a real vault with curated labels, and the
-preregistration forbids satisfying it with fabricated relevance. A gate
-demanding it would therefore fail every run for a reason no contributor could
-fix. Whether to accept the drift, commit to producing the measurement, or
-withdraw the installable default is an owner decision, not something a test can
-settle.
-
-One narrower invariant *is* enforced, by
-`test/architecture/model-default-disclosure.test.ts`: while an installable
-default ships, this document must keep stating that the model is unmeasured.
-That stops the tradeoff from going silent through a routine edit. Withdrawing
-the default lifts the requirement, so a genuine removal is not obstructed. The
-gate holds the disclosure, not the measurement.
-
-## The closing condition currently names an artifact nothing can produce
-
-The condition above asks for a validator-accepted `model-default` manifest. The
-validator can check one: `scripts/check-measurement-manifest.mjs` lists
-`model-default` in `MEASUREMENT_PROFILES`, and in strict mode it demands a
-complete descriptor, `armId: "model-default"`, paired raw evidence with an
-A-embed `kind` and `outputDigest`, a green verdict, and a timestamp.
-
-Nothing can produce one. Three pieces are missing, and they are missing
-structurally rather than by oversight:
+That is deliberate rather than an oversight to fix in code, because the manifest
+cannot presently be produced at all. The validator can check one:
+`scripts/check-measurement-manifest.mjs` lists `model-default` in
+`MEASUREMENT_PROFILES` and, in strict mode, demands a complete descriptor,
+`armId: "model-default"`, paired raw evidence with an A-embed `kind` and
+`outputDigest`, a green verdict, and a timestamp. Nothing emits one:
 
 - **No A-embed arm exists.** The validator reads `aEmbedMetrics`, but
   `test/golden-set/harness.ts` knows only the three boost arms
-  (`boost-k-scale`, `boost-per-list`, `boost-zero`). There is no arm that
-  measures an embedding model.
-- **No preregistered protocol defines the measurement.**
-  `docs/preregistration/` contains `boost-arms.md` and nothing for
-  `model-default`: no query classes, no comparison, no pass rule.
-- **No manifest producer exists for any profile.** Nothing in `scripts/`,
-  `test/`, or `src/` emits a manifest. `boost-c040` never needed one, because
-  the shipped ranking default is the released baseline and that gate passes with
-  a receipt.
+  (`boost-k-scale`, `boost-per-list`, `boost-zero`).
+- **No preregistered protocol defines the measurement.** `docs/preregistration/`
+  holds `boost-arms.md` and nothing for `model-default`: no query classes, no
+  comparison, no pass rule.
+- **No manifest producer exists for any profile.** `boost-c040` never needed
+  one, because the shipped ranking default is the released baseline and that
+  gate passes with a receipt.
 
-So "produce the measurement" is not a data-entry task on the owner's vault. It
-is: preregister a protocol, add the arm, add a producer, then run it against a
-real vault with curated labels.
+So "produce the measurement" means: preregister a protocol, add the arm, add a
+producer, then run it against a real vault with curated labels. The first step
+must not be written by an agent, and deliberately was not. Preregistration is
+the commitment device that stops the metric being chosen after the fact, so
+whoever defines it must do so before knowing how EmbeddingGemma-300M scores
+under it.
 
-The first of those must not be written by an agent, and deliberately was not.
-Preregistration is the commitment device that stops the metric from being chosen
-after the fact. An agent that authors the protocol, implements the arm, and then
-reports a pass has proved nothing except that it picked a rule its own candidate
-satisfies. Whoever defines this measurement must do so before knowing how
-EmbeddingGemma-300M scores under it.
+One narrower invariant *is* enforced, by
+`test/architecture/model-default-disclosure.test.ts`: while an installable
+default ships, this document must keep stating that the model is unmeasured, and
+the unconfigured-vault guidance must name `--embedding-default` exactly when that
+flag is wired. Withdrawing the default lifts both requirements, so a genuine
+removal is not obstructed. The gate holds the disclosure, not the measurement.
 
-Until that exists, the closing condition is aspirational, and the honest reading
-of this document is that the installable default ships unmeasured with no dated
-commitment to measuring it.
+---
 
-That gap is an open decision, not a settled position:
-[#78](https://github.com/GoBeromsu/oh-my-second-brain/issues/78) carries the
-three options (accept the drift on the record, commit to producing the
-measurement, or withdraw the installable default) along with the measured cost of
-each. Read it before treating anything above as final.
+# Unmeasured-state acceptance (v0.8.3)
+
+> **Decision: accept the unmeasured state on the record and keep shipping the
+> installable default.** Recorded 2026-08-30 by the vault owner, resolving
+> [#78](https://github.com/GoBeromsu/oh-my-second-brain/issues/78). The two
+> alternatives were declined: committing to produce the measurement, and
+> withdrawing `--embedding-default` until one exists.
+
+The owner reviewed the gap described above, including the measured cost of
+withdrawal — existing installs keep resolving from their on-disk descriptor, so
+the only cost is one guidance string, and a CI gate now holds that string in
+sync with whether the flag is wired — and chose to keep the feature as it
+stands.
+
+This is a decision about what to ship. It is not a claim about retrieval
+quality, and it does not close the deferral. Everything under *What remains
+unproven* still holds: this model's ranking quality here rests on being the same
+model and prompt format the reference toolchain uses by default, not on a
+measurement in this project's harness. Both READMEs state that where the feature
+is recommended, so a user adopting it adopts that caveat knowingly.
+
+The closing condition stands as written; it is simply no longer treated as
+blocking. If the measurement is ever produced it closes the deferral. Until
+then, this record is the answer to why an unmeasured default ships.
