@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-08-30
+
 ## [0.8.3] - 2026-08-29
 
 ## [0.8.2] - 2026-08-29
