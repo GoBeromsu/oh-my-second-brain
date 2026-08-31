@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-31
+
 ### Changed
 
 - **The domain kernel now keeps template shape and ontology meaning separate end to end.** Vault-resident Markdown templates own frontmatter/body shape; template policy carries note/field `intent`, naming, and defaults; taxonomy carries folder/link `intent` and placement; and Obsidian owns property types. They resolve into one signed projection shared by write, graph, link, search, setup, migration, diagnosis, and repair. Field intent is retained on search axes and folder intent is exposed through the derived `folder-ontology` axis. Legacy `concept` identity, bundled ontology runtime loaders, old capture APIs, writable projection contracts, graph cache, and fallback behavior were removed; managed template sources stay outside note indexes and embeddings.

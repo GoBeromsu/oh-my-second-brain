@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-31
+
 ### Changed
 
 - **Oh My Second Brain now derives one write/search contract from templates and a coexisting user-owned ontology.** Vault Markdown templates own frontmatter/body shape; template policy owns note/field meaning, naming, and defaults; taxonomy owns folder/link meaning and placement; and Obsidian owns property types. The synchronized kernel, CLI, MCP, host, skill, setup, migration, diagnosis, and documentation cutover removes only the former `concept` note identity and bundled runtime authority. Stable template identities, inherited base defaults, managed-source exclusion, verified repair transactions, and host pointer reconciliation now work consistently across all supported environments.

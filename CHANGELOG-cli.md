@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-31
+
 ### Changed
 
 - **`setup`, `doctor`, `audit`, and `linkify` now expose the template contract directly.** Setup uses dry-run plus `--approved-digest`, doctor reports template/projection health and renames the report cap to `--max-per-template`, audit fails closed against resolved template identities, and linkify uses the same stable identities as write/search. Retired Concept authoring and `--suggest-fields` are no longer accepted.

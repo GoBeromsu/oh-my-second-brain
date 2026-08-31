@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-31
+
 ### Changed
 
 - **The five-tool MCP surface now uses stable templates for every note-shaped operation.** `oms_write` has strict create/append/update branches: create derives placement from `templateId`, while append/update resolve the persisted note identity; guarded template operations remain on the same tool. `oms_search` advertises template/field/folder/link axes; `oms_status` reports projection signatures; and `oms_doctor` adds template diagnosis, approved projection regeneration, and exact one-note backfill without adding public tools.

@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-31
+
 ### Changed
 
 - **Claude, Codex, and Hermes host guidance and hooks now describe the template/ontology coexistence contract.** Templates own note shape, user-owned policy/taxonomy intent owns meaning, taxonomy owns placement, and Obsidian owns types. A signed XDG host-maintenance pointer lets install, update, public reconcile, and uninstall compare-and-swap every managed MCP/hook vault stamp while remaining completely outside runtime target resolution. Claude post-write checks resolve templates without rebuilding caches.
