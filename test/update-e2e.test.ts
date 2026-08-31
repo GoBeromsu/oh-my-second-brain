@@ -99,6 +99,7 @@ describe("oms update isolated e2e", () => {
 
     const result = runCli(["update", "--runtime", "codex"], cwd, {
       HOME: makeTempRoot("oms-update-home-"),
+      XDG_CONFIG_HOME: path.join(makeTempRoot("oms-update-config-"), ".config"),
       OMS_VAULT: undefined,
     });
 
@@ -129,6 +130,7 @@ describe("oms update isolated e2e", () => {
 
     const result = runCli(["update", "--runtime", "hermes", "--vault", cwd, "--yes"], cwd, {
       HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
       PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
       OMS_HERMES_HOME: path.join(home, ".hermes"),
     });

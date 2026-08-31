@@ -110,6 +110,7 @@ function runCli(
       OMS_NO_UPDATE_NOTICE: "1",
       HOME: smokeHome,
       USERPROFILE: smokeHome,
+      XDG_CONFIG_HOME: path.join(smokeHome, ".config"),
       ...env,
     },
     input,
