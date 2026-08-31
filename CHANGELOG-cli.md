@@ -4,6 +4,21 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+### Added
+
+- **`oms semantic query` now exposes explicit expansion and reranking.** `--expand` selects the closed `qmd-v2.8.3` profile, `--max-queries` bounds its generated plan, and `--rerank` independently enables the configured cross-encoder. Plain query/search behavior remains lexical-only.
+- **`oms setup` can install every declared model capability in one verified operation.** The receipt identifies the installed models and capabilities without exposing local filesystem paths.
+
+### Changed
+
+- **`oms setup` now idempotently manages `<vault>/.oms/.gitignore` with `/engine-store.sqlite*`.** It preserves existing entries and line endings while preventing the derived SQLite store and its WAL/SHM sidecars from being committed; it does not ignore the entire `.oms/` directory.
+- **Setup receipts now state whether the nested `.oms/.gitignore` was written, or would be written in `--dry-run`.**
+- **Setup help and receipts now redact local model paths.**
+
+### Breaking
+
+- **`oms setup` replaces `--embedding-default`, `--embedding-descriptor`, and `--embedding-no-default` with `--models-default`, `--models-descriptor <path>`, and `--models-no-default`.** The old flags are removed; use exactly one of the replacement flags.
+
 ## [0.8.4] - 2026-08-30
 
 ## [0.8.3] - 2026-08-29

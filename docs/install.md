@@ -1,182 +1,76 @@
-# Install Oh My Second Brain
+# Installation
 
-Oh My Second Brain v0 is distributed as one npm/GitHub-release package that contains the CLI/runtime, the default ontology, root host assets, host-native skill/rule bundles, and shell installers. Claude Code, Codex, and Hermes install Oh My Second Brain host surfaces backed by the same MCP runtime. Legacy runtime IDs remain `oms` for compatibility.
+Oh My Second Brain is an npm package with an independent CLI, optional host assets, six public skills, and five public MCP tools. It requires Node.js 20 or later.
 
-## Prerequisites
-
-- Node.js 20 or newer.
-- `npm` on `PATH`.
-- An Obsidian vault, or any folder of Markdown notes.
-- Optional host CLIs: `claude`, `codex`, `hermes`.
-
-## One-line install
-
-The installer uses the published npm package (`oh-my-second-brain@0.1.9`) by default:
+## Install the CLI
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash
+npm install -g oh-my-second-brain
+oms --help
 ```
 
-Useful overrides:
+The package exposes both `oms` and `oh-my-second-brain` command names.
+
+## Install host integrations
+
+Install the desired host surfaces and register the MCP server for a specific vault:
 
 ```bash
-# Pick one host instead of auto-detection.
-curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash -s -- --runtime claude
-
-# Install every host adapter and point Oh My Second Brain at a specific vault.
-curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash -s -- --runtime all --vault /path/to/vault
-
-# Also execute external host CLIs where available, e.g. claude plugin/mcp commands.
-curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash -s -- --runtime all --vault /path/to/vault --execute
+oms install --runtime all --vault /path/to/vault --yes
 ```
 
-Environment knobs:
+Use `claude`, `codex`, or `hermes` instead of `all` to install one runtime. Host integration is optional; CLI lifecycle and vault operations remain available without it.
 
-| Variable | Meaning |
-| --- | --- |
-| `OMS_PACKAGE_SPEC` | npm package spec or tarball URL to install globally |
-| `OMS_INSTALL_RUNTIME` | `auto`, `all`, `claude`, `codex`, or `hermes` |
-| `OMS_VAULT` | vault path used for MCP registration |
-| `OMS_EXECUTE_EXTERNAL=1` | allow host CLI commands such as `claude plugin install` |
-| `OMS_UPDATE_NOTICE=0` | disable automatic update-available notices on normal CLI commands |
-| `OMS_UPDATE_NOTICE_TIMEOUT_MS` | timeout for the non-blocking update notice check |
+Installation writes host-native guidance and skill assets, then stamps the host MCP registration as:
 
-## CLI install
+```text
+oms mcp --vault /path/to/vault
+```
 
-From npm or a checkout:
+This is an installation detail, not a target-resolution rule. Installing or uninstalling a host does not alter runtime precedence.
+
+## Target resolution
+
+At runtime, target resolution is ordered as follows:
+
+1. Explicit `--vault`.
+2. Local `.oms` template controls.
+3. Local bridge.
+4. `OMS_VAULT`.
+5. Current working directory.
+
+The current-directory fallback is read-only for mutation purposes. See [verified targets](./verified-target.md) for admission behavior. The host's stamped `--vault` simply supplies the first, explicit source.
+
+## Template setup
+
+Run setup inside a vault workflow to discover existing templates recursively and review the migration:
 
 ```bash
-npm install -g oh-my-second-brain@0.1.9
-oh-my-second-brain install --runtime all --vault /path/to/vault --dry-run
-oh-my-second-brain install --runtime all --vault /path/to/vault --yes
+oms setup --vault /path/to/vault --dry-run
 ```
 
-Runtime selection follows the Ouroboros pattern:
-
-1. Explicit `--runtime` wins.
-2. `auto` detects `claude`, `codex`, and `hermes` on `PATH`.
-3. If nothing is detected, `auto` defaults to Claude Code for conservative first-run behavior; use `--runtime all` to install every host surface.
-4. `all` installs every known host surface.
-
-## What install writes
-
-| Host | Install behavior |
-| --- | --- |
-| Claude Code | Installs the plugin-owned `.mcp.json` surface; removes stale `oms` registrations across local/project/user scopes; with `--execute`, adds the OMS marketplace and installs `oms@oms` through it, falling back to the local plugin path when the marketplace flow can't complete. |
-| Codex | Installs `~/.codex/rules/oms.md`, `~/.codex/skills/oms-*`, installs guidance to `~/.codex/plugins/oms`, and writes a managed `[mcp_servers.oms]` block plus `OMS_AGENT_RUNTIME=codex` env in `~/.codex/config.toml`. |
-| Hermes | Installs `~/.hermes/skills/knowledge-management/oms/`, copies adapter files to `~/.hermes/adapters/oms`, and writes `mcp_servers.oms` in `~/.hermes/config.yaml`. |
-
-Host writes keep the legacy `oms` namespace for backward-compatible MCP/skill IDs and are reversible with `oh-my-second-brain uninstall` (or the `oms` alias). Each runtime is installed independently: if one host fails, the others still complete.
-
-Hermes config writes are an upsert, so comments and key ordering in `~/.hermes/config.yaml` survive an install or update.
-
-### Claude Code marketplace
-
-OMS publishes a marketplace manifest at the repo root (`.claude-plugin/marketplace.json`), so Claude Code can discover and install it natively:
+Apply only with the exact digest reported by that dry run:
 
 ```bash
-claude plugin marketplace add GoBeromsu/oh-my-second-brain
-claude plugin install oms@oms
+oms setup --vault /path/to/vault --approved-digest <digest>
 ```
 
-A local checkout wins over the published repo, which keeps offline and dev installs working; the plain `claude plugin install <path>` route stays as the fallback.
+Setup never modifies notes and has no bundled defaults. `.obsidian/types.json` remains read-only; `.oms/template-policy.json` holds semantics, naming, and defaults; `.oms/types.json` is derived and must not be hand-edited.
 
-Claude keeps `autoUpdate` off for third-party marketplaces, and OMS does not change that for you. If you want this marketplace to refresh itself, set `extraKnownMarketplaces.<name>.autoUpdate` to `true` in `~/.claude/settings.json`. Otherwise run `claude plugin marketplace update` when you want a refresh. The install output prints this reminder.
+## Skills and MCP tools
 
-## Update
+The installable skill set is `write`, `search`, `link`, `distill`, `status`, and `doctor`. Skills are host workflows, not MCP tool names.
 
-Preview the package update and host adapter reconciliation first:
+`oms mcp` exposes exactly five public tools:
 
-```bash
-oh-my-second-brain update --dry-run --runtime all --vault /path/to/vault
-```
+`oms_write` · `oms_search` · `oms_link` · `oms_status` · `oms_doctor`
 
-Apply the latest npm package and refresh selected host adapters:
-
-```bash
-oh-my-second-brain update --yes --runtime all --vault /path/to/vault
-```
-
-`update` checks `oh-my-second-brain@latest`, then plans `npm install -g oh-my-second-brain@latest` plus a post-update adapter reconciliation. It does not mutate package or host config unless `--yes` is provided. Use `--execute` only when you want reconciliation to call external host CLIs where available.
-
-Normal CLI commands such as `setup`, `install`, `uninstall`, and `doctor` also print a short stderr notice when a newer npm version is available. Set `OMS_UPDATE_NOTICE=0` to silence that check in CI or release smoke environments.
-
-The MCP server carries the same nudge. At boot it reads a 24-hour cache (`~/.oms/update-notice-cache.json` by default) and, when a newer version is stamped there, appends one line to the server `instructions` your host sees. The registry lookup itself runs in a bounded background refresh, never on the startup path, so an offline or slow registry can't delay the server. `OMS_UPDATE_NOTICE=0` silences it here too.
-
-## Legacy setup flow
-
-`setup` still adopts a vault into the Oh My Second Brain ontology and can print the Claude Code plan:
-
-```bash
-oh-my-second-brain setup --vault /path/to/vault --yes --install-claude
-```
-
-Interactive setup now interviews folder axes, concept bindings, optional observed frontmatter fields, and retrieval lenses:
-
-```bash
-oh-my-second-brain setup --vault /path/to/vault --suggest-fields
-```
-
-Setup does not modify vault notes. It writes `.oms/taxonomy.yaml`, preserves existing `.oms/concepts/`, and only adds selected observed fields when `--suggest-fields` is enabled.
-
-Typical printed commands look like:
-
-```bash
-claude plugin install /path/to/oh-my-second-brain
-# MCP is declared by the installed plugin in .mcp.json.
-```
+`oms_status` is read-only. `oms_doctor` diagnoses state and performs supported regenerate/backfill repairs only after verified-target admission. Notes are written through resolved templates in `create`, `append`, or `update` mode.
 
 ## Uninstall
 
-Preview first:
-
 ```bash
-oh-my-second-brain uninstall --runtime all --dry-run
+oms uninstall --runtime all --yes
 ```
 
-Remove host registrations and adapter files:
-
-```bash
-oh-my-second-brain uninstall --runtime all --yes
-```
-
-One-line uninstall:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/uninstall.sh | bash -s -- --yes
-```
-
-The uninstaller removes Oh My Second Brain host registrations and adapter files. It does **not** remove vault notes or `vault/.oms/` ontology data. Pass `--keep-package` to the shell uninstaller if you want to keep the globally installed package.
-
-## Link existing notes
-
-OMS treats `term` as a first-class concept: notes in `terms/` define your vocabulary once, and their `aliases` frontmatter lists the other surface forms that should point back. Wikilinks resolve through those aliases, so `[[some-alias]]` reaches the term note.
-
-To retrofit links across notes you already wrote:
-
-```bash
-# Report only. Nothing is written.
-oh-my-second-brain linkify --vault /path/to/vault
-
-# Restrict the scan to one top-level folder.
-oh-my-second-brain linkify --vault /path/to/vault --folder notes
-
-# Rewrite in place. Both flags are required.
-oh-my-second-brain linkify --vault /path/to/vault --apply --yes
-```
-
-Hosts can do the same note by note through `oms_link`: its `suggest` operation is read-only and its `apply` operation writes accepted candidates. Nothing is linked behind your back: new notes are composed already linked, and existing notes change only when you ask.
-
-## Verify the install
-
-```bash
-oh-my-second-brain doctor --vault /path/to/vault
-oh-my-second-brain semantic sync --vault /path/to/vault --collection vault
-oh-my-second-brain semantic query "what should I retrieve?" --vault /path/to/vault
-oh-my-second-brain semantic context list --vault /path/to/vault
-oh-my-second-brain semantic status --vault /path/to/vault
-oh-my-second-brain install --runtime all --vault /path/to/vault --dry-run
-claude plugin validate .
-```
-
-Inside a host runtime, verify the MCP server by listing its five tools: `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`. `oms_search` provides retrieval operations, `oms_status` is read-only health/statistics, and `oms_doctor` provides diagnosis or repair operations. OMS does not require the `qmd` binary; `oms semantic status` reports semantic-engine availability.
+Uninstall removes OMS host registrations and installed host assets. It does not modify vault notes, templates, or vault convention files.

@@ -4,22 +4,21 @@
 
 ## Vault Convention (Oh My Second Brain)
 
-This vault is governed by Oh My Second Brain conventions stored in `.oms/`.
-All knowledge capture and retrieval must follow the declared semantic convention.
+This vault is governed by template-first conventions stored in `.oms/`. People and agents follow the same rules.
 
-**Before working with vault notes:**
-- Run `oms doctor` to validate existing notes against the convention (exits 0, non-blocking).
-- Read `.oms/taxonomy.yaml` to understand which folders hold which concepts.
-- Read `.oms/concepts/*.yaml` to understand field requirements and lenses.
+### Template authority
 
-**When writing vault notes:**
-- Use the `/write` skill. Call MCP `oms_write`. Do not use host Write/Edit for vault `.md` files.
-- The kernel fills and checks frontmatter from `.oms`. `ask` or `rejected` means fix and call `oms_write` again.
+- Vault-resident Obsidian `.md` templates are the single source of truth for note shape and body.
+- `.obsidian/types.json` is read-only type authority.
+- `.oms/template-policy.json` defines template semantics.
+- `.oms/types.json` is a derived projection; never hand-edit it.
+- Each template has a stable `templateId`. Do not classify templates by persona.
 
-**When retrieving knowledge:**
-- Use the `/search` skill.
-- Apply the concept's declared lens for the retrieval purpose (synthesis, audit, etc.).
-- Return only the fields the lens specifies — do not dump full frontmatter.
+### Operations
 
-**Doctor is advisory. Write is not.**
-`oms doctor` always exits 0. MCP `oms_write` rejects contract violations.
+- To create or update a vault note, use the `/write` skill and MCP `op:note`. Do not use host Write/Edit for vault notes or managed templates.
+- To author or reclassify a template, use MCP `op:template`: first dry-run, then apply with the exact approved `approvedDigest`.
+- To search templates, use the `/search` skill and MCP `op:templates`. Search by template, declared field, folder, or link.
+- Use `/status` for reads. Use `/doctor` to diagnose and repair.
+
+> **v0 native install:** `oms install --runtime claude` installs the `/write`, `/search`, `/link`, `/distill`, `/status`, and `/doctor` skills and a managed Claude MCP configuration. Use Oh My Second Brain MCP operations for vault work and CLI commands for lifecycle.

@@ -18,6 +18,16 @@ const queryInputSchema: Tool["inputSchema"] = {
   type: "object",
   properties: {
     query: { type: "string" },
+    strategy: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["expand"] },
+        profile: { type: "string", enum: ["qmd-v2.8.3"] },
+        maxQueries: { type: "integer", minimum: 1, maximum: 32 },
+      },
+      required: ["kind", "profile"],
+      additionalProperties: false,
+    },
     collection: { type: "string" },
     mode: { type: "string", enum: ["query", "search", "vsearch"] },
     limit: { type: "number" },
@@ -26,6 +36,8 @@ const queryInputSchema: Tool["inputSchema"] = {
     lex: { type: "string" },
     vec: { type: "string" },
     hyde: { type: "string" },
+    rerank: { type: "boolean" },
+    candidateLimit: { type: "number", minimum: 0 },
     index: { type: "string" },
   },
   required: ["query"],

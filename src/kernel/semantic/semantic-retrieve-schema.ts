@@ -15,6 +15,16 @@ export const retrieveContextSemanticInputProperties = {
   semanticScope: { type: "string", enum: ["global", "graph"] },
   semanticMode: { type: "string", enum: ["query", "search", "vsearch"] },
   semanticIntent: { type: "string" },
+  semanticStrategy: {
+    type: "object",
+    properties: {
+      kind: { type: "string", enum: ["expand"] },
+      profile: { type: "string", enum: ["qmd-v2.8.3"] },
+      maxQueries: { type: "integer", minimum: 1, maximum: 32 },
+    },
+    required: ["kind", "profile"],
+    additionalProperties: false,
+  },
   semanticSearches: { type: "array", items: typedQuerySearchSchema },
   semanticLex: { type: "string" },
   semanticVec: { type: "string" },

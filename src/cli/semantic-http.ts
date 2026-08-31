@@ -2,7 +2,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { AddressInfo } from "node:net";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import { assembleSemanticEngine } from "../kernel/semantic/semantic-engine.js";
-import type { SemanticQueryOptions, SemanticSearchMode } from "../kernel/search/semantic-contract.js";
+import type {
+  SemanticQueryOptions,
+  SemanticSearchMode,
+  SemanticTypedSearch,
+} from "../kernel/search/semantic-contract.js";
+import type { McpSemanticExpandStrategy } from "../kernel/engine/mcp/types.js";
 import { handleSemanticTool } from "../kernel/semantic/semantic-retrieve.js";
 import { semanticMcpTools } from "../kernel/semantic/semantic-schemas.js";
 
@@ -16,6 +21,8 @@ export interface SemanticHttpServerOptions {
   readonly index?: string;
   readonly host?: string;
   readonly port?: number;
+  /** Test/embedding seam; production omission uses the standard user cache. */
+  readonly modelCacheDir?: string;
 }
 
 interface RouteContext {
@@ -58,6 +65,11 @@ function numberField(value: Record<string, unknown>, key: string): number | unde
   return typeof field === "number" ? field : undefined;
 }
 
+function booleanField(value: Record<string, unknown>, key: string): boolean | undefined {
+  const field = value[key];
+  return typeof field === "boolean" ? field : undefined;
+}
+
 function queryOptions(ctx: RouteContext, mode: SemanticSearchMode, body: unknown): SemanticQueryOptions {
   const record = isRecord(body) ? body : {};
   return {
@@ -65,10 +77,14 @@ function queryOptions(ctx: RouteContext, mode: SemanticSearchMode, body: unknown
     index: ctx.index,
     mode,
     query: stringField(record, "query") ?? "",
+    strategy: record["strategy"] as McpSemanticExpandStrategy | undefined,
+    searches: record["searches"] as readonly SemanticTypedSearch[] | undefined,
     collection: stringField(record, "collection"),
     limit: numberField(record, "limit"),
     minScore: numberField(record, "minScore"),
     intent: stringField(record, "intent"),
+    candidateLimit: numberField(record, "candidateLimit"),
+    rerank: booleanField(record, "rerank"),
     lex: stringField(record, "lex"),
     vec: stringField(record, "vec"),
     hyde: stringField(record, "hyde"),
@@ -144,7 +160,7 @@ export async function startSemanticHttpServer(opts: SemanticHttpServerOptions): 
   const port = opts.port ?? 8765;
   // Single engine per server: vec-capable when OMS_EMBEDDING_PROVIDER/MODEL are
   // configured, else a core lex + document engine (vec/HyDE fail fast).
-  const engine = assembleSemanticEngine(opts.vault);
+  const engine = assembleSemanticEngine(opts.vault, undefined, opts.modelCacheDir);
   const ctx: RouteContext = { vault: opts.vault, index: opts.index, adapter: engine.adapter };
   const server: Server = createServer((request, response) => {
     void routeRequest(ctx, request, response);

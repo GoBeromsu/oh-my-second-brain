@@ -1,20 +1,26 @@
 /**
- * Deferred (graph-only) embedding primitives.
+ * Deferred embedding primitives — throw-on-use stand-ins for an absent model.
  *
- * The native engine's graph subsystem — buildGraph, the node index, axis-first
- * retrieval, and cache-meta status — needs NO embeddings: it scans markdown,
- * frontmatter, folders, and wikilinks off the filesystem. assembleGraphOnlyEngine()
- * wires the McpEngineAdapter with these throw-on-use stand-ins so graph ops run
- * model-free, while any accidental semantic / vector call fails loudly instead of
- * silently fabricating vectors.
+ * Several assemblies run without an embedding model on purpose. Lexical search,
+ * document reads, the link graph, axis-first retrieval, and cache-meta status all
+ * work off the filesystem and need no vectors, so those engines wire these guards
+ * and stay fully usable for everything that does not require embeddings.
  *
  * ADR-007: these are LOUD GUARDS, not fake fallbacks. They never return a
- * projected / hash vector — they throw. Real semantic retrieval requires an
- * explicitly configured embedding provider/model; the graph-only engine never
- * loads one.
+ * projected or hash vector — they throw, so a semantic call reaches a real error
+ * rather than fabricated results.
+ *
+ * The provider is deliberately silent about *which* engine wired it. It is used by
+ * the core, ephemeral, read-only, and graph-only assemblies alike, and it once
+ * hardcoded "graph-only engine" into its message — so a user running
+ * `oms semantic vsearch` on an ordinary model-less vault was told they were on a
+ * graph-only engine they never asked for. A guard that misreports the runtime it
+ * is guarding is its own kind of dishonest output, so the message now describes
+ * only what is actually true: no embedding model is configured.
  */
 
 import type { EmbeddingProvider } from "../types.js";
+import { capabilityGuidance } from "./config.js";
 import type { EngineStore } from "./store.js";
 
 const GRAPH_ONLY = "graph-only engine";
@@ -25,21 +31,25 @@ const DEFERRED_DIMENSIONS = 768;
 /**
  * An EmbeddingProvider that throws on embed().
  *
- * Used by the graph-only engine, where no model is loaded and embeddings are
- * never produced. `dimensions` is advertised so a downstream store could still
- * be opened with a stable width, but `embed()` rejects loudly. `dispose()` is a
- * safe no-op so engine teardown never crashes.
+ * Wired by every assembly that runs without an embedding model. `dimensions` is
+ * advertised so a downstream store can still be opened with a stable width, but
+ * `embed()` rejects loudly. `dispose()` is a safe no-op so engine teardown never
+ * crashes.
  */
 export function makeDeferredProvider(): EmbeddingProvider {
   return {
     model: "deferred:graph-only",
     dimensions: DEFERRED_DIMENSIONS,
     embed(_text: string): Promise<Float32Array> {
+      // The remedy comes from the shared capability guidance rather than a local
+      // copy, so this guard names the same environment pair, vault contract file,
+      // and setup command the resolver does. A hand-written variant here drifted
+      // once already: it named the env pair only, telling a user two of the three
+      // ways to configure embeddings and omitting the one-step install.
       return Promise.reject(
         new Error(
-          `${GRAPH_ONLY}: embedding provider unavailable. Configure embeddings via ` +
-            `OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL (and provider auth env vars, ` +
-            `e.g. UPSTAGE_API_KEY) for engine semantic ops.`,
+          `Embedding provider unavailable. ${capabilityGuidance("embed")} ` +
+            "A remote provider also needs its auth variable, e.g. UPSTAGE_API_KEY.",
         ),
       );
     },

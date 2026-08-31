@@ -6,6 +6,7 @@ import { syncEngineStore } from "../kernel/engine/embed/sync.js";
 import { startSemanticHttpServer, type SemanticHttpServer } from "./semantic-http.js";
 
 let tmpVault: string | undefined;
+let modelCacheDir: string | undefined;
 let httpServer: SemanticHttpServer | undefined;
 
 afterEach(async () => {
@@ -16,6 +17,10 @@ afterEach(async () => {
   if (tmpVault) {
     await rm(tmpVault, { recursive: true, force: true });
     tmpVault = undefined;
+  }
+  if (modelCacheDir) {
+    await rm(modelCacheDir, { recursive: true, force: true });
+    modelCacheDir = undefined;
   }
 });
 
@@ -53,9 +58,14 @@ async function jsonFetch(url: string, body: unknown): Promise<Record<string, unk
 describe("semantic HTTP transport", () => {
   it("serves engine-backed health, lexical query/search, and MCP tool-list endpoints", async () => {
     tmpVault = await writeVault();
+    modelCacheDir = await mkdtemp(path.join(tmpdir(), "oms-http-model-cache-"));
     // Model-less: a lex-only sync populates the engine FTS index (no vectors).
     await syncEngineStore({ vault: tmpVault, embed: false });
-    httpServer = await startSemanticHttpServer({ vault: tmpVault, port: 0 });
+    httpServer = await startSemanticHttpServer({
+      vault: tmpVault,
+      port: 0,
+      modelCacheDir,
+    });
 
     const healthResponse = await fetch(`${httpServer.url}/health`);
     expect(healthResponse.ok).toBe(true);
@@ -75,9 +85,8 @@ describe("semantic HTTP transport", () => {
     expect(Array.isArray(hits)).toBe(true);
     expect(hits).toEqual([expect.objectContaining({ path: "references/Agent Retrieval.md" })]);
 
-    // The ordinary query mode is hybrid when a model is available. A
-    // model-less HTTP server must still serve its lexical half rather than
-    // failing because the deferred vector provider is unavailable.
+    // A plain query is lexical-only regardless of installed models. This
+    // isolated model-less server proves it never demands a deferred vector.
     const modelLessQuery = await jsonFetch(`${httpServer.url}/query`, {
       query: "agent retrieval",
       limit: 1,
@@ -86,6 +95,17 @@ describe("semantic HTTP transport", () => {
     expect(modelLessQuery["hits"]).toEqual([
       expect.objectContaining({ path: "references/Agent Retrieval.md" }),
     ]);
+
+    const unavailableExpansion = await jsonFetch(`${httpServer.url}/query`, {
+      query: "expand agent retrieval",
+      strategy: { kind: "expand", profile: "qmd-v2.8.3" },
+      limit: 1,
+    });
+    expect(unavailableExpansion).toEqual(expect.objectContaining({
+      available: false,
+      reason: expect.stringMatching(/OMS_GENERATE_PROVIDER/),
+      receipt: expect.objectContaining({ requestedStrategy: "expand" }),
+    }));
 
     const search = await jsonFetch(`${httpServer.url}/search`, {
       lex: "agent retrieval",

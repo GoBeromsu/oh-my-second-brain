@@ -139,7 +139,14 @@ Index note for graph neighborhoods and semantic lookup.
         // hybrid behaviour, and the seam landing is what changed it.
         expect(syncRaw.isError).toBe(true);
         const syncText = syncRaw.content[0]?.type === "text" ? syncRaw.content[0].text : "";
-        expect(syncText).toMatch(/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/);
+        // Each element is asserted separately rather than as one alternation. An
+        // `A|B` pattern passes when only A appears, so it would have accepted a
+        // refusal naming half the contract; AC-10 requires the exact environment
+        // pair, the vault contract file, and the command that installs a model.
+        expect(syncText).toMatch(/OMS_EMBEDDING_PROVIDER/);
+        expect(syncText).toMatch(/OMS_EMBEDDING_MODEL/);
+        expect(syncText).toMatch(/\.oms\/models\.json/);
+        expect(syncText).toMatch(/oms setup --models-default/);
 
         const plainQuery = textPayload(await client.callTool(queryCall));
         expect(plainQuery.available).toBe(true);
@@ -158,7 +165,13 @@ Index note for graph neighborhoods and semantic lookup.
           },
         });
         const vecText = explicitVec.content[0]?.type === "text" ? explicitVec.content[0].text : "";
-        expect(vecText).toMatch(/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/);
+        expect(vecText).toMatch(/OMS_EMBEDDING_PROVIDER/);
+        expect(vecText).toMatch(/OMS_EMBEDDING_MODEL/);
+        expect(vecText).toMatch(/\.oms\/models\.json/);
+        expect(vecText).toMatch(/oms setup --models-default/);
+        // The remedy must be the embed one. Naming the rerank or generate pair here
+        // would send an agent to install a model that cannot serve a vector request.
+        expect(vecText).not.toMatch(/OMS_RERANK_PROVIDER|OMS_GENERATE_PROVIDER/);
 
         const lexOnlyQuery = textPayload(
           await client.callTool({

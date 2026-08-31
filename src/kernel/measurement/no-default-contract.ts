@@ -6,14 +6,14 @@ import {
   embeddingModelCacheDir,
   EMBEDDING_MODEL_ENV,
   EMBEDDING_PROVIDER_ENV,
-  INSTALLED_DEFAULT_DESCRIPTOR,
+  INSTALLED_MODELS_RECEIPT,
   resolveEmbeddingModel,
 } from "../engine/embed/model.js";
 import { assembleCoreSemanticEngine } from "../engine/assemble.js";
 
 export interface NoDefaultContract {
   readonly resolveEmbeddingModel: typeof resolveEmbeddingModel;
-  readonly defaultDescriptorExists: () => boolean | Promise<boolean>;
+  readonly installedReceiptExists: () => boolean | Promise<boolean>;
   readonly runMcp: (options: {
     readonly fetch: typeof globalThis.fetch;
     readonly waiverActive: boolean;
@@ -106,7 +106,7 @@ export function createNoDefaultContract(options: {
       ...resolveOptions,
       cacheDir,
     }),
-    defaultDescriptorExists: () => existsSync(path.join(cacheDir, INSTALLED_DEFAULT_DESCRIPTOR)),
+    installedReceiptExists: () => existsSync(path.join(cacheDir, INSTALLED_MODELS_RECEIPT)),
     runMcp: async ({ fetch }) => probeNoModelMcp(fetch),
     fetch: globalThis.fetch.bind(globalThis),
   };

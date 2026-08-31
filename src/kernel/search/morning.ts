@@ -29,6 +29,7 @@ export interface MorningRetrieveOptions extends GraphExploreOptions {
     readonly limit?: number;
     readonly scope?: SemanticFusionScope;
     readonly mode?: SemanticQueryOptions["mode"];
+    readonly strategy?: SemanticQueryOptions["strategy"];
     readonly intent?: string;
     readonly searches?: SemanticQueryOptions["searches"];
     readonly lex?: string;
@@ -161,6 +162,7 @@ function semanticQueryOptions(opts: MorningRetrieveOptions): SemanticQueryOption
     collection: opts.semantic?.collection,
     limit: opts.semantic?.limit ?? opts.limit,
     mode: opts.semantic?.mode,
+    strategy: opts.semantic?.strategy,
     intent: opts.semantic?.intent,
     searches: opts.semantic?.searches,
     lex: opts.semantic?.lex,

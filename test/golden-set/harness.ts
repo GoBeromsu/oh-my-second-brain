@@ -55,7 +55,7 @@ function envValue(name: string): string | undefined {
  * This allows CI to inject real-vault-backed queries without committing them.
  * 0 scored => inconclusive => fail: an empty or unresolvable path is an error.
  */
-function loadGoldenQueries(): GoldenQuery[] {
+export function loadGoldenQueries(): GoldenQuery[] {
   const p = envValue("OMS_GOLDEN_QUERIES");
   if (!p) return GOLDEN_QUERIES;
   const raw = JSON.parse(readFileSync(p, "utf8"));
@@ -163,7 +163,7 @@ function qrelsForQueries(queries: readonly GoldenQuery[]): Qrels {
   );
 }
 
-function loadQrels(queries: readonly GoldenQuery[]): Qrels {
+export function loadQrels(queries: readonly GoldenQuery[]): Qrels {
   const p = envValue("OMS_GOLDEN_QRELS") ?? envValue("OMS_PREREG_QRELS");
   if (!p) return qrelsForQueries(queries);
   return validateQrels(JSON.parse(readFileSync(p, "utf8")), `preregistered qrels at ${p}`);
@@ -194,6 +194,16 @@ export interface QueryReport {
   /** Alias kept explicit for report consumers that use the metric name. */
   readonly ndcgAt10: number;
   readonly engineNdcgAt10: number;
+  /**
+   * Reciprocal rank of the first relevant document within the top 10.
+   *
+   * Reported alongside nDCG rather than instead of it: nDCG rewards good ordering
+   * across the whole page, while this answers how far the reader had to look
+   * before hitting something useful. An engine can lift aggregate nDCG by packing
+   * several moderately-relevant documents lower down while still burying the one
+   * obviously-right answer, and only this metric notices.
+   */
+  readonly mrrAt10: number;
   /** End-to-end engine latency for this query, in milliseconds. */
   readonly latencyMs: number;
   readonly durationMs: number;
@@ -211,7 +221,7 @@ export interface QueryReport {
 
 export interface HarnessReport {
   readonly queries: QueryReport[];
-  readonly byType: Record<QueryType, { engineAvg: number; ndcgAvg: number; pass: boolean }>;
+  readonly byType: Record<QueryType, { engineAvg: number; ndcgAvg: number; mrrAvg: number; pass: boolean }>;
   /** Paired baseline/current nDCG means by the nine preregistered classes. */
   readonly ndcgByClass: Record<GoldenQueryClass, MetricPair>;
   readonly qrelsHash: string;
@@ -252,6 +262,7 @@ export interface BootstrapCI {
 
 export interface HarnessMetrics {
   readonly ndcgAt10: { mean: number; ci: BootstrapCI };
+  readonly mrrAt10: { mean: number; ci: BootstrapCI };
   readonly latencyMs: { p50: number; p95: number };
 }
 
@@ -574,6 +585,53 @@ export const ndcgAt10 = (rankedDocs: readonly RankedDocumentInput[], qrels: Qrel
   ndcgAtK(rankedDocs, qrels, 10);
 
 /**
+ * Mean reciprocal rank of the first relevant document within the top `k`.
+ *
+ * nDCG rewards good ordering across the whole page; MRR asks a narrower and
+ * more human question: how far down did the reader have to look before hitting
+ * something useful? The parity gate requires both, because an engine can lift
+ * aggregate nDCG by packing several moderately-relevant documents lower on the
+ * page while still burying the one obviously-right answer.
+ *
+ * Relevance is treated as binary here (any positive grade counts), since a
+ * reciprocal rank has no way to express *how* relevant the first hit was.
+ * Duplicate paths are collapsed before ranking and matched case-insensitively,
+ * matching {@link ndcgAtK} so the two metrics never disagree about which
+ * document sits at which rank. Returns 0 when no relevant document appears in
+ * the top `k`, which is a real measurement rather than a missing one.
+ */
+export function mrrAtK(
+  rankedDocs: readonly RankedDocumentInput[],
+  qrelsInput: QrelDocumentInput,
+  k = 10,
+): number {
+  if (!Number.isInteger(k) || k <= 0) throw new Error(`MRR cutoff must be a positive integer, got ${k}`);
+  const qrels = qrelDocumentMap(qrelsInput);
+  const relevant = new Set(
+    Object.entries(qrels)
+      .filter(([, grade]) => grade > 0)
+      .map(([docPath]) => docPath.toLowerCase()),
+  );
+  if (relevant.size === 0) return 0;
+
+  const seen = new Set<string>();
+  let rank = 0;
+  for (const doc of rankedDocs) {
+    const docPath = typeof doc === "string" ? doc : doc.docPath;
+    const key = docPath.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (rank >= k) break;
+    if (relevant.has(key)) return 1 / (rank + 1);
+    rank += 1;
+  }
+  return 0;
+}
+
+export const mrrAt10 = (rankedDocs: readonly RankedDocumentInput[], qrels: QrelDocumentInput): number =>
+  mrrAtK(rankedDocs, qrels, 10);
+
+/**
  * Canonical qrels serialization.  Every accepted input is represented as
  * sorted `(queryId, docPath, relevance)` rows, so object insertion order or
  * JSON pretty-printing cannot change the preregistered digest.
@@ -844,6 +902,8 @@ function hasMatchingBootstrapRows(
 export interface HarnessOptions {
   /** Absolute path to the vault. Falls back to OMS_VAULT env. */
   vaultPath?: string;
+  /** Frozen in-memory query snapshot; avoids rereading a mutable file mid-run. */
+  queries?: readonly GoldenQuery[];
   /**
    * Explicit file list to keep the run fast (slice of vault).
    * Recommended for CI; omit to run against full vault.
@@ -1019,7 +1079,9 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
   }
   const vaultPath = opts.vaultPath ?? envValue("OMS_VAULT") ?? path.resolve("test/fixtures/vault");
   const floor = recallFloor();
-  const loadedQueries = loadGoldenQueries();
+  const loadedQueries = opts.queries === undefined
+    ? loadGoldenQueries()
+    : [...opts.queries];
   const qrels = validateQrels(opts.qrels ?? loadQrels(loadedQueries), "golden qrels");
   const queries = [...loadedQueries].sort((left, right) => left.id.localeCompare(right.id));
   const queryIds = queries.map((query) => query.id);
@@ -1170,6 +1232,7 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
           engineNdcg: 0,
           ndcgAt10: 0,
           engineNdcgAt10: 0,
+          mrrAt10: 0,
           latencyMs: 0,
           durationMs: 0,
           pass: false,
@@ -1191,6 +1254,9 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
       const engineTop10 = execution.hits.map((hit) => hit.docPath);
       const engineRecall = recall(engineTop10, q.expectedNotes);
       const engineNdcg = ndcgAt10(execution.hits, qrels[q.id]!);
+      // Computed from the same ranked hits and qrels as nDCG, so the two metrics
+      // can never disagree about which document occupies which rank.
+      const engineMrr = mrrAt10(execution.hits, qrels[q.id]!);
       reports.push({
         id: q.id,
         type: q.type,
@@ -1202,6 +1268,7 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
         engineNdcg,
         ndcgAt10: engineNdcg,
         engineNdcgAt10: engineNdcg,
+        mrrAt10: engineMrr,
         latencyMs,
         durationMs: latencyMs,
         pass: engineRecall >= floor,
@@ -1256,7 +1323,7 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
 
   // ── Per-type aggregation (curated / non-skipped rows only) ──────────────
   const types: QueryType[] = ["lex", "vec", "hyde", "graph"];
-  const byType = {} as Record<QueryType, { engineAvg: number; ndcgAvg: number; pass: boolean }>;
+  const byType = {} as Record<QueryType, { engineAvg: number; ndcgAvg: number; mrrAvg: number; pass: boolean }>;
 
   for (const t of types) {
     // Exclude skipped (uncurated) queries from all averages and gates
@@ -1264,14 +1331,20 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
     const unavailable = reports.some((r) => r.type === t && !r.skipped && r.error !== undefined);
     // 0 scored => inconclusive => fail: an unmeasured type is never a pass.
     if (rows.length === 0) {
-      byType[t] = { engineAvg: 0, ndcgAvg: 0, pass: false };
+      byType[t] = { engineAvg: 0, ndcgAvg: 0, mrrAvg: 0, pass: false };
       continue;
     }
     const engineAvg = rows.reduce((s, r) => s + r.engineRecall, 0) / rows.length;
     const ndcgAvg = rows.reduce((s, r) => s + r.engineNdcg, 0) / rows.length;
+    const mrrAvg = rows.reduce((s, r) => s + r.mrrAt10, 0) / rows.length;
     // Any unavailable row is a failed capability gate even when another row
     // of the same modality happened to produce a score.
-    byType[t] = { engineAvg, ndcgAvg, pass: !unavailable && engineAvg >= floor };
+    //
+    // `pass` deliberately stays the R2 recall-floor gate. The frozen parity floors
+    // for all three metrics are enforced in `parity-gate.ts`, which is the single
+    // place those numbers live; duplicating them into this reporter would create a
+    // second copy that could disagree with the preregistered ones.
+    byType[t] = { engineAvg, ndcgAvg, mrrAvg, pass: !unavailable && engineAvg >= floor };
   }
 
   // 0 scored => inconclusive => fail: zero total scored rows can never be green.
@@ -1287,6 +1360,9 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
   const scoredNdcg = reports
     .filter((row) => !row.skipped && row.error === undefined)
     .map((row) => row.engineNdcg);
+  const scoredMrr = reports
+    .filter((row) => !row.skipped && row.error === undefined)
+    .map((row) => row.mrrAt10);
   const scoredLatency = reports
     .filter((row) => !row.skipped && row.error === undefined)
     .map((row) => row.latencyMs);
@@ -1296,10 +1372,26 @@ export async function runHarness(opts: HarnessOptions = {}): Promise<HarnessRepo
           mean: scoredNdcg.reduce((sum, value) => sum + value, 0) / scoredNdcg.length,
           ci: bootstrapMeanCI(scoredNdcg, opts.bootstrap),
         },
+        mrrAt10: {
+          mean: scoredMrr.reduce((sum, value) => sum + value, 0) / scoredMrr.length,
+          ci: bootstrapMeanCI(scoredMrr, opts.bootstrap),
+        },
         latencyMs: latencyPercentiles(scoredLatency),
       }
     : {
         ndcgAt10: {
+          mean: 0,
+          ci: {
+            estimate: 0,
+            ciLow: 0,
+            ciHigh: 0,
+            lower: 0,
+            upper: 0,
+            seed: opts.bootstrap?.seed ?? 0x9e3779b9,
+            samples: opts.bootstrap?.samples ?? 2_000,
+          },
+        },
+        mrrAt10: {
           mean: 0,
           ci: {
             estimate: 0,
@@ -1380,13 +1472,23 @@ export function printHarnessReport(report: HarnessReport): void {
   for (const t of ["lex", "vec", "hyde", "graph"] as QueryType[]) {
     const s = report.byType[t];
     const status = s.pass ? "PASS" : "FAIL";
-    console.log(`[${status}] type=${t}  engine=${(s.engineAvg * 100).toFixed(1)}%`);
+    // All three metrics are printed per modality. Recall alone hides the failure
+    // mode MRR exists to expose: an engine can retrieve the right document
+    // somewhere on the page while burying it far enough down that no reader finds it.
+    console.log(
+      `[${status}] type=${t}  recall=${(s.engineAvg * 100).toFixed(1)}%  ` +
+      `nDCG@10=${(s.ndcgAvg * 100).toFixed(1)}%  MRR@10=${(s.mrrAvg * 100).toFixed(1)}%`,
+    );
   }
 
   console.log(`\nOverall: ${report.overallPass ? "PASS" : "FAIL"}`);
   console.log(
     `nDCG@10: ${(report.metrics.ndcgAt10.mean * 100).toFixed(1)}% ` +
     `(bootstrap ${(report.metrics.ndcgAt10.ci.ciLow * 100).toFixed(1)}–${(report.metrics.ndcgAt10.ci.ciHigh * 100).toFixed(1)}%)`,
+  );
+  console.log(
+    `MRR@10: ${(report.metrics.mrrAt10.mean * 100).toFixed(1)}% ` +
+    `(bootstrap ${(report.metrics.mrrAt10.ci.ciLow * 100).toFixed(1)}–${(report.metrics.mrrAt10.ci.ciHigh * 100).toFixed(1)}%)`,
   );
   console.log(
     `Latency: p50=${report.metrics.latencyMs.p50.toFixed(2)}ms p95=${report.metrics.latencyMs.p95.toFixed(2)}ms`,

@@ -56,6 +56,7 @@ describe("queryOptionsToSubQueries — searches array", () => {
   it("uses explicit searches verbatim (lex + vec)", () => {
     const opts: McpSemanticQueryOptions = {
       ...BASE,
+      query: undefined,
       searches: [
         { type: "lex", query: "foo" },
         { type: "vec", query: "bar" },
@@ -70,6 +71,7 @@ describe("queryOptionsToSubQueries — searches array", () => {
   it("uses explicit searches verbatim (single hyde)", () => {
     const opts: McpSemanticQueryOptions = {
       ...BASE,
+      query: undefined,
       searches: [{ type: "hyde", query: "hypothetical answer" }],
     };
     expect(queryOptionsToSubQueries(opts)).toEqual([
@@ -81,20 +83,17 @@ describe("queryOptionsToSubQueries — searches array", () => {
     const opts: McpSemanticQueryOptions = { ...BASE, searches: [] };
     expect(queryOptionsToSubQueries(opts)).toEqual([
       { type: "lex", query: "hello world" },
-      { type: "vec", query: "hello world" },
     ]);
   });
 
-  it("searches takes priority over lex/vec shorthand fields", () => {
+  it("rejects query plus explicit searches instead of silently choosing one", () => {
     const opts: McpSemanticQueryOptions = {
       ...BASE,
       searches: [{ type: "hyde", query: "from-searches" }],
       lex: "should-be-ignored",
       vec: "also-ignored",
     };
-    expect(queryOptionsToSubQueries(opts)).toEqual([
-      { type: "hyde", query: "from-searches" },
-    ]);
+    expect(() => queryOptionsToSubQueries(opts)).toThrow(/mutually exclusive/);
   });
 });
 
@@ -138,30 +137,26 @@ describe("queryOptionsToSubQueries — shorthand fields", () => {
     const opts: McpSemanticQueryOptions = { ...BASE, lex: "", vec: "" };
     expect(queryOptionsToSubQueries(opts)).toEqual([
       { type: "lex", query: "hello world" },
-      { type: "vec", query: "hello world" },
     ]);
   });
 });
 
 describe("queryOptionsToSubQueries — mode-driven defaults", () => {
-  it("no mode → hybrid lex + vec", () => {
+  it("no mode → lexical only", () => {
     expect(queryOptionsToSubQueries(BASE)).toEqual([
       { type: "lex", query: "hello world" },
-      { type: "vec", query: "hello world" },
     ]);
   });
 
-  it("mode: query → hybrid lex + vec", () => {
+  it("mode: query → lexical only", () => {
     expect(queryOptionsToSubQueries({ ...BASE, mode: "query" })).toEqual([
       { type: "lex", query: "hello world" },
-      { type: "vec", query: "hello world" },
     ]);
   });
 
-  it("mode: search → hybrid lex + vec", () => {
+  it("mode: search → lexical only", () => {
     expect(queryOptionsToSubQueries({ ...BASE, mode: "search" })).toEqual([
       { type: "lex", query: "hello world" },
-      { type: "vec", query: "hello world" },
     ]);
   });
 
@@ -178,8 +173,6 @@ describe("queryOptionsToSubQueries — mode-driven defaults", () => {
       lexicalQuery: "",
     });
     expect(normalizeQueryOptions({
-      query: "fallback",
-      mode: "vsearch",
       searches: [{ type: "lex", query: "explicit" }],
     })).toMatchObject({
       overview: false,
@@ -217,6 +210,16 @@ describe("queryOptionsToSubQueries — mode-driven defaults", () => {
       hits: [{ path: "note-10.md" }, { path: "note-11.md" }],
       cursor: null,
     });
+  });
+
+  it.each([
+    ["fractional limit", { query: "q", limit: 1.5 }],
+    ["non-finite limit", { query: "q", limit: Number.POSITIVE_INFINITY }],
+    ["zero candidate limit", { query: "q", candidateLimit: 0 }],
+    ["non-finite candidate limit", { query: "q", candidateLimit: Number.NaN }],
+    ["non-finite score", { query: "q", minScore: Number.NEGATIVE_INFINITY }],
+  ] as const)("rejects invalid query budget: %s", (_case, options) => {
+    expect(() => normalizeQueryOptions(options)).toThrow(/limit|finite|score/i);
   });
 
   it("retains typed searches and axes through the runtime argument parser", () => {
@@ -280,6 +283,49 @@ describe("queryOptionsToSubQueries — mode-driven defaults", () => {
   });
 });
 
+describe("queryOptionsToSubQueries — explicit expansion strategy", () => {
+  const strategy = { kind: "expand", profile: "qmd-v2.8.3" } as const;
+
+  it("returns an empty seed for the facade to replace asynchronously", () => {
+    expect(queryOptionsToSubQueries({ query: "what is ataraxia", strategy })).toEqual([]);
+  });
+
+  it.each([
+    ["empty query", { query: "", strategy }],
+    ["explicit searches", { query: "q", strategy, searches: [] }],
+    ["lex shorthand", { query: "q", strategy, lex: "x" }],
+    ["vec shorthand", { query: "q", strategy, vec: "x" }],
+    ["hyde shorthand", { query: "q", strategy, hyde: "x" }],
+    ["vector mode", { query: "q", strategy, mode: "vsearch" }],
+    ["axis query", { query: "q", strategy, axes: { folder: "notes" } }],
+  ] as const)("rejects %s", (_case, options) => {
+    expect(() => queryOptionsToSubQueries(options as McpSemanticQueryOptions)).toThrow();
+  });
+
+  it.each([
+    null,
+    "expand",
+    { kind: "expand", profile: "latest" },
+    { kind: "other", profile: "qmd-v2.8.3" },
+    { kind: "expand", profile: "qmd-v2.8.3", unknown: true },
+  ])("rejects malformed or open strategy %j", (strategyInput) => {
+    expect(() => queryOptionsToSubQueries({
+      query: "q",
+      strategy: strategyInput as never,
+    })).toThrow(/strategy/i);
+  });
+
+  it.each([0, 33, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid maxQueries %s",
+    (maxQueries) => {
+      expect(() => queryOptionsToSubQueries({
+        query: "q",
+        strategy: { ...strategy, maxQueries },
+      })).toThrow(/between 1 and 32/);
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // retrievalResultsToQueryResult
 // ---------------------------------------------------------------------------
@@ -292,7 +338,16 @@ describe("retrievalResultsToQueryResult — shape", () => {
       totalCount: 0,
       facets: [],
       cursor: null,
-      receipt: { usedChannels: [], approximated: false, drift: false },
+      receipt: {
+        usedChannels: [],
+        approximated: false,
+        drift: false,
+        requestedStrategy: "plain",
+        generatedSearches: [],
+        rerankApplied: false,
+        taxonomyIntents: [],
+        warnings: [],
+      },
     });
   });
 
@@ -305,7 +360,16 @@ describe("retrievalResultsToQueryResult — shape", () => {
       totalCount: 0,
       facets: [],
       cursor: null,
-      receipt: { usedChannels: [], approximated: false, drift: false },
+      receipt: {
+        usedChannels: [],
+        approximated: false,
+        drift: false,
+        requestedStrategy: "plain",
+        generatedSearches: [],
+        rerankApplied: false,
+        taxonomyIntents: [],
+        warnings: [],
+      },
     });
   });
 

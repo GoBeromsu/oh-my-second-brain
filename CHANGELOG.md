@@ -10,6 +10,31 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Added
+
+- **OMS now implements the explicit precision-query path without changing plain search.** The closed `qmd-v2.8.3` expansion strategy produces validated typed retrieval channels, active taxonomy folder intents supply the only model context, and reranking remains independently opt-in. Receipts expose the generated plan, rerank application, taxonomy provenance, and deterministic context warnings. This functionality has been exercised with the registered local Qwen models, but it does not relax the frozen parity gates or establish a replacement claim.
+- **Parity evidence now has one executable, audited outcome pipeline.** The runner verifies and invokes the exact pinned qmd checkout, runs OMS sync/query through the production adapter, persists and post-run seals the complete raw record, derives per-modality and aggregate metrics plus RSS/wall-time/count/vector/p95 operability, and exact-matches frozen corpus/query/qrels/model inputs before the gate and stop policy run. B2 revalidates the preserved B1 raw seal, measurements, gate, outcome, and common evidence; a failed run writes evidence before release or replacement assertions stop execution.
+
+- **A frozen parity gate now stands between OMS and any claim that it replaces qmd.** The comparison it governs has not been run, and that is the point of landing it first: every threshold is a constant in `test/golden-set/parity-gate.ts` rather than configuration, and the gate refuses to run when an environment variable tries to move one — including the retrieval harness's own `OMS_GOLDEN_MIN_RECALL`. A bound that can be edited after seeing results is not a bound. Relevance and operability are scored separately and neither can satisfy the other, so a run that finishes fast, inside its memory ceiling, and returns irrelevant documents fails rather than passing on the strength of having completed. Supporting pieces are admissibility of a declared run against a pinned comparator commit, an order-independent corpus digest that excludes the engine's own store so measuring a vault cannot alter it, peak-RSS and wall-clock instrumentation, a stop policy that denies B2 work, release, and the replacement claim together on a miss, and a preflight that reports which preconditions remain and whether each is implementation work or the vault owner's to supply. `MRR@10` is also now emitted per query, per modality, and in aggregate; it previously existed as a function the report never surfaced, so a run could not have produced the three metrics the gate requires.
+- **The parity baseline and both measurement protocols are recorded before any measurement exists.** `docs/measurements/qmd-parity-matrix.md` pins the comparator to one qmd commit and classifies each capability, while `docs/preregistration/parity-b1.md` and `parity-b2.md` freeze both profiles before results exist. The exact comparator is installed; the remaining owner evidence is the curated query/qrels set and either the approved historical corpus snapshot or authorization for a new preregistration.
+
+### Changed
+
+- **The canonical derived SQLite store is now `<vault>/.oms/engine-store.sqlite`, resolved by one kernel path owner.** No migration, dual-read, or compatibility alias is provided; run `oms embed` to rebuild an existing derived store when necessary.
+- **OMS now has a cross-layer portable model contract.** Strict `models.json` v1 descriptors, declared prompt identities, verified acquisition receipts, multi-capability setup, and redacted CLI path output describe the same installed model state across kernel and command surfaces.
+
+### Breaking
+
+- **Embedding identity metadata is revision/checksum v3, so existing vectors must be re-embedded with `oms embed`.** There is no migration or compatibility path for prior vector identities.
+
+### Documentation
+
+- **A benchmark-backed claim that OMS replaces qmd remains gated and is not delivered.** The model contract and installation work do not establish that claim.
+
+### Fixed
+
+- **`oms setup` now keeps the derived store and its WAL/SHM sidecars out of Git without ignoring all of `.oms/`.** It idempotently manages `<vault>/.oms/.gitignore` with `/engine-store.sqlite*`, preserving user entries and line endings, and setup receipts disclose whether the file was written or would be written in `--dry-run`.
+
 ## [0.8.4] - 2026-08-30
 
 ### Documentation

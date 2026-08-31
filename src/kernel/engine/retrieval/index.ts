@@ -5,7 +5,6 @@
  *   - retrieve()   — top-level entrypoint (dispatch → optional rerank)
  *   - fuseRRF()    — RRF fusion (useful standalone)
  *   - Reranker     — cross-encoder hook interface
- *   - passthroughReranker — default no-op reranker
  *   - CancelToken / createCancelToken — cancellation primitives
  *   - DispatcherDeps — dependency-injection bag for backends
  */
@@ -13,11 +12,10 @@
 export { fuseRRF } from "./rrf.js";
 export type { Reranker } from "./reranker.js";
 export {
+  createLazyOwnedReranker,
   createLlamaReranker,
   DEFAULT_RERANKER_CANDIDATE_CAP,
   LlamaReranker,
-  PassthroughReranker,
-  passthroughReranker,
 } from "./reranker.js";
 export type {
   LlamaModelLoader,
@@ -51,8 +49,11 @@ export interface RetrieveOptions {
   k?: number;
   /**
    * Optional cross-encoder reranker.
-   * When provided, the fused RRF list is re-scored before returning.
-   * Defaults to passthrough (no reranking) when absent.
+   *
+   * When provided, the fused RRF list is re-scored before returning. When absent,
+   * the fused order is returned unchanged — callers that asked for reranking
+   * explicitly must be refused upstream rather than served this order as though
+   * it had been reranked.
    */
   reranker?: Reranker;
   /**

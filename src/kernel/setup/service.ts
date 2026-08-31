@@ -1,6 +1,7 @@
 import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stringify as yamlStringify } from "yaml";
+import { parseModelsConfig, type ModelsConfigV1 } from "../engine/embed/config.js";
 import { loadOntology } from "../ontology/loader.js";
 import type { Concept, FolderBinding, OntologyField, OntologyLens, Taxonomy } from "../ontology/types.js";
 import { collectObservedFields, mergeObservedFieldsIntoConcept, type ObservedField, type ObservedFolderSummary } from "./axis.js";
@@ -15,6 +16,9 @@ import {
   writeConcept,
   type ConceptDocument,
 } from "./documents.js";
+
+const ENGINE_STORE_GITIGNORE_COMMENT = "# Oh My Second Brain engine store (managed)";
+const ENGINE_STORE_GITIGNORE_PATTERN = "/engine-store.sqlite*";
 
 export interface SetupState {
   readonly vault: string;
@@ -110,11 +114,72 @@ export function decideNonInteractiveSetup(state: SetupState, suggestFields: bool
   return decideSetup(state, { folderBindings, observedFieldsByConcept });
 }
 
-export async function applySetup(decision: SetupDecision, { dryRun = false }: { dryRun?: boolean } = {}): Promise<{ copiedFiles: readonly string[]; copyError?: unknown }> {
-  if (dryRun) return { copiedFiles: [] };
+function mergeEngineStoreGitignore(existing: string): string {
+  const lineEnding = existing.includes("\r\n") ? "\r\n" : "\n";
+  const lines = existing === "" ? [] : existing.split(/\r?\n/);
+  const hasFinalNewline = /\r?\n$/.test(existing);
+  if (hasFinalNewline) lines.pop();
+
+  const commentIndex = lines.indexOf(ENGINE_STORE_GITIGNORE_COMMENT);
+  const patternIndex = lines.indexOf(ENGINE_STORE_GITIGNORE_PATTERN);
+  if (commentIndex !== -1 && patternIndex === commentIndex + 1 && lines.filter((line) => line === ENGINE_STORE_GITIGNORE_COMMENT).length === 1 && lines.filter((line) => line === ENGINE_STORE_GITIGNORE_PATTERN).length === 1) {
+    return existing;
+  }
+
+  const userLines = lines.filter(
+    (line) => line !== ENGINE_STORE_GITIGNORE_COMMENT && line !== ENGINE_STORE_GITIGNORE_PATTERN,
+  );
+  const prefix = userLines.length === 0 ? "" : `${userLines.join(lineEnding)}${lineEnding}`;
+  const managedBlock = `${ENGINE_STORE_GITIGNORE_COMMENT}${lineEnding}${ENGINE_STORE_GITIGNORE_PATTERN}`;
+  return `${prefix}${managedBlock}${hasFinalNewline || existing.length === 0 ? lineEnding : ""}`;
+}
+
+async function ensureEngineStoreGitignore(omsDir: string): Promise<boolean> {
+  const gitignorePath = path.join(omsDir, ".gitignore");
+  let existing = "";
+  try {
+    existing = await readFile(gitignorePath, "utf-8");
+  } catch (error) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const merged = mergeEngineStoreGitignore(existing);
+  if (merged === existing) return false;
+  await writeFile(gitignorePath, merged, "utf-8");
+  return true;
+}
+
+async function modelsConfigNeedsUpdate(omsDir: string, content: Buffer): Promise<boolean> {
+  try {
+    return !(await readFile(path.join(omsDir, "models.json"))).equals(content);
+  } catch (error) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return true;
+  }
+}
+
+export async function applySetup(
+  decision: SetupDecision,
+  { dryRun = false, modelsConfig }: { dryRun?: boolean; modelsConfig?: ModelsConfigV1 } = {},
+): Promise<{
+  copiedFiles: readonly string[];
+  copyError?: unknown;
+  engineStoreGitignoreUpdated: boolean;
+  modelsConfigUpdated: boolean;
+}> {
+  const modelsConfigContent = modelsConfig === undefined
+    ? undefined
+    : Buffer.from(`${JSON.stringify(parseModelsConfig(modelsConfig), null, 2)}\n`, "utf-8");
+  const modelsConfigUpdated = modelsConfigContent === undefined
+    ? false
+    : await modelsConfigNeedsUpdate(decision.omsDir, modelsConfigContent);
+  if (dryRun) return { copiedFiles: [], engineStoreGitignoreUpdated: false, modelsConfigUpdated };
   const conceptsOutDir = path.join(decision.omsDir, "concepts");
   await mkdir(conceptsOutDir, { recursive: true });
   await writeFile(path.join(decision.omsDir, "taxonomy.yaml"), yamlStringify(decision.taxonomy), "utf-8");
+  const engineStoreGitignoreUpdated = await ensureEngineStoreGitignore(decision.omsDir);
+  if (modelsConfigContent !== undefined && modelsConfigUpdated) {
+    await writeFile(path.join(decision.omsDir, "models.json"), modelsConfigContent);
+  }
   const copiedFiles: string[] = [];
   let copyError: unknown;
   try {
@@ -132,5 +197,5 @@ export async function applySetup(decision: SetupDecision, { dryRun = false }: { 
     copyError = error;
   }
   for (const { concept, existingDocument } of decision.concepts) await writeConcept(decision.omsDir, concept, existingDocument);
-  return { copiedFiles, copyError };
+  return { copiedFiles, copyError, engineStoreGitignoreUpdated, modelsConfigUpdated };
 }

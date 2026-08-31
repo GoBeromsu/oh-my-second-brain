@@ -1,18 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createLazyOwnedReranker,
   createLlamaReranker,
-  PassthroughReranker,
-  passthroughReranker,
   type RankingContext,
   type RankingModel,
 } from "./reranker.js";
-import type { Reranker } from "./reranker.js";
+import { PassthroughReranker, passthroughReranker } from "./passthrough.test-helper.js";
+import type { DisposableReranker, Reranker } from "./reranker.js";
 import type { ScoredHit } from "../types.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
 function hit(docPath: string, score: number): ScoredHit {
   return { docPath, chunkOrdinal: 0, score };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }
 
 describe("PassthroughReranker", () => {
@@ -61,6 +72,130 @@ describe("PassthroughReranker", () => {
     const fromSingleton = await passthroughReranker.rerank("q", hits);
     const fromNew = await new PassthroughReranker().rerank("q", hits);
     expect(fromSingleton).toEqual(fromNew);
+  });
+});
+
+describe("createLazyOwnedReranker", () => {
+  it("constructs once for concurrent first calls and reuses the inner reranker", async () => {
+    const construction = deferred<Reranker>();
+    const rerank = vi.fn(async (_query: string, hits: ScoredHit[]) => hits);
+    const factory = vi.fn(() => construction.promise);
+    const reranker = createLazyOwnedReranker(factory);
+    const first = reranker.rerank("first", [hit("first.md", 0.8)]);
+    const second = reranker.rerank("second", [hit("second.md", 0.7)]);
+
+    await Promise.resolve();
+    expect(factory).toHaveBeenCalledTimes(1);
+    construction.resolve({ rerank });
+    await expect(first).resolves.toEqual([hit("first.md", 0.8)]);
+    await expect(second).resolves.toEqual([hit("second.md", 0.7)]);
+
+    await reranker.rerank("third", [hit("third.md", 0.6)]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(rerank).toHaveBeenCalledTimes(3);
+    await reranker.dispose();
+  });
+
+  it("does not construct for empty or cancelled requests", async () => {
+    const factory = vi.fn(() => ({
+      rerank: vi.fn(async (_query: string, hits: ScoredHit[]) => hits),
+    }));
+    const reranker = createLazyOwnedReranker(factory);
+
+    await expect(reranker.rerank("empty", [])).resolves.toEqual([]);
+    await expect(
+      reranker.rerank("cancelled", [hit("first.md", 0.8)], { cancelled: true }),
+    ).rejects.toThrow(/cancelled/i);
+    expect(factory).not.toHaveBeenCalled();
+    await reranker.dispose();
+  });
+
+  it("propagates factory failures without constructing a passthrough", async () => {
+    const failure = new Error("model unavailable");
+    const factory = vi.fn(() => Promise.reject(failure));
+    const reranker = createLazyOwnedReranker(factory);
+
+    await expect(reranker.rerank("query", [hit("first.md", 0.8)])).rejects.toThrow(failure);
+    await expect(reranker.dispose()).rejects.toThrow(failure);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates inner rerank failures", async () => {
+    const failure = new Error("ranking failed");
+    const reranker = createLazyOwnedReranker(() => ({
+      rerank: async () => {
+        throw failure;
+      },
+    }));
+
+    await expect(reranker.rerank("query", [hit("first.md", 0.8)])).rejects.toThrow(failure);
+    await reranker.dispose();
+  });
+
+  it("allows admitted calls to drain before disposing the owned inner reranker", async () => {
+    const rankGate = deferred<void>();
+    const dispose = vi.fn(async () => undefined);
+    const inner: DisposableReranker = {
+      rerank: async (_query, hits) => {
+        await rankGate.promise;
+        return hits;
+      },
+      dispose,
+    };
+    const reranker = createLazyOwnedReranker(() => inner);
+    const ranking = reranker.rerank("query", [hit("first.md", 0.8)]);
+
+    await Promise.resolve();
+    const disposing = reranker.dispose();
+    expect(reranker.dispose()).toBe(disposing);
+    await expect(reranker.rerank("new", [hit("second.md", 0.7)])).rejects.toThrow(/disposed/i);
+    expect(dispose).not.toHaveBeenCalled();
+
+    rankGate.resolve();
+    await ranking;
+    await disposing;
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not construct when disposed before use", async () => {
+    const factory = vi.fn(() => ({
+      rerank: vi.fn(async (_query: string, hits: ScoredHit[]) => hits),
+    }));
+    const reranker = createLazyOwnedReranker(factory);
+
+    const firstDispose = reranker.dispose();
+    expect(reranker.dispose()).toBe(firstDispose);
+    await firstDispose;
+    expect(factory).not.toHaveBeenCalled();
+    await expect(reranker.rerank("query", [hit("first.md", 0.8)])).rejects.toThrow(/disposed/i);
+  });
+
+  it("disposes a factory result that resolves after disposal starts", async () => {
+    const construction = deferred<Reranker>();
+    const dispose = vi.fn(async () => undefined);
+    const reranker = createLazyOwnedReranker(() => construction.promise);
+    const ranking = reranker.rerank("query", [hit("first.md", 0.8)]);
+
+    await Promise.resolve();
+    const disposing = reranker.dispose();
+    construction.resolve({
+      rerank: async (_query, hits) => hits,
+      dispose,
+    });
+
+    await ranking;
+    await disposing;
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports inner rerankers without dispose", async () => {
+    const rerank = vi.fn(async (_query: string, hits: ScoredHit[]) => hits);
+    const reranker = createLazyOwnedReranker(() => ({ rerank }));
+
+    await expect(reranker.rerank("query", [hit("first.md", 0.8)])).resolves.toEqual([
+      hit("first.md", 0.8),
+    ]);
+    await expect(reranker.dispose()).resolves.toBeUndefined();
   });
 });
 

@@ -135,9 +135,15 @@ under it.
 One narrower invariant *is* enforced, by
 `test/architecture/model-default-disclosure.test.ts`: while an installable
 default ships, this document must keep stating that the model is unmeasured, and
-the unconfigured-vault guidance must name `--embedding-default` exactly when that
-flag is wired. Withdrawing the default lifts both requirements, so a genuine
+the unconfigured-capability guidance must name `--models-default` exactly when
+that flag is wired. Withdrawing the default lifts both requirements, so a genuine
 removal is not obstructed. The gate holds the disclosure, not the measurement.
+
+> **Flag rename.** The install flag recorded below as `--embedding-default` is
+> now `--models-default`, and `--embedding-descriptor` is now
+> `--models-descriptor`, since setup installs a multi-capability model set rather
+> than one embedding model. The decisions themselves are unchanged; only the
+> command names are. Historical records below keep their original wording.
 
 ---
 

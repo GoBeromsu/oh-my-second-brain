@@ -8,7 +8,11 @@ import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js"
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { runMcpServer } from "../mcp/server.js";
 import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
-import { PINNED_DEFAULT_EMBEDDING_MODEL } from "../kernel/engine/embed/model.js";
+import {
+  PINNED_DEFAULT_EMBEDDING_MODEL,
+  parseModelSetAcquisitionManifest,
+  type ModelSetAcquisitionManifest,
+} from "../kernel/engine/embed/model.js";
 import { parseCliArgs } from "./args.js";
 import { runAudit } from "./audit.js";
 import { runDoctor, runLint } from "./doctor-lint.js";
@@ -21,7 +25,7 @@ import {
 import { runLink } from "./link-command.js";
 import { runLinkify } from "./linkify.js";
 import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
-import { runSetup, type SetupEmbeddingDescriptor } from "./setup-command.js";
+import { runSetup } from "./setup-command.js";
 import { maybePrintUpdateNotice } from "./update-notice.js";
 import { printUsage } from "./usage.js";
 
@@ -37,7 +41,6 @@ export { runLinkify } from "./linkify.js";
 export {
   runSetup,
   type SetupPrompt,
-  type SetupEmbeddingDescriptor,
 } from "./setup-command.js";
 export { maybePrintUpdateNotice } from "./update-notice.js";
 
@@ -82,9 +85,9 @@ async function main(): Promise<void> {
     maxPerConcept,
     folders,
     conventionNote,
-    embeddingDescriptorPath,
-    embeddingNoDefault,
-    embeddingDefault,
+    modelsDescriptorPath,
+    modelsNoDefault,
+    modelsDefault,
     unknownFlags,
   } = parsedArgs;
 
@@ -116,25 +119,43 @@ async function main(): Promise<void> {
   }
 
   if (command === "setup") {
-    const embeddingChoices = [
-      embeddingDescriptorPath !== undefined ? "--embedding-descriptor" : undefined,
-      embeddingDefault ? "--embedding-default" : undefined,
-      embeddingNoDefault ? "--embedding-no-default" : undefined,
-    ].filter((flag): flag is string => flag !== undefined);
-    if (embeddingChoices.length > 1) {
-      console.error(`[oms] Choose one embedding option, not ${embeddingChoices.join(" and ")}.`);
+    if (unknownFlags.length > 0) {
+      console.error(`[oms] Unsupported setup option: ${unknownFlags.join(", ")}`);
       process.exitCode = 1;
       return;
     }
-    let embeddingDescriptor: SetupEmbeddingDescriptor | null | undefined;
-    if (embeddingDescriptorPath !== undefined) {
-      embeddingDescriptor = JSON.parse(readFileSync(embeddingDescriptorPath, "utf8")) as SetupEmbeddingDescriptor;
-    } else if (embeddingDefault) {
-      embeddingDescriptor = PINNED_DEFAULT_EMBEDDING_MODEL;
-    } else if (embeddingNoDefault) {
-      embeddingDescriptor = null;
+    const modelChoices = [
+      modelsDescriptorPath !== undefined ? "--models-descriptor" : undefined,
+      modelsDefault ? "--models-default" : undefined,
+      modelsNoDefault ? "--models-no-default" : undefined,
+    ].filter((flag): flag is string => flag !== undefined);
+    if (modelChoices.length > 1) {
+      console.error(`[oms] Choose one models option, not ${modelChoices.join(" and ")}.`);
+      process.exitCode = 1;
+      return;
     }
-    await runSetup({ vault, yes, installClaude, suggestFields, dryRun, embeddingDescriptor });
+    let modelSetManifest: ModelSetAcquisitionManifest | undefined;
+    if (modelsDescriptorPath !== undefined) {
+      modelSetManifest = parseModelSetAcquisitionManifest(readFileSync(modelsDescriptorPath, "utf8"));
+    } else if (modelsDefault) {
+      modelSetManifest = parseModelSetAcquisitionManifest({
+        schemaVersion: 1,
+        embed: {
+          provider: PINNED_DEFAULT_EMBEDDING_MODEL.provider,
+          model: PINNED_DEFAULT_EMBEDDING_MODEL.model,
+          revision: PINNED_DEFAULT_EMBEDDING_MODEL.revision,
+          sha256: PINNED_DEFAULT_EMBEDDING_MODEL.sha256,
+          promptScheme: PINNED_DEFAULT_EMBEDDING_MODEL.prefixScheme,
+          url: PINNED_DEFAULT_EMBEDDING_MODEL.url,
+          filename: PINNED_DEFAULT_EMBEDDING_MODEL.filename,
+          dimensions: PINNED_DEFAULT_EMBEDDING_MODEL.dimensions,
+          contextLength: PINNED_DEFAULT_EMBEDDING_MODEL.context,
+          mrlDim: PINNED_DEFAULT_EMBEDDING_MODEL.mrlDim,
+          normalization: PINNED_DEFAULT_EMBEDDING_MODEL.normalization,
+        },
+      });
+    }
+    await runSetup({ vault, yes, installClaude, suggestFields, dryRun, modelSetManifest, modelsNoDefault });
     if (!dryRun) await maybePrintUpdateNotice();
   } else if (command === "link") {
     process.exitCode = await runLink({

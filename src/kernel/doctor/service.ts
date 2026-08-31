@@ -1,9 +1,9 @@
 import { readFile, stat } from "node:fs/promises";
-import path from "node:path";
 import Database from "better-sqlite3";
 import { admitWriteTarget } from "../capture/safe.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { walkMarkdown } from "../engine/embed/sync.js";
+import { engineStorePath } from "../engine/paths.js";
 import { buildGraphCache, graphCachePath } from "../graph/cache.js";
 import { resolveActiveOntology } from "../ontology/active.js";
 import { handleSemanticTool } from "../semantic/semantic-retrieve.js";
@@ -41,7 +41,7 @@ export type DoctorRepairResult =
   | { readonly kind: "completed"; readonly value: Record<string, unknown> };
 
 async function semanticIndexPostcondition(vault: string): Promise<SemanticIndexPostcondition> {
-  const databasePath = path.join(vault, ".oms", "engine-store.sqlite");
+  const databasePath = engineStorePath(vault);
   await stat(databasePath);
   const database = new Database(databasePath, { readonly: true });
   try {

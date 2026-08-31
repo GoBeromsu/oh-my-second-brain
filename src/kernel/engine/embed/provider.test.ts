@@ -67,48 +67,54 @@ describe("embedding provider runtime guards", () => {
     vi.unstubAllGlobals();
   });
 
-  it("honors query/passage prefixes for the Upstage provider", async () => {
+  it("sends raw none prompts through the Upstage fetch seam", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ data: [{ embedding: [3, 4] }] }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    const provider = createUpstageProvider("test-key", "test-model", 2, {
-      prefixScheme: "query=Q:,passage=P:",
-    }) as ReturnType<typeof createUpstageProvider> & {
-      readonly embedQuery: (text: string) => Promise<Float32Array>;
-    };
+    const provider = createUpstageProvider("test-key", "test-model", 2);
 
-    await provider.embed("document");
+    await provider.embed(" document ", "Ignored title");
     await provider.embedQuery("question");
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "https://api.upstage.ai/v1/embeddings",
-      expect.objectContaining({ body: JSON.stringify({ input: "P:document", model: "test-model" }) }),
+      expect.objectContaining({ body: JSON.stringify({ input: " document ", model: "test-model" }) }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "https://api.upstage.ai/v1/embeddings",
-      expect.objectContaining({ body: JSON.stringify({ input: "Q:question", model: "test-model" }) }),
+      expect.objectContaining({ body: JSON.stringify({ input: "question", model: "test-model" }) }),
     );
   });
 
-  it("substitutes the document title into a passage prefix that declares the slot", async () => {
+  it("formats EmbeddingGemma query and documents exactly", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ data: [{ embedding: [3, 4] }] }),
     });
     vi.stubGlobal("fetch", fetchMock);
     const provider = createUpstageProvider("test-key", "test-model", 2, {
-      prefixScheme: JSON.stringify({
-        query: "task: search result | query: ",
-        passage: "title: {title} | text: ",
-      }),
+      prefixScheme: "embeddinggemma-v1",
     });
 
-    await provider.embed("body text", "Stellar Nucleosynthesis");
+    await provider.embedQuery("find stars");
+    await provider.embed("body text", "  Stellar Nucleosynthesis  ");
+    await provider.embed("body");
+    await provider.embed("body", "   ");
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
+      "https://api.upstage.ai/v1/embeddings",
+      expect.objectContaining({
+        body: JSON.stringify({
+          input: "task: search result | query: find stars",
+          model: "test-model",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
       "https://api.upstage.ai/v1/embeddings",
       expect.objectContaining({
         body: JSON.stringify({
@@ -117,21 +123,7 @@ describe("embedding provider runtime guards", () => {
         }),
       }),
     );
-  });
-
-  it("falls back to the untitled literal for a missing or blank title", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [{ embedding: [3, 4] }] }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const provider = createUpstageProvider("test-key", "test-model", 2, {
-      prefixScheme: JSON.stringify({ passage: "title: {title} | text: " }),
-    });
-
-    await provider.embed("body");
-    await provider.embed("body", "   ");
-    for (const call of [1, 2]) {
+    for (const call of [3, 4]) {
       expect(fetchMock).toHaveBeenNthCalledWith(
         call,
         "https://api.upstage.ai/v1/embeddings",
@@ -142,22 +134,133 @@ describe("embedding provider runtime guards", () => {
     }
   });
 
-  it("leaves a prefix without a title slot byte-identical when a title is supplied", async () => {
+  it("formats Qwen query and blank or present document titles exactly", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ data: [{ embedding: [3, 4] }] }),
     });
     vi.stubGlobal("fetch", fetchMock);
     const provider = createUpstageProvider("test-key", "test-model", 2, {
-      prefixScheme: "query=Q:,passage=P:",
+      prefixScheme: "qwen3-embedding-v1",
     });
 
-    await provider.embed("document", "Ignored Title");
+    await provider.embedQuery("question");
+    await provider.embed("document");
+    await provider.embed("document", "  ");
+    await provider.embed("document", "  Document title  ");
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "https://api.upstage.ai/v1/embeddings",
-      expect.objectContaining({ body: JSON.stringify({ input: "P:document", model: "test-model" }) }),
+      expect.objectContaining({
+        body: JSON.stringify({
+          input: "Instruct: Retrieve relevant documents for the given query\nQuery: question",
+          model: "test-model",
+        }),
+      }),
     );
+    for (const call of [2, 3]) {
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        call,
+        "https://api.upstage.ai/v1/embeddings",
+        expect.objectContaining({ body: JSON.stringify({ input: "document", model: "test-model" }) }),
+      );
+    }
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "https://api.upstage.ai/v1/embeddings",
+      expect.objectContaining({ body: JSON.stringify({ input: "Document title\ndocument", model: "test-model" }) }),
+    );
+  });
+
+  it("uses the same closed formatter before fake GGUF embeddings", async () => {
+    const inputs: string[] = [];
+    const loadModel = async () => ({
+      tokenize: (text: string) => [text],
+      detokenize: (tokens: string[]) => tokens.join(""),
+      createEmbeddingContext: async () => ({
+        getEmbeddingFor: async (input: string) => {
+          inputs.push(input);
+          return { vector: [3, 4] };
+        },
+        dispose: async () => undefined,
+      }),
+      dispose: async () => undefined,
+    });
+    const provider = createGGUFEmbeddingProvider("/fake/model.gguf", {
+      dimensions: 2,
+      prefixScheme: "qwen3-embedding-v1",
+    }, undefined, loadModel as never);
+
+    await provider.embedQuery("question");
+    await provider.embed("document", "Document title");
+    expect(inputs).toEqual([
+      "Instruct: Retrieve relevant documents for the given query\nQuery: question",
+      "Document title\ndocument",
+    ]);
+    await provider.dispose();
+  });
+
+  it("never evaluates two embeddings on the same native context", async () => {
+    // The sync kernel may have several documents in flight. Round-robin assignment
+    // is not sufficient: when one call finishes early, its next chunk can land on a
+    // different context that is still busy. This fake yields once after entering so
+    // every unsafe overlap is visible without sleep or wall-clock timing.
+    let contextId = 0;
+    const contextOptions: Array<Record<string, unknown>> = [];
+    const activeByContext = new Map<number, number>();
+    const maxByContext = new Map<number, number>();
+    const loadModel = async () => ({
+      tokenize: (text: string) => [text],
+      detokenize: (tokens: string[]) => tokens.join(""),
+      createEmbeddingContext: async (options: Record<string, unknown>) => {
+        const id = contextId;
+        contextId += 1;
+        contextOptions.push(options);
+        return {
+          getEmbeddingFor: async () => {
+            const active = (activeByContext.get(id) ?? 0) + 1;
+            activeByContext.set(id, active);
+            maxByContext.set(id, Math.max(maxByContext.get(id) ?? 0, active));
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            activeByContext.set(id, active - 1);
+            return { vector: [3, 4] };
+          },
+          dispose: async () => undefined,
+        };
+      },
+      dispose: async () => undefined,
+    });
+    const provider = createGGUFEmbeddingProvider(
+      "/fake/model.gguf",
+      { dimensions: 2 },
+      undefined,
+      loadModel as never,
+    );
+
+    const calls = (provider.maxConcurrency ?? 1) * 3;
+    await Promise.all(Array.from({ length: calls }, (_, index) => provider.embed(`text ${index}`)));
+
+    expect(contextId).toBe(provider.maxConcurrency);
+    expect([...maxByContext.values()]).toEqual(
+      Array.from({ length: provider.maxConcurrency ?? 1 }, () => 1),
+    );
+    // qmd and node-llama's measured fast path leaves batch sizing to the runtime.
+    // Forcing it equal to the 2048-token context made the exact same 19 documents
+    // take 23.68s instead of 12.42s and raised peak memory. Pin the absence so a
+    // seemingly harmless "make all sizes explicit" cleanup cannot restore the 2×
+    // regression.
+    expect(contextOptions.every((options) => options.batchSize === undefined)).toBe(true);
+    expect(contextOptions.every((options) => options.contextSize === 2048)).toBe(true);
+    await provider.dispose();
+  });
+
+  it.each([
+    "unknown-v1",
+    "{\"query\":\"Q:\"}",
+    "query=Q:,passage=P:",
+  ])("rejects unsupported legacy or unknown prompt scheme %s", (prefixScheme) => {
+    expect(() => createUpstageProvider("test-key", "test-model", 2, { prefixScheme }))
+      .toThrow(/Unsupported embedding prefixScheme/);
   });
 
   it("rejects a non-finite model vector instead of coercing it to zero", async () => {

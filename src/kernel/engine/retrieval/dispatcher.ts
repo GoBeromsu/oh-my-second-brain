@@ -20,7 +20,16 @@ import type {
   TypedSubQuery,
   VectorStore,
 } from "../types.js";
+import { MODEL_CAPABILITY_ENV_PAIRS } from "../embed/config.js";
 import { fuseRRF } from "./rrf.js";
+
+/**
+ * Environment pair naming the generation capability, taken from the shared model
+ * contract rather than re-spelled here so the guidance can never drift from the
+ * variables the resolver actually reads.
+ */
+const [GENERATE_PROVIDER_ENV, GENERATE_MODEL_ENV] = MODEL_CAPABILITY_ENV_PAIRS.generate;
+const [EMBED_PROVIDER_ENV, EMBED_MODEL_ENV] = MODEL_CAPABILITY_ENV_PAIRS.embed;
 
 type QueryEmbeddingProvider = EmbeddingProvider & {
   readonly embedQuery?: (text: string) => Promise<Float32Array>;
@@ -112,15 +121,52 @@ async function withRetry<T>(
  * Given a query, produces a hypothetical answer document whose embedding
  * is closer to relevant documents than the raw query embedding.
  *
- * M1 default: identity stub — embeds the query text directly.
- * Intended M2+ impl: prompt an LLM to write a short hypothetical passage,
- * then embed that passage.
+ * There is deliberately **no default**. An identity stub used to stand in here,
+ * returning the query unchanged, which meant an explicit `hyde` request quietly
+ * became an ordinary vector search over the raw query while still reporting
+ * itself as HyDE. That is precisely the silent degradation ADR-007 forbids: the
+ * caller asked for a capability the engine did not have and was given something
+ * else without being told. An absent generator is now an explicit failure.
  */
 export type HydeGenerator = (query: string) => Promise<string>;
 
-/** Default no-op HyDE generator: returns the query unchanged. */
-const defaultHydeGenerator: HydeGenerator = (query: string) =>
-  Promise.resolve(query);
+export interface ExpansionRequest {
+  readonly query: string;
+  /** Taxonomy-derived context only; callers must not pass arbitrary persisted maps. */
+  readonly context?: string;
+  readonly maxQueries?: number;
+  readonly cancel?: { readonly cancelled: boolean };
+}
+
+export type ExpandedSubQuery = Omit<TypedSubQuery, "type"> & {
+  readonly type: "lex" | "vec" | "hyde";
+};
+
+export type QueryExpander = (request: ExpansionRequest) => Promise<readonly ExpandedSubQuery[]>;
+
+/**
+ * Reject generator output that cannot be a hypothetical document.
+ *
+ * Empty output has nothing to embed. Output equal to the query is the identity
+ * stub's behaviour arriving by another route — a generator that echoes its input
+ * produces exactly the fake HyDE this path exists to prevent, so it fails rather
+ * than degrading into a vector search wearing HyDE's name.
+ */
+function assertGeneratedDocument(generated: unknown, query: string): string {
+  if (typeof generated !== "string" || generated.trim() === "") {
+    throw new Error(
+      "HyDE generation produced no hypothetical document. An explicit HyDE request fails rather " +
+        "than falling back to embedding the raw query.",
+    );
+  }
+  if (generated.trim() === query.trim()) {
+    throw new Error(
+      "HyDE generation returned the query unchanged, which is not a hypothetical document. " +
+        "Embedding it would report an ordinary vector search as HyDE.",
+    );
+  }
+  return generated;
+}
 
 // ---------------------------------------------------------------------------
 // Provenance boost
@@ -177,10 +223,15 @@ export interface DispatcherDeps {
    */
   graphTraverse?: (query: GphQuery) => Promise<ScoredHit[]>;
   /**
-   * HyDE generator — injectable; defaults to identity stub for M1.
-   * Replace with an LLM-backed generator to enable full HyDE.
+   * HyDE generator. There is no default: an explicit `hyde` sub-query fails
+   * loudly when this is absent rather than embedding the raw query.
    */
   hydeGenerator?: HydeGenerator;
+  /**
+   * Explicit query-plan generator. Omission never changes a plain query; only a
+   * request carrying the closed expand strategy may call this capability.
+   */
+  queryExpander?: QueryExpander;
   /**
    * Provenance resolver: maps a vault-relative docPath to its curation grade.
    * When absent, no provenance boost is applied.
@@ -229,8 +280,33 @@ async function dispatchOne(
     }
 
     case "hyde": {
-      const generator = deps.hydeGenerator ?? defaultHydeGenerator;
-      const hypoDoc = await withRetry(() => generator(sub.query), cancel);
+      let hypoDoc: string;
+      if (sub.hypotheticalDocument === true) {
+        // Expansion produced this text in the same generation call that produced
+        // the typed plan. qmd embeds expanded vec/hyde lines directly; generating
+        // it a second time both doubles latency and can turn valid text into an
+        // identity echo.
+        if (sub.query.trim() === "") {
+          throw new Error("Expanded HyDE produced an empty hypothetical document.");
+        }
+        hypoDoc = sub.query;
+      } else {
+        const generator = deps.hydeGenerator;
+        if (generator === undefined) {
+          // User-authored explicit HyDE still needs two capabilities: generate the
+          // hypothetical document, then embed it.
+          throw new Error(
+            "Explicit HyDE retrieval requires a generation model to write the hypothetical " +
+              `document (set ${GENERATE_PROVIDER_ENV} and ${GENERATE_MODEL_ENV}) and an embedding ` +
+              `model to embed it (set ${EMBED_PROVIDER_ENV} and ${EMBED_MODEL_ENV}). Declare them in ` +
+              "`.oms/models.json`, or install them with `oms setup`.",
+          );
+        }
+        hypoDoc = assertGeneratedDocument(
+          await withRetry(() => generator(sub.query), cancel),
+          sub.query,
+        );
+      }
       const vec = await withRetry(() => embedQuery(deps.embed, hypoDoc), cancel);
       assertFiniteVector(vec, deps.embed.dimensions);
       return withRetry(

@@ -12,9 +12,9 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
     name: "setup",
     line: "  setup    Adopt an existing vault into the Oh My Second Brain convention.",
     detailLines: [
-      "             --embedding-default       Install the pinned local embedding model (EmbeddingGemma-300M, 768d).",
-      "             --embedding-descriptor <path>  Install an operator-supplied model descriptor instead.",
-      "             --embedding-no-default    Waive model installation; vector search stays unavailable.",
+      "             --models-default       Install the pinned EmbeddingGemma model set.",
+      "             --models-descriptor <path>  Install an operator-supplied model-set descriptor instead.",
+      "             --models-no-default    Waive model installation; lexical search remains available.",
     ],
   },
   { name: "install", line: "  install  Install Oh My Second Brain host adapters and MCP registration." },
@@ -81,7 +81,7 @@ oh-my-second-brain — Oh My Second Brain convention layer for Obsidian vaults
 
 Usage:
   oh-my-second-brain setup [--vault <path>] [--yes] [--suggest-fields] [--install-claude]
-                           [--embedding-default | --embedding-descriptor <path> | --embedding-no-default]
+                           [--models-default | --models-descriptor <path> | --models-no-default]
   oh-my-second-brain install [--vault <path>] [--runtime <${runtime}>] [--dry-run] [--execute] [--yes] [--json]
   oh-my-second-brain uninstall [--runtime <all|${registry.hosts.map((host) => host.runtime).join("|")}>] [--dry-run] [--execute] [--yes] [--json]
   oh-my-second-brain update [--check] [--dry-run] [--yes] [--runtime <${runtime}>] [--vault <path>]
@@ -115,14 +115,13 @@ Options:
   --apply          linkify: rewrite notes in place; must be combined with --yes.
   --no-convention-note
                   link: skip writing the managed OMS usage block to AGENTS.md.
-  --embedding-default
-                  setup: download and verify the pinned EmbeddingGemma-300M model into the
-                  user-level cache, then select it for \`oms embed\` and vector search without
-                  requiring OMS_EMBEDDING_PROVIDER / OMS_EMBEDDING_MODEL.
-  --embedding-descriptor <path>
-                  setup: install an operator-supplied model descriptor (SHA-256 verified).
-  --embedding-no-default
-                  setup: explicitly install no model; lexical search still works.
+  --models-default
+                  setup: download and SHA-256 verify the pinned immutable EmbeddingGemma model
+                  into the user cache, then select it for \`oms embed\` and vector search.
+  --models-descriptor <path>
+                  setup: install an operator-supplied, SHA-256-verified model-set descriptor.
+  --models-no-default
+                  setup: explicitly install no default model set; lexical search still works.
 `;
 }
 

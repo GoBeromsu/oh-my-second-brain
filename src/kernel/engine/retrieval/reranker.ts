@@ -43,6 +43,13 @@ export interface Reranker {
   ): Promise<ScoredHit[]>;
 }
 
+/** A reranker whose owner can release its resources. */
+export interface DisposableReranker extends Reranker {
+  dispose(): Promise<void>;
+}
+
+type OptionallyDisposableReranker = Reranker & Partial<DisposableReranker>;
+
 /**
  * Narrow seam around node-llama-cpp used by the lazy implementation.
  *
@@ -254,21 +261,121 @@ export function createLlamaReranker(options: LlamaRerankerOptions): LlamaReranke
 }
 
 /**
- * Passthrough (no-op) reranker — returns hits unchanged.
+ * Lazy owner for a reranker assembled from a factory.
  *
- * Preserves the RRF-fused order and scores. Use this when no reranker model
- * is available or when reranking overhead is not desired.
+ * Construction starts only for a non-empty, non-cancelled request. The owner
+ * retains the factory result for its lifetime and releases it after all
+ * admitted reranks have completed.
  */
-export class PassthroughReranker implements Reranker {
-  async rerank(
-    _query: string,
+class LazyOwnedReranker implements DisposableReranker {
+  private readonly factory: () => Reranker | Promise<Reranker>;
+  private inner: Reranker | null = null;
+  private constructionPromise: Promise<Reranker> | null = null;
+  private activeCalls = 0;
+  private activeDone: Promise<void> | null = null;
+  private resolveActiveDone: (() => void) | null = null;
+  private disposed = false;
+  private disposePromise: Promise<void> | null = null;
+
+  constructor(factory: () => Reranker | Promise<Reranker>) {
+    this.factory = factory;
+  }
+
+  private ensureInner(): Promise<Reranker> {
+    if (this.inner !== null) return Promise.resolve(this.inner);
+    if (this.constructionPromise !== null) return this.constructionPromise;
+
+    this.constructionPromise = Promise.resolve()
+      .then(this.factory)
+      .then((inner) => {
+        this.inner = inner;
+        return inner;
+      });
+    return this.constructionPromise;
+  }
+
+  private admitCall(): void {
+    this.activeCalls += 1;
+    if (this.activeCalls === 1) {
+      this.activeDone = new Promise<void>((resolve) => {
+        this.resolveActiveDone = resolve;
+      });
+    }
+  }
+
+  private finishCall(): void {
+    this.activeCalls -= 1;
+    if (this.activeCalls === 0) {
+      this.resolveActiveDone?.();
+      this.resolveActiveDone = null;
+      this.activeDone = null;
+    }
+  }
+
+  rerank(
+    query: string,
     hits: ScoredHit[],
     cancel?: { readonly cancelled: boolean },
   ): Promise<ScoredHit[]> {
-    if (cancel?.cancelled) throw new Error("Retrieval cancelled");
-    return hits;
+    if (hits.length === 0) return Promise.resolve([]);
+    if (this.disposed) return Promise.reject(new Error("Reranker has been disposed."));
+    if (cancel?.cancelled) return Promise.reject(new Error("Retrieval cancelled"));
+
+    this.admitCall();
+    return this.ensureInner()
+      .then((inner) => {
+        if (cancel?.cancelled) throw new Error("Retrieval cancelled");
+        return inner.rerank(query, hits, cancel);
+      })
+      .finally(() => {
+        this.finishCall();
+      });
+  }
+
+  dispose(): Promise<void> {
+    if (this.disposePromise !== null) return this.disposePromise;
+    this.disposed = true;
+    this.disposePromise = this.disposeOwned();
+    return this.disposePromise;
+  }
+
+  private async disposeOwned(): Promise<void> {
+    let constructionFailed = false;
+    let constructionError: unknown;
+    if (this.constructionPromise !== null) {
+      try {
+        await this.constructionPromise;
+      } catch (error) {
+        constructionFailed = true;
+        constructionError = error;
+      }
+    }
+    if (this.activeDone !== null) await this.activeDone;
+
+    const inner = this.inner as OptionallyDisposableReranker | null;
+    await inner?.dispose?.();
+
+    if (constructionFailed) throw constructionError;
   }
 }
 
-/** Shared singleton passthrough instance — safe to reuse across calls. */
-export const passthroughReranker: Reranker = new PassthroughReranker();
+/**
+ * Create an assembly-owned reranker that initializes its factory product on
+ * the first non-empty rerank request.
+ */
+export function createLazyOwnedReranker(
+  factory: () => Reranker | Promise<Reranker>,
+): DisposableReranker {
+  return new LazyOwnedReranker(factory);
+}
+
+// A passthrough reranker deliberately does NOT live here.
+//
+// It used to, exported as the "default no-op reranker", which made a fake
+// capability reachable as a real one: the MCP facade treats any defined reranker
+// as available, so injecting a passthrough made an explicit `rerank: true` request
+// report success while returning the unchanged RRF order. Reranking is opt-in
+// (ADR-011) and an unavailable capability must fail loudly (ADR-007), so the
+// correct production state is an absent reranker, not an inert one.
+//
+// Tests that need an inert `Reranker` import it from `./passthrough.test-helper.js`.

@@ -1,16 +1,23 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, rm, cp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { parse as yamlParse } from "yaml";
-import { buildClaudeInstallPlan, runSetup, runDoctor, type SetupPrompt } from "./oms.js";
+import {
+  buildClaudeInstallPlan,
+  runSetup,
+  runDoctor,
+  type SetupPrompt,
+} from "./oms.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../..");
 const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
+const gitIt = spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0 ? it : it.skip;
 
 let tmpVault: string;
 
@@ -81,64 +88,172 @@ describe("runSetup --yes E2E", () => {
     await rm(vault, { recursive: true, force: true });
   });
 
-  it("acquires a canonical descriptor outside the vault and accepts an explicit no-default waiver", async () => {
+  gitIt("ignores only the engine store and its SQLite sidecars from the nested .oms file", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-test-engine-store-ignore-"));
+    try {
+      await writeFile(path.join(vault, ".gitignore"), "user-root-rule\n", "utf-8");
+      const init = spawnSync("git", ["init"], { cwd: vault, encoding: "utf-8" });
+      expect(init.status).toBe(0);
+
+      await runSetup({ vault, yes: true });
+      await Promise.all([
+        writeFile(path.join(vault, ".oms", "engine-store.sqlite"), "", "utf-8"),
+        writeFile(path.join(vault, ".oms", "engine-store.sqlite-wal"), "", "utf-8"),
+        writeFile(path.join(vault, ".oms", "engine-store.sqlite-shm"), "", "utf-8"),
+        writeFile(path.join(vault, ".oms", "other.sqlite"), "", "utf-8"),
+      ]);
+
+      const ignored = spawnSync(
+        "git",
+        [
+          "check-ignore",
+          "-v",
+          "--",
+          ".oms/engine-store.sqlite",
+          ".oms/engine-store.sqlite-wal",
+          ".oms/engine-store.sqlite-shm",
+        ],
+        { cwd: vault, encoding: "utf-8" },
+      );
+      expect(ignored.status).toBe(0);
+      expect(ignored.stdout).toContain(".oms/.gitignore");
+      expect(ignored.stdout).toContain("/engine-store.sqlite*");
+
+      const other = spawnSync("git", ["check-ignore", "-q", "--", ".oms/other.sqlite"], {
+        cwd: vault,
+        encoding: "utf-8",
+      });
+      expect(other.status).toBe(1);
+      await expect(readFile(path.join(vault, ".gitignore"), "utf-8")).resolves.toBe("user-root-rule\n");
+    } finally {
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("installs a strict three-capability model set and writes only its portable vault config", async () => {
     const vault = await mkdtemp(path.join(tmpdir(), "oms-test-model-"));
     const cacheDir = await mkdtemp(path.join(tmpdir(), "oms-test-model-cache-"));
     const bytes = new TextEncoder().encode("verified model bytes");
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       await runSetup({
         vault,
         yes: true,
-        embeddingCacheDir: cacheDir,
-        embeddingDescriptor: {
-          provider: "gguf",
-          model: "descriptor-model",
-          dimensions: 384,
-          context: 1024,
-          mrlDim: 384,
-          normalization: "l2",
-          prefixScheme: "none",
-          url: "https://models.invalid/descriptor.gguf",
-          sha256,
+        modelCacheDir: cacheDir,
+        modelSetManifest: {
+          schemaVersion: 1,
+          embed: {
+            provider: "gguf", model: "embed.gguf", revision: "embed-v1", sha256,
+            promptScheme: "embeddinggemma-v1", url: "https://models.invalid/embed.gguf",
+            filename: "embed.gguf", dimensions: 384, contextLength: 1024, mrlDim: 384, normalization: "l2",
+          },
+          rerank: {
+            provider: "gguf", model: "rerank.gguf", revision: "rerank-v1", sha256,
+            url: "https://models.invalid/rerank.gguf", filename: "rerank.gguf",
+          },
+          generate: {
+            provider: "gguf", model: "generate.gguf", revision: "generate-v1", sha256,
+            promptScheme: "qmd-query-expansion-v2.8.3",
+            url: "https://models.invalid/generate.gguf", filename: "generate.gguf",
+          },
         },
-        embeddingFetchImpl: async () => new Response(bytes),
+        modelFetchImpl: async () => new Response(bytes),
       });
+      const output = log.mock.calls.flat().join("\n");
+      log.mockRestore();
       const installed = JSON.parse(
-        await readFile(path.join(cacheDir, "default-model.json"), "utf-8"),
+        await readFile(path.join(cacheDir, "installed-models.json"), "utf-8"),
       ) as Record<string, unknown>;
-      expect(installed).toMatchObject({
-        provider: "gguf",
-        model: "descriptor-model",
-        dimensions: 384,
-        context: 1024,
-        mrlDim: 384,
-        normalization: "l2",
-        prefixScheme: "none",
-        sha256,
-      });
-      expect(String(installed.path)).not.toContain(path.resolve(vault));
-      await expect(
-        readFile(String(installed.path), "utf-8"),
-      ).resolves.toBe("verified model bytes");
-
-      const waivedVault = await mkdtemp(path.join(tmpdir(), "oms-test-no-default-"));
-      try {
-        await runSetup({
-          vault: waivedVault,
-          yes: true,
-          embeddingCacheDir: path.join(waivedVault, "cache"),
-          embeddingNoDefault: true,
-        });
-        await expect(
-          readFile(path.join(waivedVault, "cache", "default-model.json"), "utf-8"),
-        ).rejects.toThrow();
-      } finally {
-        await rm(waivedVault, { recursive: true, force: true });
-      }
+      expect(installed["artifacts"]).toHaveLength(3);
+      await expect(readFile(path.join(vault, ".oms", "models.json"), "utf-8")).resolves.toBe(
+        `${JSON.stringify({
+          schemaVersion: 1,
+          embed: { provider: "gguf", model: "embed.gguf", revision: "embed-v1", sha256, promptScheme: "embeddinggemma-v1" },
+          rerank: { provider: "gguf", model: "rerank.gguf", revision: "rerank-v1", sha256 },
+          generate: { provider: "gguf", model: "generate.gguf", revision: "generate-v1", sha256, promptScheme: "qmd-query-expansion-v2.8.3" },
+        }, null, 2)}\n`,
+      );
+      expect(JSON.stringify(installed)).not.toContain(path.resolve(vault));
+      expect(output).toContain("Model: embed gguf/embed.gguf@embed-v1");
+      expect(output).toContain("Model: rerank gguf/rerank.gguf@rerank-v1");
+      expect(output).toContain("Model: generate gguf/generate.gguf@generate-v1");
+      expect(output).toContain("Written:  .oms/models.json");
+      expect(output).not.toContain(cacheDir);
+      expect(output).not.toContain("https://");
     } finally {
       await rm(vault, { recursive: true, force: true });
       await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fetch or write model state during a dry-run", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-test-model-dry-run-"));
+    const cacheDir = path.join(vault, "model-cache");
+    let fetches = 0;
+    const manifest = {
+      schemaVersion: 1,
+      embed: {
+        provider: "gguf", model: "embed.gguf", revision: "embed-v1", sha256: "a".repeat(64),
+        promptScheme: "embeddinggemma-v1", url: "https://models.invalid/embed.gguf",
+        dimensions: 384, contextLength: 1024, mrlDim: 384, normalization: "l2",
+      },
+    };
+    try {
+      await runSetup({
+        vault, yes: true, dryRun: true, modelCacheDir: cacheDir, modelSetManifest: manifest,
+        modelFetchImpl: async () => { fetches += 1; return new Response("unexpected"); },
+      });
+      expect(fetches).toBe(0);
+      await expect(readFile(path.join(vault, ".oms", "models.json"), "utf-8")).rejects.toThrow();
+      await expect(readFile(path.join(cacheDir, "installed-models.json"), "utf-8")).rejects.toThrow();
+    } finally {
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves existing models config when the explicit no-default waiver is used", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-test-no-default-"));
+    const existing = "{\"user\":\"owned\"}\n";
+    try {
+      await mkdir(path.join(vault, ".oms"), { recursive: true });
+      await writeFile(path.join(vault, ".oms", "models.json"), existing, "utf-8");
+      await runSetup({ vault, yes: true, modelsNoDefault: true });
+      await expect(readFile(path.join(vault, ".oms", "models.json"), "utf-8")).resolves.toBe(existing);
+    } finally {
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects strict legacy manifest fields before setup writes files", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-test-model-legacy-"));
+    const manifest = {
+      schemaVersion: 1,
+      embed: {
+        provider: "gguf", model: "descriptor-model", revision: "test-revision", dimensions: 384,
+        context: 1024, mrlDim: 384, normalization: "l2", promptScheme: "embeddinggemma-v1",
+        url: "https://models.invalid/descriptor.gguf", sha256: "a".repeat(64),
+      },
+    };
+    try {
+      await expect(
+        runSetup({ vault, yes: true, modelSetManifest: manifest }),
+      ).rejects.toThrow('Invalid installed-models.json: manifest.embed contains unknown key "context".');
+      await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf-8")).rejects.toThrow();
+    } finally {
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed model manifests before setup writes files", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-test-model-malformed-"));
+    try {
+      await expect(runSetup({ vault, yes: true, modelSetManifest: "{not json" })).rejects.toThrow(
+        "Invalid installed-models.json: acquisition manifest is not valid JSON.",
+      );
+      await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf-8")).rejects.toThrow();
+    } finally {
+      await rm(vault, { recursive: true, force: true });
     }
   });
 

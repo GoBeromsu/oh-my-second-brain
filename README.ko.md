@@ -97,27 +97,30 @@ oms hook       볼트 가드 훅 (Claude Code pre/post tool-use)
 
 - **Contract (기계 검증)** — `taxonomy.yaml`(폴더 → intent → concept)와 `concepts/*.yaml`(노트 타입별 프론트매터 선언). `vault-lint`와 `oms_validate_contract`가 강제한다.
 - **Governance (사람 의도)** — `governance/`의 ADR과 규칙. 기계가 파싱하지 않는다.
-- `.oms/cache/`(파생 그래프/임베딩 아티팩트)는 gitignore된다.
+- `.oms/cache/`에는 파생 그래프/임베딩 아티팩트가 들어간다. 정식 파생 SQLite 저장소는 `.oms/engine-store.sqlite`이며, 프로덕션 기본값은 이 커널 소유 단일 경로를 사용한다.
+- `setup`은 `/engine-store.sqlite*` 항목으로 `.oms/.gitignore`를 멱등적으로 관리하면서 기존 항목과 줄 끝을 보존한다. 이는 저장소 DB와 WAL/SHM 사이드카만 무시하며 `.oms/` 전체를 무시하지 않는다. dry-run을 포함한 setup 영수증은 이 파일을 작성했는지 또는 작성할지를 알린다.
 
-`setup`은 `.oms/taxonomy.yaml`을 작성하고 기존 `.oms/concepts/`를 보존하며, 노트는 절대 수정하지 않는다.
+`setup`은 `.oms/taxonomy.yaml`을 작성하고 기존 `.oms/concepts/`를 보존하며, 노트는 절대 수정하지 않는다. 저장소 마이그레이션, 이중 읽기, 호환 별칭은 없으므로 기존 파생 저장소를 다시 만들어야 하면 `oms embed`를 실행한다.
 
 ## 시맨틱 검색 (선택)
 
-시맨틱 검색에는 실제 임베딩 모델이 필요하다 — 프로덕션 경로에 가짜/해시 폴백은 없다(ADR-007). 가장 간단한 경로는 핀 고정된 로컬 기본 모델이다:
+시맨틱 검색에는 실제로 구성된 모델 아티팩트가 필요하다 — 프로덕션 경로에 가짜/해시 폴백은 없다(ADR-007). 가장 간단한 경로는 핀 고정된 로컬 기본 모델이다:
 
 ```bash
-oms setup --vault /path/to/vault --yes --embedding-default
+oms setup --vault /path/to/vault --yes --models-default
 oms embed  --vault /path/to/vault
 oms semantic vsearch "무엇을 찾아야 하나?" --vault /path/to/vault
 ```
 
-`--embedding-default`는 EmbeddingGemma-300M(약 318 MB)을 내려받아 핀 고정된 SHA-256으로 검증한 뒤, 볼트가 아니라 사용자 캐시 디렉터리에 설치한다. `node-llama-cpp`로 로컬 실행되므로 API 키가 필요 없고, 모델 원본 768차원을 폴딩 없이 그대로 사용한다. 이후 `oms embed`와 벡터 검색은 환경변수 없이 동작한다.
+`--models-default`는 편의용으로 핀 고정된 EmbeddingGemma-300M 기본 모델(약 318 MB)을 내려받아 불변 revision과 SHA-256으로 검증한 뒤, 볼트가 아니라 사용자 캐시 디렉터리에 설치한다. `node-llama-cpp`로 로컬 실행되므로 API 키가 필요 없고, 모델 원본 768차원을 폴딩 없이 그대로 사용한다. 이후 `oms embed`와 벡터 검색은 환경변수 없이 동작한다.
 
-의존하기 전에 알아둘 점이 하나 있다. 이 모델과 프롬프트 형식은 [qmd](https://github.com/tobi/qmd)가 기본으로 쓰는 것과 동일하지만, 이 프로젝트의 자체 검색 하네스에서 측정된 적은 한 번도 없다. 여기서의 랭킹 품질은 대안과의 측정 비교가 아니라 그 동일성에 근거한다. 그 이유와, 해당 측정이 단순히 '보류 중'이 아닌 이유는 [결정 기록](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/measurements/model-default-deferral.md)에 적혀 있다.
+`oms setup --models-descriptor <path>`는 사용자 지정 SHA-256 검증 모델 세트를 설치한다. 이 descriptor는 Qwen3 임베딩 모델과 선택적 rerank/generate capability를 제공할 수 있다. setup은 portable한 `.oms/models.json` schema version 1을 작성한다. 여기에는 필수 `embed`와 선택 `rerank`/`generate` 선택 항목의 provider, model, revision, SHA-256, 적용되는 prompt scheme만 들어간다. 절대 경로를 포함한 아티팩트 경로, 다운로드 URL, 가중치, 설치된 아티팩트 영수증은 사용자 캐시에 남으며 볼트 설정에는 들어가지 않는다.
 
-직접 고른 모델을 쓰려면 `OMS_EMBEDDING_PROVIDER`와 `OMS_EMBEDDING_MODEL`을 함께 지정한다(`gguf`에 로컬 GGUF 경로, 또는 `upstage`에 모델 id와 `UPSTAGE_API_KEY`). 둘 중 하나만 지정하면 두 변수 이름을 모두 알려주며 실패한다. 조용한 폴백은 없다.
+capability 해석 순서는 엄격하다: request, 완전한 환경변수 쌍, 볼트 설정, setup 기본값, unavailable 순이다. 환경변수 쌍은 `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL`, `OMS_RERANK_PROVIDER` + `OMS_RERANK_MODEL`, `OMS_GENERATE_PROVIDER` + `OMS_GENERATE_MODEL`이다. 환경변수의 model 값은 임의의 로컬 경로가 아니라 검증된 설치 아티팩트를 식별해야 한다. 반쪽짜리 쌍 또는 더 높은 우선순위의 잘못된 소스는 필요한 조치를 알리며 실패하고, 폴백하지 않는다.
 
-모델이 없어도 어휘 검색, 그래프 기반 검색, 컨벤션 검증은 그대로 동작한다. 벡터와 HyDE 요청만 거부되며, 그때 어떤 변수를 설정해야 하는지 알려준다.
+Qwen3 임베딩은 원본 문서 텍스트를 사용하고, 제목이 있으면 `title\ntext`를 사용한다. 쿼리는 정확히 `Instruct: Retrieve relevant documents for the given query\nQuery: <query>` 형식을 사용한다. EmbeddingGemma는 별도의 기존 프롬프트 형식을 유지한다. reranking은 계속 명시적 opt-in이다. 생략하거나 `false`이면 reranker를 불러오지 않고, opt-in 요청에서는 구성된 reranker를 지연 해석하며 capability가 없으면 명확히 실패한다.
+
+일반 `oms semantic query`와 `oms semantic search`는 lexical-only이므로 모델 없는 어휘 검색도 계속 가능하다. `--vec`와 `vsearch`는 embed capability를 요구한다. `--hyde`는 두 capability를 요구한다 — 가설 문서를 작성할 generate 모델과 그것을 임베딩할 embed 모델이다. 원본 질의를 그대로 임베딩하는 폴백은 없다. 일반 벡터 검색을 HyDE 이름으로 보고하는 것은 실행된 내용을 잘못 알리는 일이기 때문이다. 사용할 수 없는 capability는 각자의 구성 방법을 알리며, 명시적인 rerank 요청도 rerank remedy를 알린다. 벡터 마이그레이션은 없다. 모델 identity, prompt scheme, revision, checksum을 바꾸면 벡터를 삭제하고 `oms embed`로 다시 빌드해야 한다.
 
 ## 개발
 

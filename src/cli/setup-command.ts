@@ -1,7 +1,6 @@
 import { createInterface } from "node:readline/promises";
-import path from "node:path";
-import type { FolderBinding, OntologyField, OntologyLens } from "../kernel/ontology/types.js";
 import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
+import type { FolderBinding, OntologyField, OntologyLens } from "../kernel/ontology/types.js";
 import { parseLensDefinitions } from "../kernel/setup/axis.js";
 import {
   applySetup,
@@ -12,43 +11,19 @@ import {
 } from "../kernel/setup/service.js";
 import { isFieldType } from "../kernel/setup/documents.js";
 import { buildClaudeInstallPlan, printClaudeInstallPlan } from "./claude-install-plan.js";
-import { acquireEmbeddingModel } from "../kernel/engine/embed/model.js";
-import type { EmbeddingModelDescriptor } from "../kernel/engine/embed/model.js";
+import {
+  acquireModelSet,
+  modelsConfigFromAcquisitionManifest,
+  parseModelSetAcquisitionManifest,
+  type ModelSetAcquisitionManifest,
+} from "../kernel/engine/embed/model.js";
+import type { ModelsConfigV1 } from "../kernel/engine/embed/config.js";
 
 const bundledAssets = resolveBundledAssetPaths();
 
 export interface SetupPrompt {
   question(query: string): Promise<string>;
   close(): void;
-}
-
-export type SetupEmbeddingDescriptor = EmbeddingModelDescriptor & {
-  readonly url: string;
-  readonly sha256: string;
-};
-
-function validateSetupEmbeddingDescriptor(descriptor: SetupEmbeddingDescriptor): void {
-  const context = descriptor.context ?? descriptor.contextLength ?? descriptor.contextTokens;
-  const missing =
-    descriptor.dimensions === undefined ||
-    context === undefined ||
-    descriptor.mrlDim === undefined ||
-    !descriptor.normalization?.trim() ||
-    !descriptor.prefixScheme?.trim();
-  if (missing) {
-    throw new Error(
-      "Setup embeddingDescriptor is incomplete. dimensions/context/mrlDim/normalization/prefixScheme are required.",
-    );
-  }
-  if (!Number.isInteger(descriptor.dimensions) || descriptor.dimensions <= 0) {
-    throw new Error("Setup embeddingDescriptor dimensions must be a positive integer.");
-  }
-  if (!Number.isInteger(context) || context <= 0) {
-    throw new Error("Setup embeddingDescriptor context must be a positive integer.");
-  }
-  if (!Number.isInteger(descriptor.mrlDim) || descriptor.mrlDim < 0) {
-    throw new Error("Setup embeddingDescriptor mrlDim must be a non-negative integer.");
-  }
 }
 
 export async function runSetup(opts: {
@@ -58,17 +33,14 @@ export async function runSetup(opts: {
   suggestFields?: boolean;
   dryRun?: boolean;
   prompt?: SetupPrompt;
-  /**
-   * Optional canonical model descriptor. Setup verifies and caches the model
-   * outside the vault before writing convention files.
-   */
-  embeddingDescriptor?: SetupEmbeddingDescriptor | null;
+  /** Strict setup acquisition manifest for one or more model capabilities. */
+  modelSetManifest?: ModelSetAcquisitionManifest | unknown;
   /** User-level model cache override, primarily for setup automation/tests. */
-  embeddingCacheDir?: string;
-  /** Explicitly waive installing a default embedding model. */
-  embeddingNoDefault?: boolean;
+  modelCacheDir?: string;
+  /** Explicitly waive installing a default model set and preserve vault config. */
+  modelsNoDefault?: boolean;
   /** Fetch seam for setup tests; production uses global fetch. */
-  embeddingFetchImpl?: typeof fetch;
+  modelFetchImpl?: typeof fetch;
 }): Promise<void> {
   const {
     vault,
@@ -76,27 +48,17 @@ export async function runSetup(opts: {
     installClaude = false,
     suggestFields = false,
     dryRun = false,
-    embeddingDescriptor,
-    embeddingCacheDir,
-    embeddingNoDefault,
-    embeddingFetchImpl,
+    modelSetManifest,
+    modelCacheDir,
+    modelsNoDefault,
+    modelFetchImpl,
   } = opts;
-  const hasEmbeddingDescriptor = embeddingDescriptor !== undefined && embeddingDescriptor !== null;
-  const noDefaultWaived = embeddingNoDefault === true || embeddingDescriptor === null;
-  const hasEmbeddingOptions =
-    embeddingDescriptor !== undefined ||
-    embeddingCacheDir !== undefined ||
-    embeddingNoDefault !== undefined ||
-    embeddingFetchImpl !== undefined;
-  if (hasEmbeddingDescriptor && embeddingNoDefault === true) {
-    throw new Error("Setup embeddingDescriptor and embeddingNoDefault are mutually exclusive.");
+  if (modelSetManifest !== undefined && modelsNoDefault === true) {
+    throw new Error("Setup modelSetManifest and modelsNoDefault are mutually exclusive.");
   }
-  if (hasEmbeddingDescriptor) validateSetupEmbeddingDescriptor(embeddingDescriptor);
-  if (hasEmbeddingOptions && !hasEmbeddingDescriptor && !noDefaultWaived) {
-    throw new Error(
-      "Setup requires an embeddingDescriptor or an explicit embeddingNoDefault:true waiver.",
-    );
-  }
+  const manifest = modelSetManifest === undefined
+    ? undefined
+    : parseModelSetAcquisitionManifest(modelSetManifest);
   const nonInteractive = yes || process.env["OMS_NON_INTERACTIVE"] === "1";
   const state = await inspectSetup({ vault, ontologyDir: bundledAssets.ontologyDir });
   let decision;
@@ -159,25 +121,37 @@ export async function runSetup(opts: {
     decision = decideSetup(state, { folderBindings, additionalFieldsByConcept: interactiveFieldsByConcept, additionalLensesByConcept: interactiveLensesByConcept });
   }
 
-  let acquiredModelPath: string | undefined;
-  if (!dryRun && hasEmbeddingDescriptor) {
-    const acquired = await acquireEmbeddingModel({
+  let modelsConfig: ModelsConfigV1 | undefined;
+  if (dryRun && manifest !== undefined) {
+    modelsConfig = modelsConfigFromAcquisitionManifest(manifest);
+  } else if (manifest !== undefined) {
+    const acquired = await acquireModelSet({
       vault,
-      cacheDir: embeddingCacheDir,
-      descriptor: embeddingDescriptor,
-      fetchImpl: embeddingFetchImpl,
+      cacheDir: modelCacheDir,
+      manifest,
+      fetchImpl: modelFetchImpl,
     });
-    acquiredModelPath = acquired.modelPath;
+    modelsConfig = acquired.config;
   }
-  const { copiedFiles, copyError } = await applySetup(decision, { dryRun });
+  const { copiedFiles, copyError, engineStoreGitignoreUpdated, modelsConfigUpdated } = await applySetup(
+    decision,
+    { dryRun, modelsConfig },
+  );
   if (copyError !== undefined) console.warn("[oms] Could not copy concept files:", copyError);
   console.log(`\nOh My Second Brain setup ${dryRun ? "preview complete" : "complete"}.`);
-  console.log(`  Vault:    ${vault}`);
-  console.log(`  ${dryRun ? "Would write" : "Written"}:  ${path.join(state.omsDir, "taxonomy.yaml")}`);
+  console.log("  Vault:    configured");
+  console.log(`  ${dryRun ? "Would write" : "Written"}:  .oms/taxonomy.yaml`);
+  console.log(`  ${dryRun ? "Would write" : engineStoreGitignoreUpdated ? "Written" : "Unchanged"}:  .oms/.gitignore`);
+  console.log(`  ${dryRun && modelsConfigUpdated ? "Would write" : modelsConfigUpdated ? "Written" : "Unchanged"}:  .oms/models.json`);
   console.log(`  Concepts: ${dryRun ? decision.bundledConceptFiles.join(", ") || "(none)" : copiedFiles.join(", ") || "(none)"}`);
   console.log(`  Folders:  ${Object.keys(decision.taxonomy.folders).join(", ") || "(none)"}`);
-  if (acquiredModelPath !== undefined) console.log(`  Embedding model: ${acquiredModelPath}`);
-  if (noDefaultWaived) console.log("  Embedding model: no default (explicit waiver)");
+  if (modelsConfig !== undefined) {
+    for (const capability of ["embed", "rerank", "generate"] as const) {
+      const model = modelsConfig[capability];
+      if (model !== undefined) console.log(`  Model: ${capability} ${model.provider}/${model.model}@${model.revision}`);
+    }
+  }
+  if (modelsNoDefault) console.log("  Models: no default (explicit waiver)");
   console.log(`\nRun "oh-my-second-brain doctor" to validate existing notes.\n`);
   if (installClaude) {
     printClaudeInstallPlan(buildClaudeInstallPlan({ vault }));

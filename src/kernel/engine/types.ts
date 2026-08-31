@@ -96,6 +96,13 @@ export interface EmbeddingProvider {
    * it is always safe.
    */
   embed(text: string, title?: string): Promise<Float32Array>;
+  /**
+   * Maximum number of independent embed calls this provider can execute safely.
+   *
+   * Sync uses this to keep every native context busy without ever scheduling two
+   * calls onto the same context. Providers that omit it remain strictly sequential.
+   */
+  readonly maxConcurrency?: number;
   /** Release any native resources held by the provider. */
   dispose(): Promise<void>;
 }
@@ -176,6 +183,12 @@ export interface TypedSubQuery {
   type: "lex" | "vec" | "hyde" | "graph";
   /** The query string (natural language for vec/hyde; keyword for lex; seed path for graph). */
   query: string;
+  /**
+   * Internal expansion provenance: for a `hyde` line emitted by the generation
+   * model, `query` is already a hypothetical document and must be embedded
+   * directly. Public/user-authored HyDE omits this and invokes the generator.
+   */
+  hypotheticalDocument?: true;
 }
 
 /** Final ranked result returned by the retrieval pipeline. */

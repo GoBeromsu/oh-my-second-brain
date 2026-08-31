@@ -104,6 +104,188 @@ describe("McpEngineAdapter — construction", () => {
 // ---------------------------------------------------------------------------
 
 describe("McpEngineAdapter.semanticQuery", () => {
+  it("keeps a plain query lexical-only even when a vector provider is available", async () => {
+    const store = makeStore([LEX_HIT], [VEC_HIT]);
+    const adapter = new McpEngineAdapter(
+      { store, embed: makeEmbed() },
+      "/vault",
+      undefined,
+      undefined,
+      false,
+      false,
+    );
+
+    const result = await adapter.semanticQuery({ query: "test" });
+
+    expect(result.available).toBe(true);
+    expect(store.queryLex).toHaveBeenCalled();
+    expect(store.queryVec).not.toHaveBeenCalled();
+    expect(result.receipt).toMatchObject({
+      requestedStrategy: "plain",
+      usedChannels: ["lex"],
+      generatedSearches: [],
+    });
+  });
+
+  it("executes a validated expansion plan with active taxonomy provenance", async () => {
+    const vault = freshVault();
+    mkdirSync(path.join(vault, ".oms"), { recursive: true });
+    writeFileSync(path.join(vault, ".oms", "taxonomy.yaml"), `
+version: 1
+folders:
+  notes:
+    intent: Permanent project notes
+    concept: note
+  unused:
+    intent: No indexed documents
+    concept: note
+`);
+    // Parallel legacy context must never reach a model prompt.
+    writeFileSync(path.join(vault, "taxonomy.yaml"), `
+folders:
+  notes:
+    intent: Legacy context must not leak
+`);
+    const store = makeEngineStore(["notes/alpha.md", "notes/beta.md", "inbox/raw.md"]);
+    vi.mocked(store.queryLex).mockReturnValue([
+      { docPath: "notes/alpha.md", chunkOrdinal: 0, score: 0.9 },
+    ]);
+    vi.mocked(store.queryVec).mockReturnValue([
+      { docPath: "notes/beta.md", chunkOrdinal: 0, score: 0.8 },
+    ]);
+    const queryExpander = vi.fn().mockResolvedValue([
+      { type: "lex", query: "ataraxia" },
+      { type: "vec", query: "freedom from disturbance" },
+    ]);
+    const adapter = new McpEngineAdapter(
+      { store, embed: makeEmbed(), queryExpander },
+      vault,
+      undefined,
+      undefined,
+      false,
+      false,
+    );
+
+    const result = await adapter.semanticQuery({
+      query: "what is ataraxia",
+      strategy: { kind: "expand", profile: "qmd-v2.8.3" },
+    });
+
+    expect(result.available).toBe(true);
+    expect(queryExpander).toHaveBeenCalledWith({
+      query: "what is ataraxia",
+      context: "- notes: Permanent project notes",
+    });
+    expect(JSON.stringify(queryExpander.mock.calls)).not.toContain("Legacy context must not leak");
+    expect(store.queryLex).toHaveBeenCalledWith("ataraxia", expect.any(Number));
+    expect(store.queryVec).toHaveBeenCalled();
+    expect(result.receipt).toMatchObject({
+      requestedStrategy: "expand",
+      generatedSearches: [
+        { type: "lex", query: "ataraxia" },
+        { type: "vec", query: "freedom from disturbance" },
+      ],
+      taxonomyIntents: [
+        {
+          folder: "notes",
+          intent: "Permanent project notes",
+          source: ".oms/taxonomy.yaml",
+        },
+      ],
+    });
+    expect(result.receipt.warnings).toEqual([
+      'Indexed folder "inbox" has no intent in .oms/taxonomy.yaml.',
+      'Taxonomy folder "unused" has no indexed Markdown files.',
+    ]);
+  });
+
+  it("reports generate-unavailable for expansion without an expander", async () => {
+    const adapter = new McpEngineAdapter(makeDeps([LEX_HIT]), "/vault", undefined, undefined, false, false);
+
+    const result = await adapter.semanticQuery({
+      query: "expand me",
+      strategy: { kind: "expand", profile: "qmd-v2.8.3" },
+    });
+
+    expect(result.available).toBe(false);
+    if (result.available) return;
+    expect(result.reason).toMatch(/OMS_GENERATE_PROVIDER/);
+    expect(result.reason).toMatch(/OMS_GENERATE_MODEL/);
+    expect(result.reason).toMatch(/\.oms\/models\.json/);
+    expect(result.receipt.requestedStrategy).toBe("expand");
+  });
+
+  it("rejects an invalid caller-injected expansion plan before dispatch", async () => {
+    const store = makeStore([LEX_HIT], [VEC_HIT]);
+    const adapter = new McpEngineAdapter(
+      {
+        store,
+        embed: makeEmbed(),
+        queryExpander: vi.fn().mockResolvedValue([
+          { type: "graph", query: "not allowed" },
+        ]) as never,
+      },
+      "/vault",
+      undefined,
+      undefined,
+      false,
+      false,
+    );
+
+    const result = await adapter.semanticQuery({
+      query: "q",
+      strategy: { kind: "expand", profile: "qmd-v2.8.3" },
+    });
+
+    expect(result.available).toBe(false);
+    expect(store.queryLex).not.toHaveBeenCalled();
+    expect(store.queryVec).not.toHaveBeenCalled();
+  });
+
+  it("feeds active taxonomy intent to reranking and records it", async () => {
+    const vault = freshVault();
+    mkdirSync(path.join(vault, ".oms"), { recursive: true });
+    writeFileSync(path.join(vault, ".oms", "taxonomy.yaml"), `
+version: 1
+folders:
+  notes:
+    intent: Permanent project notes
+    concept: note
+`);
+    const store = makeEngineStore(["notes/alpha.md", "notes/beta.md"]);
+    vi.mocked(store.queryLex).mockReturnValue([
+      { docPath: "notes/alpha.md", chunkOrdinal: 0, score: 0.9 },
+    ]);
+    const rerank = vi.fn().mockImplementation(async (_query, hits) => hits);
+    const adapter = new McpEngineAdapter(
+      { store, embed: makeEmbed() },
+      vault,
+      undefined,
+      { rerank },
+      false,
+      false,
+    );
+
+    const result = await adapter.semanticQuery({ query: "ataraxia", rerank: true });
+
+    expect(result.available).toBe(true);
+    expect(rerank).toHaveBeenCalledWith(
+      "ataraxia\n\nVault folder intents:\n- notes: Permanent project notes",
+      expect.any(Array),
+    );
+    expect(result.receipt).toMatchObject({
+      requestedStrategy: "plain",
+      rerankApplied: true,
+      taxonomyIntents: [
+        {
+          folder: "notes",
+          intent: "Permanent project notes",
+          source: ".oms/taxonomy.yaml",
+        },
+      ],
+    });
+  });
+
   it("does not download a model while serving an MCP query", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
@@ -179,7 +361,30 @@ describe("McpEngineAdapter.semanticQuery", () => {
     const result = await adapter.semanticQuery({ query: "test", rerank: true });
 
     expect(result.available).toBe(false);
-    expect(result.reason).toMatch(/configured Reranker/i);
+    // The refusal has to be actionable for the person who hit it, not just for a
+    // programmer reading the source. It previously named only `assembleEngine()`,
+    // which tells a CLI or MCP user nothing they can act on. Assert the whole
+    // remedy: the exact rerank environment pair, the vault contract file, and the
+    // setup command that installs one.
+    const reason = result.available === false ? result.reason : "";
+    expect(reason).toMatch(/OMS_RERANK_PROVIDER/);
+    expect(reason).toMatch(/OMS_RERANK_MODEL/);
+    expect(reason).toMatch(/\.oms\/models\.json/);
+    expect(reason).toMatch(/oms setup --models-descriptor/);
+    // A programmatic caller still learns about injection.
+    expect(reason).toMatch(/assembleEngine\(\)/);
+  });
+
+  it("names the rerank capability, never the embed pair, when reranking is unavailable", async () => {
+    // Guards a plausible regression: reusing the embed guidance would send a user
+    // to install an embedding model that would not enable reranking at all.
+    const adapter = new McpEngineAdapter(makeDeps([LEX_HIT], []), "/vault");
+
+    const result = await adapter.semanticQuery({ query: "test", rerank: true });
+
+    const reason = result.available === false ? result.reason : "";
+    expect(reason).not.toMatch(/OMS_EMBEDDING_PROVIDER/);
+    expect(reason).not.toMatch(/models-default/);
   });
 
   it("returns available=true with empty hits for an empty store", async () => {
@@ -282,7 +487,10 @@ describe("McpEngineAdapter.semanticQuery", () => {
       available: true,
       totalCount: 1,
       intent: "typed axis lookup",
-      receipt: { usedChannels: ["lex"], approximated: true },
+      // A plain query is lexical-only even when a model is installed, so the
+      // axis path executes exactly what was requested instead of dropping an
+      // implicit vector channel and calling the result approximate.
+      receipt: { usedChannels: ["lex"], approximated: false },
     });
     expect(result.facets).toEqual(expect.arrayContaining([
       expect.objectContaining({ axis: "field", key: "rating", value: "9", count: 1 }),
@@ -380,6 +588,116 @@ describe("McpEngineAdapter.semanticStatus", () => {
     expect(result.available).toBe(true);
     if (!result.available) return;
     expect(result.models.embedding).toBe("my-embed-model");
+    expect(result.capabilities).toBeUndefined();
+  });
+
+  it("reports three path-safe model capabilities only when status is requested", async () => {
+    const modelCapabilityStatus = vi.fn(() => ({
+      embed: {
+        capability: "embed" as const,
+        available: true,
+        source: "environment" as const,
+        provider: "gguf",
+        model: "portable-embed",
+        revision: "revision-1",
+        sha256: "a".repeat(64),
+        promptScheme: "query-document",
+        guidance: "Configured by OMS_EMBEDDING_MODEL.",
+      },
+      rerank: {
+        capability: "rerank" as const,
+        available: false,
+        source: "unavailable" as const,
+        guidance: "Configure a reranker to enable reranking.",
+      },
+      generate: {
+        capability: "generate" as const,
+        available: false,
+        source: "unavailable" as const,
+        guidance: "Configure a generator to enable generation.",
+      },
+    }));
+    const store = {
+      ...makeStore(),
+      readEmbeddingIdentity: () => ({ fingerprint: "store-fingerprint" }),
+    };
+    const adapter = new McpEngineAdapter(
+      { store, embed: makeEmbed("/Users/secret/model.gguf") },
+      "/vault",
+      { embeddingModel: "portable-embed", modelCapabilityStatus },
+    );
+
+    expect(modelCapabilityStatus).not.toHaveBeenCalled();
+    await adapter.semanticQuery({ query: "test" });
+    expect(modelCapabilityStatus).not.toHaveBeenCalled();
+    const result = adapter.semanticStatus({});
+
+    expect(modelCapabilityStatus).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      available: true,
+      models: { embedding: "portable-embed" },
+      storeEmbeddingFingerprint: "store-fingerprint",
+    });
+    if (!result.available) return;
+    expect(Object.keys(result.capabilities ?? {})).toEqual(["embed", "rerank", "generate"]);
+    expect(result.capabilities?.embed).toMatchObject({
+      capability: "embed",
+      source: "environment",
+      promptScheme: "query-document",
+      sha256: "a".repeat(64),
+    });
+    expect(JSON.stringify(result)).not.toContain("/Users/secret/model.gguf");
+  });
+
+  it("reports deterministic taxonomy context drift without exposing a second source", () => {
+    const vault = freshVault();
+    mkdirSync(path.join(vault, ".oms"), { recursive: true });
+    writeFileSync(path.join(vault, ".oms", "taxonomy.yaml"), `
+folders:
+  notes:
+    intent: Permanent notes
+    concept: note
+  unused:
+    intent: No indexed files
+    concept: note
+`);
+    const adapter = new McpEngineAdapter(
+      { store: makeEngineStore(["notes/alpha.md", "inbox/raw.md"]), embed: makeEmbed() },
+      vault,
+    );
+
+    const result = adapter.semanticStatus({});
+
+    expect(result).toMatchObject({
+      available: true,
+      taxonomyContext: {
+        matched: [
+          { folder: "notes", intent: "Permanent notes", source: ".oms/taxonomy.yaml" },
+        ],
+        indexedWithoutIntent: ["inbox"],
+        taxonomyWithoutIndexed: ["unused"],
+        warnings: [
+          'Indexed folder "inbox" has no intent in .oms/taxonomy.yaml.',
+          'Taxonomy folder "unused" has no indexed Markdown files.',
+        ],
+      },
+    });
+  });
+
+  it("returns a generic unavailable status when capability resolution throws", () => {
+    const adapter = new McpEngineAdapter(makeDeps(), "/vault", {
+      modelCapabilityStatus: () => {
+        throw new Error("/Users/secret/model.gguf");
+      },
+    });
+
+    const result = adapter.semanticStatus({});
+
+    expect(result).toEqual({
+      available: false,
+      reason: "Model capability resolution is unavailable.",
+    });
+    expect(JSON.stringify(result)).not.toContain("/Users/secret/model.gguf");
   });
 });
 
@@ -408,6 +726,35 @@ describe("McpEngineAdapter.listContexts", () => {
     expect(result.available).toBe(true);
     if (!result.available) return;
     expect(result.contexts).toHaveLength(0);
+  });
+
+  it("lists active taxonomy intents with provenance instead of a parallel store", () => {
+    const vault = freshVault();
+    mkdirSync(path.join(vault, ".oms"), { recursive: true });
+    writeFileSync(path.join(vault, ".oms", "taxonomy.yaml"), `
+folders:
+  notes:
+    intent: Permanent project notes
+    concept: note
+`);
+    const adapter = new McpEngineAdapter(
+      { store: makeEngineStore(["notes/alpha.md"]), embed: makeEmbed() },
+      vault,
+    );
+
+    const result = adapter.listContexts({});
+
+    expect(result).toMatchObject({
+      available: true,
+      contexts: [{
+        collection: "notes",
+        pathPrefix: "notes",
+        context: "Permanent project notes",
+        source: ".oms/taxonomy.yaml",
+      }],
+    });
+    if (!result.available) return;
+    expect(result.contexts[0]?.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
   });
 });
 

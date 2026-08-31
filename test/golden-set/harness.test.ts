@@ -9,6 +9,8 @@ import {
   calculateC040,
   canonicalQrels,
   latencyPercentiles,
+  mrrAt10,
+  mrrAtK,
   ndcgAt10,
   ndcgAtK,
   percentile,
@@ -24,7 +26,11 @@ import {
   validateNoDefaultWaiver,
   validateMeasurementManifest,
 } from "../../scripts/check-measurement-manifest.mjs";
-import { GOLDEN_QRELS, GOLDEN_QUERY_CLASSES } from "./queries.js";
+import {
+  GOLDEN_QRELS,
+  GOLDEN_QUERIES,
+  GOLDEN_QUERY_CLASSES,
+} from "./queries.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -176,6 +182,72 @@ function isolateMeasurementEnv(): void {
     saved = {};
   });
 }
+
+describe("MRR@k", () => {
+  const qrels = { "answer.md": 1 };
+
+  it("returns the reciprocal of the first relevant rank", () => {
+    expect(mrrAt10(["answer.md", "other.md"], qrels)).toBe(1);
+    expect(mrrAt10(["other.md", "answer.md"], qrels)).toBe(0.5);
+    expect(mrrAt10(["a.md", "b.md", "answer.md"], qrels)).toBeCloseTo(1 / 3, 10);
+  });
+
+  it("returns 0 when nothing relevant appears, which is a measurement not a gap", () => {
+    expect(mrrAt10(["a.md", "b.md"], qrels)).toBe(0);
+    expect(mrrAt10([], qrels)).toBe(0);
+  });
+
+  it("scores 0 when the only relevant document falls outside the cutoff", () => {
+    // The reader never sees it, so the run gets no credit for it.
+    expect(mrrAtK(["a.md", "answer.md"], qrels, 1)).toBe(0);
+    expect(mrrAtK(["a.md", "answer.md"], qrels, 2)).toBe(0.5);
+  });
+
+  it("treats relevance as binary because a reciprocal rank cannot express a grade", () => {
+    // Grade 3 at rank 2 and grade 1 at rank 2 are the same observation here;
+    // nDCG is the metric that distinguishes them.
+    expect(mrrAt10(["other.md", "answer.md"], { "answer.md": 3 })).toBe(0.5);
+    expect(mrrAt10(["other.md", "answer.md"], { "answer.md": 1 })).toBe(0.5);
+  });
+
+  it("ignores non-positive grades rather than counting them as hits", () => {
+    expect(mrrAt10(["answer.md"], { "answer.md": 0 })).toBe(0);
+    expect(mrrAt10(["answer.md"], { "answer.md": -1 })).toBe(0);
+    expect(mrrAt10(["answer.md"], {})).toBe(0);
+  });
+
+  it("collapses duplicate paths before ranking, exactly as nDCG does", () => {
+    // A result list that repeats a document must not be able to push the first
+    // real hit further down than the reader would actually see it.
+    expect(mrrAt10(["a.md", "a.md", "answer.md"], qrels)).toBe(0.5);
+    expect(mrrAt10(["A.md", "a.md", "answer.md"], qrels)).toBe(0.5);
+  });
+
+  it("matches document paths case-insensitively on both sides", () => {
+    expect(mrrAt10(["Answer.MD"], qrels)).toBe(1);
+    expect(mrrAt10(["answer.md"], { "ANSWER.MD": 1 })).toBe(1);
+  });
+
+  it("agrees with nDCG about which rank the first hit occupies", () => {
+    // Both metrics must read the same ranking; a disagreement would mean one of
+    // them is de-duplicating differently.
+    const ranked = ["dup.md", "dup.md", "answer.md"];
+    expect(mrrAt10(ranked, qrels)).toBe(0.5);
+    expect(ndcgAt10(ranked, qrels)).toBeCloseTo(1 / Math.log2(3), 10);
+  });
+
+  it("accepts every qrel input shape the harness supports", () => {
+    expect(mrrAt10(["answer.md"], new Map([["answer.md", 1]]))).toBe(1);
+    expect(mrrAt10(["answer.md"], [{ docPath: "answer.md", relevance: 1 }])).toBe(1);
+    expect(mrrAt10([{ docPath: "answer.md", score: 0.9 }], qrels)).toBe(1);
+  });
+
+  it("rejects a cutoff that is not a positive integer", () => {
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(() => mrrAtK(["answer.md"], qrels, bad)).toThrow(/MRR cutoff must be a positive integer/);
+    }
+  });
+});
 
 describe("R2 golden harness measurement core", () => {
   isolateMeasurementEnv();
@@ -489,6 +561,23 @@ describe("R2 golden harness measurement core", () => {
     expect(report.qrelsHash).toBe(qrelsSha256(GOLDEN_QRELS));
   });
 
+  it("uses a frozen in-memory query snapshot instead of rereading the environment", async () => {
+    const previous = process.env.OMS_GOLDEN_QUERIES;
+    process.env.OMS_GOLDEN_QUERIES = "/definitely/missing/queries.json";
+    try {
+      const report = await runHarness({
+        queries: GOLDEN_QUERIES,
+        qrels: GOLDEN_QRELS,
+        qrelsHash: qrelsSha256(GOLDEN_QRELS),
+        files: [],
+      });
+      expect(report.queries).toHaveLength(GOLDEN_QUERIES.length);
+    } finally {
+      if (previous === undefined) delete process.env.OMS_GOLDEN_QUERIES;
+      else process.env.OMS_GOLDEN_QUERIES = previous;
+    }
+  });
+
   it.each(["", " \t "])(
     "treats a %j preregistered qrels hash and empty injected qrels path as unset",
     async (emptyValue) => {
@@ -726,5 +815,54 @@ describe("R2 golden harness measurement core", () => {
     );
     expect(report.pairedBootstrap).toEqual(paired);
     expect(report.bootstrap).toEqual(paired);
+  });
+
+  it("emits MRR@10 per row, per modality, and in aggregate", async () => {
+    // The parity gate requires recall, nDCG *and* MRR for every scope. The metric
+    // existed as a function while the report emitted only the first two, so a run
+    // could not have supplied the evidence the gate asks for.
+    const report = await runHarness();
+    const scored = report.queries.filter((row) => !row.skipped && row.error === undefined);
+    expect(scored.length).toBeGreaterThan(0);
+
+    for (const row of scored) {
+      expect(Number.isFinite(row.mrrAt10)).toBe(true);
+      expect(row.mrrAt10).toBeGreaterThanOrEqual(0);
+      expect(row.mrrAt10).toBeLessThanOrEqual(1);
+    }
+
+    // Per-modality average is the mean over that modality's scored rows.
+    for (const type of ["lex", "vec", "hyde", "graph"] as const) {
+      const rows = scored.filter((row) => row.type === type);
+      const expected = rows.length === 0
+        ? 0
+        : rows.reduce((sum, row) => sum + row.mrrAt10, 0) / rows.length;
+      expect(report.byType[type].mrrAvg).toBeCloseTo(expected, 10);
+    }
+
+    // Aggregate mean covers every scored row, with a seeded interval like nDCG's.
+    const aggregate = scored.reduce((sum, row) => sum + row.mrrAt10, 0) / scored.length;
+    expect(report.metrics.mrrAt10.mean).toBeCloseTo(aggregate, 10);
+    expect(report.metrics.mrrAt10.ci.samples).toBe(report.metrics.ndcgAt10.ci.samples);
+    expect(report.metrics.mrrAt10.ci.ciLow).toBeLessThanOrEqual(report.metrics.mrrAt10.ci.ciHigh);
+  });
+
+  it("keeps MRR and nDCG agreeing about whether anything relevant was retrieved", async () => {
+    // Both derive from the same ranked hits and the same qrels, so they must never
+    // disagree on the zero case: one reporting a hit while the other reports none
+    // would mean the two metrics are reading different rankings.
+    const report = await runHarness();
+    for (const row of report.queries.filter((r) => !r.skipped && r.error === undefined)) {
+      expect(row.mrrAt10 > 0).toBe(row.engineNdcg > 0);
+    }
+  });
+
+  it("reports zero MRR for an uncurated skipped row rather than omitting it", async () => {
+    // Skipped rows stay in `queries` for count-consistency; a missing metric there
+    // would read as undefined rather than as excluded-from-scoring.
+    const report = await runHarness();
+    for (const row of report.queries.filter((r) => r.skipped)) {
+      expect(row.mrrAt10).toBe(0);
+    }
   });
 });

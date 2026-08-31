@@ -4,6 +4,14 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+### Added
+
+- **`oms_search` query operations now advertise the closed expansion strategy.** Callers can request `{ kind: "expand", profile: "qmd-v2.8.3" }`, receive generated-channel and taxonomy provenance in every query receipt, and combine it independently with `rerank: true`. Malformed or conflicting strategies fail before retrieval.
+
+### Changed
+
+- **An explicit `rerank: true` request can now reach a configured, verified lazy reranker through the kernel assembly.** Reranking remains opt-in and default behavior is unchanged; when reranking is requested without that capability, MCP fails loudly rather than silently returning an unreranked result.
+
 ## [0.8.4] - 2026-08-30
 
 ## [0.8.3] - 2026-08-29

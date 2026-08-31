@@ -1,135 +1,53 @@
 # Oh My Second Brain
 
-> A host-agnostic, user-owned convention layer for Obsidian and plain-markdown knowledge vaults.
+Oh My Second Brain (`oms`) makes an existing Obsidian or Markdown vault available to AI hosts without taking ownership of its notes. The vault's own Markdown templates define managed note shape and body; OMS provides safe setup, writing, search, diagnosis, and host integration.
 
-**English** · [한국어](./README.ko.md)
+## Template-first vault model
 
-[![npm](https://img.shields.io/npm/v/oh-my-second-brain)](https://www.npmjs.com/package/oh-my-second-brain)
-![license](https://img.shields.io/npm/l/oh-my-second-brain)
+- Vault-resident Obsidian `.md` templates are the authority for managed note shape and body.
+- Every managed template has a stable `templateId`, independent of its path or content digest.
+- A single BaseContract is inherited by each managed TemplateContract.
+- `.obsidian/types.json` is read-only type authority.
+- `.oms/template-policy.json` defines template semantics, naming, and defaults.
+- `.oms/types.json` is a validated derived projection for writing and search. Do not hand-edit it.
+- Taxonomy supplies placement; folders and wikilinks remain global retrieval axes.
 
-Oh My Second Brain (`oms`) turns an existing Obsidian/markdown vault into an agent-readable knowledge base. It loads your vault's own folder/frontmatter conventions, validates notes against them, builds a local link graph, and exposes all of it to AI coding hosts (Claude Code, Codex, Hermes) through a single MCP server — without locking you into any one host or moving your notes.
+## Setup and template changes
 
-It is **convention-first and user-owned**: your vault stays plain markdown, the ontology lives in a committed `.oms/` folder you control, and nothing is hidden behind a proprietary store.
-
-## How it works
-
-```
-kernel (written once)                     root host surfaces
-  ontology + convention logic                .claude-plugin/  Claude plugin manifest
-  graph + semantic runtime        +          .codex-plugin/   Codex plugin manifest
-  gated note operations                      .mcp.json         Claude MCP registration
-  CLI and MCP entry points                   .mcp.codex.json   Codex MCP registration
-```
-
-- **kernel** is host-agnostic: ontology, validation, graph/semantic logic, and note operations.
-- host-specific assets live at the package root: Claude hooks are in `assets/claude/hooks/`, Codex rules are in `assets/codex/rules/`, and Hermes metadata is `assets/hermes-manifest.json`.
-- the cross-host mechanism is one **MCP server** (`oms mcp`) that every host talks to.
-
-## Requirements
-
-- Node.js 20+
-- `npm` on `PATH`
-- An Obsidian vault, or any folder of markdown notes
-- Optional host CLIs: `claude`, `codex`, `hermes`
-- Optional embedding backend for [semantic search](#semantic-search-optional)
-
-## Install
-
-One-line (uses the published npm package):
+`oms setup` recursively discovers existing templates and proposes a migration. It does not modify notes and ships no bundled defaults. Review the dry run, then repeat the operation with its exact approved digest:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash
+oms setup --vault /path/to/vault --dry-run
+oms setup --vault /path/to/vault --approved-digest <digest>
 ```
 
-Pick hosts and point at a vault:
+Managed-template mutations use the same dry-run, explicit approval, compare-and-swap, and transaction-receipt boundary.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash -s -- --runtime all --vault /path/to/vault
-```
+## Operations
 
-Or via npm:
+Writes resolve a `ResolvedTemplate` and support `create`, `append`, and `update` modes. The verified-target admission check runs before any mutation; successful writes return receipts.
 
-```bash
-npm install -g oh-my-second-brain
-oms install --runtime all --vault /path/to/vault --dry-run   # preview
-oms install --runtime all --vault /path/to/vault --yes       # apply
-```
+Search is lexical and does not depend on the derived projection. It can narrow by managed template, declared field, folder, or link. Managed sources are excluded from ordinary results. Vector behavior is never fabricated: unavailable vector capability is reported rather than simulated.
 
-Full guide: [docs/install.md](./docs/install.md).
+`oms doctor` diagnoses, regenerates projections, and backfills where applicable; repair operations require a verified target. `oms status` is read-only.
 
-## Hosts
+## Hosts, skills, and MCP
 
-| Host | Manifest | Convention file | Sigil | Status |
-|------|----------|-----------------|-------|--------|
-| **claude-code** | `.claude-plugin/plugin.json` | `CLAUDE.md` | `/` | installable |
-| **codex** | `.codex-plugin/plugin.json` | `AGENTS.md` | `$` | native skills + MCP |
-| **hermes** | `assets/hermes-manifest.json` | `SOUL.md` | (MCP/tools) | native skills + MCP |
+OMS is usable independently through the CLI. Installable host surfaces live in [`assets/`](./assets/), including six public skills: `write`, `search`, `link`, `distill`, `status`, and `doctor`.
 
-`oms install` writes the host-native rules/skills and a managed `oms` MCP registration, and is reversible with `oms uninstall`. Per-host details: [docs/install.md](./docs/install.md).
-
-## CLI
-
-```
-oms setup      Adopt an existing vault into the convention (writes .oms/taxonomy.yaml; never edits notes)
-oms install    Install host assets + MCP registration
-oms uninstall  Remove host assets + MCP registration
-oms update     Check/apply a package update, then reconcile host assets
-oms doctor     Validate note frontmatter against the ontology (aggregated by field & concept)
-oms lint       Check vault link health: broken [[wikilinks]] + orphan notes
-oms semantic   Native markdown semantic index / search / get
-oms mcp        Start the stdio MCP server
-oms hook       Vault guard hooks (Claude Code pre/post tool-use)
-```
-
-`oh-my-second-brain` is the canonical command; `oms` is the short alias.
-
-## MCP tools
-
-`oms mcp` exposes exactly five public tools:
+`oms mcp` exposes five public MCP tools:
 
 `oms_write` · `oms_search` · `oms_link` · `oms_status` · `oms_doctor`
 
-`oms_write` is gated by path-safety, vault-confinement, and the kernel-owned concept contract.
+The skills guide host behavior; MCP tools are the transport API. They are distinct public surfaces.
 
-## Vault layout (`.oms/`)
+## Install
 
-`oms setup` adopts your vault into a committed `.oms/` folder with two layers (ADR-006):
-
-- **Contract (machine-validated)** — `taxonomy.yaml` (folder → intent → concept) and `concepts/*.yaml` (per-note-type frontmatter declarations). Enforced by `vault-lint` and `oms_validate_contract`.
-- **Governance (human intent)** — `governance/` ADRs and rules; never machine-parsed.
-- `.oms/cache/` (derived graph/embedding artifacts) is gitignored.
-
-`setup` writes `.oms/taxonomy.yaml`, preserves existing `.oms/concepts/`, and never modifies your notes.
-
-## Semantic search (optional)
-
-Semantic retrieval requires a real embedding model — there is no fake/hash fallback (ADR-007). The quickest path is the pinned local default:
+Node.js 20 or later is required.
 
 ```bash
-oms setup --vault /path/to/vault --yes --embedding-default
-oms embed  --vault /path/to/vault
-oms semantic vsearch "what should I retrieve?" --vault /path/to/vault
+npm install -g oh-my-second-brain
+oms install --runtime all --vault /path/to/vault --yes
 ```
 
-`--embedding-default` downloads EmbeddingGemma-300M (~318 MB), verifies it against a pinned SHA-256, and installs it under your user cache — not in the vault. It runs locally through `node-llama-cpp`, needs no API key, and embeds at the model's full 768 dimensions with no folding. After that, `oms embed` and vector search need no environment variables.
-
-One thing to know before you rely on it: this is the same model and prompt format [qmd](https://github.com/tobi/qmd) resolves by default, but it has never been measured in this project's own retrieval harness. Its ranking quality here rests on that equivalence, not on a measured comparison against alternatives. [The decision record](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/measurements/model-default-deferral.md) explains why, and why the measurement is not merely pending.
-
-To choose your own model instead, set `OMS_EMBEDDING_PROVIDER` + `OMS_EMBEDDING_MODEL` (`gguf` with a local GGUF path, or `upstage` with a model id and `UPSTAGE_API_KEY`). Setting only one of the pair is an error naming both, never a silent fallback.
-
-Without any model, lexical search, graph-based retrieval, and convention validation all still work; only vector and HyDE requests are refused, and they say which variables to set.
-
-## Development
-
-```bash
-npm install
-npm run build
-npm test
-npm run release:check   # lint + build + test + audit + pack + artifact-smoke + plugin validate
-```
-
-Release process: [docs/release.md](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/release.md).
-
-## License
-
-MIT. See [ACKNOWLEDGMENTS.md](./ACKNOWLEDGMENTS.md) for upstream credits.
+Host installation registers `oms mcp --vault /path/to/vault`. It stamps that explicit vault argument only; it does not change runtime target-resolution precedence. See [installation](./docs/install.md), [architecture](./docs/architecture.md), [conventions](./docs/conventions.md), and [verified targets](./docs/verified-target.md).

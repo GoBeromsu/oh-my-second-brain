@@ -57,15 +57,17 @@ export function parseSemanticArgs(argv: readonly string[]): ParsedSemanticArgs {
     } else if (arg === "--pattern" || arg === "--ignore" || arg === "--update-command" || arg === "--host") {
       options[camelOption(arg)] = argv[i + 1] ?? "";
       i++;
-    } else if (arg === "--candidate-limit" || arg === "--port" || arg === "--max-docs-per-batch" || arg === "--max-batch-mb") {
+    } else if (arg === "--candidate-limit" || arg === "--max-queries" || arg === "--port" || arg === "--max-docs-per-batch" || arg === "--max-batch-mb") {
       options[camelOption(arg)] = argv[i + 1] ?? "";
       i++;
     } else if (arg === "--include-default") {
       options["includeDefault"] = true;
     } else if (arg === "--no-include-default") {
       options["includeDefault"] = false;
-    } else if (arg === "--line-numbers" || arg === "--full-path" || arg === "--force" || arg === "--all" || arg === "--full" || arg === "--pull" || arg === "--update" || arg === "--embed") {
+    } else if (arg === "--line-numbers" || arg === "--full-path" || arg === "--force" || arg === "--all" || arg === "--full" || arg === "--pull" || arg === "--update" || arg === "--embed" || arg === "--expand" || arg === "--rerank") {
       options[camelOption(arg)] = true;
+    } else if (arg === "--no-rerank") {
+      options["rerank"] = false;
     } else if (arg === "--no-embed") {
       options["embed"] = false;
     } else if (arg === "--no-line-numbers") {
@@ -120,18 +122,33 @@ export function semanticQueryOptions(
   const axes = queryAxesFromCli(args);
   const vec = stringOption(args, "vec");
   const hyde = stringOption(args, "hyde");
-  // The query/search CLI commands are intentionally lexical by default. A
-  // model is only consulted when the caller opts into --vec, --hyde, or the
-  // dedicated vsearch command; this keeps plain searches useful on a
-  // model-less vault without approximating a vector result.
-  const lex = stringOption(args, "lex")
-    ?? (mode === "vsearch" || vec !== undefined || hyde !== undefined || query.trim().length === 0
-      ? undefined
-      : query);
+  const expand = booleanOption(args, "expand") === true;
+  if (expand && mode !== "query") {
+    throw new Error('CLI "--expand" is supported only by the "query" command.');
+  }
+  if (expand && (vec !== undefined || hyde !== undefined || stringOption(args, "lex") !== undefined || axes !== undefined)) {
+    throw new Error('CLI "--expand" conflicts with --lex, --vec, --hyde, and axis filters.');
+  }
+  // The canonical query mapper now owns lexical-only defaults. Do not duplicate
+  // a plain query into an implicit `lex` shorthand here: doing so changes its
+  // receipt from plain to explicit and recreates two representations of one
+  // request. Only a caller-authored --lex flag becomes a shorthand.
+  const lex = stringOption(args, "lex");
   return {
     vault,
     query,
     mode,
+    ...(expand
+      ? {
+        strategy: {
+          kind: "expand" as const,
+          profile: "qmd-v2.8.3" as const,
+          ...(numberOption(args, "maxQueries") === undefined
+            ? {}
+            : { maxQueries: numberOption(args, "maxQueries") }),
+        },
+      }
+      : {}),
     collection: stringOption(args, "collection"),
     index: stringOption(args, "index"),
     limit: numberOption(args, "limit"),
@@ -147,6 +164,7 @@ export function semanticQueryOptions(
     full: booleanOption(args, "full"),
     fullPath: booleanOption(args, "fullPath"),
     candidateLimit: numberOption(args, "candidateLimit"),
+    rerank: booleanOption(args, "rerank"),
   };
 }
 
