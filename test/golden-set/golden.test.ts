@@ -154,9 +154,10 @@ describe("golden harness — fail-loud behaviour (unit)", () => {
         const config = makeTracerConfig({
           vaultPath: "/nonexistent",
           dbPath: "/tmp/oms-golden-failsafe-b-do-not-use.db",
+          files: ["missing.md"],
           embeddingDimensions: 768,
         });
-        await expect(runEngine(q, config, [])).rejects.toThrow();
+        await expect(runEngine(q, config)).rejects.toThrow();
       } finally {
         // Restore env regardless of test outcome
         if (savedUpstage !== undefined) process.env["UPSTAGE_API_KEY"] = savedUpstage;

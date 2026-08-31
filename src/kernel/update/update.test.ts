@@ -158,7 +158,7 @@ describe("oms update", () => {
     expect(result.success).toBe(true);
     expect(result.mutated).toBe(false);
     expect(result.commands).toContain("npm install -g oh-my-second-brain@latest");
-    expect(result.commands.some((command) => command.includes("update-reconcile --runtime codex"))).toBe(true);
+    expect(result.commands.some((command) => command.includes("reconcile --runtime codex"))).toBe(true);
     expect(calls).toEqual([]);
   });
 
@@ -182,7 +182,7 @@ describe("oms update", () => {
     expect(result.mutated).toBe(true);
     expect(calls).toEqual([
       "npm install -g oh-my-second-brain@latest",
-      "node /pkg/dist/cli/oms.js update-reconcile --runtime codex --vault /tmp/Vault --execute",
+      "node /pkg/dist/cli/oms.js reconcile --runtime codex --vault /tmp/Vault --execute",
     ]);
   });
 

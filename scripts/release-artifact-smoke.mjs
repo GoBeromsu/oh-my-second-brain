@@ -120,9 +120,13 @@ function makeVault(tempRoot) {
   const vault = path.join(tempRoot, "Vault");
   mkdirSync(path.join(vault, "Inbox"), { recursive: true });
   mkdirSync(path.join(vault, "Literature"), { recursive: true });
+  mkdirSync(path.join(vault, "Templates"), { recursive: true });
+  mkdirSync(path.join(vault, ".obsidian"), { recursive: true });
+  writeFileSync(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text", title: "text", tags: "list" } }), "utf-8");
+  writeFileSync(path.join(vault, "Templates", "literature.md"), "---\ntemplate: literature\ntitle: Untitled\ntags: []\n---\n# Literature\n<!-- oms:content -->\n", "utf-8");
   writeFileSync(
     path.join(vault, "Literature", "semantic-retrieval.md"),
-    "---\ntitle: Semantic Retrieval\ntags:\n  - smoke-semantic\n---\n# Semantic Retrieval\n\nAgent retrieval uses OMS native semantic search.\n",
+    "---\ntemplate: literature\ntitle: Semantic Retrieval\ntags:\n  - smoke-semantic\n---\n# Semantic Retrieval\n\nAgent retrieval uses OMS native semantic search.\n",
     "utf-8",
   );
   return vault;
@@ -130,13 +134,16 @@ function makeVault(tempRoot) {
 
 function setupSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
-  const result = run(process.execPath, [cli, "setup", "--vault", vault, "--yes", "--install-claude"], {
-    cwd: packageRoot,
-    env: smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" }),
-  });
+  const env = smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" });
+  const dryRun = run(process.execPath, [cli, "setup", "--vault", vault, "--dry-run", "--install-claude"], { cwd: packageRoot, env });
+  const approval = /"approvalDigest":\s*"(sha256:[0-9a-f]{64})"/u.exec(dryRun.stdout)?.[1];
+  if (!approval) fail("setup dry-run did not return an approval digest");
+  const result = run(process.execPath, [cli, "setup", "--vault", vault, "--yes", "--approved-digest", approval, "--install-claude"], { cwd: packageRoot, env });
   const output = `${result.stdout}\n${result.stderr}`;
   assertPath(path.join(vault, ".oms/taxonomy.yaml"), "vault taxonomy");
-  assertPath(path.join(vault, ".oms/concepts"), "vault concepts directory");
+  assertPath(path.join(vault, ".oms/template-policy.json"), "vault template policy");
+  assertPath(path.join(vault, ".oms/types.json"), "vault derived projection");
+  if (existsSync(path.join(vault, ".oms/concepts"))) fail("setup recreated the retired concepts directory");
   if (!output.includes("claude plugin install")) fail("setup output did not include Claude plugin install command");
   if (!output.includes("plugin-owned and plugin-qualified")) {
     fail("setup output did not declare the plugin-owned Claude MCP surface");
@@ -149,7 +156,7 @@ function setupSmoke(packageRoot, vault, smokeHome) {
   if (realpathSync(path.resolve(pluginPath)) !== realpathSync(path.resolve(expectedRoot))) {
     fail(`printed plugin path must resolve inside extracted package: expected ${expectedRoot}, got ${pluginPath}`);
   }
-  console.log("[release:artifact-smoke] ok: setup dry-run works from unpacked package.");
+  console.log("[release:artifact-smoke] ok: setup dry-run/approved apply works from unpacked package.");
 }
 
 function hostInstallSmoke(packageRoot, vault, smokeHome) {
@@ -174,7 +181,7 @@ function updateSmoke(packageRoot, vault, smokeHome) {
   const output = `${result.stdout}\n${result.stderr}`;
   for (const expected of [
     "npm install -g oh-my-second-brain@latest",
-    "update-reconcile --runtime all",
+    "reconcile --runtime all",
     "Run `oms update --yes`",
   ]) {
     if (!output.includes(expected)) fail(`update dry-run did not include ${expected}`);

@@ -26,8 +26,8 @@ export type WriteRejectionCode =
   | "path-unsafe"
   | "note-exists"
   | "note-missing"
-  | "concept-unbound"
   | "contract-violation"
+  | "TEMPLATE_IDENTITY_IMMUTABLE"
   | "body-missing"
   | "args-invalid"
   | "postcondition-failed";
@@ -40,14 +40,6 @@ export interface WriteRejection {
   remediation: string;
 }
 
-export interface WriteReceipt {
-  resolvedVault: string;
-  resolutionSource: WriteTargetSource;
-  notePath: string;
-  mode: WriteMode;
-  concept: string | null;
-  postconditionVerified: boolean;
-}
 
 /**
  * Exhaustive recovery table: maps each rejection code to its recoverable flag.
@@ -56,12 +48,12 @@ export interface WriteReceipt {
 const RECOVERABLE_BY_CODE: Record<WriteRejectionCode, boolean> = {
   "target-unverified": true,
   "contract-violation": true,
+  "TEMPLATE_IDENTITY_IMMUTABLE": false,
   "body-missing": true,
   "args-invalid": true,
   "path-unsafe": true,
   "note-exists": false,
   "note-missing": false,
-  "concept-unbound": false,
   "target-invalid": false,
   "postcondition-failed": false,
 };

@@ -6,14 +6,13 @@
  *
  * The command owns scope and reporting only: span detection stays in
  * engine/linkify (pure), and every write goes through the capture kernel's
- * `writeNote`, which keeps path safety, the concept contract, and the
+ * `writeNote`, which keeps path safety, the resolved template contract, and the
  * postcondition read-back unduplicated here.
  */
 
 import { linkifyVault } from "../kernel/link/workflow.js";
 import type { LinkCandidate } from "../kernel/engine/linkify/types.js";
-import { validateVaultLintFolder } from "../kernel/engine/conventions/vault-lint.js";
-import { resolveActiveOntology } from "../kernel/ontology/active.js";
+import { loadResolvedTemplates } from "../kernel/templates/index.js";
 
 export interface LinkifyOptions {
   readonly vault: string;
@@ -35,8 +34,7 @@ function reportNote(notePath: string, candidates: readonly LinkCandidate[]): voi
 }
 
 /**
- * Scan (and optionally link) a vault, restricting link TARGETS to notes bound
- * to the `term` concept.
+ * Scan (and optionally link) a vault through the active resolved-template convention.
  */
 export async function runLinkify(options: LinkifyOptions): Promise<number> {
   if (options.apply && !options.yes) {
@@ -45,16 +43,17 @@ export async function runLinkify(options: LinkifyOptions): Promise<number> {
   }
 
   try {
-    const { ontology } = await resolveActiveOntology(options.vault);
-    await validateVaultLintFolder(options.vault, ontology, options.folder);
-
+    if (options.folder !== undefined && (options.folder.length === 0 || options.folder === "." || options.folder === ".." || options.folder.includes("/") || options.folder.includes("\\"))) {
+      throw new Error("Linkify folder must be one top-level name without path separators.");
+    }
+    const convention = await loadResolvedTemplates(options.vault);
     const workflow = await linkifyVault(
-      { vault: options.vault, source: "explicit", ontology },
+      { vault: options.vault, source: "explicit", convention },
       { folder: options.folder, apply: options.apply },
     );
 
     console.log(
-      `\nOh My Second Brain linkify: ${String(workflow.notesInScope)} note(s) in scope, ${String(workflow.targetNotes)} term note(s) available as link targets.`,
+      `\nOh My Second Brain linkify: ${String(workflow.notesInScope)} note(s) in scope, ${String(workflow.targetNotes)} template-bound note(s) available as link targets.`,
     );
 
     let candidateCount = 0;

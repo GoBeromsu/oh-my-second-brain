@@ -1,17 +1,11 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { buildGraphCache } from "../../../kernel/graph/cache.js";
-import { loadOntology } from "../../../kernel/ontology/loader.js";
+import { safeVaultNotePath } from "../../../kernel/capture/safe.js";
 import { parseNote } from "../../../kernel/conventions/frontmatter.js";
-import { validateFrontmatter } from "../../../kernel/conventions/validate.js";
-import { resolveConcept } from "../../../kernel/ontology/resolver.js";
+import { evaluateResolvedTemplateContract } from "../../../kernel/conventions/write-contract.js";
+import { loadResolvedTemplates } from "../../../kernel/templates/resolver.js";
+import type { JsonValue } from "../../../kernel/templates/types.js";
 import { readStdinTimeout } from "./stdin.js";
-
-/** Debounce window for graph builds, in seconds. */
-export const GRAPH_BUILD_DEBOUNCE_SECS = 300;
-
-/** Timestamp filename inside <vault>/.oms/cache/. */
-export const DEBOUNCE_STAMP_NAME = ".last-graph-build";
 
 interface PostToolUsePayload {
   tool_name?: string;
@@ -19,59 +13,55 @@ interface PostToolUsePayload {
   tool_input?: Record<string, unknown>;
 }
 
-/**
- * Return age (seconds) of the debounce stamp, or null if it does not exist.
- */
-export async function getDebounceAgeSeconds(vault: string): Promise<number | null> {
-  const stampPath = path.join(vault, ".oms", "cache", DEBOUNCE_STAMP_NAME);
-  try {
-    const s = await stat(stampPath);
-    return (Date.now() - s.mtimeMs) / 1000;
-  } catch {
-    return null;
-  }
+function diagnostic(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-export async function touchDebounceStamp(vault: string): Promise<void> {
-  const stampDir = path.join(vault, ".oms", "cache");
-  await mkdir(stampDir, { recursive: true });
-  await writeFile(path.join(stampDir, DEBOUNCE_STAMP_NAME), new Date().toISOString(), "utf-8");
+function guidance(lines: readonly string[]): string[] {
+  return lines.map(line => `[oms-template] ${line}`);
 }
 
 /**
- * Run a frontmatter audit on a just-written note and return any violation lines.
- * Returns an empty array when there are no violations or when audit is not possible.
+ * Evaluates a changed markdown note against the resolved template convention.
+ * This function is intentionally read-only: repairs belong to doctor operations.
  */
-export async function auditNote(
-  vault: string,
-  relPath: string,
-): Promise<string[]> {
+export async function auditNote(vault: string, relPath: string): Promise<string[]> {
   try {
-    const absPath = path.join(vault, relPath);
-    const raw = await readFile(absPath, "utf-8");
+    const convention = await loadResolvedTemplates(vault);
+    const normalizedPath = relPath.replaceAll("\\", "/");
+    const managedSource = Object.values(convention.templates).find(template =>
+      template.destinationClass === "managed-default" && template.sourcePath === normalizedPath,
+    );
+    if (managedSource !== undefined) {
+      return guidance([
+        `${normalizedPath} is a managed template source; run oms_doctor validate, then regenerate-types through its approved operation.`,
+      ]);
+    }
+
+    const raw = await readFile(safeVaultNotePath(vault, normalizedPath), "utf8");
     const { frontmatter } = parseNote(raw);
-
-    const localOntologyDir = path.join(vault, ".oms");
-    let ontology;
-    try {
-      ontology = await loadOntology(localOntologyDir);
-    } catch {
-      return [];
+    const templateId = frontmatter["template"];
+    if (typeof templateId !== "string" || templateId.trim() === "") {
+      if (Object.hasOwn(frontmatter, "concept")) {
+        return guidance([`${normalizedPath} has legacy concept-only frontmatter; add a stable template ID through oms_doctor backfill-defaults.`]);
+      }
+      return guidance([`${normalizedPath} is missing a stable template ID; add frontmatter template: <id>.`]);
     }
 
-    const concept = resolveConcept(ontology, relPath);
-    if (!concept) return [];
-
-    const result = validateFrontmatter(frontmatter, concept);
-    if (result.violations.length === 0) return [];
-
-    const lines = [`[oms-audit] ${relPath} (concept: ${concept.concept}):`];
-    for (const v of result.violations) {
-      lines.push(`  [${v.rule}] ${v.message}`);
+    const template = convention.templates[templateId];
+    if (template === undefined) {
+      return guidance([`${normalizedPath} references unknown template "${templateId}"; use a stable ID from the resolved template convention.`]);
     }
-    return lines;
-  } catch {
-    return [];
+
+    const result = evaluateResolvedTemplateContract(frontmatter as Record<string, JsonValue>, template, convention.base);
+    if (result.valid) return [];
+    return guidance([
+      `${normalizedPath} violates template "${templateId}": ${result.violations.map(violation => `${violation.field} (${violation.rule})`).join(", ")}.`,
+    ]);
+  } catch (error) {
+    return guidance([
+      `Cannot read the resolved template projection for ${relPath}: ${diagnostic(error)}. Run oms_doctor validate, then regenerate-types through its approved operation.`,
+    ]);
   }
 }
 
@@ -82,14 +72,14 @@ export async function runPostToolUse(opts: { vault: string }): Promise<void> {
   try {
     rawInput = await readStdinTimeout();
   } catch {
-    return; // fail-open
+    return;
   }
 
   let payload: PostToolUsePayload;
   try {
     payload = JSON.parse(rawInput) as PostToolUsePayload;
   } catch {
-    return; // fail-open
+    return;
   }
 
   const toolName = (payload.tool_name ?? payload.toolName ?? "").toLowerCase();
@@ -101,42 +91,14 @@ export async function runPostToolUse(opts: { vault: string }): Promise<void> {
 
   const absFilePath = path.isAbsolute(rawFilePath) ? rawFilePath : path.resolve(rawFilePath);
   const relPath = path.relative(vault, absFilePath).replace(/\\/g, "/");
+  if (relPath.startsWith("..") || path.isAbsolute(relPath) || !relPath.endsWith(".md")) return;
 
-  if (relPath.startsWith("..") || path.isAbsolute(relPath)) return;
-  if (!relPath.endsWith(".md")) return;
-
-  // Frontmatter audit — report violations as additionalContext.
-  const auditLines = await auditNote(vault, relPath);
-  if (auditLines.length > 0) {
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PostToolUse",
-          additionalContext: auditLines.join("\n"),
-        },
-      }) + "\n",
-    );
-  }
-
-  // Graph build with 300-second debounce.
-  try {
-    const ageSecs = await getDebounceAgeSeconds(vault);
-    if (ageSecs !== null && ageSecs < GRAPH_BUILD_DEBOUNCE_SECS) {
-      return; // built recently, skip
-    }
-
-    await touchDebounceStamp(vault);
-
-    const localOntologyDir = path.join(vault, ".oms");
-    let ontology;
-    try {
-      ontology = await loadOntology(localOntologyDir);
-    } catch {
-      return; // no ontology → skip graph build
-    }
-
-    await buildGraphCache({ vault, ontology, write: true });
-  } catch {
-    // graph build failure is non-blocking
-  }
+  const lines = await auditNote(vault, relPath);
+  if (lines.length === 0) return;
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      additionalContext: lines.join("\n"),
+    },
+  }) + "\n");
 }

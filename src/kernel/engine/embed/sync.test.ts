@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { syncEngineStore } from "./sync.js";
@@ -97,6 +97,24 @@ describe("syncEngineStore — embed=false (lex-only)", () => {
     } finally {
       store.close();
     }
+  });
+
+  it("excludes an explicit symlink alias of a managed template source", async () => {
+    writeDoc("Templates/note.md", "managed template");
+    writeDoc(".oms/template-policy.json", JSON.stringify({
+      templates: { note: { sourcePath: "Templates/note.md" } },
+    }));
+    mkdirSync(path.join(vault, "notes"), { recursive: true });
+    symlinkSync(path.join(vault, "Templates", "note.md"), path.join(vault, "notes", "template-alias.md"));
+    const result = await syncEngineStore({
+      vault,
+      dbPath,
+      files: ["notes/template-alias.md"],
+      embed: false,
+    });
+    expect(result.available).toBe(true);
+    expect(result.scanned).toBe(0);
+    expect(result.added).toBe(0);
   });
 
   it("rejects explicit files that escape the vault", async () => {

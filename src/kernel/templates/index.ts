@@ -1,0 +1,20 @@
+export { approvalDigest, canonicalJson, frameHash, hashCanonical, inputDigest, outputDigest, parseDigest } from "./canonical.js";
+export { extractTemplate, parseTemplate } from "./extract.js";
+export { axisValueEquals, deriveTemplateRetrievalAxes } from "./axes.js";
+export { buildTemplateNoteIndex, queryTemplateAxis, queryTemplateLexically, TEMPLATE_NOTE_INDEX_VERSION } from "./note-index.js";
+export { resolveDefaults, validateBaseSpecialization } from "./defaults.js";
+export { renderNoteName, slugify } from "./naming.js";
+export { canonicalPathKey, deriveManagedSourcePath, deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, validateTemplateId, verifyTemplateFolderPath, verifyTemplateSourcePath, verifyVaultPath } from "./paths.js";
+export { loadResolvedTemplates, sourceSignature, buildTemplateCompositionManifest } from "./resolver.js";
+export { executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
+export type { ExtractedTemplate, TemplateExpression } from "./extract.js";
+export type { SearchableAxis, TemplateAxisSet, TemplateFieldAxis, TemplateIdentityAxis, TemplateRetrievalAxes } from "./axes.js";
+export type { LexicalNoteMatch, TemplateAxisQuery, TemplateIndexedNote, TemplateNoteIndex } from "./note-index.js";
+export type { ResolveDefaultsRequest, ResolvedDefaults, WriteMode } from "./defaults.js";
+export type { RenderNameRequest } from "./naming.js";
+export type { LoadResolvedTemplatesOptions } from "./resolver.js";
+export type { AuthorityEntry, AuthorityKind, BaseContract, ContractDefinition, DerivedProjection, DerivedTemplateProjection, DestinationClass, Diagnostic, DiagnosticCode, Digest, FieldDefault, FieldNormalize, FieldPolicy, GlobalAxis, GlobalAxes, InputV2, JsonValue, LogicalOperation, MigrationMarker, MigrationReceipt, PlacementEntry, PlannedPhysicalOutput, PreparedWrite, ResolvedConvention, ResolvedTemplate, TemplateBinding, TemplateFolderPath, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateCompositionManifest, TemplateCompositionOptions, TemplateTransactionReceipt } from "./types.js";
+export type { VaultPathVerificationOptions, VerifiedVaultPath } from "./paths.js";
+
+export { backfillDefaults, diagnoseTemplates, regenerateTypes } from "./doctor.js";
+export type { BackfillDefaultsRequest, RegenerateTypesRequest, TemplateDoctorDiagnosis, TemplateDoctorDiagnostic, TemplateDoctorRepair, TemplateDoctorTarget } from "./doctor.js";

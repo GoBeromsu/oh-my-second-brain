@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -45,7 +45,11 @@ afterEach(() => {
 describe("oms update isolated e2e", () => {
   it("refuses a non-TTY update without --yes and leaves the cwd untouched", () => {
     const cwd = makeTempRoot("oms-update-non-tty-");
-    const result = runCli(["update", "--runtime", "codex", "--vault", cwd], cwd);
+    const home = makeTempRoot("oms-update-home-");
+    const result = runCli(["update", "--runtime", "codex", "--vault", cwd], cwd, {
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+    });
 
     expect(result.status).toBe(1);
     expect(`${result.stdout}${result.stderr}`).toContain("stdin is not a TTY");
@@ -54,23 +58,35 @@ describe("oms update isolated e2e", () => {
 
   it("keeps --dry-run non-mutating while showing both update commands", () => {
     const cwd = makeTempRoot("oms-update-dry-run-");
-    const result = runCli(["update", "--runtime", "codex", "--vault", cwd, "--dry-run"], cwd);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("npm install -g oh-my-second-brain@latest");
-    expect(result.stdout).toContain("update-reconcile --runtime codex");
-    expect(readdirSync(cwd)).toEqual([]);
-  });
-
-  it("resolves an OMS_VAULT target before building the reconciliation plan", () => {
-    const cwd = makeTempRoot("oms-update-env-cwd-");
-    const target = makeTempRoot("oms-update-env-target-");
-    const result = runCli(["update", "--runtime", "codex", "--dry-run"], cwd, {
-      OMS_VAULT: target,
+    const home = makeTempRoot("oms-update-home-");
+    const result = runCli(["update", "--runtime", "codex", "--vault", cwd, "--dry-run"], cwd, {
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(`--vault ${target}`);
+    expect(result.stdout).toContain("npm install -g oh-my-second-brain@latest");
+    expect(result.stdout).toContain("reconcile --runtime codex");
+    expect(readdirSync(cwd)).toEqual([]);
+  });
+
+  it("uses the installed host pointer before building the reconciliation plan", () => {
+    const cwd = makeTempRoot("oms-update-env-cwd-");
+    const target = makeTempRoot("oms-update-env-target-");
+    const home = makeTempRoot("oms-update-home-");
+    const env = {
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+    };
+    const installed = runCli(["install", "--runtime", "codex", "--vault", target, "--yes"], cwd, env);
+    expect(installed.status).toBe(0);
+    const result = runCli(["update", "--runtime", "codex", "--dry-run"], cwd, {
+      ...env,
+      OMS_VAULT: makeTempRoot("oms-update-ignored-env-"),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`--vault ${realpathSync(target)}`);
     expect(readdirSync(cwd)).toEqual([]);
   });
 
@@ -87,14 +103,14 @@ describe("oms update isolated e2e", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("verified vault target");
+    expect(result.stderr).toContain("No OMS host vault pointer exists");
     expect(readFileSync(path.join(omsDir, "user-owned.txt"), "utf-8")).toBe(before);
   });
 
   it("propagates reconcile failure to the parent update exit code", () => {
-    const cwd = makeTempRoot("oms-update-reconcile-fail-");
+    const cwd = makeTempRoot("oms-reconcile-fail-");
     const omsDir = path.join(cwd, ".oms");
-    const home = makeTempRoot("oms-update-reconcile-home-");
+    const home = makeTempRoot("oms-reconcile-home-");
     const fakeBin = path.join(home, "bin");
     const fakeNpm = path.join(fakeBin, "npm");
     const decoy = path.join(home, "decoy");

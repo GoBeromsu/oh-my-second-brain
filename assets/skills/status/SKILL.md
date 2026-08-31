@@ -1,22 +1,16 @@
 ---
 name: status
-description: Report read-only vault health, statistics, and index state.
+description: Report read-only template, graph, and semantic-index health.
 mcp_tool: oms_status
 mcp_args: {}
 ---
 
 # status
 
-Report the current state of a vault without changing it.
-
-## Use when
-
-Use this skill to inspect vault health and statistics before deciding whether maintenance is needed.
-
-## Usage
+Report vault health without changing files.
 
 ```text
 /status
 ```
 
-Report note counts, semantic-index availability and freshness, and graph-cache status. Status is observational only: it never rebuilds an index, repairs notes, or writes vault files.
+Show resolved template count, current projection/input signature, managed template-source exclusions, template diagnosis state, and graph/semantic-index availability. A malformed or missing projection is reported as invalid with an actionable doctor operation. Status never regenerates controls, rebuilds caches, repairs notes, or writes the vault.

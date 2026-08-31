@@ -1,30 +1,36 @@
 ---
 name: write
-description: Write a vault note through the Oh My Second Brain kernel contract.
+description: Write vault notes and manage Obsidian templates through the guarded template contract.
 mcp_tool: oms_write
 mcp_args:
-  op: "create"
-  notePath: "$1"
+  op: "note"
+  mode: "create"
+  templateId: "$1"
   body: "$2"
 ---
 
 # write
 
-Write, append to, or update a vault note through MCP `oms_write`. Do not use host Write/Edit for vault `.md` files.
+Use MCP `oms_write` for every vault-note or managed-template mutation. Do not use host Write/Edit for vault Markdown.
 
-## Use when
+## Notes
 
-Use this skill for every vault-note mutation.
-
-## Usage
+Translate the user's natural-language note kind into a stable ID returned by `oms_search { op: "templates" }`; never guess an ID.
 
 ```text
-/write <create|append|update> <vault-relative-note-path> [body]
+/write <template-id> [body]
 ```
 
-Use `op` with `create`, `append`, or `update`. The kernel owns `.oms` and returns one status:
+For create, call `op: "note"` with `mode`, `templateId`, and body/frontmatter; placement and naming derive the path. For append/update, pass `notePath` without `templateId`; OMS resolves the persisted `frontmatter.template`. The actual Obsidian template supplies frontmatter shape and body scaffolding; OMS applies the vault-wide base defaults and policy.
 
-- `ask` — fill the missing or invalid fields and call `write` again
-- `inbox` — tell the user; do not invent a folder
-- `written` — done
-- `rejected` — fix `violations` or `reason` and call `write` again
+## Templates
+
+Template creation, updates, reclassification, and template-folder relocation use `op: "template"` with `mode: "create" | "update" | "reclassify" | "relocate-folder"`.
+
+1. Submit `dryRun: true` with current input and source signatures.
+2. Show the resulting proposal and `approvalDigest`.
+3. Apply only with `dryRun: false` and that exact caller-approved digest.
+
+Never self-approve, hand-edit the derived `.oms/types.json`, or directly edit a managed template.
+
+Responses are `ask`, `written`, or `rejected`. Resolve named violations and retry; never invent missing required values.

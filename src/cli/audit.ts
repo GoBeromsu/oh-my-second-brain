@@ -1,114 +1,55 @@
-import {
-  collectObservedFields,
-  collectObservedFieldValues,
-  type ObservedField,
-  type ObservedFieldValueDrift,
-} from "../kernel/setup/axis.js";
-import { lintVault, type VaultLintViolation } from "../kernel/engine/conventions/vault-lint.js";
-import { resolveActiveOntology } from "../kernel/ontology/active.js";
-import type { Ontology } from "../kernel/ontology/types.js";
+import { access } from "node:fs/promises";
+import path from "node:path";
+import { buildTemplateNoteIndex, diagnoseTemplates, loadResolvedTemplates } from "../kernel/templates/index.js";
 
-/** Fields observed in a folder that its bound concept(s) do not declare. */
-function undeclaredObservedFields(
-  ontology: Ontology,
-  summary: { readonly folder: string; readonly fields: readonly ObservedField[] },
-): ObservedField[] {
-  const binding = ontology.taxonomy.folders[summary.folder];
-  if (!binding || binding.concept === null) return [...summary.fields];
-  const conceptNames = Array.isArray(binding.concept) ? binding.concept : [binding.concept];
-  const declared = new Set<string>();
-  for (const name of conceptNames) {
-    const concept = ontology.concepts.get(name);
-    if (!concept) continue;
-    for (const field of concept.fields) declared.add(field.name);
+function validatedFolder(folder: string | undefined): string | undefined {
+  if (folder === undefined) return undefined;
+  if (folder.length === 0 || folder === "." || folder === ".." || folder.includes("/") || folder.includes("\\")) {
+    throw new Error("Audit folder must be one safe top-level name without path separators.");
   }
-  return summary.fields.filter((field) => !declared.has(field.name));
+  return folder;
 }
-
 
 export async function runAudit(opts: {
   readonly vault: string;
   readonly json?: boolean;
   readonly folder?: string;
-  readonly suggestFields?: boolean;
 }): Promise<number> {
-  const { vault, json = false, folder, suggestFields = false } = opts;
-
   try {
-    const { ontology } = await resolveActiveOntology(vault);
-    const report = await lintVault(vault, ontology, { folder });
-
-    let suggestedFields: Array<{ folder: string; fields: ObservedField[] }> = [];
-    let driftValues: readonly ObservedFieldValueDrift[] = [];
-    if (suggestFields) {
-      const observed = await collectObservedFields({ vault, ontology, folder });
-      suggestedFields = observed
-        .map((summary) => ({
-          folder: summary.folder,
-          fields: undeclaredObservedFields(ontology, summary),
-        }))
-        .filter((summary) => summary.fields.length > 0);
-      driftValues = await collectObservedFieldValues({ vault, ontology, folder });
+    const folder = validatedFolder(opts.folder);
+    if (folder !== undefined) await access(path.join(opts.vault, folder));
+    const convention = await loadResolvedTemplates(opts.vault);
+    const index = await buildTemplateNoteIndex(opts.vault, convention);
+    const diagnosis = await diagnoseTemplates({ vault: opts.vault, source: "explicit" });
+    const notes = folder === undefined ? index.notes : index.notes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
+    const unresolvedNotes = folder === undefined ? index.unresolvedNotes : index.unresolvedNotes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
+    const identityDiagnostics = unresolvedNotes.map(note => ({ code: "TEMPLATE_NOTE_IDENTITY_UNRESOLVED", path: note.path, remediation: `persist a valid template identity (${note.reason})` }));
+    const scopedDiagnosis = folder === undefined
+      ? diagnosis.diagnostics
+      : diagnosis.diagnostics.filter(item => item.code !== "MIGRATION_NOTE_IDENTITY_UNRESOLVED" || item.path === undefined || item.path === folder || item.path.startsWith(`${folder}/`));
+    const templateCounts: Record<string, number> = {};
+    for (const note of notes) templateCounts[note.templateId] = (templateCounts[note.templateId] ?? 0) + 1;
+    const result = {
+      vault: opts.vault,
+      folder: folder ?? null,
+      projectionSignature: convention.inputSignature,
+      templates: Object.keys(convention.templates).length,
+      scannedNotes: notes.length,
+      excludedTemplateSources: convention.managedSourcePaths,
+      templateCounts,
+      status: scopedDiagnosis.length === 0 && unresolvedNotes.length === 0 ? "healthy" : "needs-repair",
+      diagnostics: [...scopedDiagnosis, ...identityDiagnostics],
+      unresolvedNotes,
+      unresolvedLegacyNotes: folder === undefined ? diagnosis.unresolvedLegacyNotes : diagnosis.unresolvedLegacyNotes.filter(notePath => notePath === folder || notePath.startsWith(`${folder}/`)),
+      clean: scopedDiagnosis.length === 0 && unresolvedNotes.length === 0,
+    };
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(`\nOh My Second Brain audit: ${result.scannedNotes} template-bound note(s), ${result.templates} template(s), status ${result.status}.`);
+      for (const item of result.diagnostics) console.log(`  [${item.code}]${item.path === undefined ? "" : ` ${item.path}`} — ${item.remediation}`);
+      console.log("");
     }
-
-    if (json) {
-      console.log(
-        JSON.stringify(
-          {
-            vault,
-            folder: folder ?? null,
-            scannedNotes: report.scannedNotes,
-            excludedNotes: report.excludedNotes,
-            clean: report.clean,
-            violations: report.violations,
-            ...(suggestFields ? { suggestedFields, driftValues } : {}),
-          },
-          null,
-          2,
-        ),
-      );
-    } else {
-      console.log(
-        `\nOh My Second Brain audit: ${report.scannedNotes} note(s) scanned, ${report.excludedNotes} excluded, ${report.violations.length} violation(s).`,
-      );
-
-      if (report.violations.length === 0) {
-        console.log("Vault is clean — no contract violations found.\n");
-      } else {
-        const byNote = new Map<string, VaultLintViolation[]>();
-        for (const violation of report.violations) {
-          const list = byNote.get(violation.notePath) ?? [];
-          list.push(violation);
-          byNote.set(violation.notePath, list);
-        }
-        for (const [notePath, violations] of byNote) {
-          console.log(`\n  ${notePath}`);
-          for (const violation of violations) {
-            console.log(`    [${violation.rule}] ${violation.message}`);
-          }
-        }
-        console.log(`\n${report.violations.length} violation(s) across ${byNote.size} note(s).\n`);
-      }
-
-      if (suggestFields) {
-        console.log("--- Unregistered fields observed in vault (candidates for concept schema) ---");
-        if (suggestedFields.length === 0) console.log("  (none)");
-        for (const summary of suggestedFields) {
-          const fieldList = summary.fields.map((field) => `${field.name}:${field.type}(${field.count})`).join(", ");
-          console.log(`  ${summary.folder}: ${fieldList}`);
-        }
-
-        console.log("\n--- Enum drift: values outside declared enum (top 20 by frequency) ---");
-        const top = driftValues.slice(0, 20);
-        if (top.length === 0) console.log("  (none)");
-        for (const drift of top) {
-          console.log(`  ${drift.folder} / ${drift.field} = "${drift.value}" (${drift.count})`);
-        }
-        console.log("");
-      }
-    }
-
-    return report.violations.length > 0 ? 1 : 0;
+    return result.clean ? 0 : 1;
   } catch (error) {
     console.error(`[oms] audit could not complete: ${error instanceof Error ? error.message : String(error)}`);
     return 1;

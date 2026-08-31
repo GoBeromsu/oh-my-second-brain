@@ -20,6 +20,7 @@
     "./assets/skills/link/",
     "./assets/skills/search/",
     "./assets/skills/status/",
+    "./assets/skills/template/",
     "./assets/skills/write/"
   ]
 }

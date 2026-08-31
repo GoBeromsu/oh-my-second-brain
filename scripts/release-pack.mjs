@@ -60,6 +60,7 @@ const forbidden = [
   "dist/cli/lexa.d.ts",
   "dist/cli/lexa.js.map",
   "assets/codex/rules/lexa.md",
+  "core/ontology",
 ].filter((forbiddenPath) => hasPath(files, forbiddenPath));
 if (forbidden.length > 0) {
   fail(`package tarball includes forbidden legacy removed assets:\n${forbidden.map((item) => `  - ${item}`).join("\n")}`);

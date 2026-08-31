@@ -1,264 +1,132 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildGraph, buildNodeIndex, loadCachedGraph, saveCachedGraph } from "./builder.js";
-import type { GraphEdge } from "../types.js";
+import { buildGraph, buildNodeIndex, loadCachedGraph, loadNodeIndex, nodeSourceSignature, saveCachedGraph, saveNodeIndex } from "./builder.js";
+import type { Digest, ResolvedConvention, TemplateFolderPath, TemplateId, TemplateSourcePath } from "../../templates/types.js";
 
-let tmpVault: string;
+let vault: string;
+const signature = "sha256:projection" as Digest;
+const template = "note" as TemplateId;
+
+function convention(overrides: Partial<ResolvedConvention> = {}): ResolvedConvention {
+  return {
+    base: { fields: {} },
+    templates: {
+      [template]: {
+        id: template,
+        destinationClass: "managed-default",
+        sourcePath: "Templates/note.md" as TemplateSourcePath,
+        targetFolder: "notes" as TemplateFolderPath,
+        keyOrder: ["status", "rating"],
+        fields: { status: { type: "select" }, rating: { type: "number" } },
+        frontmatterTemplate: {},
+        body: "",
+        naming: "title",
+        views: [],
+        inputSignature: signature,
+        templateSignature: signature,
+        managedSourcePaths: ["Templates/note.md" as TemplateSourcePath],
+      },
+    },
+    globalAxes: {
+      folder: { kind: "folder", key: "folder", type: "text", members: [] },
+      link: { kind: "link", key: "link", type: "text", members: [] },
+    },
+    managedSourcePaths: ["Templates/note.md" as TemplateSourcePath],
+    inputSignature: signature,
+    ...overrides,
+  };
+}
+
+async function note(file: string, frontmatter: string, body = ""): Promise<void> {
+  const destination = path.join(vault, file);
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, `---\n${frontmatter}\n---\n${body}`, "utf8");
+}
 
 beforeEach(async () => {
-  tmpVault = await mkdtemp(path.join(tmpdir(), "oms-engine-graph-"));
+  vault = await mkdtemp(path.join(tmpdir(), "oms-template-graph-"));
+  await note("Templates/note.md", "template: note", "source");
 });
+afterEach(async () => { await rm(vault, { recursive: true, force: true }); });
 
-afterEach(async () => {
-  await rm(tmpVault, { recursive: true, force: true });
-});
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-async function writeVaultFile(relPath: string, content: string): Promise<void> {
-  const full = path.join(tmpVault, relPath);
-  await mkdir(path.dirname(full), { recursive: true });
-  await writeFile(full, content, "utf-8");
-}
-
-function edgesOfKind(edges: GraphEdge[], kind: GraphEdge["kind"]): GraphEdge[] {
-  return edges.filter((e) => e.kind === kind);
-}
-
-// ---------------------------------------------------------------------------
-// Tier 1: wikilinks × 3.0
-// ---------------------------------------------------------------------------
-
-describe("Tier 1 – wikilink edges", () => {
-  it("produces a wikilink edge with weight 3.0 for a resolved [[link]]", async () => {
-    await writeVaultFile("a.md", "# A\n\nSee [[b]] for details.\n");
-    await writeVaultFile("b.md", "# B\n");
-
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    const wikilinks = edgesOfKind(edges, "wikilink");
-
-    expect(wikilinks).toContainEqual({
-      from: "a.md",
-      to: "b.md",
-      weight: 3.0,
-      kind: "wikilink",
-    });
+describe("template-bound graph construction", () => {
+  it("uses stable template identity, declared fields, and preserved folder/link axes", async () => {
+    await note("notes/a.md", "template: note\nstatus: open\nrating: 5\nrogue: retained", "[[b]] text");
+    await note("notes/b.md", "template: note\nstatus: closed", "body");
+    const nodes = await buildNodeIndex({ vaultPath: vault, convention: convention() });
+    expect(nodes).toHaveLength(2);
+    expect(nodes[0]).toMatchObject({ path: "notes/a.md", template: "note", folder: "notes", axes: { status: ["open"], rating: [5] }, wikilinks: ["notes/b.md"] });
+    expect(nodes[0]?.axes).not.toHaveProperty("rogue");
+    const graph = await buildGraph({ vaultPath: vault, convention: convention() });
+    expect(graph).toContainEqual({ from: "notes/a.md", to: "notes/b.md", weight: 3, kind: "wikilink" });
   });
 
-  it("emits an unknown-ref edge (weight 0) for an unresolvable [[link]]", async () => {
-    await writeVaultFile("a.md", "Link to [[ghost-note]] which does not exist.\n");
-
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    const unknowns = edgesOfKind(edges, "unknown-ref");
-
-    expect(unknowns).toHaveLength(1);
-    expect(unknowns[0]).toMatchObject({ from: "a.md", weight: 0, kind: "unknown-ref" });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tier 2: frontmatter sources / relations × 4.0
-// ---------------------------------------------------------------------------
-
-describe("Tier 2 – frontmatter edges", () => {
-  it("produces a frontmatter edge with weight 4.0 for a sources entry", async () => {
-    await writeVaultFile(
-      "note.md",
-      "---\nsources:\n  - ref.md\n---\n# Note\n",
-    );
-    await writeVaultFile("ref.md", "# Ref\n");
-
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    const fm = edgesOfKind(edges, "frontmatter");
-
-    expect(fm).toContainEqual({
-      from: "note.md",
-      to: "ref.md",
-      weight: 4.0,
-      kind: "frontmatter",
-    });
+  it("does not accept a legacy identity field as a fallback", async () => {
+    await note("notes/legacy.md", "concept: old\nstatus: open", "body");
+    await expect(buildNodeIndex({ vaultPath: vault, convention: convention() })).resolves.toEqual([]);
+    await expect(buildGraph({ vaultPath: vault, convention: convention() })).resolves.toEqual([]);
   });
 
-  it("produces a frontmatter edge with weight 4.0 for a relations entry", async () => {
-    await writeVaultFile(
-      "note.md",
-      "---\nrelations:\n  - other\n---\n# Note\n",
-    );
-    await writeVaultFile("other.md", "# Other\n");
+  it("omits an unresolved template identity without failing the whole graph", async () => {
+    await note("notes/invalid.md", "template: unknown", "body");
+    await expect(buildNodeIndex({ vaultPath: vault, convention: convention() })).resolves.toEqual([]);
+  });
 
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    const fm = edgesOfKind(edges, "frontmatter");
+  it("does not treat BOM-prefixed frontmatter wikilinks as body edges", async () => {
+    await note("notes/target.md", "template: note", "target");
+    const source = path.join(vault, "notes", "bom.md");
+    await writeFile(source, "\ufeff---\r\ntemplate: note\r\nrelated: \"[[ghost]]\"\r\n---\r\nbody\r\n");
+    const graph = await buildGraph({ vaultPath: vault, convention: convention() });
+    expect(graph.some(edge => edge.to.includes("ghost") || edge.from.includes("ghost"))).toBe(false);
+  });
 
-    expect(fm).toContainEqual({
-      from: "note.md",
-      to: "other.md",
-      weight: 4.0,
-      kind: "frontmatter",
-    });
+  it("excludes managed template source paths from explicit and whole-vault scans", async () => {
+    await note("Templates/note.md", "template: note\nstatus: source", "source");
+    await note("notes/live.md", "template: note\nstatus: live", "live");
+    const resolved = convention();
+    await expect(buildNodeIndex({ vaultPath: vault, convention: resolved })).resolves.toHaveLength(1);
+    await expect(buildNodeIndex({ vaultPath: vault, convention: resolved, files: ["Templates/note.md"] })).resolves.toEqual([]);
+  });
+
+  it("excludes a symlink alias of a managed template from graph scans", async () => {
+    await note("Templates/note.md", "template: note\nstatus: source", "source");
+    await mkdir(path.join(vault, "notes"), { recursive: true });
+    await symlink(path.join(vault, "Templates", "note.md"), path.join(vault, "notes", "template-alias.md"));
+    await expect(buildNodeIndex({ vaultPath: vault, convention: convention() })).resolves.toEqual([]);
+    await expect(buildNodeIndex({ vaultPath: vault, convention: convention(), files: ["notes/template-alias.md"] })).resolves.toEqual([]);
+  });
+
+  it("returns an empty graph for an explicit zero-file graph-only scan without creating .oms", async () => {
+    await expect(buildGraph({ vaultPath: vault, convention: convention(), files: [] })).resolves.toEqual([]);
+    await expect(access(path.join(vault, ".oms"))).rejects.toThrow();
+  });
+
+  it("orders node paths and source signatures deterministically", async () => {
+    await note("notes/z.md", "template: note\nstatus: open", "z");
+    await note("notes/a.md", "template: note\nstatus: open", "a");
+    const resolved = convention();
+    expect((await buildNodeIndex({ vaultPath: vault, convention: resolved })).map(node => node.path)).toEqual(["notes/a.md", "notes/z.md"]);
+    expect(await nodeSourceSignature(vault, resolved)).toBe(await nodeSourceSignature(vault, resolved));
   });
 });
 
-// ---------------------------------------------------------------------------
-// Tier 3: Adamic-Adar × 1.5 — numeric correctness
-// ---------------------------------------------------------------------------
+describe("projection-bound cache", () => {
+  it("requires exact projection and source signatures and rejects old versions", async () => {
+    const cache = path.join(vault, "cache.json");
+    await saveCachedGraph(cache, [], signature);
+    await expect(loadCachedGraph(cache, signature)).resolves.toEqual([]);
+    await expect(loadCachedGraph(cache, "sha256:other" as Digest)).rejects.toThrow(/stale/);
+    await writeFile(cache, JSON.stringify({ version: 1, edges: [] }), "utf8");
+    await expect(loadCachedGraph(cache, signature)).rejects.toThrow(/rebuild explicitly/);
 
-describe("Tier 3 – Adamic-Adar edges", () => {
-  it("computes correct Adamic-Adar weight for two nodes sharing one common neighbour", async () => {
-    // Graph: a → c, b → c  (both link to c; c is the common neighbour)
-    // Adjacency (undirected): adj(c) = {a, b}  — degree 2
-    // AA(a, b) via c = 1/log(2)
-    // Edge weight   = 1/log(2) * 1.5
-    await writeVaultFile("a.md", "[[c]]\n");
-    await writeVaultFile("b.md", "[[c]]\n");
-    await writeVaultFile("c.md", "");
-
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    const aaEdges = edgesOfKind(edges, "adamic-adar");
-
-    // Both directions emitted
-    expect(aaEdges.length).toBeGreaterThanOrEqual(2);
-
-    const expectedWeight = (1 / Math.log(2)) * 1.5;
-    const ab = aaEdges.find((e) => e.from === "a.md" && e.to === "b.md");
-    const ba = aaEdges.find((e) => e.from === "b.md" && e.to === "a.md");
-
-    expect(ab).toBeDefined();
-    expect(ba).toBeDefined();
-    expect(ab?.weight).toBeCloseTo(expectedWeight, 10);
-    expect(ba?.weight).toBeCloseTo(expectedWeight, 10);
-  });
-
-  it("Adamic-Adar accumulates correctly for two common neighbours", async () => {
-    // Graph: a → c, a → d, b → c, b → d
-    // adj(c) = {a,b}, adj(d) = {a,b}  — each degree 2
-    // AA(a, b) = 1/log(2) + 1/log(2) = 2/log(2)
-    // Edge weight = 2/log(2) * 1.5
-    await writeVaultFile("a.md", "[[c]]\n[[d]]\n");
-    await writeVaultFile("b.md", "[[c]]\n[[d]]\n");
-    await writeVaultFile("c.md", "");
-    await writeVaultFile("d.md", "");
-
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    const ab = edgesOfKind(edges, "adamic-adar").find(
-      (e) => e.from === "a.md" && e.to === "b.md",
-    );
-
-    expect(ab).toBeDefined();
-    expect(ab?.weight).toBeCloseTo((2 / Math.log(2)) * 1.5, 10);
-  });
-
-  it("no Adamic-Adar edges when no common neighbours exist", async () => {
-    // a → b, c is isolated
-    await writeVaultFile("a.md", "[[b]]\n");
-    await writeVaultFile("b.md", "");
-    await writeVaultFile("c.md", "");
-
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    // b has degree 1 (only neighbour is a) → contrib = 0 → no AA edge
-    expect(edgesOfKind(edges, "adamic-adar")).toHaveLength(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tier 4: type-affinity × 1.0
-// ---------------------------------------------------------------------------
-
-describe("Tier 4 – type-affinity edges", () => {
-  it("produces type-affinity edges (weight 1.0) for notes in the same folder", async () => {
-    await writeVaultFile("projects/alpha.md", "# Alpha\n");
-    await writeVaultFile("projects/beta.md", "# Beta\n");
-
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    const affinities = edgesOfKind(edges, "type-affinity");
-
-    expect(affinities).toContainEqual({
-      from: "projects/alpha.md",
-      to: "projects/beta.md",
-      weight: 1.0,
-      kind: "type-affinity",
-    });
-    expect(affinities).toContainEqual({
-      from: "projects/beta.md",
-      to: "projects/alpha.md",
-      weight: 1.0,
-      kind: "type-affinity",
-    });
-  });
-
-  it("does not emit type-affinity between notes in different folders", async () => {
-    await writeVaultFile("folder1/x.md", "# X\n");
-    await writeVaultFile("folder2/y.md", "# Y\n");
-
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    expect(edgesOfKind(edges, "type-affinity")).toHaveLength(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Cache round-trip
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// taxonomy.yaml: exclude — malformed frontmatter must not abort the scan
-// ---------------------------------------------------------------------------
-
-describe("taxonomy-declared exclusions", () => {
-  it("honors taxonomy.yaml: exclude instead of aborting on invalid frontmatter", async () => {
-    await writeVaultFile(
-      ".oms/taxonomy.yaml",
-      "folders: {}\nexclude:\n  - \"templates/**\"\n",
-    );
-    // A template source's pre-substitution frontmatter is intentionally not
-    // valid YAML — this must be skipped, not thrown on.
-    await writeVaultFile("templates/daily.md", "---\ndate: {{date}}\n---\n# {{title}}\n");
-    await writeVaultFile("notes/idea.md", "# Idea\n");
-
-    const nodes = await buildNodeIndex({ vaultPath: tmpVault });
-    expect(nodes.map((n) => n.path)).toEqual(["notes/idea.md"]);
-
-    const edges = await buildGraph({ vaultPath: tmpVault });
-    expect(edges.every((e) => e.from !== "templates/daily.md" && e.to !== "templates/daily.md")).toBe(
-      true,
-    );
-  });
-
-  it("still throws for malformed frontmatter on a note that is not excluded", async () => {
-    await writeVaultFile(".oms/taxonomy.yaml", "folders: {}\n");
-    await writeVaultFile("broken.md", "---\nstatus: [broken\n---\nBody\n");
-    await expect(buildNodeIndex({ vaultPath: tmpVault })).rejects.toThrow(/Malformed frontmatter/);
-  });
-});
-
-describe("cache helpers", () => {
-  it("preserves numeric and boolean frontmatter values in the node snapshot", async () => {
-    await writeVaultFile(
-      "notes/typed.md",
-      "---\nrating: 5\ndone: false\n---\n# Typed\n",
-    );
-    const [node] = await buildNodeIndex({ vaultPath: tmpVault });
-    expect(node?.axes.rating).toEqual([5]);
-    expect(node?.axes.done).toEqual([false]);
-  });
-
-  it("saveCachedGraph and loadCachedGraph round-trip GraphEdge[]", async () => {
-    const cachePath = path.join(tmpVault, ".oms", "cache", "engine", "graph.json");
-    const original: GraphEdge[] = [
-      { from: "a.md", to: "b.md", weight: 3.0, kind: "wikilink" },
-      { from: "b.md", to: "a.md", weight: 1.5, kind: "adamic-adar" },
-    ];
-
-    await saveCachedGraph(cachePath, original);
-    const loaded = await loadCachedGraph(cachePath);
-
-    expect(loaded).toEqual(original);
-  });
-
-  it("loadCachedGraph returns null when file does not exist", async () => {
-    const result = await loadCachedGraph(path.join(tmpVault, "nonexistent.json"));
-    expect(result).toBeNull();
+    await note("notes/a.md", "template: note\nstatus: open", "a");
+    const resolved = convention();
+    const source = await nodeSourceSignature(vault, resolved);
+    const nodes = await buildNodeIndex({ vaultPath: vault, convention: resolved });
+    await saveNodeIndex(cache, nodes, source, signature);
+    await expect(loadNodeIndex(cache, source, signature)).resolves.toHaveLength(1);
+    await expect(loadNodeIndex(cache, source, "sha256:other" as Digest)).rejects.toThrow(/stale/);
   });
 });

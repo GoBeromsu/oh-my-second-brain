@@ -8,7 +8,8 @@ import { parse as yamlParse, stringify as yamlStringify } from "yaml";
  *
  * Two distinct `.oms/` profiles exist, distinguished by content:
  *
- *   - Vault `.oms/`  — the convention SSOT: `taxonomy.yaml` + `concepts/*.yaml`.
+ *   - Vault `.oms/`  — template-first controls: `template-policy.json`,
+ *                      `taxonomy.yaml`, and derived `types.json`.
  *                      Written by `oms setup`. Owned by the user's Obsidian vault.
  *   - Bridge `.oms/` — a link into a vault from some *other* repo (e.g. a GitHub
  *                      project). Holds NO convention yaml; only `links.yaml`
@@ -165,7 +166,8 @@ export async function writeLinkRecord(omsDir: string, record: LinkRecord): Promi
  * Resolve the effective vault root for a command invoked from `startDir`.
  *
  * Precedence (content-based, so the two `.oms/` profiles never collide):
- *   1. Local vault ontology (`.oms/concepts` or `.oms/taxonomy.yaml`) → vault.
+ *   1. Local template convention (`.oms/template-policy.json` or
+ *      `.oms/taxonomy.yaml`)                                        → vault.
  *   2. Local bridge (`.oms/links.yaml`)                              → bridge.
  *   3. `OMS_VAULT` environment variable                             → env.
  *   4. Fallback to `startDir`                                       → cwd.
@@ -176,9 +178,9 @@ export async function resolveEffectiveVault(
 ): Promise<ResolvedVault> {
   const omsDir = path.join(startDir, ".oms");
 
-  const conceptsKind = await pathKind(path.join(omsDir, "concepts"));
+  const policyKind = await pathKind(path.join(omsDir, "template-policy.json"));
   const taxonomyKind = await pathKind(path.join(omsDir, "taxonomy.yaml"));
-  if (conceptsKind === "directory" || taxonomyKind === "file") {
+  if (policyKind === "file" || taxonomyKind === "file") {
     return { vault: path.resolve(startDir), scope: null, source: "vault" };
   }
 

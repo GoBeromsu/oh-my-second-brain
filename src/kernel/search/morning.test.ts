@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { loadOntology } from "../ontology/loader.js";
 import { retrieveMorningContext, type MorningSemanticBackend } from "./morning.js";
 import { writeMorningVaultFixture } from "./morning-test-fixtures.js";
 import type {
@@ -13,11 +11,6 @@ import type {
   SemanticQueryResult,
   SemanticSearchHit,
 } from "./semantic-contract.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, "../../../");
-const ontologyDir = path.join(repoRoot, "core", "ontology");
 
 let tmpVault: string | undefined;
 
@@ -97,7 +90,6 @@ const BASE_OPTS = {
 describe("morning context retrieval", () => {
   it("combines local graph hits with engine semantic candidates", async () => {
     tmpVault = await writeMorningVaultFixture();
-    const ontology = await loadOntology(ontologyDir);
     const backend = stubBackend({
       query: {
         available: true,
@@ -106,7 +98,7 @@ describe("morning context retrieval", () => {
     });
 
     const result = await retrieveMorningContext(
-      { vault: tmpVault, ontology, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", limit: 2 } },
+      { vault: tmpVault, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", limit: 2 } },
       backend,
     );
 
@@ -124,7 +116,6 @@ describe("morning context retrieval", () => {
 
   it("restricts semantic candidates to the local graph when scope=graph", async () => {
     tmpVault = await writeMorningVaultFixture();
-    const ontology = await loadOntology(ontologyDir);
     const backend = stubBackend({
       query: {
         available: true,
@@ -133,7 +124,7 @@ describe("morning context retrieval", () => {
     });
 
     const result = await retrieveMorningContext(
-      { vault: tmpVault, ontology, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", limit: 3, scope: "graph" } },
+      { vault: tmpVault, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", limit: 3, scope: "graph" } },
       backend,
     );
 
@@ -143,7 +134,6 @@ describe("morning context retrieval", () => {
 
   it("passes typed query options through to the backend", async () => {
     tmpVault = await writeMorningVaultFixture();
-    const ontology = await loadOntology(ontologyDir);
     const backend = stubBackend({
       query: { available: true, hits: [hit("references/Agent Retrieval.md")] },
     });
@@ -151,7 +141,6 @@ describe("morning context retrieval", () => {
     await retrieveMorningContext(
       {
         vault: tmpVault,
-        ontology,
         ...BASE_OPTS,
         query: "fallback retrieve query",
         semantic: {
@@ -183,14 +172,13 @@ describe("morning context retrieval", () => {
 
   it("surfaces the embedding sync result when sync runs", async () => {
     tmpVault = await writeMorningVaultFixture();
-    const ontology = await loadOntology(ontologyDir);
     const backend = stubBackend({
       sync: { available: true, storage: "oms-native-json", collection: "obsidian", status: READY_STATUS, steps: [] },
       query: { available: true, hits: [hit("references/Agent Retrieval.md")] },
     });
 
     const result = await retrieveMorningContext(
-      { vault: tmpVault, ontology, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", syncBeforeSearch: true } },
+      { vault: tmpVault, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", syncBeforeSearch: true } },
       backend,
     );
 
@@ -200,7 +188,6 @@ describe("morning context retrieval", () => {
 
   it("keeps graph results and skips semantic search when embedding sync fails", async () => {
     tmpVault = await writeMorningVaultFixture();
-    const ontology = await loadOntology(ontologyDir);
     const backend = stubBackend({
       sync: {
         available: false,
@@ -212,7 +199,7 @@ describe("morning context retrieval", () => {
     });
 
     const result = await retrieveMorningContext(
-      { vault: tmpVault, ontology, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", syncBeforeSearch: true } },
+      { vault: tmpVault, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", syncBeforeSearch: true } },
       backend,
     );
 
@@ -228,13 +215,12 @@ describe("morning context retrieval", () => {
 
   it("keeps graph results when the semantic provider is unavailable", async () => {
     tmpVault = await writeMorningVaultFixture();
-    const ontology = await loadOntology(ontologyDir);
     const backend = stubBackend({
       status: { available: false, reason: "vector/HyDE require an embedding model" },
     });
 
     const result = await retrieveMorningContext(
-      { vault: tmpVault, ontology, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian" } },
+      { vault: tmpVault, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian" } },
       backend,
     );
 
@@ -249,7 +235,6 @@ describe("morning context retrieval", () => {
 
   it("hydrates the top semantic hit when requested", async () => {
     tmpVault = await writeMorningVaultFixture();
-    const ontology = await loadOntology(ontologyDir);
     const backend = stubBackend({
       query: { available: true, hits: [hit("references/Agent Retrieval.md"), hit("references/Unrelated.md")] },
       documents: {
@@ -259,7 +244,7 @@ describe("morning context retrieval", () => {
     });
 
     const result = await retrieveMorningContext(
-      { vault: tmpVault, ontology, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", hydrate: "top" } },
+      { vault: tmpVault, ...BASE_OPTS, semantic: { enabled: true, collection: "obsidian", hydrate: "top" } },
       backend,
     );
 

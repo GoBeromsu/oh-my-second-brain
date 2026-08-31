@@ -1,65 +1,33 @@
+import { afterEach, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  loadContract,
-  loadObsidianTypes,
-  parseContract,
-  serializeContract,
-  writeContract,
-} from "../index.js";
+import { loadObsidianTypes, parseTemplatePolicy, serializeTemplatePolicy } from "./index.js";
 
 let vault: string | undefined;
+afterEach(async () => { if (vault !== undefined) await rm(vault, { recursive: true, force: true }); vault = undefined; });
 
-afterEach(async () => {
-  if (vault !== undefined) await rm(vault, { recursive: true, force: true });
-  vault = undefined;
-});
-
-describe("frontmatter JSON contract", () => {
-  it("round-trips unknown contract, axis, and vocabulary properties", () => {
-    const contract = parseContract({
-      version: 4,
-      extension: { owner: "vault" },
-      axes: [{
-        kind: "field",
-        key: "status",
-        type: "select",
-        renderer: "badge",
-        allowedValues: [{ value: "active", color: "green" }],
-      }],
-      types: {},
-      allowedValues: {},
-    });
-
-    expect(JSON.parse(serializeContract(contract))).toMatchObject({
-      extension: { owner: "vault" },
-      axes: [{ renderer: "badge", allowedValues: [{ value: "active", color: "green" }] }],
-    });
+describe("Obsidian property type authority", () => {
+  it("is read-only and returns null when the authority is absent", async () => {
+    vault = await mkdtemp(path.join(tmpdir(), "oms-types-authority-"));
+    expect(await loadObsidianTypes(vault)).toBeNull();
+    expect(await readFile(vault).catch(() => null)).toBeNull();
   });
 
-  it("uses .oms/types.json as the writable authority and reads Obsidian types without writing them", async () => {
-    vault = await mkdtemp(path.join(tmpdir(), "oms-contract-"));
-    await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await mkdir(path.join(vault, ".obsidian"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), "version: 999\n", "utf-8");
-    await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ status: "checkbox" }), "utf-8");
+  it("reads map and descriptor-array forms without changing bytes", async () => {
+    vault = await mkdtemp(path.join(tmpdir(), "oms-types-authority-"));
+    await mkdir(path.join(vault, ".obsidian"));
+    const target = path.join(vault, ".obsidian", "types.json");
+    const raw = JSON.stringify({ types: { title: "text", done: { type: "checkbox" } }, extension: true });
+    await writeFile(target, raw);
+    expect(await loadObsidianTypes(vault)).toMatchObject({ types: { title: "text", done: "checkbox" }, source: target });
+    expect(await readFile(target, "utf8")).toBe(raw);
+    await writeFile(target, JSON.stringify({ types: [{ name: "rating", type: "number" }] }));
+    expect((await loadObsidianTypes(vault))?.types).toEqual({ rating: "number" });
+  });
 
-    expect(await loadContract(vault)).toBeNull();
-
-    await writeContract(vault, {
-      version: 4,
-      axes: [{ kind: "field", key: "status", type: "select" }],
-      types: {},
-      allowedValues: {},
-    });
-
-    expect(await loadContract(vault)).toMatchObject({ types: { status: "checkbox" } });
-    expect(await loadObsidianTypes(vault)).toEqual({
-      types: { status: "checkbox" },
-      source: path.join(vault, ".obsidian", "types.json"),
-    });
-    expect(await readFile(path.join(vault, ".obsidian", "types.json"), "utf-8")).toBe(JSON.stringify({ status: "checkbox" }));
+  it("re-exports the template policy parser rather than a writable projection contract", () => {
+    const policy = parseTemplatePolicy({ version: 1, templateFolder: "Templates", base: { fields: {} }, contracts: {}, templates: {}, extension: { owner: "vault" } });
+    expect(JSON.parse(serializeTemplatePolicy(policy))).toMatchObject({ version: 1, extensions: { extension: { owner: "vault" } } });
   });
 });

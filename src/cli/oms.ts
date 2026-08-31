@@ -15,7 +15,7 @@ import { runDoctor, runLint } from "./doctor-lint.js";
 import {
   runInstallOrUninstall,
   runUpdateCommand,
-  runUpdateReconcile,
+  runReconcile,
   type HostCommandContext,
 } from "./host-commands.js";
 import { runLink } from "./link-command.js";
@@ -68,9 +68,11 @@ async function main(): Promise<void> {
     vault,
     vaultExplicit,
     yes,
+    approvedDigest,
+    templateFolder,
+    maxPerTemplate,
     apply,
     installClaude,
-    suggestFields,
     runtime,
     dryRun,
     executeExternal,
@@ -79,7 +81,6 @@ async function main(): Promise<void> {
     agentVault,
     verbose,
     json,
-    maxPerConcept,
     folders,
     conventionNote,
     embeddingDescriptorPath,
@@ -91,7 +92,7 @@ async function main(): Promise<void> {
   // `mcp` keeps the FULL resolution result: the write surface trusts every
   // source except `cwd`, so the server needs the source, not just the path.
   let mcpTarget: { vault: string; scope: string[] | null; source: WriteTargetSource } | undefined;
-  if ((command === "update" || command === "update-reconcile") && unknownFlags.length > 0) {
+  if ((command === "update" || command === "reconcile") && unknownFlags.length > 0) {
     console.error(`[oms] Unsupported update option: ${unknownFlags.join(", ")}`);
     process.exitCode = 1;
     return;
@@ -101,16 +102,6 @@ async function main(): Promise<void> {
       ? { vault, scope: null, source: "explicit" }
       : await resolveEffectiveVault(process.cwd(), process.env);
     vault = mcpTarget.vault;
-  } else if (command === "update" || command === "update-reconcile") {
-    if (!vaultExplicit) {
-      const resolved = await resolveEffectiveVault(process.cwd(), process.env);
-      if (resolved.source === "cwd") {
-        console.error("[oms] Refusing update: target-unverified; no verified vault target was resolved from the current directory. Pass --vault or configure OMS_VAULT instead.");
-        process.exitCode = 1;
-        return;
-      }
-      vault = resolved.vault;
-    }
   } else if (shouldResolveBridgeVault(command, vaultExplicit)) {
     vault = (await resolveEffectiveVault(process.cwd(), process.env)).vault;
   }
@@ -134,7 +125,15 @@ async function main(): Promise<void> {
     } else if (embeddingNoDefault) {
       embeddingDescriptor = null;
     }
-    await runSetup({ vault, yes, installClaude, suggestFields, dryRun, embeddingDescriptor });
+    await runSetup({
+      vault,
+      yes,
+      approvedDigest: approvedDigest as `sha256:${string}` | undefined,
+      templateFolder,
+      installClaude,
+      dryRun,
+      embeddingDescriptor,
+    });
     if (!dryRun) await maybePrintUpdateNotice();
   } else if (command === "link") {
     process.exitCode = await runLink({
@@ -150,18 +149,17 @@ async function main(): Promise<void> {
     if (process.exitCode === 0) await maybePrintUpdateNotice();
   } else if (command === "update") {
     process.exitCode = await runUpdateCommand(hostContext());
-  } else if (command === "update-reconcile") {
-    process.exitCode = await runUpdateReconcile(hostContext());
+  } else if (command === "reconcile") {
+    process.exitCode = await runReconcile(hostContext());
   } else if (command === "doctor") {
-    process.exitCode = await runDoctor({ vault, verbose, json, maxPerConcept });
+    process.exitCode = await runDoctor({ vault, verbose, json, maxPerTemplate });
     await maybePrintUpdateNotice();
   } else if (command === "audit") {
     process.exitCode = await runAudit({
       vault,
       json,
       folder: folders[0],
-      suggestFields,
-    });
+      });
     await maybePrintUpdateNotice();
   } else if (command === "linkify") {
     process.exitCode = await runLinkify({

@@ -28,8 +28,8 @@ export interface FrontmatterRange {
   end: number;
 }
 
-const OPEN_FENCE = /^---\r?\n/;
-const FENCE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+const OPEN_FENCE = /^\ufeff?---\r?\n/;
+const FENCE = /^\ufeff?---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 function emptyParsedNote(raw: string): ParsedNote {
   return {
@@ -66,6 +66,7 @@ export function parseNote(raw: string): ParsedNote {
     };
   }
   const yamlText = match[1] ?? "";
+  const frontmatterStart = open[0].length;
   const document = parseDocument(yamlText, { prettyErrors: false, uniqueKeys: true });
   if (document.errors.length > 0) {
     return {
@@ -77,7 +78,7 @@ export function parseNote(raw: string): ParsedNote {
         message: error.message,
       })),
       frontmatterRaw: yamlText,
-      frontmatterRange: { start: 4, end: 4 + yamlText.length },
+      frontmatterRange: { start: frontmatterStart, end: frontmatterStart + yamlText.length },
     };
   }
 
@@ -100,6 +101,6 @@ export function parseNote(raw: string): ParsedNote {
     hasFrontmatter: true,
     diagnostics,
     frontmatterRaw: yamlText,
-    frontmatterRange: { start: 4, end: 4 + yamlText.length },
+    frontmatterRange: { start: frontmatterStart, end: frontmatterStart + yamlText.length },
   };
 }

@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { DEFAULT_EXCLUDE_GLOBS, matchesAnyGlob, excludedNoteMatcher } from "./note-exclude.js";
+import { DEFAULT_EXCLUDE_GLOBS, managedSourceExclusionMatcher, matchesAnyGlob, excludedNoteMatcher } from "./note-exclude.js";
 
 let roots: string[] = [];
 
@@ -78,12 +78,22 @@ describe("excludedNoteMatcher", () => {
     expect(isExcluded("notes/idea.md")).toBe(false);
   });
 
-  it("degrades to the built-in defaults when taxonomy.yaml is malformed", async () => {
+  it("retains malformed taxonomy evidence instead of silently allowing every note", async () => {
     const vault = await makeVault({
       ".oms/taxonomy.yaml": "broken: [legacy\n",
     });
-    const isExcluded = await excludedNoteMatcher(vault);
-    expect(isExcluded(".obsidian/workspace.md")).toBe(true);
-    expect(isExcluded("notes/idea.md")).toBe(false);
+    await expect(excludedNoteMatcher(vault)).rejects.toThrow(/NOTE_EXCLUSION_RESOLUTION_FAILED.*taxonomy\.yaml/);
+  });
+});
+
+describe("managedSourceExclusionMatcher", () => {
+  it("excludes arbitrary managed source names through a symlink alias", async () => {
+    const vault = await makeVault({ "authored/नोट 이름.md": "---\ntitle: template\n---\n" });
+    await mkdir(path.join(vault, "aliases"), { recursive: true });
+    await symlink(path.join(vault, "authored", "नोट 이름.md"), path.join(vault, "aliases", "copy.md"));
+    const isExcluded = await managedSourceExclusionMatcher(vault, ["authored/नोट 이름.md"]);
+    await expect(isExcluded("authored/नोट 이름.md")).resolves.toBe(true);
+    await expect(isExcluded("aliases/copy.md")).resolves.toBe(true);
+    await expect(isExcluded("notes/idea.md")).rejects.toThrow(/MANAGED_SOURCE_RESOLUTION_FAILED.*notes\/idea.md/);
   });
 });

@@ -4,25 +4,21 @@
  * `taxonomy.yaml: exclude` names markdown files that are not notes - template
  * sources whose pre-substitution frontmatter is intentionally not valid YAML
  * (Templater tags, agent {{var}} placeholders), build staging, skill files.
- * The vault-lint lane already honours it via `resolveExcludeGlobs` in
- * ../engine/conventions/vault-lint.ts, but the walkers that feed retrieval
- * (the engine graph builder, the EAV axis scan, the graph cache) never saw
- * it and threw on the first excluded note, aborting the whole vault scan.
+ * Every template-derived graph/index walker uses this declaration so excluded
+ * authored sources cannot abort a vault scan.
  *
  * This module gives those walkers the same exclusion policy without
- * requiring a full Ontology load (two of the three call sites intentionally
- * do not load one): it reads <vaultRoot>/.oms/taxonomy.yaml directly and
- * degrades to the built-in defaults when the file is missing or malformed.
+ * requiring template resolution: it reads the vault exclusion declaration
+ * directly and uses built-in system exclusions when none is configured.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 
 /**
  * Default audit exemptions - build artifacts, self-documenting templates, and
  * skill files that intentionally carry no frontmatter. This is the single
- * declaration; ../engine/conventions/vault-lint.ts re-exports it so its
- * existing importers are unaffected.
+ * declaration shared by current vault walkers.
  */
 export const DEFAULT_EXCLUDE_GLOBS: readonly string[] = [
   "25. Digital Garden/.deploy-staging/**",
@@ -63,6 +59,22 @@ export function matchesAnyGlob(notePath: string, globs: readonly string[]): bool
 /** One resolve per vault root per process; every walker level shares it. */
 const matcherCache = new Map<string, Promise<RegExp[]>>();
 
+function normalizedPath(notePath: string): string {
+  const normalized = notePath.normalize("NFC").replaceAll("\\", "/").replace(/^\.\/+/, "");
+  if (
+    normalized === ""
+    || normalized.startsWith("/")
+    || normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    failure("MANAGED_SOURCE_RESOLUTION_FAILED", `unsafe path ${notePath}`);
+  }
+  return normalized;
+}
+
+function failure(code: string, evidence: string): never {
+  throw new Error(`${code}: ${evidence}`);
+}
+
 async function loadExcludeMatchers(vaultRoot: string): Promise<RegExp[]> {
   const key = path.resolve(vaultRoot);
   let pending = matcherCache.get(key);
@@ -78,16 +90,61 @@ async function loadExcludeMatchers(vaultRoot: string): Promise<RegExp[]> {
             : undefined;
         if (Array.isArray(rawExclude) && rawExclude.every((item) => typeof item === "string")) {
           declared = rawExclude;
+        } else if (rawExclude !== undefined) {
+          failure("NOTE_EXCLUSION_RESOLUTION_FAILED", ".oms/taxonomy.yaml: exclude must be a list of strings");
         }
-      } catch {
-        // A vault with no (or an unparsable) taxonomy.yaml still gets the
-        // built-in defaults - a missing exclude declaration is not fatal.
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+          return DEFAULT_EXCLUDE_GLOBS.map(globToRegExp);
+        }
+        failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `.oms/taxonomy.yaml: ${error instanceof Error ? error.message : String(error)}`);
       }
       return [...DEFAULT_EXCLUDE_GLOBS, ...declared].map(globToRegExp);
     })();
     matcherCache.set(key, pending);
   }
   return pending;
+}
+
+async function managedSourcePaths(vaultRoot: string): Promise<readonly string[]> {
+  const policyPath = path.join(vaultRoot, ".oms", "template-policy.json");
+  let raw: string;
+  try {
+    raw = await readFile(policyPath, "utf-8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    return failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (error) {
+    return failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: policy must be an object`);
+  }
+  const templates = (parsed as Record<string, unknown>)["templates"];
+  if (templates === null || typeof templates !== "object" || Array.isArray(templates)) {
+    return failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: templates must be an object`);
+  }
+  const sources: string[] = [];
+  for (const [templateId, binding] of Object.entries(templates)) {
+    if (binding === null || typeof binding !== "object" || Array.isArray(binding)) {
+      failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: templates.${templateId} must be an object`);
+    }
+    const sourcePath = (binding as Record<string, unknown>)["sourcePath"];
+    if (typeof sourcePath !== "string" || sourcePath === "") {
+      failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: templates.${templateId}.sourcePath must be a non-empty string`);
+    }
+    sources.push(normalizedPath(sourcePath));
+  }
+  return sources;
+}
+
+/** Exact managed template paths without requiring the derived projection. */
+export async function managedSourcePathSet(vaultRoot: string): Promise<ReadonlySet<string>> {
+  return new Set(await managedSourcePaths(path.resolve(vaultRoot)));
 }
 
 /**
@@ -98,5 +155,42 @@ export async function excludedNoteMatcher(
   vaultRoot: string,
 ): Promise<(notePath: string) => boolean> {
   const matchers = await loadExcludeMatchers(vaultRoot);
-  return (notePath: string) => matchers.some((pattern) => pattern.test(notePath));
+  const sources = new Set(await managedSourcePaths(vaultRoot));
+  return (notePath: string) => {
+    const normalized = normalizedPath(notePath);
+    return sources.has(normalized) || matchers.some((pattern) => pattern.test(normalized));
+  };
+}
+
+/**
+ * Resolves managed source identities once and matches both lexical paths and
+ * aliases that resolve to the same on-disk file. Resolution failures reject
+ * the scan with the source path that could not be established.
+ */
+export async function managedSourceExclusionMatcher(
+  vaultRoot: string,
+  sourcePaths?: readonly string[],
+): Promise<(notePath: string) => Promise<boolean>> {
+  const root = await realpath(vaultRoot);
+  const matchers = await loadExcludeMatchers(root);
+  const lexical = new Set((sourcePaths ?? await managedSourcePaths(root)).map(normalizedPath));
+  const resolved = new Set<string>();
+  for (const sourcePath of lexical) {
+    try {
+      resolved.add(await realpath(path.resolve(root, sourcePath)));
+    } catch (error) {
+      failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${sourcePath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return async (notePath: string) => {
+    const normalized = normalizedPath(notePath);
+    if (lexical.has(normalized) || matchers.some((matcher) => matcher.test(normalized))) return true;
+    let actual: string;
+    try {
+      actual = await realpath(path.resolve(root, normalized));
+    } catch (error) {
+      return failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${normalized}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return resolved.has(actual);
+  };
 }

@@ -1,16 +1,21 @@
 # Oh My Second Brain Convention Shim — Codex
 
-<!-- Append this block to your project's AGENTS.md to activate Oh My Second Brain conventions in Codex (oh-my-codex). -->
+<!-- Append this block to a project's AGENTS.md to activate Oh My Second Brain conventions in Codex. -->
 
-## Vault Convention (Oh My Second Brain)
+## Vault Convention
 
-This vault is governed by Oh My Second Brain conventions stored in `.oms/`.
+The vault is governed by user-owned template conventions in `.oms/`.
 
-**Before working with vault notes:**
-- Run `oms doctor` to validate notes against the convention (exits 0, non-blocking).
-- Read `.oms/taxonomy.yaml` and `.oms/concepts/*.yaml` for folder and field declarations.
+- Actual Obsidian `.md` templates own note shape and body scaffolding.
+- `.obsidian/types.json` is read-only type authority.
+- The user-owned ontology remains active: `.oms/template-policy.json` records note/field meaning and policy; `.oms/taxonomy.yaml` records folder/link meaning and placement.
+- `.oms/types.json` is derived; never hand-edit it.
+- Humans and agents use the same stable `templateId` rules.
 
-**Write:** Use `$oms-write`. Call MCP `oms_write`. Do not use host Write/Edit for vault `.md` files.
-**Retrieve:** Use the `$oms-search` skill with declared lenses.
+**Write:** Use `$oms-write` and MCP `oms_write`, never host Write/Edit for vault notes or managed templates. Notes use `op: "note"`. Template changes use `op: "template"`, first as a dry-run and then only with the exact reviewed `approvalDigest`.
 
-> **v0 native install:** `oms install --runtime codex` installs Codex rules, the `$oms-write`, `$oms-search`, `$oms-link`, `$oms-distill`, `$oms-status`, and `$oms-doctor` skills, and a managed Codex MCP config. Use Oh My Second Brain MCP tools for vault operations and CLI commands for lifecycle.
+**Retrieve:** Use `$oms-search`; discover stable IDs with `op: "templates"`, then use template, declared field, folder, and link axes.
+
+**Maintain:** `$oms-status` is read-only. `$oms-doctor` diagnoses and performs explicit repairs.
+
+`oms install --runtime codex` installs seven skills: `$oms-write`, `$oms-search`, `$oms-link`, `$oms-distill`, `$oms-status`, `$oms-doctor`, and tool-less `$oms-template`, plus managed MCP configuration.

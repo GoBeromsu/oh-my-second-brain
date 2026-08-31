@@ -29,6 +29,7 @@ import type { EmbeddingProvider } from "../types.js";
 import type { ChunkerOptions, Chunk } from "../types.js";
 import type { EmbeddingIdentity, EngineStore } from "./store.js";
 import type { EmbeddingModelDescriptor } from "./model.js";
+import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -186,13 +187,14 @@ async function* selectedMarkdownFiles(
   collectionRoot: string,
   collectionRelative: string,
   files: readonly string[] | undefined,
+  isExcluded: (path: string) => Promise<boolean>,
 ): AsyncGenerator<string> {
   if (files === undefined) {
-    yield* walkMarkdown(collectionRoot, vault);
+    for await (const relPath of walkMarkdown(collectionRoot, vault)) if (!(await isExcluded(relPath))) yield relPath;
     return;
   }
   for (const relPath of explicitMarkdownFiles(vault, collectionRelative, files)) {
-    yield relPath;
+    if (!(await isExcluded(relPath))) yield relPath;
   }
 }
 
@@ -500,6 +502,7 @@ async function rebuildGenerationAtomically(opts: {
   collectionRoot: string;
   collectionRelative: string;
   files: readonly string[] | undefined;
+  isExcluded: (path: string) => Promise<boolean>;
   provider: EmbeddingProvider;
   configuredIdentity: EmbeddingIdentity;
   chunkerOpts: Partial<ChunkerOptions> | undefined;
@@ -548,6 +551,7 @@ async function rebuildGenerationAtomically(opts: {
       opts.collectionRoot,
       opts.collectionRelative,
       opts.files,
+      opts.isExcluded,
     )) {
       expectedDocs.add(relPath);
       await syncDocument({
@@ -646,6 +650,7 @@ function renameGeneration(shadowPath: string, activePath: string): void {
 
 export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSyncResult> {
   const vault = path.resolve(opts.vault);
+  const isExcluded = await managedSourceExclusionMatcher(vault);
   const collection = opts.collection ?? "vault";
   const collectionRoot = opts.collectionPath ? path.resolve(vault, opts.collectionPath) : vault;
   const collectionRelative = path.relative(vault, collectionRoot).replace(/\\/g, "/");
@@ -685,6 +690,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
         collectionRoot,
         collectionRelative,
         opts.files,
+        isExcluded,
       )) {
         await syncDocument({
           relPath,
@@ -873,6 +879,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
         collectionRoot,
         collectionRelative,
         files: opts.files,
+        isExcluded,
         provider,
         configuredIdentity: identity,
         chunkerOpts: opts.chunkerOpts,
@@ -916,6 +923,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
       collectionRoot,
       collectionRelative,
       opts.files,
+      isExcluded,
     )) {
       await syncDocument({
         relPath,

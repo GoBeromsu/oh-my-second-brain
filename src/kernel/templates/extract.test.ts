@@ -1,0 +1,25 @@
+import { describe, expect, it } from "vitest";
+import { parseTemplate } from "./extract.js";
+
+describe("parseTemplate", () => {
+  it("preserves note shape and recognizes quoted and bare narrow expressions", () => {
+    const bytes = Buffer.from("\ufeff---\r\ntitle: {{title}}\r\ncreated: '{{date}}'\r\ntime: {{time}}\r\n---\r\n# {{title}}\r\n<!-- oms:content -->\r\n", "utf8");
+    const template = parseTemplate("Templates/OMS/note.md", bytes);
+    expect(template).toMatchObject({ bom: true, eol: "crlf", finalNewline: true, keyOrder: ["title", "created", "time"], contentMarker: true });
+    expect(template.frontmatter).toMatchObject({ title: "{{title}}", created: "{{date}}", time: "{{time}}" });
+    expect(template.body).toBe("# {{title}}\r\n<!-- oms:content -->\r\n");
+    expect(template.expressions.title).toEqual({ kind: "title" });
+    expect(template.expressions.created).toEqual({ kind: "date" });
+    expect(template.expressions.time).toEqual({ kind: "time" });
+  });
+
+  it("rejects bare arbitrary expressions with source and field diagnostics", () => {
+    expect(() => parseTemplate("Templates/OMS/note.md", Buffer.from("---\ntitle: {{tp.system.run()}}\n---\n"))).toThrow(/TEMPLATE_EXPRESSION_UNSUPPORTED.*Templates\/OMS\/note.md:title.*\{\{tp\.system\.run\(\)\}\}/);
+    expect(() => parseTemplate("Templates/OMS/note.md", Buffer.from("---\nmetadata:\n  nested:\n    - '{{tp.system.run()}}'\n---\n"))).toThrow(/TEMPLATE_EXPRESSION_UNSUPPORTED.*metadata\.nested\[0\]/);
+  });
+
+  it("rejects arbitrary body expressions and multiple content markers", () => {
+    expect(() => parseTemplate("Templates/OMS/note.md", Buffer.from("---\ntitle: literal\n---\n{{tp.system.run()}}\n<!-- oms:content -->\n"))).toThrow(/TEMPLATE_EXPRESSION_UNSUPPORTED.*body/);
+    expect(() => parseTemplate("Templates/OMS/note.md", Buffer.from("---\ntitle: literal\n---\n<!-- oms:content -->\n<!-- oms:content -->\n"))).toThrow(/multiple oms content markers/);
+  });
+});

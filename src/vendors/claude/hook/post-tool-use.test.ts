@@ -1,124 +1,92 @@
-import { describe, it, expect } from "vitest";
-import {
-  getDebounceAgeSeconds,
-  touchDebounceStamp,
-  auditNote,
-  GRAPH_BUILD_DEBOUNCE_SECS,
-  DEBOUNCE_STAMP_NAME,
-} from "./post-tool-use.js";
-import { mkdtemp, mkdir, writeFile, rm, stat } from "node:fs/promises";
-import path from "node:path";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { sourceSignature } from "../../../kernel/templates/resolver.js";
+import type { Digest } from "../../../kernel/templates/types.js";
+import { auditNote } from "./post-tool-use.js";
 
-async function makeVault(files: Record<string, string>): Promise<{
-  vaultPath: string;
-  cleanup: () => Promise<void>;
-}> {
-  const vaultPath = await mkdtemp(path.join(os.tmpdir(), "oms-post-test-"));
-  for (const [rel, content] of Object.entries(files)) {
-    const abs = path.join(vaultPath, rel);
-    await mkdir(path.dirname(abs), { recursive: true });
-    await writeFile(abs, content, "utf-8");
-  }
-  return { vaultPath, cleanup: async () => rm(vaultPath, { recursive: true, force: true }) };
+const roots: string[] = [];
+const sha = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
+
+async function vault(notes: Record<string, string> = {}): Promise<string> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "oms-claude-hook-"));
+  roots.push(root);
+  await Promise.all([".oms", ".obsidian", "Templates", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
+  const policy = `${JSON.stringify({ version: 1, templateFolder: "Templates", base: { fields: {} }, contracts: { note: { intent: "note", fields: { title: { required: true, type: "text" } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
+  const taxonomy = "folders:\n  notes:\n    template: note\n";
+  const obsidian = "{\"title\":\"text\"}\n";
+  const template = "---\ntitle: template\n---\nbody\n";
+  const descriptors = [{ logicalId: "template-policy", signature: sha(policy) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }, { path: "Templates/note.md", signature: sha(template) }];
+  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { required: true, type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") } } } }, null, 2)}\n`;
+  await Promise.all([
+    writeFile(path.join(root, ".oms", "template-policy.json"), policy, "utf8"),
+    writeFile(path.join(root, ".oms", "taxonomy.yaml"), taxonomy, "utf8"),
+    writeFile(path.join(root, ".oms", "types.json"), projection, "utf8"),
+    writeFile(path.join(root, ".obsidian", "types.json"), obsidian, "utf8"),
+    writeFile(path.join(root, "Templates", "note.md"), template, "utf8"),
+    ...Object.entries(notes).map(([relative, content]) => writeFile(path.join(root, relative), content, "utf8")),
+  ]);
+  return root;
 }
 
-// ---------------------------------------------------------------------------
-// Debounce stamp
-// ---------------------------------------------------------------------------
+async function tree(root: string, prefix = ""): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  for (const entry of await readdir(path.join(root, prefix), { withFileTypes: true })) {
+    const relative = path.posix.join(prefix, entry.name);
+    if (entry.isDirectory()) Object.assign(result, await tree(root, relative));
+    else result[relative] = await readFile(path.join(root, relative), "utf8");
+  }
+  return result;
+}
 
-describe("debounce stamp", () => {
-  it("returns null when stamp does not exist", async () => {
-    const { vaultPath, cleanup } = await makeVault({});
-    try {
-      const age = await getDebounceAgeSeconds(vaultPath);
-      expect(age).toBeNull();
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("creates the stamp and returns a small age immediately after", async () => {
-    const { vaultPath, cleanup } = await makeVault({});
-    try {
-      await touchDebounceStamp(vaultPath);
-      const age = await getDebounceAgeSeconds(vaultPath);
-      expect(age).not.toBeNull();
-      expect(age!).toBeLessThan(5); // created within 5 seconds
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("stamp file is placed at expected path", async () => {
-    const { vaultPath, cleanup } = await makeVault({});
-    try {
-      await touchDebounceStamp(vaultPath);
-      const stampPath = path.join(vaultPath, ".oms", "cache", DEBOUNCE_STAMP_NAME);
-      const s = await stat(stampPath);
-      expect(s.isFile()).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("GRAPH_BUILD_DEBOUNCE_SECS is 300", () => {
-    expect(GRAPH_BUILD_DEBOUNCE_SECS).toBe(300);
-  });
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-// ---------------------------------------------------------------------------
-// auditNote — frontmatter audit
-// ---------------------------------------------------------------------------
+describe("Claude PostToolUse template audit", () => {
+  it("is read-only across the whole vault tree", async () => {
+    const root = await vault({ "notes/one.md": "---\ntemplate: note\ntitle: One\n---\nBody\n" });
+    const before = await tree(root);
 
-describe("auditNote", () => {
-  it("returns empty array when note has no frontmatter violations", async () => {
-    // Vault with a minimal taxonomy that has no required fields → no violations.
-    // The concepts/ directory must exist for loadOntology to succeed.
-    const { vaultPath, cleanup } = await makeVault({
-      ".oms/taxonomy.yaml": `version: 1\nfolders:\n  "notes":\n    intent: notes\n    concept: null\n`,
-      ".oms/concepts/.keep": "",
-      "notes/A.md": "---\ntitle: Test\n---\nBody.",
-    });
-    try {
-      const lines = await auditNote(vaultPath, "notes/A.md");
-      // No required fields declared → no violations
-      expect(lines).toHaveLength(0);
-    } finally {
-      await cleanup();
-    }
+    await expect(auditNote(root, "notes/one.md")).resolves.toEqual([]);
+
+    expect(await tree(root)).toEqual(before);
   });
 
-  it("returns empty array gracefully when taxonomy is missing (fail-open)", async () => {
-    const { vaultPath, cleanup } = await makeVault({
-      "notes/A.md": "---\ntitle: Test\n---\nBody.",
-    });
-    try {
-      const lines = await auditNote(vaultPath, "notes/A.md");
-      expect(lines).toHaveLength(0);
-    } finally {
-      await cleanup();
-    }
+  it("accepts a note with a valid stable template ID", async () => {
+    const root = await vault({ "notes/one.md": "---\ntemplate: note\ntitle: One\n---\nBody\n" });
+    await expect(auditNote(root, "notes/one.md")).resolves.toEqual([]);
   });
 
-  it("returns empty array when note file does not exist (fail-open)", async () => {
-    const { vaultPath, cleanup } = await makeVault({});
-    try {
-      const lines = await auditNote(vaultPath, "nonexistent/note.md");
-      expect(lines).toHaveLength(0);
-    } finally {
-      await cleanup();
-    }
+  it("warns for a legacy concept-only note without falling back", async () => {
+    const root = await vault({ "notes/one.md": "---\nconcept: note\ntitle: One\n---\nBody\n" });
+    await expect(auditNote(root, "notes/one.md")).resolves.toEqual([
+      expect.stringContaining("legacy concept-only frontmatter"),
+    ]);
   });
-});
 
-// ---------------------------------------------------------------------------
-// Constants are exported and stable
-// ---------------------------------------------------------------------------
+  it("guides doctor operations for a managed template source", async () => {
+    const root = await vault();
+    await expect(auditNote(root, "Templates/note.md")).resolves.toEqual([
+      expect.stringContaining("validate"),
+    ]);
+  });
 
-describe("post-tool-use exports", () => {
-  it("exports DEBOUNCE_STAMP_NAME as a non-empty string", () => {
-    expect(typeof DEBOUNCE_STAMP_NAME).toBe("string");
-    expect(DEBOUNCE_STAMP_NAME.length).toBeGreaterThan(0);
+  it("reports a malformed projection without throwing", async () => {
+    const root = await vault({ "notes/one.md": "---\ntemplate: note\ntitle: One\n---\nBody\n" });
+    await writeFile(path.join(root, ".oms", "types.json"), "{", "utf8");
+
+    await expect(auditNote(root, "notes/one.md")).resolves.toEqual([
+      expect.stringContaining("Cannot read the resolved template projection"),
+    ]);
+  });
+
+  it("never creates a graph cache", async () => {
+    const root = await vault({ "notes/one.md": "---\ntemplate: note\ntitle: One\n---\nBody\n" });
+    await auditNote(root, "notes/one.md");
+
+    await expect(readFile(path.join(root, ".oms", "cache", "graph.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

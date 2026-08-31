@@ -1,199 +1,56 @@
-# Oh My Second Brain Harness Architecture
+# Harness Architecture
 
-Oh My Second Brain is an **axis graph harness** for an Obsidian markdown vault. Its purpose is not to generate note content for the user. Its purpose is to give host agents a deterministic contract for where knowledge belongs, which frontmatter axes describe it, how it links to other notes, and how it should be retrieved later.
+Oh My Second Brain is an Obsidian-first convention layer over plain Markdown. Obsidian remains the command center and the vault remains readable without OMS.
 
-The architecture is docs-first because the core product claim is semantic: capture is only good when it makes future retrieval and reuse easier.
+## Authority model
 
-## 1. Retrieval and reuse are the telos
+A vault composes four authorities:
 
-Oh My Second Brain treats note making as a retrieval problem. A new note is successful when it can be found and reused later through the user's own knowledge axes.
+1. Actual Obsidian Markdown templates own frontmatter shape and body scaffolding.
+2. `.obsidian/types.json` is read-only property-type authority.
+3. `.oms/template-policy.json` owns requiredness, formats, allowed values, defaults, naming, stable IDs, and bindings.
+4. `.oms/taxonomy.yaml` owns physical placement and global folder/link axes.
 
-That means capture and retrieval are separate flows over the same substrate:
+Every managed template inherits one vault-wide `BaseContract`. A stable `templateId` does not depend on source path or content digest. `.oms/types.json` is a derived, validated write/search projection and is never user-authored authority.
 
-- **Capture**: place the note under the right folder/concept, fill the frontmatter axes, preserve user body content, and validate contract conformity.
-- **Retrieval**: narrow by folder/concept/frontmatter/wikilink axes first, optionally rank by search, then lazy-load the selected note bodies as payload.
+## Prepare → Admission Check → Write → Evaluate
 
-Oh My Second Brain therefore optimizes for future reuse, not for the shortest possible write path.
+All note and control mutations follow one pipeline:
 
-## 2. User-owned ontology
+- **Prepare:** resolve the target, template, defaults, naming, paths, and source signatures once.
+- **Admission Check:** require a verified target, safe paths, explicit approval digest where applicable, and current compare-and-swap expectations. Failure has no side effects.
+- **Write:** publish through the guarded note writer or template transaction.
+- **Evaluate:** read persisted state back and return a server-verifiable postcondition receipt.
 
-The ontology is owned by the vault:
+Create applies defaults and template body scaffolding. Append changes body only. Update preserves omitted fields and does not revive deleted defaults. Unknown frontmatter and template extensions are preserved.
 
-- `vault/.oms/taxonomy.yaml` declares folder intent and folder-to-concept bindings.
-- `vault/.oms/concepts/*.yaml` declares concepts, frontmatter fields, and retrieval views.
-- Markdown notes remain ordinary Obsidian notes.
+## Setup and migration
 
-Oh My Second Brain ships defaults, but setup copies them into the vault. After that, the live ontology is the user's editable contract. Oh My Second Brain must not impose a fixed taxonomy or silently overwrite user convention files.
+Setup recursively discovers actual templates, explicit registered sources, Obsidian types, taxonomy, and legacy vault controls needed for one-shot migration. It reports duplicate, unsafe, and unresolved mappings before activation. One source may produce deterministic clones when taxonomy placement is one-to-many.
 
-## 3. Axes: frontmatter, folders, and wikilinks
+Setup is proposal-driven: run `setup --dry-run`, review the manifest and digest, then apply with `--yes --approved-digest <digest>`. Publication is atomic and resumable; setup never self-approves or modifies notes.
 
-Oh My Second Brain's intentional graph is built from user-authored structure:
+## Retrieval
 
-| Primitive | Meaning |
-|---|---|
-| `property-axis` | A frontmatter key such as `author`, `status`, or `project`. |
-| `property-value` | A frontmatter value that connects notes sharing the same axis value. |
-| `folder-concept-edge` | A note's physical folder binding into the taxonomy/concept map. |
-| `wikilink-edge` | An explicit user-authored relation in note body syntax such as `[[Target]]`. |
-| `note` | The markdown file as a retrievable object. |
+Writes, typed search, graph construction, and linking consume the same resolved template projection.
 
-Folders are not merely storage. They are the most basic placement/classification edge in the ontology. Frontmatter fields add multiple retrieval dimensions on top of that physical placement. Wikilinks add explicit relational edges authored by the user.
+- `axes.template` uses stable note identity from frontmatter `template` only.
+- `axes.field.<key>` accepts only fields declared for that template.
+- folder and link axes come from the same resolved convention.
+- managed template source paths are excluded from note indexes, graph candidates, and embeddings.
 
-## 4. Note duality: graph surface and body payload
+Plain lexical retrieval is projection-independent and read-only. Typed axes fail loudly on missing/malformed projection or stale index signatures. Vector and HyDE requests fail loudly unless both embedding provider and model are configured.
 
-A note has two operational layers:
+## Maintenance
 
-1. **Graph surface**: path, folder, frontmatter, and wikilinks. This layer is used to validate the contract and build the intentional ontology graph.
-2. **Body payload**: prose, excerpts, evidence, and free-form markdown. This layer is loaded lazily after axis/search narrowing.
+`status` is read-only. `doctor` owns diagnosis and repair operations. Template diagnosis reports policy/projection/source drift, migration state, managed exclusions, and unresolved legacy notes. Projection regeneration and one-note identity backfill require a verified target, dry-run proposal, exact caller-approved digest, CAS, and postcondition receipt.
 
-Oh My Second Brain does not judge whether the body is true, complete, or high quality. Body content belongs to the user. Oh My Second Brain only checks whether the note conforms to the declared retrieval contract.
+## Surfaces
 
-## 5. Capture flow
+The public sets are intentionally different:
 
-Capture is a write-side planning flow:
+- seven skills: write, search, link, distill, status, doctor, template;
+- five MCP tools: `oms_write`, `oms_search`, `oms_link`, `oms_status`, `oms_doctor`;
+- an independent CLI command allowlist.
 
-```text
-content/intention
-  → choose candidate folder/concept
-  → infer required frontmatter axes from the concept contract
-  → ask for missing required fields or route to inbox
-  → validate contract conformity
-  → write/append only through a safe, vault-confined path
-```
-
-Default failure posture:
-
-- If placement is ambiguous, route to the configured inbox or ask a missing-field question.
-- If required frontmatter is missing, ask for the missing axes before final commit when the write tool is active.
-- If a note cannot safely be written inside the vault, refuse the write path.
-
-## 6. Retrieve flow
-
-Retrieval is a read-side narrowing flow:
-
-```text
-intent/query
-  → resolve relevant concept/folder/property/wikilink axes
-  → narrow candidates through the intentional graph
-  → optionally fuse lexical/vector/hybrid search candidates
-  → apply a retrieval view
-  → lazy-load selected note bodies
-```
-
-This is the main difference from generic search. Search is useful, but it is not the first source of meaning. The user's ontology narrows intent first; search helps rank or fill gaps second.
-
-## 7. Retrieval views, not "lens projection"
-
-Existing concept files may contain `lenses`. Oh My Second Brain keeps this schema for compatibility, but user-facing docs should call them **retrieval views**.
-
-A retrieval view is not the graph itself. It is an output shape applied after candidate notes have been selected by axis graph narrowing and optional search. For example, a `synthesis` retrieval view may choose to show `title`, `source-url`, and `author`, while an `audit` view may show `status` and `date-read`.
-
-Order of operations:
-
-1. Axis graph narrowing by folder/property/wikilink/concept.
-2. Optional OMS semantic lexical/vector/hybrid search, either globally across the vault for broad semantic recall or restricted to the narrowed graph candidate space.
-3. Retrieval view (`lenses` in YAML) selects the returned fields/excerpts.
-
-Avoid the phrase "lens projection" unless a document defines it locally. Prefer "retrieval view" or "axis view".
-
-## 8. Contract-conformity gates
-
-Oh My Second Brain gates structural conformity, not content quality.
-
-Contract checks include:
-
-- required frontmatter fields
-- declared field type/shape
-- folder/concept binding
-- enough axes to make later retrieval plausible
-- ambiguous placement or missing required values
-
-Default enforcement remains non-blocking warning behavior unless a future explicit strict mode is configured. A gate may ask for missing fields or route to inbox, but it must not rewrite user meaning or judge body truth.
-
-## 9. Derived graph cache and search cache
-
-Markdown notes and `.oms/` convention files are canonical. Everything under a cache/index layer is derived and rebuildable.
-
-Recommended derived slices:
-
-- graph schema cache
-- note graph slices
-- folder/concept edge index
-- property-axis/value edge index
-- wikilink edge index
-- validation status
-- lexical search index
-- optional embedding/vector index
-
-Invalidation rules:
-
-| Change | Invalidates |
-|---|---|
-| `.oms/taxonomy.yaml` folder binding/intent | graph schema, folder-concept edges, retrieval route cache |
-| `.oms/concepts/*.yaml` fields/views/intent | graph schema, property-axis nodes, retrieval view cache, validation plan |
-| note path/folder move | that note's folder edge, graph membership, search collection metadata |
-| note frontmatter key/value change | that note's property edges, validation result, graph slice |
-| note body wikilink change | that note's wikilink edges and graph slice |
-| note body text change without frontmatter/link change | search/embedding slice only |
-| note deletion | graph slice, search entry, validation status |
-
-Graph status should report stale slices separately: schema stale, graph stale, search stale, and embedding stale.
-
-## 10. Claude Code skill/MCP installation surface
-
-The first installable target is Claude Code. The harness surface should make Oh My Second Brain usable where the user is already working:
-
-- skills for setup, doctor, write, retrieve, and graph/status operations
-- CLI commands for deterministic local actions
-- MCP server for cross-host read/status tools first, then gated write tools
-
-Current-vs-target boundary:
-
-| Phase | Status | Scope |
-|---|---|---|
-| Phase 0 | docs/plan | This architecture and terminology lock. |
-| Phase 1 | install shell | Claude Code skills, `oms setup`, and dry-run MCP registration guidance. |
-| Phase 2 | runtime | Real stdio MCP read/status tools: `oms_graph_status`, `oms_list_concepts`, and `oms_validate_contract`. Write tools remain gated. |
-| Phase 3 | derived cache | Ontology graph/search cache, invalidation slices, axis-first retrieval, and semantic lazy body access. |
-| Phase 4 | safe writes | Capture prepare/commit tools after path-safety and vault-confinement tests. |
-
-Docs must not describe MCP write/capture runtime as present tense until the server and tests exist.
-
-The Phase 1 command surface is intentionally dry-run for Claude runtime registration:
-
-```bash
-oms setup --vault /path/to/vault --yes --install-claude
-```
-
-This initializes `.oms/` and prints a Claude Code plugin install command plus the plugin-owned MCP asset. It does not mutate Claude config. Capture/write tools are only available through the gated safe-write path.
-
-Phase 3 adds a derived cache at `vault/.oms/cache/graph.json`. This file is not canonical. It can be rebuilt from markdown plus `.oms/` and contains:
-
-- note graph slices for folder-concept, property-axis/value, and wikilink edges
-- lexical search terms and body previews for search-second ranking
-- source signatures for taxonomy, concept files, frontmatter, wikilinks, and body text
-- staleness reasons that distinguish schema, graph, search, embedding, and validation slices
-
-The MCP tools for this layer are:
-
-- `oms_graph_build`
-- `oms_retrieve_by_axis`
-- `oms_lazy_load_note`
-
-`oms_retrieve_by_axis` returns candidate notes and previews; `oms_lazy_load_note` reads full body payload only after a note has been selected.
-
-Phase 4 adds the write kernel:
-
-- `write` creates, appends, or updates a markdown note only after vault-relative path checks and concept contract validation pass. Missing fields return `ask`; unbound placement returns `inbox`; contract or path failure returns `rejected`.
-
-The write path rejects absolute paths, `..` escapes, non-markdown targets, `.oms/` internals, and frontmatter that violates the resolved concept contract.
-
-## 11. External inspiration boundaries
-
-Oh My Second Brain borrows patterns, not product identity:
-
-- **OMS semantic retrieval**: anywhere access to a local markdown knowledge base through MCP/skills; lexical/vector search is a derived support layer.
-- **Graphify**: graph effect as a useful retrieval affordance; Oh My Second Brain's graph is grounded in intentional frontmatter/folder/wikilink axes instead of inferred body concepts by default.
-- **Ouroboros**: installable harness posture, stateful MCP/skill surfaces, and deterministic gates; Oh My Second Brain is not an OS-above host orchestrator.
-
-The boundary matters: Oh My Second Brain is a user-owned ontology harness for Obsidian markdown folders, not a generic search engine, automatic graph extractor, or content generator.
+Detail capabilities remain `op` values under the five tools. Host adapters differ natively, but all register the same MCP runtime and stamp the selected vault into their managed `oms mcp --vault` entry. That stamp never changes runtime resolution precedence: explicit target, local vault controls, bridge, `OMS_VAULT`, then read-only cwd fallback.

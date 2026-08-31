@@ -1,49 +1,46 @@
 import { describe, it, expect, afterEach } from "vitest";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { writeNote } from "../kernel/capture/safe.js";
-import { resolveActiveOntology } from "../kernel/ontology/active.js";
+import { writeResolvedTemplateNote } from "../kernel/capture/safe.js";
+import { loadResolvedTemplates, sourceSignature } from "../kernel/templates/index.js";
+import type { SourceDescriptor } from "../kernel/templates/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
-// Minimal ontology fixture matching server.test.ts / link.test.ts patterns
-async function createMinimalOntology(vaultPath: string): Promise<void> {
-  await mkdir(path.join(vaultPath, ".oms", "concepts"), { recursive: true });
-  await writeFile(
-    path.join(vaultPath, ".oms", "taxonomy.yaml"),
-    "version: 1\nfolders:\n  references:\n    concept: literature\n",
-    "utf-8",
-  );
-  await writeFile(
-    path.join(vaultPath, ".oms", "concepts", "literature.yaml"),
-    `concept: literature
-intent: External sources worth revisiting.
-folder: references
-fields:
-  - name: title
-    type: string
-    required: true
-    intent: Human-readable title.
-  - name: source-url
-    type: string
-    required: true
-    intent: Source URL.
-`,
-    "utf-8",
-  );
+function digest(value: string): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+async function createTemplateAuthority(vault: string): Promise<void> {
+  const policy = JSON.stringify({ version: 1, templateFolder: "Templates/OMS", base: { fields: {} }, contracts: { literature: { intent: "A source.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [] } }, templates: { literature: { templateId: "literature", destinationClass: "managed-default", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{slug}}.md" } } });
+  const taxonomy = "folders: {}\n";
+  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", "source-url": "text" } });
+  const template = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n# Literature\n<!-- oms:content -->\n";
+  const sources: SourceDescriptor[] = [
+    { logicalId: "template-policy", signature: digest(policy) },
+    { logicalId: "taxonomy", signature: digest(taxonomy) },
+    { logicalId: "obsidian-types", signature: digest(obsidianTypes) },
+    { path: "Templates/OMS/literature.md", signature: digest(template) },
+  ];
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { literature: { templateId: "literature", destinationClass: "managed-default", sourcePath: "Templates/OMS/literature.md", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: digest("# Literature\n<!-- oms:content -->\n") } } } });
+  await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
+  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.yaml"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "literature.md"), template)]);
 }
 
 function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   const block = result.content[0];
   expect(block?.type).toBe("text");
-  return JSON.parse(block.type === "text" ? block.text : "{}") as Record<string, unknown>;
+  const text = block.type === "text" ? block.text : "{}";
+  try { return JSON.parse(text) as Record<string, unknown>; }
+  catch { throw new Error(text); }
 }
 
 describe("Issue #58: Verified-target write kernel", () => {
@@ -88,7 +85,9 @@ describe("Issue #58: Verified-target write kernel", () => {
         await client.callTool({
           name: "oms_write",
           arguments: {
+            op: "note",
             mode: "create",
+            templateId: "literature",
             notePath: "references/rejected-note.md",
             frontmatter: {
               title: "Should Be Rejected",
@@ -115,23 +114,17 @@ describe("Issue #58: Verified-target write kernel", () => {
     }
   });
 
-  it("(4) explicit source passthrough via writeNote", async () => {
+  it("(4) explicit source passthrough via the template writer", async () => {
     const envVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-env-")));
-    await createMinimalOntology(envVault);
-
-    // Explicit source passthrough in writeNote accepts bare tmpdir with source:explicit
     const bareDir = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-bare-")));
-    const activeOntology = await resolveActiveOntology(envVault);
-    const result = await writeNote({
+    await createTemplateAuthority(bareDir);
+    const result = await writeResolvedTemplateNote({
       target: { vault: bareDir, source: "explicit" },
-      ontology: activeOntology.ontology,
+      convention: await loadResolvedTemplates(bareDir),
+      templateId: "literature",
       mode: "create",
       dryRun: false,
-      notePath: "references/explicit-note.md",
-      frontmatter: {
-        title: "Explicit Vault",
-        "source-url": "https://example.com/explicit",
-      },
+      frontmatter: { title: "Explicit Vault", "source-url": "https://example.com/explicit" },
       body: "Written with explicit source.",
     });
 
@@ -149,8 +142,8 @@ describe("Issue #58: Verified-target write kernel", () => {
     tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
     tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-vault-")));
 
-    // Create minimal ontology in vault
-    await createMinimalOntology(tmpVault);
+    // Legacy direct-kernel coverage still needs its ontology; MCP note writes use the template authority.
+    await createTemplateAuthority(tmpVault);
 
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -169,8 +162,9 @@ describe("Issue #58: Verified-target write kernel", () => {
         await client.callTool({
           name: "oms_write",
           arguments: {
+            op: "note",
             mode: "create",
-            notePath: "references/response-test.md",
+            templateId: "literature",
             frontmatter: {
               title: "Response Test",
               "source-url": "https://example.com/response",
@@ -192,8 +186,9 @@ describe("Issue #58: Verified-target write kernel", () => {
         await client.callTool({
           name: "oms_write",
           arguments: {
+            op: "note",
             mode: "create",
-            notePath: "references/incomplete.md",
+            templateId: "literature",
             frontmatter: {
               title: "Incomplete",
               // Missing source-url - required field
@@ -206,7 +201,7 @@ describe("Issue #58: Verified-target write kernel", () => {
       expect(rejected.status).toBe("ask");
       expect(rejected.resolvedVault).toBe(tmpVault);
       expect(rejected.resolutionSource).toBe("env");
-      expect(rejected.missingFields).toContain("source-url");
+      expect((rejected.violations as Array<Record<string, unknown>>).some((item) => item.field === "source-url" && item.rule === "required")).toBe(true);
     } finally {
       await client.close();
     }

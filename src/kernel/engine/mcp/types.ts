@@ -136,7 +136,7 @@ export interface McpSemanticSearchHit {
 
 /** A facet count computed after axis filtering and before result limiting. */
 export interface McpSemanticFacet {
-  readonly axis: "folder" | "field" | "link";
+  readonly axis: "template" | "folder" | "field" | "link";
   readonly value: string;
   readonly count: number;
   readonly key?: string;
@@ -364,7 +364,7 @@ export type McpGraphStatusResult =
 
 /** Axis filters for oms_retrieve_by_axis. */
 export interface McpAxisFilters {
-  readonly concept?: string;
+  readonly template?: string;
   readonly folder?: string;
   readonly property?: string;
   readonly value?: string;

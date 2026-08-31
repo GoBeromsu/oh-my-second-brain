@@ -21,6 +21,7 @@ import { requireRealEmbeddingProvider } from "./embed/provider.js";
 import { openEngineStore } from "./embed/store.js";
 import type { EmbeddingModelDescriptor } from "./embed/model.js";
 import { buildGraph, loadCachedGraph, saveCachedGraph } from "./graph/builder.js";
+import { loadResolvedTemplates } from "../templates/resolver.js";
 import { buildAdjacency, traverseGraph } from "./graph/traverse.js";
 import { retrieve, createCancelToken } from "./retrieval/index.js";
 
@@ -117,6 +118,7 @@ export async function runTracer(
 
   // ── Step 1: resolve vault files ───────────────────────────────────────────
   const files = await resolveFiles(vaultPath, config.files);
+  if (files.length === 0) return [];
 
   // ── Step 2: create embed provider + store ─────────────────────────────────
   const descriptor = config.embeddingDescriptor ?? undefined;
@@ -170,11 +172,12 @@ export async function runTracer(
     }
 
     // ── Step 3: load or build graph ─────────────────────────────────────────
+    const convention = await loadResolvedTemplates(vaultPath);
     const graphCachePath = path.join(cacheDir, "engine", "graph.json");
-    let edges = await loadCachedGraph(graphCachePath);
+    let edges = await loadCachedGraph(graphCachePath, convention.inputSignature);
     if (edges === null) {
-      edges = await buildGraph({ vaultPath, files });
-      await saveCachedGraph(graphCachePath, edges);
+      edges = await buildGraph({ vaultPath, convention, files });
+      await saveCachedGraph(graphCachePath, edges, convention.inputSignature);
     }
     const adj = buildAdjacency(edges);
 

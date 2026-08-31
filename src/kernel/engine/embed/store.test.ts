@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect } from "vitest";
 import { openEngineStore, openEngineStoreCore, SQLITE_VEC_MAX_K } from "./store.js";
 import type { EngineStore } from "./store.js";
 import { createHashProjectionProvider } from "./hash-stub.test-helper.js";
@@ -10,12 +10,12 @@ const DIMS = 64;
 let dir: string;
 let store: EngineStore;
 
-beforeAll(() => {
+beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), "oms-store-test-"));
   store = openEngineStore(path.join(dir, "test.db"), DIMS);
 });
 
-afterAll(() => {
+afterEach(() => {
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -55,7 +55,8 @@ describe("openEngineStore — upsert + queryLex", () => {
     expect(() => store.upsert(rows)).not.toThrow();
   });
 
-  it("queryLex returns hits for a matching term", () => {
+  it("given a matching row, when lexical search runs, then its document is returned", async () => {
+    store.upsert([await makeRow("notes/alpha.md", 0, "retrieval augmented generation")]);
     const hits = store.queryLex("retrieval augmented", 5);
     const paths = hits.map((h) => h.docPath);
     expect(paths).toContain("notes/alpha.md");
@@ -66,8 +67,13 @@ describe("openEngineStore — upsert + queryLex", () => {
     expect(hits).toEqual([]);
   });
 
-  it("queryLex hits have decreasing scores (rank-based)", () => {
+  it("given multiple matches, when lexical search ranks them, then scores decrease", async () => {
+    store.upsert([
+      await makeRow("notes/rank-one.md", 0, "retrieval retrieval retrieval"),
+      await makeRow("notes/rank-two.md", 0, "retrieval once"),
+    ]);
     const hits = store.queryLex("retrieval", 5);
+    expect(hits.length).toBeGreaterThanOrEqual(2);
     for (let i = 1; i < hits.length; i++) {
       expect(hits[i - 1]!.score).toBeGreaterThanOrEqual(hits[i]!.score);
     }
@@ -161,12 +167,12 @@ describe.each([
   let collectionDir: string;
   let collectionStore: EngineStore;
 
-  beforeAll(() => {
+  beforeEach(() => {
     collectionDir = mkdtempSync(path.join(tmpdir(), "oms-store-collection-test-"));
     collectionStore = openStore(path.join(collectionDir, "test.db"));
   });
 
-  afterAll(() => {
+  afterEach(() => {
     collectionStore.close();
     rmSync(collectionDir, { recursive: true, force: true });
   });

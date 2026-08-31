@@ -22,9 +22,10 @@
 
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { parse as parseYaml } from "yaml";
-import { resolveBundledAssetPaths } from "../../runtime/assets.js";
-import { loadContract } from "../../contracts/index.js";
+import { deriveTemplateRetrievalAxes } from "../../templates/axes.js";
+import { loadResolvedTemplates } from "../../templates/resolver.js";
+import { walkVaultMarkdown } from "../../conventions/vault-walk.js";
+import type { ResolvedConvention } from "../../templates/types.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import { retrieve } from "../retrieval/index.js";
 import type { Reranker } from "../retrieval/reranker.js";
@@ -53,12 +54,6 @@ import {
   searchScore,
 } from "../graph/node.js";
 import type { QueryAxes } from "../graph/node.js";
-import {
-  axisStorePath,
-  collectVaultAxisObservations,
-  openAxisStore,
-} from "../axes/store.js";
-import type { AxisObservation } from "../axes/store.js";
 import type {
   McpSemanticQueryOptions,
   McpSemanticQueryResult,
@@ -280,46 +275,13 @@ function enrichQueryHits(result: McpSemanticQueryResult, vault: string): McpSema
   return { ...result, available: true, hits };
 }
 
-/** Read folder intent declarations without creating or updating vault state. */
-function folderIntents(vault: string): Map<string, string> {
-  const candidates = [
-    path.join(vault, ".oms", "taxonomy.yaml"),
-    path.join(vault, "taxonomy.yaml"),
-  ];
-  try {
-    candidates.push(path.join(resolveBundledAssetPaths().ontologyDir, "taxonomy.yaml"));
-  } catch {
-    // A package without bundled ontology still serves axis results; intents
-    // remain optional metadata.
-  }
-  for (const candidate of candidates) {
-    try {
-      const parsed = parseYaml(readFileSync(candidate, "utf-8")) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      const folders = (parsed as Record<string, unknown>)["folders"];
-      if (!folders || typeof folders !== "object" || Array.isArray(folders)) continue;
-      const intents = new Map<string, string>();
-      for (const [folder, value] of Object.entries(folders as Record<string, unknown>)) {
-        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-        const intent = (value as Record<string, unknown>)["intent"];
-        if (typeof intent === "string" && intent.trim()) intents.set(folder, intent.trim());
-      }
-      return intents;
-    } catch {
-      // A missing optional taxonomy is not an error; a malformed one simply
-      // contributes no intent and never causes a write.
-    }
-  }
-  return new Map();
-}
-
 function facetIntent(
   facet: { readonly axis: McpSemanticFacet["axis"]; readonly key?: string; readonly value: string },
-  intents: ReadonlyMap<string, string>,
   queryIntent: string | undefined,
 ): string {
-  if (facet.axis === "folder") return intents.get(facet.value) ?? `Folder axis: ${facet.value}`;
   if (queryIntent !== undefined && queryIntent.trim().length > 0) return queryIntent.trim();
+  if (facet.axis === "template") return `Template axis: ${facet.value}`;
+  if (facet.axis === "folder") return `Folder axis: ${facet.value}`;
   if (facet.axis === "field") return `Frontmatter field axis: ${facet.key ?? "unknown"}`;
   return `Link axis: ${facet.value}`;
 }
@@ -349,234 +311,26 @@ function resultPageLimit(opts: McpSemanticQueryOptions): number | undefined {
   return opts.limit ?? (opts.collectionPath === undefined ? undefined : UNBOUNDED_CANDIDATE_LIMIT);
 }
 
-/** Read the dedicated EAV snapshot without creating `.oms` state. */
-async function loadAxisSnapshot(vault: string): Promise<AxisObservation[] | null> {
-  const dbPath = axisStorePath(vault);
-  if (!existsSync(dbPath)) return null;
-  const store = openAxisStore(dbPath, { readOnly: true });
-  try {
-    const storedSignature = store.sourceSignature();
-    if (storedSignature === null || storedSignature !== await nodeSourceSignature(vault)) return null;
-    return store.list();
-  } finally {
-    store.close();
-  }
-}
-
-function observationValue(value: unknown): string {
-  if (value instanceof Date) return value.toISOString().toLowerCase();
-  return String(value).trim().toLowerCase();
-}
-
-function contractAxisType(type: string): AxisObservation["valueType"] | undefined {
-  switch (type) {
-    case "number":
-      return "number";
-    case "boolean":
-    case "checkbox":
-      return "boolean";
-    case "date":
-    case "datetime":
-      return "date";
-    case "text":
-    case "string":
-    case "select":
-    case "list":
-    case "multitext":
-    case "multi":
-    case "tags":
-    case "aliases":
-    case "file":
-      return "string";
-    default:
-      return undefined;
-  }
-}
-
-/**
- * Compare live frontmatter/EAV observations with the tracked JSON contract.
- * Missing fields are allowed (required-field validation owns that concern);
- * an observed undeclared key, type, or closed-vocabulary value is drift.
- */
-function hasContractObservationDrift(
-  contract: Awaited<ReturnType<typeof loadContract>>,
-  nodes: readonly EngineGraphNode[],
-  observations: readonly AxisObservation[] | null,
-): boolean {
-  if (contract === null) return false;
-
-  const declared = new Set<string>();
-  const types = new Map<string, string>();
-  const allowed = new Map<string, Set<string>>();
-  const addAllowed = (key: string, values: readonly unknown[] | undefined): void => {
-    if (values === undefined) return;
-    const normalizedKey = key.trim().toLowerCase();
-    const target = allowed.get(normalizedKey) ?? new Set<string>();
-    for (const item of values) {
-      const value = typeof item === "string"
-        ? item
-        : item && typeof item === "object" && typeof (item as { readonly value?: unknown }).value === "string"
-          ? (item as { readonly value: string }).value
-          : undefined;
-      if (value !== undefined) target.add(observationValue(value));
-    }
-    allowed.set(normalizedKey, target);
-  };
-
-  for (const axis of contract.axes) {
-    if (axis.kind !== "field") continue;
-    const key = axis.key.trim().toLowerCase();
-    if (key === "concept") continue;
-    declared.add(key);
-    types.set(key, axis.type);
-    addAllowed(key, axis.allowedValues);
-  }
-  for (const [key, type] of Object.entries(contract.types)) {
-    const normalizedKey = key.trim().toLowerCase();
-    if (normalizedKey === "concept") continue;
-    declared.add(normalizedKey);
-    types.set(normalizedKey, type);
-  }
-  for (const [key, values] of Object.entries(contract.allowedValues)) {
-    const normalizedKey = key.trim().toLowerCase();
-    if (normalizedKey === "concept") continue;
-    declared.add(normalizedKey);
-    addAllowed(normalizedKey, values);
-  }
-
-  const observedKeys = new Set<string>();
-  const observedValues: Array<{
-    readonly key: string;
-    readonly value: unknown;
-    readonly valueType?: AxisObservation["valueType"];
-    readonly normalizedValue?: string;
-  }> = [];
-  // Node axes are the live source of truth even when no EAV snapshot exists.
-  for (const node of nodes) {
-    for (const [key, rawValues] of Object.entries(node.axes)) {
-      const normalizedKey = key.trim().toLowerCase();
-      if (normalizedKey === "concept") continue;
-      observedKeys.add(normalizedKey);
-      const values = Array.isArray(rawValues) ? rawValues : [rawValues];
-      for (const value of values) {
-        // String values can also represent YAML dates after node-cache
-        // serialisation, so only infer unambiguous primitive types here.
-        const valueType = typeof value === "number"
-          ? "number"
-          : typeof value === "boolean"
-            ? "boolean"
-            : undefined;
-        observedValues.push({ key: normalizedKey, value, valueType });
-      }
-    }
-  }
-  for (const row of observations ?? []) {
-    const normalizedKey = row.axisKey.trim().toLowerCase();
-    if (row.axisKind !== "field" || normalizedKey === "concept") continue;
-    observedKeys.add(normalizedKey);
-    observedValues.push({
-      key: normalizedKey,
-      value: row.value,
-      valueType: row.valueType,
-      normalizedValue: row.normalizedValue,
-    });
-  }
-  for (const observed of observedValues) {
-    if (!declared.has(observed.key)) return true;
-    const expectedType = contractAxisType(types.get(observed.key) ?? "");
-    if (expectedType !== undefined && observed.valueType !== undefined && expectedType !== observed.valueType) {
-      return true;
-    }
-    const values = allowed.get(observed.key);
-    if (values !== undefined && !values.has(observed.normalizedValue ?? observationValue(observed.value))) {
-      return true;
-    }
-  }
-  for (const key of observedKeys) {
-    if (!declared.has(key)) return true;
-  }
-  return false;
-}
-
-async function contractObservationDrift(
-  vault: string,
-  nodes: readonly EngineGraphNode[],
-  observations: readonly AxisObservation[] | null,
-): Promise<boolean> {
-  return hasContractObservationDrift(await loadContract(vault), nodes, observations);
-}
-
-/** Overlay typed EAV values onto the lexical node snapshot. */
-function applyAxisSnapshot(
-  nodes: readonly EngineGraphNode[],
-  observations: readonly AxisObservation[],
-): EngineGraphNode[] {
-  const byNote = new Map<string, AxisObservation[]>();
-  for (const observation of observations) {
-    const rows = byNote.get(observation.notePath) ?? [];
-    rows.push(observation);
-    byNote.set(observation.notePath, rows);
-  }
-  return nodes.map((node) => {
-    const rows = byNote.get(node.path);
-    if (rows === undefined) return node;
-    const fields: Record<string, (string | number | boolean)[]> = {};
-    const links: string[] = [];
-    let folder = node.folder;
-    for (const row of rows) {
-      const value = row.value instanceof Date ? row.value.toISOString() : row.value;
-      if (row.axisKind === "folder" && typeof value === "string") {
-        folder = value;
-      } else if (row.axisKind === "link" && typeof value === "string") {
-        links.push(value);
-      } else if (row.axisKind === "field") {
-        const values = fields[row.axisKey] ?? [];
-        values.push(value);
-        fields[row.axisKey] = values;
-      }
-    }
-    return {
-      ...node,
-      folder,
-      // The node DTO keeps its legacy string-array declaration, while this
-      // runtime overlay deliberately carries typed EAV scalars.
-      axes: fields as unknown as Record<string, string[]>,
-      // An existing snapshot is authoritative: an empty link/field set must
-      // clear stale values from an older JSON node-index cache.
-      wikilinks: [...new Set(links)],
-    };
-  });
-}
-
-/** Contract field names are the allow-list for public field-axis queries. */
-async function loadContractFieldKeys(vault: string): Promise<ReadonlySet<string> | undefined> {
-  const contract = await loadContract(vault);
-  if (contract === null) return undefined;
+function templateFieldKeys(convention: ResolvedConvention): ReadonlySet<string> {
   const keys = new Set<string>();
-  for (const axis of contract.axes) {
-    if (axis.kind === "field") keys.add(axis.key.trim().toLowerCase());
+  for (const template of deriveTemplateRetrievalAxes(convention).templates) {
+    for (const axis of template.axes) if (axis.key !== "template") keys.add(axis.key.trim().toLowerCase());
   }
-  for (const key of Object.keys(contract.types)) keys.add(key.trim().toLowerCase());
   return keys;
 }
 
-function validateKnownFieldAxes(
-  axes: QueryAxes | undefined,
-  knownFields: ReadonlySet<string> | undefined,
-): void {
-  if (axes === undefined || knownFields === undefined || axes.field === undefined) return;
+function validateKnownFieldAxes(axes: QueryAxes | undefined, knownFields: ReadonlySet<string>): void {
+  if (axes === undefined || axes.field === undefined) return;
   if (axes.field === null || typeof axes.field !== "object" || Array.isArray(axes.field)) {
     throw new Error("Field axis must be an object mapping field names to values.");
   }
   for (const key of Object.keys(axes.field)) {
-    if (key.trim().toLocaleLowerCase() === "concept") {
-      throw new Error('Unknown query field axis "concept".');
-    }
     if (!knownFields.has(key.trim().toLowerCase())) {
-      throw new Error(`Unknown field axis "${key}" (not declared by the JSON contract).`);
+      throw new Error(`Unknown field axis "${key}" (not declared by the resolved template projection).`);
     }
   }
 }
+
 // ---------------------------------------------------------------------------
 // Adapter facade
 // ---------------------------------------------------------------------------
@@ -632,18 +386,12 @@ export class McpEngineAdapter {
     return path.join(vault, ".oms", "cache", "engine", "node-index.json");
   }
 
-  /** Load the node index from cache, building it live on a cache miss. */
-  private async loadOrBuildNodes(vault = this.vaultPath): Promise<EngineGraphNode[]> {
-    // A direct adapter caller may supply a store-backed query without a
-    // filesystem vault (for example an MCP transport test). Node enrichment is
-    // optional in that case; never turn a valid retrieval result into an ENOENT.
-    if (!existsSync(vault)) return [];
-    const cached = await loadNodeIndex(
-      this.nodeCachePath(vault),
-      await nodeSourceSignature(vault),
-    );
+  /** Load a projection-matched node index, scanning notes without writing on a cache miss. */
+  private async loadOrBuildNodes(vault: string, convention: ResolvedConvention): Promise<EngineGraphNode[]> {
+    const sourceSignature = await nodeSourceSignature(vault, convention);
+    const cached = await loadNodeIndex(this.nodeCachePath(vault), sourceSignature, convention.inputSignature);
     if (cached !== null) return cached;
-    return buildNodeIndex({ vaultPath: vault });
+    return buildNodeIndex({ vaultPath: vault, convention });
   }
 
   // -------------------------------------------------------------------------
@@ -661,19 +409,12 @@ export class McpEngineAdapter {
     subQueries: readonly { readonly type: string; readonly query: string }[],
   ): Promise<McpSemanticQueryResult> {
     const vault = opts.vault ?? this.vaultPath;
-    const baseNodes = await this.loadOrBuildNodes(vault);
-    const snapshot = await loadAxisSnapshot(vault);
-    const drift = await contractObservationDrift(vault, baseNodes, snapshot);
-    const observedFields = snapshot === null
-      ? undefined
-      : new Set(snapshot.filter((row) => row.axisKind === "field").map((row) => row.axisKey.toLowerCase()));
-    const liveObservedFields = new Set(
-      baseNodes.flatMap((node) => Object.keys(node.axes).map((key) => key.toLowerCase())),
-    );
-    const knownFields = await loadContractFieldKeys(vault)
-      ?? (observedFields === undefined ? liveObservedFields : new Set([...observedFields, ...liveObservedFields]));
+    const convention = await loadResolvedTemplates(vault);
+    const baseNodes = await this.loadOrBuildNodes(vault, convention);
+    const drift = false;
+    const knownFields = templateFieldKeys(convention);
     validateKnownFieldAxes(opts.axes as QueryAxes | undefined, knownFields);
-    const nodes = snapshot === null ? baseNodes : applyAxisSnapshot(baseNodes, snapshot);
+    const nodes = baseNodes;
     const axisFiltered = opts.axes === undefined
       ? nodes
       : filterNodesByQueryAxes(nodes, opts.axes as QueryAxes);
@@ -700,10 +441,9 @@ export class McpEngineAdapter {
     const facetNodes = opts.minScore === undefined
       ? filtered
       : filtered.filter((node) => searchScore(node, query) >= opts.minScore!);
-    const intents = folderIntents(vault);
     const facets: McpSemanticFacet[] = queryFacets(facetNodes).map((facet) => ({
       ...facet,
-      intent: facetIntent(facet, intents, opts.intent),
+      intent: facetIntent(facet, opts.intent),
     }));
     const candidateLimit = opts.candidateLimit ?? UNBOUNDED_CANDIDATE_LIMIT;
     const candidates = scored.slice(0, candidateLimit);
@@ -767,11 +507,23 @@ export class McpEngineAdapter {
           "OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL.",
       );
     }
-    if (opts.axes !== undefined || normalized.overview) {
-      try {
-        return await this.queryNodeAxes(opts, subQueries);
-      } catch (err) {
-        return queryResultUnavailable(err instanceof Error ? err.message : String(err));
+    const hasAxes = opts.axes !== undefined && Object.keys(opts.axes).length > 0;
+    if (hasAxes) {
+      try { return await this.queryNodeAxes(opts, subQueries); }
+      catch (err) { return queryResultUnavailable(err instanceof Error ? err.message : String(err)); }
+    }
+    if (normalized.overview) {
+      try { return await this.queryNodeAxes({ ...opts, axes: undefined }, subQueries); }
+      catch {
+        const vault = opts.vault ?? this.vaultPath;
+        const store = this.deps.store as Partial<EngineStore>;
+        const paths = typeof store.listDocPaths === "function" ? store.listDocPaths() : [];
+        if (paths.length === 0 && vault !== undefined) {
+          for await (const docPath of walkVaultMarkdown(vault)) paths.push(docPath);
+        }
+        const ranked = paths.slice().sort((left, right) => left.localeCompare(right)).map(docPath => ({ docPath, score: 0 }));
+        const result = retrievalResultsToQueryResult(ranked, { limit: resultPageLimit(opts), cursor: opts.cursor, intent: opts.intent, facetValues: [], usedChannels: [], approximated: false, drift: false });
+        return enrichQueryHits(result, vault);
       }
     }
     try {
@@ -826,19 +578,20 @@ export class McpEngineAdapter {
       });
       let facetValues: McpSemanticFacet[] | undefined;
       const vault = opts.vault ?? this.vaultPath;
-      const baseNodes = await this.loadOrBuildNodes(vault);
-      const snapshot = await loadAxisSnapshot(vault);
-      const nodes = snapshot === null ? baseNodes : applyAxisSnapshot(baseNodes, snapshot);
-      const drift = await contractObservationDrift(vault, baseNodes, snapshot);
-      const scoped = opts.collectionPath === undefined
-        ? nodes
-        : nodes.filter((node) =>
-          node.path === opts.collectionPath || node.path.startsWith(`${opts.collectionPath}/`));
-      const intents = folderIntents(vault);
-      facetValues = queryFacets(scoped).map((facet) => ({
-        ...facet,
-        intent: facetIntent(facet, intents, opts.intent),
-      }));
+      let drift = false;
+      try {
+        const convention = await loadResolvedTemplates(vault);
+        const nodes = await this.loadOrBuildNodes(vault, convention);
+        const scoped = opts.collectionPath === undefined
+          ? nodes
+          : nodes.filter(node => node.path === opts.collectionPath || node.path.startsWith(`${opts.collectionPath}/`));
+        facetValues = queryFacets(scoped).map(facet => ({ ...facet, intent: facetIntent(facet, opts.intent) }));
+      } catch {
+        // Lexical/vector retrieval is projection-independent. Typed axis requests
+        // are routed through queryNodeAxes and still fail loudly above.
+        facetValues = undefined;
+        drift = false;
+      }
       const requestedChannels = [...new Set(effectiveSubQueries.map((search) => search.type))]
         .filter((type): type is "lex" | "vec" | "hyde" => type === "lex" || type === "vec" || type === "hyde");
       const mapped = retrievalResultsToQueryResult(results, {
@@ -1044,17 +797,15 @@ export class McpEngineAdapter {
    */
   async graphBuild(opts: McpGraphBuildOptions, vaultPath: string): Promise<McpGraphBuildResult> {
     const args = graphBuildOptionsToEngineArgs(opts, vaultPath);
+    const convention = await loadResolvedTemplates(args.vaultPath);
     const graphCachePath = this.graphCachePath(args.vaultPath);
 
     if (args.dryRun) {
-      const meta = await loadCachedGraphMeta(graphCachePath);
+      const meta = await loadCachedGraphMeta(graphCachePath, convention.inputSignature);
       if (meta !== null) {
-        const noteSet = new Set(meta.edges.flatMap((e) => [e.from, e.to]));
-        return engineGraphBuildResultToMcp({
-          notes: noteSet.size,
-          edges: meta.edges.length,
-          generatedAt: meta.generatedAt,
-        });
+        const sourceSignature = await nodeSourceSignature(args.vaultPath, convention);
+        const nodes = await loadNodeIndex(this.nodeCachePath(args.vaultPath), sourceSignature, convention.inputSignature);
+        if (nodes !== null) return engineGraphBuildResultToMcp({ notes: nodes.length, edges: meta.edges.length, generatedAt: meta.generatedAt });
       }
       return engineGraphBuildResultToMcp({
         notes: 0,
@@ -1063,24 +814,14 @@ export class McpEngineAdapter {
       });
     }
 
-    const edges = await buildGraph({ vaultPath: args.vaultPath });
-    await saveCachedGraph(graphCachePath, edges);
+    const edges = await buildGraph({ vaultPath: args.vaultPath, convention });
+    await saveCachedGraph(graphCachePath, edges, convention.inputSignature);
 
-    const nodes = await buildNodeIndex({ vaultPath: args.vaultPath });
-    const sourceSignature = await nodeSourceSignature(args.vaultPath);
-    await saveNodeIndex(this.nodeCachePath(args.vaultPath), nodes, sourceSignature);
+    const nodes = await buildNodeIndex({ vaultPath: args.vaultPath, convention });
+    const sourceSignature = await nodeSourceSignature(args.vaultPath, convention);
+    await saveNodeIndex(this.nodeCachePath(args.vaultPath), nodes, sourceSignature, convention.inputSignature);
 
-    // Graph build is the explicit writable refresh boundary for the typed
-    // EAV snapshot. Reconcile it atomically with the current markdown set.
-    const axisStore = await collectVaultAxisObservations(args.vaultPath);
-    axisStore.close();
-
-    const noteSet = new Set(edges.flatMap((e) => [e.from, e.to]));
-    return engineGraphBuildResultToMcp({
-      notes: noteSet.size,
-      edges: edges.length,
-      generatedAt: new Date().toISOString(),
-    });
+    return engineGraphBuildResultToMcp({ notes: nodes.length, edges: edges.length, generatedAt: new Date().toISOString() });
   }
 
   // -------------------------------------------------------------------------
@@ -1089,14 +830,17 @@ export class McpEngineAdapter {
 
   /** Report graph cache status (notes / edges / generatedAt) from disk. */
   async graphStatus(vaultPath: string): Promise<McpGraphStatusResult> {
-    const meta = await loadCachedGraphMeta(this.graphCachePath(vaultPath));
-    if (meta === null) return engineGraphBuildToStatusResult(null);
-    const noteSet = new Set(meta.edges.flatMap((e) => [e.from, e.to]));
-    return engineGraphBuildToStatusResult({
-      notes: noteSet.size,
-      edges: meta.edges.length,
-      generatedAt: meta.generatedAt,
-    });
+    try {
+      const convention = await loadResolvedTemplates(vaultPath);
+      const meta = await loadCachedGraphMeta(this.graphCachePath(vaultPath), convention.inputSignature);
+      if (meta === null) return engineGraphBuildToStatusResult(null);
+      const sourceSignature = await nodeSourceSignature(vaultPath, convention);
+      const nodes = await loadNodeIndex(this.nodeCachePath(vaultPath), sourceSignature, convention.inputSignature);
+      if (nodes === null) return engineGraphBuildToStatusResult(null);
+      return engineGraphBuildToStatusResult({ notes: nodes.length, edges: meta.edges.length, generatedAt: meta.generatedAt });
+    } catch {
+      return engineGraphBuildToStatusResult(null);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1104,20 +848,20 @@ export class McpEngineAdapter {
   // -------------------------------------------------------------------------
 
   /**
-   * Filter the node index by axis (concept / folder / property / value /
+   * Filter the node index by axis (template / folder / property / value /
    * wikilink), rank by lexical overlap with the optional query, return hits.
-   * Axis metadata (concept / folder / axes / wikilinks) is JSON-encoded into
+   * Axis metadata (template / folder / axes / wikilinks) is JSON-encoded into
    * the hit's `context` field for callers that need it (RISK-6).
    */
   async retrieveByAxis(filters: McpAxisFilters): Promise<McpSemanticQueryResult> {
     try {
-      const baseNodes = await this.loadOrBuildNodes();
-      const snapshot = await loadAxisSnapshot(this.vaultPath);
-      const drift = await contractObservationDrift(this.vaultPath, baseNodes, snapshot);
-      const nodes = snapshot === null ? baseNodes : applyAxisSnapshot(baseNodes, snapshot);
+      const convention = await loadResolvedTemplates(this.vaultPath);
+      const baseNodes = await this.loadOrBuildNodes(this.vaultPath, convention);
+      const nodes = baseNodes;
+      const drift = false;
       const limit = Math.max(1, filters.limit ?? 10);
       const filtered = filterNodesByAxis(nodes, {
-        concept: filters.concept,
+        template: filters.template,
         folder: filters.folder,
         property: filters.property,
         value: filters.value,
@@ -1135,17 +879,16 @@ export class McpEngineAdapter {
         path: node.path,
         snippet: node.bodyPreview,
         context: JSON.stringify({
-          concept: node.concept,
+          template: node.template,
           folder: node.folder,
           axes: node.axes,
           wikilinks: node.wikilinks,
         }),
         evidence: { lexical: true, vector: false },
       }));
-      const intents = folderIntents(this.vaultPath);
       const facets: McpSemanticFacet[] = queryFacets(filtered).map((facet) => ({
         ...facet,
-        intent: facetIntent(facet, intents, undefined),
+        intent: facetIntent(facet, undefined),
       }));
       return {
         available: true,

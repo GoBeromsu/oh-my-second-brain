@@ -1,18 +1,16 @@
-# Oh My Second Brain Convention Shim — Hermes
+# Oh My Second Brain — Hermes
 
-<!-- Add this as a context file in your Hermes session to activate Oh My Second Brain conventions. -->
+This vault uses user-owned template conventions in `.oms/`.
 
-## Vault Convention (Oh My Second Brain)
+Before vault work:
+- Actual Obsidian `.md` templates own note shape and body scaffolding.
+- `.obsidian/types.json` is read-only type authority.
+- The user-owned ontology remains active: `.oms/template-policy.json` records note/field meaning and policy; `.oms/taxonomy.yaml` records folder/link meaning and placement.
+- `.oms/types.json` is derived and must never be hand-edited.
+- Humans and agents use identical stable `templateId` rules.
 
-This vault is governed by Oh My Second Brain conventions stored in `.oms/`.
+**Write:** Use the `write` skill and MCP `oms_write`; never direct file tools for vault notes or managed templates. Notes use `op: "note"`. Template changes use `op: "template"`, dry-run first, then exact reviewed `approvalDigest`.
 
-**Before working with vault notes:**
-- Run `oms doctor` to validate notes against the convention (exits 0, non-blocking).
-- Read `.oms/taxonomy.yaml` for folder-to-concept bindings.
-- Read `.oms/concepts/*.yaml` for field declarations and lenses.
+**Retrieve:** Use `search`, discover IDs through `op: "templates"`, and filter by template, declared fields, folder, or links.
 
-**Write:** Use the `write` skill. Call MCP `oms_write`. Do not use host Write/Edit for vault `.md` files.
-
-**Retrieve:** Use the `search` skill or follow the retriever persona — identify purpose, match lens, project lens fields only.
-
-> **v0 native install:** `oms install --runtime hermes` installs the `write`, `search`, `link`, `distill`, `status`, and `doctor` skills and registers Oh My Second Brain MCP in `~/.hermes/config.yaml`. Use Oh My Second Brain MCP tools for vault operations and CLI commands for lifecycle.
+**Maintain:** `status` is read-only. `doctor` diagnoses and performs explicit repairs. Hermes installs the same seven write, search, link, distill, status, doctor, and tool-less template skills.
