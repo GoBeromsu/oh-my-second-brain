@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { writeMorningVaultFixture } from "../kernel/search/morning-test-fixtures.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,30 +30,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
     const hasModel =
       typeof embeddingProvider === "string" && embeddingProvider.length > 0 &&
       typeof embeddingModel === "string" && embeddingModel.length > 0;
-    const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-semantic-"));
-    await mkdir(path.join(tmpVault, "references"), { recursive: true });
-    await writeFile(
-      path.join(tmpVault, "references", "Agent Retrieval.md"),
-      `---
-title: Agent Retrieval
-tags:
-  - agent-graph
----
-Agent retrieval follows [[Graph Index]] and preserves semantic evidence through OMS retrieve.
-`,
-      "utf-8",
-    );
-    await writeFile(
-      path.join(tmpVault, "references", "Graph Index.md"),
-      `---
-title: Graph Index
-tags:
-  - agent-graph
----
-Index note for graph neighborhoods and semantic lookup.
-`,
-      "utf-8",
-    );
+    const tmpVault = await writeMorningVaultFixture();
 
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -191,6 +168,7 @@ Index note for graph neighborhoods and semantic lookup.
       expect((batch.documents as Array<Record<string, unknown>>).map((doc) => doc.path)).toEqual([
         "references/Agent Retrieval.md",
         "references/Graph Index.md",
+        "references/Unrelated.md",
       ]);
     } finally {
       await client.close();

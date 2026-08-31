@@ -1,25 +1,24 @@
 # Oh My Second Brain for Codex
 
-Use Oh My Second Brain when the user asks to set up, validate, capture into, retrieve from, or inspect an Obsidian/Markdown vault governed by `vault/.oms/`.
+Use Oh My Second Brain for an Obsidian/Markdown vault governed by user-owned template controls in `.oms/`.
 
 ## Core rule
 
-Oh My Second Brain is a convention harness, not a content generator. The user owns the ontology in `vault/.oms/`; agents must use the declared folder axis, frontmatter/property axes, wikilinks, and retrieval lenses before reading or writing notes.
+Actual Obsidian Markdown templates own note shape and body scaffolding. The user-owned ontology remains active: template policy records note/field meaning and policy, while taxonomy records folder/link meaning and placement. `.obsidian/types.json` is read-only type authority; `.oms/types.json` is derived and must never be hand-edited.
 
 ## Command mapping
 
-| User intent | Preferred Oh My Second Brain surface |
+| User intent | Preferred surface |
 |---|---|
-| adopt a vault | `oms setup --vault <path>` |
+| inspect and adopt templates | `oms setup --vault <path> --dry-run`, then `--yes --approved-digest <digest>` |
 | install host integration | `oms install --runtime codex --vault <path> --yes` |
-| uninstall host integration | `oms uninstall --runtime codex --yes` |
-| validate notes | `$oms-doctor` or `oms doctor --vault <path>` |
-| write a vault note | use `$oms-write` / MCP `oms_write` (`create`, `append`, or `update`) |
-| retrieve knowledge | use `$oms-search` / MCP `oms_search`, loading full notes only when needed |
+| diagnose or repair | `$oms-doctor` or `oms doctor --vault <path>` |
+| write a note | `$oms-write` / MCP `oms_write` with a stable `templateId` |
+| retrieve knowledge | `$oms-search` / MCP `oms_search`; discover IDs with `op: "templates"` |
 
 ## Safety
 
-- Never delete vault notes or `vault/.oms/` during uninstall.
-- Capture must stay inside the configured vault and target Markdown files only.
-- If required frontmatter is missing, ask for it; do not invent user-owned ontology values.
-- Route ambiguous captures to inbox when the ontology cannot decide.
+- Never delete vault notes or `.oms/` during uninstall.
+- Never use direct file tools for vault notes or managed templates.
+- Never invent required values or self-approve a repair digest.
+- `status` and search are read-only; mutation requires a verified target.

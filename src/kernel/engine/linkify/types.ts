@@ -75,12 +75,10 @@ export interface LinkCandidate {
   readonly rivalPaths: readonly string[];
 }
 
-/** A link-target note: its vault path, concept binding, and surface forms. */
+/** A template-bound link target and its surface forms. */
 export interface TermNote {
   /** Vault-relative path (with .md). */
   readonly path: string;
-  /** Ontology concept this note is bound to, or null when unbound. */
-  readonly concept: string | null;
   /** Frontmatter `aliases`, already flattened to trimmed strings. */
   readonly aliases: readonly string[];
 }

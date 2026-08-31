@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { suggestLinks, termBoundNotes } from "./suggest.js";
+import { suggestLinks } from "./suggest.js";
 import type { LinkCandidate, TermNote } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -17,19 +17,16 @@ import type { LinkCandidate, TermNote } from "./types.js";
 
 const ATARAXIA: TermNote = {
   path: "terms/Ataraxia.md",
-  concept: "term",
   aliases: ["아타락시아", "tranquility"],
 };
 
 const STOICISM: TermNote = {
   path: "terms/Stoicism.md",
-  concept: "term",
   aliases: [],
 };
 
 const SELF: TermNote = {
   path: "notes/Ataraxia.md",
-  concept: "note",
   aliases: [],
 };
 
@@ -237,26 +234,7 @@ describe("suggestLinks — ambiguity", () => {
 // Candidate universe
 // ---------------------------------------------------------------------------
 
-describe("termBoundNotes", () => {
-  it("keeps only notes bound to the `term` concept", () => {
-    // Given: a mixed candidate set
-    const notes: readonly TermNote[] = [ATARAXIA, SELF, STOICISM];
-    // When: it is filtered to the term concept
-    const filtered = termBoundNotes(notes);
-    // Then: the non-term note is dropped
-    expect(filtered.map((n) => n.path)).toEqual(["terms/Ataraxia.md", "terms/Stoicism.md"]);
-  });
 
-  it("respects the caller's candidate set — a non-term note passed in is still matched", () => {
-    // Given: a caller that deliberately passes a non-term note
-    const body = "Ataraxia matters.\n";
-    // When: links are suggested against it
-    const candidates = suggestLinks(body, [SELF], { notePath: "notes/Other.md" });
-    // Then: the caller's choice wins; suggest does not re-filter by concept
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.targetPath).toBe("notes/Ataraxia.md");
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Optional rankers

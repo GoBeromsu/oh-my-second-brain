@@ -61,6 +61,24 @@ async function makeVault(
 }
 
 describe("detectLinkIssues", () => {
+  it("excludes managed template sources from the lint note universe", async () => {
+    const { vaultPath, cleanup } = await makeVault({
+      ".oms/template-policy.json": JSON.stringify({
+        templates: { note: { sourcePath: "Templates/note.md" } },
+      }),
+      "Templates/note.md": "---\ntemplate: note\n---\n[[Missing]]",
+      "notes/live.md": "---\ntemplate: note\n---\nlive",
+    });
+    try {
+      const result = await detectLinkIssues(vaultPath);
+      expect(result.totalNotes).toBe(1);
+      expect(result.brokenLinks).toEqual([]);
+      expect(result.orphanPaths).toEqual(["notes/live.md"]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("reports no issues for a vault with valid wikilinks", async () => {
     const { vaultPath, cleanup } = await makeVault({
       "notes/A.md": "---\ntitle: A\n---\nSee [[B]].",

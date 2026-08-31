@@ -4,6 +4,11 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`setup`, `doctor`, `audit`, and `linkify` now expose the template contract directly.** Setup uses dry-run plus `--approved-digest`, doctor reports template/projection health and renames the report cap to `--max-per-template`, audit fails closed against resolved template identities, and linkify uses the same stable identities as write/search. Retired Concept authoring and `--suggest-fields` are no longer accepted.
+- **Host lifecycle commands now maintain a strict signed XDG vault pointer.** `install`, `update`, public `reconcile`, and `uninstall` compare-and-swap host stamps without affecting runtime vault resolution; `--template-folder` is also bound into setup discovery and its approval digest.
+
 ## [0.8.4] - 2026-08-30
 
 ## [0.8.3] - 2026-08-29

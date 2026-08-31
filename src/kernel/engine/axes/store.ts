@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { parseNote } from "../../conventions/frontmatter.js";
-import { excludedNoteMatcher } from "../../conventions/note-exclude.js";
+import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
 
 export type AxisKind = "folder" | "field" | "link";
 export type AxisValueType = "string" | "number" | "boolean" | "date";
@@ -389,7 +389,7 @@ function ensureInsideVault(root: string, candidate: string, label: string): void
 async function* walkVaultMarkdownStrict(
   dir: string,
   base: string,
-  isExcluded: (notePath: string) => boolean,
+  isExcluded: (notePath: string) => Promise<boolean>,
   rootRealPath?: string,
   visitedDirectories: Set<string> = new Set(),
 ): AsyncGenerator<string> {
@@ -412,7 +412,7 @@ async function* walkVaultMarkdownStrict(
       const notePath = path.relative(base, fullPath).replace(/\\/g, "/");
       // Taxonomy-declared non-notes (template sources above all) never enter
       // the EAV scan: their frontmatter is intentionally not valid YAML.
-      if (!isExcluded(notePath)) yield notePath;
+      if (!(await isExcluded(notePath))) yield notePath;
     }
   }
 }
@@ -431,7 +431,7 @@ export async function collectVaultAxisObservations(
     parsed: ReturnType<typeof parseNote>;
   }> = [];
   try {
-    const isExcluded = await excludedNoteMatcher(vault);
+    const isExcluded = await managedSourceExclusionMatcher(vault);
     // Read and parse the complete source set before touching the existing
     // snapshot. This keeps read/parse failures from exposing a partial scan.
     for await (const notePath of walkVaultMarkdownStrict(vault, vault, isExcluded)) {

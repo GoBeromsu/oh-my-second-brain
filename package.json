@@ -15,7 +15,6 @@
   "files": [
     "dist",
     "core/AGENTS.md",
-    "core/ontology",
     ".claude-plugin",
     ".codex-plugin",
     ".mcp.json",
@@ -23,6 +22,9 @@
     "assets",
     "docs/adapters.md",
     "docs/install.md",
+    "docs/architecture.md",
+    "docs/conventions.md",
+    "docs/verified-target.md",
     "scripts/install.sh",
     "scripts/uninstall.sh",
     "ACKNOWLEDGMENTS.md",

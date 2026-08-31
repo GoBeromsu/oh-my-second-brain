@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { parseNote } from "./frontmatter.js";
 
 describe("parseNote frontmatter diagnostics", () => {
+  it("parses BOM-prefixed CRLF frontmatter with byte-accurate range", () => {
+    const parsed = parseNote("\ufeff---\r\ntemplate: note\r\n---\r\nBody\r\n");
+    expect(parsed.frontmatter).toEqual({ template: "note" });
+    expect(parsed.body).toBe("Body\r\n");
+    expect(parsed.frontmatterRange).toEqual({ start: 6, end: 20 });
+  });
+
   it("does not treat a markdown line that only starts with dashes as frontmatter", () => {
     const raw = "---not frontmatter\nBody stays readable.\n";
 

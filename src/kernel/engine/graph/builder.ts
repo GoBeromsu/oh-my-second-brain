@@ -1,647 +1,292 @@
 import { createHash } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  readFile,
-  readdir,
-  realpath,
-  rename,
-  stat,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseNote } from "../../conventions/frontmatter.js";
-import { excludedNoteMatcher } from "../../conventions/note-exclude.js";
+import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
+import { deriveTemplateRetrievalAxes } from "../../templates/axes.js";
+import type { Digest, ResolvedConvention, TemplateId } from "../../templates/types.js";
 import type { GraphEdge } from "../types.js";
 import type { AxisScalar, EngineGraphNode } from "./node.js";
 import { toAxisScalars, tokenize } from "./node.js";
-import { buildWikilinkIndex, resolveWikilink } from "./resolver.js";
+import { buildWikilinkIndexWithFrontmatter, resolveWikilink } from "./resolver.js";
 
-// ---------------------------------------------------------------------------
-// Internal file-system helpers
-// ---------------------------------------------------------------------------
+const CACHE_VERSION = 2;
+const NODE_CACHE_VERSION = 3;
 
-function ensureInsideRoot(root: string, candidate: string, label: string): void {
+interface ParsedDoc {
+  readonly docPath: string;
+  readonly raw: string;
+  readonly frontmatter: Record<string, unknown>;
+  readonly body: string;
+}
+
+interface SerializedNode {
+  readonly path: string;
+  readonly template: string;
+  readonly folder: string;
+  readonly axes: Readonly<Record<string, readonly AxisScalar[]>>;
+  readonly wikilinks: readonly string[];
+  readonly bodyPreview: string;
+  readonly searchTerms: readonly string[];
+}
+
+function fail(message: string): never { throw new Error(`TEMPLATE_GRAPH_INVALID: ${message}`); }
+function isRecord(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function folder(pathname: string): string { return pathname.split("/")[0] ?? ""; }
+function excludedPaths(convention: ResolvedConvention): ReadonlySet<string> { return new Set(convention.managedSourcePaths); }
+
+function requireConvention(convention: ResolvedConvention): void {
+  if (!isRecord(convention) || typeof convention.inputSignature !== "string" || !isRecord(convention.templates) || !isRecord(convention.globalAxes) || !Array.isArray(convention.managedSourcePaths)) fail("resolved template projection is missing or malformed");
+  deriveTemplateRetrievalAxes(convention);
+}
+
+function ensureInside(root: string, candidate: string, label: string): void {
   const relative = path.relative(root, candidate);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error(`${label} escapes the configured vault root.`);
-  }
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`${label} escapes the configured vault root.`);
 }
 
-async function* walkMarkdown(
-  dir: string,
-  base: string,
-  isExcluded: (notePath: string) => boolean,
-  rootRealPath?: string,
-  visitedDirectories: Set<string> = new Set(),
-): AsyncGenerator<string> {
-  const root = rootRealPath ?? await realpath(base);
-  const realDir = await realpath(dir);
-  ensureInsideRoot(root, realDir, `Vault directory "${dir}"`);
-  if (visitedDirectories.has(realDir)) return;
-  visitedDirectories.add(realDir);
-
-  const entries = await readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const name = entry.name;
-    const full = path.join(dir, name);
-    // Resolve skipped entries too: an excluded symlink must not conceal an
-    // escape or a dangling path from a strict graph build.
-    const realEntry = await realpath(full);
-    ensureInsideRoot(root, realEntry, `Vault entry "${full}"`);
-    if (name === ".oms" || name === "node_modules" || name.startsWith(".")) continue;
-    const entryStat = await stat(full);
-    if (entryStat.isDirectory()) {
-      yield* walkMarkdown(full, base, isExcluded, root, visitedDirectories);
-    } else if (entryStat.isFile() && name.toLowerCase().endsWith(".md")) {
-      const notePath = path.relative(base, full).replace(/\\/g, "/");
-      // Template sources and other taxonomy-declared non-notes are skipped
-      // here: their pre-substitution frontmatter is intentionally invalid
-      // YAML, and a single one of them must not abort the whole vault scan.
-      if (!isExcluded(notePath)) yield notePath;
+async function markdownPaths(vault: string, isExcluded: (path: string) => Promise<boolean>): Promise<string[]> {
+  const root = await realpath(vault);
+  const paths: string[] = [];
+  const visited = new Set<string>();
+  async function walk(directory: string): Promise<void> {
+    const resolved = await realpath(directory);
+    ensureInside(root, resolved, `Vault directory "${directory}"`);
+    if (visited.has(resolved)) return;
+    visited.add(resolved);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.name === ".oms" || entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const absolute = path.join(directory, entry.name);
+      const target = await realpath(absolute);
+      ensureInside(root, target, `Vault entry "${absolute}"`);
+      const entryStat = await stat(absolute);
+      if (entryStat.isDirectory()) await walk(absolute);
+      else if (entryStat.isFile() && entry.name.toLocaleLowerCase().endsWith(".md")) {
+        const relative = path.relative(vault, absolute).replaceAll("\\", "/");
+        if (!(await isExcluded(relative))) paths.push(relative);
+      }
     }
   }
+  await walk(vault);
+  return paths.sort((left, right) => left.localeCompare(right));
 }
 
-async function validateExplicitFiles(vault: string, files: readonly string[]): Promise<void> {
-  const lexicalRoot = path.resolve(vault);
-  const root = await realpath(lexicalRoot);
+async function explicitPaths(vault: string, files: readonly string[], isExcluded: (path: string) => Promise<boolean>): Promise<string[]> {
+  const root = await realpath(vault);
+  const output: string[] = [];
   for (const docPath of files) {
-    if (path.isAbsolute(docPath)) {
-      throw new Error(`Graph file path must be vault-relative: ${docPath}`);
-    }
-    const fullPath = path.resolve(vault, docPath);
-    ensureInsideRoot(lexicalRoot, fullPath, `Graph file "${docPath}"`);
-    const realPath = await realpath(fullPath);
-    ensureInsideRoot(root, realPath, `Graph file "${docPath}"`);
-    const fileStat = await stat(fullPath);
-    if (!fileStat.isFile()) throw new Error(`Graph file path is not a regular file: ${docPath}`);
+    if (path.isAbsolute(docPath)) throw new Error(`Graph file path must be vault-relative: ${docPath}`);
+    const absolute = path.resolve(vault, docPath);
+    ensureInside(path.resolve(vault), absolute, `Graph file "${docPath}"`);
+    const target = await realpath(absolute);
+    ensureInside(root, target, `Graph file "${docPath}"`);
+    if (!(await stat(absolute)).isFile()) throw new Error(`Graph file path is not a regular file: ${docPath}`);
+    const normalized = path.relative(vault, absolute).replaceAll("\\", "/");
+    if (!(await isExcluded(normalized))) output.push(normalized);
   }
+  return [...new Set(output)].sort((left, right) => left.localeCompare(right));
 }
 
-// ---------------------------------------------------------------------------
-// Markdown parsing helpers (shared frontmatter contract parser)
-// ---------------------------------------------------------------------------
+async function graphPaths(vault: string, files: readonly string[] | undefined, convention: ResolvedConvention): Promise<string[]> {
+  const isExcluded = await managedSourceExclusionMatcher(vault, convention.managedSourcePaths);
+  return files === undefined ? markdownPaths(vault, isExcluded) : explicitPaths(vault, files, isExcluded);
+}
 
-/** Parse YAML frontmatter from raw markdown. Invalid YAML is a loud contract error. */
-function parseFrontmatter(raw: string, docPath?: string): Record<string, unknown> {
-  // Keep this parser at the graph boundary, but use the shared frontmatter
-  // contract diagnostics so malformed notes cannot become an indistinguishable
-  // empty map.
+function parseDocument(raw: string, docPath: string): { readonly frontmatter: Record<string, unknown>; readonly body: string } {
   const parsed = parseNote(raw);
-  if (parsed.diagnostics.length > 0) {
-    const location = docPath === undefined ? "" : ` in ${docPath}`;
-    throw new Error(`Malformed frontmatter${location}: ${parsed.diagnostics.map((item) => item.message).join("; ")}`);
-  }
-  return parsed.frontmatter;
+  if (parsed.diagnostics.length) throw new Error(`Malformed frontmatter in ${docPath}: ${parsed.diagnostics.map(item => item.message).join("; ")}`);
+  return { frontmatter: parsed.frontmatter, body: parsed.body };
 }
 
-/** Return the markdown body after the frontmatter fence (or the whole doc). */
-function extractBody(raw: string): string {
-  const match = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)([\s\S]*)/.exec(raw);
-  return match ? (match[1] ?? raw) : raw;
-}
-
-/** Extract raw inner strings from every `[[…]]` wikilink in body text. */
-function extractRawWikilinks(body: string): string[] {
+function wikilinks(markdown: string): string[] {
   const links: string[] = [];
-  const pattern = /\[\[([^\]]+)\]\]/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(body)) !== null) {
-    const inner = match[1];
-    if (inner) links.push(inner.trim());
-  }
+  for (const match of markdown.matchAll(/\[\[([^\]]+)\]\]/gu)) if (match[1]?.trim()) links.push(match[1].trim());
   return links;
 }
 
-/** Coerce an unknown YAML value to a flat string array. */
-function toStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) return value.flatMap(toStringArray);
-  if (typeof value === "string" && value.trim()) return [value.trim()];
-  return [];
+function strings(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(strings);
+  return typeof value === "string" && value.trim() ? [value.trim()] : [];
 }
 
-/** First path segment = note type (folder group). */
-function noteType(docPath: string): string {
-  return docPath.split("/")[0] ?? "";
+async function parseDocs(vault: string, paths: readonly string[]): Promise<ParsedDoc[]> {
+  return Promise.all(paths.map(async docPath => {
+    const raw = await readFile(path.join(vault, docPath), "utf8");
+    return { docPath, raw, ...parseDocument(raw, docPath) };
+  }));
 }
 
-// ---------------------------------------------------------------------------
-// Adamic-Adar helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Contribution of a common neighbour with `degree` connections.
- * AA contribution = 1 / log(degree). Returns 0 for degree ≤ 1 (log(1) = 0).
- *
- * Algorithm absorbed from nashsu/llm_wiki (GPL-3.0) — idea only, zero verbatim
- * code.  See ACKNOWLEDGMENTS.md for attribution.
- */
-function adamicAdarContrib(degree: number): number {
-  if (degree <= 1) return 0;
-  const l = Math.log(degree);
-  return l === 0 ? 0 : 1 / l;
+function isKnownTemplateId(value: unknown, convention: ResolvedConvention): value is TemplateId {
+  return typeof value === "string" && Object.hasOwn(convention.templates, value);
 }
 
-// ---------------------------------------------------------------------------
-// Document model
-// ---------------------------------------------------------------------------
-
-interface ParsedDoc {
-  docPath: string;
-  frontmatter: Record<string, unknown>;
-  rawWikilinks: string[];
+function templateId(doc: ParsedDoc, convention: ResolvedConvention): TemplateId | null {
+  const value = doc.frontmatter.template;
+  if (value === undefined) return null;
+  if (!isKnownTemplateId(value, convention)) return null;
+  return value;
 }
 
-async function parseDocs(vaultPath: string, files: readonly string[]): Promise<ParsedDoc[]> {
-  return Promise.all(
-    files.map(async (docPath): Promise<ParsedDoc> => {
-      const raw = await readFile(path.join(vaultPath, docPath), "utf-8");
-      return {
-        docPath,
-        frontmatter: parseFrontmatter(raw, docPath),
-        rawWikilinks: extractRawWikilinks(extractBody(raw)),
-      };
-    }),
-  );
+function selectedDocs(docs: readonly ParsedDoc[], convention: ResolvedConvention): ParsedDoc[] {
+  return docs.filter(doc => templateId(doc, convention) !== null);
 }
 
-// ---------------------------------------------------------------------------
-// Public API — graph construction
-// ---------------------------------------------------------------------------
+function adamicAdarContribution(degree: number): number { return degree <= 1 ? 0 : 1 / Math.log(degree); }
 
-/**
- * Build a 4-tier weighted edge graph from vault markdown files.
- *
- * Tier weights (composite = weighted sum; nashsu composite idea, GPL-3.0 —
- * algorithm absorbed as idea only, zero verbatim code):
- *
- *   Tier 1  wikilink    `[[target]]`         weight × 3.0
- *   Tier 2  frontmatter `sources`/`relations` weight × 4.0
- *   Tier 3  Adamic-Adar common-neighbour      weight × 1.5
- *   Tier 4  type-affinity same folder group   weight × 1.0
- *
- * Unresolvable links emit `kind: "unknown-ref"` edges (weight 0) rather than
- * throwing.  The full graph is returned as a flat GraphEdge array; persist it
- * with {@link saveCachedGraph} and reload with {@link loadCachedGraph}.
- */
-export async function buildGraph(opts: {
-  vaultPath: string;
-  /**
-   * Vault-relative file paths.  When omitted the whole vault is walked.
-   * Provide an explicit list to build a sparse on-demand sub-graph.
-   */
-  files?: readonly string[];
-}): Promise<GraphEdge[]> {
-  const vaultPath = path.resolve(opts.vaultPath);
-
-  let files: readonly string[];
-  if (opts.files !== undefined) {
-    files = opts.files;
-    await validateExplicitFiles(vaultPath, files);
-  } else {
-    const isExcluded = await excludedNoteMatcher(vaultPath);
-    const collected: string[] = [];
-    for await (const f of walkMarkdown(vaultPath, vaultPath, isExcluded)) collected.push(f);
-    files = collected;
-  }
-
-  const docs = await parseDocs(vaultPath, files);
-  const index = buildWikilinkIndex(files);
+/** Build graph edges from the current resolved template projection without writing vault state. */
+export async function buildGraph(opts: { readonly vaultPath: string; readonly convention: ResolvedConvention; readonly files?: readonly string[] }): Promise<GraphEdge[]> {
+  const vault = path.resolve(opts.vaultPath);
+  requireConvention(opts.convention);
+  const docs = selectedDocs(await parseDocs(vault, await graphPaths(vault, opts.files, opts.convention)), opts.convention);
+  if (docs.length === 0) return [];
+  const index = buildWikilinkIndexWithFrontmatter(docs.map(doc => ({ path: doc.docPath, frontmatter: doc.frontmatter })));
   const edges: GraphEdge[] = [];
-
-  // Undirected adjacency used for Adamic-Adar (resolved links only).
-  const adj = new Map<string, Set<string>>();
-  const ensureAdj = (node: string): Set<string> => {
-    let s = adj.get(node);
-    if (!s) { s = new Set<string>(); adj.set(node, s); }
-    return s;
+  const adjacency = new Map<string, Set<string>>();
+  const adjacent = (key: string): Set<string> => {
+    const existing = adjacency.get(key);
+    if (existing !== undefined) return existing;
+    const next = new Set<string>();
+    adjacency.set(key, next);
+    return next;
   };
-
-  // ── Tier 1: wikilinks × 3.0 ──────────────────────────────────────────────
-  for (const { docPath, rawWikilinks } of docs) {
-    ensureAdj(docPath);
-    for (const rawLink of rawWikilinks) {
-      const { docPath: target } = resolveWikilink(rawLink, index);
-      if (target !== null) {
-        edges.push({ from: docPath, to: target, weight: 3.0, kind: "wikilink" });
-        ensureAdj(docPath).add(target);
-        ensureAdj(target).add(docPath);
-      } else {
-        edges.push({ from: docPath, to: rawLink, weight: 0, kind: "unknown-ref" });
-      }
+  for (const doc of docs) {
+    adjacent(doc.docPath);
+    for (const reference of wikilinks(doc.body)) {
+      const target = resolveWikilink(reference, index).docPath;
+      if (target === null) edges.push({ from: doc.docPath, to: reference, weight: 0, kind: "unknown-ref" });
+      else { edges.push({ from: doc.docPath, to: target, weight: 3, kind: "wikilink" }); adjacent(doc.docPath).add(target); adjacent(target).add(doc.docPath); }
+    }
+    for (const reference of [...strings(doc.frontmatter.sources), ...strings(doc.frontmatter.relations)]) {
+      const target = resolveWikilink(reference, index).docPath;
+      edges.push(target === null ? { from: doc.docPath, to: reference, weight: 0, kind: "unknown-ref" } : { from: doc.docPath, to: target, weight: 4, kind: "frontmatter" });
     }
   }
-
-  // ── Tier 2: frontmatter sources / relations × 4.0 ────────────────────────
-  for (const { docPath, frontmatter } of docs) {
-    const refs: string[] = [
-      ...toStringArray(frontmatter["sources"]),
-      ...toStringArray(frontmatter["relations"]),
-    ];
-    for (const rawRef of refs) {
-      const { docPath: target } = resolveWikilink(rawRef, index);
-      if (target !== null) {
-        edges.push({ from: docPath, to: target, weight: 4.0, kind: "frontmatter" });
-      } else {
-        edges.push({ from: docPath, to: rawRef, weight: 0, kind: "unknown-ref" });
-      }
+  const pairs = new Map<string, number>();
+  for (const [common, neighbors] of adjacency) {
+    const score = adamicAdarContribution(neighbors.size);
+    if (score === 0) continue;
+    const sorted = [...neighbors].sort((left, right) => left.localeCompare(right));
+    for (let left = 0; left < sorted.length; left++) for (let right = left + 1; right < sorted.length; right++) {
+      const a = sorted[left]!;
+      const b = sorted[right]!;
+      const key = a.localeCompare(b) < 0 ? `${a}\0${b}` : `${b}\0${a}`;
+      pairs.set(key, (pairs.get(key) ?? 0) + score);
     }
   }
-
-  // ── Tier 3: Adamic-Adar × 1.5 ────────────────────────────────────────────
-  // For each node w, every pair of its neighbours (u, v) gains
-  // 1/log(deg(w)) — the Adamic-Adar contribution.
-  const aaPairs = new Map<string, number>();
-  for (const [w, neighbours] of adj) {
-    const contrib = adamicAdarContrib(neighbours.size);
-    if (contrib === 0) continue;
-    const ns = Array.from(neighbours).sort();
-    for (let i = 0; i < ns.length; i++) {
-      for (let j = i + 1; j < ns.length; j++) {
-        const u = ns[i]!;
-        const v = ns[j]!;
-        // canonical key: lexicographically smaller node first
-        const key = u < v ? `${u}\0${v}` : `${v}\0${u}`;
-        aaPairs.set(key, (aaPairs.get(key) ?? 0) + contrib);
-      }
-    }
+  for (const [key, score] of [...pairs].sort(([left], [right]) => left.localeCompare(right))) {
+    const split = key.indexOf("\0");
+    const left = key.slice(0, split);
+    const right = key.slice(split + 1);
+    edges.push({ from: left, to: right, weight: score * 1.5, kind: "adamic-adar" }, { from: right, to: left, weight: score * 1.5, kind: "adamic-adar" });
   }
-  for (const [key, rawScore] of aaPairs) {
-    const sep = key.indexOf("\0");
-    const u = key.slice(0, sep);
-    const v = key.slice(sep + 1);
-    const weight = rawScore * 1.5;
-    // Emit both directions — Adamic-Adar is an undirected similarity.
-    edges.push({ from: u, to: v, weight, kind: "adamic-adar" });
-    edges.push({ from: v, to: u, weight, kind: "adamic-adar" });
+  const groups = new Map<string, string[]>();
+  for (const doc of docs) {
+    const id = templateId(doc, opts.convention)!;
+    const members = groups.get(id) ?? [];
+    members.push(doc.docPath);
+    groups.set(id, members);
   }
-
-  // ── Tier 4: type-affinity × 1.0 (same first-folder group) ────────────────
-  const byType = new Map<string, string[]>();
-  for (const { docPath } of docs) {
-    const type = noteType(docPath);
-    if (!type) continue;
-    const bucket = byType.get(type) ?? [];
-    bucket.push(docPath);
-    byType.set(type, bucket);
+  for (const members of groups.values()) for (let left = 0; left < members.length; left++) for (let right = left + 1; right < members.length; right++) {
+    edges.push({ from: members[left]!, to: members[right]!, weight: 1, kind: "type-affinity" }, { from: members[right]!, to: members[left]!, weight: 1, kind: "type-affinity" });
   }
-  for (const [, members] of byType) {
-    if (members.length < 2) continue;
-    for (let i = 0; i < members.length; i++) {
-      for (let j = i + 1; j < members.length; j++) {
-        const u = members[i]!;
-        const v = members[j]!;
-        edges.push({ from: u, to: v, weight: 1.0, kind: "type-affinity" });
-        edges.push({ from: v, to: u, weight: 1.0, kind: "type-affinity" });
-      }
-    }
-  }
-
-  return edges;
+  return edges.sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || left.kind.localeCompare(right.kind) || left.weight - right.weight);
 }
 
-// ---------------------------------------------------------------------------
-// Two-tier cache
-// ---------------------------------------------------------------------------
-
-/**
- * Cache layout note:
- *
- *   Full graph  → .oms/cache/engine/graph.json  (gitignored)
- *   Sparse graph → computed live on demand via buildGraph({ files: [...] })
- *
- * Both paths use the same GraphEdge[] contract; the caller decides which to
- * invoke based on whether a cache hit is acceptable.
- */
-
-const CACHE_VERSION = 1;
-
-interface EngineCacheFile {
-  readonly version: number;
-  readonly generatedAt: string;
-  readonly edges: GraphEdge[];
+/** Scan template-bound notes and construct retrieval nodes without writing vault state. */
+export async function buildNodeIndex(opts: { readonly vaultPath: string; readonly convention: ResolvedConvention; readonly files?: readonly string[] }): Promise<EngineGraphNode[]> {
+  const vault = path.resolve(opts.vaultPath);
+  requireConvention(opts.convention);
+  const retrieval = deriveTemplateRetrievalAxes(opts.convention);
+  const declared = new Map(retrieval.templates.map(item => [item.templateId, new Set(item.axes.map(axis => axis.key))]));
+  const docs = selectedDocs(await parseDocs(vault, await graphPaths(vault, opts.files, opts.convention)), opts.convention);
+  const index = buildWikilinkIndexWithFrontmatter(docs.map(doc => ({ path: doc.docPath, frontmatter: doc.frontmatter })));
+  return docs.map(doc => {
+    const template = templateId(doc, opts.convention)!;
+    const allowed = declared.get(template);
+    if (allowed === undefined) fail(`${doc.docPath} template ${template} has no derived axes`);
+    const axes: Record<string, readonly AxisScalar[]> = {};
+    const searchable: string[] = [];
+    for (const key of [...allowed].sort((left, right) => left.localeCompare(right))) {
+      if (key === "template") continue;
+      const values = toAxisScalars(doc.frontmatter[key]);
+      if (values.length) { axes[key] = values; searchable.push(...values.map(String)); }
+    }
+    const outgoing = wikilinks(doc.body).map(link => resolveWikilink(link, index).docPath).filter((link): link is string => link !== null).sort((left, right) => left.localeCompare(right));
+    return { path: doc.docPath, template, folder: folder(doc.docPath), axes, wikilinks: outgoing, bodyPreview: doc.body.slice(0, 240), searchTerms: new Set([...tokenize(searchable.join(" ")), ...tokenize(doc.body)]) };
+  }).sort((left, right) => left.path.localeCompare(right.path));
 }
 
-async function readCacheFile(cachePath: string): Promise<string | null> {
-  try {
-    return await readFile(cachePath, "utf-8");
-  } catch (error) {
+/** Hash current indexed notes, exact projection input signature, and managed exclusions. */
+export async function nodeSourceSignature(vaultPath: string, convention: ResolvedConvention): Promise<Digest> {
+  const vault = path.resolve(vaultPath);
+  requireConvention(convention);
+  const hash = createHash("sha256");
+  hash.update(convention.inputSignature);
+  hash.update("\0");
+  for (const excluded of [...excludedPaths(convention)].sort((left, right) => left.localeCompare(right))) { hash.update(excluded); hash.update("\0"); }
+  for (const file of await graphPaths(vault, undefined, convention)) { hash.update(file); hash.update("\0"); hash.update(await readFile(path.join(vault, file))); hash.update("\0"); }
+  return `sha256:${hash.digest("hex")}` as Digest;
+}
+
+async function readCache(cachePath: string): Promise<string | null> {
+  try { return await readFile(cachePath, "utf8"); }
+  catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    try {
-      await lstat(cachePath);
-    } catch (missingError) {
-      if ((missingError as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw missingError;
-    }
+    try { await lstat(cachePath); } catch (missing) { if ((missing as NodeJS.ErrnoException).code === "ENOENT") return null; throw missing; }
     throw new Error(`Graph cache "${cachePath}" is a broken symbolic link.`, { cause: error });
   }
 }
 
-function parseCacheJson(raw: string, cachePath: string): unknown {
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch (error) {
-    throw new Error(`Graph cache "${cachePath}" is not valid JSON.`, { cause: error });
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-async function writeCacheAtomically(cachePath: string, contents: string): Promise<void> {
-  const outputPath = path.resolve(cachePath);
-  const directory = path.dirname(outputPath);
+async function atomicWrite(cachePath: string, content: string): Promise<void> {
+  const directory = path.dirname(path.resolve(cachePath));
   await mkdir(directory, { recursive: true });
-  const temporaryPath = path.join(
-    directory,
-    `.${path.basename(outputPath)}.${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`,
-  );
-  try {
-    await writeFile(temporaryPath, contents, { encoding: "utf-8", flag: "wx" });
-    await rename(temporaryPath, outputPath);
-  } finally {
-    try {
-      await unlink(temporaryPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
+  const temporary = path.join(directory, `.${path.basename(cachePath)}.${process.pid}-${Date.now()}.tmp`);
+  try { await writeFile(temporary, content, { encoding: "utf8", flag: "wx" }); await rename(temporary, cachePath); }
+  finally { try { await unlink(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
 }
 
-/**
- * Load the persisted full-graph cache from `cachePath`.
- * Returns `null` only when the file is absent or at a stale version.
- */
-export async function loadCachedGraph(cachePath: string): Promise<GraphEdge[] | null> {
-  const raw = await readCacheFile(cachePath);
+function parseCache(raw: string, cachePath: string): Record<string, unknown> {
+  try { const parsed: unknown = JSON.parse(raw); if (!isRecord(parsed)) throw new Error(); return parsed; }
+  catch (error) { throw new Error(`Graph cache "${cachePath}" has an invalid format.`, { cause: error }); }
+}
+
+function validEdges(edges: unknown): edges is GraphEdge[] { return Array.isArray(edges) && edges.every(edge => isRecord(edge) && typeof edge.from === "string" && typeof edge.to === "string" && typeof edge.weight === "number" && typeof edge.kind === "string"); }
+
+export async function saveCachedGraph(cachePath: string, edges: readonly GraphEdge[], projectionSignature: Digest): Promise<void> {
+  await atomicWrite(cachePath, `${JSON.stringify({ version: CACHE_VERSION, generatedAt: new Date().toISOString(), projectionSignature, edges })}\n`);
+}
+
+export async function loadCachedGraph(cachePath: string, projectionSignature: Digest): Promise<GraphEdge[] | null> {
+  const raw = await readCache(cachePath);
   if (raw === null) return null;
-  const parsed = parseCacheJson(raw, cachePath);
-  if (!isRecord(parsed)) {
-    throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
-  }
-  if (parsed.version !== CACHE_VERSION) return null;
-  if (
-    !Array.isArray(parsed.edges) ||
-    !parsed.edges.every((edge) =>
-      isRecord(edge) &&
-      typeof edge.from === "string" &&
-      typeof edge.to === "string" &&
-      typeof edge.weight === "number" &&
-      typeof edge.kind === "string"
-    )
-  ) {
-    throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
-  }
-  return parsed.edges as GraphEdge[];
+  const parsed = parseCache(raw, cachePath);
+  if (parsed.version !== CACHE_VERSION || typeof parsed.projectionSignature !== "string") fail(`cache "${cachePath}" is stale; rebuild explicitly`);
+  if (!validEdges(parsed.edges)) throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
+  if (parsed.projectionSignature !== projectionSignature) fail(`cache "${cachePath}" projection signature is stale; rebuild explicitly`);
+  return parsed.edges;
 }
 
-/**
- * Persist `edges` to `cachePath` as the full-graph cache.
- * Parent directories are created automatically.
- */
-export async function saveCachedGraph(cachePath: string, edges: GraphEdge[]): Promise<void> {
-  const file: EngineCacheFile = {
-    version: CACHE_VERSION,
-    generatedAt: new Date().toISOString(),
-    edges,
-  };
-  await writeCacheAtomically(cachePath, `${JSON.stringify(file, null, 2)}\n`);
-}
-
-/**
- * Load the persisted full-graph cache, returning both edges and the build
- * timestamp.  Unlike {@link loadCachedGraph} (which drops `generatedAt`), this
- * is used by oms_graph_status to report when the cache was built.
- * Returns `null` only when the file is absent or at a stale version.
- */
-export async function loadCachedGraphMeta(
-  cachePath: string,
-): Promise<{ edges: GraphEdge[]; generatedAt: string } | null> {
-  const raw = await readCacheFile(cachePath);
+export async function loadCachedGraphMeta(cachePath: string, projectionSignature: Digest): Promise<{ readonly edges: GraphEdge[]; readonly generatedAt: string } | null> {
+  const raw = await readCache(cachePath);
   if (raw === null) return null;
-  const parsed = parseCacheJson(raw, cachePath);
-  if (!isRecord(parsed)) {
-    throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
-  }
-  if (parsed.version !== CACHE_VERSION) return null;
-  if (
-    typeof parsed.generatedAt !== "string" ||
-    !Array.isArray(parsed.edges) ||
-    !parsed.edges.every((edge) =>
-      isRecord(edge) &&
-      typeof edge.from === "string" &&
-      typeof edge.to === "string" &&
-      typeof edge.weight === "number" &&
-      typeof edge.kind === "string"
-    )
-  ) {
-    throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
-  }
-  return { edges: parsed.edges as GraphEdge[], generatedAt: parsed.generatedAt };
+  const parsed = parseCache(raw, cachePath);
+  if (parsed.version !== CACHE_VERSION || typeof parsed.projectionSignature !== "string") fail(`cache "${cachePath}" is stale; rebuild explicitly`);
+  if (typeof parsed.generatedAt !== "string" || !validEdges(parsed.edges)) throw new Error(`Graph cache "${cachePath}" has an invalid format.`);
+  if (parsed.projectionSignature !== projectionSignature) fail(`cache "${cachePath}" projection signature is stale; rebuild explicitly`);
+  return { edges: parsed.edges, generatedAt: parsed.generatedAt };
 }
 
-// ---------------------------------------------------------------------------
-// Node index — per-note metadata for axis-filtered retrieval (C2)
-// ---------------------------------------------------------------------------
-
-const NODE_CACHE_VERSION = 2;
-
-/** JSON-serialisable form of EngineGraphNode (Set → string[] for searchTerms). */
-interface SerializedNode {
-  readonly path: string;
-  readonly concept: string | null;
-  readonly folder: string;
-  readonly axes: Record<string, AxisScalar[]>;
-  readonly wikilinks: string[];
-  readonly bodyPreview: string;
-  readonly searchTerms: string[];
+export async function saveNodeIndex(cachePath: string, nodes: readonly EngineGraphNode[], sourceSignature: Digest, projectionSignature: Digest): Promise<void> {
+  const serialized: SerializedNode[] = nodes.map(node => ({ path: node.path, template: node.template, folder: node.folder, axes: node.axes, wikilinks: node.wikilinks, bodyPreview: node.bodyPreview, searchTerms: [...node.searchTerms].sort((left, right) => left.localeCompare(right)) }));
+  await atomicWrite(cachePath, `${JSON.stringify({ version: NODE_CACHE_VERSION, generatedAt: new Date().toISOString(), sourceSignature, projectionSignature, nodes: serialized })}\n`);
 }
 
-interface NodeCacheFile {
-  readonly version: number;
-  readonly generatedAt: string;
-  readonly sourceSignature: string;
-  readonly nodes: SerializedNode[];
-}
-
-/** Hash sorted markdown paths and bytes so add/edit/delete invalidates a cache. */
-export async function nodeSourceSignature(vaultPath: string): Promise<string> {
-  const vault = path.resolve(vaultPath);
-  const isExcluded = await excludedNoteMatcher(vault);
-  const files: string[] = [];
-  for await (const file of walkMarkdown(vault, vault, isExcluded)) files.push(file);
-  files.sort();
-
-  const digest = createHash("sha256");
-  for (const file of files) {
-    digest.update(file);
-    digest.update("\0");
-    digest.update(await readFile(path.join(vault, file)));
-    digest.update("\0");
-  }
-  return digest.digest("hex");
-}
-
-function inferNodeCacheVault(cachePath: string): string {
-  const absolute = path.resolve(cachePath);
-  const engineDir = path.basename(path.dirname(absolute));
-  const cacheDir = path.basename(path.dirname(path.dirname(absolute)));
-  const omsDir = path.basename(path.dirname(path.dirname(path.dirname(absolute))));
-  if (engineDir === "engine" && cacheDir === "cache" && omsDir === ".oms") {
-    return path.dirname(path.dirname(path.dirname(path.dirname(absolute))));
-  }
-  return path.dirname(absolute);
-}
-
-/**
- * Scan the vault (or an explicit file slice) and build the per-note index
- * consumed by retrieve_by_axis.
- *
- * Each node carries concept (frontmatter["concept"] only — no Ontology, R18),
- * folder group, every frontmatter field as a string-array axis, resolved
- * out-going wikilinks, a 240-char body preview, and a tokenised searchTerms
- * set (frontmatter strings ∪ body) for lexical scoring.
- */
-export async function buildNodeIndex(opts: {
-  vaultPath: string;
-  /** Vault-relative file paths.  Whole vault is walked when omitted. */
-  files?: readonly string[];
-}): Promise<EngineGraphNode[]> {
-  const vaultPath = path.resolve(opts.vaultPath);
-
-  let files: readonly string[];
-  if (opts.files !== undefined) {
-    files = opts.files;
-    await validateExplicitFiles(vaultPath, files);
-  } else {
-    const isExcluded = await excludedNoteMatcher(vaultPath);
-    const collected: string[] = [];
-    for await (const f of walkMarkdown(vaultPath, vaultPath, isExcluded)) collected.push(f);
-    files = collected;
-  }
-
-  const index = buildWikilinkIndex(files);
-  const nodes: EngineGraphNode[] = [];
-
-  for (const docPath of files) {
-    const raw = await readFile(path.join(vaultPath, docPath), "utf-8");
-
-    const frontmatter = parseFrontmatter(raw, docPath);
-    const body = extractBody(raw);
-
-    const conceptRaw = frontmatter["concept"];
-    const concept = typeof conceptRaw === "string" ? conceptRaw : null;
-
-    const axes: Record<string, AxisScalar[]> = {};
-    const fmStrings: string[] = [];
-    for (const [key, value] of Object.entries(frontmatter)) {
-      const arr = toAxisScalars(value);
-      if (arr.length > 0) {
-        axes[key] = arr;
-        fmStrings.push(...arr.map((item) => String(item)));
-      }
-    }
-
-    const wikilinks: string[] = [];
-    for (const rawLink of extractRawWikilinks(body)) {
-      const { docPath: target } = resolveWikilink(rawLink, index);
-      if (target !== null) wikilinks.push(target);
-    }
-
-    const searchTerms = new Set<string>([
-      ...tokenize(fmStrings.join(" ")),
-      ...tokenize(body),
-    ]);
-
-    nodes.push({
-      path: docPath,
-      concept,
-      folder: noteType(docPath),
-      // Keep the node-index DTO compatible with legacy graph renderers. The
-      // runtime values remain typed (the cast only documents the old surface).
-      axes: axes as unknown as Record<string, string[]>,
-      wikilinks,
-      bodyPreview: body.slice(0, 240),
-      searchTerms,
-    });
-  }
-
-  return nodes;
-}
-
-/** Persist the node index to `cachePath` (compact JSON; Set serialised as array). */
-export async function saveNodeIndex(
-  cachePath: string,
-  nodes: readonly EngineGraphNode[],
-  sourceSignature?: string,
-): Promise<void> {
-  const file: NodeCacheFile = {
-    version: NODE_CACHE_VERSION,
-    generatedAt: new Date().toISOString(),
-    sourceSignature: sourceSignature ?? await nodeSourceSignature(inferNodeCacheVault(cachePath)),
-    nodes: nodes.map((n) => ({
-      path: n.path,
-      concept: n.concept,
-      folder: n.folder,
-      axes: n.axes,
-      wikilinks: n.wikilinks,
-      bodyPreview: n.bodyPreview,
-      searchTerms: Array.from(n.searchTerms),
-    })),
-  };
-  await writeCacheAtomically(cachePath, `${JSON.stringify(file)}\n`);
-}
-
-/**
- * Load the node index from `cachePath`, rebuilding each searchTerms Set from
- * its serialised array form. Returns `null` when absent, stale, or when the
- * markdown source signature no longer matches the cache. Corrupt or
- * unreadable files fail loudly so a partial snapshot is never accepted.
- */
-export async function loadNodeIndex(
-  cachePath: string,
-  sourceSignature?: string,
-): Promise<EngineGraphNode[] | null> {
-  const raw = await readCacheFile(cachePath);
+export async function loadNodeIndex(cachePath: string, sourceSignature: Digest, projectionSignature: Digest): Promise<EngineGraphNode[] | null> {
+  const raw = await readCache(cachePath);
   if (raw === null) return null;
-  const parsed = parseCacheJson(raw, cachePath);
-  if (!isRecord(parsed)) {
-    throw new Error(`Node cache "${cachePath}" has an invalid format.`);
-  }
-  if (parsed.version !== NODE_CACHE_VERSION) return null;
-  if (
-    typeof parsed.sourceSignature !== "string" ||
-    typeof parsed.generatedAt !== "string" ||
-    !Array.isArray(parsed.nodes) ||
-    !parsed.nodes.every((node) =>
-      isRecord(node) &&
-      typeof node.path === "string" &&
-      (typeof node.concept === "string" || node.concept === null) &&
-      typeof node.folder === "string" &&
-      isRecord(node.axes) &&
-      Array.isArray(node.wikilinks) &&
-      node.wikilinks.every((item) => typeof item === "string") &&
-      typeof node.bodyPreview === "string" &&
-      Array.isArray(node.searchTerms) &&
-      node.searchTerms.every((item) => typeof item === "string")
-    )
-  ) {
-    throw new Error(`Node cache "${cachePath}" has an invalid format.`);
-  }
-  const expectedSignature = sourceSignature ?? await nodeSourceSignature(inferNodeCacheVault(cachePath));
-  if (parsed.sourceSignature !== expectedSignature) return null;
-  return (parsed.nodes as SerializedNode[]).map((n) => ({
-    path: n.path,
-    concept: n.concept,
-    folder: n.folder,
-    // Typed values survive JSON round-tripping; retain the legacy DTO
-    // declaration for graph consumers.
-    axes: n.axes as unknown as Record<string, string[]>,
-    wikilinks: n.wikilinks,
-    bodyPreview: n.bodyPreview,
-    searchTerms: new Set(n.searchTerms),
-  }));
+  const parsed = parseCache(raw, cachePath);
+  if (parsed.version !== NODE_CACHE_VERSION || typeof parsed.sourceSignature !== "string" || typeof parsed.projectionSignature !== "string") fail(`node cache "${cachePath}" is stale; rebuild explicitly`);
+  if (parsed.sourceSignature !== sourceSignature || parsed.projectionSignature !== projectionSignature) fail(`node cache "${cachePath}" signature is stale; rebuild explicitly`);
+  if (!Array.isArray(parsed.nodes) || !parsed.nodes.every(node => isRecord(node) && typeof node.path === "string" && typeof node.template === "string" && typeof node.folder === "string" && isRecord(node.axes) && Array.isArray(node.wikilinks) && node.wikilinks.every(item => typeof item === "string") && typeof node.bodyPreview === "string" && Array.isArray(node.searchTerms) && node.searchTerms.every(item => typeof item === "string"))) throw new Error(`Node cache "${cachePath}" has an invalid format.`);
+  return (parsed.nodes as SerializedNode[]).map(node => ({ ...node, searchTerms: new Set(node.searchTerms) }));
 }

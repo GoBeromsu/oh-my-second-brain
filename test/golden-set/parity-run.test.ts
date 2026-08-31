@@ -11,7 +11,7 @@
  *   OMS_ENGINE_CACHE=… OMS_SLICE_MANIFEST=… OMS_GOLDEN_REPORT=… \
  *   npx vitest run test/golden-set/parity-run.test.ts
  */
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { runHarness, printHarnessReport } from "./harness.js";
 
@@ -19,7 +19,7 @@ describe("golden parity runner", () => {
   // Standalone manual runner: skipped in the bare `npm test` gate (no env),
   // runs only when invoked with OMS_VAULT + the sibling OMS_* env vars.
   it.skipIf(!process.env["OMS_VAULT"])(
-    "runs full parity and emits report",
+    "given a configured vault, when parity runs, then the report passes",
     async () => {
       const vaultPath = process.env["OMS_VAULT"];
       if (!vaultPath) throw new Error("OMS_VAULT required");
@@ -40,6 +40,7 @@ describe("golden parity runner", () => {
 
       printHarnessReport(report);
       console.log("[parity-run] overallPass=" + report.overallPass);
+      expect(report.overallPass).toBe(true);
     },
     3_600_000,
   );

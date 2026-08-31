@@ -1,23 +1,24 @@
 ---
 name: doctor
-description: Diagnose vault convention and index problems, then run explicit repairs.
+description: Diagnose template authority and index problems, then run explicit repairs.
 mcp_tool: oms_doctor
 mcp_args:
-  op: "audit"
+  op: "validate"
 ---
 
 # doctor
 
-Diagnose vault problems and perform the requested repair.
-
-## Use when
-
-Use this skill when a vault has convention violations, an unhealthy graph or semantic index, or stale generated state that needs correction. Use `status` instead when inspection alone is required.
+Diagnose vault template and derived-index state, then run only the named repair.
 
 ## Usage
 
 ```text
-/doctor <audit|validate|build-graph|cleanup|sync-embeddings>
+/doctor <validate|regenerate-types|backfill-defaults|audit|build-graph|cleanup|sync-embeddings>
 ```
 
-`audit` and `validate` inspect notes against their declared concept schemas. `build-graph`, `cleanup`, and `sync-embeddings` are repair operations and may write generated graph or semantic-index state. Review the diagnosis, then invoke only the repair needed.
+- `validate` is read-only. It reports policy/projection/source-signature drift, migration marker state, managed source exclusions, and unresolved legacy notes.
+- `regenerate-types` recomputes the derived `.oms/types.json` from actual templates, policy, taxonomy, and read-only Obsidian types.
+- `backfill-defaults` updates exactly one explicit note with stable template identity while preserving unrelated frontmatter and body bytes.
+- `build-graph`, `cleanup`, and `sync-embeddings` repair derived indexes.
+
+Every note/control repair requires a verified target. Run a dry-run, review the receipt, then submit its exact `approvalDigest`; never self-approve or repair all notes implicitly.

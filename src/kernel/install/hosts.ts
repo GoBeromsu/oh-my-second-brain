@@ -15,6 +15,16 @@ export {
   hostSurfaceForRuntime,
   resolveHostAdapterSource,
 } from "./adapter-source.js";
+export {
+  HostVaultPointerError,
+  canonicalHostVault,
+  deleteHostVaultPointer,
+  hostVaultPointerPath,
+  readHostVaultPointer,
+  readHostVaultPointerForRepair,
+  writeHostVaultPointer,
+  type HostVaultPointer,
+} from "./pointer.js";
 export function detectAvailableHosts(): HostRuntime[] {
   return HOST_RUNTIMES.filter((runtime) => commandExists(runtime));
 }

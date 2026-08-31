@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseNote } from "./frontmatter.js";
+import { managedSourceExclusionMatcher } from "./note-exclude.js";
 import { walkVaultMarkdown, mapWithConcurrency } from "./vault-walk.js";
 
 export interface BrokenLink {
@@ -53,8 +54,9 @@ function buildNoteIndex(notePaths: readonly string[]): Map<string, string> {
  */
 export async function detectLinkIssues(vault: string): Promise<VaultLintResult> {
   const allPaths: string[] = [];
+  const isExcluded = await managedSourceExclusionMatcher(vault);
   for await (const p of walkVaultMarkdown(vault)) {
-    allPaths.push(p);
+    if (!(await isExcluded(p))) allPaths.push(p);
   }
 
   const noteIndex = buildNoteIndex(allPaths);

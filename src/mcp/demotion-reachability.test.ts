@@ -1,21 +1,49 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { sourceSignature } from "../kernel/templates/index.js";
+import type { SourceDescriptor } from "../kernel/templates/types.js";
+import { createHash } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../");
 const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
+function digest(value: string): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+async function createTemplateAuthority(vault: string): Promise<void> {
+  const policy = JSON.stringify({ version: 1, templateFolder: "Templates/OMS", base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
+  const taxonomy = "folders: {}\n";
+  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", status: "select" } });
+  const template = "---\ntemplate: note\ntitle: Untitled\nstatus: open\n---\n# Note\n<!-- oms:content -->\n";
+  const sources: SourceDescriptor[] = [
+    { logicalId: "template-policy", signature: digest(policy) },
+    { logicalId: "taxonomy", signature: digest(taxonomy) },
+    { logicalId: "obsidian-types", signature: digest(obsidianTypes) },
+    { path: "Templates/OMS/note.md", signature: digest(template) },
+  ];
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title", "status"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [], naming: "{{slug}}.md", bodySignature: digest("# Note\n<!-- oms:content -->\n") } } } });
+  await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
+  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.yaml"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
+  const targetPath = path.join(vault, "references", "clean-architecture.md");
+  const target = await readFile(targetPath, "utf-8");
+  await writeFile(targetPath, target.replace(/^---\n/u, "---\ntemplate: note\n"), "utf-8");
+}
+
 function payload(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   const block = result.content[0];
   expect(block?.type).toBe("text");
-  return JSON.parse(block?.type === "text" ? block.text : "{}") as Record<string, unknown>;
+  const text = block?.type === "text" ? block.text : "{}";
+  try { return JSON.parse(text) as Record<string, unknown>; }
+  catch { throw new Error(text); }
 }
 
 function expectAdvertisedArguments(tool: Tool, args: Record<string, unknown>): void {
@@ -43,6 +71,7 @@ describe("MCP detail-tool demotion", () => {
     const client = new Client({ name: "demotion-test", version: "0" });
     const vault = await mkdtemp(path.join(tmpdir(), "oms-demotion-"));
     await cp(fixtureVault, vault, { recursive: true });
+    await createTemplateAuthority(vault);
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [distCli, "mcp", "--vault", vault], cwd: repoRoot, stderr: "pipe" }));
     try {
       const names = (await client.listTools()).tools.map((tool) => tool.name);
@@ -53,13 +82,14 @@ describe("MCP detail-tool demotion", () => {
         expectAdvertisedArguments(tool!, arguments_);
         return client.callTool({ name, arguments: arguments_ });
       };
-      const demoted = ["oms_retrieve_by_axis", "oms_retrieve_context", "oms_lazy_load_note", "oms_list_concepts", "oms_semantic_query", "oms_semantic_collections", "oms_semantic_contexts", "oms_semantic_status", "oms_get_document", "oms_multi_get_documents", "oms_link_suggest", "oms_link_apply", "oms_graph_status", "oms_vault_audit", "oms_validate_contract", "oms_graph_build", "oms_semantic_cleanup", "oms_sync_embeddings", "query", "get", "multi_get", "status"];
+      const demoted = ["oms_retrieve_by_axis", "oms_retrieve_context", "oms_lazy_load_note", "oms_semantic_query", "oms_semantic_collections", "oms_semantic_contexts", "oms_semantic_status", "oms_get_document", "oms_multi_get_documents", "oms_link_suggest", "oms_link_apply", "oms_graph_status", "oms_vault_audit", "oms_graph_build", "oms_semantic_cleanup", "oms_sync_embeddings", "query", "get", "multi_get", "status"];
       expect(names).not.toEqual(expect.arrayContaining(demoted));
       expect(payload(await call("oms_status", {})).derivedState).toBeDefined();
       expect(payload(await call("oms_doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
-      expect(payload(await call("oms_doctor", { op: "validate", notePath: "references/clean-architecture.md" })).valid).toBe(true);
+      expect(payload(await call("oms_doctor", { op: "validate" })).status).toBeTypeOf("string");
       expect(payload(await call("oms_doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
-      expect(payload(await call("oms_search", { op: "concepts" })).concepts).toBeInstanceOf(Array);
+      expect(payload(await call("oms_search", { op: "templates" })).templates).toBeInstanceOf(Array);
+      expect(payload(await call("oms_doctor", { op: "regenerate-types", dryRun: true })).status).toMatch(/planned|unchanged/);
       expect(payload(await call("oms_search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
       expect(payload(await call("oms_search", { op: "lazy-load", notePath: "references/clean-architecture.md" })).body).toBeTypeOf("string");
       expect(payload(await call("oms_search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);

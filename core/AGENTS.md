@@ -1,112 +1,49 @@
 # Oh My Second Brain Vault Convention — SSOT for Host Agents
 
-This file is the authoritative reference a host agent (Claude Code, Codex, Hermes, or any
-other) reads when working inside a vault managed by Oh My Second Brain. It explains the convention model so
-the agent understands *why* knowledge is organized the way it is — not just *where*.
+This file defines the end-user vault convention for host agents (Claude Code, Codex,
+Hermes, and others). All convention data and its meaning remain vault-owned.
 
----
+## Four Separate Authorities
 
-## What is a Convention?
+These authorities do not overlap:
 
-An Oh My Second Brain **convention** is declarative semantic data the **user owns**. It lives in
-`vault/.oms/` (copied there by `oms setup`; Oh My Second Brain ships the defaults in `core/ontology/`).
-The user edits it freely. Oh My Second Brain enforces whatever is declared — it does not impose structure.
+1. **Markdown templates — shape and body.** Actual vault Markdown templates own
+   frontmatter-key scaffolding, default literals, and note body shape. Do not infer
+   semantic meaning from a template's defaults.
+2. **Ontology policy — note and field meaning.** `.oms/template-policy.json` owns
+   `intent` for notes and frontmatter fields. It is the note/field portion of the
+   semantic ontology, not template shape or type authority.
+3. **Taxonomy — placement and folder/link ontology.** `.oms/taxonomy.yaml` owns note
+   placement and the folder/link portion of the semantic ontology, expressed through
+   folder and link `intent`. Authored folder intents surface on the derived
+   `folder-ontology` axis.
+4. **Obsidian types — type authority.** `.obsidian/types.json` is the read-only type
+   authority. `.oms/types.json` is derived output, never an independent authority.
 
-The convention has four building blocks:
+## Operating Boundaries
 
----
-
-## 1. Concept
-
-A **concept** is a note-type. Each concept carries:
-
-| Field    | Purpose |
-|----------|---------|
-| `concept` | Identifier (e.g. `literature`). |
-| `intent`  | One sentence: *what this knowledge is FOR.* |
-| `folder`  | The vault folder where notes of this type live. |
-| `fields`  | List of frontmatter keys the concept declares. |
-| `lenses`  | Named retrieval views (optional). |
-
-> "The folder itself is information — every folder declares its intent."
-> Rather than pattern-matching a directory listing, a host agent reads the declared `intent`
-> to understand *why* knowledge lives in a given folder.
-
----
-
-## 2. Field
-
-A **field** is one frontmatter key — the smallest unit of convention. Each field declares:
-
-| Property   | Meaning |
-|------------|---------|
-| `name`     | The frontmatter key (kebab-case, e.g. `source-url`). |
-| `type`     | One of `string`, `url`, `date`, `list`, `number`, `boolean`. |
-| `required` | Whether the key must be present and non-empty. |
-| `intent`   | Semantic purpose: *what this field is FOR.* |
-| `normalize` | Optional: `kebab`, `lower`, or `trim` — applied at validation. |
-| `immutable` | Advisory: once written, should not change (v0: no-op, forward-compat). |
-| `enum` | Optional closed vocabulary for string fields; values outside it are lint violations. |
-
-Users grow their convention field-by-field. There is no mandatory field list.
-
----
-
-## 3. Lens
-
-A **lens** is a pre-declared, named retrieval view. It is NOT a query filter — it is a
-concept's declaration of which fields matter for a specific retrieval purpose.
-
-Example: a `synthesis` lens on `literature` surfaces `title` and `source-url`, because those
-are the fields needed when synthesizing across references. A host agent uses the active lens
-to know which frontmatter to surface during retrieval.
-
----
-
-## 4. Taxonomy
-
-The **taxonomy** binds folders to concepts and gives each folder a declared `intent`.
-
-```yaml
-version: 1
-folders:
-  references:
-    intent: "Processed external sources the user has read and synthesized."
-    concept: literature
-  inbox:
-    intent: "Unprocessed captures awaiting triage."
-    concept: inbox
-```
-
-A folder may bind to one concept, multiple concepts (list), or `null` (not yet assigned). A folder binding may set `agentWritable: true`; paired with `routingLawStrict: true`, notes in that folder must carry `created_by`. Top-level `exclude` entries are vault-relative globs skipped by audit/lint scans.
-
----
-
-## Enforcement Posture
-
-| Setting | Value | Meaning |
-|---------|-------|---------|
-| `onViolation` | `warn` | Violations are logged but never block writes (v0 is non-blocking). |
-| `additionalProperties` | `preserve` | Frontmatter keys not declared in the concept are left untouched. |
-
-Oh My Second Brain enforces what the user declared; it does not touch anything else.
-
----
+- Treat the verified target note and its applicable vault template as the write
+  boundary. Write only after verifying that target; never use a destination merely
+  because a template default suggests it.
+- Read ontology and taxonomy to understand declared meaning and placement. Do not
+  overwrite them as a side effect of writing a note.
+- Read `.obsidian/types.json` without modifying it. Do not edit derived
+  `.oms/types.json` as a source of truth.
+- Preserve unknown frontmatter fields and their values. The convention constrains only
+  what the user declared.
 
 ## User Ownership
 
-1. `oms setup` scans the vault's existing top-level folders and creates `vault/.oms/`.
-2. It copies shipped default concepts into `vault/.oms/concepts/` and writes
-   `vault/.oms/taxonomy.yaml` — seeded with the user's real folders.
-3. The user fills in `intent` values and adds or removes fields/lenses freely.
-4. Oh My Second Brain never imposes a folder structure; it adopts what already exists.
-
----
+The user owns templates, ontology, taxonomy, and type definitions in the vault.
+Oh My Second Brain applies those declarations without making them sticky: it does not
+impose a folder structure, retain obsolete declarations, or replace user-authored
+meaning. The user-owned semantic ontology remains active across ontology policy and
+taxonomy; it is separate from template shape and type authority.
 
 ## Quick Reference for Host Agents
 
-- To understand a note: look up its folder in the taxonomy → read the `concept.intent`.
-- To validate frontmatter: load the concept's `fields`; check `required`, `type`, and any `enum`.
-- To retrieve knowledge: apply the relevant `lens` to surface the fields that matter.
-- To audit a vault: honor taxonomy `exclude` globs and routing-law flags.
-- When in doubt, preserve: `additionalProperties: preserve` means unknown keys are safe.
+- For note shape and default values, read the applicable vault Markdown template.
+- For note or field ontology, read `intent` in `.oms/template-policy.json`.
+- For destination and folder/link ontology, read `.oms/taxonomy.yaml`.
+- For types, read `.obsidian/types.json`; treat `.oms/types.json` only as derived data.
+- When in doubt, preserve user-authored content and unknown frontmatter.

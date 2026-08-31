@@ -212,7 +212,7 @@ function buildReconcileArgs(options: {
   readonly vault: string;
   readonly executeExternal: boolean;
 }): readonly string[] {
-  const args = ["update-reconcile", "--runtime", options.runtime, "--vault", options.vault];
+  const args = ["reconcile", "--runtime", options.runtime, "--vault", options.vault];
   if (options.executeExternal) {
     args.push("--execute");
   }

@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { lstat, mkdir, readFile, readlink, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink, realpath, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,8 +13,8 @@ const repoRoot = path.resolve(__dirname, "../..");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
 // This suite calls `runCli(["setup", ...])` without `--dry-run`. `oms setup`
-// no longer writes a global vault registry, but it still writes host state
-// under `$HOME` - e.g. `--install-claude` wires hook entries into
+// writes a stamp-only pointer and host state under `$HOME` - e.g.
+// `--install-claude` wires hook entries into
 // `$HOME/.claude/settings.json` (see upsertClaudeHooks in
 // src/vendors/claude/claude-hooks.ts) - so the isolation below is load-bearing
 // today, not merely precautionary. Every runCli() call gets HOME/USERPROFILE
@@ -72,12 +73,24 @@ afterAll(async () => {
 afterEach(async () => {
   await Promise.all(tempRoots.map((root) => rm(root, { recursive: true, force: true })));
   tempRoots = [];
+  await rm(smokeHome, { recursive: true, force: true });
+  await mkdir(smokeHome, { recursive: true });
 });
 
 async function makeVault(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-cli-dispatch-"));
   tempRoots.push(vault);
   return vault;
+}
+
+async function approvedSetup(vault: string): Promise<ReturnType<typeof runCli>> {
+  await mkdir(path.join(vault, ".obsidian"), { recursive: true });
+  await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text", title: "text" } }));
+  const dryRun = runCli(["setup", "--vault", vault, "--dry-run"]);
+  expect(dryRun.status).toBe(0);
+  const match = /"approvalDigest":\s*"(sha256:[0-9a-f]{64})"/u.exec(dryRun.stdout);
+  expect(match?.[1]).toBeDefined();
+  return runCli(["setup", "--vault", vault, "--yes", "--approved-digest", match![1]!]);
 }
 
 function runCli(
@@ -97,6 +110,7 @@ function runCli(
       OMS_NO_UPDATE_NOTICE: "1",
       HOME: smokeHome,
       USERPROFILE: smokeHome,
+      XDG_CONFIG_HOME: path.join(smokeHome, ".config"),
       ...env,
     },
     input,
@@ -168,9 +182,9 @@ describe("oms CLI dispatch", () => {
     expect(doctor.stderr).toBe("");
     expect(jsonObject(doctor.stdout)).toEqual(
       expect.objectContaining({
-        totalNotes: 0,
-        notesWithViolations: 0,
-        totalViolations: 0,
+        status: "needs-repair",
+        migrationMarker: "absent",
+        unresolvedLegacyNotes: [],
       }),
     );
 
@@ -185,25 +199,21 @@ describe("oms CLI dispatch", () => {
     );
   });
 
-  it("emits audit JSON and exits 0 for a clean fixture folder", () => {
-    const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
-    const audit = runCli(["audit", "--vault", fixtureVault, "--folder", "references", "--json"]);
-
+  it("emits audit JSON and exits 0 for a clean template fixture folder", async () => {
+    const vault = await makeVault();
+    await mkdir(path.join(vault, "Templates"), { recursive: true });
+    await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\ntitle: Untitled\n---\n<!-- oms:content -->\n");
+    expect((await approvedSetup(vault)).status).toBe(0);
+    await mkdir(path.join(vault, "notes"), { recursive: true });
+    await writeFile(path.join(vault, "notes", "Alpha.md"), "---\ntemplate: note\ntitle: Alpha\n---\nAlpha.\n");
+    const audit = runCli(["audit", "--vault", vault, "--folder", "notes", "--json"]);
     expect(audit.status).toBe(0);
     expect(audit.stderr).toBe("");
-    expect(jsonObject(audit.stdout)).toEqual(
-      expect.objectContaining({
-        folder: "references",
-        scannedNotes: 1,
-        excludedNotes: 0,
-        clean: true,
-        violations: [],
-      }),
-    );
+    expect(jsonObject(audit.stdout)).toEqual(expect.objectContaining({ folder: "notes", scannedNotes: 1, clean: true, templateCounts: { note: 1 } }));
   });
 
-  it("G002-CLI-001 rejects audit folder scopes that are not top-level folders", () => {
-    const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
+  it("G002-CLI-001 rejects audit folder scopes that are not top-level folders", async () => {
+    const fixtureVault = await makeVault();
     const audit = runCli(["audit", "--vault", fixtureVault, "--folder", "references/missing", "--json"]);
 
     expect(audit.status).toBe(1);
@@ -213,13 +223,14 @@ describe("oms CLI dispatch", () => {
 
   it("reports incomplete local .oms during audit instead of falling back to bundled defaults", async () => {
     const vault = await makeVault();
-    await mkdir(path.join(vault, ".oms", "concepts"), { recursive: true });
+    await mkdir(path.join(vault, ".oms"), { recursive: true });
 
     const audit = runCli(["audit", "--vault", vault, "--json"]);
 
     expect(audit.status).toBe(1);
     expect(audit.stdout).toBe("");
-    expect(audit.stderr).toContain("Local .oms ontology is incomplete");
+    expect(audit.stderr).toContain("TEMPLATE_SOURCE_INVALID");
+    expect(audit.stderr).not.toContain("bundled");
   });
 
   it("dispatches nested semantic status and rejects the retired top-level status alias", async () => {
@@ -255,7 +266,7 @@ describe("oms CLI dispatch", () => {
       "utf-8",
     );
 
-    const setup = runCli(["setup", "--vault", vault, "--yes"]);
+    const setup = await approvedSetup(vault);
     expect(setup.status).toBe(0);
 
     const link = runCli(["link", "--vault", vault, "--folder", "notes"], undefined, undefined, repo);
@@ -277,7 +288,7 @@ describe("oms CLI dispatch", () => {
 
     const doctor = runCli(["doctor"], undefined, undefined, repo);
     expect(doctor.status).toBe(0);
-    expect(doctor.stdout).toContain(`Vault: ${vault}`);
+    expect(doctor.stdout).toContain("Oh My Second Brain doctor:");
     const search = runCli(["search", "--lex", "Alpha"], undefined, undefined, repo);
     expect(search.status).toBe(0);
     expect(search.stderr).toBe("");
@@ -288,24 +299,22 @@ describe("oms CLI dispatch", () => {
     ]);
   });
 
-  it("routes linkify report mode without touching the vault, and refuses --apply without --yes", async () => {
+  it("routes linkify report mode without touching the vault and applies after confirmation", async () => {
     const vault = await makeVault();
+    await mkdir(path.join(vault, "Templates"), { recursive: true });
+    await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\ntitle: Untitled\n---\n<!-- oms:content -->\n");
+    expect((await approvedSetup(vault)).status).toBe(0);
     await mkdir(path.join(vault, "terms"), { recursive: true });
     await mkdir(path.join(vault, "notes"), { recursive: true });
-    await writeFile(path.join(vault, "terms", "Ataraxia.md"), "---\ntitle: Ataraxia\n---\n\nCalm.\n", "utf-8");
+    await writeFile(path.join(vault, "terms", "Ataraxia.md"), "---\ntemplate: note\ntitle: Ataraxia\n---\n\nCalm.\n", "utf-8");
     const notePath = path.join(vault, "notes", "Sage.md");
-    await writeFile(notePath, "---\ntitle: Sage\n---\n\nThe sage pursues Ataraxia daily.\n", "utf-8");
+    await writeFile(notePath, "---\ntemplate: note\ntitle: Sage\n---\n\nThe sage pursues Ataraxia daily.\n", "utf-8");
     const before = await readFile(notePath, "utf-8");
 
     const report = runCli(["linkify", "--vault", vault]);
     expect(report.status).toBe(0);
     expect(report.stdout).toContain("notes/Sage.md");
     expect(report.stdout).toContain("[[Ataraxia]]");
-    expect(await readFile(notePath, "utf-8")).toBe(before);
-
-    const refused = runCli(["linkify", "--vault", vault, "--apply"]);
-    expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain("--yes");
     expect(await readFile(notePath, "utf-8")).toBe(before);
 
     const applied = runCli(["linkify", "--vault", vault, "--apply", "--yes"]);
@@ -315,14 +324,41 @@ describe("oms CLI dispatch", () => {
     expect(after).not.toBe(before);
   });
 
-  it("routes update-reconcile dry-run through the scoped Claude cleanup plan", async () => {
+  it("routes reconcile dry-run through the scoped Claude cleanup plan", async () => {
     const vault = await makeVault();
-    const result = runCli(["update-reconcile", "--runtime", "claude", "--vault", vault, "--dry-run"]);
+    const result = runCli(["reconcile", "--runtime", "claude", "--vault", vault, "--dry-run"]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("claude mcp remove oms --scope local");
     expect(result.stdout).toContain("claude mcp remove oms --scope project");
     expect(result.stdout).toContain("claude mcp remove oms --scope user");
+  });
+
+  it("given installed vault A moved away, when all hosts install B, then the signed pointer and stamps contain only B", async () => {
+    const first = await makeVault();
+    const second = await makeVault();
+    expect(runCli(["install", "--runtime", "all", "--vault", first, "--yes", "--json"]).status).toBe(0);
+    const canonicalFirst = await realpath(first);
+    await rm(first, { recursive: true });
+    expect(runCli(["install", "--runtime", "all", "--vault", second, "--yes", "--json"]).status).toBe(0);
+    const canonicalSecond = await realpath(second);
+    const pointer = JSON.parse(
+      await readFile(path.join(smokeHome, ".config", "oms", "vault.json"), "utf-8"),
+    ) as { readonly vault: string; readonly signature: string };
+    expect(pointer.vault).toBe(canonicalSecond);
+    expect(pointer.signature).toMatch(/^[0-9a-f]{64}$/u);
+    for (const config of [
+      await readFile(path.join(smokeHome, ".claude.json"), "utf-8"),
+      await readFile(path.join(smokeHome, ".codex", "config.toml"), "utf-8"),
+    ]) {
+      expect(config).toContain(canonicalSecond);
+      expect(config).not.toContain(canonicalFirst);
+    }
+    const hermes = parse(
+      await readFile(path.join(smokeHome, ".hermes", "config.yaml"), "utf-8"),
+    ) as { readonly mcp_servers: { readonly oms: { readonly args: readonly string[] } } };
+    expect(hermes.mcp_servers.oms.args).toEqual(["mcp", "--vault", canonicalSecond]);
+    expect(existsSync(path.join(smokeHome, ".oms"))).toBe(false);
   });
 
   it("returns stable cleanup fields for host JSON output", async () => {

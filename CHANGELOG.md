@@ -6,9 +6,13 @@ This aggregate changelog contains changes that span multiple layers.
 - [CLI changelog](./CHANGELOG-cli.md) — the `oms` command surface
 - [MCP changelog](./CHANGELOG-mcp.md) — MCP server tools and resources
 - [Vendors changelog](./CHANGELOG-vendors.md) — per-host adapters and installers
-- [Assets changelog](./CHANGELOG-assets.md) — skills, agents, and ontology data
+- [Assets changelog](./CHANGELOG-assets.md) — skills, agents, templates, and host guidance
 
 ## [Unreleased]
+
+### Changed
+
+- **Oh My Second Brain now derives one write/search contract from templates and a coexisting user-owned ontology.** Vault Markdown templates own frontmatter/body shape; template policy owns note/field meaning, naming, and defaults; taxonomy owns folder/link meaning and placement; and Obsidian owns property types. The synchronized kernel, CLI, MCP, host, skill, setup, migration, diagnosis, and documentation cutover removes only the former `concept` note identity and bundled runtime authority. Stable template identities, inherited base defaults, managed-source exclusion, verified repair transactions, and host pointer reconciliation now work consistently across all supported environments.
 
 ## [0.8.4] - 2026-08-30
 

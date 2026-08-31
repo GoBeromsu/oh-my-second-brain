@@ -33,12 +33,10 @@ The npm package root is the runtime asset root. A releasable tarball must includ
 
 - `dist/cli/oms.js`
 - `dist/mcp/server.js`
-- `core/ontology/taxonomy.yaml`
-- `core/ontology/concepts/`
 - `.claude-plugin/plugin.json`
 - `assets/skills/*/SKILL.md`
 - `assets/codex/rules/oms.md` and `assets/hermes-manifest.json`
-- `docs/install.md`
+- `docs/install.md`, `docs/architecture.md`, `docs/conventions.md`, and `docs/verified-target.md`
 - `scripts/install.sh`
 - `scripts/uninstall.sh`
 - `CHANGELOG.md` and the five layer changelogs
@@ -49,9 +47,9 @@ release this package, which an installed consumer cannot do; shipping it would
 put instructions in the artifact that only apply to the repository. The READMEs
 link to the repository copy instead.
 
-`src/` is TypeScript source only. Bundled host/ontology assets intentionally stay
-at the package root so the built CLI can read the same package-root layout in
-source checkouts and in published tarballs.
+`src/` is TypeScript source only. Host assets and the shared skill source stay at
+the package root. Template authority is vault-resident; the package ships no
+bundled note-type defaults.
 
 Codex and Hermes host assets are packaged as host-native skill/rule bundles plus MCP registrations; release notes must describe the exact installed paths and avoid claiming behavior beyond the shipped skills and MCP tools.
 

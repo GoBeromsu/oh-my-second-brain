@@ -1,25 +1,21 @@
-# Oh My Second Brain Convention Fragment
+# Oh My Second Brain — Claude Code
 
-<!-- Append this block to your project's CLAUDE.md to activate Oh My Second Brain conventions in Claude Code. -->
+This vault is governed by user-owned template conventions in `.oms/`.
 
-## Vault Convention (Oh My Second Brain)
+Before vault work:
+- Treat actual Obsidian `.md` templates as the note-shape and body source of truth.
+- Treat `.obsidian/types.json` as read-only property-type authority.
+- Read the user-owned ontology from `.oms/template-policy.json` for note/field meaning and policy, and `.oms/taxonomy.yaml` for folder/link meaning and placement.
+- Never hand-edit derived `.oms/types.json`; use doctor diagnosis and an approved regeneration.
+- People and agents follow the same stable `templateId` rules.
 
-This vault is governed by Oh My Second Brain conventions stored in `.oms/`.
-All knowledge capture and retrieval must follow the declared semantic convention.
+Writes:
+- Use `/write` and MCP `oms_write`; never host Write/Edit for vault notes or managed templates.
+- Notes use `op: "note"` with a stable template ID.
+- Template changes use `op: "template"`: dry-run first, then apply only with the exact reviewed `approvalDigest`.
 
-**Before working with vault notes:**
-- Run `oms doctor` to validate existing notes against the convention (exits 0, non-blocking).
-- Read `.oms/taxonomy.yaml` to understand which folders hold which concepts.
-- Read `.oms/concepts/*.yaml` to understand field requirements and lenses.
+Retrieval:
+- Use `/search`; discover identities with `op: "templates"`.
+- Filter with template, declared field, folder, and link axes. Plain lexical search remains read-only and projection-independent.
 
-**When writing vault notes:**
-- Use the `/write` skill. Call MCP `oms_write`. Do not use host Write/Edit for vault `.md` files.
-- The kernel fills and checks frontmatter from `.oms`. `ask` or `rejected` means fix and call `oms_write` again.
-
-**When retrieving knowledge:**
-- Use the `/search` skill.
-- Apply the concept's declared lens for the retrieval purpose (synthesis, audit, etc.).
-- Return only the fields the lens specifies — do not dump full frontmatter.
-
-**Doctor is advisory. Write is not.**
-`oms doctor` always exits 0. MCP `oms_write` rejects contract violations.
+`status` is observational. `doctor` owns explicit diagnosis and repairs. The seven installed skills are write, search, link, distill, status, doctor, and tool-less template authoring.

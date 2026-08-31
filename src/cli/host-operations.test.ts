@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 import {
   runHostOperation as runKernelHostOperation,
   formatHostOperationResults,
@@ -49,6 +50,14 @@ const repoRoot = path.resolve(__dirname, "../..");
 const adapterRoot = repoRoot;
 
 describe("host installer/uninstaller", () => {
+  it("keeps normal target resolution independent from the host pointer", async () => {
+    const targetResolver = await readFile(
+      path.join(repoRoot, "src", "kernel", "link", "link.ts"),
+      "utf-8",
+    );
+    expect(targetResolver).not.toContain("install/pointer");
+  });
+
   it("installs and uninstalls Codex managed MCP config without removing unrelated sections", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-install-codex-"));
     const codexDir = path.join(home, ".codex");
@@ -859,6 +868,28 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     });
     expect(result.messages.join(" ")).toContain("not a JSON object");
     expect(await readFile(mcpPath, "utf-8")).toBe("[]\n");
+  });
+
+  it("reconciles every managed host stamp to the latest selected vault without a legacy .oms registry", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-host-pointer-"));
+    const first = path.join(home, "Vault A");
+    const second = path.join(home, "Vault B");
+    await runHostOperation({ action: "install", runtime: "all", vault: first, homeDir: home, adapterRoot });
+    await runHostOperation({ action: "install", runtime: "all", vault: second, homeDir: home, adapterRoot });
+
+    const claudeMcp = await readFile(path.join(home, ".claude.json"), "utf-8");
+    const claudeHooks = await readFile(path.join(home, ".claude", "settings.json"), "utf-8");
+    const codex = await readFile(path.join(home, ".codex", "config.toml"), "utf-8");
+    const hermes = await readFile(path.join(home, ".hermes", "config.yaml"), "utf-8");
+    for (const managed of [claudeMcp, codex]) {
+      expect(managed).toContain(second);
+      expect(managed).not.toContain(first);
+    }
+    const hermesConfig = parse(hermes) as { readonly mcp_servers: { readonly oms: { readonly args: readonly string[] } } };
+    expect(hermesConfig.mcp_servers.oms.args).toEqual(["mcp", "--vault", second]);
+    expect(claudeHooks).toContain("Vault B");
+    expect(claudeHooks).not.toContain("Vault A");
+    expect(existsSync(path.join(home, ".oms"))).toBe(false);
   });
 
   it("install+uninstall Claude runtime writes and then removes hooks from settings.json", async () => {

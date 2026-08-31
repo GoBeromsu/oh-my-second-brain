@@ -4,6 +4,13 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The domain kernel now keeps template shape and ontology meaning separate end to end.** Vault-resident Markdown templates own frontmatter/body shape; template policy carries note/field `intent`, naming, and defaults; taxonomy carries folder/link `intent` and placement; and Obsidian owns property types. They resolve into one signed projection shared by write, graph, link, search, setup, migration, diagnosis, and repair. Field intent is retained on search axes and folder intent is exposed through the derived `folder-ontology` axis. Legacy `concept` identity, bundled ontology runtime loaders, old capture APIs, writable projection contracts, graph cache, and fallback behavior were removed; managed template sources stay outside note indexes and embeddings.
+- **Template migration and repair are guarded transactions.** Setup discovers existing templates and publishes only after an explicit approval digest; projection regeneration, template mutation, relocation/reclassification, and one-note identity backfill use verified targets, compare-and-swap expectations, and read-back postcondition receipts.
+- **Migration now preserves legacy meaning while cutting over synchronously.** URL formats, enum/immutable field semantics, retrieval views, legacy type/allowed-value/axis contracts, unknown extensions, string/list/null taxonomy cardinality, raw source bytes, and provenance survive translation; one-to-many legacy routes materialize deterministic stable template clones. Unmarked managed-folder notes block activation. Durable checksummed plans can resume after interruption, invalid markers fail closed, taxonomy owns placement, and unbound templates route to the safe `Inbox/` fallback rather than their source folder.
+- **Template rendering uses one exact source layout and instant.** `{{date}}` and `{{time}}` render as UTC `YYYY-MM-DD` and `HH:mm`, title-dependent templates require a non-empty title, only a standalone content-marker line is replaced, and BOM/EOL/final-newline semantics flow from the resolved source.
+
 ## [0.8.4] - 2026-08-30
 
 ## [0.8.3] - 2026-08-29

@@ -1,138 +1,71 @@
-import type { Concept, Ontology, OntologyField } from "../ontology/types.js";
-import { validateFrontmatter } from "./validate.js";
+import type { BaseContract, FieldPolicy, JsonValue, ResolvedTemplate } from "../templates/types.js";
 
-export type WriteContractRule = "required" | "type" | "enum" | "routing-law";
+export type TemplateContractRule = "required" | "type" | "allowed-values" | "format";
 
-export interface WriteContractViolation {
-  field: string;
-  rule: WriteContractRule;
-  message: string;
+export interface TemplateContractViolation {
+  readonly field: string;
+  readonly rule: TemplateContractRule;
+  readonly message: string;
 }
 
-export interface WriteContractResult {
-  valid: boolean;
-  violations: WriteContractViolation[];
+export interface TemplateContractResult {
+  readonly valid: boolean;
+  readonly violations: readonly TemplateContractViolation[];
 }
 
-export interface WriteFieldDescriptor {
-  name: string;
-  type: OntologyField["type"];
-  required: boolean;
-  intent: string;
-  enum?: string[];
+const STRING_TYPES = new Set(["text", "string", "select", "file"]);
+const LIST_TYPES = new Set(["list", "multitext", "multi", "tags", "aliases"]);
+
+function valueMatchesType(value: JsonValue, type: FieldPolicy["type"]): boolean {
+  if (type === undefined) return true;
+  if (STRING_TYPES.has(type)) return typeof value === "string";
+  if (type === "number") return typeof value === "number" && Number.isFinite(value);
+  if (type === "boolean" || type === "checkbox") return typeof value === "boolean";
+  if (type === "date") return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  if (type === "datetime") return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(Date.parse(value));
+  return LIST_TYPES.has(type) && Array.isArray(value) && (type === "list" || type === "multi" || value.every(item => typeof item === "string"));
 }
 
-/**
- * Kernel-owned write contract. Does not throw. Does not check allowlist —
- * undeclared keys are preserved (additionalProperties: preserve).
- */
-export function evaluateWriteContract(
-  frontmatter: Record<string, unknown>,
-  concept: Concept,
-  notePath: string,
-  strictZones: ReadonlySet<string>,
-): WriteContractResult {
-  const violations: WriteContractViolation[] = [];
+function empty(value: JsonValue | undefined): boolean {
+  return value === undefined || value === null || (typeof value === "string" && value.trim() === "") || (Array.isArray(value) && value.length === 0);
+}
 
-  const fieldResult = validateFrontmatter(frontmatter, concept);
-  for (const violation of fieldResult.violations) {
-    if (violation.rule === "immutable") {
+function validUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** Evaluates resolved template fields while retaining undeclared frontmatter. */
+export function evaluateResolvedTemplateContract(
+  frontmatter: Readonly<Record<string, JsonValue>>,
+  template: ResolvedTemplate,
+  base: BaseContract,
+): TemplateContractResult {
+  const violations: TemplateContractViolation[] = [];
+  const fields: Record<string, FieldPolicy> = { ...base.fields, ...template.fields };
+
+  for (const [field, policy] of Object.entries(fields)) {
+    const value = frontmatter[field];
+    if (policy.required === true && empty(value)) {
+      violations.push({ field, rule: "required", message: `Field "${field}" is required.` });
       continue;
     }
-    violations.push({
-      field: violation.field,
-      rule: violation.rule,
-      message: violation.message,
-    });
+    if (value === undefined || value === null) continue;
+    if (!valueMatchesType(value, policy.type)) {
+      violations.push({ field, rule: "type", message: `Field "${field}" must be ${policy.type ?? "a valid value"}.` });
+      continue;
+    }
+    if (policy.allowedValues !== undefined && (typeof value !== "string" || !policy.allowedValues.includes(value))) {
+      violations.push({ field, rule: "allowed-values", message: `Field "${field}" is not an allowed value.` });
+    }
+    if (policy.format === "url" && (typeof value !== "string" || !validUrl(value))) {
+      violations.push({ field, rule: "format", message: `Field "${field}" must be an http(s) URL.` });
+    }
   }
-
-  violations.push(...enumViolations(frontmatter, concept));
-  violations.push(...routingLawViolations(frontmatter, notePath, strictZones));
 
   return { valid: violations.length === 0, violations };
-}
-
-export function routingLawStrictFolders(ontology: Ontology): Set<string> {
-  const zones = new Set<string>();
-  for (const [folder, binding] of Object.entries(ontology.taxonomy.folders)) {
-    if (binding.agentWritable === true && binding.routingLawStrict === true) {
-      zones.add(folder);
-    }
-  }
-  return zones;
-}
-
-export function writeFieldDescriptors(concept: Concept): WriteFieldDescriptor[] {
-  return concept.fields.map((field) => {
-    const descriptor: WriteFieldDescriptor = {
-      name: field.name,
-      type: field.type,
-      required: field.required === true,
-      intent: field.intent,
-    };
-    if (field.enum !== undefined) {
-      descriptor.enum = field.enum;
-    }
-    return descriptor;
-  });
-}
-
-export function enumViolations(
-  frontmatter: Record<string, unknown>,
-  concept: Concept,
-): WriteContractViolation[] {
-  const violations: WriteContractViolation[] = [];
-  for (const field of concept.fields) {
-    if (!field.enum || field.enum.length === 0) {
-      continue;
-    }
-    const value = frontmatter[field.name];
-    if (value === undefined || value === null) {
-      continue;
-    }
-    if (typeof value !== "string") {
-      continue;
-    }
-    if (!field.enum.includes(value)) {
-      violations.push({
-        field: field.name,
-        rule: "enum",
-        message:
-          `Field "${field.name}" value "${value}" is not one of` +
-          ` [${field.enum.map((entry) => `"${entry}"`).join(", ")}].`,
-      });
-    }
-  }
-  return violations;
-}
-
-export function routingLawViolations(
-  frontmatter: Record<string, unknown>,
-  notePath: string,
-  strictZones: ReadonlySet<string>,
-): WriteContractViolation[] {
-  const folder = notePath.split("/")[0] ?? "";
-  if (!strictZones.has(folder)) {
-    return [];
-  }
-
-  const createdBy = frontmatter["created_by"];
-  const missing =
-    createdBy === undefined ||
-    createdBy === null ||
-    (typeof createdBy === "string" && createdBy.trim() === "");
-
-  if (!missing) {
-    return [];
-  }
-
-  return [
-    {
-      field: "created_by",
-      rule: "routing-law",
-      message:
-        `Note in agent-writable zone "${folder}" must carry "created_by"` +
-        ` to satisfy the ROUTING LAW (agent-authored notes are traceable).`,
-    },
-  ];
 }

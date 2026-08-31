@@ -22,9 +22,6 @@ import { matchTermInToken } from "./josa.js";
 import { maskBody } from "./mask.js";
 import type { LinkCandidate, MatchSource, Span, TermNote } from "./types.js";
 
-/** The ontology concept whose notes are the default link universe. */
-export const TERM_CONCEPT = "term";
-
 /** Minimal shape of `EngineStore.queryLex` results — only what ranking needs. */
 export interface LexHit {
   readonly docPath: string;
@@ -66,15 +63,6 @@ const TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu;
 // Candidate universe
 // ---------------------------------------------------------------------------
 
-/**
- * Restrict a candidate set to notes bound to the `term` concept.
- *
- * Offered as a helper rather than applied inside {@link suggestLinks} so the
- * caller owns the universe decision (a vault may want a wider set).
- */
-export function termBoundNotes(notes: readonly TermNote[]): TermNote[] {
-  return notes.filter((note) => note.concept === TERM_CONCEPT);
-}
 
 /** Basename + alias surfaces of a note, longest first so the greediest wins. */
 function surfacesOf(note: TermNote): Surface[] {

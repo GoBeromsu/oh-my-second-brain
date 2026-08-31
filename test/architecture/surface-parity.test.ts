@@ -10,7 +10,7 @@ import { omsMcpTools } from "../../src/mcp/server.js";
 /**
  * Surface-set parity gate.
  *
- * The live target set (6 skills / 5 tools) is asserted directly. The fixture
+ * The live target set (7 skills / 5 tools) is asserted directly. The fixture
  * cases below prove that the rules also fail closed when a surface drifts.
  *
  * The rule set is deliberately NOT "all three lists are equal". The three
@@ -19,7 +19,7 @@ import { omsMcpTools } from "../../src/mcp/server.js";
  *   skills      - the authored skill set
  *   mcpTools    - a strict SUBSET of skills, namely those declaring `mcp_tool`
  *   cliCommands - an INDEPENDENT allowlist; `mcp`, `setup`, `install`,
- *                 `update`, `update-reconcile`, `audit`, `lint` and `hook` are
+ *                 `update`, `reconcile`, `audit`, `lint` and `hook` are
  *                 real CLI commands that are not skills and must never be
  *                 deleted to force literal equality.
  *
@@ -154,10 +154,10 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
   return violations;
 }
 
-const TARGET = { skills: 6, tools: 5 } as const;
+const TARGET = { skills: 7, tools: 5 } as const;
 
 const CLEAN: SurfaceSets = {
-  skills: ["write", "search", "link", "distill", "status", "doctor"],
+  skills: ["write", "search", "link", "distill", "status", "doctor", "template"],
   skillsWithTool: ["write", "search", "link", "status", "doctor"],
   // In this fixture, a tool is identified by its declaring skill; the `oms_`
   // naming convention is verified separately by the registry parity suite.
@@ -327,7 +327,6 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     .filter((op): op is string => typeof op === "string");
   expect(searchOperations.sort()).toEqual([
     "collections",
-    "concepts",
     "context",
     "contexts",
     "get-document",
@@ -335,6 +334,7 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     "multi-get-documents",
     "query",
     "status",
+    "templates",
   ]);
   const queryBranch = (
     (searchTool?.inputSchema as {
@@ -363,7 +363,7 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     cursor: { type: "string" },
   });
   const doctorTool = omsMcpTools.find((tool) => tool.name === "oms_doctor");
-  const doctorOperations = (
+  const doctorOperations = [...new Set((
     (doctorTool?.inputSchema as {
       readonly oneOf?: readonly {
         readonly properties?: Record<string, { readonly const?: string }>;
@@ -371,11 +371,13 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     }).oneOf ?? []
   )
     .map((branch) => branch.properties?.["op"]?.const)
-    .filter((op): op is string => typeof op === "string");
+    .filter((op): op is string => typeof op === "string"))];
   expect(doctorOperations.sort()).toEqual([
     "audit",
+    "backfill-defaults",
     "build-graph",
     "cleanup",
+    "regenerate-types",
     "sync-embeddings",
     "validate",
   ]);
@@ -408,7 +410,7 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
 }
 
 describe("surface-set parity gate (live surface)", () => {
-  it("reads the six disk-authored skills, MCP registry, and CLI dispatcher", () => {
+  it("reads the seven disk-authored skills, MCP registry, and CLI dispatcher", () => {
     expect(checkSurfaceSets(liveSurfaceSets(), TARGET)).toEqual([]);
   });
 

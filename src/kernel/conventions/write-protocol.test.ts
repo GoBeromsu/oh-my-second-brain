@@ -84,17 +84,6 @@ describe("write-protocol", () => {
       expect(result.code).toBe("note-missing");
     });
 
-    it("stamps recoverable=false for concept-unbound", () => {
-      const result = rejection(
-        "admission",
-        "concept-unbound",
-        "concept not bound",
-        "bind concept"
-      );
-      expect(result.recoverable).toBe(false);
-      expect(result.code).toBe("concept-unbound");
-    });
-
     it("stamps recoverable=false for target-invalid", () => {
       const result = rejection(
         "admission",
@@ -115,6 +104,17 @@ describe("write-protocol", () => {
       );
       expect(result.recoverable).toBe(false);
       expect(result.code).toBe("postcondition-failed");
+    });
+
+    it("stamps recoverable=false for immutable template identity", () => {
+      const result = rejection(
+        "admission",
+        "TEMPLATE_IDENTITY_IMMUTABLE",
+        "template identity changed",
+        "select the persisted template",
+      );
+      expect(result.recoverable).toBe(false);
+      expect(result.code).toBe("TEMPLATE_IDENTITY_IMMUTABLE");
     });
 
     it("passes through stage, code, message, and remediation verbatim", () => {

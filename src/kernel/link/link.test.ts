@@ -102,8 +102,9 @@ describe("ensureGitignore", () => {
 });
 
 describe("resolveEffectiveVault", () => {
-  it("treats a dir with .oms/concepts as the vault itself", async () => {
-    await mkdir(path.join(vault, ".oms", "concepts"), { recursive: true });
+  it("treats a dir with .oms/template-policy.json as the vault itself", async () => {
+    await mkdir(path.join(vault, ".oms"), { recursive: true });
+    await writeFile(path.join(vault, ".oms", "template-policy.json"), "{}\n");
     const resolved = await resolveEffectiveVault(vault, {});
     expect(resolved).toEqual({ vault: path.resolve(vault), scope: null, source: "vault" });
   });
@@ -139,8 +140,9 @@ describe("resolveEffectiveVault", () => {
     expect(resolved).toEqual({ vault: path.resolve(repo), scope: null, source: "cwd" });
   });
 
-  it("prefers a local vault ontology over a bridge record", async () => {
-    await mkdir(path.join(repo, ".oms", "concepts"), { recursive: true });
+  it("prefers local template controls over a bridge record", async () => {
+    await mkdir(path.join(repo, ".oms"), { recursive: true });
+    await writeFile(path.join(repo, ".oms", "template-policy.json"), "{}\n");
     await writeLinkRecord(path.join(repo, ".oms"), { version: 1, vault, scope: ["notes"] });
     const resolved = await resolveEffectiveVault(repo, { OMS_VAULT: "/somewhere/else" });
     expect(resolved.source).toBe("vault");

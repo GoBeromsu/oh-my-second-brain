@@ -1,8 +1,12 @@
 # Assets Changelog
 
-Skills, agents, and ontology data changes belong here.
+Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
+
+### Changed
+
+- **The seven shared skills, including the tool-less template authoring workflow, now teach stable template IDs, derived axes, explicit repair approval, and template/ontology coexistence.** Claude, Codex, and Hermes guidance separates template-owned shape from user-owned note/field/folder/link meaning. It no longer describes `concept` identity, personas, retrieval lenses, hand-edited projection state, or bundled note-type defaults.
 
 ## [0.8.4] - 2026-08-30
 

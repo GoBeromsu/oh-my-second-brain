@@ -4,6 +4,12 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The five-tool MCP surface now uses stable templates for every note-shaped operation.** `oms_write` has strict create/append/update branches: create derives placement from `templateId`, while append/update resolve the persisted note identity; guarded template operations remain on the same tool. `oms_search` advertises template/field/folder/link axes; `oms_status` reports projection signatures; and `oms_doctor` adds template diagnosis, approved projection regeneration, and exact one-note backfill without adding public tools.
+- **Graph, link, and search paths share one resolved convention.** Typed retrieval omits and reports unresolved note identities instead of failing the whole index, stale projections fail loudly, managed template sources are excluded, and every advertised search operation remains byte-identical read-only.
+- **Doctor and template mutation use exact public operations and durable recovery.** Doctor exposes `validate`, `regenerate-types`, and `backfill-defaults`; interrupted template transactions resume by persisted transaction ID and the original approved digest instead of reconstructing mutable caller state.
+
 ## [0.8.4] - 2026-08-30
 
 ## [0.8.3] - 2026-08-29

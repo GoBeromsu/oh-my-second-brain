@@ -125,11 +125,7 @@ describe("harness registry parity", () => {
     const distModuleUrl = pathToFileURL(path.join(packageRoot, "dist", "runtime", "assets.js")).href;
     const resolved = resolveBundledAssetPaths(distModuleUrl);
 
-    // Only the ontology root survives. The adapter roots were retired with the
-    // vendor topology move: skills resolve through SHARED_SKILLS_SOURCE now, not
-    // through a per-host runtime asset root.
-    expect(harnessSurfaceRegistry.packageAssets.runtimeAssetRoots).toEqual([
-      { id: "ontology", path: path.relative(packageRoot, resolved.ontologyDir), owner: "core" },
-    ]);
+    expect(resolved).toEqual({ packageRoot });
+    expect(harnessSurfaceRegistry.packageAssets.runtimeAssetRoots).toEqual([]);
   });
 });

@@ -30,12 +30,40 @@ describe("CLI argument parser", () => {
     expect(parsed.yes).toBe(true);
   });
 
+  it("parses an approved setup digest, defaults it, and rejects a missing value", () => {
+    const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const parsed = parseCliArgs(["setup", "--approved-digest", "sha256:old", "--approved-digest", digest]);
+
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.approvedDigest).toBe(digest);
+    expect(parseCliArgs(["setup"]).approvedDigest).toBeUndefined();
+    expect(parseCliArgs(["setup", "--approved-digest"]).error?.message).toBe(
+      "[oms] Missing value for --approved-digest.",
+    );
+    expect(parseCliArgs(["setup", "--approved-digest", "--yes"]).error?.message).toBe(
+      "[oms] Missing value for --approved-digest.",
+    );
+  });
+
+  it("given a setup template folder, when parsing, then the exact folder is retained", () => {
+    expect(parseCliArgs(["setup", "--template-folder", "Meta/Templates"]).templateFolder).toBe(
+      "Meta/Templates",
+    );
+    expect(parseCliArgs(["setup", "--template-folder"]).error?.message).toBe(
+      "[oms] Missing value for --template-folder.",
+    );
+  });
+
+  it("accepts only a positive integer max-per-template report limit", () => {
+    expect(parseCliArgs(["doctor", "--max-per-template", "3"]).maxPerTemplate).toBe(3);
+    expect(parseCliArgs(["doctor", "--max-per-template"]).error?.message).toContain("positive integer");
+    expect(parseCliArgs(["doctor", "--max-per-template", "0"]).error?.message).toContain("positive integer");
+    expect(parseCliArgs(["doctor", "--max-per-template", "1.5"]).error?.message).toContain("positive integer");
+  });
+
   it("preserves unsupported runtime and malformed numeric flag errors", () => {
     expect(parseCliArgs(["install", "--runtime", "banana"]).error?.message).toBe(
       "[oms] Unsupported runtime: banana",
-    );
-    expect(parseCliArgs(["doctor", "--max", "0"]).error?.message).toBe(
-      "[oms] Unsupported --max value: 0",
     );
     expect(parseCliArgs(["update", "--timeout-ms", "nope"]).error?.message).toBe(
       "[oms] Unsupported timeout: nope",
@@ -97,7 +125,7 @@ describe("CLI argument parser", () => {
 
   it("parses audit flags", () => {
     const parsed = parseCliArgs(
-      ["audit", "--vault", "Vault", "--folder", "references", "--json", "--suggest-fields"],
+      ["audit", "--vault", "Vault", "--folder", "references", "--json"],
       "/tmp/oms-cli",
     );
 
@@ -106,6 +134,5 @@ describe("CLI argument parser", () => {
     expect(parsed.vault).toBe("/tmp/oms-cli/Vault");
     expect(parsed.folders).toEqual(["references"]);
     expect(parsed.json).toBe(true);
-    expect(parsed.suggestFields).toBe(true);
   });
 });

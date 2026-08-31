@@ -1,57 +1,54 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { sourceSignature } from "../templates/index.js";
+import type { SourceDescriptor } from "../templates/types.js";
 import { assembleGraphOnlyEngine } from "./assemble.js";
 
 const tempDirs: string[] = [];
-afterAll(() => {
-  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
-});
+afterAll(() => { for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true }); });
+const digest = (value: string): `sha256:${string}` => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 
 function freshVault(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "oms-graph-only-"));
-  tempDirs.push(dir);
-  mkdirSync(path.join(dir, "notes"), { recursive: true });
-  writeFileSync(
-    path.join(dir, "notes", "alpha.md"),
-    "---\nconcept: Project\nstatus: active\n---\nAlpha links [[beta]].\n",
-  );
-  writeFileSync(
-    path.join(dir, "notes", "beta.md"),
-    "---\nconcept: Reference\n---\nBeta note.\n",
-  );
-  return dir;
+  const vault = mkdtempSync(path.join(tmpdir(), "oms-graph-only-"));
+  tempDirs.push(vault);
+  for (const directory of [".oms", ".obsidian", "Templates/OMS", "notes"]) mkdirSync(path.join(vault, directory), { recursive: true });
+  const policy = JSON.stringify({ version: 1, templateFolder: "Templates/OMS", base: { fields: {} }, contracts: { note: { intent: "note", fields: { template: { type: "text", required: true }, status: { type: "text" } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
+  const taxonomy = "folders: {}\n";
+  const obsidianTypes = JSON.stringify({ types: { template: "text", status: "text" } });
+  const template = "---\ntemplate: note\nstatus: active\n---\n<!-- oms:content -->\n";
+  const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: digest(policy) }, { logicalId: "taxonomy", signature: digest(taxonomy) }, { logicalId: "obsidian-types", signature: digest(obsidianTypes) }, { path: "Templates/OMS/note.md", signature: digest(template) }];
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "status"], fields: { template: { type: "text", required: true }, status: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: digest("<!-- oms:content -->\n") } } } });
+  writeFileSync(path.join(vault, ".oms/template-policy.json"), policy);
+  writeFileSync(path.join(vault, ".oms/taxonomy.yaml"), taxonomy);
+  writeFileSync(path.join(vault, ".oms/types.json"), projection);
+  writeFileSync(path.join(vault, ".obsidian/types.json"), obsidianTypes);
+  writeFileSync(path.join(vault, "Templates/OMS/note.md"), template);
+  writeFileSync(path.join(vault, "notes/alpha.md"), "---\ntemplate: note\nstatus: active\n---\nAlpha links [[beta]].\n");
+  writeFileSync(path.join(vault, "notes/beta.md"), "---\ntemplate: note\nstatus: reference\n---\nBeta note.\n");
+  return vault;
 }
 
 describe("assembleGraphOnlyEngine", () => {
-  it("serves graph build + axis retrieval model-free (deferred provider/store)", async () => {
+  it("serves graph build and template-axis retrieval model-free", async () => {
     const vault = freshVault();
     const engine = assembleGraphOnlyEngine({ vault });
     try {
       expect(engine.provider.model).toContain("deferred");
-
-      const build = await engine.adapter.graphBuild({}, vault);
-      expect(build.available).toBe(true);
-
-      // concept axis: only alpha (concept: Project) matches; beta (Reference) does not.
-      const axis = await engine.adapter.retrieveByAxis({ concept: "Project" });
-      expect(Array.isArray(axis.hits)).toBe(true);
-      expect(axis.hits.length).toBe(1);
-    } finally {
-      await engine.dispose();
-    }
+      expect((await engine.adapter.graphBuild({}, vault)).available).toBe(true);
+      const result = await engine.adapter.retrieveByAxis({ template: "note", property: "status", value: "active" });
+      expect(result.available).toBe(true);
+      expect(result.hits.map(hit => hit.path)).toEqual(["notes/alpha.md"]);
+    } finally { await engine.dispose(); }
   });
 
-  it("guards the semantic path: embed rejects, vault sync reports unavailable", async () => {
-    const vault = freshVault();
-    const engine = assembleGraphOnlyEngine({ vault });
+  it("guards semantic embedding paths", async () => {
+    const engine = assembleGraphOnlyEngine({ vault: freshVault() });
     try {
       await expect(engine.provider.embed("x")).rejects.toThrow(/unavailable/i);
-      const sync = await engine.syncVault();
-      expect(sync.available).toBe(false);
-    } finally {
-      await engine.dispose();
-    }
+      expect((await engine.syncVault()).available).toBe(false);
+    } finally { await engine.dispose(); }
   });
 });

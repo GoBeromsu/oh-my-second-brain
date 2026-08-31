@@ -344,17 +344,35 @@ export async function upsertClaudeHooks(
   const preCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, GUARD_MARKER);
   const postCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, POST_GUARD_MARKER);
 
+  const reconcile = (entries: readonly unknown[], marker: string, command: string): unknown[] => {
+    const desired = buildOmsHookEntry(HOOK_MATCHER, command);
+    const next: unknown[] = [];
+    let inserted = false;
+    for (const entry of entries) {
+      if (!isOmsHookEntry(entry, marker)) {
+        next.push(entry);
+        continue;
+      }
+      if (!inserted) {
+        next.push(desired);
+        inserted = true;
+      }
+    }
+    if (!inserted) next.push(desired);
+    return next;
+  };
+
   const preArr = Array.isArray(hooks["PreToolUse"]) ? [...hooks["PreToolUse"]] : [];
-  if (!preArr.some((e) => isOmsHookEntry(e, GUARD_MARKER))) {
-    preArr.push(buildOmsHookEntry(HOOK_MATCHER, preCmd));
-    hooks["PreToolUse"] = preArr;
+  const nextPre = reconcile(preArr, GUARD_MARKER, preCmd);
+  if (JSON.stringify(nextPre) !== JSON.stringify(preArr)) {
+    hooks["PreToolUse"] = nextPre;
     changed = true;
   }
 
   const postArr = Array.isArray(hooks["PostToolUse"]) ? [...hooks["PostToolUse"]] : [];
-  if (!postArr.some((e) => isOmsHookEntry(e, POST_GUARD_MARKER))) {
-    postArr.push(buildOmsHookEntry(HOOK_MATCHER, postCmd));
-    hooks["PostToolUse"] = postArr;
+  const nextPost = reconcile(postArr, POST_GUARD_MARKER, postCmd);
+  if (JSON.stringify(nextPost) !== JSON.stringify(postArr)) {
+    hooks["PostToolUse"] = nextPost;
     changed = true;
   }
 

@@ -7,10 +7,13 @@
  * that silently mutated a vault is the exact failure this command must not have.
  */
 
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { sourceSignature } from "../kernel/templates/index.js";
+import type { SourceDescriptor } from "../kernel/templates/types.js";
 import { runLinkify } from "./linkify.js";
 
 let tempRoots: string[] = [];
@@ -20,6 +23,19 @@ afterEach(async () => {
   tempRoots = [];
 });
 
+const digest = (value: string): `sha256:${string}` => `sha256:${createHash("sha256").update(value).digest("hex")}`;
+
+async function writeAuthority(vault: string): Promise<void> {
+  for (const directory of [".oms", ".obsidian", "Templates/OMS"]) await mkdir(path.join(vault, directory), { recursive: true });
+  const policy = JSON.stringify({ version: 1, templateFolder: "Templates/OMS", base: { fields: {} }, contracts: { note: { intent: "note", fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
+  const taxonomy = "folders: {}\n";
+  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text" } });
+  const template = "---\ntemplate: note\ntitle: Untitled\n---\n<!-- oms:content -->\n";
+  const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: digest(policy) }, { logicalId: "taxonomy", signature: digest(taxonomy) }, { logicalId: "obsidian-types", signature: digest(obsidianTypes) }, { path: "Templates/OMS/note.md", signature: digest(template) }];
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: digest("<!-- oms:content -->\n") } } } });
+  await Promise.all([writeFile(path.join(vault, ".oms/template-policy.json"), policy), writeFile(path.join(vault, ".oms/taxonomy.yaml"), taxonomy), writeFile(path.join(vault, ".oms/types.json"), projection), writeFile(path.join(vault, ".obsidian/types.json"), obsidianTypes), writeFile(path.join(vault, "Templates/OMS/note.md"), template)]);
+}
+
 /**
  * A vault with one `term` note (terms/Ataraxia.md) and one prose note
  * (notes/Sage.md) that mentions the term in plain text.
@@ -27,16 +43,17 @@ afterEach(async () => {
 async function makeVault(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-linkify-"));
   tempRoots.push(vault);
+  await writeAuthority(vault);
   await mkdir(path.join(vault, "terms"), { recursive: true });
   await mkdir(path.join(vault, "notes"), { recursive: true });
   await writeFile(
     path.join(vault, "terms", "Ataraxia.md"),
-    "---\ntitle: Ataraxia\n---\n\nFreedom from disturbance.\n",
+    "---\ntemplate: note\ntitle: Ataraxia\n---\n\nFreedom from disturbance.\n",
     "utf-8",
   );
   await writeFile(
     path.join(vault, "notes", "Sage.md"),
-    "---\ntitle: Sage\n---\n\nThe sage pursues Ataraxia daily.\n",
+    "---\ntemplate: note\ntitle: Sage\n---\n\nThe sage pursues Ataraxia daily.\n",
     "utf-8",
   );
   return vault;
@@ -83,6 +100,7 @@ describe("runLinkify — report mode", () => {
     // Given: an empty vault directory
     const vault = await mkdtemp(path.join(tmpdir(), "oms-linkify-empty-"));
     tempRoots.push(vault);
+    await writeAuthority(vault);
 
     // When: linkify runs
     const result = await captureOutput(() => runLinkify({ vault, apply: false, yes: false }));
@@ -97,7 +115,7 @@ describe("runLinkify — report mode", () => {
     const vault = await makeVault();
     await writeFile(
       path.join(vault, "notes", "Sage.md"),
-      "---\ntitle: Sage\n---\n\nNothing here matches a defined term.\n",
+      "---\ntemplate: note\ntitle: Sage\n---\n\nNothing here matches a defined term.\n",
       "utf-8",
     );
     const before = await readNote(vault, "notes/Sage.md");

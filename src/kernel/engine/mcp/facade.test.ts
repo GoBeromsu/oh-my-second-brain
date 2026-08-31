@@ -1,13 +1,14 @@
 import { describe, expect, it, vi, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpEngineAdapter } from "./facade.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import type { EmbeddingProvider, ScoredHit, VectorStore } from "../types.js";
 import type { EngineStore } from "../embed/store.js";
-import { openAxisStore } from "../axes/store.js";
-import { nodeSourceSignature } from "../graph/builder.js";
+import { loadResolvedTemplates, sourceSignature } from "../../templates/resolver.js";
+import type { Digest, SourceDescriptor } from "../../templates/types.js";
 
 // ---------------------------------------------------------------------------
 // Fake backends
@@ -68,18 +69,59 @@ const VEC_HIT: ScoredHit = { docPath: "notes/vec.md", chunkOrdinal: 0, score: 0.
 
 const tempDirs: string[] = [];
 
-/** Create an isolated temp vault with two linked notes; auto-cleaned. */
+const digest = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
+
+/** Create an isolated template-authorized vault with two linked notes. */
 function freshVault(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "oms-facade-"));
   mkdirSync(path.join(dir, "notes"), { recursive: true });
-  writeFileSync(
-    path.join(dir, "notes", "alpha.md"),
-    "---\nconcept: Project\nstatus: active\n---\n# Alpha\n\nLinks to [[beta]].\n",
-  );
-  writeFileSync(
-    path.join(dir, "notes", "beta.md"),
-    "---\nconcept: Reference\n---\n# Beta\n\nReferenced by alpha.\n",
-  );
+  mkdirSync(path.join(dir, ".oms"), { recursive: true });
+  mkdirSync(path.join(dir, ".obsidian"), { recursive: true });
+  mkdirSync(path.join(dir, "Templates", "OMS"), { recursive: true });
+  const policy = JSON.stringify({
+    version: 1,
+    templateFolder: "Templates/OMS",
+    base: { fields: {} },
+    contracts: {
+      project: { intent: "project note.", fields: { status: { type: "text" }, rating: { type: "number" }, done: { type: "boolean" } }, views: [] },
+      reference: { intent: "reference note.", fields: { rating: { type: "number" }, done: { type: "boolean" } }, views: [] },
+    },
+    templates: {
+      project: { templateId: "project", destinationClass: "managed-default", sourcePath: "Templates/OMS/project.md", contract: "project", naming: "{{title}}" },
+      reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", contract: "reference", naming: "{{title}}" },
+    },
+  });
+  const taxonomy = "folders: {}\n";
+  const types = JSON.stringify({ types: { status: "text", rating: "number", done: "boolean" } });
+  const projectTemplate = "---\nstatus: active\nrating: 1\ndone: false\n---\nBody\n";
+  const referenceTemplate = "---\nrating: 1\ndone: false\n---\nBody\n";
+  const sources: SourceDescriptor[] = [
+    { logicalId: "template-policy", signature: digest(policy) },
+    { logicalId: "taxonomy", signature: digest(taxonomy) },
+    { logicalId: "obsidian-types", signature: digest(types) },
+    { path: "Templates/OMS/project.md", signature: digest(projectTemplate) },
+    { path: "Templates/OMS/reference.md", signature: digest(referenceTemplate) },
+  ];
+  const field = (type: string) => ({ type });
+  const projection = JSON.stringify({
+    version: "oms.types.v1",
+    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources },
+    managed: {
+      base: { fields: {} }, globalAxes: {},
+      templates: {
+        project: { templateId: "project", destinationClass: "managed-default", sourcePath: "Templates/OMS/project.md", targetFolder: "Inbox", keyOrder: ["status", "rating", "done"], fields: { status: field("text"), rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: digest("Body\n") },
+        reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", targetFolder: "Inbox", keyOrder: ["rating", "done"], fields: { rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: digest("Body\n") },
+      },
+    },
+  });
+  writeFileSync(path.join(dir, ".oms", "template-policy.json"), policy);
+  writeFileSync(path.join(dir, ".oms", "taxonomy.yaml"), taxonomy);
+  writeFileSync(path.join(dir, ".obsidian", "types.json"), types);
+  writeFileSync(path.join(dir, ".oms", "types.json"), projection);
+  writeFileSync(path.join(dir, "Templates", "OMS", "project.md"), projectTemplate);
+  writeFileSync(path.join(dir, "Templates", "OMS", "reference.md"), referenceTemplate);
+  writeFileSync(path.join(dir, "notes", "alpha.md"), "---\ntemplate: project\nstatus: active\n---\n# Alpha\n\nLinks to [[beta]].\n");
+  writeFileSync(path.join(dir, "notes", "beta.md"), "---\ntemplate: reference\n---\n# Beta\n\nreferenced by alpha.\n");
   tempDirs.push(dir);
   return dir;
 }
@@ -261,14 +303,10 @@ describe("McpEngineAdapter.semanticQuery", () => {
     expect(result.reason).toContain("db locked");
   });
 
-  it("uses the read-only EAV snapshot for typed axis filtering", async () => {
+  it("uses template-declared typed axes for filtering", async () => {
     const v = freshVault();
-    mkdirSync(path.join(v, ".oms", "cache"), { recursive: true });
-    const axisStore = openAxisStore(path.join(v, ".oms", "cache", "axes.sqlite"));
-    axisStore.replaceNote("notes/alpha.md", { rating: 9, done: false }, { folder: "notes" });
-    axisStore.replaceNote("notes/beta.md", { rating: 2, done: true }, { folder: "notes" });
-    axisStore.setSourceSignature(await nodeSourceSignature(v));
-    axisStore.close();
+    writeFileSync(path.join(v, "notes", "alpha.md"), "---\ntemplate: project\nrating: 9\ndone: false\n---\n# Alpha\n");
+    writeFileSync(path.join(v, "notes", "beta.md"), "---\ntemplate: reference\nrating: 2\ndone: true\n---\n# Beta\n");
     const adapter = new McpEngineAdapter(makeDeps(), v, undefined, undefined, false, false);
 
     const result = await adapter.semanticQuery({
@@ -286,17 +324,16 @@ describe("McpEngineAdapter.semanticQuery", () => {
     });
     expect(result.facets).toEqual(expect.arrayContaining([
       expect.objectContaining({ axis: "field", key: "rating", value: "9", count: 1 }),
+      expect.objectContaining({ axis: "template", value: "project", count: 1 }),
     ]));
     if (result.available) expect(result.hits[0]?.path).toBe("notes/alpha.md");
   });
 
   it("applies the query envelope after axis filtering without returning zero-score nonmatches", async () => {
-    const v = mkdtempSync(path.join(tmpdir(), "oms-axis-envelope-"));
-    tempDirs.push(v);
-    mkdirSync(path.join(v, "notes"), { recursive: true });
-    writeFileSync(path.join(v, "notes", "first.md"), "# Needle\nneedle needle\n");
-    writeFileSync(path.join(v, "notes", "second.md"), "# Needle\nneedle\n");
-    writeFileSync(path.join(v, "notes", "nonmatch.md"), "# Other\nunrelated text\n");
+    const v = freshVault();
+    writeFileSync(path.join(v, "notes", "first.md"), "---\ntemplate: project\n---\n# Needle\nneedle needle\n");
+    writeFileSync(path.join(v, "notes", "second.md"), "---\ntemplate: project\n---\n# Needle\nneedle\n");
+    writeFileSync(path.join(v, "notes", "nonmatch.md"), "---\ntemplate: project\n---\n# Other\nunrelated text\n");
     const rerank = vi.fn().mockResolvedValue([
       { docPath: "notes/second.md", chunkOrdinal: 0, score: 2 },
       { docPath: "notes/first.md", chunkOrdinal: 0, score: 1 },
@@ -471,7 +508,10 @@ describe("McpEngineAdapter.graphBuild", () => {
     expect(typeof result.edges).toBe("number");
     expect(typeof result.generatedAt).toBe("string");
     expect(existsSync(path.join(v, ".oms", "cache", "engine", "graph.json"))).toBe(true);
-    expect(existsSync(path.join(v, ".oms", "cache", "engine", "node-index.json"))).toBe(true);
+    const nodeIndexPath = path.join(v, ".oms", "cache", "engine", "node-index.json");
+    expect(existsSync(nodeIndexPath)).toBe(true);
+    const cached = JSON.parse(readFileSync(nodeIndexPath, "utf8")) as { nodes: readonly { path: string }[] };
+    expect(cached.nodes.some((node) => node.path.startsWith("Templates/OMS/"))).toBe(false);
   });
 
   it("dryRun reports the persisted stats without rebuilding", async () => {
@@ -491,6 +531,18 @@ describe("McpEngineAdapter.graphStatus", () => {
     const adapter = new McpEngineAdapter(makeDeps(), v);
     const result = await adapter.graphStatus(v);
     expect(result.available).toBe(false);
+    expect(existsSync(path.join(v, ".oms", "cache", "engine"))).toBe(false);
+  });
+
+  it("rejects a stale graph projection cache without rebuilding it", async () => {
+    const v = freshVault();
+    const adapter = new McpEngineAdapter(makeDeps(), v);
+    await adapter.graphBuild({}, v);
+    const graphPath = path.join(v, ".oms", "cache", "engine", "graph.json");
+    const cached = JSON.parse(readFileSync(graphPath, "utf8")) as Record<string, unknown>;
+    cached.projectionSignature = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    writeFileSync(graphPath, `${JSON.stringify(cached)}\n`);
+    expect((await adapter.graphStatus(v)).available).toBe(false);
   });
 
   it("returns available=true after graphBuild", async () => {
@@ -510,27 +562,36 @@ describe("McpEngineAdapter.graphStatus", () => {
 // ---------------------------------------------------------------------------
 
 describe("McpEngineAdapter.retrieveByAxis", () => {
-  it("filters the node index by concept and JSON-encodes axis metadata in context", async () => {
+  it("filters the node index by template and JSON-encodes axis metadata in context", async () => {
     const v = freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
-    const result = await adapter.retrieveByAxis({ concept: "Project" });
+    const result = await adapter.retrieveByAxis({ template: "project" });
     expect(result.available).toBe(true);
     if (!result.available) return;
     expect(result.hits.length).toBeGreaterThanOrEqual(1);
     const alpha = result.hits.find((h) => h.path.endsWith("alpha.md"));
     expect(alpha).toBeDefined();
     expect(alpha!.evidence).toEqual({ lexical: true, vector: false });
-    const ctx = JSON.parse(alpha!.context ?? "{}") as { concept?: string };
-    expect(ctx.concept).toBe("Project");
+    const ctx = JSON.parse(alpha!.context ?? "{}") as { template?: string };
+    expect(ctx.template).toBe("project");
   });
 
-  it("does not surface notes outside the requested concept axis", async () => {
+  it("does not surface notes outside the requested template axis", async () => {
     const v = freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
-    const result = await adapter.retrieveByAxis({ concept: "Reference" });
+    const result = await adapter.retrieveByAxis({ template: "reference" });
     expect(result.available).toBe(true);
     if (!result.available) return;
     expect(result.hits.some((h) => h.path.endsWith("beta.md"))).toBe(true);
     expect(result.hits.some((h) => h.path.endsWith("alpha.md"))).toBe(false);
+  });
+
+  it("returns an unavailable result when template authority is missing", async () => {
+    const v = mkdtempSync(path.join(tmpdir(), "oms-missing-authority-"));
+    tempDirs.push(v);
+    const adapter = new McpEngineAdapter(makeDeps(), v);
+    const result = await adapter.retrieveByAxis({ template: "project" });
+    expect(result.available).toBe(false);
+    if (!result.available) expect(result.reason).toMatch(/TEMPLATE/);
   });
 });
