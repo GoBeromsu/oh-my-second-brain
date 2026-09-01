@@ -64,7 +64,7 @@ export function parseSearchArgs(argv: readonly string[]): ParsedSearchArgs {
       options["includeDefault"] = true;
     } else if (arg === "--no-include-default") {
       options["includeDefault"] = false;
-    } else if (arg === "--line-numbers" || arg === "--full-path" || arg === "--force" || arg === "--all" || arg === "--full" || arg === "--pull" || arg === "--update" || arg === "--embed" || arg === "--expand" || arg === "--rerank") {
+    } else if (arg === "--line-numbers" || arg === "--full-path" || arg === "--force" || arg === "--all" || arg === "--full" || arg === "--pull" || arg === "--update" || arg === "--embed" || arg === "--expand" || arg === "--rerank" || arg === "--dry-run") {
       options[camelOption(arg)] = true;
     } else if (arg === "--no-rerank") {
       options["rerank"] = false;

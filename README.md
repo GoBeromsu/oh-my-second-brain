@@ -36,7 +36,7 @@ oms doctor     Diagnose template authority and derived state
 oms lint       Check broken [[wikilinks]] and orphan notes
 oms search <text>  Plain lexical search; --vec, --hyde, --expand, --max-queries 1..32, and --rerank are explicit
 oms embed      Generate embeddings for indexed notes
-oms index sync|status|cleanup|collections|contexts
+oms index sync|status|repair|cleanup|collections|contexts
 oms doc get|multi-get
 oms serve      Start the local search HTTP server
 oms mcp        Start the stdio MCP server

@@ -35,6 +35,23 @@ stamp; uninstall removes the pointer last after host cleanup succeeds.
 
 This is an installation detail, not a target-resolution rule. Installing or uninstalling a host does not alter runtime precedence.
 
+### Hermes roots and provenance
+
+Each Hermes command operates on exactly one root. With `OMS_HERMES_HOME` unset,
+that root is `~/.hermes` (for example, Sari). To install for a named Hermes
+profile such as Xia, run the command separately with that profile directory:
+
+```bash
+OMS_HERMES_HOME=~/.hermes/profiles/xia oms install --runtime hermes --vault /path/to/vault --yes
+```
+
+This does not enumerate or modify other profiles; a `hermes -p xia` wrapper
+uses the same profile root. Hermes stores npm installation provenance at
+`adapters/oms/.oms-provenance.json`, outside the skill scan tree. Reinstall
+does nothing when the package version and installed skill digest match. A
+foreign, incomplete, or tampered install is refused rather than overwritten;
+remove or migrate that installation before retrying.
+
 ## Target resolution
 
 At runtime, target resolution is ordered as follows:
@@ -81,7 +98,7 @@ pair fails loudly.
 ```text
 oms search <text> [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank]
 oms embed
-oms index sync|status|cleanup|collections|contexts
+oms index sync|status|repair|cleanup|collections|contexts
 oms doc get|multi-get
 oms serve
 ```
@@ -89,8 +106,13 @@ oms serve
 A plain `oms search <text>` is lexical-only. Every non-lexical channel is
 explicit: `--vec`, `--hyde`, G004 `--expand`, and `--rerank`. G004 expansion is
 available only when selected; no replacement, parity, or outperformance claim
-is made. `oms embed` is the sole embedding command, and `oms index` has no
+`oms embed` is the sole embedding command, and `oms index` has no
 embedding subcommand.
+
+When `oms index status` reports a corrupt or incompatible legacy store, inspect
+the non-mutating plan with `oms index repair --mode rebuild --dry-run`, then run
+`oms index repair --mode rebuild` and `oms index sync`. `--mode drop` only moves
+the store to a timestamped backup; it does not create a replacement.
 
 ## Skills and MCP tools
 
@@ -109,3 +131,7 @@ oms uninstall --runtime all --yes
 ```
 
 Uninstall removes OMS host registrations and installed host assets. It does not modify vault notes, templates, or vault convention files.
+
+For Hermes, uninstall removes only an installation with valid OMS npm
+provenance (or the exact legacy seven-skill layout). It refuses to delete a
+foreign or tampered skill tree.

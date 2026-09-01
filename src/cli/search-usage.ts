@@ -4,6 +4,7 @@ export function searchUsage(): string {
   oms embed [--collection <name>] [--index <path>] [--force]
   oms index sync [--collection <name>] [--index <path>] [--force]
   oms index status [--index <path>]
+  oms index repair --mode rebuild|drop [--dry-run]
   oms index cleanup [--index <path>]
   oms index collections [name]
   oms index contexts

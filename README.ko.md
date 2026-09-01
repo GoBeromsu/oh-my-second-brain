@@ -36,7 +36,7 @@ oms doctor     템플릿 권위와 파생 상태 진단
 oms lint       깨진 [[wikilink]]와 고아 노트 점검
 oms search <text>  일반 lexical 검색; --vec, --hyde, --expand, --max-queries 1..32, --rerank은 명시적 선택
 oms embed      색인된 노트의 임베딩 생성
-oms index sync|status|cleanup|collections|contexts
+oms index sync|status|repair|cleanup|collections|contexts
 oms doc get|multi-get
 oms serve      로컬 검색 HTTP 서버 시작
 oms mcp        stdio MCP 서버 시작

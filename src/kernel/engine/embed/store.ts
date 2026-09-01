@@ -31,6 +31,22 @@ export interface EngineStoreCapabilities {
   readonly vecAvailable: boolean;
 }
 
+export type EngineStoreDiagnostic = "corrupt-or-incompatible";
+
+export class EngineStoreOpenError extends Error {
+  readonly diagnostic: EngineStoreDiagnostic;
+
+  constructor(diagnostic: EngineStoreDiagnostic, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "EngineStoreOpenError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+export function engineStoreDiagnostic(error: unknown): EngineStoreDiagnostic | null {
+  return error instanceof EngineStoreOpenError ? error.diagnostic : null;
+}
+
 export interface EmbeddingIdentity {
   readonly provider: string;
   readonly model: string;
@@ -813,7 +829,8 @@ function openExistingCoreStore(dbPath: string): Database.Database | null {
   try {
     db = new Database(dbPath, { fileMustExist: true });
   } catch (error) {
-    throw new Error(
+    throw new EngineStoreOpenError(
+      "corrupt-or-incompatible",
       `Engine store is unavailable at "${dbPath}": ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
@@ -824,7 +841,10 @@ function openExistingCoreStore(dbPath: string): Database.Database | null {
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?)",
     ).all(...REQUIRED_CORE_TABLES) as Array<{ name: string }>;
     if (rows.length !== REQUIRED_CORE_TABLES.length) {
-      throw new Error(`Engine store at "${dbPath}" is corrupt or incompatible: required core tables are missing.`);
+      throw new EngineStoreOpenError(
+        "corrupt-or-incompatible",
+        `Engine store at "${dbPath}" is corrupt or incompatible: required core tables are missing.`,
+      );
     }
     const metaColumns = new Set(
       (db.prepare("PRAGMA table_info(engine_meta)").all() as Array<{ name: string }>).map(
@@ -845,22 +865,27 @@ function openExistingCoreStore(dbPath: string): Database.Database | null {
       "embedding_schema_version",
     ];
     if (requiredMetaColumns.some((column) => !metaColumns.has(column))) {
-      throw new Error(`Engine store at "${dbPath}" is corrupt or incompatible: required metadata columns are missing.`);
+      throw new EngineStoreOpenError(
+        "corrupt-or-incompatible",
+        `Engine store at "${dbPath}" is corrupt or incompatible: required metadata columns are missing.`,
+      );
     }
     const version = db.prepare("SELECT embedding_schema_version FROM engine_meta WHERE id = 1")
       .get() as { embedding_schema_version: string } | undefined;
     if (!version || version.embedding_schema_version !== ENGINE_EMBED_META_VERSION) {
-      throw new Error(
+      throw new EngineStoreOpenError(
+        "corrupt-or-incompatible",
         `Embedding metadata version "${version?.embedding_schema_version}" is incompatible; expected "${ENGINE_EMBED_META_VERSION}".`,
       );
     }
     return db;
   } catch (error) {
     db.close();
-    if (error instanceof Error && error.message.startsWith(`Engine store at "${dbPath}"`)) {
+    if (error instanceof EngineStoreOpenError) {
       throw error;
     }
-    throw new Error(
+    throw new EngineStoreOpenError(
+      "corrupt-or-incompatible",
       `Engine store at "${dbPath}" is corrupt or unreadable: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
