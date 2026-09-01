@@ -10,6 +10,10 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Fixed
+
+- **OMS setup can safely add templates after initial adoption.** Generated taxonomy bindings are accepted on later setup runs, and newly discovered templates are registered without losing existing policy bindings.
+
 ## [0.12.1] - 2026-09-01
 
 ### Fixed
