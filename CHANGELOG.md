@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-01
+
 ### Breaking
 
 - **OMS now has one search taxonomy.** `oms semantic` and the old top-level collection, context, cleanup, and HTTP aliases are removed; use `oms search`, `oms doc get|multi-get`, `oms embed`, and `oms serve`. `oms index` contains exactly `sync|status|cleanup|collections|contexts`; embedding remains the compact top-level `oms embed` command.

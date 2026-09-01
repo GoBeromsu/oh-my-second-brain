@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-01
+
 ### Changed
 
 - **`oms_search` query now accepts the closed `strategy`, `maxQueries`, `rerank`, and `candidateLimit` controls.** Query budgets are strict integers, expansion is not advertised on context retrieval, and these controls remain on the existing tool; no additional public search tool was added.

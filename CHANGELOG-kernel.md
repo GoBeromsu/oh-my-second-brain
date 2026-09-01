@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-01
+
 ### Changed
 
 - **The kernel now manages model lifecycle explicitly and carries active-template taxonomy context through the canonical engine search path.** It reports unavailable capabilities honestly instead of silently claiming support.
