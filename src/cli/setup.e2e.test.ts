@@ -106,6 +106,51 @@ describe("template-first setup", () => {
     expect(existsSync(path.join(root, ".oms"))).toBe(false);
   });
 
+  it("blocks unresolved notes before composing a setup manifest and emits no digest", async () => {
+    const root = await fresh();
+    await authority(root);
+    await mkdir(path.join(root, "Notes"), { recursive: true });
+    await writeFile(path.join(root, "Notes", "broken.md"), "---\ntitle: [unterminated\n---\n");
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      await runSetup({ vault: root, yes: true, dryRun: true });
+      const output = log.mock.calls.map(call => call.join(" ")).join("\n");
+      expect(output).toContain('"status": "blocked"');
+      expect(output).toContain("MIGRATION_NOTE_INVALID");
+      expect(output).not.toContain("inputDigest");
+      expect(output).not.toContain("approvalDigest");
+      expect(output).not.toContain("outputDigest");
+      expect(existsSync(path.join(root, ".oms"))).toBe(false);
+    } finally {
+      log.mockRestore();
+      process.exitCode = undefined;
+    }
+  });
+
+  it("dry-runs configured external template sources without adopting them", async () => {
+    const root = await fresh();
+    await authority(root);
+    await noteTemplate(root);
+    await mkdir(path.join(root, "External", "Templater"), { recursive: true });
+    await writeFile(path.join(root, "External", "Templater", "source.template.md"), "{{ unsupported }}\n");
+    await mkdir(path.join(root, ".obsidian", "plugins", "templater-obsidian"), { recursive: true });
+    await writeFile(path.join(root, ".obsidian", "templates.json"), JSON.stringify({ folder: "External/Obsidian" }));
+    await writeFile(path.join(root, ".obsidian", "plugins", "templater-obsidian", "data.json"), JSON.stringify({
+      templates_folder: "External/Templater",
+    }));
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      await runSetup({ vault: root, yes: true, dryRun: true });
+      const output = log.mock.calls.map(call => call.join(" ")).join("\n");
+      expect(output).toContain("inputDigest");
+      expect(output).toContain("approvalDigest");
+      expect(output).toContain("outputDigest");
+      expect(output).not.toContain("External/Templater/source.template.md");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("fails loudly without Obsidian type authority", async () => {
     const root = await fresh(); await noteTemplate(root);
     await expect(runSetup({ vault: root, yes: true, dryRun: true })).rejects.toThrow("MIGRATION_CONTROL_MISSING");

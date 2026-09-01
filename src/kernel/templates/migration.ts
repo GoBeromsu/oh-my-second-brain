@@ -4,6 +4,7 @@ import { lstat, readdir, readFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { parseDocument, stringify } from "yaml";
 import { parseNote } from "../conventions/frontmatter.js";
+import { excludedNoteMatcher } from "../conventions/note-exclude.js";
 
 import { approvalDigest, inputDigest, outputDigest } from "./canonical.js";
 import { parseTemplate } from "./extract.js";
@@ -18,7 +19,7 @@ import type { AuthorityEntry, BaseContract, ContractDefinition, DerivedProjectio
 const encoder = new TextEncoder();
 
 type LegacySource = ".oms/types.json" | ".oms/concepts" | ".oms/taxonomy.yaml";
-export type MigrationDiagnosticCode = "MIGRATION_UNRESOLVED_MAPPING" | "TEMPLATE_ID_DUPLICATE" | "TEMPLATE_SOURCE_DUPLICATE" | "MIGRATION_TEMPLATE_UNSAFE" | "MIGRATION_TEMPLATE_INVALID" | "MIGRATION_NOTE_IDENTITY_UNRESOLVED" | "MIGRATION_TAXONOMY_INVALID";
+export type MigrationDiagnosticCode = "MIGRATION_UNRESOLVED_MAPPING" | "TEMPLATE_ID_DUPLICATE" | "TEMPLATE_SOURCE_DUPLICATE" | "MIGRATION_TEMPLATE_UNSAFE" | "MIGRATION_TEMPLATE_INVALID" | "MIGRATION_NOTE_INVALID" | "MIGRATION_NOTE_IDENTITY_UNRESOLVED" | "MIGRATION_TAXONOMY_INVALID";
 export interface MigrationDiagnostic { readonly code: MigrationDiagnosticCode; readonly message: string; readonly path?: string; readonly templateId?: TemplateId; }
 export interface RegisteredTemplate { readonly templateId: string; readonly sourcePath: string; }
 export interface TemplateCandidate { readonly templateId: TemplateId; readonly sourcePath: TemplateSourcePath; readonly bytes: Uint8Array; readonly destinationClass: DestinationClass; }
@@ -142,8 +143,9 @@ function conceptsFromTaxonomy(entries: readonly LegacyLedgerEntry[], diagnostics
   return values.sort((left, right) => left.concept.localeCompare(right.concept) || left.folder.localeCompare(right.folder));
 }
 
-async function notes(root: string, sources: ReadonlySet<string>): Promise<ExistingNoteIdentity[]> {
+async function notes(root: string, sources: ReadonlySet<string>, diagnostics: MigrationDiagnostic[]): Promise<ExistingNoteIdentity[]> {
   const values: ExistingNoteIdentity[] = [];
+  const isExcluded = await excludedNoteMatcher(root, false);
   const visit = async (directory: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (entry.name.startsWith(".")) continue;
@@ -151,10 +153,13 @@ async function notes(root: string, sources: ReadonlySet<string>): Promise<Existi
       if (entry.isDirectory()) { await visit(absolute); continue; }
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
       const path = relative(root, absolute).replaceAll("\\", "/");
-      if (sources.has(path)) continue;
+      if (sources.has(path) || isExcluded(path)) continue;
       const content = await readFile(absolute, "utf8");
       const parsed = parseNote(content);
-      if (parsed.diagnostics.length > 0) throw new Error(`MIGRATION_NOTE_INVALID: ${path}`);
+      if (parsed.diagnostics.length > 0) {
+        diagnostics.push(issue("MIGRATION_NOTE_INVALID", "Existing note frontmatter is invalid", path));
+        continue;
+      }
       const fields = parsed.frontmatter;
       values.push({ path, templateId: typeof fields.template === "string" ? fields.template : null, legacyConcept: typeof fields.concept === "string" ? fields.concept : null });
     }
@@ -238,7 +243,7 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
     ...candidates.map(candidate => candidate.sourcePath),
   ])].sort();
   const effectiveIds = new Set(candidates.map(candidate => candidate.templateId));
-  const existingNotes = await notes(root, new Set(managedSourcePaths));
+  const existingNotes = await notes(root, new Set(managedSourcePaths), diagnostics);
   const managedFolders = new Set(taxonomyBindings.map(binding => binding.folder.replace(/\/+$/g, "")));
   for (const note of existingNotes) {
     const stableNoteId = note.templateId === null ? null : stableId(note.templateId);

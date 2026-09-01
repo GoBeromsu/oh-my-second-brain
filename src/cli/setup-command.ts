@@ -61,6 +61,17 @@ export async function runSetup(opts: {
     ? undefined
     : modelsConfigFromAcquisitionManifest(modelManifest);
   const state = await inspectSetup({ vault, templateFolder });
+  if (state.proposal.unresolved.length > 0) {
+    console.log(JSON.stringify({
+      status: "blocked",
+      diagnostics: state.proposal.unresolved.map(({ code, path }) => ({
+        code,
+        ...(path === undefined ? {} : { path }),
+      })),
+    }, null, 2));
+    process.exitCode = 1;
+    return;
+  }
   const decision = await decideNonInteractiveSetup(state);
   const manifest = await composeSetup(decision, { base: { fields: {} } });
   if (dryRun) {

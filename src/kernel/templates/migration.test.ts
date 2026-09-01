@@ -33,6 +33,44 @@ describe("template migration planner", () => {
     expect(proposal.candidates[0]?.templateId).toBe("reading");
   });
 
+  it("excludes Obsidian and Templater sources from notes without adopting them as candidates", async () => {
+    const root = await fresh();
+    await template(root, "Templates/note.md");
+    await template(root, "External/Obsidian/template.md", "{{ unsupported }}\n");
+    await template(root, "External/Templater/mail-thread.template.md", "{{ unsupported }}\n");
+    await mkdir(path.join(root, ".obsidian", "plugins", "templater-obsidian"), { recursive: true });
+    await writeFile(path.join(root, ".obsidian", "templates.json"), JSON.stringify({ folder: "External/Obsidian" }));
+    await writeFile(path.join(root, ".obsidian", "plugins", "templater-obsidian", "data.json"), JSON.stringify({
+      templates_folder: "External/Templater",
+      folder_templates: [{ folder: "mail", template: "External/Templater/mail-thread.template.md" }],
+    }));
+    await writeFile(path.join(root, ".obsidian", "types.json"), JSON.stringify({ types: { template: "string" } }));
+
+    const proposal = await planTemplateMigration(root);
+    expect(proposal.candidates.map(candidate => candidate.sourcePath)).toEqual(["Templates/note.md"]);
+    expect(proposal.existingNotes.map(note => note.path)).not.toContain("External/Obsidian/template.md");
+    expect(proposal.existingNotes.map(note => note.path)).not.toContain("External/Templater/mail-thread.template.md");
+    expect(proposal.diagnostics.map(diagnostic => diagnostic.path)).not.toContain("External/Obsidian/template.md");
+    expect(proposal.diagnostics.map(diagnostic => diagnostic.path)).not.toContain("External/Templater/mail-thread.template.md");
+    expect(proposal.unresolved).toEqual([]);
+
+    const defaultManifest = await buildMigrationManifest(root, proposal, { base: { fields: {} } });
+    const explicitProposal = await planTemplateMigration(root, { templateFolder: "Templates" });
+    const explicitManifest = await buildMigrationManifest(root, explicitProposal, { base: { fields: {} } });
+    expect(defaultManifest.approvalDigest).toBe(explicitManifest.approvalDigest);
+  });
+
+  it("reports malformed ordinary notes instead of throwing and still rejects activation", async () => {
+    const root = await fresh();
+    await template(root, "Notes/broken.md", "---\ntitle: [unterminated\n---\n");
+    const proposal = await planTemplateMigration(root);
+    expect(proposal.unresolved).toContainEqual(expect.objectContaining({
+      code: "MIGRATION_NOTE_INVALID",
+      path: "Notes/broken.md",
+    }));
+    await expect(applyTemplateMigration(root, proposal, noManifest, { approvedDigest: approval })).rejects.toThrow("MIGRATION_UNRESOLVED_MAPPING");
+  });
+
   it("imports an explicitly registered external source without rewriting bytes", async () => {
     const root = await fresh();
     const bytes = "---\ntemplate: imported\n---\ncustom body\n";
