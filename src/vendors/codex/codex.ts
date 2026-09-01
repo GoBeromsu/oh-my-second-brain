@@ -33,12 +33,89 @@ function isCodexOMSTable(line: string): boolean {
   return line === "[mcp_servers.oms]" || line.startsWith("[mcp_servers.oms.");
 }
 
-function removeManagedCodexBlock(content: string): { content: string; removed: boolean } {
-  const start = MANAGED_CODEX_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const end = MANAGED_CODEX_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const markerPattern = new RegExp(`\\n?${start}[\\s\\S]*?${end}\\n?`, "g");
-  const withoutMarkers = content.replace(markerPattern, "\n");
-  const markerRemoved = withoutMarkers !== content;
+type CodexManagedMarker = {
+  readonly token: typeof MANAGED_CODEX_START | typeof MANAGED_CODEX_END;
+  readonly line: number;
+  readonly offset: number;
+};
+
+type ManagedCodexBlock = {
+  readonly start: number;
+  readonly end: number;
+};
+
+export class CodexManagedBlockAmbiguousError extends Error {
+  constructor(configPath: string, markers: readonly CodexManagedMarker[]) {
+    const locations = markers.length === 0
+      ? "none"
+      : markers.map((marker) => `${marker.token} (line ${marker.line})`).join(", ");
+    super(
+      `Ambiguous OMS managed MCP markers in ${configPath}: ${locations}. `
+      + "No changes were made. Manually remove every OMS managed MCP block and its markers, then rerun oms install or uninstall.",
+    );
+    this.name = "CodexManagedBlockAmbiguousError";
+  }
+}
+
+function scanCodexManagedMarkers(content: string): CodexManagedMarker[] {
+  const markers: CodexManagedMarker[] = [];
+  let offset = 0;
+  let line = 1;
+  for (const sourceLine of content.split(/(?<=\n)/)) {
+    let position = 0;
+    while (position < sourceLine.length) {
+      const start = sourceLine.indexOf(MANAGED_CODEX_START, position);
+      const end = sourceLine.indexOf(MANAGED_CODEX_END, position);
+      if (start === -1 && end === -1) break;
+      const isStart = start !== -1 && (end === -1 || start < end);
+      const token = isStart ? MANAGED_CODEX_START : MANAGED_CODEX_END;
+      const tokenOffset = isStart ? start : end;
+      markers.push({ token, line, offset: offset + tokenOffset });
+      position = tokenOffset + token.length;
+    }
+    offset += sourceLine.length;
+    line++;
+  }
+  return markers;
+}
+
+function managedCodexBlock(content: string, configPath: string): ManagedCodexBlock | undefined {
+  const markers = scanCodexManagedMarkers(content);
+  if (markers.length === 0) return undefined;
+  if (
+    markers.length !== 2
+    || markers[0]?.token !== MANAGED_CODEX_START
+    || markers[1]?.token !== MANAGED_CODEX_END
+  ) {
+    throw new CodexManagedBlockAmbiguousError(configPath, markers);
+  }
+  const start = markers[0];
+  const end = markers[1];
+  if (
+    start === undefined
+    || end === undefined
+    || start.offset >= end.offset
+    || start.line >= end.line
+    || !content.slice(start.offset, end.offset).includes("[mcp_servers.oms]")
+  ) {
+    throw new CodexManagedBlockAmbiguousError(configPath, markers);
+  }
+
+  let blockEnd = end.offset + MANAGED_CODEX_END.length;
+  if (content.slice(blockEnd, blockEnd + 2) === "\r\n") blockEnd += 2;
+  else if (content[blockEnd] === "\n") blockEnd++;
+  return { start: start.offset, end: blockEnd };
+}
+
+function removeManagedCodexBlock(
+  content: string,
+  configPath: string,
+): { content: string; removed: boolean; block: ManagedCodexBlock | undefined } {
+  const block = managedCodexBlock(content, configPath);
+  const withoutMarkers = block === undefined
+    ? content
+    : `${content.slice(0, block.start)}${content.slice(block.end)}`;
+  const markerRemoved = block !== undefined;
   const lines = withoutMarkers.split(/\r?\n/);
   const output: string[] = [];
   let removedLegacy = false;
@@ -65,7 +142,14 @@ function removeManagedCodexBlock(content: string): { content: string; removed: b
     }
     output.push(line);
   }
-  return { content: `${output.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`, removed: markerRemoved || removedLegacy };
+  if (markerRemoved && !removedLegacy) {
+    return { content: withoutMarkers, removed: true, block };
+  }
+  return {
+    content: `${output.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`,
+    removed: markerRemoved || removedLegacy,
+    block,
+  };
 }
 
 async function installCodexNativeArtifacts(
@@ -119,8 +203,10 @@ export async function installCodex(options: HostOperationOptions, host: HarnessH
   const guidanceTarget = path.join(codexDir, "plugins", "oms", "AGENTS.md");
   const configPath = path.join(codexDir, "config.toml");
   const original = existsSync(configPath) ? await readFile(configPath, "utf-8") : "";
-  const stripped = removeManagedCodexBlock(original).content;
-  const next = `${stripped.trimEnd()}\n\n${codexManagedBlock(options)}`;
+  const removed = removeManagedCodexBlock(original, configPath);
+  const next = removed.block === undefined
+    ? `${removed.content.trimEnd()}\n\n${codexManagedBlock(options)}`
+    : `${original.slice(0, removed.block.start)}${codexManagedBlock(options)}${original.slice(removed.block.end)}`;
   let nativePaths: string[] = [];
   if (!options.dryRun) {
     await mkdir(path.dirname(configPath), { recursive: true });
@@ -155,7 +241,7 @@ export async function uninstallCodex(options: HostOperationOptions): Promise<Hos
   let changed = false;
   if (existsSync(configPath)) {
     const original = await readFile(configPath, "utf-8");
-    const removed = removeManagedCodexBlock(original);
+    const removed = removeManagedCodexBlock(original, configPath);
     changed = removed.removed;
     if (removed.removed && !options.dryRun) await writeFile(configPath, removed.content, "utf-8");
   }
