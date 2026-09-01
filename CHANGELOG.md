@@ -10,6 +10,10 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Legacy taxonomy conversion is fully transaction-bounded.** YAML cleanup joins the approval hash with CAS/rollback/resume/receipts, doctor never reads YAML, and simultaneous JSON+YAML authorities fail closed with cleanup guidance.
+
 ## [0.12.0] - 2026-09-01
 
 - **Breaking: taxonomy authority is JSON-only across setup and validation.** Vaults now publish `.oms/taxonomy.json`; setup converts a legacy YAML taxonomy only after approval, removes it on apply, and requires a newly approved digest because the signed authority path changes.
