@@ -4,6 +4,16 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Added
+
+- **Install provenance is now a first-class kernel contract.** (#64, #90) A dependency-leaf module owns provenance parsing/serialization, deterministic tree digests, and a pure six-state ownership decision shared by update, install, and doctor.
+- **Legacy engine stores have a supported recovery path.** (#88) A dedicated repair service moves legacy or incompatible engine stores to timestamped backups without opening them: rebuild recreates the current empty schema, drop only retires, and neither mode ever writes vault Markdown or `.oms` authority files.
+
+### Changed
+
+- **Update follows a consumer-side contract.** (#64) The updater resolves the npm prefix that owns the running binary and refuses destructively ambiguous topologies with exact manual commands; reconciliation always runs even when the package is already current; cross-version handoff invokes the freshly installed binary's public reconcile command so a new release can never call a removed internal subcommand.
+- **Graph tier-4 type-affinity is bounded.** (#69) Groups above 64 members skip pairwise edges and emit a deterministic build-report warning; `OMS_TYPE_AFFINITY_UNBOUNDED=1` restores exhaustive pairing; behavior at or below the cap is unchanged.
+
 ## [0.10.1] - 2026-09-01
 
 ### Fixed

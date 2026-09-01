@@ -10,6 +10,10 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Added
+
+- **Lifecycle, API, and delivery-channel release across kernel, CLI, MCP, and vendors.** Update gains a consumer-side topology/provenance contract (#64), legacy engine stores gain `oms index repair` (#88), MCP op errors become self-describing (#65), graph type-affinity is bounded (#69), and Hermes delivery becomes provenance-aware with version lockstep across both agent profiles (#90).
+
 ## [0.10.1] - 2026-09-01
 
 ### Fixed
