@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- **Setup preserves generated taxonomy template bindings and incrementally registers newly discovered templates.** (#104)
+
 ## [0.12.1] - 2026-09-01
 
 ## [0.12.0] - 2026-09-01

@@ -569,21 +569,39 @@ function translatedTaxonomy(value: VerifiedFileState, proposal: MigrationProposa
       if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`MIGRATION_TAXONOMY_INVALID: folders.${folder}`);
       const binding = raw as Record<string, JsonValue>;
       const concept = binding.concept;
-      if (concept !== null && typeof concept !== "string" && (!Array.isArray(concept) || concept.some(item => typeof item !== "string"))) throw new Error(`MIGRATION_TAXONOMY_INVALID: folders.${folder}.concept`);
+      if (concept !== undefined && concept !== null && typeof concept !== "string" && (!Array.isArray(concept) || concept.some(item => typeof item !== "string"))) throw new Error(`MIGRATION_TAXONOMY_INVALID: folders.${folder}.concept`);
       const concepts = typeof concept === "string" ? [concept] : Array.isArray(concept) ? concept as readonly string[] : [];
-      const templateIds = concepts.map(name => {
+      const conceptTemplateIds = concepts.map(name => {
         const clone = proposal.bindingClones.find(item => item.legacyConcept === name && item.folder === folder);
-        const templateId = clone?.templateId ?? candidates.get(validateTemplateId(name));
+        let templateId: TemplateId | undefined;
+        if (clone !== undefined) templateId = clone.templateId;
+        else {
+          try { templateId = candidates.get(validateTemplateId(name)); }
+          catch { templateId = undefined; }
+        }
         if (templateId === undefined) throw new Error(`MIGRATION_UNRESOLVED_MAPPING: folders.${folder}`);
-        targetFolders.set(templateId, normalizeTemplateFolderPath(folder));
+        targetFolders.set(templateId, normalizeTemplateFolderPath(typeof binding.templateFolder === "string" ? binding.templateFolder : folder));
         return templateId;
       });
-      const { concept: _concept, ...rest } = binding;
-      (folders as Record<string, JsonValue>)[folder] = {
-        ...rest,
-        ...(templateIds.length === 1 ? { template: templateIds[0]! } : { templates: templateIds }),
-        templateFolder: folder,
-      };
+      const rawTemplateIds = binding.templates ?? binding.template;
+      let existingTemplateIds: TemplateId[] = [];
+      if (rawTemplateIds !== undefined) {
+        const values = Array.isArray(rawTemplateIds) ? rawTemplateIds : [rawTemplateIds];
+        if (values.some(item => typeof item !== "string")) throw new Error(`MIGRATION_TAXONOMY_INVALID: folders.${folder}.template(s)`);
+        existingTemplateIds = values.map(item => {
+          try {
+            const id = validateTemplateId(item as string);
+            if (!candidates.has(id)) throw new Error();
+            return id;
+          } catch { throw new Error(`MIGRATION_UNRESOLVED_MAPPING: folders.${folder}`); }
+        });
+        for (const id of existingTemplateIds) targetFolders.set(id, normalizeTemplateFolderPath(typeof binding.templateFolder === "string" ? binding.templateFolder : folder));
+      }
+      const templateIds = concepts.length > 0 ? conceptTemplateIds : existingTemplateIds;
+      const { concept: _concept, template: _template, templates: _templates, ...rest } = binding;
+      (folders as Record<string, JsonValue>)[folder] = templateIds.length === 0
+        ? { ...rest }
+        : { ...rest, ...(templateIds.length === 1 ? { template: templateIds[0]! } : { templates: templateIds }), ...(typeof binding.templateFolder === "string" ? { templateFolder: binding.templateFolder } : {}) };
     }
   }
   const rawAxes = root.globalAxes ?? root.axes;
@@ -646,7 +664,17 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
   // accepted through the template-first projection parser.
   const legacyContract = legacyProjectionContract(projectionState);
   const migratedBase: BaseContract = { ...input.base, fields: { ...legacyContract.fields, ...input.base.fields } };
-  const proposedPolicy = currentPolicy ?? policyFor(proposal, migratedBase);
+  const proposedPolicy = currentPolicy === undefined
+    ? policyFor(proposal, migratedBase)
+    : {
+      ...currentPolicy,
+      templates: {
+        ...currentPolicy.templates,
+        ...Object.fromEntries(proposal.bindings
+          .filter(binding => !(binding.templateId in currentPolicy.templates))
+          .map(binding => [binding.templateId, binding])),
+      },
+    };
   const proposedBindings = Object.values(proposedPolicy.templates).sort((a, b) => a.templateId.localeCompare(b.templateId));
   const candidateById = new Map(proposal.candidates.map(candidate => [candidate.templateId, candidate]));
   if (candidateById.size !== proposal.candidates.length) throw new Error("TEMPLATE_ID_DUPLICATE");
