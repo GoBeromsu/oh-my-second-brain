@@ -5,7 +5,7 @@ export interface TaxonomyIntentProvenance {
   readonly folder: string;
   readonly intent: string;
   /** The sole source allowed to contribute prompt text. */
-  readonly source: ".oms/taxonomy.yaml";
+  readonly source: ".oms/taxonomy.json";
 }
 
 export interface TaxonomyIntentProjection {
@@ -60,7 +60,7 @@ export function projectTaxonomyIntents(
       const intent = intents.get(folder)?.trim();
       return intent === undefined || intent === ""
         ? []
-        : [{ folder, intent, source: ".oms/taxonomy.yaml" }];
+        : [{ folder, intent, source: ".oms/taxonomy.json" }];
     })
     .sort((left, right) => compareText(left.folder, right.folder));
 
@@ -76,7 +76,7 @@ export function projectTaxonomyIntents(
 
   const warnings = [
     ...indexedWithoutIntent.map((folder) =>
-      `Indexed folder "${folder}" has no intent in .oms/taxonomy.yaml.`),
+      `Indexed folder "${folder}" has no intent in .oms/taxonomy.json.`),
     ...taxonomyWithoutIndexed.map((folder) =>
       `Taxonomy folder "${folder}" has no indexed Markdown files.`),
   ];

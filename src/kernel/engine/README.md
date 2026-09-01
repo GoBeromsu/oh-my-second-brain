@@ -50,7 +50,7 @@ exactly once with its assembly. Constructing an engine or serving lexical querie
 loads no model state at all.
 
 In 0.10.0, expansion and reranking receive folder context only from active
-`.oms/taxonomy.yaml` `intent` values. No legacy root file, bundled default, or
+`.oms/taxonomy.json` `intent` values. No legacy root file, bundled default, or
 parallel context database can enter a model prompt. Receipts and status expose
 the exact matched intents and deterministic warnings for unmatched indexed or
 taxonomy folders.

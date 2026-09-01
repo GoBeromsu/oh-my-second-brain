@@ -11,14 +11,14 @@ vault Markdown templates ──> frontmatter/body shape ──> ResolvedTemplate
          │
 .obsidian/types.json ───────────────> read-only type authority
 .oms/template-policy.json ──────────> note/field ontology, naming, defaults
-.oms/taxonomy.yaml ─────────────────> folder/link ontology and placement
+.oms/taxonomy.json ─────────────────> folder/link ontology and placement
          │
          └───────────────────────────> .oms/types.json (validated derived projection)
 ```
 
 Vault-resident Obsidian Markdown templates own a managed note's shape and body. Each managed template has a stable `templateId`; moving or editing the file does not make identity path- or digest-derived. The BaseContract is inherited by every managed TemplateContract.
 
-`.obsidian/types.json` is read-only. The user-owned ontology is the semantic metadata separated from template shape: `.oms/template-policy.json` records note and field `intent` alongside naming/default policy, while `.oms/taxonomy.yaml` records folder/link `intent` and placement. `.oms/types.json` is generated after validation and is used as a write/search projection; it is never authority or hand-edited configuration.
+`.obsidian/types.json` is read-only. The user-owned ontology is the semantic metadata separated from template shape: `.oms/template-policy.json` records note and field `intent` alongside naming/default policy, while `.oms/taxonomy.json` records folder/link `intent` and placement. `.oms/types.json` is generated after validation and is used as a write/search projection; it is never authority or hand-edited configuration.
 
 Taxonomy controls placement without deciding a template's keys. Folder and wikilink relationships are global axes, so retrieval is not constrained to a single placement rule. Authored folder intents are exposed through the derived `folder-ontology` axis. Removing the legacy `concept` note identity and bundled ontology runtime defaults does not remove ontology: meaning remains active, vault-owned data.
 

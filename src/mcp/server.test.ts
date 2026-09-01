@@ -21,24 +21,24 @@ function templateDigest(value: string): `sha256:${string}` {
 
 async function createMcpTemplateAuthority(vault: string): Promise<void> {
   const policy = JSON.stringify({ version: 1, templateFolder: "Templates/OMS", base: { fields: {} }, contracts: { literature: { intent: "A source.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [] } }, templates: { literature: { templateId: "literature", destinationClass: "managed-default", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{slug}}.md" } } });
-  const taxonomy = "folders: {}\n";
+  const taxonomy = JSON.stringify({ folders: {} });
   const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", "source-url": "text" } });
   const template = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n# Literature\n<!-- oms:content -->\n";
   const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: templateDigest(policy) }, { logicalId: "taxonomy", signature: templateDigest(taxonomy) }, { logicalId: "obsidian-types", signature: templateDigest(obsidianTypes) }, { path: "Templates/OMS/literature.md", signature: templateDigest(template) }];
   const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { literature: { templateId: "literature", destinationClass: "managed-default", sourcePath: "Templates/OMS/literature.md", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: templateDigest("# Literature\n<!-- oms:content -->\n") } } } });
   await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
-  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.yaml"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "literature.md"), template)]);
+  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "literature.md"), template)]);
 }
 
 async function createLinkTemplateAuthority(vault: string): Promise<void> {
   const policy = JSON.stringify({ version: 1, templateFolder: "Templates/OMS", base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
-  const taxonomy = "folders: {}\n";
+  const taxonomy = JSON.stringify({ folders: {} });
   const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", aliases: "aliases" } });
   const template = "---\ntemplate: note\ntitle: Untitled\n---\n<!-- oms:content -->\n";
   const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: templateDigest(policy) }, { logicalId: "taxonomy", signature: templateDigest(taxonomy) }, { logicalId: "obsidian-types", signature: templateDigest(obsidianTypes) }, { path: "Templates/OMS/note.md", signature: templateDigest(template) }];
   const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: templateDigest("<!-- oms:content -->\n") } } } });
   await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
-  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.yaml"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
+  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1186,7 +1186,7 @@ Valid frontmatter remains available to retrieve.
   it("returns a server-verified semantic sync receipt for a verified target", async () => {
     const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-doctor-sync-")));
     await mkdir(path.join(tmpVault, ".oms", "concepts"), { recursive: true });
-    await writeFile(path.join(tmpVault, ".oms", "taxonomy.yaml"), "version: 1\nfolders: {}\n", "utf-8");
+    await writeFile(path.join(tmpVault, ".oms", "taxonomy.json"), JSON.stringify({ version: 1, folders: {} }), "utf-8");
     await writeFile(path.join(tmpVault, "note.md"), "# Indexed note\n", "utf-8");
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -1233,7 +1233,7 @@ Valid frontmatter remains available to retrieve.
   it("returns a server-verified semantic cleanup receipt for a verified target", async () => {
     const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-doctor-cleanup-")));
     await mkdir(path.join(tmpVault, ".oms", "concepts"), { recursive: true });
-    await writeFile(path.join(tmpVault, ".oms", "taxonomy.yaml"), "version: 1\nfolders: {}\n", "utf-8");
+    await writeFile(path.join(tmpVault, ".oms", "taxonomy.json"), JSON.stringify({ version: 1, folders: {} }), "utf-8");
     await writeFile(path.join(tmpVault, "removed.md"), "# Removed note\n", "utf-8");
     const transport = new StdioClientTransport({
       command: process.execPath,

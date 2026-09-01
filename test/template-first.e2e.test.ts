@@ -65,7 +65,7 @@ async function fixture(): Promise<string> {
       },
     },
   });
-  const taxonomy = "folders:\n  notes:\n    template: note\n";
+  const taxonomy = JSON.stringify({ folders: { notes: { template: "note" } } });
   const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", status: "select" } });
   const template = "---\ntemplate: note\ntitle: Untitled\nstatus: open\n---\n# Note\n<!-- oms:content -->\n";
   const sources: SourceDescriptor[] = [
@@ -102,7 +102,7 @@ async function fixture(): Promise<string> {
 
   await Promise.all([
     writeFile(join(root, ".oms", "template-policy.json"), policy),
-    writeFile(join(root, ".oms", "taxonomy.yaml"), taxonomy),
+    writeFile(join(root, ".oms", "taxonomy.json"), taxonomy),
     writeFile(join(root, ".oms", "types.json"), projection),
     writeFile(join(root, ".obsidian", "types.json"), obsidianTypes),
     writeFile(join(root, "Templates", "OMS", "note.md"), template),

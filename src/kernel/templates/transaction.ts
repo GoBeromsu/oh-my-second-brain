@@ -33,7 +33,7 @@ function matches(actual: VerifiedFileState, expected: FileExpectation): boolean 
 async function verifyPath(vault: string, path: TransactionPath, expectation: FileExpectation): Promise<boolean> { if (path.startsWith(".oms/")) await verifyTemplateControlPath(vault, normalizeTemplateControlPath(path), { expected: "either" }); else await verifyTemplateSourcePath(vault, normalizeTemplateSourcePath(path), { expected: "either" }); return matches(await state(vault, path), expectation); }
 function manifestValid(manifest: TemplateCompositionManifest): boolean {
   if (manifest.version !== 1 || manifest.controls.length !== 3) return false;
-  const paths: readonly ControlPath[] = [".oms/template-policy.json", ".oms/taxonomy.yaml", ".oms/types.json"];
+  const paths: readonly ControlPath[] = [".oms/template-policy.json", ".oms/taxonomy.json", ".oms/types.json"];
   if (!manifest.controls.every((control, index) => control.path === paths[index] && control.proposed.signature === sha(control.proposed.bytes))) return false;
   if (manifest.current.inputDigest !== inputDigest(manifest.current.input) || manifest.proposed.inputDigest !== inputDigest(manifest.proposed.input)) return false;
   if (manifest.approvalDigest !== approvalDigest(manifest.proposed.inputDigest, manifest.operations, manifest.diagnostics)) return false;

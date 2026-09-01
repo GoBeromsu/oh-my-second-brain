@@ -496,7 +496,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         return jsonText({
           vault,
           projectionSource: ".oms/types.json",
-          sourceOfTruth: ["markdown notes", "actual Obsidian templates", ".obsidian/types.json", ".oms/template-policy.json", ".oms/taxonomy.yaml"],
+          sourceOfTruth: ["markdown notes", "actual Obsidian templates", ".obsidian/types.json", ".oms/template-policy.json", ".oms/taxonomy.json"],
           counts: {
             templates: Object.keys(convention.templates).length,
             globalAxes: Object.keys(convention.globalAxes).length,
@@ -909,7 +909,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       };
       const [policy, taxonomy, projection] = await Promise.all([
         readState(".oms/template-policy.json"),
-        readState(".oms/taxonomy.yaml"),
+        readState(".oms/taxonomy.json"),
         readState(".oms/types.json"),
       ]);
       if (
@@ -949,7 +949,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         sources,
       };
       const currentTaxonomy = new Uint8Array(
-        await readFile(path.join(vault, ".oms/taxonomy.yaml")),
+        await readFile(path.join(vault, ".oms/taxonomy.json")),
       );
       const mode = stringArg(args, "mode");
       let change: TemplateSemanticChange;

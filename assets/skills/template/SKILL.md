@@ -12,7 +12,7 @@ Turn the user's natural-language note design into an actual Obsidian Markdown te
 - The actual `.md` template owns frontmatter order/default scaffolding and body shape.
 - `.obsidian/types.json` is read-only property-type authority.
 - The user-owned ontology remains active: `.oms/template-policy.json` owns note/field `intent` plus BaseContract inheritance, requiredness, formats, allowed values, naming, stable identity, and bindings.
-- `.oms/taxonomy.yaml` owns folder/link `intent`, note placement, and global axes.
+- `.oms/taxonomy.json` owns folder/link `intent`, note placement, and global axes.
 - `.oms/types.json` is derived state. Never edit it directly.
 
 Use an existing stable `templateId` when updating or moving a template. A path or digest change never creates a new identity. New OMS-managed templates default to `<templateFolder>/<templateId>.md`; registered existing templates keep their explicitly verified `sourcePath`.

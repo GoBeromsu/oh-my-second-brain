@@ -52,9 +52,9 @@ describe("matchesAnyGlob", () => {
 });
 
 describe("excludedNoteMatcher", () => {
-  it("applies only the built-in defaults when taxonomy.yaml has no exclude key", async () => {
+  it("applies only the built-in defaults when taxonomy.json has no exclude key", async () => {
     const vault = await makeVault({
-      ".oms/taxonomy.yaml": "folders: {}\n",
+      ".oms/taxonomy.json": JSON.stringify({ folders: {} }),
     });
     const isExcluded = await excludedNoteMatcher(vault);
     expect(isExcluded(".obsidian/workspace.md")).toBe(true);
@@ -63,7 +63,7 @@ describe("excludedNoteMatcher", () => {
 
   it("merges vault-declared exclude globs with the built-in defaults", async () => {
     const vault = await makeVault({
-      ".oms/taxonomy.yaml": "folders: {}\nexclude:\n  - \"drafts/**\"\n",
+      ".oms/taxonomy.json": JSON.stringify({ folders: {}, exclude: ["drafts/**"] }),
     });
     const isExcluded = await excludedNoteMatcher(vault);
     expect(isExcluded("drafts/unfinished.md")).toBe(true);
@@ -71,7 +71,7 @@ describe("excludedNoteMatcher", () => {
     expect(isExcluded("notes/idea.md")).toBe(false);
   });
 
-  it("degrades to the built-in defaults when taxonomy.yaml is missing", async () => {
+  it("degrades to the built-in defaults when taxonomy.json is missing", async () => {
     const vault = await makeVault();
     const isExcluded = await excludedNoteMatcher(vault);
     expect(isExcluded(".obsidian/workspace.md")).toBe(true);
@@ -80,9 +80,9 @@ describe("excludedNoteMatcher", () => {
 
   it("retains malformed taxonomy evidence instead of silently allowing every note", async () => {
     const vault = await makeVault({
-      ".oms/taxonomy.yaml": "broken: [legacy\n",
+      ".oms/taxonomy.json": "broken: [legacy\n",
     });
-    await expect(excludedNoteMatcher(vault)).rejects.toThrow(/NOTE_EXCLUSION_RESOLUTION_FAILED.*taxonomy\.yaml/);
+    await expect(excludedNoteMatcher(vault)).rejects.toThrow(/NOTE_EXCLUSION_RESOLUTION_FAILED.*taxonomy\.json/);
   });
 });
 

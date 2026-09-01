@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { parseDocument } from "yaml";
 
 import { admitWriteTarget } from "../capture/safe.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
@@ -89,7 +88,7 @@ export async function regenerateTypes(input: RegenerateTypesRequest): Promise<Te
   try { policy = parseTemplatePolicy(await readFile(join(root, ".oms/template-policy.json"), "utf8")); }
   catch { return rejected("TEMPLATE_POLICY_INVALID", "restore .oms/template-policy.json before regenerating types"); }
   try {
-    const controls = await Promise.all([state(root, ".oms/template-policy.json"), state(root, ".oms/taxonomy.yaml"), state(root, ".oms/types.json"), state(root, ".obsidian/types.json")]);
+    const controls = await Promise.all([state(root, ".oms/template-policy.json"), state(root, ".oms/taxonomy.json"), state(root, ".oms/types.json"), state(root, ".obsidian/types.json")]);
     if (controls[0]?.state === "absent" || controls[1]?.state === "absent" || controls[3]?.state === "absent") return rejected("TEMPLATE_CONTROL_MISSING", "restore template policy, taxonomy, and Obsidian types before regenerating types");
     const sources = await Promise.all(Object.values(policy.templates).map(async binding => {
       const current = await state(root, binding.sourcePath);
@@ -97,7 +96,7 @@ export async function regenerateTypes(input: RegenerateTypesRequest): Promise<Te
     }));
     const authority: AuthorityEntry[] = [
       { kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: (controls[0] as Extract<VerifiedFileState, { state: "present" }>).signature },
-      { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.yaml", contentDigest: (controls[1] as Extract<VerifiedFileState, { state: "present" }>).signature },
+      { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: (controls[1] as Extract<VerifiedFileState, { state: "present" }>).signature },
       { kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: ".obsidian/types.json", contentDigest: (controls[3] as Extract<VerifiedFileState, { state: "present" }>).signature },
     ];
     for (const source of sources) {
@@ -119,9 +118,10 @@ function legacyTemplateId(policy: TemplatePolicy, raw: string, taxonomyRaw: stri
   if (!parsed.hasFrontmatter || parsed.diagnostics.length > 0 || parsed.frontmatter["template"] !== undefined) return null;
   const concept = parsed.frontmatter["concept"];
   if (typeof concept !== "string") return null;
-  const taxonomy = parseDocument(taxonomyRaw, { prettyErrors: false });
-  const root = taxonomy.toJS();
-  if (taxonomy.errors.length > 0 || typeof root !== "object" || root === null || Array.isArray(root)) return null;
+  let root: unknown;
+  try { root = JSON.parse(taxonomyRaw) as unknown; }
+  catch { return null; }
+  if (typeof root !== "object" || root === null || Array.isArray(root)) return null;
   const folders = (root as Record<string, unknown>)["folders"];
   if (typeof folders !== "object" || folders === null || Array.isArray(folders)) return null;
   const candidates = Object.entries(folders).filter(([folder, binding]) => {
@@ -138,12 +138,12 @@ function legacyTemplateId(policy: TemplatePolicy, raw: string, taxonomyRaw: stri
   return line.test(parsed.frontmatterRaw) ? matches[0]!.templateId : null;
 }
 async function noteManifest(root: string, notePath: TemplateSourcePath, before: Extract<VerifiedFileState, { readonly state: "present" }>, after: Uint8Array, templateId: TemplateId): Promise<TemplateCompositionManifest> {
-  const controlPaths = [".oms/template-policy.json", ".oms/taxonomy.yaml", ".oms/types.json"] as const;
+  const controlPaths = [".oms/template-policy.json", ".oms/taxonomy.json", ".oms/types.json"] as const;
   const values = await Promise.all(controlPaths.map(path => state(root, path)));
   if (values.some(value => value.state === "absent")) throw new Error("TEMPLATE_CONTROL_MISSING");
   const controls = controlPaths.map((path, index) => {
     const value = values[index]! as Extract<VerifiedFileState, { readonly state: "present" }>;
-    return { kind: path === ".oms/template-policy.json" ? "policy" as const : path === ".oms/taxonomy.yaml" ? "taxonomy" as const : "projection" as const, path, expectedCurrent: expectation(value), current: value, proposed: value, action: "verify-only" as const };
+    return { kind: path === ".oms/template-policy.json" ? "policy" as const : path === ".oms/taxonomy.json" ? "taxonomy" as const : "projection" as const, path, expectedCurrent: expectation(value), current: value, proposed: value, action: "verify-only" as const };
   }) as unknown as TemplateCompositionManifest["controls"];
   const authority: InputV2 = { version: 2, authority: [{ kind: "template", logicalId: templateId, vaultRelativePath: notePath, contentDigest: digest(after) }], placement: [] };
   const transition = { templateId, path: notePath, expectedCurrent: expectation(before), current: before, proposed: { state: "present" as const, bytes: after, signature: digest(after) }, action: "write" as const };
@@ -165,7 +165,7 @@ export async function backfillDefaults(input: BackfillDefaultsRequest): Promise<
   try { path = normalizeTemplateSourcePath(input.notePath); await verifyTemplateSourcePath(root, path); }
   catch { return rejected("TEMPLATE_SOURCE_UNSAFE", "provide one existing regular markdown note path inside the verified vault"); }
   try {
-    const [before, policyRaw, taxonomyRaw] = await Promise.all([state(root, path), readFile(join(root, ".oms/template-policy.json"), "utf8"), readFile(join(root, ".oms/taxonomy.yaml"), "utf8")]);
+    const [before, policyRaw, taxonomyRaw] = await Promise.all([state(root, path), readFile(join(root, ".oms/template-policy.json"), "utf8"), readFile(join(root, ".oms/taxonomy.json"), "utf8")]);
     if (before.state === "absent") return rejected("TEMPLATE_SOURCE_INVALID", "provide one existing note path");
     const policy = parseTemplatePolicy(policyRaw);
     const raw = Buffer.from(before.bytes).toString("utf8");

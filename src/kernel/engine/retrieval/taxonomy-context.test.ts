@@ -83,7 +83,7 @@ async function vaultWithContract(taxonomy: string): Promise<string> {
   });
   await Promise.all([
     writeFile(path.join(vault, ".oms", "template-policy.json"), policy),
-    writeFile(path.join(vault, ".oms", "taxonomy.yaml"), taxonomy),
+    writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy),
     writeFile(path.join(vault, ".oms", "types.json"), projection),
     writeFile(path.join(vault, ".obsidian", "types.json"), types),
     writeFile(path.join(vault, "Templates", "OMS", "note.md"), template),
@@ -105,8 +105,8 @@ describe("projectTaxonomyIntents", () => {
     ]);
 
     expect(projection.matched).toEqual([
-      { folder: "alpha", intent: "Alpha knowledge", source: ".oms/taxonomy.yaml" },
-      { folder: "zeta", intent: "Zeta knowledge", source: ".oms/taxonomy.yaml" },
+      { folder: "alpha", intent: "Alpha knowledge", source: ".oms/taxonomy.json" },
+      { folder: "zeta", intent: "Zeta knowledge", source: ".oms/taxonomy.json" },
     ]);
     expect(projection.promptContext).toBe(
       "- alpha: Alpha knowledge\n- zeta: Zeta knowledge",
@@ -125,9 +125,9 @@ describe("projectTaxonomyIntents", () => {
     expect(projection.indexedWithoutIntent).toEqual(["alpha", "blank", "zulu"]);
     expect(projection.taxonomyWithoutIndexed).toEqual(["taxonomy-only"]);
     expect(projection.warnings).toEqual([
-      'Indexed folder "alpha" has no intent in .oms/taxonomy.yaml.',
-      'Indexed folder "blank" has no intent in .oms/taxonomy.yaml.',
-      'Indexed folder "zulu" has no intent in .oms/taxonomy.yaml.',
+      'Indexed folder "alpha" has no intent in .oms/taxonomy.json.',
+      'Indexed folder "blank" has no intent in .oms/taxonomy.json.',
+      'Indexed folder "zulu" has no intent in .oms/taxonomy.json.',
       'Taxonomy folder "taxonomy-only" has no indexed Markdown files.',
     ]);
   });
@@ -143,7 +143,7 @@ describe("projectTaxonomyIntents", () => {
     );
 
     expect(projection.matched).toEqual([
-      { folder: "notes", intent: "Permanent notes", source: ".oms/taxonomy.yaml" },
+      { folder: "notes", intent: "Permanent notes", source: ".oms/taxonomy.json" },
     ]);
     expect(projection.warnings).toEqual([]);
     expect(projection.promptContext).toBe("- notes: Permanent notes");
@@ -162,25 +162,23 @@ describe("projectTaxonomyIntents", () => {
 
 describe("loadTaxonomyIntentProjection", () => {
   it("uses resolved folder-ontology members and intents", async () => {
-    const vault = await vaultWithContract([
-      "folders:",
-      "  references:",
-      "    intent: Processed sources.",
-      "  notes:",
-      "    intent: Permanent notes.",
-      "",
-    ].join("\n"));
+    const vault = await vaultWithContract(JSON.stringify({
+      folders: {
+        references: { intent: "Processed sources." },
+        notes: { intent: "Permanent notes." },
+      },
+    }));
 
     const projection = await loadTaxonomyIntentProjection(vault, ["references/a.md", "notes/b.md"]);
 
     expect(projection.matched).toEqual([
-      { folder: "notes", intent: "Permanent notes.", source: ".oms/taxonomy.yaml" },
-      { folder: "references", intent: "Processed sources.", source: ".oms/taxonomy.yaml" },
+      { folder: "notes", intent: "Permanent notes.", source: ".oms/taxonomy.json" },
+      { folder: "references", intent: "Processed sources.", source: ".oms/taxonomy.json" },
     ]);
   });
 
   it("treats an absent folder-ontology axis as empty context", async () => {
-    const vault = await vaultWithContract("folders:\n  notes:\n    template: note\n");
+    const vault = await vaultWithContract(JSON.stringify({ folders: { notes: { template: "note" } } }));
 
     const projection = await loadTaxonomyIntentProjection(vault, ["notes/a.md"]);
 
@@ -214,7 +212,7 @@ describe("loadTaxonomyIntentProjection", () => {
       await writeFile(projectionPath, JSON.stringify(projection));
     }],
   ])("fails closed with repair guidance when the active contract is %s", async (state, change) => {
-    const vault = await vaultWithContract("folders:\n  notes:\n    intent: Permanent notes.\n");
+    const vault = await vaultWithContract(JSON.stringify({ folders: { notes: { intent: "Permanent notes." } } }));
     await change(vault);
 
     await expect(loadTaxonomyIntentProjection(vault, ["notes/a.md"])).rejects.toThrow(state);

@@ -1,7 +1,7 @@
 /**
  * Vault-declared note exclusions for the scanning walkers.
  *
- * `taxonomy.yaml: exclude` names markdown files that are not notes - template
+ * `taxonomy.json: exclude` names markdown files that are not notes - template
  * sources whose pre-substitution frontmatter is intentionally not valid YAML
  * (Templater tags, agent {{var}} placeholders), build staging, skill files.
  * Every template-derived graph/index walker uses this declaration so excluded
@@ -13,7 +13,6 @@
  */
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
-import { parse as parseYaml } from "yaml";
 
 /**
  * Default audit exemptions - build artifacts, self-documenting templates, and
@@ -82,8 +81,8 @@ async function loadExcludeMatchers(vaultRoot: string): Promise<RegExp[]> {
     pending = (async () => {
       let declared: string[] = [];
       try {
-        const raw = await readFile(path.join(key, ".oms", "taxonomy.yaml"), "utf-8");
-        const parsed = parseYaml(raw) as unknown;
+        const raw = await readFile(path.join(key, ".oms", "taxonomy.json"), "utf-8");
+        const parsed = JSON.parse(raw) as unknown;
         const rawExclude =
           parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
             ? (parsed as Record<string, unknown>)["exclude"]
@@ -91,13 +90,13 @@ async function loadExcludeMatchers(vaultRoot: string): Promise<RegExp[]> {
         if (Array.isArray(rawExclude) && rawExclude.every((item) => typeof item === "string")) {
           declared = rawExclude;
         } else if (rawExclude !== undefined) {
-          failure("NOTE_EXCLUSION_RESOLUTION_FAILED", ".oms/taxonomy.yaml: exclude must be a list of strings");
+          failure("NOTE_EXCLUSION_RESOLUTION_FAILED", ".oms/taxonomy.json: exclude must be a list of strings");
         }
       } catch (error) {
         if (error instanceof Error && "code" in error && error.code === "ENOENT") {
           declared = [];
         } else {
-          failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `.oms/taxonomy.yaml: ${error instanceof Error ? error.message : String(error)}`);
+          failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `.oms/taxonomy.json: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       const externalTemplatePaths = await loadExternalTemplatePaths(key);

@@ -9,7 +9,7 @@ A vault composes four authorities:
 1. Actual Obsidian Markdown templates own frontmatter shape and body scaffolding.
 2. `.obsidian/types.json` is read-only property-type authority.
 3. `.oms/template-policy.json` owns requiredness, formats, allowed values, defaults, naming, stable IDs, and bindings.
-4. `.oms/taxonomy.yaml` owns physical placement and global folder/link axes.
+4. `.oms/taxonomy.json` owns physical placement and global folder/link axes.
 
 Every managed template inherits one vault-wide `BaseContract`. A stable `templateId` does not depend on source path or content digest. `.oms/types.json` is a derived, validated write/search projection and is never user-authored authority.
 

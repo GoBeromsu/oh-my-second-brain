@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import { isMap, parseDocument } from "yaml";
 import { loadObsidianTypes } from "../contracts/index.js";
 import { extractTemplate, parseTemplate } from "./extract.js";
 import { approvalDigest, canonicalJson, inputDigest, outputDigest } from "./canonical.js";
@@ -23,7 +22,7 @@ const TEMPLATE_CONTROL_PATHS = [
   ".oms/template-migration.json",
   ".oms/template-policy.json",
   ".oms/types.json",
-  ".oms/taxonomy.yaml",
+  ".oms/taxonomy.json",
 ] as const;
 
 function sha256(value: Uint8Array | string): Digest {
@@ -156,13 +155,17 @@ function managed(projection: DerivedProjection["managed"], templates: Readonly<R
   };
 }
 function validateTaxonomy(path: string, bytes: Uint8Array): void {
-  const document = parseDocument(Buffer.from(bytes).toString("utf8"), { prettyErrors: false });
-  if (document.errors.length > 0 || document.contents === null || !isMap(document.contents)) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be a YAML mapping`);
+  const root = jsonRecord(bytes, path);
+  if (root === null) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be a JSON object`);
 }
 function yamlRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Readonly<Record<string, unknown>>
     : null;
+}
+function jsonRecord(bytes: Uint8Array, path: string): Readonly<Record<string, unknown>> | null {
+  try { return yamlRecord(JSON.parse(Buffer.from(bytes).toString("utf8")) as unknown); }
+  catch { fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be valid JSON`); }
 }
 
 export function deriveFolderOntologyAxis(rawFolders: unknown, where = "taxonomy.folders"): GlobalAxis | null {
@@ -187,9 +190,8 @@ export function deriveFolderOntologyAxis(rawFolders: unknown, where = "taxonomy.
 }
 
 function taxonomyRouting(path: string, bytes: Uint8Array): { readonly targetFolders: ReadonlyMap<string, TemplateFolderPath>; readonly globalAxes: GlobalAxes } {
-  const document = parseDocument(Buffer.from(bytes).toString("utf8"), { prettyErrors: false });
-  const root = yamlRecord(document.toJS());
-  if (root === null) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be a YAML mapping`);
+  const root = jsonRecord(bytes, path);
+  if (root === null) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be a JSON object`);
   const targetFolders = new Map<string, TemplateFolderPath>();
   const templates = yamlRecord(root.templates);
   for (const [templateId, raw] of Object.entries(templates ?? {})) {
@@ -238,7 +240,7 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
   if (await templateMigrationAdmission(root) !== "clear") fail("MIGRATION_INCOMPLETE", "template migration marker is in progress or invalid");
   const policyFile = options.policyPath ?? ".oms/template-policy.json";
   const projectionFile = options.projectionPath ?? ".oms/types.json";
-  const taxonomyFile = options.taxonomyPath ?? ".oms/taxonomy.yaml";
+  const taxonomyFile = options.taxonomyPath ?? ".oms/taxonomy.json";
   const [policyRaw, projectionRaw, taxonomyRaw] = await Promise.all([
     required(root, policyFile, "template policy"), required(root, projectionFile, "derived projection"), required(root, taxonomyFile, "taxonomy"),
   ]);
@@ -359,7 +361,7 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     await loadResolvedTemplates(vault);
   }
   const policyPath = ".oms/template-policy.json";
-  const taxonomyPath = ".oms/taxonomy.yaml";
+  const taxonomyPath = ".oms/taxonomy.json";
   const projectionPath = ".oms/types.json";
   const obsidianPath = ".obsidian/types.json";
   const [policyState, taxonomyState, projectionState, obsidianState] = await Promise.all([
@@ -372,8 +374,7 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
   const taxonomyFile = requiredControl(taxonomyPath, taxonomyState);
   const obsidianFile = requiredControl(obsidianPath, obsidianState);
   if (!matchExpectation(policyFile, options.expected.controls.policy) || !matchExpectation(taxonomyFile, options.taxonomy.expectedCurrent) || !matchExpectation(projectionState, options.expected.controls.projection)) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "control CAS does not match");
-  const taxonomy = parseDocument(new TextDecoder().decode(options.taxonomy.proposedBytes), { prettyErrors: false });
-  if (taxonomy.errors.length || taxonomy.contents === null || !isMap(taxonomy.contents) || (options.taxonomy.action === "verify-only" && !sameManifestBytes(taxonomyFile.bytes, options.taxonomy.proposedBytes))) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "taxonomy proposal is invalid");
+  if (jsonRecord(options.taxonomy.proposedBytes, taxonomyPath) === null || (options.taxonomy.action === "verify-only" && !sameManifestBytes(taxonomyFile.bytes, options.taxonomy.proposedBytes))) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "taxonomy proposal is invalid");
   const currentPolicy = parseTemplatePolicy(new TextDecoder().decode(policyFile.bytes));
   const proposedPolicy = applyTemplatePolicyChange(currentPolicy, change);
   const proposedTaxonomy = taxonomyRouting(taxonomyPath, options.taxonomy.proposedBytes);
@@ -444,7 +445,7 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     transitions.push({ templateId: binding.templateId, path: binding.sourcePath, expectedCurrent: current.state === "present" ? { state: "present", signature: current.signature } : { state: "absent" }, current, proposed, action: proposal === undefined || proposal.publication === "verify-existing" ? "verify-only" : "write" });
   }
   const makeSnapshot = (policy: import("./types.js").TemplatePolicy, policyDigest: Digest, taxonomyDigest: Digest, obsidianDigest: Digest, bindings: readonly import("./types.js").TemplateBinding[], sourceState: (binding: import("./types.js").TemplateBinding) => VerifiedFileState, resolvedInputSignature: Digest): TemplateSemanticSnapshot => {
-    const authority = [{ kind: "policy" as const, logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: policyDigest }, { kind: "taxonomy" as const, logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.yaml", contentDigest: taxonomyDigest }, { kind: "obsidian-types" as const, logicalId: "obsidian-types", vaultRelativePath: obsidianPath, contentDigest: obsidianDigest }, ...bindings.map(binding => { const state = sourceState(binding); return { kind: "template" as const, logicalId: binding.templateId, vaultRelativePath: binding.sourcePath, contentDigest: state.state === "present" ? state.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source absent") }; })].sort((a,b) => a.kind.localeCompare(b.kind) || a.logicalId.localeCompare(b.logicalId));
+    const authority = [{ kind: "policy" as const, logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: policyDigest }, { kind: "taxonomy" as const, logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: taxonomyDigest }, { kind: "obsidian-types" as const, logicalId: "obsidian-types", vaultRelativePath: obsidianPath, contentDigest: obsidianDigest }, ...bindings.map(binding => { const state = sourceState(binding); return { kind: "template" as const, logicalId: binding.templateId, vaultRelativePath: binding.sourcePath, contentDigest: state.state === "present" ? state.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source absent") }; })].sort((a,b) => a.kind.localeCompare(b.kind) || a.logicalId.localeCompare(b.logicalId));
     const input: InputV2 = { version: 2, authority, placement: bindings.map(binding => ({ templateId: binding.templateId, destinationClass: binding.destinationClass, templateFolder: binding.destinationClass === "managed-default" ? policy.templateFolder : null, sourcePath: binding.sourcePath })) };
     return { input, inputDigest: inputDigest(input), bindings, resolvedTemplates: bindings.map(binding => { const source = sourceState(binding); return { templateId: binding.templateId, sourcePath: binding.sourcePath, inputSignature: resolvedInputSignature, templateSignature: source.state === "present" ? source.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source absent") }; }) };
   };

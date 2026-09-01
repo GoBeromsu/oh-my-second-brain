@@ -14,14 +14,14 @@ async function vault(): Promise<string> {
   roots.push(root);
   await Promise.all([".oms", ".obsidian", "Templates", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
   const policy = `${JSON.stringify({ version: 1, templateFolder: "Templates", base: { fields: {} }, contracts: { note: { intent: "note", fields: {}, views: [] } }, templates: { note: { templateId: "note", destinationClass: "registered-existing", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
-  const taxonomy = "folders:\n  notes:\n    concept: note\n";
+  const taxonomy = JSON.stringify({ folders: { notes: { concept: "note" } } });
   const obsidian = "{\"title\":\"text\"}\n";
   const template = "---\ntitle: template\n---\nbody\n";
   const descriptors = [{ logicalId: "template-policy", signature: sha(policy) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }, { path: "Templates/note.md", signature: sha(template) }];
   const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "registered-existing", sourcePath: "Templates/note.md", targetFolder: "Inbox", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") } } } }, null, 2)}\n`;
   await Promise.all([
     writeFile(path.join(root, ".oms", "template-policy.json"), policy, "utf8"),
-    writeFile(path.join(root, ".oms", "taxonomy.yaml"), taxonomy, "utf8"),
+    writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy, "utf8"),
     writeFile(path.join(root, ".oms", "types.json"), projection, "utf8"),
 
     writeFile(path.join(root, ".obsidian", "types.json"), obsidian, "utf8"),
@@ -125,7 +125,7 @@ describe("template doctor", () => {
     const root = await vault();
     await mkdir(path.join(root, "notes", "one"), { recursive: true });
     await writeFile(path.join(root, "notes", "one", "child.md"), "---\nconcept: note\n---\nbody\n", "utf8");
-    await writeFile(path.join(root, ".oms", "taxonomy.yaml"), "folders:\n  notes:\n    concept: note\n  notes/one:\n    concept: note\n", "utf8");
+    await writeFile(path.join(root, ".oms", "taxonomy.json"), JSON.stringify({ folders: { notes: { concept: "note" }, "notes/one": { concept: "note" } } }), "utf8");
     expect((await backfillDefaults({ target: { vault: root, source: "explicit" }, notePath: "notes/one/child.md", request: { dryRun: true } })).status).toBe("rejected");
   });
   it("rejects symlink and escaping note paths", async () => {

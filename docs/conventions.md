@@ -11,7 +11,7 @@ Each managed template has a stable `templateId`, independent of its file locatio
 | Vault Markdown template | Frontmatter key scaffolding/default literals and body shape. |
 | `.obsidian/types.json` | Read-only Obsidian type authority. OMS reads it but never writes it. |
 | `.oms/template-policy.json` | User-owned note/field ontology (`intent`) plus naming rules and defaults. |
-| `.oms/taxonomy.yaml` | User-owned folder/link ontology (`intent`) plus template placement. |
+| `.oms/taxonomy.json` | User-owned folder/link ontology (`intent`) plus template placement. |
 | `.oms/types.json` | Validated derived projection used by write and search operations; never hand-edit it. |
 
 These authorities coexist: templates decide what a note contains, ontology explains what those fields, folders, and relationships mean, taxonomy places notes, and Obsidian decides property types. The removed legacy surface is `concept` as note identity and bundled runtime defaults—not ontology itself.
