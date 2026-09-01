@@ -171,7 +171,8 @@ describe("installHermes transaction", () => {
     const provenanceFile = path.join(hermes, "adapters", "oms", ".oms-provenance.json");
     const provenance = parseProvenance(await readFile(provenanceFile, "utf8"));
     expect(await readdir(skills)).toHaveLength(7);
-    expect(provenance).toMatchObject({ source: "npm", version: "0.10.1", treeDigest: await computeTreeDigest(skills) });
+    const packageVersion = (JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { version: string }).version;
+    expect(provenance).toMatchObject({ source: "npm", version: packageVersion, treeDigest: await computeTreeDigest(skills) });
     const before = await readFile(provenanceFile, "utf8");
     await expect(installHermes(options, host)).resolves.toMatchObject({ changed: false, skipped: true });
     expect(await readFile(provenanceFile, "utf8")).toBe(before);
