@@ -12,6 +12,7 @@ import { buildWikilinkIndexWithFrontmatter, resolveWikilink } from "./resolver.j
 
 const CACHE_VERSION = 2;
 const NODE_CACHE_VERSION = 3;
+export const TYPE_AFFINITY_MAX_GROUP = 64;
 
 interface ParsedDoc {
   readonly docPath: string;
@@ -133,6 +134,26 @@ function selectedDocs(docs: readonly ParsedDoc[], convention: ResolvedConvention
 
 function adamicAdarContribution(degree: number): number { return degree <= 1 ? 0 : 1 / Math.log(degree); }
 
+export function typeAffinityCapWarnings(
+  groups: ReadonlyMap<string, readonly string[]>,
+  unbounded = process.env["OMS_TYPE_AFFINITY_UNBOUNDED"] === "1",
+): string[] {
+  return typeAffinityCappedTemplates(groups, unbounded)
+    .map(([template, members]) =>
+      `Skipped type-affinity edges for template "${template}": ${members.length} notes exceeds the ${TYPE_AFFINITY_MAX_GROUP}-note limit.`,
+    );
+}
+
+function typeAffinityCappedTemplates(
+  groups: ReadonlyMap<string, readonly string[]>,
+  unbounded: boolean,
+): [string, readonly string[]][] {
+  if (unbounded) return [];
+  return [...groups.entries()]
+    .filter(([, members]) => members.length > TYPE_AFFINITY_MAX_GROUP)
+    .sort(([left], [right]) => left.localeCompare(right));
+}
+
 /** Build graph edges from the current resolved template projection without writing vault state. */
 export async function buildGraph(opts: { readonly vaultPath: string; readonly convention: ResolvedConvention; readonly files?: readonly string[] }): Promise<GraphEdge[]> {
   const vault = path.resolve(opts.vaultPath);
@@ -186,8 +207,15 @@ export async function buildGraph(opts: { readonly vaultPath: string; readonly co
     members.push(doc.docPath);
     groups.set(id, members);
   }
-  for (const members of groups.values()) for (let left = 0; left < members.length; left++) for (let right = left + 1; right < members.length; right++) {
+  const cappedTemplates = new Set(typeAffinityCappedTemplates(
+    groups,
+    process.env["OMS_TYPE_AFFINITY_UNBOUNDED"] === "1",
+  ).map(([template]) => template));
+  for (const [template, members] of groups) {
+    if (cappedTemplates.has(template)) continue;
+    for (let left = 0; left < members.length; left++) for (let right = left + 1; right < members.length; right++) {
     edges.push({ from: members[left]!, to: members[right]!, weight: 1, kind: "type-affinity" }, { from: members[right]!, to: members[left]!, weight: 1, kind: "type-affinity" });
+  }
   }
   return edges.sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || left.kind.localeCompare(right.kind) || left.weight - right.weight);
 }
