@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { DestinationClass, TemplateFolderPath, TemplateId, TemplateSourcePath } from "./types.js";
 const ID = /^[a-z0-9]+(?:-{1,2}[a-z0-9]+)*$/;
 const INTERNAL = new Set([".oms", ".gjc", ".git", ".obsidian", ".template-transactions"]);
-const CONTROLS = new Set([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.json", ".oms/template-migration.json", ".oms/template-transaction.json"]);
+const CONTROLS = new Set([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.json", ".oms/taxonomy.yaml", ".oms/template-migration.json", ".oms/template-transaction.json"]);
 export type TemplateControlPath = string & { readonly __kind: "TemplateControlPath" };
 export interface VerifiedVaultPath<T extends TemplateFolderPath | TemplateSourcePath | TemplateControlPath> { readonly vaultRoot: string; readonly vaultRelativePath: T; readonly absolutePath: string; readonly targetRealPath: string | null; }
 export interface VaultPathVerificationOptions { readonly expected: "existing-file" | "absent" | "either"; }

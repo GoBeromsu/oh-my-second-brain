@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { lstat, readdir, readFile } from "node:fs/promises";
+import { join, relative, resolve } from "node:path";
 
 import { admitWriteTarget } from "../capture/safe.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { approvalDigest, inputDigest, outputDigest } from "./canonical.js";
 import { parseNote } from "../conventions/frontmatter.js";
-import { planTemplateMigration } from "./migration.js";
+import { excludedNoteMatcher } from "../conventions/note-exclude.js";
 import { normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
 import { parseDerivedProjection, parseTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest, loadResolvedTemplates } from "./resolver.js";
@@ -39,6 +39,26 @@ async function admitted(target: TemplateDoctorTarget): Promise<TemplateDoctorRep
     : rejected("migration-incomplete", "resume or repair the validated template migration transaction before reading or repairing conventions");
 }
 function code(error: unknown): string { return error instanceof Error ? error.message.split(":", 1)[0] ?? "TEMPLATE_DOCTOR_INVALID" : "TEMPLATE_DOCTOR_INVALID"; }
+async function exists(vault: string, path: string): Promise<boolean> {
+  try { return (await lstat(join(vault, path))).isFile(); }
+  catch (error: unknown) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return false; throw error; }
+}
+async function invalidNotes(vault: string): Promise<readonly string[]> {
+  const excluded = await excludedNoteMatcher(vault, false);
+  const invalid: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      const absolute = join(directory, entry.name);
+      if (entry.isDirectory()) { await visit(absolute); continue; }
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const path = relative(vault, absolute).replaceAll("\\", "/");
+      if (!excluded(path) && parseNote(await readFile(absolute, "utf8")).diagnostics.length > 0) invalid.push(path);
+    }
+  };
+  await visit(vault);
+  return invalid.sort();
+}
 
 /** Read-only health report for template authorities, projection, legacy notes, and transaction state. */
 export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<TemplateDoctorDiagnosis> {
@@ -53,6 +73,17 @@ export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<T
       migrationMarker,
     };
   }
+  const [jsonExists, yamlExists] = await Promise.all([exists(root, ".oms/taxonomy.json"), exists(root, ".oms/taxonomy.yaml")]);
+  if (!jsonExists && yamlExists) {
+    return { status: "needs-repair", diagnostics: [{ code: "LEGACY_TAXONOMY_MIGRATION_REQUIRED", path: ".oms/taxonomy.yaml", remediation: "run setup to convert the legacy taxonomy exactly once" }], managedSourceExclusions: [], unresolvedLegacyNotes: [], migrationMarker };
+  }
+  if (jsonExists && yamlExists) {
+    return { status: "needs-repair", diagnostics: [{ code: "LEGACY_TAXONOMY_CONFLICT", path: ".oms/taxonomy.yaml", remediation: ".oms/taxonomy.json is authoritative; manually remove .oms/taxonomy.yaml" }], managedSourceExclusions: [], unresolvedLegacyNotes: [], migrationMarker };
+  }
+  if (jsonExists) {
+    try { JSON.parse(await readFile(join(root, ".oms/taxonomy.json"), "utf8")); }
+    catch { return { status: "needs-repair", diagnostics: [{ code: "TEMPLATE_SOURCE_INVALID", path: ".oms/taxonomy.json", remediation: "restore valid .oms/taxonomy.json, then rerun doctor" }], managedSourceExclusions: [], unresolvedLegacyNotes: [], migrationMarker }; }
+  }
   const diagnostics: TemplateDoctorDiagnostic[] = [];
   let policy: TemplatePolicy | null = null;
   try { policy = parseTemplatePolicy(await readFile(join(root, ".oms/template-policy.json"), "utf8")); }
@@ -63,9 +94,7 @@ export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<T
     try { await loadResolvedTemplates(root); }
     catch (error: unknown) { diagnostics.push({ code: code(error), remediation: "run regenerate-types after correcting the named authority or template source" }); }
   }
-  const proposal = await planTemplateMigration(root, { templateFolder: policy?.templateFolder });
-  const unresolvedLegacyNotes = proposal.existingNotes.filter(note => note.templateId === null && note.legacyConcept !== null).map(note => note.path);
-  for (const item of proposal.unresolved) diagnostics.push({ code: item.code, ...(item.path === undefined ? {} : { path: item.path }), ...(item.templateId === undefined ? {} : { templateId: item.templateId }), remediation: "resolve this legacy mapping explicitly with backfill-defaults" });
+  for (const path of await invalidNotes(root)) diagnostics.push({ code: "MIGRATION_NOTE_INVALID", path, remediation: "repair the note frontmatter before migration" });
   const unique = new Map<string, TemplateDoctorDiagnostic>();
   for (const item of diagnostics) unique.set(`${item.code}\0${item.path ?? ""}`, item);
   const counts = new Map<string, number>();
@@ -76,7 +105,7 @@ export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<T
     counts.set(key, count + 1);
     return count < target.maxPerTemplate;
   });
-  return { status: unique.size === 0 ? "healthy" : "needs-repair", diagnostics: bounded, managedSourceExclusions: proposal.managedSourcePaths, unresolvedLegacyNotes, migrationMarker };
+  return { status: unique.size === 0 ? "healthy" : "needs-repair", diagnostics: bounded, managedSourceExclusions: policy === null ? [] : Object.values(policy.templates).map(binding => binding.sourcePath), unresolvedLegacyNotes: [], migrationMarker };
 }
 
 /** Recomputes only the derived projection and delegates all publication to the guarded transaction. */

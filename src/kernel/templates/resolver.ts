@@ -158,21 +158,21 @@ function validateTaxonomy(path: string, bytes: Uint8Array): void {
   const root = jsonRecord(bytes, path);
   if (root === null) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be a JSON object`);
 }
-function yamlRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+function jsonRecordValue(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Readonly<Record<string, unknown>>
     : null;
 }
 function jsonRecord(bytes: Uint8Array, path: string): Readonly<Record<string, unknown>> | null {
-  try { return yamlRecord(JSON.parse(Buffer.from(bytes).toString("utf8")) as unknown); }
+  try { return jsonRecordValue(JSON.parse(Buffer.from(bytes).toString("utf8")) as unknown); }
   catch { fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be valid JSON`); }
 }
 
 export function deriveFolderOntologyAxis(rawFolders: unknown, where = "taxonomy.folders"): GlobalAxis | null {
-  const folders = yamlRecord(rawFolders);
+  const folders = jsonRecordValue(rawFolders);
   if (rawFolders !== undefined && folders === null) fail("TEMPLATE_SOURCE_INVALID", `${where} must be a mapping`);
   const meanings = Object.entries(folders ?? {}).flatMap(([rawPath, raw]) => {
-    const definition = yamlRecord(raw);
+    const definition = jsonRecordValue(raw);
     if (definition === null) fail("TEMPLATE_SOURCE_INVALID", `${where}.${rawPath} must be a mapping`);
     if (definition.intent === undefined) return [];
     if (typeof definition.intent !== "string" || definition.intent.trim().length === 0) fail("TEMPLATE_SOURCE_INVALID", `${where}.${rawPath}.intent must be a non-empty string`);
@@ -193,14 +193,14 @@ function taxonomyRouting(path: string, bytes: Uint8Array): { readonly targetFold
   const root = jsonRecord(bytes, path);
   if (root === null) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be a JSON object`);
   const targetFolders = new Map<string, TemplateFolderPath>();
-  const templates = yamlRecord(root.templates);
+  const templates = jsonRecordValue(root.templates);
   for (const [templateId, raw] of Object.entries(templates ?? {})) {
-    const definition = yamlRecord(raw);
+    const definition = jsonRecordValue(raw);
     if (typeof definition?.templateFolder === "string") targetFolders.set(templateId, normalizeTemplateFolderPath(definition.templateFolder));
   }
-  const folders = yamlRecord(root.folders);
+  const folders = jsonRecordValue(root.folders);
   for (const [folder, raw] of Object.entries(folders ?? {})) {
-    const definition = yamlRecord(raw);
+    const definition = jsonRecordValue(raw);
     const templateId = typeof definition?.templateId === "string" ? definition.templateId : typeof definition?.template === "string" ? definition.template : undefined;
     const targetFolder = typeof definition?.templateFolder === "string" ? definition.templateFolder : folder;
     if (templateId !== undefined) targetFolders.set(templateId, normalizeTemplateFolderPath(targetFolder));
@@ -210,9 +210,9 @@ function taxonomyRouting(path: string, bytes: Uint8Array): { readonly targetFold
     }
   }
   const axes: Record<string, GlobalAxis> = {};
-  const rawAxes = yamlRecord(root.globalAxes) ?? yamlRecord(root.axes) ?? {};
+  const rawAxes = jsonRecordValue(root.globalAxes) ?? jsonRecordValue(root.axes) ?? {};
   for (const [name, raw] of Object.entries(rawAxes)) {
-    const axis = yamlRecord(raw);
+    const axis = jsonRecordValue(raw);
     if ((axis?.kind !== "folder" && axis?.kind !== "link") || typeof axis.key !== "string" || typeof axis.type !== "string" || !Array.isArray(axis.members)) continue;
     axes[name] = {
       kind: axis.kind,
@@ -220,7 +220,7 @@ function taxonomyRouting(path: string, bytes: Uint8Array): { readonly targetFold
       type: axis.type as GlobalAxis["type"],
       ...(typeof axis.intent === "string" ? { intent: axis.intent } : {}),
       members: axis.members as readonly JsonValue[],
-      ...(axis.extensions !== undefined && yamlRecord(axis.extensions) !== null ? { extensions: axis.extensions as GlobalAxis["extensions"] } : {}),
+      ...(axis.extensions !== undefined && jsonRecordValue(axis.extensions) !== null ? { extensions: axis.extensions as GlobalAxis["extensions"] } : {}),
     };
   }
   const folderOntology = deriveFolderOntologyAxis(root.folders, `${path}.folders`);

@@ -55,6 +55,12 @@ export function matchesAnyGlob(notePath: string, globs: readonly string[]): bool
   return globs.some((glob) => globToRegExp(glob).test(notePath));
 }
 
+/** Setup migration injects a legacy declaration here; runtime readers stay JSON-only. */
+export function noteExcludeMatcherFromGlobs(globs: readonly string[]): (notePath: string) => boolean {
+  const matchers = [...DEFAULT_EXCLUDE_GLOBS, ...globs].map(globToRegExp);
+  return (notePath: string) => matchers.some((matcher) => matcher.test(normalizedPath(notePath)));
+}
+
 /** One resolve per vault root per process; every walker level shares it. */
 const matcherCache = new Map<string, Promise<RegExp[]>>();
 
