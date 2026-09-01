@@ -998,7 +998,7 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     expect(await readFile(mcpPath, "utf-8")).toBe("[]\n");
   });
 
-  it("reconciles every managed host stamp to the latest selected vault without a legacy .oms registry", async () => {
+  it("reconciles managed host stamps while retaining a provenance-validated Hermes install", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-host-pointer-"));
     const first = path.join(home, "Vault A");
     const second = path.join(home, "Vault B");
@@ -1014,6 +1014,8 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
       expect(managed).not.toContain(first);
     }
     const hermesConfig = parse(hermes) as { readonly mcp_servers: { readonly oms: { readonly args: readonly string[] } } };
+    // Identical assets are a provenance no-op, but the MCP registration must
+    // still reconcile to the newly selected vault.
     expect(hermesConfig.mcp_servers.oms.args).toEqual(["mcp", "--vault", second]);
     expect(claudeHooks).toContain("Vault B");
     expect(claudeHooks).not.toContain("Vault A");
