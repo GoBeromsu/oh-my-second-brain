@@ -10,6 +10,10 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Provenance contract and lifecycle hardening across kernel, CLI, and the Hermes adapter.** The provenance record follows its approved external contract (`adapters/oms/oms-provenance.json` with `skillTreeDigest`), newer owned installs are never silently downgraded, legacy adoption proves a genuine older-version handoff, update admits only writable resolved prefixes and reports package and host mutations separately, `oms index status` reports an absent engine store honestly with sync guidance, and graph type-affinity cap warnings surface through the real build report.
+
 ## [0.11.0] - 2026-09-01
 
 ### Added
