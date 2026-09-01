@@ -8,7 +8,7 @@ Oh My Second Brain(`oms`)은 기존 Obsidian/Markdown 볼트를 노트 소유권
 - 각 템플릿은 경로·digest와 독립적인 안정적 `templateId`를 가지며, 볼트 전체의 `BaseContract` 하나를 상속한다.
 - `.obsidian/types.json`은 읽기 전용 타입 권위다.
 - 사용자 소유 온톨로지는 계속 활성 상태다. `.oms/template-policy.json`은 노트·필드 의미와 필수값, 형식, 허용값, 기본값, 이름 규칙, 정체성, 바인딩을 기록한다.
-- `.oms/taxonomy.yaml`은 폴더·링크 의미와 배치를 소유하며, 작성된 폴더 의미는 `folder-ontology` 검색 축으로 노출된다.
+- `.oms/taxonomy.json`은 폴더·링크 의미와 배치를 소유하며, 작성된 폴더 의미는 `folder-ontology` 검색 축으로 노출된다. runtime의 유일한 권위이며, setup이 레거시 YAML을 한 번 변환한다.
 - `.oms/types.json`은 쓰기·검색용 검증된 파생 projection이다. 직접 편집하지 않는다.
 
 제거된 것은 노트 정체성으로서의 `concept`와 번들 runtime 기본값이지, 의미 계층으로서의 온톨로지가 아니다.

@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { lstat, readdir, readFile, rm } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { parseNote } from "../conventions/frontmatter.js";
-import { excludedNoteMatcher } from "../conventions/note-exclude.js";
+import { excludedNoteMatcher, noteExcludeMatcherFromGlobs } from "../conventions/note-exclude.js";
 
 import { approvalDigest, inputDigest, outputDigest } from "./canonical.js";
 import { parseTemplate } from "./extract.js";
@@ -40,7 +40,7 @@ export interface MigrationProposal {
   readonly diagnostics: readonly MigrationDiagnostic[];
   readonly unresolved: readonly MigrationDiagnostic[];
 }
-export interface MigrationOptions { readonly templateFolder?: string; readonly registeredTemplates?: readonly RegisteredTemplate[]; }
+export interface MigrationOptions { readonly templateFolder?: string; readonly registeredTemplates?: readonly RegisteredTemplate[]; readonly legacyExclude?: readonly string[]; }
 
 function sha(bytes: Uint8Array): Digest { return `sha256:${createHash("sha256").update(bytes).digest("hex")}` as Digest; }
 function issue(code: MigrationDiagnosticCode, message: string, path?: string, templateId?: TemplateId): MigrationDiagnostic { return { code, message, ...(path === undefined ? {} : { path }), ...(templateId === undefined ? {} : { templateId }) }; }
@@ -142,10 +142,19 @@ function conceptsFromTaxonomy(entries: readonly LegacyLedgerEntry[], diagnostics
   }
   return values.sort((left, right) => left.concept.localeCompare(right.concept) || left.folder.localeCompare(right.folder));
 }
+function excludesFromTaxonomy(entries: readonly LegacyLedgerEntry[]): readonly string[] {
+  const entry = entries.find(value => value.source === ".oms/taxonomy.yaml");
+  if (entry === undefined) return [];
+  const document = parseDocument(new TextDecoder().decode(entry.bytes), { prettyErrors: false });
+  const root = mapping(document.toJS({ mapAsMap: true }));
+  const exclude = root?.get("exclude");
+  return Array.isArray(exclude) && exclude.every(value => typeof value === "string") ? exclude : [];
+}
 
-async function notes(root: string, sources: ReadonlySet<string>, diagnostics: MigrationDiagnostic[]): Promise<ExistingNoteIdentity[]> {
+async function notes(root: string, sources: ReadonlySet<string>, diagnostics: MigrationDiagnostic[], legacyExclude?: readonly string[]): Promise<ExistingNoteIdentity[]> {
   const values: ExistingNoteIdentity[] = [];
-  const isExcluded = await excludedNoteMatcher(root, false);
+  const runtimeExcluded = await excludedNoteMatcher(root, false);
+  const legacyExcluded = legacyExclude === undefined ? null : noteExcludeMatcherFromGlobs(legacyExclude);
   const visit = async (directory: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (entry.name.startsWith(".")) continue;
@@ -153,7 +162,7 @@ async function notes(root: string, sources: ReadonlySet<string>, diagnostics: Mi
       if (entry.isDirectory()) { await visit(absolute); continue; }
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
       const path = relative(root, absolute).replaceAll("\\", "/");
-      if (sources.has(path) || isExcluded(path)) continue;
+      if (sources.has(path) || runtimeExcluded(path) || legacyExcluded?.(path)) continue;
       const content = await readFile(absolute, "utf8");
       const parsed = parseNote(content);
       if (parsed.diagnostics.length > 0) {
@@ -191,6 +200,12 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
     ids.add(candidate.templateId); paths.add(candidate.sourcePath);
   }
   const legacyLedger = await ledger(root);
+  if (legacyLedger.some(entry => entry.path === ".oms/taxonomy.yaml")) {
+    try {
+      await readFile(join(root, ".oms", "taxonomy.json"));
+      diagnostics.push(issue("MIGRATION_TAXONOMY_INVALID", ".oms/taxonomy.json is authoritative; manually remove .oms/taxonomy.yaml before setup", ".oms/taxonomy.yaml"));
+    } catch (error: unknown) { if (!isMissing(error)) throw error; }
+  }
   const taxonomyBindings = conceptsFromTaxonomy(legacyLedger, diagnostics);
   const byConcept = new Map<string, TemplateCandidate>();
   for (const candidate of candidates) byConcept.set(candidate.templateId, candidate);
@@ -243,7 +258,7 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
     ...candidates.map(candidate => candidate.sourcePath),
   ])].sort();
   const effectiveIds = new Set(candidates.map(candidate => candidate.templateId));
-  const existingNotes = await notes(root, new Set(managedSourcePaths), diagnostics);
+  const existingNotes = await notes(root, new Set(managedSourcePaths), diagnostics, options.legacyExclude ?? excludesFromTaxonomy(legacyLedger));
   const managedFolders = new Set(taxonomyBindings.map(binding => binding.folder.replace(/\/+$/g, "")));
   for (const note of existingNotes) {
     const stableNoteId = note.templateId === null ? null : stableId(note.templateId);
@@ -322,9 +337,6 @@ export async function applyTemplateMigration(vault: string, proposal: MigrationP
     || typeof manifest.outputDigest !== "string"
   ) throw new Error("MIGRATION_APPROVAL_MISMATCH");
   const receipt = await executeTemplateTransaction(vault, manifest, request);
-  if (request.dryRun !== true && (receipt.status === "applied" || receipt.status === "already-complete")) {
-    await rm(join(vault, ".oms", "taxonomy.yaml"), { force: true });
-  }
   return receipt;
 }
 
@@ -618,6 +630,7 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
   const authority = await loadObsidianTypes(root);
   if (authority === null) throw new Error("MIGRATION_AUTHORITY_MISSING: .obsidian/types.json");
   const currentPolicy = policyState.state === "present" ? parseTemplatePolicy(new TextDecoder().decode(policyState.bytes)) : undefined;
+  if (legacyTaxonomyState.state === "present" && taxonomyState.state === "present") throw new Error("MIGRATION_TAXONOMY_CONFLICT: .oms/taxonomy.json is authoritative; manually remove .oms/taxonomy.yaml");
   const taxonomyInput = legacyTaxonomyState.state === "present" ? legacyTaxonomyState : taxonomyState;
   if (taxonomyInput.state === "present") {
     try {
@@ -695,6 +708,7 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
   ];
   const mode: "create" | "update" = currentPolicy === undefined ? "create" : "update";
   const operations = proposedBindings.map(binding => ({ kind: mode, templateId: binding.templateId, destinationClass: binding.destinationClass, payloadDigest: candidateById.get(binding.templateId)!.bytes ? sha(candidateById.get(binding.templateId)!.bytes) : sha(new Uint8Array()), stableRelativeSuffix: null }));
-  const outputs = [...controls.map(control => ({ finalVaultRelativePath: control.path, payloadDigest: control.proposed.signature })), ...sources.map(source => ({ finalVaultRelativePath: source.path, payloadDigest: source.proposed.signature }))];
-  return { version: 1, mode, current, proposed, controls, sources, operations, diagnostics: [], moves: [], outputs, approvalDigest: approvalDigest(proposed.inputDigest, operations, []), outputDigest: outputDigest(outputs) };
+  const cleanup = legacyTaxonomyState.state === "present" ? { path: ".oms/taxonomy.yaml" as const, expectedCurrent: expectation(legacyTaxonomyState), current: legacyTaxonomyState, proposed: { state: "absent" as const }, action: "delete" as const } : undefined;
+  const outputs = [...controls.map(control => ({ finalVaultRelativePath: control.path, payloadDigest: control.proposed.signature })), ...sources.map(source => ({ finalVaultRelativePath: source.path, payloadDigest: source.proposed.signature })), ...(cleanup?.expectedCurrent.state === "present" ? [{ finalVaultRelativePath: cleanup.path, payloadDigest: cleanup.expectedCurrent.signature }] : [])];
+  return { version: 1, mode, current, proposed, controls, sources, ...(cleanup === undefined ? {} : { legacyCleanup: cleanup }), operations, diagnostics: [], moves: [], outputs, approvalDigest: approvalDigest(proposed.inputDigest, operations, [], cleanup?.expectedCurrent.state === "present" ? { path: cleanup.path, expectedDigest: cleanup.expectedCurrent.signature } : undefined), outputDigest: outputDigest(outputs) };
 }

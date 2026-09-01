@@ -163,7 +163,7 @@ function diagnostic(value: Diagnostic): Record<string, unknown> {
   };
 }
 
-export function approvalDigest(input: Digest, operations: readonly LogicalOperation[], diagnostics: readonly Diagnostic[]): Digest {
+export function approvalDigest(input: Digest, operations: readonly LogicalOperation[], diagnostics: readonly Diagnostic[], cleanup?: { readonly path: string; readonly expectedDigest: Digest }): Digest {
   parseDigest(input);
   const canonicalOperations = [...operations]
     .sort((left, right) =>
@@ -193,6 +193,7 @@ export function approvalDigest(input: Digest, operations: readonly LogicalOperat
     inputDigest: input,
     operations: canonicalOperations,
     diagnostics: canonicalDiagnostics,
+    cleanup: cleanup === undefined ? null : { path: cleanup.path, expectedDigest: parseDigest(cleanup.expectedDigest) },
   });
 }
 

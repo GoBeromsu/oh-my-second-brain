@@ -335,4 +335,20 @@ describe("template migration planner", () => {
     const migration = await buildMigrationManifest(root, await planTemplateMigration(root), { base: { fields: {} } });
     expect(migration.controls.map(control => control.expectedCurrent.state)).toEqual(["present", "present", "present"]);
   });
+
+  it("binds legacy taxonomy deletion to the observed YAML pre-image", async () => {
+    const root = await fresh();
+    await template(root, "Templates/note.md");
+    await mkdir(path.join(root, ".oms"), { recursive: true });
+    await mkdir(path.join(root, ".obsidian"), { recursive: true });
+    await writeFile(path.join(root, ".oms", "taxonomy.yaml"), "folders:\n  Notes:\n    concept: note\n");
+    await writeFile(path.join(root, ".obsidian", "types.json"), JSON.stringify({ types: { template: "string" } }));
+    const proposal = await planTemplateMigration(root);
+    const manifest = await buildMigrationManifest(root, proposal, { base: { fields: {} } });
+    expect(manifest.legacyCleanup).toMatchObject({ path: ".oms/taxonomy.yaml", action: "delete" });
+    await writeFile(path.join(root, ".oms", "taxonomy.yaml"), "folders: {}\n");
+    const receipt = await applyTemplateMigration(root, proposal, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt).toMatchObject({ status: "rejected", diagnostics: [{ code: "MIGRATION_APPROVAL_MISMATCH" }] });
+    expect(existsSync(path.join(root, ".oms", "taxonomy.yaml"))).toBe(true);
+  });
 });

@@ -8,7 +8,7 @@ Oh My Second Brain (`oms`) connects an existing Obsidian or Markdown vault to AI
 - Each template has a stable `templateId`, independent of its path and digest, and inherits one vault-wide `BaseContract`.
 - `.obsidian/types.json` is read-only type authority.
 - The user-owned ontology remains active: `.oms/template-policy.json` records note/field meaning alongside requiredness, formats, allowed values, defaults, naming, identity, and bindings.
-- `.oms/taxonomy.yaml` records folder/link meaning and owns placement; authored folder intents are exposed through the `folder-ontology` search axis.
+- `.oms/taxonomy.json` records folder/link meaning and owns placement; authored folder intents are exposed through the `folder-ontology` search axis. It is the sole runtime authority; setup performs the one-time legacy YAML conversion.
 - `.oms/types.json` is a validated derived write/search projection. Never hand-edit it.
 
 The retired model is `concept` as note identity and bundled runtime defaults—not ontology as semantic meaning.
