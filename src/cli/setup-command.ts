@@ -66,8 +66,9 @@ export async function runSetup(opts: {
   if (state.proposal.unresolved.length > 0) {
     console.log(JSON.stringify({
       status: "blocked",
-      diagnostics: state.proposal.unresolved.map(({ code, path }) => ({
+      diagnostics: state.proposal.unresolved.map(({ code, message, path }) => ({
         code,
+        remediation: message,
         ...(path === undefined ? {} : { path }),
       })),
     }, null, 2));

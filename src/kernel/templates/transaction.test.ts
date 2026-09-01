@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -54,6 +55,7 @@ vi.mock("node:fs/promises", async importOriginal => {
 });
 
 import { inputDigest } from "./canonical.js";
+import { buildMigrationManifest, planTemplateMigration } from "./migration.js";
 import { normalizeTemplateSourcePath } from "./paths.js";
 import { serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest, sourceSignature } from "./resolver.js";
@@ -521,6 +523,34 @@ describe("guarded template transactions", () => {
       }
       expect(await readFile(path.join(item.vault, "Moved/beta.md"), "utf8")).toBe(TEMPLATE);
     } finally { await cleanup(item); }
+  });
+
+  it("resumes a failed legacy taxonomy YAML cleanup and receipts the converged final state", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-transaction-legacy-cleanup-"));
+    try {
+      await mkdir(path.join(vault, ".oms"), { recursive: true });
+      await mkdir(path.join(vault, ".obsidian"), { recursive: true });
+      await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), "folders: {}\n");
+      await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text" } }));
+      const proposal = await planTemplateMigration(vault);
+      const manifest = await buildMigrationManifest(vault, proposal, { base: { fields: {} } });
+      expect(manifest.legacyCleanup).toMatchObject({ path: ".oms/taxonomy.yaml", action: "delete" });
+      const transactionId = createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32);
+
+      inject("remove", ".oms/taxonomy.yaml");
+      injectSecondary("remove", ".oms/template-migration.json");
+      expect((await executeTemplateTransaction(vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("inconsistent");
+      expect(existsSync(path.join(vault, ".oms", "taxonomy.yaml"))).toBe(true);
+
+      const receipt = await resumeTemplateTransaction(vault, transactionId, manifest.approvalDigest);
+      expect(receipt.status).toBe("applied");
+      if (receipt.status === "applied") {
+        expect(receipt.deletedPaths).toContain(".oms/taxonomy.yaml");
+        expect(receipt.verified).toContainEqual({ path: ".oms/taxonomy.yaml", state: "absent" });
+        expect(receipt.markerState).toBe("complete");
+      }
+      expect(existsSync(path.join(vault, ".oms", "taxonomy.yaml"))).toBe(false);
+    } finally { await rm(vault, { recursive: true, force: true }); }
   });
 
   it("keeps completed migration, routine mutation, and regenerate marker families independent", async () => {
