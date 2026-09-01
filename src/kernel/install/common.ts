@@ -262,8 +262,14 @@ export function renderYamlEntryPreservingComments(
     }
     rejectCommentedPair(entry, raw);
     const [start, end] = pairSpan(raw, entry);
-    const text = `${raw.slice(0, start)}${raw.slice(end)}`;
-    return { changed: true, text };
+    const prefix = raw.slice(0, start);
+    // Deleting the trailing entry of a document that has no final newline must
+    // also remove the separator EOL that the matching insertion added, so an
+    // absent-entry set -> delete round-trip restores the original bytes.
+    const restoredPrefix = raw.slice(end) === "" && !raw.endsWith("\n") && prefix.endsWith(eol)
+      ? prefix.slice(0, -eol.length)
+      : prefix;
+    return { changed: true, text: `${restoredPrefix}${raw.slice(end)}` };
   }
   if (entry) {
     rejectCommentedPair(entry, raw);
