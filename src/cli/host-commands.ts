@@ -191,10 +191,6 @@ export async function runUpdateCommand(context: HostCommandContext): Promise<num
     interactive: process.stdin.isTTY === true && process.env["OMS_NON_INTERACTIVE"] !== "1",
     executeExternal: context.executeExternal,
     timeoutMs: context.timeoutMs,
-    reconcileCommand: {
-      command: process.execPath,
-      argsPrefix: process.argv[1] === undefined ? [] : [process.argv[1]],
-    },
   });
   console.log(formatUpdateResult(result));
   return result.success ? 0 : 1;

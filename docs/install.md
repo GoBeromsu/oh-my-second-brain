@@ -47,10 +47,12 @@ OMS_HERMES_HOME=~/.hermes/profiles/xia oms install --runtime hermes --vault /pat
 
 This does not enumerate or modify other profiles; a `hermes -p xia` wrapper
 uses the same profile root. Hermes stores npm installation provenance at
-`adapters/oms/.oms-provenance.json`, outside the skill scan tree. Reinstall
+`adapters/oms/oms-provenance.json`, outside the skill scan tree. Reinstall
 does nothing when the package version and installed skill digest match. A
 foreign, incomplete, or tampered install is refused rather than overwritten;
-remove or migrate that installation before retrying.
+remove or migrate that installation before retrying. A newer recorded npm
+version is also refused until an explicit downgrade policy exists; uninstall
+remains available for a verified owned installation.
 
 ## Target resolution
 

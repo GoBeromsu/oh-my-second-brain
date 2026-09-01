@@ -194,6 +194,7 @@ export function engineGraphBuildResultToMcp(result: EngineGraphBuildResult): Mcp
     notes: result.notes,
     edges: result.edges,
     generatedAt: result.generatedAt,
+    warnings: result.warnings ?? [],
   };
 }
 

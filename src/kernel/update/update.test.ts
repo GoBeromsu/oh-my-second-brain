@@ -29,11 +29,12 @@ function updateOptions(overrides: Partial<RunUpdateOptions> = {}): RunUpdateOpti
     yes: true,
     entrypoint,
     realpath,
+    access: async () => {},
     ...overrides,
   };
 }
 
-function matchingRunner(calls: string[], reconcileResult = okCall()): (command: string, args: readonly string[]) => UpdateRunnerCall {
+function matchingRunner(calls: string[], reconcileResult = okCall('{"results":[{"changed":false}]}')): (command: string, args: readonly string[]) => UpdateRunnerCall {
   return (command, args) => {
     calls.push([command, ...args].join(" "));
     if (command === "npm" && args.join(" ") === "prefix -g") return okCall(`${runningPrefix}\n`);
@@ -60,7 +61,7 @@ describe("oms update", () => {
     expect(result.success).toBe(true);
     expect(result.commands).toEqual([
       "npm install -g oh-my-second-brain@latest",
-      "oms reconcile --runtime codex --vault /tmp/Vault",
+      "oms reconcile --runtime codex --vault /tmp/Vault --json",
     ]);
     expect(calls).toEqual([]);
   });
@@ -75,7 +76,7 @@ describe("oms update", () => {
     }));
 
     expect(result.success).toBe(true);
-    expect(result.commands).toEqual(["oms reconcile --runtime codex --vault /tmp/Vault"]);
+    expect(result.commands).toEqual(["oms reconcile --runtime codex --vault /tmp/Vault --json"]);
     expect(calls).toEqual([]);
   });
 
@@ -87,7 +88,7 @@ describe("oms update", () => {
     expect(calls).toEqual([
       "npm prefix -g",
       "npm install -g oh-my-second-brain@latest",
-      "/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault --execute",
+      "/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault --json --execute",
     ]);
   });
 
@@ -136,7 +137,7 @@ describe("oms update", () => {
     expect(result.message).toContain("reconciliation completed");
     expect(calls).toEqual([
       "npm prefix -g",
-      "/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault",
+      "/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault --json",
     ]);
   });
 
@@ -159,7 +160,53 @@ describe("oms update", () => {
 
     expect(result.success).toBe(false);
     expect(result.mutated).toBe(true);
-    expect(result.message).toContain("Resume with `/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault`");
+    expect(result.message).toContain("Resume with `/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault --json`");
+  });
+
+  it("refuses an unwritable resolved prefix before npm install", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({
+      runner: matchingRunner(calls),
+      access: async () => { throw new Error("EACCES"); },
+    }));
+
+    expect(result.success).toBe(false);
+    expect(result.packageMutated).toBe(false);
+    expect(result.hostReconciled).toBe(false);
+    expect(calls).toEqual(["npm prefix -g"]);
+    expect(result.message).toContain("npm --prefix /opt/oms install -g oh-my-second-brain@latest");
+  });
+
+  it("recognizes a Windows prefix/node_modules global layout", async () => {
+    const calls: string[] = [];
+    const prefix = "C:\\Users\\oms\\AppData\\Roaming\\npm";
+    const result = await runUpdate(updateOptions({
+      currentVersion: "0.1.8",
+      latestVersion: "0.1.8",
+      entrypoint: "C:\\launch\\oms.js",
+      realpath: () => `${prefix}\\node_modules\\oh-my-second-brain\\dist\\cli\\oms.js`,
+      runner: (command, args) => {
+        calls.push([command, ...args].join(" "));
+        return command === "npm" ? okCall(`${prefix}\n`) : okCall('{"results":[{"changed":true}]}');
+      },
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.hostReconciled).toBe(true);
+    expect(calls).toEqual([
+      "npm prefix -g",
+      "C:\\Users\\oms\\AppData\\Roaming\\npm\\oms.cmd reconcile --runtime codex --vault /tmp/Vault --json",
+    ]);
+  });
+
+  it("reports package and host mutations independently", async () => {
+    const result = await runUpdate(updateOptions({
+      currentVersion: "0.1.8",
+      latestVersion: "0.1.8",
+      runner: matchingRunner([], okCall('{"results":[{"changed":true}]}')),
+    }));
+
+    expect(result).toMatchObject({ packageMutated: false, hostReconciled: true, mutated: true });
   });
 
   it("compares SemVer prerelease identifiers before stable releases", () => {

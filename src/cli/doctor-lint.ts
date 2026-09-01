@@ -7,22 +7,36 @@ import { computeTreeDigest, parseProvenance } from "../kernel/install/provenance
 import { diagnoseTemplates } from "../kernel/templates/index.js";
 import path from "node:path";
 
-async function hermesProvenanceSummary(): Promise<string> {
+export type HermesProvenanceStatus = {
+  readonly state: "not-installed" | "match" | "drift";
+  readonly packageVersion: string | null;
+  readonly recordedVersion: string | null;
+  readonly digestMatch: boolean | null;
+};
+
+async function hermesProvenanceStatus(): Promise<HermesProvenanceStatus> {
   const hermesRoot = hostHome(undefined, ".hermes", "OMS_HERMES_HOME");
   const skillRoot = path.join(hermesRoot, "skills", "knowledge-management", "oms");
-  const provenancePath = path.join(hermesRoot, "adapters", "oms", ".oms-provenance.json");
-  if (!existsSync(provenancePath) || !existsSync(skillRoot)) return "Hermes provenance: not installed.";
+  const provenancePath = path.join(hermesRoot, "adapters", "oms", "oms-provenance.json");
+  const packageMetadata = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")) as { version?: unknown };
+  const packageVersion = typeof packageMetadata.version === "string" ? packageMetadata.version : null;
+  if (!existsSync(provenancePath) || !existsSync(skillRoot)) {
+    return { state: "not-installed", packageVersion, recordedVersion: null, digestMatch: null };
+  }
   try {
     const provenance = parseProvenance(await readFile(provenancePath, "utf8"));
-    const packageVersion = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")) as { version?: unknown };
-    if (provenance !== null && typeof packageVersion.version === "string" &&
-      provenance.version === packageVersion.version && provenance.treeDigest === await computeTreeDigest(skillRoot)) {
-      return "Hermes provenance: package and installed tree match.";
+    const digestMatch = provenance === null ? false : provenance.skillTreeDigest === await computeTreeDigest(skillRoot);
+    if (provenance !== null && packageVersion !== null && provenance.version === packageVersion && digestMatch) {
+      return { state: "match", packageVersion, recordedVersion: provenance.version, digestMatch };
     }
+    return { state: "drift", packageVersion, recordedVersion: provenance?.version ?? null, digestMatch };
   } catch {
-    return "Hermes provenance: drift detected.";
+    return { state: "drift", packageVersion, recordedVersion: null, digestMatch: false };
   }
-  return "Hermes provenance: drift detected.";
+}
+
+function formatHermesProvenanceStatus(status: HermesProvenanceStatus): string {
+  return `Hermes provenance: ${status.state} (package ${status.packageVersion ?? "unknown"}, recorded ${status.recordedVersion ?? "none"}).`;
 }
 
 export async function runDoctor(opts: {
@@ -33,14 +47,15 @@ export async function runDoctor(opts: {
 }): Promise<number> {
   try {
     const diagnosis = await diagnoseTemplates({ vault: opts.vault, source: "explicit", maxPerTemplate: opts.maxPerTemplate });
+    const hermesProvenance = await hermesProvenanceStatus();
     if (opts.json) {
-      console.log(JSON.stringify({ vault: opts.vault, ...diagnosis }, null, 2));
+      console.log(JSON.stringify({ vault: opts.vault, ...diagnosis, hermesProvenance }, null, 2));
       return 0;
     }
     console.log(`\nOh My Second Brain doctor: ${diagnosis.status}.`);
     console.log(`Migration marker: ${diagnosis.migrationMarker}.`);
     console.log(`Managed template sources excluded: ${diagnosis.managedSourceExclusions.length}.`);
-    console.log(await hermesProvenanceSummary());
+    console.log(formatHermesProvenanceStatus(hermesProvenance));
     if (diagnosis.unresolvedLegacyNotes.length > 0) {
       console.log(`Unresolved legacy notes: ${diagnosis.unresolvedLegacyNotes.length}.`);
     }

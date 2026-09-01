@@ -242,13 +242,13 @@ function operationSchema(tool: string): Tool["inputSchema"] {
   }
   return { type: "object", oneOf: branches };
 }
-export function resolveOperation(tool: string, op: string | undefined): string | undefined {
+function resolveOperation(tool: string, op: string | undefined): string | undefined {
   return operations[tool]?.find(
     (operation) => (operation.direct && op === undefined) || operation.op === op,
   )?.name;
 }
 
-export function unknownOperationMessage(tool: string, op: string | undefined): string {
+function unknownOperationMessage(tool: string, op: string | undefined): string {
   const supported = (operations[tool] ?? [])
     .map((operation) => operation.op)
     .filter((operation): operation is string => operation !== undefined)

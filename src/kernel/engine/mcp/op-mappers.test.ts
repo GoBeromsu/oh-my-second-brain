@@ -226,12 +226,14 @@ describe("engineGraphBuildResultToMcp", () => {
       notes: 42,
       edges: 100,
       generatedAt: "2026-01-01T00:00:00.000Z",
+      warnings: [],
     });
     expect(result).toEqual({
       available: true,
       notes: 42,
       edges: 100,
       generatedAt: "2026-01-01T00:00:00.000Z",
+      warnings: [],
     });
   });
 });
