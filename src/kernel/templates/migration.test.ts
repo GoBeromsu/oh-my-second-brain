@@ -336,6 +336,43 @@ describe("template migration planner", () => {
     expect(migration.controls.map(control => control.expectedCurrent.state)).toEqual(["present", "present", "present"]);
   });
 
+  it("re-ingests normalized taxonomy and adds newly discovered template bindings", async () => {
+    const root = await fresh();
+    await mkdir(path.join(root, ".oms"), { recursive: true });
+    await mkdir(path.join(root, ".obsidian"), { recursive: true });
+    await writeFile(path.join(root, ".obsidian", "types.json"), JSON.stringify({ types: { template: "string" } }));
+    await writeFile(path.join(root, ".oms", "template-policy.json"), JSON.stringify({
+      version: 1,
+      templateFolder: "Templates",
+      base: { fields: {} },
+      contracts: { base: { intent: "Template convention", fields: {}, views: [] } },
+      templates: {},
+    }));
+    await writeFile(path.join(root, ".oms", "taxonomy.json"), JSON.stringify({
+      folders: {
+        Notes: { intent: "Notes", templates: [], templateFolder: "Notes" },
+        Raw: { intent: "Raw", template: "note", templateFolder: "Raw" },
+      },
+    }));
+    await template(root, "Templates/note.md");
+
+    const proposal = await planTemplateMigration(root);
+    const manifest = await buildMigrationManifest(root, proposal, { base: { fields: {} } });
+    const taxonomy = manifest.controls.find(control => control.kind === "taxonomy")!;
+    const policy = manifest.controls.find(control => control.kind === "policy")!;
+    if (taxonomy.proposed.state !== "present" || policy.proposed.state !== "present") throw new Error("expected proposed controls");
+    expect(JSON.parse(new TextDecoder().decode(taxonomy.proposed.bytes))).toMatchObject({
+      folders: { Raw: { template: "note", templateFolder: "Raw" } },
+    });
+    expect(JSON.parse(new TextDecoder().decode(policy.proposed.bytes))).toMatchObject({
+      templates: { note: { templateId: "note", sourcePath: "Templates/note.md" } },
+    });
+
+    await applyTemplateMigration(root, proposal, manifest, { approvedDigest: manifest.approvalDigest });
+    const rerun = await buildMigrationManifest(root, await planTemplateMigration(root), { base: { fields: {} } });
+    expect(rerun.controls.map(control => control.action)).toEqual(["verify-only", "verify-only", "verify-only"]);
+  });
+
   it("binds legacy taxonomy deletion to the observed YAML pre-image", async () => {
     const root = await fresh();
     await template(root, "Templates/note.md");
