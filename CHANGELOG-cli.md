@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-01
+
 ### Added
 
 - **`oms index repair --mode rebuild|drop [--dry-run]`.** (#88) Repairs run before any engine session opens, so corrupt stores never block their own recovery; `oms index status` cites the exact repair command when it detects a corrupt or incompatible store; dry-run prints the plan with zero file changes.

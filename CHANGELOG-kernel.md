@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-01
+
 ### Added
 
 - **Install provenance is now a first-class kernel contract.** (#64, #90) A dependency-leaf module owns provenance parsing/serialization, deterministic tree digests, and a pure six-state ownership decision shared by update, install, and doctor.

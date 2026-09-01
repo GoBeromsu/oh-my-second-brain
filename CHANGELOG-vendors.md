@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-01
+
 ### Changed
 
 - **Hermes installation is provenance-aware and one-root.** (#90) Each install targets exactly the resolved `OMS_HERMES_HOME` root (Sari: `~/.hermes`; Xia: `~/.hermes/profiles/xia`), records npm provenance (version + deterministic skill-tree digest) under `adapters/oms/`, no-ops on three-way identity while still reconciling a changed vault registration, replaces owned drift atomically, fails closed on foreign or tampered trees with explicit resolution guidance, adopts only the exact legacy layout, and keeps uninstall symmetric — foreign trees are never blind-deleted.
