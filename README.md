@@ -45,6 +45,11 @@ oms hook       Run Claude pre/post tool-use vault guards
 
 `oh-my-second-brain` is the full command; `oms` is its short alias.
 
+### Help contract
+
+Every recognized command accepts `--help` and `-h`, exits 0, and performs no
+side effects. An unknown command combined with `--help` exits 1.
+
 `oms search <text>` is lexical-only. `--vec` and `--hyde` select their respective
 typed channels; `--expand` explicitly enables G004 expansion, `--max-queries`
 accepts an integer from 1 through 32, and `--rerank` is opt-in. `oms embed` is

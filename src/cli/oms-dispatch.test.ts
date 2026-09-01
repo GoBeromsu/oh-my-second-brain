@@ -6,6 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
+import { mainUsageCommandNames } from "./usage.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -143,12 +144,7 @@ describe("oms CLI dispatch", () => {
 
   it.each([
     { command: [] },
-    { command: ["setup"] },
-    { command: ["doctor"] },
-    { command: ["index"] },
-    { command: ["search"] },
-    { command: ["mcp"] },
-    { command: ["install"] },
+    ...mainUsageCommandNames().map((command) => ({ command: [command] })),
   ])("prints usage without side effects for $command --help", async ({ command }) => {
     const vault = await makeVault();
     const beforeVault = snapshotDir(vault);
@@ -213,6 +209,28 @@ describe("oms CLI dispatch", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("[oms] Unsupported update option: --bogus");
+  });
+
+  it("does not print an update notice after blocked setup", async () => {
+    const vault = await makeVault();
+    await mkdir(path.join(vault, ".obsidian"), { recursive: true });
+    await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { title: "text" } }));
+    await mkdir(path.join(vault, "Notes"), { recursive: true });
+    await writeFile(path.join(vault, "Notes", "broken.md"), "---\ntitle: [unterminated\n---\n");
+
+    const result = runCli(
+      ["setup", "--vault", vault, "--yes", "--approved-digest", `sha256:${"0".repeat(64)}`],
+      undefined,
+      {
+        OMS_UPDATE_NOTICE: "1",
+        OMS_NO_UPDATE_NOTICE: "0",
+        OMS_UPDATE_LATEST_VERSION: "99.0.0",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('"status": "blocked"');
+    expect(result.stderr).not.toContain("Update available");
   });
 
   it("emits doctor and lint JSON for an empty temp vault", async () => {

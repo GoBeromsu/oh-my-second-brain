@@ -1,5 +1,5 @@
 import { existsSync, lstatSync } from "node:fs";
-import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import type { HarnessHostSurface } from "../../kernel/harness/surface-registry.js";
@@ -18,6 +18,7 @@ const HERMES_SKILL_CATEGORY = "knowledge-management";
 const HERMES_SKILL_NAME = "oms";
 
 const HERMES_MCP_ENTRY_PATH = ["mcp_servers", "oms"] as const;
+const HERMES_SKILLS = ["distill", "doctor", "link", "search", "status", "template", "write"] as const;
 
 function refuseSymlink(target: string): void {
   if (existsSync(target) && lstatSync(target).isSymbolicLink()) {
@@ -42,11 +43,39 @@ async function rollbackConfig(configPath: string, preImage: Buffer | undefined, 
   throw original;
 }
 
-async function verifyHermesMcp(configPath: string): Promise<void> {
+async function verifyHermesInstall(configPath: string, skillTarget: string, options: HostOperationOptions): Promise<void> {
   const raw = existsSync(configPath) ? await readFile(configPath) : Buffer.alloc(0);
   const document = parseDocument(raw.toString("utf8"));
-  if (document.errors.length > 0 || !document.hasIn(HERMES_MCP_ENTRY_PATH)) {
-    throw new Error("Hermes config verification failed: mcp_servers.oms is missing");
+  const parsed = document.toJS() as Record<string, unknown> | null;
+  const servers = parsed?.mcp_servers;
+  const entry = servers && typeof servers === "object" ? (servers as Record<string, unknown>).oms : undefined;
+  const expected = mcpServerEntry(options);
+  const actual = entry as Record<string, unknown>;
+  if (
+    document.errors.length > 0 ||
+    !entry ||
+    typeof entry !== "object" ||
+    actual.command !== expected.command ||
+    actual.enabled !== true ||
+    !Array.isArray(actual.args) ||
+    actual.args.join("\0") !== (expected.args as string[]).join("\0")
+  ) {
+    throw new Error("Hermes config verification failed: mcp_servers.oms does not match the expected entry");
+  }
+  const installed = new Set(await readdir(skillTarget));
+  if (!HERMES_SKILLS.every(skill => installed.has(skill) && existsSync(path.join(skillTarget, skill, "SKILL.md")))) {
+    throw new Error("Hermes install verification failed: skill bundle is incomplete");
+  }
+}
+
+async function verifyHermesUninstall(configPath: string, targets: readonly string[]): Promise<void> {
+  const raw = existsSync(configPath) ? await readFile(configPath) : Buffer.alloc(0);
+  const document = parseDocument(raw.toString("utf8"));
+  if (document.errors.length > 0 || document.hasIn(HERMES_MCP_ENTRY_PATH)) {
+    throw new Error("Hermes uninstall verification failed: mcp_servers.oms remains");
+  }
+  if (targets.some(existsSync)) {
+    throw new Error("Hermes uninstall verification failed: OMS-owned paths remain");
   }
 }
 
@@ -80,14 +109,14 @@ export async function installHermes(options: HostOperationOptions, host: Harness
       // OMS-owned files commit first. config.yaml is deliberately the final commit.
       await rm(legacyPluginTarget, { recursive: true, force: true });
       await rm(legacyMcpPath, { force: true });
+      await replaceDirectory(skillSource, skillTarget, false);
       await rm(adapterTarget, { recursive: true, force: true });
       await mkdir(adapterTarget, { recursive: true });
       await cp(path.join(adapterSource, "hermes-manifest.json"), adapterManifestTarget);
       await cp(path.join(adapterSource, "hermes", "SOUL.md"), guidanceTarget);
       await cp(path.join(adapterSource, "hermes", "README.md"), readmeTarget);
-      await replaceDirectory(skillSource, skillTarget, false);
       if (config.changed) await atomicWrite(configPath, Buffer.from(config.text, "utf8"));
-      await verifyHermesMcp(configPath);
+      await verifyHermesInstall(configPath, skillTarget, options);
     } catch (error) {
       await rollbackConfig(configPath, preImage, error);
     }
@@ -128,6 +157,7 @@ export async function uninstallHermes(options: HostOperationOptions): Promise<Ho
         await rm(target, { recursive: true, force: true });
       }
       if (config.changed) await atomicWrite(configPath, Buffer.from(config.text, "utf8"));
+      await verifyHermesUninstall(configPath, [adapterTarget, skillTarget, legacyPluginTarget, legacyMcpPath]);
     } catch (error) {
       await rollbackConfig(configPath, preImage, error);
     }

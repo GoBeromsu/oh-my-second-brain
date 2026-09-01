@@ -151,6 +151,37 @@ describe("template-first setup", () => {
     }
   });
 
+  it("keeps the dry-run approval digest unchanged when external template settings are present", async () => {
+    const withSettings = await fresh();
+    const withoutSettings = await mkdtemp(path.join(tmpdir(), "oms-setup-"));
+    try {
+      for (const root of [withSettings, withoutSettings]) {
+        await authority(root);
+        await noteTemplate(root);
+      }
+      await mkdir(path.join(withSettings, "External", "Templater"), { recursive: true });
+      await writeFile(path.join(withSettings, "External", "Templater", "source.template.md"), "{{ unsupported }}\n");
+      await mkdir(path.join(withSettings, ".obsidian", "plugins", "templater-obsidian"), { recursive: true });
+      await writeFile(path.join(withSettings, ".obsidian", "templates.json"), JSON.stringify({ folder: "External/Obsidian" }));
+      await writeFile(path.join(withSettings, ".obsidian", "plugins", "templater-obsidian", "data.json"), JSON.stringify({
+        templates_folder: "External/Templater",
+      }));
+      const digest = async (root: string): Promise<string> => {
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        try {
+          await runSetup({ vault: root, yes: true, dryRun: true });
+          const output = log.mock.calls.map(call => call.join(" ")).join("\n");
+          return output.match(/"approvalDigest":\s*"([^"]+)"/)?.[1] ?? "";
+        } finally {
+          log.mockRestore();
+        }
+      };
+      expect(await digest(withSettings)).toBe(await digest(withoutSettings));
+    } finally {
+      await rm(withoutSettings, { recursive: true, force: true });
+    }
+  });
+
   it("fails loudly without Obsidian type authority", async () => {
     const root = await fresh(); await noteTemplate(root);
     await expect(runSetup({ vault: root, yes: true, dryRun: true })).rejects.toThrow("MIGRATION_CONTROL_MISSING");

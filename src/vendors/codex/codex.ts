@@ -36,7 +36,9 @@ function isCodexOMSTable(line: string): boolean {
 type CodexManagedMarker = {
   readonly token: typeof MANAGED_CODEX_START | typeof MANAGED_CODEX_END;
   readonly line: number;
+  readonly lineStart: number;
   readonly offset: number;
+  readonly valid: boolean;
 };
 
 type ManagedCodexBlock = {
@@ -44,7 +46,7 @@ type ManagedCodexBlock = {
   readonly end: number;
 };
 
-export class CodexManagedBlockAmbiguousError extends Error {
+class CodexManagedBlockAmbiguousError extends Error {
   constructor(configPath: string, markers: readonly CodexManagedMarker[]) {
     const locations = markers.length === 0
       ? "none"
@@ -62,6 +64,7 @@ function scanCodexManagedMarkers(content: string): CodexManagedMarker[] {
   let offset = 0;
   let line = 1;
   for (const sourceLine of content.split(/(?<=\n)/)) {
+    const lineContent = sourceLine.replace(/\r?\n$/, "");
     let position = 0;
     while (position < sourceLine.length) {
       const start = sourceLine.indexOf(MANAGED_CODEX_START, position);
@@ -70,7 +73,14 @@ function scanCodexManagedMarkers(content: string): CodexManagedMarker[] {
       const isStart = start !== -1 && (end === -1 || start < end);
       const token = isStart ? MANAGED_CODEX_START : MANAGED_CODEX_END;
       const tokenOffset = isStart ? start : end;
-      markers.push({ token, line, offset: offset + tokenOffset });
+      markers.push({
+        token,
+        line,
+        lineStart: offset,
+        offset: offset + tokenOffset,
+        valid: lineContent === `${sourceLine.slice(0, tokenOffset)}${token}`
+          && /^[ \t]*$/.test(sourceLine.slice(0, tokenOffset)),
+      });
       position = tokenOffset + token.length;
     }
     offset += sourceLine.length;
@@ -84,6 +94,7 @@ function managedCodexBlock(content: string, configPath: string): ManagedCodexBlo
   if (markers.length === 0) return undefined;
   if (
     markers.length !== 2
+    || markers.some((marker) => !marker.valid)
     || markers[0]?.token !== MANAGED_CODEX_START
     || markers[1]?.token !== MANAGED_CODEX_END
   ) {
@@ -96,7 +107,6 @@ function managedCodexBlock(content: string, configPath: string): ManagedCodexBlo
     || end === undefined
     || start.offset >= end.offset
     || start.line >= end.line
-    || !content.slice(start.offset, end.offset).includes("[mcp_servers.oms]")
   ) {
     throw new CodexManagedBlockAmbiguousError(configPath, markers);
   }
@@ -104,7 +114,7 @@ function managedCodexBlock(content: string, configPath: string): ManagedCodexBlo
   let blockEnd = end.offset + MANAGED_CODEX_END.length;
   if (content.slice(blockEnd, blockEnd + 2) === "\r\n") blockEnd += 2;
   else if (content[blockEnd] === "\n") blockEnd++;
-  return { start: start.offset, end: blockEnd };
+  return { start: start.lineStart, end: blockEnd };
 }
 
 function removeManagedCodexBlock(
@@ -112,11 +122,14 @@ function removeManagedCodexBlock(
   configPath: string,
 ): { content: string; removed: boolean; block: ManagedCodexBlock | undefined } {
   const block = managedCodexBlock(content, configPath);
-  const withoutMarkers = block === undefined
-    ? content
-    : `${content.slice(0, block.start)}${content.slice(block.end)}`;
-  const markerRemoved = block !== undefined;
-  const lines = withoutMarkers.split(/\r?\n/);
+  if (block !== undefined) {
+    return {
+      content: `${content.slice(0, block.start)}${content.slice(block.end)}`,
+      removed: true,
+      block,
+    };
+  }
+  const lines = content.split(/\r?\n/);
   const output: string[] = [];
   let removedLegacy = false;
   for (let i = 0; i < lines.length; i++) {
@@ -142,13 +155,10 @@ function removeManagedCodexBlock(
     }
     output.push(line);
   }
-  if (markerRemoved && !removedLegacy) {
-    return { content: withoutMarkers, removed: true, block };
-  }
   return {
     content: `${output.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`,
-    removed: markerRemoved || removedLegacy,
-    block,
+    removed: removedLegacy,
+    block: undefined,
   };
 }
 
@@ -189,12 +199,7 @@ async function installCodexNativeArtifacts(
   return [rulesTarget, ...paths];
 }
 
-/**
- * Codex install stays file-copy based on purpose.
- *
- * Codex install stays file-copy based on purpose. Its native rules and skills
- * are installed directly so they use Codex's expected destinations.
- */
+/** Codex install uses native file copies for its rules and skills. */
 export async function installCodex(options: HostOperationOptions, host: HarnessHostSurface): Promise<HostOperationResult> {
   const codexDir = hostHome(options.homeDir, ".codex", "OMS_CODEX_HOME");
   const packageRoot = resolveHostAdapterSource(options.adapterRoot, host);

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { applyTemplateMigration, buildMigrationManifest, planTemplateMigration } from "./migration.js";
+import { diagnoseTemplates } from "./doctor.js";
 import { loadResolvedTemplates } from "./resolver.js";
 import type { Digest, TemplateCompositionManifest } from "./types.js";
 
@@ -60,14 +61,30 @@ describe("template migration planner", () => {
     expect(defaultManifest.approvalDigest).toBe(explicitManifest.approvalDigest);
   });
 
-  it("reports malformed ordinary notes instead of throwing and still rejects activation", async () => {
+  it("isolates external Templater sources while reporting a malformed ordinary note through doctor", async () => {
     const root = await fresh();
+    await template(root, "External/Templater/source.template.md", "{{ unsupported }}\n");
+    await mkdir(path.join(root, ".obsidian", "plugins", "templater-obsidian"), { recursive: true });
+    await writeFile(path.join(root, ".obsidian", "plugins", "templater-obsidian", "data.json"), JSON.stringify({
+      templates_folder: "External/Templater",
+    }));
     await template(root, "Notes/broken.md", "---\ntitle: [unterminated\n---\n");
     const proposal = await planTemplateMigration(root);
     expect(proposal.unresolved).toContainEqual(expect.objectContaining({
       code: "MIGRATION_NOTE_INVALID",
       path: "Notes/broken.md",
     }));
+    for (const paths of [
+      proposal.candidates.map(candidate => candidate.sourcePath),
+      proposal.diagnostics.map(diagnostic => diagnostic.path),
+      proposal.unresolved.map(unresolved => unresolved.path),
+    ]) expect(paths).not.toContain("External/Templater/source.template.md");
+    const diagnosis = await diagnoseTemplates({ vault: root });
+    expect(diagnosis.diagnostics).toContainEqual(expect.objectContaining({
+      code: "MIGRATION_NOTE_INVALID",
+      path: "Notes/broken.md",
+    }));
+    expect(diagnosis.diagnostics.map(diagnostic => diagnostic.path)).not.toContain("External/Templater/source.template.md");
     await expect(applyTemplateMigration(root, proposal, noManifest, { approvedDigest: approval })).rejects.toThrow("MIGRATION_UNRESOLVED_MAPPING");
   });
 

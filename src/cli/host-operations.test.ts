@@ -128,6 +128,11 @@ describe("host installer/uninstaller", () => {
         content: "# END OMS MANAGED MCP\n[mcp_servers.oms]\n# BEGIN OMS MANAGED MCP\n",
         markerLines: [1, 3],
       },
+      {
+        name: "marker token inside a TOML string",
+        content: 'model = "# BEGIN OMS MANAGED MCP"\n',
+        markerLines: [1],
+      },
     ];
 
     for (const fixture of fixtures) {
@@ -157,13 +162,13 @@ describe("host installer/uninstaller", () => {
 
   it("replaces one valid Codex managed block in place and removes legacy-only config", async () => {
     const prefix = 'model = "gpt-5"\n\n';
-    const suffix = '[other]\nvalue = "preserve me"\n';
+    const suffix = '[mcp_servers.oms.unmanaged]\nvalue = "preserve me"\n\n[other]\nvalue = "preserve me too"\n';
     const managedBlock = [
-      "# BEGIN OMS MANAGED MCP",
+      "  # BEGIN OMS MANAGED MCP",
       "# OMS MCP hookup for Codex CLI. Managed by `oms install/uninstall`.",
       "[mcp_servers.oms]",
       'command = "old-oms"',
-      "# END OMS MANAGED MCP",
+      "  # END OMS MANAGED MCP",
       "",
     ].join("\n");
     const home = await mkdtemp(path.join(tmpdir(), "oms-codex-valid-marker-"));

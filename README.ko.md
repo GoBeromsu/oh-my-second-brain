@@ -43,7 +43,12 @@ oms mcp        stdio MCP 서버 시작
 oms hook       Claude pre/post tool-use 볼트 가드 실행
 ```
 
-`oh-my-second-brain`이 전체 명령이고 `oms`는 짧은 별칭이다.
+`oh-my-second-brain`은 전체 명령이고 `oms`는 짧은 별칭이다.
+
+### 도움말 계약
+
+인식된 모든 명령은 `--help`와 `-h`를 받아들이며, exit 0으로 종료하고
+부작용을 수행하지 않는다. 알 수 없는 명령에 `--help`를 함께 주면 exit 1로 종료한다.
 
 `oms search <text>`는 lexical-only다. `--vec`, `--hyde`는 각각의 typed
 channel을 선택하고, `--expand`는 G004 expansion을 명시적으로 켜며,
