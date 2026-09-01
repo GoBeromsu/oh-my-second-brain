@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -108,36 +108,22 @@ describe("oms update isolated e2e", () => {
     expect(readFileSync(path.join(omsDir, "user-owned.txt"), "utf-8")).toBe(before);
   });
 
-  it("propagates reconcile failure to the parent update exit code", () => {
-    const cwd = makeTempRoot("oms-reconcile-fail-");
+  it("rejects a source-tree binary before npm can mutate a global installation", () => {
+    const cwd = makeTempRoot("oms-update-source-tree-");
     const omsDir = path.join(cwd, ".oms");
-    const home = makeTempRoot("oms-reconcile-home-");
-    const fakeBin = path.join(home, "bin");
-    const fakeNpm = path.join(fakeBin, "npm");
-    const decoy = path.join(home, "decoy");
-    const symlinkTarget = path.join(home, ".hermes", "skills", "knowledge-management", "oms");
     mkdirSync(omsDir);
     writeFileSync(path.join(omsDir, "user-owned.txt"), "must remain unchanged\n", "utf-8");
     const beforeOmsHash = createHash("sha256")
       .update(readFileSync(path.join(omsDir, "user-owned.txt")))
       .digest("hex");
-    mkdirSync(fakeBin, { recursive: true });
-    writeFileSync(fakeNpm, "#!/bin/sh\nexit 0\n", "utf-8");
-    chmodSync(fakeNpm, 0o755);
-    mkdirSync(decoy);
-    mkdirSync(path.dirname(symlinkTarget), { recursive: true });
-    symlinkSync(decoy, symlinkTarget, "dir");
 
     const result = runCli(["update", "--runtime", "hermes", "--vault", cwd, "--yes"], cwd, {
-      HOME: home,
-      XDG_CONFIG_HOME: path.join(home, ".config"),
-      PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
-      OMS_HERMES_HOME: path.join(home, ".hermes"),
+      HOME: makeTempRoot("oms-update-home-"),
     });
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("reconciliation failed");
-    expect(result.stdout).toContain("Refusing to replace symlinked");
+    expect(result.stdout).toContain("not owned by a global npm prefix");
+    expect(result.stdout).toContain("npm prefix -g");
     const afterOmsHash = createHash("sha256")
       .update(readFileSync(path.join(omsDir, "user-owned.txt")))
       .digest("hex");
