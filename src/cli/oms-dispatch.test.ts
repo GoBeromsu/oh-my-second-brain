@@ -295,6 +295,13 @@ describe("oms CLI dispatch", () => {
 
   it("dispatches index status and rejects retired command names", async () => {
     const vault = await makeVault();
+    // A never-synced vault has no disk store: status must say so with sync
+    // guidance rather than reporting an ephemeral in-memory store as available.
+    const missing = runCli(["index", "status", "--vault", vault]);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("oms index sync");
+
+    expect(runCli(["index", "sync", "--vault", vault]).status).toBe(0);
     const nested = runCli(["index", "status", "--vault", vault]);
     const alias = runCli(["semantic", "--vault", vault]);
 
