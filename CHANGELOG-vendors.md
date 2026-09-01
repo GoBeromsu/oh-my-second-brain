@@ -4,6 +4,11 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Codex managed-marker rewrites fail closed on ambiguity.** (#54) The greedy regex span removal is replaced by a line scanner: exactly one ordered `BEGIN`/`END` pair enclosing `[mcp_servers.oms]` is rewritten in place; orphan, duplicate, reversed, or nested markers refuse to write a single byte and report the config path with 1-based marker line numbers plus manual removal steps. Marker-free legacy tables continue to be cleaned up normally.
+- **Hermes install/uninstall is now a guarded transaction.** (#89) `Prepare → Admission → Apply → Verify`: all sources, symlink targets, and the YAML edit are validated before any write; OMS-owned adapter/skill files commit first and `config.yaml` commits last via a pre-imaged atomic temp→rename write; verification reparses the config, any failure restores the config byte-for-byte, and a rollback failure preserves both errors. Registration failures are no longer downgraded to warnings.
+
 ## [0.10.0] - 2026-09-01
 
 ## [0.9.0] - 2026-08-31

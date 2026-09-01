@@ -4,6 +4,11 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--help` is now a first-class, side-effect-free path.** (#55) Every recognized command plus the bare `oms --help`/`-h` prints usage and exits 0 before any vault resolution, host-config access, MCP server start, or update notice; `--help` never lands in unknown-flag handling, and an unknown command with `--help` still fails so typos are not hidden.
+- **Setup dry-run reports blocked proposals instead of aborting.** (#67) `oms setup --dry-run` on a vault with unresolved notes prints a deterministic blocked diagnosis without composing a manifest and issues no approval digest; apply requests are clearly rejected before composition.
+
 ## [0.10.0] - 2026-09-01
 
 ### Breaking

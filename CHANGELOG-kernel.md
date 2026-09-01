@@ -4,6 +4,11 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Host YAML configuration is now edited surgically, never reserialized.** (#89) `editYamlEntryPreservingComments` splices only the character range of the managed `mcp_servers.oms` entry, preserving every other byte — comments, key order, quoting style, wrapping, and non-ASCII content — and refuses unsafe documents (anchors/aliases, merge keys, tab indentation, multi-document, non-mapping roots) instead of silently rewriting them.
+- **One malformed note or external template source no longer aborts setup and doctor.** (#67) Obsidian core Templates and Templater folder locations declared under `.obsidian/` are discovered read-only and excluded from note scans without ever being promoted to OMS template candidates, malformed ordinary notes downgrade to `MIGRATION_NOTE_INVALID` diagnostics instead of throwing, and `applyTemplateMigration` still rejects unresolved proposals so write safety is unchanged.
+
 ## [0.10.0] - 2026-09-01
 
 ### Changed
