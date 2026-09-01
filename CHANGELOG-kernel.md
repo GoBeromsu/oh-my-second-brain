@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-01
+
 - **Breaking: template taxonomy authority moved from `.oms/taxonomy.yaml` to `.oms/taxonomy.json`.** Resolution, transaction manifests, signatures, and derived folder ontology read JSON only. Approved setup converts legacy YAML and removes it after publishing the JSON authority; rerun setup and approve its newly returned digest for existing vaults.
 
 ## [0.11.1] - 2026-09-01

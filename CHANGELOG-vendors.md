@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-01
+
 ## [0.11.1] - 2026-09-01
 
 ### Changed

@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-01
+
 - **Breaking: `oms doctor` no longer accepts `.oms/taxonomy.yaml`.** It reports one conversion error for a YAML-only vault (or cleanup guidance when both files remain); run `oms setup` and approve the returned digest to publish `.oms/taxonomy.json`.
 
 ## [0.11.1] - 2026-09-01
