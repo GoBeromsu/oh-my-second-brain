@@ -21,6 +21,8 @@ export interface SetupPrompt {
   close(): void;
 }
 
+export type SetupOutcome = "blocked" | "completed";
+
 export async function runSetup(opts: {
   vault: string;
   yes: boolean;
@@ -37,7 +39,7 @@ export async function runSetup(opts: {
   modelsNoDefault?: boolean;
   /** Fetch seam for setup tests; production uses global fetch. */
   modelFetchImpl?: typeof fetch;
-}): Promise<void> {
+}): Promise<SetupOutcome> {
   const {
     vault,
     yes,
@@ -70,7 +72,7 @@ export async function runSetup(opts: {
       })),
     }, null, 2));
     process.exitCode = 1;
-    return;
+    return "blocked";
   }
   const decision = await decideNonInteractiveSetup(state);
   const manifest = await composeSetup(decision, { base: { fields: {} } });
@@ -83,7 +85,7 @@ export async function runSetup(opts: {
       ...(proposedModelsConfig === undefined ? {} : { modelsConfig: proposedModelsConfig }),
       receipt,
     }, null, 2));
-    return;
+    return "completed";
   }
   if (approvedDigest === undefined) throw new Error("Setup apply requires approvedDigest from a shown dry-run proposal.");
   const receipt = await applySetup(decision, manifest, { approvedDigest });
@@ -106,4 +108,5 @@ export async function runSetup(opts: {
   console.log(`Oh My Second Brain setup complete. Approval: ${manifest.approvalDigest}`);
   if (modelsNoDefault) console.log("Models: no default (explicit waiver)");
   if (installClaude) printClaudeInstallPlan(buildClaudeInstallPlan({ vault }));
+  return "completed";
 }

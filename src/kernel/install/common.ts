@@ -153,8 +153,6 @@ function pairSpan(text: string, pair: YamlPair): readonly [number, number] {
   const value = pair.value as { range?: readonly number[] };
   if (!value.range || value.range.length < 3) throw new UnsafeYamlEditError("entry value has no source range");
   const start = lineStart(text, pair.key.range[0]);
-  const valueEnd = value.range[1] ?? value.range[2];
-  if (valueEnd === undefined) throw new UnsafeYamlEditError("entry value has no source range");
   const indent = text.slice(start, pair.key.range[0]);
   const end = entryEnd(text, start, indent);
   const beforeKey = text.slice(start, pair.key.range[0]);
@@ -167,6 +165,36 @@ function pairSpan(text: string, pair: YamlPair): readonly [number, number] {
 function indentation(text: string, pair: YamlPair): string {
   if (!isScalar(pair.key) || !pair.key.range) throw new UnsafeYamlEditError("mapping key has no source range");
   return text.slice(lineStart(text, pair.key.range[0]), pair.key.range[0]);
+}
+
+function rejectCommentedPair(pair: YamlPair, text?: string): void {
+  for (const node of [pair, pair.key, pair.value]) {
+    if (node && typeof node === "object") {
+      const comments = node as { comment?: unknown; commentBefore?: unknown };
+      if (typeof comments.comment === "string" || typeof comments.commentBefore === "string") {
+        throw new UnsafeYamlEditError("target entry has comments with ambiguous ownership");
+      }
+    }
+  }
+  if (text !== undefined) {
+    const [start, end] = pairSpan(text, pair);
+    let commentStart = start;
+    while (commentStart > 0) {
+      const previousEnd = commentStart - 1;
+      const previousStart = lineStart(text, previousEnd);
+      const line = text.slice(previousStart, previousEnd).trim();
+      if (!line.startsWith("#")) break;
+      commentStart = previousStart;
+    }
+    if (text.slice(commentStart, end).includes("#")) {
+      throw new UnsafeYamlEditError("target entry has comments with ambiguous ownership");
+    }
+  }
+}
+
+function insertFragment(raw: string, offset: number, fragment: string, eol: string): string {
+  const prefix = raw.slice(0, offset);
+  return `${prefix}${prefix.endsWith("\n") || prefix === "" ? "" : eol}${fragment}${raw.slice(offset)}`;
 }
 
 function sectionWithEntry(
@@ -195,7 +223,8 @@ export function renderYamlEntryPreservingComments(
   entryPath: readonly [string, string],
   edit: YamlEntryEdit,
 ): YamlEntryRender {
-  if (!Buffer.from(raw, "utf8").equals(Buffer.from(Buffer.from(raw, "utf8").toString("utf8"), "utf8"))) {
+  const bytes = Buffer.from(raw, "utf8");
+  if (!bytes.equals(Buffer.from(bytes.toString("utf8"), "utf8"))) {
     throw new UnsafeYamlEditError("file is not losslessly representable as UTF-8");
   }
   if (/(^|\n)[ ]*\t/m.test(raw)) throw new UnsafeYamlEditError("tab indentation is not supported");
@@ -216,7 +245,7 @@ export function renderYamlEntryPreservingComments(
   const root = doc.contents;
   const section = root === null ? undefined : pairFor(root, entryPath[0]);
 
-  if (section && section.value !== null && !isMap(section.value)) {
+  if (section && !isMap(section.value)) {
     throw new UnsafeYamlEditError(`${entryPath[0]} must be a mapping`);
   }
   const sectionMap = section && isMap(section.value) ? section.value : undefined;
@@ -224,17 +253,20 @@ export function renderYamlEntryPreservingComments(
   if (edit.kind === "delete") {
     if (!entry) return { changed: false, text: raw };
     if (section && sectionMap && sectionMap.items.length === 1) {
+      rejectCommentedPair(section, raw);
+      rejectCommentedPair(entry, raw);
       const [start, end] = pairSpan(raw, section);
-      const indent = indentation(raw, section);
-      const replacement = `${indent}${entryPath[0]}: {}${raw.slice(end - 1, end) === "\n" ? eol : ""}`;
-      return { changed: true, text: `${raw.slice(0, start)}${replacement}${raw.slice(end)}` };
+      const prefix = raw.slice(0, start);
+      const restoredPrefix = !raw.endsWith("\n") && prefix.endsWith(eol) ? prefix.slice(0, -eol.length) : prefix;
+      return { changed: true, text: `${restoredPrefix}${raw.slice(end)}` };
     }
+    rejectCommentedPair(entry, raw);
     const [start, end] = pairSpan(raw, entry);
     const text = `${raw.slice(0, start)}${raw.slice(end)}`;
-    if (`${raw.slice(0, start)}${raw.slice(end)}` !== text) throw new UnsafeYamlEditError("splice integrity check failed");
     return { changed: true, text };
   }
   if (entry) {
+    rejectCommentedPair(entry, raw);
     const [start, end] = pairSpan(raw, entry);
     const indent = indentation(raw, entry);
     const replacement = `${indent}${entryPath[1]}:${eol}${renderValue(edit.value, indent, eol)}${raw.slice(end - 1, end) === "\n" ? eol : ""}`;
@@ -250,6 +282,7 @@ export function renderYamlEntryPreservingComments(
   }
   if (!root) throw new UnsafeYamlEditError("empty document was not handled");
   if (section && sectionMap && sectionMap.items.length === 0) {
+    rejectCommentedPair(section, raw);
     const [start, end] = pairSpan(raw, section);
     const indent = indentation(raw, section);
     const replacement = `${indent}${entryPath[0]}:${eol}${indent}  ${entryPath[1]}:${eol}${renderValue(edit.value, `${indent}  `, eol)}${raw.slice(end - 1, end) === "\n" ? eol : ""}`;
@@ -260,31 +293,15 @@ export function renderYamlEntryPreservingComments(
     const [, end] = pairSpan(raw, last);
     const indent = indentation(raw, last);
     const fragment = `${indent}${entryPath[1]}:${eol}${renderValue(edit.value, indent, eol)}${raw.slice(end - 1, end) === "\n" ? eol : ""}`;
-    return { changed: true, text: `${raw.slice(0, end)}${fragment}${raw.slice(end)}` };
+    return { changed: true, text: insertFragment(raw, end, fragment, eol) };
   }
   const rootLast = root.items.at(-1) as YamlPair;
   const [, end] = pairSpan(raw, rootLast);
+  if (raw.slice(end).trim() !== "") {
+    throw new UnsafeYamlEditError("root insertion with document terminator or trailing comment is not supported");
+  }
   const fragment = `${sectionWithEntry(entryPath, edit.value, "", eol)}${raw.slice(end - 1, end) === "\n" ? eol : ""}`;
-  return { changed: true, text: `${raw.slice(0, end)}${fragment}${raw.slice(end)}` };
-}
-
-/**
- * Applies one `section.key` edit to a YAML file while leaving every other byte,
- * comment, and key ordering the document already had in place.
- */
-export async function editYamlEntryPreservingComments(
-  file: string,
-  entryPath: readonly [string, string],
-  edit: YamlEntryEdit,
-): Promise<boolean> {
-  const rawBytes = existsSync(file) ? await readFile(file) : Buffer.alloc(0);
-  const raw = rawBytes.toString("utf8");
-  if (!rawBytes.equals(Buffer.from(raw, "utf8"))) throw new UnsafeYamlEditError("file is not valid UTF-8");
-  const rendered = renderYamlEntryPreservingComments(raw, entryPath, edit);
-  if (!rendered.changed) return false;
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, rendered.text, "utf-8");
-  return true;
+  return { changed: true, text: insertFragment(raw, end, fragment, eol) };
 }
 
 export function mcpServerEntry(options: HostOperationOptions): Record<string, unknown> {

@@ -27,7 +27,7 @@ import { isSearchCliCommand, runSearchCli } from "./search.js";
 import { runSetup } from "./setup-command.js";
 import { searchUsage } from "./search-usage.js";
 import { maybePrintUpdateNotice } from "./update-notice.js";
-import { printUsage } from "./usage.js";
+import { mainUsageCommandNames, printUsage } from "./usage.js";
 
 export { buildClaudeInstallPlan } from "./claude-install-plan.js";
 export type { ClaudeInstallPlan } from "./claude-install-plan.js";
@@ -59,22 +59,7 @@ function shouldResolveBridgeVault(command: string | undefined, vaultExplicit: bo
 }
 
 function isKnownCommand(command: string | undefined): boolean {
-  return (
-    command === undefined ||
-    command === "setup" ||
-    command === "link" ||
-    command === "install" ||
-    command === "uninstall" ||
-    command === "update" ||
-    command === "reconcile" ||
-    command === "doctor" ||
-    command === "audit" ||
-    command === "linkify" ||
-    command === "lint" ||
-    command === "mcp" ||
-    command === "hook" ||
-    isSearchCliCommand(command)
-  );
+  return command === undefined || mainUsageCommandNames().includes(command);
 }
 
 async function main(): Promise<void> {
@@ -186,7 +171,7 @@ async function main(): Promise<void> {
         },
       };
     }
-    await runSetup({
+    const outcome = await runSetup({
       vault,
       yes,
       approvedDigest: approvedDigest as `sha256:${string}` | undefined,
@@ -196,7 +181,7 @@ async function main(): Promise<void> {
       modelSetManifest,
       modelsNoDefault,
     });
-    if (!dryRun) await maybePrintUpdateNotice();
+    if (!dryRun && outcome === "completed") await maybePrintUpdateNotice();
   } else if (command === "link") {
     process.exitCode = await runLink({
       cwd: process.cwd(),
