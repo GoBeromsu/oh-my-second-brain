@@ -4,6 +4,15 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+### Added
+
+- **`oms index repair --mode rebuild|drop [--dry-run]`.** (#88) Repairs run before any engine session opens, so corrupt stores never block their own recovery; `oms index status` cites the exact repair command when it detects a corrupt or incompatible store; dry-run prints the plan with zero file changes.
+- **`oms doctor` reports Hermes install provenance in one read-only line.** (#90) Not-installed, match, or drift between the package version and the installed provenance for the resolved `OMS_HERMES_HOME` root.
+
+### Changed
+
+- **`oms update` refuses ambiguous install topologies and always reconciles.** (#64) Mismatched running-binary and `npm prefix -g` locations are reported with both paths and exact manual commands instead of silently updating the wrong copy.
+
 ## [0.10.1] - 2026-09-01
 
 ### Fixed

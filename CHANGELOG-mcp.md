@@ -4,6 +4,10 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A missing or unknown `op` now names the supported operations.** (#65) Instead of a bare unknown-operation error, every public tool lists its supported operations in deterministic order; `oms_status` remains the only op-free direct route, and supplying an operation to it is rejected explicitly.
+
 ## [0.10.1] - 2026-09-01
 
 ## [0.10.0] - 2026-09-01
