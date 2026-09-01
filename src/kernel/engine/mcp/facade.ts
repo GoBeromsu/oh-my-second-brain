@@ -45,7 +45,7 @@ import type { EngineStore } from "../embed/store.js";
 import type { EmbeddingModelDescriptor } from "../embed/model.js";
 import { capabilityGuidance } from "../embed/config.js";
 import {
-  buildGraph,
+  buildGraphWithWarnings,
   saveCachedGraph,
   loadCachedGraphMeta,
   buildNodeIndex,
@@ -1031,23 +1031,25 @@ export class McpEngineAdapter {
       if (meta !== null) {
         const sourceSignature = await nodeSourceSignature(args.vaultPath, convention);
         const nodes = await loadNodeIndex(this.nodeCachePath(args.vaultPath), sourceSignature, convention.inputSignature);
-        if (nodes !== null) return engineGraphBuildResultToMcp({ notes: nodes.length, edges: meta.edges.length, generatedAt: meta.generatedAt });
+        if (nodes !== null) return engineGraphBuildResultToMcp({ notes: nodes.length, edges: meta.edges.length, generatedAt: meta.generatedAt, warnings: [] });
       }
       return engineGraphBuildResultToMcp({
         notes: 0,
         edges: 0,
         generatedAt: new Date().toISOString(),
+        warnings: [],
       });
     }
 
-    const edges = await buildGraph({ vaultPath: args.vaultPath, convention });
+    const built = await buildGraphWithWarnings({ vaultPath: args.vaultPath, convention });
+    const edges = built.edges;
     await saveCachedGraph(graphCachePath, edges, convention.inputSignature);
 
     const nodes = await buildNodeIndex({ vaultPath: args.vaultPath, convention });
     const sourceSignature = await nodeSourceSignature(args.vaultPath, convention);
     await saveNodeIndex(this.nodeCachePath(args.vaultPath), nodes, sourceSignature, convention.inputSignature);
 
-    return engineGraphBuildResultToMcp({ notes: nodes.length, edges: edges.length, generatedAt: new Date().toISOString() });
+    return engineGraphBuildResultToMcp({ notes: nodes.length, edges: edges.length, generatedAt: new Date().toISOString(), warnings: built.warnings });
   }
 
   // -------------------------------------------------------------------------

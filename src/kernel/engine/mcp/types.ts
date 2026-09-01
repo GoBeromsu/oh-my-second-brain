@@ -398,6 +398,7 @@ export interface McpGraphBuildResult {
   readonly notes: number;
   readonly edges: number;
   readonly generatedAt: string;
+  readonly warnings: readonly string[];
 }
 
 /** Output of oms_graph_status. */
@@ -492,4 +493,5 @@ export interface EngineGraphBuildResult {
   readonly notes: number;
   readonly edges: number;
   readonly generatedAt: string;
+  readonly warnings?: readonly string[];
 }

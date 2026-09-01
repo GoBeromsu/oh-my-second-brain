@@ -82,5 +82,20 @@ describe("oms index repair", () => {
     const writeError = vi.fn();
     await runSearchCli({ argv: ["index", "status"], vault, write: vi.fn(), writeError });
     expect(writeError).not.toHaveBeenCalledWith(expect.stringContaining("oms index repair --mode rebuild"));
+  }, 15_000);
+
+  it("reports a missing store after drop and directs the user to sync", async () => {
+    const vault = await makeVault();
+    createCorruptStore(vault);
+    expect(await runSearchCli({
+      argv: ["index", "repair", "--mode", "drop"],
+      vault,
+      write: vi.fn(),
+      writeError: vi.fn(),
+    })).toBe(0);
+
+    const writeError = vi.fn();
+    expect(await runSearchCli({ argv: ["index", "status"], vault, write: vi.fn(), writeError })).toBe(1);
+    expect(writeError).toHaveBeenCalledWith("No engine store; run `oms index sync`.");
   });
 });

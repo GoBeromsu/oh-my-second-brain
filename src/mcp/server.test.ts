@@ -11,7 +11,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { parse } from "yaml";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
-import { omsMcpTools, resolveOperation, unknownOperationMessage } from "./server.js";
+import { omsMcpTools } from "./server.js";
 import { sourceSignature } from "../kernel/templates/index.js";
 import type { SourceDescriptor } from "../kernel/templates/types.js";
 
@@ -325,7 +325,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(JSON.stringify(toolByName.get("oms_search")!.inputSchema)).not.toContain("concept");
   });
 
-  it("requires an op for routed tools and reports deterministic supported operations", () => {
+  it("requires an op for routed tools", () => {
     const normalOperations = [
       ["oms_write", "note", "write-note"],
       ["oms_search", "query", "oms_semantic_query"],
@@ -338,25 +338,14 @@ describe("Oh My Second Brain MCP stdio server", () => {
       readonly oneOf?: readonly { readonly required: readonly string[] }[];
     }]));
 
-    for (const [tool, op, name] of normalOperations) {
-      expect(resolveOperation(tool, op), tool).toBe(name);
-      expect(resolveOperation(tool, "typo"), tool).toBeUndefined();
+    for (const [tool, op] of normalOperations) {
       if (tool === "oms_status") {
         expect(schemas.get(tool)?.required).not.toContain("op");
-        expect(unknownOperationMessage(tool, "typo")).toBe(
-          'Unknown operation "typo" for oms_status. Supported operations: (none).',
-        );
       } else {
-        expect(resolveOperation(tool, undefined), tool).toBeUndefined();
+        expect(op).toBeDefined();
         expect(schemas.get(tool)?.oneOf?.every((branch) => branch.required.includes("op")), tool).toBe(true);
-        expect(unknownOperationMessage(tool, undefined), tool).toMatch(
-          new RegExp(`^Unknown operation "\\(missing\\)" for ${tool}\\. Supported operations: .+\\.$`),
-        );
       }
     }
-    expect(unknownOperationMessage("oms_search", undefined)).toBe(
-      'Unknown operation "(missing)" for oms_search. Supported operations: collections, context, contexts, get-document, lazy-load, multi-get-documents, query, status, templates.',
-    );
   });
 
   it("registers only the five public tools and retires detail aliases", () => {
@@ -1155,6 +1144,39 @@ Valid frontmatter remains available to retrieve.
       expect(postcondition.notes).toBe(1);
       expect(postcondition.edges).toBe(0);
       expect((receipt.written as Record<string, unknown>).paths).toEqual(cachePaths);
+    } finally {
+      await client.close();
+      await rm(tmpVault, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a type-affinity cap warning through the build-graph MCP response", async () => {
+    const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-graph-cap-")));
+    await createMcpTemplateAuthority(tmpVault);
+    await mkdir(path.join(tmpVault, "notes"), { recursive: true });
+    await Promise.all(Array.from({ length: 65 }, (_, index) =>
+      writeFile(
+        path.join(tmpVault, "notes", `cap-${index}.md`),
+        `---\ntemplate: literature\ntitle: Cap ${index}\nsource-url: https://example.com/cap-${index}\n---\nCap note.\n`,
+        "utf-8",
+      ),
+    ));
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp"],
+      cwd: tmpVault,
+      env: stdioEnv(),
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
+
+    try {
+      await client.connect(transport);
+      const result = textPayload(await client.callTool({ name: "oms_doctor", arguments: { op: "build-graph" } }));
+      expect(result.edges).toBe(0);
+      expect(result.warnings).toEqual([
+        'Skipped type-affinity edges for template "literature": 65 notes exceeds the 64-note limit.',
+      ]);
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });

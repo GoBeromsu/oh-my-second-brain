@@ -4,6 +4,10 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Hermes provenance now records `skillTreeDigest` at `adapters/oms/oms-provenance.json`.** Ownership has six explicit outcomes: absent, matching, drift, foreign, legacy-candidate, and newer-version rejection. The leaf remains independent of update orchestration.
+
 ## [0.11.0] - 2026-09-01
 
 ### Added

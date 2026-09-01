@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { constants, realpathSync } from "node:fs";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { RuntimeSelection } from "../install/hosts.js";
@@ -21,7 +22,7 @@ export type UpdateRunner = (
   options: UpdateRunnerOptions,
 ) => UpdateRunnerCall | Promise<UpdateRunnerCall>;
 
-export interface ReconcileCommand {
+interface ReconcileCommand {
   readonly command: string;
   readonly argsPrefix: readonly string[];
 }
@@ -48,8 +49,8 @@ export interface RunUpdateOptions {
   /** Injectable only to make ownership topology deterministic in tests. */
   readonly entrypoint?: string;
   readonly realpath?: (target: string) => string;
-  /** Retained until #90 updates the host-command caller; topology intentionally ignores it. */
-  readonly reconcileCommand?: ReconcileCommand;
+  /** Injectable only to test the resolved npm prefix admission check. */
+  readonly access?: (pathname: string, mode: number) => Promise<void>;
 }
 
 export interface UpdateResult {
@@ -57,6 +58,11 @@ export interface UpdateResult {
   readonly currentVersion: string | null;
   readonly latestVersion: string;
   readonly updateAvailable: boolean;
+  /** Whether npm installed a package during this invocation. */
+  readonly packageMutated: boolean;
+  /** Whether reconciliation reported a host-state change. */
+  readonly hostReconciled: boolean;
+  /** Whether this invocation changed either the package or a host. */
   readonly mutated: boolean;
   readonly message: string;
   readonly commands: readonly string[];
@@ -218,7 +224,7 @@ function buildReconcileArgs(options: {
   readonly vault: string;
   readonly executeExternal: boolean;
 }): readonly string[] {
-  const args = ["reconcile", "--runtime", options.runtime, "--vault", options.vault];
+  const args = ["reconcile", "--runtime", options.runtime, "--vault", options.vault, "--json"];
   if (options.executeExternal) {
     args.push("--execute");
   }
@@ -231,15 +237,32 @@ function buildReconcileCommand(options: RunUpdateOptions): ReconcileCommand {
     throw new Error("The running OMS binary path is unavailable.");
   }
   const binary = (options.realpath ?? realpathSync)(entrypoint);
-  const nodeModules = `${path.sep}lib${path.sep}node_modules${path.sep}`;
-  const index = binary.indexOf(nodeModules);
-  if (index === -1) {
+  const posixIndex = binary.indexOf("/lib/node_modules/");
+  const winIndex = binary.toLocaleLowerCase().indexOf("\\node_modules\\");
+  if (posixIndex === -1 && winIndex === -1) {
     throw new Error(`The running OMS binary is not owned by a global npm prefix: ${binary}`);
   }
+  if (posixIndex !== -1) {
+    const prefix = binary.slice(0, posixIndex);
+    return { command: path.join(prefix, "bin", "oms"), argsPrefix: [] };
+  }
+  const prefix = binary.slice(0, winIndex);
   return {
-    command: path.join(binary.slice(0, index), "bin", "oms"),
+    command: path.win32.join(prefix, "oms.cmd"),
     argsPrefix: [],
   };
+}
+
+function runningPrefix(reconcile: ReconcileCommand): string {
+  return reconcile.command.includes("\\")
+    ? path.win32.dirname(reconcile.command)
+    : path.dirname(path.dirname(reconcile.command));
+}
+
+function samePrefix(left: string, right: string): boolean {
+  return left.includes("\\") || right.includes("\\")
+    ? path.win32.resolve(left).toLocaleLowerCase() === path.win32.resolve(right).toLocaleLowerCase()
+    : path.resolve(left) === path.resolve(right);
 }
 
 async function resolveNpmTopology(
@@ -268,14 +291,35 @@ async function resolveNpmTopology(
     };
   }
 
-  const runningPrefix = path.dirname(path.dirname(reconcile.command));
-  if (path.resolve(runningPrefix) !== path.resolve(npmPrefix)) {
+  const resolvedRunningPrefix = runningPrefix(reconcile);
+  if (!samePrefix(resolvedRunningPrefix, npmPrefix)) {
     return {
       ok: false,
-      error: `Refusing to update: running OMS binary belongs to ${runningPrefix} (version ${options.currentVersion ?? "unknown"}), but npm prefix -g resolved ${npmPrefix} (target version ${options.latestVersion ?? "latest"}). Run \`npm --prefix ${runningPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` and then \`${reconcile.command} reconcile --runtime ${options.runtime} --vault ${options.vault}\` manually.`,
+      error: `Refusing to update: running OMS binary belongs to ${resolvedRunningPrefix} (version ${options.currentVersion ?? "unknown"}), but npm prefix -g resolved ${npmPrefix} (target version ${options.latestVersion ?? "latest"}). Run \`npm --prefix ${resolvedRunningPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` and then \`${reconcile.command} reconcile --runtime ${options.runtime} --vault ${options.vault}\` manually.`,
+    };
+  }
+  try {
+    await (options.access ?? access)(npmPrefix, constants.W_OK);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      error: `Refusing to update: npm global prefix ${npmPrefix} is not writable: ${detail}. Run \`npm --prefix ${npmPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` manually after restoring write access, then \`${reconcile.command} reconcile --runtime ${options.runtime} --vault ${options.vault}\` manually.`,
     };
   }
   return { ok: true, reconcile };
+}
+
+function hostReconciled(stdout: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    if (typeof parsed !== "object" || parsed === null || !("results" in parsed)) return false;
+    return Array.isArray(parsed.results) && parsed.results.some((result) =>
+      typeof result === "object" && result !== null && (result as { changed?: unknown }).changed === true,
+    );
+  } catch {
+    return false;
+  }
 }
 
 export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult> {
@@ -294,6 +338,8 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       currentVersion: options.currentVersion,
       latestVersion: "unknown",
       updateAvailable: false,
+      packageMutated: false,
+      hostReconciled: false,
       mutated: false,
       message: `Update check failed: ${latest.error}`,
       commands: [],
@@ -321,6 +367,8 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       currentVersion,
       latestVersion: latest.version,
       updateAvailable,
+      packageMutated: false,
+      hostReconciled: false,
       mutated: false,
       message: updateAvailable
         ? `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}.`
@@ -337,6 +385,8 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         currentVersion,
         latestVersion: latest.version,
         updateAvailable: true,
+        packageMutated: false,
+        hostReconciled: false,
         mutated: false,
         message: `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}. Refusing to update without --yes when stdin is not a TTY.`,
         commands,
@@ -356,6 +406,8 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         currentVersion,
         latestVersion: latest.version,
         updateAvailable: true,
+        packageMutated: false,
+        hostReconciled: false,
         mutated: false,
         message: "Update cancelled; no changes were made.",
         commands,
@@ -371,6 +423,8 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       currentVersion,
       latestVersion: latest.version,
       updateAvailable,
+      packageMutated: false,
+      hostReconciled: false,
       mutated: false,
       message: topology.error,
       commands,
@@ -389,6 +443,8 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         currentVersion,
         latestVersion: latest.version,
         updateAvailable: true,
+        packageMutated: false,
+        hostReconciled: false,
         mutated: false,
         message: `npm update failed: ${error}`,
         commands,
@@ -409,6 +465,8 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       currentVersion,
       latestVersion: latest.version,
       updateAvailable,
+      packageMutated: updateAvailable,
+      hostReconciled: false,
       mutated: updateAvailable,
       message: `${updateAvailable ? `Updated package to ${latest.version}, but` : "Package is already up to date, but"} reconciliation failed: ${error}. Resume with \`${reconcile.command} ${installedReconcileArgs.join(" ")}\`.`,
       commands,
@@ -416,12 +474,15 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
     };
   }
 
+  const reconciled = hostReconciled(reconcileResult.stdout);
   return {
     success: true,
     currentVersion,
     latestVersion: latest.version,
     updateAvailable,
-    mutated: updateAvailable,
+    packageMutated: updateAvailable,
+    hostReconciled: reconciled,
+    mutated: updateAvailable || reconciled,
     message: updateAvailable
       ? `Successfully updated Oh My Second Brain from ${currentVersion ?? "unknown"} to ${latest.version}.`
       : `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}); runtime reconciliation completed.`,

@@ -106,9 +106,20 @@ function canonicalSkillLayout(entries: readonly string[]): boolean {
     entries.every(entry => HERMES_SKILLS.includes(entry as (typeof HERMES_SKILLS)[number]));
 }
 
-async function legacyOwnershipEvidence(skillTarget: string, adapterManifestTarget: string): Promise<boolean> {
-  return existsSync(skillTarget) && existsSync(adapterManifestTarget) &&
-    canonicalSkillLayout(await readdir(skillTarget));
+async function legacyOwnershipEvidence(skillTarget: string, adapterManifestTarget: string, expectedVersion: string): Promise<boolean> {
+  if (!existsSync(skillTarget) || !existsSync(adapterManifestTarget)) return false;
+  try {
+    const manifest = JSON.parse(await readFile(adapterManifestTarget, "utf8")) as { version?: unknown };
+    if (typeof manifest.version !== "string" || manifest.version !== expectedVersion) return false;
+    const entries = await readdir(skillTarget, { withFileTypes: true });
+    if (!canonicalSkillLayout(entries.map(entry => entry.name)) || entries.some(entry => !entry.isDirectory())) return false;
+    return HERMES_SKILLS.every(skill => {
+      const skillFile = path.join(skillTarget, skill, "SKILL.md");
+      return existsSync(skillFile) && lstatSync(skillFile).isFile();
+    });
+  } catch {
+    return false;
+  }
 }
 
 async function readProvenance(file: string): Promise<{ readonly provenance: OmsInstallProvenance | null; readonly raw: string | null }> {
@@ -133,28 +144,30 @@ export async function installHermes(options: HostOperationOptions, host: Harness
   const adapterManifestTarget = path.join(adapterTarget, "hermes-manifest.json");
   const guidanceTarget = path.join(adapterTarget, "SOUL.md");
   const readmeTarget = path.join(adapterTarget, "README.md");
-  const provenanceTarget = path.join(adapterTarget, ".oms-provenance.json");
+  const provenanceTarget = path.join(adapterTarget, "oms-provenance.json");
+  const staleProvenanceTarget = path.join(adapterTarget, ".oms-provenance.json");
   const messages = ["Installed Hermes-native Oh My Second Brain skill bundle and registered mcp_servers.oms in ~/.hermes/config.yaml."];
   const manifest = JSON.parse(await readFile(path.join(adapterSource, "hermes-manifest.json"), "utf8")) as { version?: unknown };
   const packageMetadata = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8")) as { version?: unknown };
   if (typeof packageMetadata.version !== "string" || manifest.version !== packageMetadata.version) {
     throw new Error("Hermes install source package version does not match its manifest");
   }
-  const expected = { version: packageMetadata.version, treeDigest: await computeTreeDigest(skillSource) };
+  const expected = { version: packageMetadata.version, skillTreeDigest: await computeTreeDigest(skillSource) };
   if (!options.dryRun) {
     // Prepare + admission: all input and host safety checks precede every write.
     for (const source of [skillSource, path.join(adapterSource, "hermes-manifest.json"), path.join(adapterSource, "hermes", "SOUL.md"), path.join(adapterSource, "hermes", "README.md")]) {
       if (!existsSync(source)) throw new Error(`Hermes install source is missing: ${source}`);
     }
-    for (const target of [legacyPluginTarget, legacyMcpPath, adapterTarget, skillTarget, configPath, provenanceTarget]) refuseSymlink(target);
+    for (const target of [legacyPluginTarget, legacyMcpPath, adapterTarget, skillTarget, configPath, provenanceTarget, staleProvenanceTarget]) refuseSymlink(target);
     const recorded = await readProvenance(provenanceTarget);
     const actualTreeDigest = existsSync(skillTarget) ? await computeTreeDigest(skillTarget) : null;
     if (recorded.raw !== null && recorded.provenance === null) {
       throw foreignOwnershipError("the provenance record is not valid npm provenance.");
     }
     const ownership = decideOwnership(recorded.provenance, expected, actualTreeDigest);
+    if (ownership.action === "reject-newer") throw foreignOwnershipError(ownership.reason);
     if (ownership.action === "adopt-legacy-candidate" || ownership.action === "reject-foreign") {
-      if (!await legacyOwnershipEvidence(skillTarget, adapterManifestTarget)) {
+      if (!await legacyOwnershipEvidence(skillTarget, adapterManifestTarget, expected.version)) {
         throw foreignOwnershipError(
           ownership.action === "adopt-legacy-candidate"
             ? "the unrecorded skill tree does not have the exact legacy OMS layout."
@@ -172,7 +185,7 @@ export async function installHermes(options: HostOperationOptions, host: Harness
     if (ownership.action === "noop") {
       // Assets are identical; the MCP registration may still differ (for example a
       // new vault). Reconcile only the config commit under the same rollback rule.
-      if (!config.changed) {
+      if (!config.changed && !existsSync(staleProvenanceTarget)) {
         return {
           runtime: "hermes", action: "install", changed: false, skipped: true,
           paths: [adapterTarget, guidanceTarget, readmeTarget, skillTarget, provenanceTarget, configPath],
@@ -180,7 +193,8 @@ export async function installHermes(options: HostOperationOptions, host: Harness
         };
       }
       try {
-        await atomicWrite(configPath, Buffer.from(config.text, "utf8"));
+        if (existsSync(staleProvenanceTarget)) await rm(staleProvenanceTarget, { force: true });
+        if (config.changed) await atomicWrite(configPath, Buffer.from(config.text, "utf8"));
         await verifyHermesInstall(configPath, skillTarget, options);
       } catch (error) {
         await rollbackConfig(configPath, preImage, error);
@@ -205,7 +219,7 @@ export async function installHermes(options: HostOperationOptions, host: Harness
         schemaVersion: 1,
         source: "npm",
         version: expected.version,
-        treeDigest: expected.treeDigest,
+        skillTreeDigest: expected.skillTreeDigest,
         installedAt: new Date().toISOString(),
       }), "utf8"));
       if (config.changed) await atomicWrite(configPath, Buffer.from(config.text, "utf8"));
@@ -240,18 +254,21 @@ export async function uninstallHermes(options: HostOperationOptions): Promise<Ho
   const legacyMcpPath = path.join(hermesDir, "mcp", "oms.json");
   const configPath = path.join(hermesDir, "config.yaml");
   const adapterManifestTarget = path.join(adapterTarget, "hermes-manifest.json");
-  const provenanceTarget = path.join(adapterTarget, ".oms-provenance.json");
+  const provenanceTarget = path.join(adapterTarget, "oms-provenance.json");
+  const staleProvenanceTarget = path.join(adapterTarget, ".oms-provenance.json");
   const recorded = await readProvenance(provenanceTarget);
   const actualTreeDigest = existsSync(skillTarget) ? await computeTreeDigest(skillTarget) : null;
-  const ownsInstall = (recorded.provenance !== null && actualTreeDigest === recorded.provenance.treeDigest) ||
-    (recorded.raw === null && await legacyOwnershipEvidence(skillTarget, adapterManifestTarget));
+  const packageMetadata = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8")) as { version?: unknown };
+  if (typeof packageMetadata.version !== "string") throw new Error("Hermes package version is invalid");
+  const ownsInstall = (recorded.provenance !== null && actualTreeDigest === recorded.provenance.skillTreeDigest) ||
+    (recorded.raw === null && await legacyOwnershipEvidence(skillTarget, adapterManifestTarget, packageMetadata.version));
   if ((existsSync(skillTarget) || existsSync(adapterTarget)) && !ownsInstall) {
     throw foreignOwnershipError("the installed tree is not verified OMS npm ownership.");
   }
   const preImage = existsSync(configPath) ? await readFile(configPath) : undefined;
   const configRaw = preImage?.toString("utf8") ?? "";
   if (preImage && !preImage.equals(Buffer.from(configRaw, "utf8"))) throw new Error("Hermes config.yaml is not valid UTF-8");
-  for (const target of [adapterTarget, skillTarget, legacyPluginTarget, legacyMcpPath, configPath, provenanceTarget]) refuseSymlink(target);
+  for (const target of [adapterTarget, skillTarget, legacyPluginTarget, legacyMcpPath, configPath, provenanceTarget, staleProvenanceTarget]) refuseSymlink(target);
   const config = renderYamlEntryPreservingComments(configRaw, HERMES_MCP_ENTRY_PATH, { kind: "delete" });
   let changed = false;
   changed = ownsInstall && config.changed;

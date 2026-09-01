@@ -11,12 +11,12 @@ import {
 } from "./provenance.js";
 
 const roots: string[] = [];
-const expected = { version: "0.11.0", treeDigest: "expected-digest" };
+const expected = { version: "0.11.0", skillTreeDigest: "expected-digest" };
 const matching: OmsInstallProvenance = {
   schemaVersion: 1,
   source: "npm",
   version: expected.version,
-  treeDigest: expected.treeDigest,
+  skillTreeDigest: expected.skillTreeDigest,
   installedAt: "2026-09-01T00:00:00.000Z",
 };
 
@@ -28,7 +28,7 @@ describe("OMS install provenance", () => {
   it("round-trips valid records and tolerates unknown fields", () => {
     const serialized = serializeProvenance(matching);
     expect(parseProvenance(serialized)).toEqual(matching);
-    expect(parseProvenance('{"schemaVersion":1,"source":"npm","version":"0.11.0","treeDigest":"x","installedAt":"now","future":true}')).toMatchObject({ version: "0.11.0" });
+    expect(parseProvenance('{"schemaVersion":1,"source":"npm","version":"0.11.0","skillTreeDigest":"x","installedAt":"now","future":true}')).toMatchObject({ version: "0.11.0" });
     expect(parseProvenance("not json")).toBeNull();
     expect(parseProvenance('{"schemaVersion":2}')).toBeNull();
   });
@@ -45,11 +45,12 @@ describe("OMS install provenance", () => {
 
   it.each([
     ["installs an absent tree", null, null, "install"],
-    ["adopts a matching unrecorded legacy tree", null, expected.treeDigest, "adopt-legacy-candidate"],
+    ["adopts a matching unrecorded legacy tree", null, expected.skillTreeDigest, "adopt-legacy-candidate"],
     ["rejects an unrecorded foreign tree", null, "foreign-digest", "reject-foreign"],
-    ["accepts a complete matching npm identity", matching, expected.treeDigest, "noop"],
-    ["replaces a stale npm version", { ...matching, version: "0.10.1" }, expected.treeDigest, "replace"],
+    ["accepts a complete matching npm identity", matching, expected.skillTreeDigest, "noop"],
+    ["replaces an older npm version", { ...matching, version: "0.10.1" }, expected.skillTreeDigest, "replace"],
     ["replaces a tampered npm tree", matching, "tampered-digest", "replace"],
+    ["rejects a newer npm version", { ...matching, version: "0.11.1" }, expected.skillTreeDigest, "reject-newer"],
   ] as const)("%s", (_name, existing, actualTreeDigest, action) => {
     expect(decideOwnership(existing, expected, actualTreeDigest).action).toBe(action);
   });

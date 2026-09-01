@@ -668,6 +668,35 @@ describe("host installer/uninstaller", () => {
     expect(existsSync(path.join(home, ".hermes", "adapters", "oms"))).toBe(false);
   });
 
+  it("changes only the OMS_HERMES_HOME Xia root and preserves its coordinator entry", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-hermes-xia-"));
+    const sariConfig = path.join(home, ".hermes", "config.yaml");
+    const xiaRoot = path.join(home, ".hermes", "profiles", "xia");
+    const xiaConfig = path.join(xiaRoot, "config.yaml");
+    await mkdir(path.dirname(sariConfig), { recursive: true });
+    await mkdir(xiaRoot, { recursive: true });
+    await writeFile(sariConfig, "mcp_servers:\n  sari_only:\n    command: sari\n", "utf8");
+    await writeFile(xiaConfig, "mcp_servers:\n  gjc_coordinator:\n    command: gjc\n", "utf8");
+    const sariBefore = await readFile(sariConfig);
+    const originalOverride = process.env.OMS_HERMES_HOME;
+    process.env.OMS_HERMES_HOME = xiaRoot;
+    try {
+      await runHostOperation({ action: "install", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+      expect(await readFile(sariConfig)).toEqual(sariBefore);
+      expect(await readFile(xiaConfig, "utf8")).toContain("gjc_coordinator:");
+      expect(existsSync(path.join(xiaRoot, "adapters", "oms", "oms-provenance.json"))).toBe(true);
+      expect(existsSync(path.join(home, ".hermes", "adapters", "oms"))).toBe(false);
+
+      await runHostOperation({ action: "uninstall", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
+      expect(await readFile(sariConfig)).toEqual(sariBefore);
+      expect(await readFile(xiaConfig, "utf8")).toContain("gjc_coordinator:");
+      expect(existsSync(path.join(xiaRoot, "adapters", "oms"))).toBe(false);
+    } finally {
+      if (originalOverride === undefined) delete process.env.OMS_HERMES_HOME;
+      else process.env.OMS_HERMES_HOME = originalOverride;
+    }
+  });
+
   it("keeps other runtimes installing when one runtime throws", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-install-isolation-"));
     const decoy = await mkdtemp(path.join(tmpdir(), "oms-install-isolation-decoy-"));

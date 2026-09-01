@@ -45,7 +45,7 @@ export function repairEngineStore(options: RepairEngineStoreOptions): EngineStor
 }
 
 function backupStorePath(storePath: string, now: Date): string {
-  const timestamp = now.toISOString().replace(/[-:.]/gu, "").replace("Z", "Z");
+  const timestamp = now.toISOString().replace(/[-:.]/gu, "");
   return `${storePath}.backup-${timestamp}`;
 }
 

@@ -155,11 +155,11 @@ function typeAffinityCappedTemplates(
 }
 
 /** Build graph edges from the current resolved template projection without writing vault state. */
-export async function buildGraph(opts: { readonly vaultPath: string; readonly convention: ResolvedConvention; readonly files?: readonly string[] }): Promise<GraphEdge[]> {
+export async function buildGraphWithWarnings(opts: { readonly vaultPath: string; readonly convention: ResolvedConvention; readonly files?: readonly string[] }): Promise<{ readonly edges: GraphEdge[]; readonly warnings: readonly string[] }> {
   const vault = path.resolve(opts.vaultPath);
   requireConvention(opts.convention);
   const docs = selectedDocs(await parseDocs(vault, await graphPaths(vault, opts.files, opts.convention)), opts.convention);
-  if (docs.length === 0) return [];
+  if (docs.length === 0) return { edges: [], warnings: [] };
   const index = buildWikilinkIndexWithFrontmatter(docs.map(doc => ({ path: doc.docPath, frontmatter: doc.frontmatter })));
   const edges: GraphEdge[] = [];
   const adjacency = new Map<string, Set<string>>();
@@ -217,7 +217,15 @@ export async function buildGraph(opts: { readonly vaultPath: string; readonly co
     edges.push({ from: members[left]!, to: members[right]!, weight: 1, kind: "type-affinity" }, { from: members[right]!, to: members[left]!, weight: 1, kind: "type-affinity" });
   }
   }
-  return edges.sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || left.kind.localeCompare(right.kind) || left.weight - right.weight);
+  return {
+    edges: edges.sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || left.kind.localeCompare(right.kind) || left.weight - right.weight),
+    warnings: typeAffinityCapWarnings(groups),
+  };
+}
+
+/** Build graph edges from the current resolved template projection without writing vault state. */
+export async function buildGraph(opts: { readonly vaultPath: string; readonly convention: ResolvedConvention; readonly files?: readonly string[] }): Promise<GraphEdge[]> {
+  return (await buildGraphWithWarnings(opts)).edges;
 }
 
 /** Scan template-bound notes and construct retrieval nodes without writing vault state. */

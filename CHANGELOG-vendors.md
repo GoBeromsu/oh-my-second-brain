@@ -4,6 +4,10 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Hermes provenance uses the canonical `oms-provenance.json` filename and `skillTreeDigest` field.** Reinstall removes only the stale former filename; it is never read as a compatibility fallback. Valid legacy adoption additionally requires a parseable string-version manifest, exactly seven skill directories, and each `SKILL.md`.
+
 ## [0.11.0] - 2026-09-01
 
 ### Changed

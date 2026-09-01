@@ -9,6 +9,8 @@ import { runEngineSession } from "./engine-session.js";
 import { searchUsage } from "./search-usage.js";
 import { repairEngineStore } from "../kernel/engine/embed/repair.js";
 import { engineStoreDiagnostic } from "../kernel/engine/embed/store.js";
+import { engineStorePath } from "../kernel/engine/paths.js";
+import { existsSync } from "node:fs";
 
 export interface IndexCommandOptions {
   readonly args: ParsedSearchArgs;
@@ -70,6 +72,10 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
   }
 
   if (command === "status") {
+    if (!existsSync(engineStorePath(vault))) {
+      writeError("No engine store; run `oms index sync`.");
+      return 1;
+    }
     try {
       return await runEngineSession(vault, { write: false }, async (adapter) => {
         const result = await adapter.semanticStatus({ vault, index: stringOption(args, "index") });

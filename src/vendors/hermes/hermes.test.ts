@@ -168,14 +168,18 @@ describe("installHermes transaction", () => {
     await installHermes(options, host);
     const hermes = path.join(home, ".hermes");
     const skills = path.join(hermes, "skills", "knowledge-management", "oms");
-    const provenanceFile = path.join(hermes, "adapters", "oms", ".oms-provenance.json");
+    const provenanceFile = path.join(hermes, "adapters", "oms", "oms-provenance.json");
     const provenance = parseProvenance(await readFile(provenanceFile, "utf8"));
     expect(await readdir(skills)).toHaveLength(7);
     const packageVersion = (JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { version: string }).version;
-    expect(provenance).toMatchObject({ source: "npm", version: packageVersion, treeDigest: await computeTreeDigest(skills) });
+    expect(provenance).toMatchObject({ source: "npm", version: packageVersion, skillTreeDigest: await computeTreeDigest(skills) });
     const before = await readFile(provenanceFile, "utf8");
     await expect(installHermes(options, host)).resolves.toMatchObject({ changed: false, skipped: true });
     expect(await readFile(provenanceFile, "utf8")).toBe(before);
+    const staleFile = path.join(hermes, "adapters", "oms", ".oms-provenance.json");
+    await writeFile(staleFile, "stale metadata\n");
+    await expect(installHermes(options, host)).resolves.toMatchObject({ changed: true, skipped: false });
+    expect(existsSync(staleFile)).toBe(false);
   });
 
   it("refuses foreign provenance without changing the pre-existing tree", async () => {
@@ -183,7 +187,7 @@ describe("installHermes transaction", () => {
     temporaryDirectories.push(home);
     const hermes = path.join(home, ".hermes");
     const skills = path.join(hermes, "skills", "knowledge-management", "oms");
-    const provenance = path.join(hermes, "adapters", "oms", ".oms-provenance.json");
+    const provenance = path.join(hermes, "adapters", "oms", "oms-provenance.json");
     await mkdir(skills, { recursive: true });
     await writeFile(path.join(skills, "foreign.txt"), "foreign\n");
     await mkdir(path.dirname(provenance), { recursive: true });
@@ -192,7 +196,7 @@ describe("installHermes transaction", () => {
     if (!host) throw new Error("Hermes surface missing");
     await expect(installHermes({
       action: "install", runtime: "hermes", vault: "/vault", homeDir: home, adapterRoot: path.resolve("."),
-    }, host)).rejects.toThrow("not valid npm provenance");
+    }, host)).rejects.toThrow("provenance record is not valid npm provenance");
     expect(await readFile(path.join(skills, "foreign.txt"), "utf8")).toBe("foreign\n");
   });
 
@@ -205,7 +209,7 @@ describe("installHermes transaction", () => {
     await installHermes(options, host);
     const hermes = path.join(home, ".hermes");
     const skills = path.join(hermes, "skills", "knowledge-management", "oms");
-    const provenance = path.join(hermes, "adapters", "oms", ".oms-provenance.json");
+    const provenance = path.join(hermes, "adapters", "oms", "oms-provenance.json");
     await rm(provenance);
     await writeFile(path.join(skills, "write", "SKILL.md"), "legacy\n");
     await expect(installHermes(options, host)).resolves.toMatchObject({ changed: true });
@@ -213,6 +217,28 @@ describe("installHermes transaction", () => {
     await rm(provenance);
     await mkdir(path.join(skills, "unexpected"));
     await expect(installHermes(options, host)).rejects.toThrow("exact legacy OMS layout");
+  });
+
+  it.each([
+    ["a wrong manifest version", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"0.0.0"}\n')],
+    ["a malformed manifest", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), "{not json\n")],
+    ["a file in place of a canonical skill directory", async (hermes: string) => {
+      const skill = path.join(hermes, "skills", "knowledge-management", "oms", "write");
+      await rm(skill, { recursive: true });
+      await writeFile(skill, "not a directory\n");
+    }],
+    ["a missing canonical SKILL.md", async (hermes: string) => rm(path.join(hermes, "skills", "knowledge-management", "oms", "doctor", "SKILL.md"))],
+  ])("rejects legacy adoption with %s", async (_name, damage) => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-legacy-"));
+    temporaryDirectories.push(home);
+    const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
+    if (!host) throw new Error("Hermes surface missing");
+    const options = { action: "install" as const, runtime: "hermes" as const, vault: "/vault", homeDir: home, adapterRoot: path.resolve(".") };
+    await installHermes(options, host);
+    const hermes = path.join(home, ".hermes");
+    await rm(path.join(hermes, "adapters", "oms", "oms-provenance.json"));
+    await damage(hermes);
+    await expect(installHermes(options, host)).rejects.toThrow("Refusing to replace Hermes OMS assets");
   });
 
   it("refuses uninstall of a tampered npm-owned tree", async () => {
@@ -226,6 +252,27 @@ describe("installHermes transaction", () => {
     await writeFile(skill, "tampered\n");
     await expect(uninstallHermes({ ...options, action: "uninstall" })).rejects.toThrow("not verified OMS npm ownership");
     expect(existsSync(skill)).toBe(true);
+  });
+
+  it("rejects a newer valid provenance without changing assets, but permits uninstall", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-newer-"));
+    temporaryDirectories.push(home);
+    const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
+    if (!host) throw new Error("Hermes surface missing");
+    const options = { action: "install" as const, runtime: "hermes" as const, vault: "/vault", homeDir: home, adapterRoot: path.resolve(".") };
+    await installHermes(options, host);
+    const hermes = path.join(home, ".hermes");
+    const provenance = path.join(hermes, "adapters", "oms", "oms-provenance.json");
+    const recorded = JSON.parse(await readFile(provenance, "utf8")) as Record<string, unknown>;
+    recorded.version = "99.0.0";
+    await writeFile(provenance, `${JSON.stringify(recorded)}\n`);
+    const configBefore = await readFile(path.join(hermes, "config.yaml"));
+    const skillBefore = await readFile(path.join(hermes, "skills", "knowledge-management", "oms", "write", "SKILL.md"));
+
+    await expect(installHermes(options, host)).rejects.toThrow("newer than this package");
+    expect(await readFile(path.join(hermes, "config.yaml"))).toEqual(configBefore);
+    expect(await readFile(path.join(hermes, "skills", "knowledge-management", "oms", "write", "SKILL.md"))).toEqual(skillBefore);
+    await expect(uninstallHermes({ ...options, action: "uninstall" })).resolves.toMatchObject({ changed: true });
   });
 });
 
