@@ -146,6 +146,42 @@ describe("Oh My Second Brain MCP stdio server", () => {
     }
   });
 
+  it("keeps query budget schemas aligned with the runtime contract", () => {
+    const validator = new AjvJsonSchemaValidator();
+    const search = omsMcpTools.find((tool) => tool.name === "oms_search");
+    const validate = validator.getValidator(search!.inputSchema);
+
+    expect(validate({ op: "query", query: "architecture", limit: 0, candidateLimit: 1 }).valid).toBe(true);
+    expect(validate({ op: "query", query: "architecture", limit: 1.5 }).valid).toBe(false);
+    expect(validate({ op: "query", query: "architecture", candidateLimit: 0 }).valid).toBe(false);
+    expect(validate({ op: "query", query: "architecture", candidateLimit: 1.5 }).valid).toBe(false);
+    expect(validate({
+      op: "query",
+      query: "architecture",
+      strategy: { kind: "expand", profile: "qmd-v2.8.3", maxQueries: 32 },
+    }).valid).toBe(true);
+    expect(validate({
+      op: "query",
+      query: "architecture",
+      strategy: { kind: "expand", profile: "qmd-v2.8.3", maxQueries: 0 },
+    }).valid).toBe(false);
+    expect(validate({
+      op: "query",
+      query: "architecture",
+      strategy: { kind: "expand", profile: "qmd-v2.8.3", maxQueries: 1.5 },
+    }).valid).toBe(false);
+
+    const schema = search!.inputSchema as {
+      readonly oneOf?: readonly {
+        readonly properties?: Record<string, unknown>;
+      }[];
+    };
+    const context = schema.oneOf?.find((operation) =>
+      (operation.properties?.["op"] as { readonly const?: unknown } | undefined)?.const === "context",
+    );
+    expect(context?.properties).not.toHaveProperty("semanticStrategy");
+  });
+
   it("fails loudly for retired semantic-query and axis operation names", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -163,6 +199,28 @@ describe("Oh My Second Brain MCP stdio server", () => {
         const message = result.content[0]?.type === "text" ? result.content[0].text : "";
         expect(message).toContain(`Unknown operation "${op}"`);
       }
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("guides unavailable semantic indexes to the canonical index sync command", async () => {
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "mcp", "--vault", fixtureVault],
+      cwd: repoRoot,
+      env: stdioEnv({ OMS_EMBEDDING_PROVIDER: undefined, OMS_EMBEDDING_MODEL: undefined }),
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-index-guidance-test", version: "0.0.0" });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ name: "oms_search", arguments: { op: "collections" } });
+      const payload = textPayload(result);
+      expect(payload.available).toBe(false);
+      const message = typeof payload.reason === "string" ? payload.reason : "";
+      expect(message).toContain("oms index sync");
+      expect(message).not.toContain("oms semantic sync");
     } finally {
       await client.close();
     }
@@ -293,6 +351,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     ["vec field", { op: "query", vec: "telescope" }],
     ["hyde field", { op: "query", hyde: "hypothetical telescope answer" }],
     ["vsearch mode", { op: "query", query: "telescope", mode: "vsearch" }],
+    ["expand strategy", { op: "query", query: "telescope", strategy: { kind: "expand", profile: "qmd-v2.8.3" } }],
   ])("fails loudly for explicit vector retrieval via %s without embedding configuration", async (_strategy, arguments_) => {
     const transport = new StdioClientTransport({
       command: process.execPath,

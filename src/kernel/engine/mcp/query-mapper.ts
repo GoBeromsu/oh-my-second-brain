@@ -44,8 +44,8 @@ export function normalizeQueryOptions(opts: McpSemanticQueryOptions): Normalized
   if (opts === null || typeof opts !== "object" || Array.isArray(opts)) {
     throw new Error("Semantic query options must be an object.");
   }
-  if (opts.limit !== undefined && (!Number.isFinite(opts.limit) || opts.limit < 0)) {
-    throw new Error('Query "limit" must be a finite non-negative number.');
+  if (opts.limit !== undefined && (!Number.isSafeInteger(opts.limit) || opts.limit < 0)) {
+    throw new Error('Query "limit" must be a safe non-negative integer.');
   }
   if (opts.cursor !== undefined && typeof opts.cursor !== "string") {
     throw new Error('Query "cursor" must be a string offset.');
@@ -55,6 +55,15 @@ export function normalizeQueryOptions(opts: McpSemanticQueryOptions): Normalized
   }
   if (opts.cursor !== undefined && opts.cursor.trim() !== "" && !Number.isSafeInteger(Number(opts.cursor))) {
     throw new Error(`Invalid query cursor "${opts.cursor}".`);
+  }
+  if (
+    opts.candidateLimit !== undefined
+    && (!Number.isSafeInteger(opts.candidateLimit) || opts.candidateLimit < 1)
+  ) {
+    throw new Error('Query "candidateLimit" must be a safe positive integer.');
+  }
+  if (opts.minScore !== undefined && !Number.isFinite(opts.minScore)) {
+    throw new Error('Query "minScore" must be finite.');
   }
   const subQueries = queryOptionsToSubQueries(opts);
   const lexical = subQueries.find((subQuery) => subQuery.type === "lex")?.query;
@@ -86,7 +95,8 @@ export function normalizeQueryOptions(opts: McpSemanticQueryOptions): Normalized
  *   2. Individual `lex` / `vec` / `hyde` shorthand fields (non-empty strings).
  *   3. Mode-driven defaults applied to `query`:
  *      - `"vsearch"` → single vec sub-query.
- *      - `"query"` | `"search"` | (default) → hybrid lex + vec.
+ *      - `"query"` | `"search"` | (default) → single lexical sub-query.
+ *        Installing a model never changes the meaning of a plain query.
  *   4. No query/searches → no sub-query (the facade serves an overview).
  */
 export function queryOptionsToSubQueries(opts: McpSemanticQueryOptions): TypedSubQuery[] {
@@ -99,8 +109,53 @@ export function queryOptionsToSubQueries(opts: McpSemanticQueryOptions): TypedSu
   if (opts.searches !== undefined && !Array.isArray(opts.searches)) {
     throw new Error('Query "searches" must be an array.');
   }
+  if (opts.strategy !== undefined) {
+    if (opts.strategy === null || typeof opts.strategy !== "object" || Array.isArray(opts.strategy)) {
+      throw new Error('Query "strategy" must be an object.');
+    }
+    const keys = Object.keys(opts.strategy);
+    if (keys.some((key) => key !== "kind" && key !== "profile" && key !== "maxQueries")) {
+      throw new Error('Expand strategy contains an unknown option.');
+    }
+    if (opts.strategy.kind !== "expand" || opts.strategy.profile !== "qmd-v2.8.3") {
+      throw new Error('Expand strategy must be { kind: "expand", profile: "qmd-v2.8.3" }.');
+    }
+    if (
+      opts.strategy.maxQueries !== undefined
+      && (
+        !Number.isSafeInteger(opts.strategy.maxQueries)
+        || opts.strategy.maxQueries < 1
+        || opts.strategy.maxQueries > 32
+      )
+    ) {
+      throw new Error("Expand strategy maxQueries must be a safe integer between 1 and 32.");
+    }
+    if (typeof opts.query !== "string" || opts.query.trim() === "") {
+      throw new Error("Expand strategy requires a non-empty query.");
+    }
+    if (
+      opts.searches !== undefined
+      || opts.lex !== undefined
+      || opts.vec !== undefined
+      || opts.hyde !== undefined
+    ) {
+      throw new Error("Expand strategy conflicts with explicit searches and channel shorthands.");
+    }
+    if (opts.mode !== undefined && opts.mode !== "query") {
+      throw new Error(`Expand strategy does not support mode "${opts.mode}".`);
+    }
+    if (opts.axes !== undefined) {
+      throw new Error("Expand strategy does not support axis queries.");
+    }
+    // Expansion is asynchronous and model-owned, so the facade replaces this empty
+    // seed with the validated typed plan before dispatch.
+    return [];
+  }
   // 1. Explicit typed searches.
   if (opts.searches !== undefined && opts.searches.length > 0) {
+    if (typeof opts.query === "string" && opts.query.trim() !== "") {
+      throw new Error('Query "query" and explicit "searches" are mutually exclusive.');
+    }
     return opts.searches.map((s): TypedSubQuery => {
       if (
         s === null
@@ -141,10 +196,7 @@ export function queryOptionsToSubQueries(opts: McpSemanticQueryOptions): TypedSu
     case "search":
     case "query":
     default:
-      return [
-        { type: "lex", query: q },
-        { type: "vec", query: q },
-      ];
+      return [{ type: "lex", query: q }];
   }
 }
 
@@ -168,6 +220,11 @@ export function retrievalResultsToQueryResult(
     readonly usedChannels?: readonly McpSemanticReceipt["usedChannels"][number][];
     readonly approximated?: boolean;
     readonly drift?: boolean;
+    readonly requestedStrategy?: McpSemanticReceipt["requestedStrategy"];
+    readonly generatedSearches?: McpSemanticReceipt["generatedSearches"];
+    readonly rerankApplied?: boolean;
+    readonly taxonomyIntents?: McpSemanticReceipt["taxonomyIntents"];
+    readonly warnings?: readonly string[];
   },
 ): McpSemanticQueryResult {
   // The engine fuses chunk hits, while the public MCP envelope is
@@ -209,6 +266,11 @@ export function retrievalResultsToQueryResult(
     usedChannels,
     approximated: opts.approximated ?? false,
     drift: opts.drift ?? false,
+    requestedStrategy: opts.requestedStrategy ?? "plain",
+    generatedSearches: opts.generatedSearches ?? [],
+    rerankApplied: opts.rerankApplied ?? false,
+    taxonomyIntents: opts.taxonomyIntents ?? [],
+    warnings: opts.warnings ?? [],
   };
   return {
     available: true,
@@ -252,7 +314,10 @@ function dedupeDocumentResults(results: readonly RetrievalResult[]): RetrievalRe
 /**
  * Build a failed McpSemanticQueryResult for the unavailable / error case.
  */
-export function queryResultUnavailable(reason: string): McpSemanticQueryResult {
+export function queryResultUnavailable(
+  reason: string,
+  receipt: Partial<McpSemanticReceipt> = {},
+): McpSemanticQueryResult {
   return {
     available: false,
     reason,
@@ -260,7 +325,16 @@ export function queryResultUnavailable(reason: string): McpSemanticQueryResult {
     totalCount: 0,
     facets: [],
     cursor: null,
-    receipt: { usedChannels: [], approximated: false, drift: false },
+    receipt: {
+      usedChannels: receipt.usedChannels ?? [],
+      approximated: receipt.approximated ?? false,
+      drift: receipt.drift ?? false,
+      requestedStrategy: receipt.requestedStrategy ?? "plain",
+      generatedSearches: receipt.generatedSearches ?? [],
+      rerankApplied: receipt.rerankApplied ?? false,
+      taxonomyIntents: receipt.taxonomyIntents ?? [],
+      warnings: receipt.warnings ?? [],
+    },
   };
 }
 

@@ -4,6 +4,10 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The `/search` skill now documents an explicit `strategy` in `oms_search` calls with `op: "query"`.** Its frontmatter is unchanged.
+
 ## [0.9.0] - 2026-08-31
 
 ### Changed

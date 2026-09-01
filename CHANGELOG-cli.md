@@ -4,6 +4,17 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **OMS now has one search taxonomy.** `oms semantic` and the old top-level collection, context, cleanup, and HTTP aliases are removed; use `oms search`, `oms doc get|multi-get`, `oms embed`, and `oms serve`. `oms index` contains exactly `sync|status|cleanup|collections|contexts`; embedding remains the compact top-level `oms embed` command.
+- **Setup model options have changed.** `--embedding-*` is replaced by `--models-default`, `--models-descriptor`, and `--models-no-default`.
+- **The embedding runtime is local-only.** The former Upstage provider path is removed; configured model identities must resolve to verified local GGUF artifacts.
+
+### Added
+
+- **Search now uses an explicit closed qmd-v2.8.3 expansion strategy.** `--max-queries` is strict, reranking is opt-in, and local model-set descriptors are supported.
+- **`oms serve` exposes only the canonical HTTP endpoints.** `/health`, `/search`, `/get`, and `/multi-get` remain; no query alias or second MCP tool surface is advertised.
+
 ## [0.9.0] - 2026-08-31
 
 ### Changed

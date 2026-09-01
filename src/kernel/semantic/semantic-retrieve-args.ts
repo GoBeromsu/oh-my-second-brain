@@ -12,12 +12,47 @@ import type {
   SemanticTypedSearch,
   SemanticTypedSearchType,
 } from "../search/semantic-contract.js";
-import type { McpSemanticQueryAxes } from "../engine/mcp/types.js";
+import type {
+  McpSemanticExpandStrategy,
+  McpSemanticQueryAxes,
+} from "../engine/mcp/types.js";
 
 export type ParseResult<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly message: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function expandStrategyArg(
+  args: Record<string, unknown> | undefined,
+  key: string,
+): McpSemanticExpandStrategy | undefined {
+  const value = args?.[key];
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`Argument "${key}" must be an object.`);
+  const unknown = Object.keys(value).find((name) =>
+    name !== "kind" && name !== "profile" && name !== "maxQueries");
+  if (unknown !== undefined) throw new Error(`Argument "${key}" contains unknown key "${unknown}".`);
+  if (value["kind"] !== "expand" || value["profile"] !== "qmd-v2.8.3") {
+    throw new Error(`Argument "${key}" must select expand profile qmd-v2.8.3.`);
+  }
+  const maxQueries = value["maxQueries"];
+  if (
+    maxQueries !== undefined
+    && (
+      typeof maxQueries !== "number"
+      || !Number.isSafeInteger(maxQueries)
+      || maxQueries < 1
+      || maxQueries > 32
+    )
+  ) {
+    throw new Error(`Argument "${key}.maxQueries" must be a safe integer between 1 and 32.`);
+  }
+  return {
+    kind: "expand",
+    profile: "qmd-v2.8.3",
+    ...(maxQueries === undefined ? {} : { maxQueries }),
+  };
 }
 
 function stringArg(args: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -170,6 +205,7 @@ export function semanticQueryOptionsFromArgs(vault: string, args: Record<string,
   return {
     vault,
     query: stringArg(args, "query"),
+    strategy: expandStrategyArg(args, "strategy"),
     collection: stringArg(args, "collection"),
     collections: stringArrayArg(args, "collections"),
     collectionPath: stringArg(args, "collectionPath"),

@@ -1,3 +1,6 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { parseModelsConfig, type ModelsConfigV1 } from "../engine/embed/config.js";
 import { applyTemplateMigration, buildMigrationManifest, planTemplateMigration, type MigrationCompositionInput, type MigrationOptions, type MigrationProposal } from "../templates/migration.js";
 import type { GuardedTemplateRequest, TemplateCompositionManifest, TemplateTransactionReceipt } from "../templates/types.js";
 import { describeTemplateSetup, type TemplateSetupDocument } from "./documents.js";
@@ -38,4 +41,26 @@ export async function composeSetup(decision: SetupDecision, input: MigrationComp
 
 export async function applySetup(decision: SetupDecision, manifest: TemplateCompositionManifest, request: GuardedTemplateRequest): Promise<TemplateTransactionReceipt> {
   return applyTemplateMigration(decision.vault, decision.proposal, manifest, request);
+}
+
+/** Publish portable selections only after their template transaction was approved and applied. */
+export async function publishSetupModels(
+  decision: SetupDecision,
+  receipt: TemplateTransactionReceipt,
+  request: GuardedTemplateRequest,
+  modelsConfig: ModelsConfigV1,
+): Promise<boolean> {
+  if (request.dryRun === true || (receipt.status !== "applied" && receipt.status !== "already-complete")) {
+    throw new Error("MIGRATION_APPROVAL_MISMATCH");
+  }
+  const content = `${JSON.stringify(parseModelsConfig(modelsConfig), null, 2)}\n`;
+  const modelsPath = path.join(decision.vault, ".oms", "models.json");
+  try {
+    if (await readFile(modelsPath, "utf8") === content) return false;
+  } catch (error: unknown) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await mkdir(path.dirname(modelsPath), { recursive: true });
+  await writeFile(modelsPath, content, "utf8");
+  return true;
 }

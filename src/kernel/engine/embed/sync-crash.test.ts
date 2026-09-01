@@ -23,6 +23,21 @@ vi.mock("./provider.js", () => ({
 
 let vault: string;
 let dbPath: string;
+const TEST_SHA256 = "c".repeat(64);
+
+function embeddingOptions(model: string) {
+  return {
+    embeddingProvider: "stub",
+    embeddingModel: model,
+    embeddingRevision: "test-revision",
+    embeddingSha256: TEST_SHA256,
+    embeddingDimensions: 3,
+    embeddingContext: 128,
+    embeddingMrlDim: 3,
+    embeddingNormalization: "l2",
+    embeddingPrefixScheme: "none",
+  };
+}
 
 function writeDoc(content: string): void {
   mkdirSync(path.join(vault, "notes"), { recursive: true });
@@ -34,8 +49,7 @@ async function seed(model: string, content: string): Promise<void> {
   const result = await syncEngineStore({
     vault,
     dbPath,
-    embeddingProvider: "stub",
-    embeddingModel: model,
+    ...embeddingOptions(model),
   });
   expect(result.available).toBe(true);
 }
@@ -60,8 +74,7 @@ describe("generation swap crash boundaries", () => {
         vault,
         dbPath,
         force: true,
-        embeddingProvider: "stub",
-        embeddingModel: "new",
+        ...embeddingOptions("new"),
         crashPoint,
       });
       expect(result.available).toBe(false);
@@ -85,8 +98,7 @@ describe("generation swap crash boundaries", () => {
       vault,
       dbPath,
       force: true,
-      embeddingProvider: "stub",
-      embeddingModel: "new",
+      ...embeddingOptions("new"),
       crashPoint: "after-swap",
     });
     expect(result.available).toBe(false);
@@ -114,8 +126,7 @@ describe("generation swap crash boundaries", () => {
         vault,
         dbPath,
         force: true,
-        embeddingProvider: "stub",
-        embeddingModel: "new",
+        ...embeddingOptions("new"),
         onGenerationSwapPrepare: () => {
           activeClosed = true;
           active.close();
@@ -147,8 +158,7 @@ describe("generation writer lock", () => {
     const blocked = await syncEngineStore({
       vault,
       dbPath,
-      embeddingProvider: "stub",
-      embeddingModel: "new",
+      ...embeddingOptions("new"),
     });
     expect(blocked.available).toBe(false);
     expect(blocked.reason).toMatch(/already in progress|lock/i);
@@ -158,8 +168,7 @@ describe("generation writer lock", () => {
     const recovered = await syncEngineStore({
       vault,
       dbPath,
-      embeddingProvider: "stub",
-      embeddingModel: "old",
+      ...embeddingOptions("old"),
     });
     expect(recovered.available).toBe(true);
   });
@@ -172,14 +181,12 @@ describe("generation writer lock", () => {
       syncEngineStore({
         vault,
         dbPath,
-        embeddingProvider: "stub",
-        embeddingModel: "old",
+        ...embeddingOptions("old"),
       }),
       syncEngineStore({
         vault,
         dbPath,
-        embeddingProvider: "stub",
-        embeddingModel: "old",
+        ...embeddingOptions("old"),
       }),
     ]);
 
@@ -199,8 +206,7 @@ describe("generation writer lock", () => {
         dbPath,
         store: callerStore,
         force: true,
-        embeddingProvider: "stub",
-        embeddingModel: "new",
+        ...embeddingOptions("new"),
       });
       expect(result.available).toBe(false);
       expect(result.reason).toMatch(/caller-owned|internally-owned/i);
@@ -269,6 +275,8 @@ it("keeps the identity fingerprint in the old generation until swap", async () =
   const old = makeEmbeddingIdentity({
     provider: "stub",
     model: "old",
+    revision: "test-revision",
+    sha256: TEST_SHA256,
     dimensions: 3,
     contextLength: 128,
     mrlDim: 3,

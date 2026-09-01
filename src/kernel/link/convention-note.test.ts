@@ -57,9 +57,10 @@ describe("writeConventionUsageSection", () => {
     expect(content).toContain(CONVENTION_NOTE_END);
     expect(content).toContain(`- Connected vault: ${path.basename(vault)}`);
     expect(content).not.toContain(vault);
-    expect(content).toContain("`oms semantic query \"what context should I know for this change?\"`");
+    expect(content).toContain("`oms search \"what context should I know for this change?\"`");
     expect(content).toContain("`oms search \"keyword or topic\"`");
-    expect(content).toContain("`oms semantic get \"note-id-or-path\"`");
+    expect(content).toContain("`oms doc get \"note-id-or-path\"`");
+    expect(content).not.toContain("oms semantic");
     expect(content).toContain("`oms mcp`");
   });
 

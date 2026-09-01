@@ -18,14 +18,15 @@ export interface EngineConfig {
   /** Dimensionality of raw embeddings produced by the chosen model. Default 768. */
   embeddingDimensions: number;
   /**
-   * Explicit embedding provider id (OMS_EMBEDDING_PROVIDER), e.g. "gguf" or "upstage".
+   * Explicit embedding provider id (OMS_EMBEDDING_PROVIDER); the portable
+   * runtime contract currently supports local "gguf".
    * Required on the strict production path (requireRealEmbeddingProvider);
    * omitting it (and OMS_EMBEDDING_MODEL) causes a loud throw — no auto-detect.
    */
   embeddingProvider?: string;
   /**
-   * Explicit embedding model/path/id (OMS_EMBEDDING_MODEL): a GGUF file path for
-   * the "gguf" provider, or a remote model id for API providers like "upstage".
+   * Explicit portable model id (OMS_EMBEDDING_MODEL), resolved to a verified
+   * local GGUF artifact by the installed-model receipt.
    */
   embeddingModel?: string;
 }
@@ -77,9 +78,8 @@ export interface Chunk {
 // ---------------------------------------------------------------------------
 
 /**
- * Abstraction over an embedding backend (GGUF/llama.cpp or Upstage Solar).
- * Mirrors the shape of SemanticEmbeddingProvider in src/search/ but exposes
- * `dimensions` as a configurable field instead of folding to the hard-coded 64.
+ * Abstraction over the local GGUF/llama.cpp embedding backend.
+ * It exposes `dimensions` as a configurable field without projecting vectors.
  * The hash-projection stub exists only in test helpers and must never appear
  * on the production path.
  */
@@ -96,6 +96,13 @@ export interface EmbeddingProvider {
    * it is always safe.
    */
   embed(text: string, title?: string): Promise<Float32Array>;
+  /**
+   * Maximum number of independent embed calls this provider can execute safely.
+   *
+   * Sync uses this to keep every native context busy without ever scheduling two
+   * calls onto the same context. Providers that omit it remain strictly sequential.
+   */
+  readonly maxConcurrency?: number;
   /** Release any native resources held by the provider. */
   dispose(): Promise<void>;
 }
@@ -112,6 +119,11 @@ export interface ScoredHit {
   chunkOrdinal: number;
   /** Relevance score (higher = more relevant; scale depends on query type). */
   score: number;
+  /**
+   * Bounded source chunk content. Stores must populate this for hits that may
+   * be sent to a cross-encoder; paths are identifiers, never ranking input.
+   */
+  text?: string;
 }
 
 /**
@@ -125,6 +137,8 @@ export interface VectorStore {
   queryVec(vec: Float32Array, k: number, collection?: string): ScoredHit[];
   /** BM25 lexical search: return the top `k` chunks matching `text`, optionally scoped by path prefix. */
   queryLex(text: string, k: number, collection?: string): ScoredHit[];
+  /** Read one indexed chunk for content-aware reranking when query rows omit text. */
+  getChunkText?(docPath: string, chunkOrdinal: number): string | undefined;
   /** Flush WAL and release the database connection. */
   close(): void;
 }
@@ -176,14 +190,24 @@ export interface TypedSubQuery {
   type: "lex" | "vec" | "hyde" | "graph";
   /** The query string (natural language for vec/hyde; keyword for lex; seed path for graph). */
   query: string;
+  /**
+   * Internal expansion provenance: for a `hyde` line emitted by the generation
+   * model, `query` is already a hypothetical document and must be embedded
+   * directly. Public/user-authored HyDE omits this and invokes the generator.
+   */
+  hypotheticalDocument?: true;
 }
 
 /** Final ranked result returned by the retrieval pipeline. */
 export interface RetrievalResult {
   /** Vault-relative path to the document. */
   docPath: string;
+  /** Zero-based ordinal of the matching source chunk when chunk-level identity is retained. */
+  chunkOrdinal?: number;
   /** Fused relevance score across all active retrieval modalities. */
   score: number;
+  /** Bounded source chunk content retained for an optional cross-encoder. */
+  text?: string;
   /** Optional curation grade of the document. */
   provenance?: Provenance;
   /** Per-modality score breakdown keyed by TypedSubQuery.type. */

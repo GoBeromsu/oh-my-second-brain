@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { isMap, parseDocument } from "yaml";
 import { loadObsidianTypes } from "../contracts/index.js";
@@ -19,8 +19,25 @@ export interface LoadResolvedTemplatesOptions {
   readonly sourcePaths?: readonly string[];
 }
 
+const TEMPLATE_CONTROL_PATHS = [
+  ".oms/template-migration.json",
+  ".oms/template-policy.json",
+  ".oms/types.json",
+  ".oms/taxonomy.yaml",
+] as const;
+
 function sha256(value: Uint8Array | string): Digest {
   return `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
+}
+async function templateControlExists(vault: string, path: string): Promise<boolean> {
+  try {
+    await stat(resolve(vault, path));
+    return true;
+  } catch (error: unknown) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    const code = error instanceof Error && "code" in error ? String(error.code) : "unknown error";
+    fail("TEMPLATE_SOURCE_INVALID", `template control (${path}) cannot be inspected: ${code}`);
+  }
 }
 
 function fail(code: string, message: string): never { throw new Error(`${code}: ${message}`); }
@@ -285,6 +302,22 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
   const expected = managed({ base: policy.base, globalAxes: taxonomy.globalAxes, templates: {} }, templates);
   if (canonicalJson(expected) !== canonicalJson(projection.managed)) fail("PROJECTION_PAYLOAD_TAMPERED", "managed projection does not equal the canonical resolved template projection");
   return { base: policy.base, templates: Object.fromEntries(Object.entries(templates).sort(([a], [b]) => a.localeCompare(b))), globalAxes: taxonomy.globalAxes, managedSourcePaths: sourcePaths, inputSignature: actualInput };
+}
+
+/**
+ * Resolves the active template contract, or null when this vault has no OMS
+ * template controls at all. Any partial control set remains a strict failure.
+ */
+export async function loadResolvedTemplatesIfPresent(
+  vault: string,
+  options: LoadResolvedTemplatesOptions = {},
+): Promise<ResolvedConvention | null> {
+  const root = resolve(vault);
+  const controls = await Promise.all(
+    TEMPLATE_CONTROL_PATHS.map((path) => templateControlExists(root, path)),
+  );
+  if (controls.every((present) => !present)) return null;
+  return loadResolvedTemplates(root, options);
 }
 
 

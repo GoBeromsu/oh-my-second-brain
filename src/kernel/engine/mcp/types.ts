@@ -64,6 +64,14 @@ export interface McpSemanticQueryAxes {
   readonly link?: McpSemanticAxisValue | readonly McpSemanticAxisValue[];
 }
 
+/** Closed, explicit query-plan strategy. Omission is always lexical-only. */
+export interface McpSemanticExpandStrategy {
+  readonly kind: "expand";
+  readonly profile: "qmd-v2.8.3";
+  /** Maximum generated typed lines; defaults to the generator's frozen budget. */
+  readonly maxQueries?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Shared status / identity options
 // ---------------------------------------------------------------------------
@@ -83,6 +91,7 @@ export interface McpStatusOptions {
 /** Full query options for oms_semantic_query (mirrors SemanticQueryOptions). */
 export interface McpSemanticQueryOptions extends McpStatusOptions {
   readonly query?: string;
+  readonly strategy?: McpSemanticExpandStrategy;
   readonly collection?: string;
   /** Vault-relative path prefix that constrains retrieval candidates. */
   readonly collectionPath?: string;
@@ -148,6 +157,18 @@ export interface McpSemanticReceipt {
   readonly usedChannels: readonly McpSemanticTypedSearchType[];
   readonly approximated: boolean;
   readonly drift: boolean;
+  /** Plain lexical, caller-authored typed channels, or model-generated expansion. */
+  readonly requestedStrategy: "plain" | "explicit" | "expand";
+  /** Validated model output; empty for plain and caller-authored typed requests. */
+  readonly generatedSearches: readonly McpSemanticTypedSearch[];
+  readonly rerankApplied: boolean;
+  /** Exact active-taxonomy intents that reached a model prompt. */
+  readonly taxonomyIntents: readonly {
+    readonly folder: string;
+    readonly intent: string;
+    readonly source: ".oms/taxonomy.yaml";
+  }[];
+  readonly warnings: readonly string[];
 }
 
 /**
@@ -248,6 +269,19 @@ export interface McpSemanticModels {
   readonly generation?: string;
 }
 
+/** Path-safe availability and identity for one semantic model capability. */
+export interface McpSemanticModelCapabilityStatus {
+  readonly capability: "embed" | "rerank" | "generate";
+  readonly available: boolean;
+  readonly source: "request" | "environment" | "vault" | "setup-default" | "unavailable";
+  readonly provider?: string;
+  readonly model?: string;
+  readonly revision?: string;
+  readonly sha256?: string;
+  readonly promptScheme?: string;
+  readonly guidance: string;
+}
+
 /** Document-count fields within a status response (mirrors SemanticIndexDocuments). */
 export interface McpSemanticIndexDocuments {
   readonly total?: number;
@@ -270,6 +304,14 @@ export type McpSemanticProviderStatus =
       readonly storage: McpSemanticStorage;
       readonly models: McpSemanticModels;
       readonly index?: McpSemanticIndexStatus;
+      readonly capabilities?: Readonly<Record<"embed" | "rerank" | "generate", McpSemanticModelCapabilityStatus>>;
+      readonly storeEmbeddingFingerprint?: string;
+      readonly taxonomyContext?: {
+        readonly matched: readonly McpSemanticReceipt["taxonomyIntents"][number][];
+        readonly indexedWithoutIntent: readonly string[];
+        readonly taxonomyWithoutIndexed: readonly string[];
+        readonly warnings: readonly string[];
+      };
     }
   | { readonly available: false; readonly reason: string };
 
@@ -310,11 +352,16 @@ export interface McpSemanticStoredContext {
   readonly pathPrefix: string;
   readonly context: string;
   readonly updatedAt: string;
+  readonly source: ".oms/taxonomy.yaml";
 }
 
 /** Output of oms_semantic_contexts (mirrors SemanticContextResult). */
 export type McpSemanticContextResult =
-  | { readonly available: true; readonly contexts: readonly McpSemanticStoredContext[] }
+  | {
+      readonly available: true;
+      readonly contexts: readonly McpSemanticStoredContext[];
+      readonly warnings?: readonly string[];
+    }
   | {
       readonly available: false;
       readonly reason: string;

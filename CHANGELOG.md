@@ -10,6 +10,24 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+### Breaking
+
+- **OMS now has one search taxonomy.** `oms semantic` and the old top-level collection, context, cleanup, and HTTP aliases are removed; use `oms search`, `oms doc get|multi-get`, `oms embed`, and `oms serve`. `oms index` contains exactly `sync|status|cleanup|collections|contexts`; embedding remains the compact top-level `oms embed` command.
+- **Setup model options have changed.** `--embedding-*` is replaced by `--models-default`, `--models-descriptor`, and `--models-no-default`.
+- **The embedding runtime is local-only.** The former Upstage provider path is removed; configured model identities must resolve to verified local GGUF artifacts.
+
+### Added
+
+- **Search now uses an explicit closed qmd-v2.8.3 expansion strategy.** `--max-queries` is strict, reranking is opt-in, and local model-set descriptors are supported.
+- **`oms serve` exposes only `/health`, `/search`, `/get`, and `/multi-get`.** It does not add a query alias or a second MCP tool surface.
+
+### Changed
+
+- **The kernel makes model lifecycle and capability availability explicit.** The canonical engine path carries active-template taxonomy context into search rather than silently claiming unavailable capabilities.
+- **Model-bearing work is lifecycle-safe and content-aware.** Vault selection outranks setup defaults, GGUF disposal waits for admitted work, and reranking scores bounded note content instead of filenames.
+- **MCP search accepts `strategy`, `maxQueries`, `rerank`, and `candidateLimit` through the existing `oms_search` tool.** No additional public search tool was added.
+- **The `/search` skill now calls `oms_search` with `op: "query"` and an explicit strategy.** Its frontmatter is unchanged.
+
 ## [0.9.0] - 2026-08-31
 
 ### Changed

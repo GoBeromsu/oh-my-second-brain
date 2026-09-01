@@ -29,9 +29,9 @@ export function conventionUsageSection(vaultPath: string): string {
     "This repository is linked to an Oh My Second Brain vault. Use the linked vault as the project knowledge base when you need durable context.",
     "",
     `- Connected vault: ${renderedVaultName} (connection details live in .oms/links.yaml)`,
-    "- Query context: `oms semantic query \"what context should I know for this change?\"`",
+    "- Query context: `oms search \"what context should I know for this change?\"`",
     "- Search notes: `oms search \"keyword or topic\"`",
-    "- Open a note: `oms semantic get \"note-id-or-path\"`",
+    "- Open a note: `oms doc get \"note-id-or-path\"`",
     "- MCP integration: run `oms mcp` from this repository so compatible agents can read the linked vault through MCP.",
     CONVENTION_NOTE_END,
   ].join("\n");

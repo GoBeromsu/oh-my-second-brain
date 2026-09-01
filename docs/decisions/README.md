@@ -15,6 +15,7 @@ oh-my-secondbrain 프로젝트의 주요 설계 결정을 기록한다.
 | [ADR-009](./ADR-009-qmd-compatible-global-collection-bridge.md) | qmd-호환 전역 컬렉션 브릿지 — link 기반 vault 해석과 product interface 계약 | Superseded (ADR-010; D1/D3/D4 remain in force) |
 | [ADR-010](./ADR-010-search-backend-seam-qmd-optional.md) | SearchBackend seam — in-repo engine default, qmd optional backend | Accepted |
 | [ADR-011](./ADR-011-search-reranking-opt-in.md) | Search reranking — explicit opt-in until a production reranker exists | Accepted |
+| [ADR-012](./ADR-012-portable-model-contract-and-lifecycle.md) | Portable strict model contract and kernel lifecycle — verified local identity and immutable embedding lineage (0.10.0) | Accepted |
 
 ## 작성 규칙
 

@@ -19,6 +19,7 @@ Retrieve vault knowledge without changing the vault.
 ```
 
 Plain `query` is projection-independent lexical retrieval and remains available when no embedding provider is configured. Template-managed source files are never returned as notes.
+Expansion is explicit only for `oms_search` `op: "query"` through the closed strategy object and never changes a plain lexical query.
 
 Use `oms_search { op: "templates" }` to discover stable template IDs and declared axes. Typed queries use the same derived projection as writes:
 

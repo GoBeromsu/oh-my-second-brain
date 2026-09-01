@@ -158,6 +158,22 @@ function searchBackendConformance(
       }
     });
 
+    it.each([
+      ["fractional limit", { query: "telescope", limit: 1.5 }],
+      ["non-finite limit", { query: "telescope", limit: Number.POSITIVE_INFINITY }],
+      ["zero candidate limit", { query: "telescope", candidateLimit: 0 }],
+      ["non-finite candidate limit", { query: "telescope", candidateLimit: Number.NaN }],
+      ["non-finite score", { query: "telescope", minScore: Number.NEGATIVE_INFINITY }],
+    ] as const)("rejects invalid query budget: %s", async (_case, request) => {
+      const vault = await fixtureVault();
+      const { backend, dispose } = create(vault);
+      try {
+        await expect(backend.search(request)).rejects.toThrow(/limit|finite|score/i);
+      } finally {
+        await dispose();
+      }
+    });
+
     it("filters results to the requested collections", async () => {
       const vault = await collectionFixtureVault();
       const { backend, dispose } = create(vault);
@@ -279,11 +295,34 @@ function searchBackendConformance(
       expect(requiresEmbeddings({ mode: "vsearch" })).toBe(true);
       expect(requiresEmbeddings({ vec: "x" })).toBe(true);
       expect(requiresEmbeddings({ hyde: "x" })).toBe(true);
+      expect(requiresEmbeddings({
+        strategy: { kind: "expand", profile: "qmd-v2.8.3" },
+      })).toBe(true);
       // A lexical sub-search alongside an explicit vector mode still counts.
       expect(requiresEmbeddings({ mode: "vsearch", searches: [{ type: "lex", query: "x" }] })).toBe(true);
       // Nothing explicit: plain queries stay lexical and must NOT demand a model.
       expect(requiresEmbeddings({})).toBe(false);
       expect(requiresEmbeddings({ searches: [{ type: "lex", query: "x" }] })).toBe(false);
+    });
+
+    it("admits explicit expansion only after embedding capability is available", async () => {
+      const vault = await fixtureVault();
+      const { backend, dispose } = create(vault);
+      try {
+        const result = await backend.search({
+          query: "telescope planets orbit",
+          strategy: { kind: "expand", profile: "qmd-v2.8.3" },
+        });
+
+        expect(result.available).toBe(false);
+        expect(result.reason ?? "").toMatch(/OMS_EMBEDDING_PROVIDER/);
+        expect(result.reason ?? "").toMatch(/OMS_EMBEDDING_MODEL/);
+        expect(result.reason ?? "").toMatch(/\.oms\/models\.json/);
+        expect(result.reason ?? "").toMatch(/oms setup --models-default/);
+        expect(result.receipt.requestedStrategy).toBe("expand");
+      } finally {
+        await dispose();
+      }
     });
 
 

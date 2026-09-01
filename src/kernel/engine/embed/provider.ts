@@ -1,9 +1,8 @@
 /**
  * EmbeddingProvider implementations for the OMS engine.
  *
- * Two production providers:
- *   1. GGUF / node-llama-cpp (EmbeddingGemma-300M, 768d, NO fold) — default production.
- *   2. Upstage Solar (4096d, REST API, env-keyed) — opt-in commercial path (ADR-002).
+ * The sole production provider is GGUF / node-llama-cpp
+ * (EmbeddingGemma-300M, 768d, NO fold).
  *
  * The hash-projection stub is TEST-ONLY and lives in hash-stub.test-helper.ts.
  * It MUST NOT be imported by any production module.
@@ -20,6 +19,7 @@
 import { cpus } from "node:os";
 import { UNTITLED_DOCUMENT_TITLE } from "../types.js";
 import type { EmbeddingProvider } from "../types.js";
+import { capabilityGuidance } from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -56,6 +56,7 @@ type LlamaModelInstance = Awaited<ReturnType<LlamaInstance["loadModel"]>>;
 type LlamaEmbeddingContextInstance = Awaited<
   ReturnType<LlamaModelInstance["createEmbeddingContext"]>
 >;
+type GGUFModelLoader = (modelPath: string) => Promise<LlamaModelInstance>;
 
 // ---------------------------------------------------------------------------
 // L2-normalise helper (GGUF provider — full vector, NO dimension folding)
@@ -89,98 +90,52 @@ function normalizeVector(values: readonly number[]): Float32Array {
   return vec;
 }
 
-interface EmbeddingPrefixes {
-  readonly query: string;
-  readonly passage: string;
+interface EmbeddingPromptFormatter {
+  readonly query: (text: string) => string;
+  readonly document: (text: string, title?: string) => string;
 }
 
-/**
- * Placeholder a passage prefix uses to request the document title.
- *
- * EmbeddingGemma's document prompt is `title: <title> | text: <text>`, so the
- * title sits INSIDE the prefix rather than before it. A prefix declaring this
- * slot gets the real title substituted; a prefix without it is prepended
- * unchanged, which keeps every existing descriptor byte-identical.
- */
-const TITLE_PLACEHOLDER = "{title}";
-
-/**
- * Build the full passage embedding input.
- *
- * Substitutes the title slot when the scheme declares one. An absent or blank
- * title falls back to the shared untitled literal so the emitted prompt never
- * contains an empty title field.
- */
-function passageInput(prefix: string, text: string, title: string | undefined): string {
-  const resolved = title?.trim() ? title.trim() : UNTITLED_DOCUMENT_TITLE;
-  if (!prefix.includes(TITLE_PLACEHOLDER)) return `${prefix}${text}`;
-  return `${prefix.split(TITLE_PLACEHOLDER).join(resolved)}${text}`;
-}
-
-/** Embedding provider seam for callers that need the query-side prefix. */
+/** Embedding provider seam for callers that need query-side embeddings. */
 export interface QueryEmbeddingProvider extends EmbeddingProvider {
   readonly embedQuery: (text: string) => Promise<Float32Array>;
 }
 
 /**
- * Parse the descriptor's compact prefix declaration.  Setup descriptors use
- * either `none`, a JSON object (`{"query":"...","passage":"..."}`), or a
- * delimited pair such as `query=search_query:,passage=search_document:`.
- * Keeping parsing here makes the actual embedding calls deterministic and
- * prevents silently ignoring a non-`none` declaration.
+ * Resolve the descriptor's closed, versioned embedding prompt scheme.
+ *
+ * Blank runtime values retain the explicitly unprefixed default. Every other
+ * value must name one of these formatters; arbitrary prefixes are not prompts.
  */
-function parsePrefixScheme(value: string | undefined): EmbeddingPrefixes {
+function promptFormatter(value: string | undefined): EmbeddingPromptFormatter {
   const scheme = typeof value === "string" ? value.trim() : "none";
-  if (scheme === "" || scheme.toLowerCase() === "none" || scheme.toLowerCase() === "symmetric") {
-    return { query: "", passage: "" };
+  switch (scheme) {
+    case "":
+    case "none":
+      return {
+        query: (text) => text,
+        document: (text) => text,
+      };
+    case "embeddinggemma-v1":
+      return {
+        query: (text) => `task: search result | query: ${text}`,
+        document: (text, title) => {
+          const resolvedTitle = title?.trim() || UNTITLED_DOCUMENT_TITLE;
+          return `title: ${resolvedTitle} | text: ${text}`;
+        },
+      };
+    case "qwen3-embedding-v1":
+      return {
+        query: (text) => `Instruct: Retrieve relevant documents for the given query\nQuery: ${text}`,
+        document: (text, title) => {
+          const resolvedTitle = title?.trim();
+          return resolvedTitle === undefined || resolvedTitle === "" ? text : `${resolvedTitle}\n${text}`;
+        },
+      };
+    default:
+      throw new Error(
+        `Unsupported embedding prefixScheme "${scheme}". Use "none", "embeddinggemma-v1", or "qwen3-embedding-v1".`,
+      );
   }
-
-  if (scheme.startsWith("{")) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(scheme) as unknown;
-    } catch {
-      throw new Error(`Invalid embedding prefixScheme JSON: ${scheme}`);
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error("Embedding prefixScheme JSON must be an object.");
-    }
-    const record = parsed as Record<string, unknown>;
-    const query = record["query"] ?? record["queryPrefix"];
-    const passage = record["passage"] ?? record["document"] ?? record["passagePrefix"] ?? record["documentPrefix"];
-    if (
-      (query !== undefined && typeof query !== "string") ||
-      (passage !== undefined && typeof passage !== "string") ||
-      (query === undefined && passage === undefined)
-    ) {
-      throw new Error("Embedding prefixScheme JSON requires a string query or passage value.");
-    }
-    return {
-      query: typeof query === "string" ? query : "",
-      passage: typeof passage === "string" ? passage : "",
-    };
-  }
-
-  const fields: Partial<Record<"query" | "passage", string>> = {};
-  const keyPattern = /(?:^|[;,|])\s*(query|queryPrefix|passage|passagePrefix|document|documentPrefix)\s*[:=]\s*/giu;
-  const matches = [...scheme.matchAll(keyPattern)];
-  for (let i = 0; i < matches.length; i++) {
-    const match = matches[i]!;
-    const key = match[1]!.toLowerCase().startsWith("document")
-      ? "passage"
-      : match[1]!.toLowerCase().startsWith("passage")
-        ? "passage"
-        : "query";
-    const start = (match.index ?? 0) + match[0].length;
-    const end = i + 1 < matches.length ? (matches[i + 1]!.index ?? scheme.length) : scheme.length;
-    fields[key] = scheme.slice(start, end).trim();
-  }
-  if (fields.query !== undefined || fields.passage !== undefined) {
-    return { query: fields.query ?? "", passage: fields.passage ?? "" };
-  }
-  throw new Error(
-    `Unsupported embedding prefixScheme "${scheme}". Use "none", JSON, or query/passage declarations.`,
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +145,13 @@ function parsePrefixScheme(value: string | undefined): EmbeddingPrefixes {
 interface GGUFPool {
   model: LlamaModelInstance;
   contexts: LlamaEmbeddingContextInstance[];
-  nextIdx: number;
+  /** Context indexes not currently evaluating an embedding. */
+  available: number[];
+  /** FIFO callers waiting for a context; prevents concurrent use of one context. */
+  waiters: Array<{
+    readonly resolve: (index: number) => void;
+    readonly reject: (reason: Error) => void;
+  }>;
 }
 
 /** Per-model runtime dimensions/context supplied by the model descriptor. */
@@ -229,6 +190,12 @@ function runtimeOptions(
   };
 }
 
+async function loadGGUFModel(modelPath: string): Promise<LlamaModelInstance> {
+  const { getLlama } = await import("node-llama-cpp");
+  const llama = await getLlama();
+  return llama.loadModel({ modelPath });
+}
+
 /**
  * Create a production EmbeddingProvider backed by a local GGUF model via
  * node-llama-cpp.  Target model: EmbeddingGemma-300M (descriptor width).
@@ -244,57 +211,111 @@ function runtimeOptions(
  * @param modelPath  - Absolute path to the GGUF model file.
  * @param dimensionsOrOptions - Expected width or descriptor runtime options.
  * @param contextLength - Legacy positional context-length override.
+ * @param loadModel - Test seam; production callers use the node-llama-cpp loader.
  */
 export function createGGUFEmbeddingProvider(
   modelPath: string,
   dimensionsOrOptions: number | EmbeddingRuntimeOptions = GGUF_EMBEDDING_DIMENSIONS,
   contextLength?: number,
+  loadModel: GGUFModelLoader = loadGGUFModel,
 ): QueryEmbeddingProvider {
   const runtime = runtimeOptions(dimensionsOrOptions, contextLength);
-  const prefixes = parsePrefixScheme(
+  const formatter = promptFormatter(
     typeof dimensionsOrOptions === "object" ? dimensionsOrOptions.prefixScheme : undefined,
   );
   const maxInputTokens = Math.max(1, runtime.contextLength - EMBED_INPUT_TOKEN_MARGIN);
-  // Hardware-adaptive pool size (P-01 pattern, qmd MIT)
+  // Four contexts are the measured optimum for OMS's document-worker scheduler on
+  // the supported M1 Pro baseline. Raising this to qmd's eight-context ceiling made
+  // the exact 19-document fixture slower (23.68s → 24.85s) and raised RSS
+  // (691 MiB → 778 MiB), because context initialization outweighed the extra lanes.
   const poolSize = Math.min(4, Math.max(1, cpus().length - 1));
 
   let pool: GGUFPool | null = null;
   let loadPromise: Promise<GGUFPool> | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
+  let disposePromise: Promise<void> | null = null;
+  let activeCalls = 0;
+  let activeCallsIdle = Promise.resolve();
+  let resolveActiveCallsIdle: (() => void) | null = null;
+  const pendingPoolDisposals = new Set<Promise<void>>();
 
-  /** Reset the 5-minute idle unload timer. Called on every embed(). */
-  function resetIdleTimer(): void {
+  function scheduleIdleUnload(): void {
+    if (disposed || activeCalls !== 0 || pool === null) return;
     if (idleTimer !== null) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       idleTimer = null;
-      if (pool === null) return;
+      if (disposed || activeCalls !== 0 || pool === null) return;
       const p = pool;
       pool = null;
-      void Promise.all(p.contexts.map((ctx) => ctx.dispose().catch(() => undefined)))
-        .then(() => p.model.dispose().catch(() => undefined));
+      trackPoolDisposal(p);
     }, IDLE_UNLOAD_MS);
+  }
+
+  async function disposePool(p: GGUFPool): Promise<void> {
+    await Promise.all(p.contexts.map((ctx) => ctx.dispose().catch(() => undefined)));
+    await p.model.dispose().catch(() => undefined);
+  }
+
+  function trackPoolDisposal(p: GGUFPool): void {
+    let disposal: Promise<void>;
+    disposal = disposePool(p).finally(() => {
+      pendingPoolDisposals.delete(disposal);
+    });
+    pendingPoolDisposals.add(disposal);
+  }
+
+  function beginCall(): void {
+    if (disposed) throw new Error("GGUF embedding provider has been disposed.");
+    if (idleTimer !== null) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    if (activeCalls === 0) {
+      activeCallsIdle = new Promise<void>((resolve) => {
+        resolveActiveCallsIdle = resolve;
+      });
+    }
+    activeCalls += 1;
+  }
+
+  function endCall(): void {
+    activeCalls -= 1;
+    if (activeCalls === 0) {
+      resolveActiveCallsIdle?.();
+      resolveActiveCallsIdle = null;
+      scheduleIdleUnload();
+    }
   }
 
   /** Ensure the pool is initialised. Returns the live pool. */
   async function ensurePool(): Promise<GGUFPool> {
+    if (disposed) throw new Error("GGUF embedding provider has been disposed.");
     if (pool !== null) return pool;
     // Deduplicate concurrent init calls via a shared promise
     if (loadPromise !== null) return loadPromise;
 
     loadPromise = (async (): Promise<GGUFPool> => {
-      const { getLlama } = await import("node-llama-cpp");
-      const llama = await getLlama();
-      const model = await llama.loadModel({ modelPath });
+      const model = await loadModel(modelPath);
       const contexts = await Promise.all(
         Array.from({ length: poolSize }, () =>
           model.createEmbeddingContext({
             contextSize: runtime.contextLength,
-            batchSize: runtime.contextLength,
           }),
         ),
       );
-      pool = { model, contexts, nextIdx: 0 };
-      return pool;
+      const loadedPool: GGUFPool = {
+        model,
+        contexts,
+        available: contexts.map((_, index) => index),
+        waiters: [],
+      };
+      if (disposed) {
+        await disposePool(loadedPool);
+        throw new Error("GGUF embedding provider has been disposed.");
+      }
+      pool = loadedPool;
+      return loadedPool;
     })().finally(() => {
       loadPromise = null;
     });
@@ -305,6 +326,10 @@ export function createGGUFEmbeddingProvider(
   const provider = {
     model: `node-llama-cpp:${modelPath}`,
     dimensions: runtime.dimensions,
+    // One independent native context per lane. The sync kernel uses this bound to
+    // parallelize documents; without exposing it, three of the four contexts stayed
+    // idle while a 21k-note vault projected to roughly 75 hours.
+    maxConcurrency: poolSize,
     // Expose the descriptor-derived context to identity/sync without widening
     // the shared EmbeddingProvider contract.
     context: runtime.contextLength,
@@ -324,7 +349,7 @@ export function createGGUFEmbeddingProvider(
     },
 
     async embedQuery(text: string): Promise<Float32Array> {
-      return embedText(`${prefixes.query}${text}`);
+      return embedText(formatter.query(text));
     },
     dispose: disposeProvider,
   } as QueryEmbeddingProvider & {
@@ -333,160 +358,74 @@ export function createGGUFEmbeddingProvider(
   };
 
   async function embedText(text: string): Promise<Float32Array> {
-    resetIdleTimer();
-    const p = await ensurePool();
-    // Token-exact truncation: never feed more than the context can hold, so a
-    // single oversized chunk can never throw "Input is longer than the context
-    // size". Bounds INPUT LENGTH only via the model's own tokenizer — NOT a
-    // dimension fold (ADR-007); the output stays at the provider width.
-    let input = text;
-    const tokens = p.model.tokenize(text);
-    if (tokens.length > maxInputTokens) {
-      input = p.model.detokenize(tokens.slice(0, maxInputTokens));
-    }
-    // Round-robin context selection across the pool
-    const idx = p.nextIdx % p.contexts.length;
-    p.nextIdx = idx + 1;
-    const ctx = p.contexts[idx]!;
-    const result = await ctx.getEmbeddingFor(input);
-    // No fold — return the full provider vector, L2-normalised
-    const vector = normalizeVector(result.vector);
-    if (vector.length !== runtime.dimensions) {
-      throw new Error(
-        `GGUF embedding returned ${vector.length} dimensions; expected ${runtime.dimensions}.`,
-      );
-    }
-    return vector;
-  }
-
-  async function embedPassage(text: string, title?: string): Promise<Float32Array> {
-    return embedText(passageInput(prefixes.passage, text, title));
-  }
-
-  async function disposeProvider(): Promise<void> {
-    if (idleTimer !== null) {
-      clearTimeout(idleTimer);
-      idleTimer = null;
-    }
-    // Wait for any in-flight load to complete before disposing
-    if (loadPromise !== null) {
-      try { await loadPromise; } catch { /* load failed, nothing to dispose */ }
-    }
-    if (pool !== null) {
-      const p = pool;
-      pool = null;
-      await Promise.all(p.contexts.map((ctx) => ctx.dispose().catch(() => undefined)));
-      await p.model.dispose().catch(() => undefined);
-    }
-  }
-  return provider;
-}
-
-// ---------------------------------------------------------------------------
-// Upstage Solar provider  (4096d, REST API, opt-in commercial, ADR-002)
-// ---------------------------------------------------------------------------
-
-const UPSTAGE_DIMENSIONS = 4096;
-const UPSTAGE_API_URL = "https://api.upstage.ai/v1/embeddings";
-// No default model: OMS config must supply OMS_EMBEDDING_MODEL explicitly.
-
-interface UpstageEmbeddingResponse {
-  data: Array<{ embedding: number[]; index: number }>;
-}
-
-/**
- * Create an Upstage Solar embedding provider (4096d).
- *
- * This is the opt-in commercial path (ADR-002 tier model).  Only activate
- * when UPSTAGE_API_KEY is set in the environment; never use by default.
- * The API key MUST come from env — never hardcoded (R4 secrets-via-env).
- */
-export function createUpstageProvider(
-  apiKey: string,
-  model: string,
-  dimensions = UPSTAGE_DIMENSIONS,
-  metadata: Pick<EmbeddingRuntimeOptions, "context" | "contextLength" | "contextTokens" | "mrlDim" | "normalization" | "prefixScheme"> = {},
-): QueryEmbeddingProvider {
-  const resolvedDimensions = positiveInteger(dimensions, UPSTAGE_DIMENSIONS, "dimensions");
-  const contextLength = metadata.context ?? metadata.contextLength ?? metadata.contextTokens;
-  const prefixes = parsePrefixScheme(metadata.prefixScheme);
-  const provider = {
-    model: `upstage:${model}`,
-    dimensions: resolvedDimensions,
-    ...(contextLength === undefined ? {} : { context: contextLength }),
-    ...(contextLength === undefined ? {} : { contextLength }),
-    ...(metadata.mrlDim === undefined ? {} : { mrlDim: metadata.mrlDim }),
-    ...(metadata.normalization === undefined ? {} : { normalization: metadata.normalization }),
-    ...(metadata.prefixScheme === undefined ? {} : { prefixScheme: metadata.prefixScheme }),
-
-    async embed(text: string, title?: string): Promise<Float32Array> {
-      return embedPassage(text, title);
-    },
-
-    async embedQuery(text: string): Promise<Float32Array> {
-      return embedText(`${prefixes.query}${text}`);
-    },
-    dispose: () => Promise.resolve(),
-  } as QueryEmbeddingProvider & Partial<{
-    readonly context: number;
-    readonly contextLength: number;
-    readonly mrlDim: number;
-    readonly normalization: string;
-    readonly prefixScheme: string;
-    readonly embedQuery: (text: string) => Promise<Float32Array>;
-  }>;
-
-  async function embedPassage(text: string, title?: string): Promise<Float32Array> {
-    return embedText(passageInput(prefixes.passage, text, title));
-  }
-
-  async function embedText(text: string): Promise<Float32Array> {
-    let input = (text ?? "").trim();
-    // Upstage rejects empty input with HTTP 400. Empty/whitespace chunks
-    // carry no semantic signal — return a zero vector so sync proceeds.
-    if (input.length === 0) return new Float32Array(resolvedDimensions);
-
-    // Solar caps input at 4000 tokens. Rather than fail the whole sync on a
-    // single oversized chunk, shrink the input and retry until it fits.
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const response = await fetch(UPSTAGE_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({ input, model }),
-      });
-      if (response.ok) {
-        const json = (await response.json()) as UpstageEmbeddingResponse;
-        const embedding = json.data[0]?.embedding;
-        if (!embedding) {
-          throw new Error("Upstage Solar API returned no embedding");
+    beginCall();
+    try {
+      const p = await ensurePool();
+      // Token-exact truncation: never feed more than the context can hold, so a
+      // single oversized chunk can never throw "Input is longer than the context
+      // size". Bounds INPUT LENGTH only via the model's own tokenizer — NOT a
+      // dimension fold (ADR-007); the output stays at the provider width.
+      let input = text;
+      const tokens = p.model.tokenize(text);
+      if (tokens.length > maxInputTokens) {
+        input = p.model.detokenize(tokens.slice(0, maxInputTokens));
+      }
+      // Acquire an actually idle context. Round-robin assignment alone is unsafe:
+      // whichever request finishes first may ask for its next chunk while the
+      // round-robin cursor points at a different, still-busy context.
+      const idx = p.available.shift() ?? await new Promise<number>((resolve, reject) => {
+        if (disposed) {
+          reject(new Error("GGUF embedding provider has been disposed."));
+          return;
         }
-        const vector = normalizeVector(embedding);
-        if (vector.length !== resolvedDimensions) {
+        p.waiters.push({ resolve, reject });
+      });
+      const ctx = p.contexts[idx]!;
+      try {
+        const result = await ctx.getEmbeddingFor(input);
+        // No fold — return the full provider vector, L2-normalised
+        const vector = normalizeVector(result.vector);
+        if (vector.length !== runtime.dimensions) {
           throw new Error(
-            `Upstage Solar API returned ${vector.length} dimensions; expected ${resolvedDimensions}.`,
+            `GGUF embedding returned ${vector.length} dimensions; expected ${runtime.dimensions}.`,
           );
         }
         return vector;
+      } finally {
+        const waiter = p.waiters.shift();
+        if (waiter === undefined) p.available.push(idx);
+        else waiter.resolve(idx);
       }
-      const body = await response.text().catch(() => "");
-      if (
-        response.status === 400 &&
-        /maximum context length/i.test(body) &&
-        input.length > 200
-      ) {
-        input = input.slice(0, Math.floor(input.length * 0.6));
-        continue;
-      }
-      throw new Error(
-        `Upstage Solar API error: ${response.status} ${response.statusText} ${body.slice(0, 160)}`,
-      );
+    } finally {
+      endCall();
     }
-    throw new Error(
-      "Upstage Solar API error: input could not be reduced under the 4000-token limit",
-    );
+  }
+
+  async function embedPassage(text: string, title?: string): Promise<Float32Array> {
+    return embedText(formatter.document(text, title));
+  }
+
+  async function disposeProvider(): Promise<void> {
+    if (disposePromise !== null) return disposePromise;
+    disposed = true;
+    if (idleTimer !== null) clearTimeout(idleTimer);
+    idleTimer = null;
+    for (const waiter of pool?.waiters.splice(0) ?? []) {
+      waiter.reject(new Error("GGUF embedding provider has been disposed."));
+    }
+    disposePromise = (async () => {
+      if (loadPromise !== null) {
+        try { await loadPromise; } catch { /* failed loads own no native pool */ }
+      }
+      await activeCallsIdle;
+      if (pool !== null) {
+        const p = pool;
+        pool = null;
+        trackPoolDisposal(p);
+      }
+      await Promise.all([...pendingPoolDisposals]);
+    })();
+    return disposePromise;
   }
   return provider;
 }
@@ -495,7 +434,7 @@ export function createUpstageProvider(
 // Production factory — strict, explicit, no auto-detect
 // ---------------------------------------------------------------------------
 
-export type EmbeddingProviderKind = "gguf" | "upstage";
+export type EmbeddingProviderKind = "gguf";
 
 /** Options for the production embedding factory (explicit provider + model). */
 export interface EmbeddingProviderOptions {
@@ -516,35 +455,39 @@ export interface EmbeddingProviderOptions {
   prefixScheme?: string;
 }
 
-/** Alias kept for callers that import StrictEmbeddingProviderOptions by name. */
-export type StrictEmbeddingProviderOptions = EmbeddingProviderOptions;
-
 /**
  * Resolve a REAL embedding provider or throw.
  *
  * This is the ONE production factory for the OMS engine. It NEVER falls back to
- * a fake/stub embedder and it NEVER auto-selects a provider based on env key
- * presence (UPSTAGE_API_KEY, etc.). Provider selection is explicit.
+ * a fake/stub embedder. Provider selection is explicit.
  *
- * @throws {Error} When provider/model are missing or unsupported, or when
- *                 provider-specific auth is missing.
+ * @throws {Error} When provider/model are missing or unsupported.
  */
 export function requireRealEmbeddingProvider(
-  opts: StrictEmbeddingProviderOptions = {},
+  opts: EmbeddingProviderOptions = {},
 ): QueryEmbeddingProvider {
   const providerRaw = (opts.provider ?? "").toString().trim();
   const model = (opts.model ?? "").toString().trim();
 
+  // Both branches below mean the embed capability is unconfigured, so both emit the
+  // shared capability guidance instead of a locally worded variant. These messages
+  // reach the MCP surface verbatim, and they previously named the environment pair
+  // alone — telling an agent one of the three ways to configure a model while
+  // omitting `.oms/models.json` and the one-step install entirely.
+  //
+  // The supported-provider hint is kept: the shared guidance says where to set a
+  // provider but not which values are valid, and that is the first thing someone
+  // hitting this error needs to know.
   if (!providerRaw) {
     throw new Error(
-      "OMS embedding provider is not configured. Set OMS_EMBEDDING_PROVIDER " +
-        "(e.g. gguf or upstage) and OMS_EMBEDDING_MODEL, then rerun sync.",
+      `OMS embedding provider is not configured. ${capabilityGuidance("embed")} ` +
+        "Supported provider: gguf.",
     );
   }
   if (!model) {
     throw new Error(
       `OMS embedding model is not configured for provider "${providerRaw}". ` +
-        "Set OMS_EMBEDDING_MODEL and rerun sync.",
+        capabilityGuidance("embed"),
     );
   }
 
@@ -560,25 +503,8 @@ export function requireRealEmbeddingProvider(
     });
   }
 
-  if (providerRaw === "upstage") {
-    const upstageKey = process.env["UPSTAGE_API_KEY"];
-    if (!upstageKey) {
-      throw new Error(
-        "OMS embedding provider is configured as upstage but UPSTAGE_API_KEY is missing.",
-      );
-    }
-    return createUpstageProvider(upstageKey, model, opts.dimensions, {
-      context: opts.context,
-      contextLength: opts.contextLength,
-      contextTokens: opts.contextTokens,
-      mrlDim: opts.mrlDim,
-      normalization: opts.normalization,
-      prefixScheme: opts.prefixScheme,
-    });
-  }
-
   throw new Error(
     `OMS embedding provider "${providerRaw}" is unsupported. ` +
-      "Supported providers: gguf, upstage.",
+      "Supported provider: gguf.",
   );
 }

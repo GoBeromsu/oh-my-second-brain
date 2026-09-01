@@ -8,7 +8,10 @@ import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js"
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { runMcpServer } from "../mcp/server.js";
 import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
-import { PINNED_DEFAULT_EMBEDDING_MODEL } from "../kernel/engine/embed/model.js";
+import {
+  PINNED_DEFAULT_EMBEDDING_MODEL,
+  type ModelSetAcquisitionManifest,
+} from "../kernel/engine/embed/model.js";
 import { parseCliArgs } from "./args.js";
 import { runAudit } from "./audit.js";
 import { runDoctor, runLint } from "./doctor-lint.js";
@@ -20,8 +23,8 @@ import {
 } from "./host-commands.js";
 import { runLink } from "./link-command.js";
 import { runLinkify } from "./linkify.js";
-import { isSemanticCliCommand, runSemanticCli } from "./semantic.js";
-import { runSetup, type SetupEmbeddingDescriptor } from "./setup-command.js";
+import { isSearchCliCommand, runSearchCli } from "./search.js";
+import { runSetup } from "./setup-command.js";
 import { maybePrintUpdateNotice } from "./update-notice.js";
 import { printUsage } from "./usage.js";
 
@@ -37,7 +40,6 @@ export { runLinkify } from "./linkify.js";
 export {
   runSetup,
   type SetupPrompt,
-  type SetupEmbeddingDescriptor,
 } from "./setup-command.js";
 export { maybePrintUpdateNotice } from "./update-notice.js";
 
@@ -51,7 +53,7 @@ function shouldResolveBridgeVault(command: string | undefined, vaultExplicit: bo
       command === "doctor" ||
       command === "lint" ||
       command === "mcp" ||
-      isSemanticCliCommand(command))
+      isSearchCliCommand(command))
   );
 }
 
@@ -83,9 +85,9 @@ async function main(): Promise<void> {
     json,
     folders,
     conventionNote,
-    embeddingDescriptorPath,
-    embeddingNoDefault,
-    embeddingDefault,
+    modelsDescriptorPath,
+    modelsNoDefault,
+    modelsDefault,
     unknownFlags,
   } = parsedArgs;
 
@@ -107,23 +109,47 @@ async function main(): Promise<void> {
   }
 
   if (command === "setup") {
-    const embeddingChoices = [
-      embeddingDescriptorPath !== undefined ? "--embedding-descriptor" : undefined,
-      embeddingDefault ? "--embedding-default" : undefined,
-      embeddingNoDefault ? "--embedding-no-default" : undefined,
-    ].filter((flag): flag is string => flag !== undefined);
-    if (embeddingChoices.length > 1) {
-      console.error(`[oms] Choose one embedding option, not ${embeddingChoices.join(" and ")}.`);
+    const canonicalModelFlags =
+      "--models-default, --models-descriptor <path>, or --models-no-default";
+    if (unknownFlags.length > 0) {
+      console.error(
+        `[oms] Unsupported setup option: ${unknownFlags.join(", ")}. Canonical model options are ${canonicalModelFlags}.`,
+      );
       process.exitCode = 1;
       return;
     }
-    let embeddingDescriptor: SetupEmbeddingDescriptor | null | undefined;
-    if (embeddingDescriptorPath !== undefined) {
-      embeddingDescriptor = JSON.parse(readFileSync(embeddingDescriptorPath, "utf8")) as SetupEmbeddingDescriptor;
-    } else if (embeddingDefault) {
-      embeddingDescriptor = PINNED_DEFAULT_EMBEDDING_MODEL;
-    } else if (embeddingNoDefault) {
-      embeddingDescriptor = null;
+    const modelChoices = [
+      modelsDescriptorPath !== undefined ? "--models-descriptor" : undefined,
+      modelsDefault ? "--models-default" : undefined,
+      modelsNoDefault ? "--models-no-default" : undefined,
+    ].filter((flag): flag is string => flag !== undefined);
+    if (modelChoices.length > 1) {
+      console.error(
+        `[oms] Mutually exclusive setup model options: ${modelChoices.join(" and ")}. Choose one of ${canonicalModelFlags}.`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    let modelSetManifest: ModelSetAcquisitionManifest | unknown;
+    if (modelsDescriptorPath !== undefined) {
+      modelSetManifest = JSON.parse(readFileSync(modelsDescriptorPath, "utf8")) as unknown;
+    } else if (modelsDefault) {
+      modelSetManifest = {
+        schemaVersion: 1,
+        embed: {
+          provider: PINNED_DEFAULT_EMBEDDING_MODEL.provider,
+          model: PINNED_DEFAULT_EMBEDDING_MODEL.model,
+          revision: PINNED_DEFAULT_EMBEDDING_MODEL.revision,
+          sha256: PINNED_DEFAULT_EMBEDDING_MODEL.sha256,
+          promptScheme: PINNED_DEFAULT_EMBEDDING_MODEL.prefixScheme,
+          filename: PINNED_DEFAULT_EMBEDDING_MODEL.filename,
+          url: PINNED_DEFAULT_EMBEDDING_MODEL.url,
+          dimensions: PINNED_DEFAULT_EMBEDDING_MODEL.dimensions,
+          contextLength: PINNED_DEFAULT_EMBEDDING_MODEL.context,
+          mrlDim: PINNED_DEFAULT_EMBEDDING_MODEL.mrlDim,
+          normalization: PINNED_DEFAULT_EMBEDDING_MODEL.normalization,
+        },
+      };
     }
     await runSetup({
       vault,
@@ -132,7 +158,8 @@ async function main(): Promise<void> {
       templateFolder,
       installClaude,
       dryRun,
-      embeddingDescriptor,
+      modelSetManifest,
+      modelsNoDefault,
     });
     if (!dryRun) await maybePrintUpdateNotice();
   } else if (command === "link") {
@@ -172,8 +199,8 @@ async function main(): Promise<void> {
   } else if (command === "lint") {
     process.exitCode = await runLint({ vault, verbose, json });
     await maybePrintUpdateNotice();
-  } else if (isSemanticCliCommand(command)) {
-    process.exitCode = await runSemanticCli({
+  } else if (isSearchCliCommand(command)) {
+    process.exitCode = await runSearchCli({
       argv,
       vault,
     });

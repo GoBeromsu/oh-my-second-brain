@@ -23,9 +23,11 @@ export { InvalidSearchRequestError } from "./search-backend.js";
 export function requiresEmbeddings(request: {
   readonly searches?: readonly McpSemanticTypedSearch[];
   readonly mode?: SearchRequest["mode"];
+  readonly strategy?: SearchRequest["strategy"];
   readonly vec?: string;
   readonly hyde?: string;
 }): boolean {
+  if (request.strategy?.kind === "expand") return true;
   if (request.mode === "vsearch") return true;
   if (typeof request.vec === "string" && request.vec.length > 0) return true;
   if (typeof request.hyde === "string" && request.hyde.length > 0) return true;
@@ -43,18 +45,30 @@ export class EngineSearchBackend implements SearchBackend {
     const normalized = normalizeSearchRequest(request);
 
     const adapter = typeof this.adapterOrResolver === "function"
-      ? this.adapterOrResolver(requiresEmbeddings({ searches: normalized.searches }))
+      ? this.adapterOrResolver(requiresEmbeddings({
+        searches: normalized.searches,
+        strategy: normalized.strategy,
+      }))
       : this.adapterOrResolver;
-    // Typed searches have no plain `query`, but their text is still the caller's
-    // retrieval intent. Preserve it for an explicitly requested reranker.
-    const rerankQuery = normalized.query ?? normalized.searches.map((search) => search.query).join(" ");
+    const callerUsedTypedSearches =
+      (request.searches?.length ?? 0) > 0
+      || request.lex !== undefined
+      || request.vec !== undefined
+      || request.hyde !== undefined;
     const searchCollection = async (
       collectionPath = normalized.collectionPath,
     ): Promise<McpSemanticQueryResult> => adapter.semanticQuery({
       vault: this.vault,
-      query: rerankQuery,
-      searches: normalized.searches,
-      mode: normalized.mode,
+      // Preserve the public query XOR searches contract. The prior adapter passed
+      // both on every plain request after normalization synthesized a lexical
+      // search, so production input contradicted the same rule the public seam
+      // enforced.
+      query: callerUsedTypedSearches ? undefined : request.query,
+      searches: callerUsedTypedSearches ? normalized.searches : undefined,
+      strategy: normalized.strategy,
+      mode: callerUsedTypedSearches || normalized.strategy !== undefined
+        ? undefined
+        : normalized.mode,
       // Collection aggregation applies one global limit after all candidate
       // collections have been merged. Per-collection truncation would make
       // totalCount/cursor and facet counts dependent on collection order.
@@ -160,12 +174,39 @@ function mergeFacets(results: readonly McpSemanticQueryResult[]): McpSemanticFac
 
 function mergeReceipts(results: readonly McpSemanticQueryResult[]): McpSemanticReceipt {
   const used = new Set<McpSemanticReceipt["usedChannels"][number]>();
+  const generated = new Map<string, McpSemanticReceipt["generatedSearches"][number]>();
+  const intents = new Map<string, McpSemanticReceipt["taxonomyIntents"][number]>();
+  const warnings = new Set<string>();
   let approximated = false;
   let drift = false;
+  let rerankApplied = false;
+  let requestedStrategy: McpSemanticReceipt["requestedStrategy"] = "plain";
   for (const result of results) {
     for (const channel of result.receipt?.usedChannels ?? []) used.add(channel);
+    for (const search of result.receipt?.generatedSearches ?? []) {
+      generated.set(`${search.type}\u0000${search.query}`, search);
+    }
+    for (const intent of result.receipt?.taxonomyIntents ?? []) {
+      intents.set(intent.folder, intent);
+    }
+    for (const warning of result.receipt?.warnings ?? []) warnings.add(warning);
     approximated ||= result.receipt?.approximated ?? false;
     drift ||= result.receipt?.drift ?? false;
+    rerankApplied ||= result.receipt?.rerankApplied ?? false;
+    const strategy = result.receipt?.requestedStrategy ?? "plain";
+    if (strategy === "expand" || (strategy === "explicit" && requestedStrategy === "plain")) {
+      requestedStrategy = strategy;
+    }
   }
-  return { usedChannels: [...used], approximated, drift };
+  return {
+    usedChannels: [...used],
+    approximated,
+    drift,
+    requestedStrategy,
+    generatedSearches: [...generated.values()],
+    rerankApplied,
+    taxonomyIntents: [...intents.values()].sort((left, right) =>
+      left.folder < right.folder ? -1 : left.folder > right.folder ? 1 : 0),
+    warnings: [...warnings].sort(),
+  };
 }

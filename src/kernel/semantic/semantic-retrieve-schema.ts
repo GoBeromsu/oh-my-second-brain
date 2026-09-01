@@ -11,10 +11,11 @@ const typedQuerySearchSchema = {
 export const retrieveContextSemanticInputProperties = {
   semanticEnabled: { type: "boolean" },
   semanticCollection: { type: "string" },
-  semanticLimit: { type: "number" },
+  semanticLimit: { type: "integer", minimum: 0 },
   semanticScope: { type: "string", enum: ["global", "graph"] },
   semanticMode: { type: "string", enum: ["query", "search", "vsearch"] },
   semanticIntent: { type: "string" },
+
   semanticSearches: { type: "array", items: typedQuerySearchSchema },
   semanticLex: { type: "string" },
   semanticVec: { type: "string" },
@@ -27,7 +28,7 @@ export const retrieveContextSemanticInputProperties = {
   semanticFullPath: { type: "boolean" },
   semanticIndex: { type: "string" },
   semanticChunkStrategy: { type: "string" },
-  semanticCandidateLimit: { type: "number" },
+  semanticCandidateLimit: { type: "integer", minimum: 1 },
   semanticNoRerank: { type: "boolean" },
   semanticHydrate: { type: "string", enum: ["none", "top", "all", "targets"] },
   semanticHydrateTargets: { type: "array", items: { type: "string" } },

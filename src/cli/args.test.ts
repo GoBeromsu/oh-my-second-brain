@@ -95,32 +95,87 @@ describe("CLI argument parser", () => {
     expect(linked.conventionNote).toBe(false);
   });
 
-  it("parses the three mutually exclusive setup embedding options independently", () => {
-    const pinned = parseCliArgs(["setup", "--embedding-default"], "/tmp/oms-cli");
+  it("parses the three mutually exclusive setup model-set options independently", () => {
+    const pinned = parseCliArgs(["setup", "--models-default"], "/tmp/oms-cli");
     const supplied = parseCliArgs(
-      ["setup", "--embedding-descriptor", "model.json"],
+      ["setup", "--models-descriptor", "models.json"],
       "/tmp/oms-cli",
     );
-    const waived = parseCliArgs(["setup", "--embedding-no-default"], "/tmp/oms-cli");
+    const waived = parseCliArgs(["setup", "--models-no-default"], "/tmp/oms-cli");
 
-    expect(pinned.embeddingDefault).toBe(true);
-    expect(pinned.embeddingDescriptorPath).toBeUndefined();
-    expect(pinned.embeddingNoDefault).toBe(false);
+    expect(pinned.modelsDefault).toBe(true);
+    expect(pinned.modelsDescriptorPath).toBeUndefined();
+    expect(pinned.modelsNoDefault).toBe(false);
     expect(pinned.unknownFlags).toEqual([]);
 
-    expect(supplied.embeddingDescriptorPath).toBe("/tmp/oms-cli/model.json");
-    expect(supplied.embeddingDefault).toBe(false);
+    expect(supplied.modelsDescriptorPath).toBe("/tmp/oms-cli/models.json");
+    expect(supplied.modelsDefault).toBe(false);
 
-    expect(waived.embeddingNoDefault).toBe(true);
-    expect(waived.embeddingDefault).toBe(false);
+    expect(waived.modelsNoDefault).toBe(true);
+    expect(waived.modelsDefault).toBe(false);
   });
 
-  it("defaults every setup embedding option to unselected", () => {
+  it("requires a non-option path after --models-descriptor", () => {
+    for (const args of [
+      ["setup", "--models-descriptor"],
+      ["setup", "--models-descriptor", "--yes"],
+      ["setup", "--models-descriptor", "-v"],
+      ["setup", "--models-descriptor", ""],
+    ]) {
+      expect(parseCliArgs(args).error?.message).toBe(
+        "[oms] Missing value for --models-descriptor. Choose one of --models-default, --models-descriptor <path>, or --models-no-default.",
+      );
+    }
+  });
+
+  it("rejects every conflicting pair of setup model options", () => {
+    for (const args of [
+      ["setup", "--models-default", "--models-descriptor", "models.json"],
+      ["setup", "--models-default", "--models-no-default"],
+      ["setup", "--models-descriptor", "models.json", "--models-no-default"],
+    ]) {
+      expect(parseCliArgs(args, "/tmp/oms-cli").error?.message).toContain(
+        "Choose one of --models-default, --models-descriptor <path>, or --models-no-default.",
+      );
+    }
+  });
+
+  it("defaults every setup model-set option to unselected and preserves retired flags for setup rejection", () => {
     const parsed = parseCliArgs(["setup"], "/tmp/oms-cli");
 
-    expect(parsed.embeddingDefault).toBe(false);
-    expect(parsed.embeddingNoDefault).toBe(false);
-    expect(parsed.embeddingDescriptorPath).toBeUndefined();
+    expect(parsed.modelsDefault).toBe(false);
+    expect(parsed.modelsNoDefault).toBe(false);
+    expect(parsed.modelsDescriptorPath).toBeUndefined();
+    expect(parseCliArgs(["setup", "--embedding-default"]).unknownFlags).toEqual(["--embedding-default"]);
+    expect(parseCliArgs(["setup", "--embedding-no-default"]).unknownFlags).toEqual(["--embedding-no-default"]);
+    expect(parseCliArgs(["setup", "--embedding-descriptor", "legacy.json"]).unknownFlags).toEqual([
+      "--embedding-descriptor",
+    ]);
+  });
+
+  it("accepts setup's shared install, runtime, vault, dry-run, and approval options", () => {
+    const parsed = parseCliArgs(
+      [
+        "setup",
+        "--vault",
+        "Vault",
+        "--runtime",
+        "hermes",
+        "--agent-vault",
+        "AgentVault",
+        "--dry-run",
+        "--execute",
+        "--yes",
+        "--approved-digest",
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "--install-claude",
+        "--models-no-default",
+      ],
+      "/tmp/oms-cli",
+    );
+
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.unknownFlags).toEqual([]);
   });
 
   it("parses audit flags", () => {

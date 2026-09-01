@@ -34,12 +34,35 @@ oms update     패키지 업데이트 확인/적용 후 어댑터 재조정
 oms reconcile  엄격한 전역 볼트 포인터로 호스트 재기록
 oms doctor     템플릿 권위와 파생 상태 진단
 oms lint       깨진 [[wikilink]]와 고아 노트 점검
-oms semantic   네이티브 Markdown lexical/vector 검색 관리
+oms search <text>  일반 lexical 검색; --vec, --hyde, --expand, --max-queries 1..32, --rerank은 명시적 선택
+oms embed      색인된 노트의 임베딩 생성
+oms index sync|status|cleanup|collections|contexts
+oms doc get|multi-get
+oms serve      로컬 검색 HTTP 서버 시작
 oms mcp        stdio MCP 서버 시작
 oms hook       Claude pre/post tool-use 볼트 가드 실행
 ```
 
 `oh-my-second-brain`이 전체 명령이고 `oms`는 짧은 별칭이다.
+
+`oms search <text>`는 lexical-only다. `--vec`, `--hyde`는 각각의 typed
+channel을 선택하고, `--expand`는 G004 expansion을 명시적으로 켜며,
+`--max-queries`는 1부터 32까지의 정수만 받는다. `--rerank`도 opt-in이다.
+`oms embed`가 유일한 embedding 명령이며 `oms index`에는 embedding
+subcommand가 없다.
+
+Vector 검색에는 검증된 로컬 embedding capability가 필요하다. 선택 경로는
+완전한 `OMS_EMBEDDING_PROVIDER`/`OMS_EMBEDDING_MODEL` 쌍, vault의
+`.oms/models.json`과 검증된 설치 receipt, 또는 setup-installed default다.
+HyDE에는 resolved generate capability가, reranking에는 resolved rerank
+capability가 필요하다. 각각의 완전한 환경변수 쌍은
+`OMS_GENERATE_PROVIDER`/`OMS_GENERATE_MODEL`과
+`OMS_RERANK_PROVIDER`/`OMS_RERANK_MODEL`이다. 누락되거나 불완전하거나
+설치되지 않은 선택은 크게 실패한다. G004
+expansion은 명시적으로 사용할 수 있는 기능이며, 교체·parity·outperformance를
+주장하지 않는다.
+Setup에서는 로컬 검증 acquisition 정책 하나를 선택한다:
+`--models-default`, `--models-descriptor <path>`, `--models-no-default`.
 
 ## MCP 도구
 

@@ -12,6 +12,12 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import type { Chunk, ScoredHit, VectorStore } from "../types.js";
+import {
+  ENGINE_EMBED_META_VERSION,
+  validateEmbeddingIdentity,
+} from "./identity.js";
+
+export { ENGINE_EMBED_META_VERSION } from "./identity.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -28,6 +34,8 @@ export interface EngineStoreCapabilities {
 export interface EmbeddingIdentity {
   readonly provider: string;
   readonly model: string;
+  readonly revision: string;
+  readonly sha256: string;
   readonly dimensions: number;
   readonly contextLength: number;
   readonly mrlDim: number;
@@ -70,8 +78,6 @@ export interface EngineStore extends VectorStore {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-export const ENGINE_EMBED_META_VERSION = "oms-embed-meta-v2";
 
 /**
  * Largest `k` sqlite-vec accepts in a knn query.
@@ -147,6 +153,60 @@ function collectionDescendantLikePattern(collection: string): string {
   return `${collection.replace(/[!%_]/g, "!$&")}/%`;
 }
 
+interface EmbeddingIdentityRow {
+  embedding_provider: string | null;
+  embedding_model: string | null;
+  embedding_revision: string | null;
+  embedding_sha256: string | null;
+  embedding_dimensions: number | null;
+  embedding_context_length: number | null;
+  embedding_mrl_dim: number | null;
+  embedding_normalization: string | null;
+  embedding_prefix_scheme: string | null;
+  embedding_fingerprint: string | null;
+  embedding_schema_version: string;
+}
+
+function decodeEmbeddingIdentity(row: EmbeddingIdentityRow | undefined): EmbeddingIdentity | null {
+  if (!row) return null;
+  if (row.embedding_schema_version !== ENGINE_EMBED_META_VERSION) {
+    throw new Error(
+      `Embedding metadata version "${row.embedding_schema_version}" is incompatible; expected "${ENGINE_EMBED_META_VERSION}".`,
+    );
+  }
+  const hasAnyIdentityField = Object.entries(row)
+    .some(([key, value]) => key.startsWith("embedding_") && key !== "embedding_schema_version" && value !== null);
+  if (!hasAnyIdentityField) return null;
+  if (
+    row.embedding_provider === null ||
+    row.embedding_model === null ||
+    row.embedding_revision === null ||
+    row.embedding_sha256 === null ||
+    row.embedding_dimensions === null ||
+    row.embedding_context_length === null ||
+    row.embedding_mrl_dim === null ||
+    row.embedding_normalization === null ||
+    row.embedding_prefix_scheme === null ||
+    row.embedding_fingerprint === null
+  ) {
+    throw new Error("Embedding metadata identity is incomplete.");
+  }
+  const identity: EmbeddingIdentity = {
+    provider: row.embedding_provider,
+    model: row.embedding_model,
+    revision: row.embedding_revision,
+    sha256: row.embedding_sha256,
+    dimensions: row.embedding_dimensions,
+    contextLength: row.embedding_context_length,
+    mrlDim: row.embedding_mrl_dim,
+    normalization: row.embedding_normalization,
+    prefixScheme: row.embedding_prefix_scheme,
+    fingerprint: row.embedding_fingerprint,
+  };
+  validateEmbeddingIdentity(identity);
+  return identity;
+}
+
 function ensureCoreSchema(db: Database.Database): void {
   db.pragma("journal_mode = WAL");
 
@@ -158,6 +218,8 @@ function ensureCoreSchema(db: Database.Database): void {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       embedding_provider TEXT,
       embedding_model TEXT,
+      embedding_revision TEXT,
+      embedding_sha256 TEXT,
       embedding_dimensions INTEGER,
       embedding_context_length INTEGER,
       embedding_mrl_dim INTEGER,
@@ -169,27 +231,35 @@ function ensureCoreSchema(db: Database.Database): void {
     );
   `);
 
-  // Existing stores are deliberately not rewritten here.  Additive columns
-  // let us inspect their schema version and reject stale identities loudly
-  // instead of accidentally treating old vectors as compatible.
+  db.prepare(
+    "INSERT OR IGNORE INTO engine_meta (id, embedding_schema_version, updated_at) VALUES (1, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+  ).run(ENGINE_EMBED_META_VERSION);
+  const requiredMetaColumns = [
+    "embedding_provider",
+    "embedding_model",
+    "embedding_revision",
+    "embedding_sha256",
+    "embedding_dimensions",
+    "embedding_context_length",
+    "embedding_mrl_dim",
+    "embedding_normalization",
+    "embedding_prefix_scheme",
+    "embedding_fingerprint",
+    "embedding_schema_version",
+  ];
   const columns = new Set(
     (db.prepare("PRAGMA table_info(engine_meta)").all() as Array<{ name: string }>).map(
       (column) => column.name,
     ),
   );
-  const additions: ReadonlyArray<[string, string]> = [
-    ["embedding_context_length", "INTEGER"],
-    ["embedding_mrl_dim", "INTEGER"],
-    ["embedding_normalization", "TEXT"],
-    ["embedding_prefix_scheme", "TEXT"],
-  ];
-  for (const [name, type] of additions) {
-    if (!columns.has(name)) db.exec(`ALTER TABLE engine_meta ADD COLUMN ${name} ${type}`);
+  if (requiredMetaColumns.some((column) => !columns.has(column))) {
+    throw new Error(`Embedding metadata schema is incompatible; expected "${ENGINE_EMBED_META_VERSION}".`);
   }
-
-  db.prepare(
-    "INSERT OR IGNORE INTO engine_meta (id, embedding_schema_version, updated_at) VALUES (1, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-  ).run(ENGINE_EMBED_META_VERSION);
+  const version = db.prepare("SELECT embedding_schema_version FROM engine_meta WHERE id = 1")
+    .get() as { embedding_schema_version: string } | undefined;
+  if (!version || version.embedding_schema_version !== ENGINE_EMBED_META_VERSION) {
+    throw new Error(`Embedding metadata version "${version?.embedding_schema_version}" is incompatible; expected "${ENGINE_EMBED_META_VERSION}".`);
+  }
 
   // (2) engine_chunk_meta + engine_chunk_fts
   db.exec(`
@@ -241,8 +311,12 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     mkdirSync(path.dirname(dbPath), { recursive: true });
   }
   const db = new Database(dbPath);
-
-  ensureCoreSchema(db);
+  try {
+    ensureCoreSchema(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
   // Optional: load sqlite-vec so lex-only sync can delete stale vectors for
   // modified chunks (prevents silent cross-model reuse on later vec queries).
   let stmtDeleteVec: ReturnType<Database.Database["prepare"]> | null = null;
@@ -309,22 +383,12 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     "SELECT DISTINCT doc_path FROM engine_chunk_meta",
   );
 
-  const stmtReadIdentity = db.prepare<[], {
-    embedding_provider: string | null;
-    embedding_model: string | null;
-    embedding_dimensions: number | null;
-    embedding_context_length: number | null;
-    embedding_mrl_dim: number | null;
-    embedding_normalization: string | null;
-    embedding_prefix_scheme: string | null;
-    embedding_fingerprint: string | null;
-    embedding_schema_version: string;
-  }>(
-    "SELECT embedding_provider, embedding_model, embedding_dimensions, embedding_context_length, embedding_mrl_dim, embedding_normalization, embedding_prefix_scheme, embedding_fingerprint, embedding_schema_version FROM engine_meta WHERE id = 1",
+  const stmtReadIdentity = db.prepare<[], EmbeddingIdentityRow>(
+    "SELECT embedding_provider, embedding_model, embedding_revision, embedding_sha256, embedding_dimensions, embedding_context_length, embedding_mrl_dim, embedding_normalization, embedding_prefix_scheme, embedding_fingerprint, embedding_schema_version FROM engine_meta WHERE id = 1",
   );
 
-  const stmtWriteIdentity = db.prepare<[string, string, number, number, number, string, string, string]>(
-    "UPDATE engine_meta SET embedding_provider = ?, embedding_model = ?, embedding_dimensions = ?, embedding_context_length = ?, embedding_mrl_dim = ?, embedding_normalization = ?, embedding_prefix_scheme = ?, embedding_fingerprint = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 1",
+  const stmtWriteIdentity = db.prepare<[string, string, string, string, number, number, number, string, string, string]>(
+    "UPDATE engine_meta SET embedding_provider = ?, embedding_model = ?, embedding_revision = ?, embedding_sha256 = ?, embedding_dimensions = ?, embedding_context_length = ?, embedding_mrl_dim = ?, embedding_normalization = ?, embedding_prefix_scheme = ?, embedding_fingerprint = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 1",
   );
 
   const doUpsertLex = db.transaction((rows: ReadonlyArray<Chunk>) => {
@@ -368,6 +432,10 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
       throw new Error("EngineStore(core-only): vector queries are unavailable.");
     },
 
+    getChunkText(docPath: string, chunkOrdinal: number): string | undefined {
+      return stmtGetMeta.get(docPath, chunkOrdinal)?.text;
+    },
+
     queryLex(text: string, k: number, collection?: string): ScoredHit[] {
       const ftsQ = makeFtsQuery(text);
       if (!ftsQ) return [];
@@ -393,51 +461,16 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
 
     // EngineStore extensions
     readEmbeddingIdentity(): EmbeddingIdentity | null {
-      const row = stmtReadIdentity.get();
-      if (!row) return null;
-      if (row.embedding_schema_version !== ENGINE_EMBED_META_VERSION) {
-        throw new Error(
-          `Embedding metadata version "${row.embedding_schema_version}" is incompatible; expected "${ENGINE_EMBED_META_VERSION}".`,
-        );
-      }
-      const hasAnyIdentityField =
-        row.embedding_provider !== null ||
-        row.embedding_model !== null ||
-        row.embedding_dimensions !== null ||
-        row.embedding_context_length !== null ||
-        row.embedding_mrl_dim !== null ||
-        row.embedding_normalization !== null ||
-        row.embedding_prefix_scheme !== null ||
-        row.embedding_fingerprint !== null;
-      if (!hasAnyIdentityField) return null;
-      if (
-        !row.embedding_provider ||
-        !row.embedding_model ||
-        row.embedding_dimensions === null ||
-        row.embedding_context_length === null ||
-        row.embedding_mrl_dim === null ||
-        !row.embedding_normalization ||
-        !row.embedding_prefix_scheme ||
-        !row.embedding_fingerprint
-      ) {
-        throw new Error("Embedding metadata identity is incomplete.");
-      }
-      return {
-        provider: row.embedding_provider,
-        model: row.embedding_model,
-        dimensions: row.embedding_dimensions,
-        contextLength: row.embedding_context_length,
-        mrlDim: row.embedding_mrl_dim,
-        normalization: row.embedding_normalization,
-        prefixScheme: row.embedding_prefix_scheme,
-        fingerprint: row.embedding_fingerprint,
-      };
+      return decodeEmbeddingIdentity(stmtReadIdentity.get());
     },
 
     writeEmbeddingIdentity(identity: EmbeddingIdentity): void {
+      validateEmbeddingIdentity(identity);
       stmtWriteIdentity.run(
         identity.provider,
         identity.model,
+        identity.revision,
+        identity.sha256,
         identity.dimensions,
         identity.contextLength,
         identity.mrlDim,
@@ -483,8 +516,12 @@ export function openEngineStore(
 ): EngineStore {
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
-
-  ensureCoreSchema(db);
+  try {
+    ensureCoreSchema(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 
   const sqliteVecLoader = opts.sqliteVecLoader ?? DEFAULT_SQLITE_VEC_LOADER;
   let vecLoaded = false;
@@ -560,22 +597,12 @@ export function openEngineStore(
     "SELECT DISTINCT doc_path FROM engine_chunk_meta",
   );
 
-  const stmtReadIdentity = db.prepare<[], {
-    embedding_provider: string | null;
-    embedding_model: string | null;
-    embedding_dimensions: number | null;
-    embedding_context_length: number | null;
-    embedding_mrl_dim: number | null;
-    embedding_normalization: string | null;
-    embedding_prefix_scheme: string | null;
-    embedding_fingerprint: string | null;
-    embedding_schema_version: string;
-  }>(
-    "SELECT embedding_provider, embedding_model, embedding_dimensions, embedding_context_length, embedding_mrl_dim, embedding_normalization, embedding_prefix_scheme, embedding_fingerprint, embedding_schema_version FROM engine_meta WHERE id = 1",
+  const stmtReadIdentity = db.prepare<[], EmbeddingIdentityRow>(
+    "SELECT embedding_provider, embedding_model, embedding_revision, embedding_sha256, embedding_dimensions, embedding_context_length, embedding_mrl_dim, embedding_normalization, embedding_prefix_scheme, embedding_fingerprint, embedding_schema_version FROM engine_meta WHERE id = 1",
   );
 
-  const stmtWriteIdentity = db.prepare<[string, string, number, number, number, string, string, string]>(
-    "UPDATE engine_meta SET embedding_provider = ?, embedding_model = ?, embedding_dimensions = ?, embedding_context_length = ?, embedding_mrl_dim = ?, embedding_normalization = ?, embedding_prefix_scheme = ?, embedding_fingerprint = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 1",
+  const stmtWriteIdentity = db.prepare<[string, string, string, string, number, number, number, string, string, string]>(
+    "UPDATE engine_meta SET embedding_provider = ?, embedding_model = ?, embedding_revision = ?, embedding_sha256 = ?, embedding_dimensions = ?, embedding_context_length = ?, embedding_mrl_dim = ?, embedding_normalization = ?, embedding_prefix_scheme = ?, embedding_fingerprint = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 1",
   );
 
   // Prepared statements (vec)
@@ -663,51 +690,16 @@ export function openEngineStore(
     },
 
     readEmbeddingIdentity(): EmbeddingIdentity | null {
-      const row = stmtReadIdentity.get();
-      if (!row) return null;
-      if (row.embedding_schema_version !== ENGINE_EMBED_META_VERSION) {
-        throw new Error(
-          `Embedding metadata version "${row.embedding_schema_version}" is incompatible; expected "${ENGINE_EMBED_META_VERSION}".`,
-        );
-      }
-      const hasAnyIdentityField =
-        row.embedding_provider !== null ||
-        row.embedding_model !== null ||
-        row.embedding_dimensions !== null ||
-        row.embedding_context_length !== null ||
-        row.embedding_mrl_dim !== null ||
-        row.embedding_normalization !== null ||
-        row.embedding_prefix_scheme !== null ||
-        row.embedding_fingerprint !== null;
-      if (!hasAnyIdentityField) return null;
-      if (
-        !row.embedding_provider ||
-        !row.embedding_model ||
-        row.embedding_dimensions === null ||
-        row.embedding_context_length === null ||
-        row.embedding_mrl_dim === null ||
-        !row.embedding_normalization ||
-        !row.embedding_prefix_scheme ||
-        !row.embedding_fingerprint
-      ) {
-        throw new Error("Embedding metadata identity is incomplete.");
-      }
-      return {
-        provider: row.embedding_provider,
-        model: row.embedding_model,
-        dimensions: row.embedding_dimensions,
-        contextLength: row.embedding_context_length,
-        mrlDim: row.embedding_mrl_dim,
-        normalization: row.embedding_normalization,
-        prefixScheme: row.embedding_prefix_scheme,
-        fingerprint: row.embedding_fingerprint,
-      };
+      return decodeEmbeddingIdentity(stmtReadIdentity.get());
     },
 
     writeEmbeddingIdentity(identity: EmbeddingIdentity): void {
+      validateEmbeddingIdentity(identity);
       stmtWriteIdentity.run(
         identity.provider,
         identity.model,
+        identity.revision,
+        identity.sha256,
         identity.dimensions,
         identity.contextLength,
         identity.mrlDim,
@@ -742,6 +734,10 @@ export function openEngineStore(
         chunkOrdinal: r.ordinal,
         score: 1 / (1 + Math.max(0, r.distance)),
         }));
+    },
+
+    getChunkText(docPath: string, chunkOrdinal: number): string | undefined {
+      return stmtGetMeta.get(docPath, chunkOrdinal)?.text;
     },
 
     queryLex(text: string, k: number, collection?: string): ScoredHit[] {
@@ -836,13 +832,27 @@ function openExistingCoreStore(dbPath: string): Database.Database | null {
       ),
     );
     const requiredMetaColumns = [
+      "embedding_provider",
+      "embedding_model",
+      "embedding_revision",
+      "embedding_sha256",
+      "embedding_dimensions",
       "embedding_context_length",
       "embedding_mrl_dim",
       "embedding_normalization",
       "embedding_prefix_scheme",
+      "embedding_fingerprint",
+      "embedding_schema_version",
     ];
     if (requiredMetaColumns.some((column) => !metaColumns.has(column))) {
       throw new Error(`Engine store at "${dbPath}" is corrupt or incompatible: required metadata columns are missing.`);
+    }
+    const version = db.prepare("SELECT embedding_schema_version FROM engine_meta WHERE id = 1")
+      .get() as { embedding_schema_version: string } | undefined;
+    if (!version || version.embedding_schema_version !== ENGINE_EMBED_META_VERSION) {
+      throw new Error(
+        `Embedding metadata version "${version?.embedding_schema_version}" is incompatible; expected "${ENGINE_EMBED_META_VERSION}".`,
+      );
     }
     return db;
   } catch (error) {
@@ -870,16 +880,16 @@ function openReadOnlyStore(
   const db = openExistingCoreStore(dbPath);
   if (db === null) return null;
 
-  const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; rank: number }>(
-    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+  const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
      JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
      WHERE engine_chunk_fts MATCH ?
      ORDER BY rank
      LIMIT ?`,
   );
-  const stmtQueryLexInCollection = db.prepare<[string, string, string, number], { doc_path: string; ordinal: number; rank: number }>(
-    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+  const stmtQueryLexInCollection = db.prepare<[string, string, string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
      JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
      WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ? ESCAPE '!')
@@ -892,31 +902,21 @@ function openReadOnlyStore(
   const stmtListDocPaths = db.prepare<[], { doc_path: string }>(
     "SELECT DISTINCT doc_path FROM engine_chunk_meta",
   );
-  const stmtReadIdentity = db.prepare<[], {
-    embedding_provider: string | null;
-    embedding_model: string | null;
-    embedding_dimensions: number | null;
-    embedding_context_length: number | null;
-    embedding_mrl_dim: number | null;
-    embedding_normalization: string | null;
-    embedding_prefix_scheme: string | null;
-    embedding_fingerprint: string | null;
-    embedding_schema_version: string;
-  }>(
-    "SELECT embedding_provider, embedding_model, embedding_dimensions, embedding_context_length, embedding_mrl_dim, embedding_normalization, embedding_prefix_scheme, embedding_fingerprint, embedding_schema_version FROM engine_meta WHERE id = 1",
+  const stmtReadIdentity = db.prepare<[], EmbeddingIdentityRow>(
+    "SELECT embedding_provider, embedding_model, embedding_revision, embedding_sha256, embedding_dimensions, embedding_context_length, embedding_mrl_dim, embedding_normalization, embedding_prefix_scheme, embedding_fingerprint, embedding_schema_version FROM engine_meta WHERE id = 1",
   );
 
   // These carry their bound parameter and row types: the bare
   // ReturnType<prepare> erases both generics, which makes `.get()` demand an
   // argument it does not take and forces a cast on every row read.
-  let stmtQueryVec: Database.Statement<[Buffer, number], { doc_path: string; ordinal: number; distance: number }> | null = null;
+  let stmtQueryVec: Database.Statement<[Buffer, number], { doc_path: string; ordinal: number; text: string; distance: number }> | null = null;
   let stmtCountChunks: Database.Statement<[], { count: number }> | null = null;
   if (opts.vectors) {
     try {
       (opts.sqliteVecLoader ?? DEFAULT_SQLITE_VEC_LOADER)(db);
       if (vecTableExists(db)) {
-        stmtQueryVec = db.prepare<[Buffer, number], { doc_path: string; ordinal: number; distance: number }>(
-          `SELECT m.doc_path, m.ordinal, v.distance
+        stmtQueryVec = db.prepare<[Buffer, number], { doc_path: string; ordinal: number; text: string; distance: number }>(
+          `SELECT m.doc_path, m.ordinal, m.text, v.distance
            FROM engine_chunk_vec v
            JOIN engine_chunk_meta m ON m.rowid = v.rowid
            WHERE v.embedding MATCH ? AND k = ?
@@ -955,6 +955,7 @@ function openReadOnlyStore(
           docPath: row.doc_path,
           chunkOrdinal: row.ordinal,
           score: 1 / (1 + Math.max(0, row.distance)),
+          text: row.text,
         }));
     },
     queryLex(text: string, k: number, collection?: string): ScoredHit[] {
@@ -968,6 +969,7 @@ function openReadOnlyStore(
           docPath: row.doc_path,
           chunkOrdinal: row.ordinal,
           score: 1 / (1 + index),
+          text: row.text,
         }));
       } catch (error) {
         throw new Error(
@@ -980,45 +982,7 @@ function openReadOnlyStore(
       db.close();
     },
     readEmbeddingIdentity(): EmbeddingIdentity | null {
-      const row = stmtReadIdentity.get();
-      if (!row) return null;
-      if (row.embedding_schema_version !== ENGINE_EMBED_META_VERSION) {
-        throw new Error(
-          `Embedding metadata version "${row.embedding_schema_version}" is incompatible; expected "${ENGINE_EMBED_META_VERSION}".`,
-        );
-      }
-      const hasAnyIdentityField =
-        row.embedding_provider !== null ||
-        row.embedding_model !== null ||
-        row.embedding_dimensions !== null ||
-        row.embedding_context_length !== null ||
-        row.embedding_mrl_dim !== null ||
-        row.embedding_normalization !== null ||
-        row.embedding_prefix_scheme !== null ||
-        row.embedding_fingerprint !== null;
-      if (!hasAnyIdentityField) return null;
-      if (
-        !row.embedding_provider ||
-        !row.embedding_model ||
-        row.embedding_dimensions === null ||
-        row.embedding_context_length === null ||
-        row.embedding_mrl_dim === null ||
-        !row.embedding_normalization ||
-        !row.embedding_prefix_scheme ||
-        !row.embedding_fingerprint
-      ) {
-        throw new Error("Embedding metadata identity is incomplete.");
-      }
-      return {
-        provider: row.embedding_provider,
-        model: row.embedding_model,
-        dimensions: row.embedding_dimensions,
-        contextLength: row.embedding_context_length,
-        mrlDim: row.embedding_mrl_dim,
-        normalization: row.embedding_normalization,
-        prefixScheme: row.embedding_prefix_scheme,
-        fingerprint: row.embedding_fingerprint,
-      };
+      return decodeEmbeddingIdentity(stmtReadIdentity.get());
     },
     writeEmbeddingIdentity(): void {
       readonlyMutation("writeEmbeddingIdentity");
