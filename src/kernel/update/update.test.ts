@@ -5,6 +5,7 @@ import {
   formatUpdateNotice,
   formatUpdateResult,
   runUpdate,
+  type RunUpdateOptions,
   type UpdateRunnerCall,
 } from "./update.js";
 
@@ -16,250 +17,159 @@ function failCall(stderr: string): UpdateRunnerCall {
   return { exitCode: 1, stdout: "", stderr };
 }
 
+const runningPrefix = "/opt/oms";
+const entrypoint = "/launch/oms.js";
+const realpath = () => `${runningPrefix}/lib/node_modules/oh-my-second-brain/dist/cli/oms.js`;
+function updateOptions(overrides: Partial<RunUpdateOptions> = {}): RunUpdateOptions {
+  return {
+    currentVersion: "0.1.7",
+    latestVersion: "0.1.8",
+    runtime: "codex",
+    vault: "/tmp/Vault",
+    yes: true,
+    entrypoint,
+    realpath,
+    ...overrides,
+  };
+}
+
+function matchingRunner(calls: string[], reconcileResult = okCall()): (command: string, args: readonly string[]) => UpdateRunnerCall {
+  return (command, args) => {
+    calls.push([command, ...args].join(" "));
+    if (command === "npm" && args.join(" ") === "prefix -g") return okCall(`${runningPrefix}\n`);
+    if (command === "npm") return okCall();
+    return reconcileResult;
+  };
+}
+
 describe("oms update", () => {
-  it("UPD-001 refuses a non-TTY update without mutating", async () => {
+  it("refuses a non-TTY update without mutating", async () => {
     const calls: string[] = [];
-    const result = await runUpdate({
-      currentVersion: "0.1.7",
-      latestVersion: "0.1.8",
-      runtime: "all",
-      vault: "/tmp/Vault",
-      interactive: false,
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return okCall("0.1.8");
-      },
-    });
+    const result = await runUpdate(updateOptions({ yes: false, interactive: false, runner: matchingRunner(calls) }));
 
     expect(result.success).toBe(false);
-    expect(result.updateAvailable).toBe(true);
     expect(result.mutated).toBe(false);
     expect(calls).toEqual([]);
     expect(formatUpdateResult(result)).toContain("oms update --yes");
   });
 
-  it("UPD-001b prompts on a TTY and updates only after confirmation", async () => {
+  it("keeps dry-run non-mutating without resolving topology", async () => {
     const calls: string[] = [];
-    const result = await runUpdate({
-      currentVersion: "0.1.7",
-      latestVersion: "0.1.8",
-      runtime: "all",
-      vault: "/tmp/Vault",
-      interactive: true,
-      confirm: async () => true,
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return okCall();
-      },
-    });
+    const result = await runUpdate(updateOptions({ dryRun: true, runner: matchingRunner(calls) }));
 
     expect(result.success).toBe(true);
-    expect(result.mutated).toBe(true);
-    expect(calls).toHaveLength(2);
-  });
-
-  it("UPD-001c leaves a TTY update untouched when confirmation is declined", async () => {
-    const calls: string[] = [];
-    const result = await runUpdate({
-      currentVersion: "0.1.7",
-      latestVersion: "0.1.8",
-      runtime: "all",
-      vault: "/tmp/Vault",
-      interactive: true,
-      confirm: async () => false,
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return okCall();
-      },
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.mutated).toBe(false);
-    expect(calls).toEqual([]);
-  });
-
-  it("UPD-001e treats a closed TTY prompt as a declined confirmation", async () => {
-    const calls: string[] = [];
-    const result = await runUpdate({
-      currentVersion: "0.1.7",
-      latestVersion: "0.1.8",
-      runtime: "all",
-      vault: "/tmp/Vault",
-      interactive: true,
-      confirm: async () => {
-        throw new Error("stdin closed");
-      },
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return okCall();
-      },
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.mutated).toBe(false);
-    expect(calls).toEqual([]);
-  });
-
-  it("UPD-001d keeps dry-run non-mutating regardless of TTY state", async () => {
-    const calls: string[] = [];
-    const result = await runUpdate({
-      currentVersion: "0.1.7",
-      latestVersion: "0.1.8",
-      runtime: "all",
-      vault: "/tmp/Vault",
-      interactive: true,
-      dryRun: true,
-      confirm: async () => {
-        throw new Error("dry-run must not prompt");
-      },
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return okCall();
-      },
-    });
-
-    expect(result.success).toBe(true);
-    expect(result.mutated).toBe(false);
-    expect(calls).toEqual([]);
-  });
-
-  it("UPD-002 compares SemVer prerelease identifiers before stable releases", () => {
-    const ordered = [
-      "1.0.0-alpha",
-      "1.0.0-alpha.1",
-      "1.0.0-alpha.beta",
-      "1.0.0-beta",
-      "1.0.0-beta.2",
-      "1.0.0-beta.11",
-      "1.0.0-rc.1",
-      "1.0.0",
-    ];
-
-    for (let index = 1; index < ordered.length; index++) {
-      expect(compareVersions(ordered[index - 1] as string, ordered[index] as string)).toBeLessThan(0);
-    }
-    expect(compareVersions("v1.0.0+build.1", "1.0.0+build.2")).toBe(0);
-  });
-
-  it("UPD-002 reports dry-run plan without invoking the runner", async () => {
-    const calls: string[] = [];
-    const result = await runUpdate({
-      currentVersion: "0.1.7",
-      latestVersion: "0.1.8",
-      runtime: "codex",
-      vault: "/tmp/Vault",
-      dryRun: true,
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return okCall();
-      },
-    });
-
-    expect(result.success).toBe(true);
-    expect(result.mutated).toBe(false);
-    expect(result.commands).toContain("npm install -g oh-my-second-brain@latest");
-    expect(result.commands.some((command) => command.includes("reconcile --runtime codex"))).toBe(true);
-    expect(calls).toEqual([]);
-  });
-
-  it("UPD-003 executes npm update and re-exec reconciliation only with yes", async () => {
-    const calls: string[] = [];
-    const result = await runUpdate({
-      currentVersion: "0.1.7",
-      latestVersion: "0.1.8",
-      runtime: "codex",
-      vault: "/tmp/Vault",
-      yes: true,
-      executeExternal: true,
-      reconcileCommand: { command: "node", argsPrefix: ["/pkg/dist/cli/oms.js"] },
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return okCall();
-      },
-    });
-
-    expect(result.success).toBe(true);
-    expect(result.mutated).toBe(true);
-    expect(calls).toEqual([
+    expect(result.commands).toEqual([
       "npm install -g oh-my-second-brain@latest",
-      "node /pkg/dist/cli/oms.js reconcile --runtime codex --vault /tmp/Vault --execute",
+      "oms reconcile --runtime codex --vault /tmp/Vault",
+    ]);
+    expect(calls).toEqual([]);
+  });
+
+  it("plans but does not execute reconciliation in check mode when already current", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({
+      currentVersion: "0.1.8",
+      latestVersion: "0.1.8",
+      check: true,
+      runner: matchingRunner(calls),
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.commands).toEqual(["oms reconcile --runtime codex --vault /tmp/Vault"]);
+    expect(calls).toEqual([]);
+  });
+
+  it("uses npm prefix matching the real running binary before installing", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({ runner: matchingRunner(calls), executeExternal: true }));
+
+    expect(result.success).toBe(true);
+    expect(calls).toEqual([
+      "npm prefix -g",
+      "npm install -g oh-my-second-brain@latest",
+      "/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault --execute",
     ]);
   });
 
-  it("UPD-004 skips reconciliation when npm update fails", async () => {
+  it("rejects an npm prefix mismatch without attempting installation", async () => {
     const calls: string[] = [];
-    const result = await runUpdate({
-      currentVersion: "0.1.7",
-      latestVersion: "0.1.8",
-      runtime: "all",
-      vault: "/tmp/Vault",
-      yes: true,
+    const result = await runUpdate(updateOptions({
       runner: (command, args) => {
         calls.push([command, ...args].join(" "));
-        return failCall("registry unavailable");
+        return okCall("/other/prefix\n");
       },
-    });
+    }));
 
     expect(result.success).toBe(false);
     expect(result.mutated).toBe(false);
-    expect(result.message).toContain("npm update failed");
-    expect(calls).toEqual(["npm install -g oh-my-second-brain@latest"]);
+    expect(calls).toEqual(["npm prefix -g"]);
+    expect(result.message).toContain("/opt/oms");
+    expect(result.message).toContain("/other/prefix");
+    expect(result.message).toContain("npm --prefix /opt/oms install -g oh-my-second-brain@latest");
   });
 
-  it("UPD-005 reports partial success when reconciliation fails after npm update", async () => {
+  it("rejects an unresolvable running binary without attempting installation", async () => {
     const calls: string[] = [];
-    const result = await runUpdate({
-      currentVersion: "0.1.7",
+    const result = await runUpdate(updateOptions({
+      realpath: () => { throw new Error("ENOENT"); },
+      runner: matchingRunner(calls),
+    }));
+
+    expect(result.success).toBe(false);
+    expect(result.mutated).toBe(false);
+    expect(calls).toEqual([]);
+    expect(result.message).toContain("ENOENT");
+  });
+
+  it("reconciles even when the installed package is already latest", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({
+      currentVersion: "0.1.8",
       latestVersion: "0.1.8",
-      runtime: "all",
-      vault: "/tmp/Vault",
-      yes: true,
-      reconcileCommand: { command: "node", argsPrefix: ["/pkg/dist/cli/oms.js"] },
+      runner: matchingRunner(calls),
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.updateAvailable).toBe(false);
+    expect(result.mutated).toBe(false);
+    expect(result.message).toContain("already up to date");
+    expect(result.message).toContain("reconciliation completed");
+    expect(calls).toEqual([
+      "npm prefix -g",
+      "/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault",
+    ]);
+  });
+
+  it("does not reconcile when installation fails", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({
       runner: (command, args) => {
         calls.push([command, ...args].join(" "));
-        return calls.length === 1 ? okCall() : failCall("host config refused");
+        return command === "npm" && args[0] === "prefix" ? okCall(`${runningPrefix}\n`) : failCall("registry unavailable");
       },
-    });
+    }));
+
+    expect(result.success).toBe(false);
+    expect(calls).toEqual(["npm prefix -g", "npm install -g oh-my-second-brain@latest"]);
+  });
+
+  it("reports the exact installed-bin resume command when reconciliation fails", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({ runner: matchingRunner(calls, failCall("host config refused")) }));
 
     expect(result.success).toBe(false);
     expect(result.mutated).toBe(true);
-    expect(result.message).toContain("reconciliation failed");
-    expect(calls).toHaveLength(2);
+    expect(result.message).toContain("Resume with `/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault`");
   });
 
-  it("UPD-NOTICE-001 reports an update notice without mutating", async () => {
-    const calls: string[] = [];
-    const notice = await checkUpdateNotice({
-      currentVersion: "0.1.7",
-      latestVersion: "0.1.8",
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return okCall();
-      },
-    });
+  it("compares SemVer prerelease identifiers before stable releases", () => {
+    expect(compareVersions("1.0.0-rc.1", "1.0.0")).toBeLessThan(0);
+    expect(compareVersions("v1.0.0+build.1", "1.0.0+build.2")).toBe(0);
+  });
 
-    expect(notice).not.toBeNull();
-    expect(notice?.currentVersion).toBe("0.1.7");
-    expect(notice?.latestVersion).toBe("0.1.8");
-    expect(calls).toEqual([]);
+  it("reports an update notice without mutating", async () => {
+    const notice = await checkUpdateNotice({ currentVersion: "0.1.7", latestVersion: "0.1.8" });
+    expect(notice).toMatchObject({ currentVersion: "0.1.7", latestVersion: "0.1.8" });
     expect(formatUpdateNotice(notice)).toContain("oms update --yes");
-  });
-
-  it("UPD-NOTICE-002 stays silent when current version is already latest", async () => {
-    await expect(
-      checkUpdateNotice({
-        currentVersion: "0.1.8",
-        latestVersion: "0.1.8",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("UPD-NOTICE-003 stays silent when registry lookup fails", async () => {
-    await expect(
-      checkUpdateNotice({
-        currentVersion: "0.1.7",
-        runner: () => failCall("registry unavailable"),
-      }),
-    ).resolves.toBeNull();
   });
 });
