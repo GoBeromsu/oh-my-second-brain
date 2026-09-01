@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { RuntimeSelection } from "../install/hosts.js";
 
@@ -43,6 +45,10 @@ export interface RunUpdateOptions {
   readonly executeExternal?: boolean;
   readonly timeoutMs?: number;
   readonly runner?: UpdateRunner;
+  /** Injectable only to make ownership topology deterministic in tests. */
+  readonly entrypoint?: string;
+  readonly realpath?: (target: string) => string;
+  /** Retained until #90 updates the host-command caller; topology intentionally ignores it. */
   readonly reconcileCommand?: ReconcileCommand;
 }
 
@@ -220,9 +226,56 @@ function buildReconcileArgs(options: {
 }
 
 function buildReconcileCommand(options: RunUpdateOptions): ReconcileCommand {
-  if (options.reconcileCommand !== undefined) return options.reconcileCommand;
-  const entrypoint = process.argv[1] ?? "oms";
-  return { command: process.execPath, argsPrefix: [entrypoint] };
+  const entrypoint = options.entrypoint ?? process.argv[1];
+  if (entrypoint === undefined) {
+    throw new Error("The running OMS binary path is unavailable.");
+  }
+  const binary = (options.realpath ?? realpathSync)(entrypoint);
+  const nodeModules = `${path.sep}lib${path.sep}node_modules${path.sep}`;
+  const index = binary.indexOf(nodeModules);
+  if (index === -1) {
+    throw new Error(`The running OMS binary is not owned by a global npm prefix: ${binary}`);
+  }
+  return {
+    command: path.join(binary.slice(0, index), "bin", "oms"),
+    argsPrefix: [],
+  };
+}
+
+async function resolveNpmTopology(
+  options: RunUpdateOptions,
+  runner: UpdateRunner,
+  timeoutMs: number,
+): Promise<
+  | { readonly ok: true; readonly reconcile: ReconcileCommand }
+  | { readonly ok: false; readonly error: string }
+> {
+  let reconcile: ReconcileCommand;
+  try {
+    reconcile = buildReconcileCommand(options);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `${detail} Run \`npm prefix -g\` and use that installation's \`oms reconcile\` command manually.` };
+  }
+
+  const prefixResult = await runner("npm", ["prefix", "-g"], { timeoutMs });
+  const npmPrefix = prefixResult.stdout.trim();
+  if (prefixResult.exitCode !== 0 || npmPrefix.length === 0) {
+    const detail = prefixResult.stderr.trim() || prefixResult.stdout.trim() || "npm prefix -g failed";
+    return {
+      ok: false,
+      error: `Unable to resolve npm's global prefix: ${detail}. Run \`npm prefix -g\` and then \`${reconcile.command} reconcile\` manually.`,
+    };
+  }
+
+  const runningPrefix = path.dirname(path.dirname(reconcile.command));
+  if (path.resolve(runningPrefix) !== path.resolve(npmPrefix)) {
+    return {
+      ok: false,
+      error: `Refusing to update: running OMS binary belongs to ${runningPrefix} (version ${options.currentVersion ?? "unknown"}), but npm prefix -g resolved ${npmPrefix} (target version ${options.latestVersion ?? "latest"}). Run \`npm --prefix ${runningPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` and then \`${reconcile.command} reconcile --runtime ${options.runtime} --vault ${options.vault}\` manually.`,
+    };
+  }
+  return { ok: true, reconcile };
 }
 
 export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult> {
@@ -252,47 +305,32 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
   const updateAvailable =
     currentVersion === null || compareVersions(currentVersion, latest.version) < 0;
   const npmArgs = ["install", "-g", `${packageName}@latest`];
-  const reconcile = buildReconcileCommand(options);
-  const reconcileArgs = [
-    ...reconcile.argsPrefix,
-    ...buildReconcileArgs({
-      runtime: options.runtime,
-      vault: options.vault,
-      executeExternal: options.executeExternal === true,
-    }),
-  ];
+  const reconcileArgs = buildReconcileArgs({
+    runtime: options.runtime,
+    vault: options.vault,
+    executeExternal: options.executeExternal === true,
+  });
   const commands = [
     formatCommand("npm", npmArgs),
-    formatCommand(reconcile.command, reconcileArgs),
+    formatCommand("oms", reconcileArgs),
   ];
-
-  if (!updateAvailable) {
-    return {
-      success: true,
-      currentVersion,
-      latestVersion: latest.version,
-      updateAvailable: false,
-      mutated: false,
-      message: `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}).`,
-      commands: [],
-      errors: [],
-    };
-  }
 
   if (options.dryRun === true || options.check === true) {
     return {
       success: true,
       currentVersion,
       latestVersion: latest.version,
-      updateAvailable: true,
+      updateAvailable,
       mutated: false,
-      message: `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}.`,
-      commands,
+      message: updateAvailable
+        ? `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}.`
+        : `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}); reconciliation is planned.`,
+      commands: updateAvailable ? commands : [formatCommand("oms", reconcileArgs)],
       errors: [],
     };
   }
 
-  if (options.yes !== true) {
+  if (updateAvailable && options.yes !== true) {
     if (options.interactive !== true) {
       return {
         success: false,
@@ -326,22 +364,40 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
     }
   }
 
-  const npmResult = await runner("npm", npmArgs, { timeoutMs });
-  if (npmResult.exitCode !== 0) {
-    const error = npmResult.stderr.trim() || npmResult.stdout.trim() || "npm install failed";
+  const topology = await resolveNpmTopology(options, runner, timeoutMs);
+  if (!topology.ok) {
     return {
       success: false,
       currentVersion,
       latestVersion: latest.version,
-      updateAvailable: true,
+      updateAvailable,
       mutated: false,
-      message: `npm update failed: ${error}`,
+      message: topology.error,
       commands,
-      errors: [error],
+      errors: [topology.error],
     };
   }
+  const reconcile = topology.reconcile;
+  const installedReconcileArgs = [...reconcile.argsPrefix, ...reconcileArgs];
 
-  const reconcileResult = await runner(reconcile.command, reconcileArgs, {
+  if (updateAvailable) {
+    const npmResult = await runner("npm", npmArgs, { timeoutMs });
+    if (npmResult.exitCode !== 0) {
+      const error = npmResult.stderr.trim() || npmResult.stdout.trim() || "npm install failed";
+      return {
+        success: false,
+        currentVersion,
+        latestVersion: latest.version,
+        updateAvailable: true,
+        mutated: false,
+        message: `npm update failed: ${error}`,
+        commands,
+        errors: [error],
+      };
+    }
+  }
+
+  const reconcileResult = await runner(reconcile.command, installedReconcileArgs, {
     timeoutMs,
     env: { OMS_UPDATE_RECONCILE: "1" },
   });
@@ -352,9 +408,9 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       success: false,
       currentVersion,
       latestVersion: latest.version,
-      updateAvailable: true,
-      mutated: true,
-      message: `Updated package to ${latest.version}, but reconciliation failed: ${error}`,
+      updateAvailable,
+      mutated: updateAvailable,
+      message: `${updateAvailable ? `Updated package to ${latest.version}, but` : "Package is already up to date, but"} reconciliation failed: ${error}. Resume with \`${reconcile.command} ${installedReconcileArgs.join(" ")}\`.`,
       commands,
       errors: [error],
     };
@@ -364,9 +420,11 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
     success: true,
     currentVersion,
     latestVersion: latest.version,
-    updateAvailable: true,
-    mutated: true,
-    message: `Successfully updated Oh My Second Brain from ${currentVersion ?? "unknown"} to ${latest.version}.`,
+    updateAvailable,
+    mutated: updateAvailable,
+    message: updateAvailable
+      ? `Successfully updated Oh My Second Brain from ${currentVersion ?? "unknown"} to ${latest.version}.`
+      : `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}); runtime reconciliation completed.`,
     commands,
     errors: [],
   };
