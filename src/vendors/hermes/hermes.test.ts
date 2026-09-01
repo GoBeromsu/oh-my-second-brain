@@ -112,6 +112,33 @@ describe("installHermes transaction", () => {
     }
   });
 
+  it("rejects a tampered installed skill tree at Verify and restores the config", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-"));
+    temporaryDirectories.push(home);
+    const hermes = path.join(home, ".hermes");
+    const config = path.join(hermes, "config.yaml");
+    const original = "mcp_servers:\n  other: keep\n";
+    await mkdir(hermes);
+    await writeFile(config, original);
+    const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
+    if (!host) throw new Error("Hermes surface missing");
+    const skillTarget = path.join(hermes, "skills", "knowledge-management", "oms");
+    const cpMock = vi.mocked(fsPromises.cp).mockImplementation(async (source, destination, options) => {
+      await originalCp(source, destination, options);
+      if (String(destination) === skillTarget) {
+        await originalWriteFile(path.join(skillTarget, "write", "SKILL.md"), "tampered\n");
+      }
+    });
+    try {
+      await expect(installHermes({
+        action: "install", runtime: "hermes", vault: "/vault", homeDir: home, adapterRoot: path.resolve("."),
+      }, host)).rejects.toThrow("installed skill tree does not match");
+      expect(await readFile(config, "utf8")).toBe(original);
+    } finally {
+      cpMock.mockRestore();
+    }
+  });
+
   it("verifies uninstall removes the config entry and all owned paths", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-"));
     temporaryDirectories.push(home);

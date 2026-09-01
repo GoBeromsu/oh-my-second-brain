@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, lstatSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -43,6 +44,31 @@ async function rollbackConfig(configPath: string, preImage: Buffer | undefined, 
   throw original;
 }
 
+/** Deterministic content digest of a file tree: sorted relative paths + bytes. */
+async function treeDigest(root: string): Promise<string> {
+  const hash = createHash("sha256");
+  const walk = async (directory: string): Promise<void> => {
+    const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(absolute);
+      } else {
+        hash.update(path.relative(root, absolute));
+        hash.update("\0");
+        hash.update(await readFile(absolute));
+        hash.update("\0");
+      }
+    }
+  };
+  await walk(root);
+  return hash.digest("hex");
+}
+
+async function fileDigest(file: string): Promise<string> {
+  return createHash("sha256").update(await readFile(file)).digest("hex");
+}
+
 async function verifyHermesInstall(configPath: string, skillTarget: string, options: HostOperationOptions): Promise<void> {
   const raw = existsSync(configPath) ? await readFile(configPath) : Buffer.alloc(0);
   const document = parseDocument(raw.toString("utf8"));
@@ -65,6 +91,21 @@ async function verifyHermesInstall(configPath: string, skillTarget: string, opti
   const installed = new Set(await readdir(skillTarget));
   if (!HERMES_SKILLS.every(skill => installed.has(skill) && existsSync(path.join(skillTarget, skill, "SKILL.md")))) {
     throw new Error("Hermes install verification failed: skill bundle is incomplete");
+  }
+}
+
+async function verifyHermesTrees(
+  skillSource: string,
+  skillTarget: string,
+  adapterFiles: readonly { readonly source: string; readonly target: string }[],
+): Promise<void> {
+  if ((await treeDigest(skillSource)) !== (await treeDigest(skillTarget))) {
+    throw new Error("Hermes install verification failed: installed skill tree does not match the prepared source");
+  }
+  for (const file of adapterFiles) {
+    if ((await fileDigest(file.source)) !== (await fileDigest(file.target))) {
+      throw new Error(`Hermes install verification failed: installed adapter asset does not match its source: ${file.target}`);
+    }
   }
 }
 
@@ -117,6 +158,11 @@ export async function installHermes(options: HostOperationOptions, host: Harness
       await cp(path.join(adapterSource, "hermes", "README.md"), readmeTarget);
       if (config.changed) await atomicWrite(configPath, Buffer.from(config.text, "utf8"));
       await verifyHermesInstall(configPath, skillTarget, options);
+      await verifyHermesTrees(skillSource, skillTarget, [
+        { source: path.join(adapterSource, "hermes-manifest.json"), target: adapterManifestTarget },
+        { source: path.join(adapterSource, "hermes", "SOUL.md"), target: guidanceTarget },
+        { source: path.join(adapterSource, "hermes", "README.md"), target: readmeTarget },
+      ]);
     } catch (error) {
       await rollbackConfig(configPath, preImage, error);
     }

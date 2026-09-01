@@ -58,6 +58,50 @@ describe("renderYamlEntryPreservingComments", () => {
     }
   });
 
+  it("creates a full section from an empty file and treats empty-file deletion as a no-op", () => {
+    const created = renderYamlEntryPreservingComments("", path, { kind: "set", value: entry });
+    expect(created.changed).toBe(true);
+    expect(created.text).toBe("mcp_servers:\n  oms:\n    command: oms\n    args:\n      - mcp\n      - --vault\n      - /vault\n    enabled: true\n");
+    const removedFromEmpty = renderYamlEntryPreservingComments("", path, { kind: "delete" });
+    expect(removedFromEmpty.changed).toBe(false);
+    expect(removedFromEmpty.text).toBe("");
+  });
+
+  it("expands an explicit empty root mapping in place", () => {
+    const result = renderYamlEntryPreservingComments("{}\n", path, { kind: "set", value: entry });
+    expect(result.changed).toBe(true);
+    expect(result.text).toContain("mcp_servers:\n  oms:\n");
+  });
+
+  it("rejects multi-document YAML for either edit", () => {
+    const raw = "name: one\n---\nname: two\n";
+    for (const edit of [{ kind: "set", value: entry } as const, { kind: "delete" } as const]) {
+      expect(() => renderYamlEntryPreservingComments(raw, path, edit)).toThrow(UnsafeYamlEditError);
+    }
+  });
+
+  it("rejects anchors and aliases for either edit", () => {
+    for (const raw of ["mcp_servers: &servers {}\n", "defaults: &d {}\nmcp_servers: *d\n"]) {
+      for (const edit of [{ kind: "set", value: entry } as const, { kind: "delete" } as const]) {
+        expect(() => renderYamlEntryPreservingComments(raw, path, edit)).toThrow(UnsafeYamlEditError);
+      }
+    }
+  });
+
+  it("round-trips set then delete byte-for-byte on a populated section without a final newline", () => {
+    const raw = "mcp_servers:\n  other: keep";
+    const inserted = renderYamlEntryPreservingComments(raw, path, { kind: "set", value: entry });
+    const removed = renderYamlEntryPreservingComments(inserted.text, path, { kind: "delete" });
+    expect(removed.text).toBe(raw);
+  });
+
+  it("round-trips set then delete byte-for-byte when the section is missing and the file lacks a final newline", () => {
+    const raw = "name: keep";
+    const inserted = renderYamlEntryPreservingComments(raw, path, { kind: "set", value: entry });
+    const removed = renderYamlEntryPreservingComments(inserted.text, path, { kind: "delete" });
+    expect(removed.text).toBe(raw);
+  });
+
   it("rejects ambiguous YAML constructs before any write", () => {
     for (const raw of [
       "mcp_servers: &servers {}\n",
