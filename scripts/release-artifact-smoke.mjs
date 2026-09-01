@@ -141,6 +141,7 @@ function setupSmoke(packageRoot, vault, smokeHome) {
   const result = run(process.execPath, [cli, "setup", "--vault", vault, "--yes", "--approved-digest", approval, "--install-claude"], { cwd: packageRoot, env });
   const output = `${result.stdout}\n${result.stderr}`;
   assertPath(path.join(vault, ".oms/taxonomy.json"), "vault taxonomy");
+  if (existsSync(path.join(vault, ".oms/taxonomy.yaml"))) fail("setup retained retired vault taxonomy YAML");
   assertPath(path.join(vault, ".oms/template-policy.json"), "vault template policy");
   assertPath(path.join(vault, ".oms/types.json"), "vault derived projection");
   if (existsSync(path.join(vault, ".oms/concepts"))) fail("setup recreated the retired concepts directory");
