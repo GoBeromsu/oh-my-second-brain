@@ -28,6 +28,9 @@ vi.mock("./engine-session.js", () => ({
   },
 }));
 
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { isSearchCliCommand, runSearchCli, TOP_LEVEL_COMMANDS } from "./search.js";
 
 beforeEach(() => {
@@ -76,13 +79,23 @@ describe("search CLI", () => {
 
   it("routes index status, cleanup, collections, contexts and document reads", async () => {
     for (const argv of [
-      ["index", "status"],
       ["index", "cleanup"],
       ["index", "collections"],
       ["index", "contexts"],
       ["doc", "get", "note.md"],
       ["doc", "multi-get", "one.md", "two.md"],
     ]) expect(await cli(argv)).toBe(0);
+
+    // Status reports an absent disk store with sync guidance instead of
+    // masking it behind the ephemeral in-memory session.
+    const missingStoreError = vi.fn();
+    expect(await runSearchCli({ argv: ["index", "status"], vault: "/vault", write: vi.fn(), writeError: missingStoreError })).toBe(1);
+    expect(missingStoreError.mock.calls.flat().join(" ")).toContain("oms index sync");
+
+    const vault = mkdtempSync(path.join(tmpdir(), "oms-search-status-"));
+    mkdirSync(path.join(vault, ".oms"), { recursive: true });
+    writeFileSync(path.join(vault, ".oms", "engine-store.sqlite"), "");
+    expect(await runSearchCli({ argv: ["index", "status"], vault, write: vi.fn(), writeError: vi.fn() })).toBe(0);
   });
 
   it("rejects retired semantic routes and index embed", async () => {
