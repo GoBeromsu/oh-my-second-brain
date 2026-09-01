@@ -25,6 +25,7 @@ import { runLink } from "./link-command.js";
 import { runLinkify } from "./linkify.js";
 import { isSearchCliCommand, runSearchCli } from "./search.js";
 import { runSetup } from "./setup-command.js";
+import { searchUsage } from "./search-usage.js";
 import { maybePrintUpdateNotice } from "./update-notice.js";
 import { printUsage } from "./usage.js";
 
@@ -57,9 +58,43 @@ function shouldResolveBridgeVault(command: string | undefined, vaultExplicit: bo
   );
 }
 
+function isKnownCommand(command: string | undefined): boolean {
+  return (
+    command === undefined ||
+    command === "setup" ||
+    command === "link" ||
+    command === "install" ||
+    command === "uninstall" ||
+    command === "update" ||
+    command === "reconcile" ||
+    command === "doctor" ||
+    command === "audit" ||
+    command === "linkify" ||
+    command === "lint" ||
+    command === "mcp" ||
+    command === "hook" ||
+    isSearchCliCommand(command)
+  );
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const parsedArgs = parseCliArgs(argv);
+  if (parsedArgs.help) {
+    if (!isKnownCommand(parsedArgs.command)) {
+      console.error(`[oms] Unknown command: ${parsedArgs.command}`);
+      printUsage();
+      process.exitCode = 1;
+      return;
+    }
+    if (isSearchCliCommand(parsedArgs.command)) {
+      console.log(searchUsage());
+    } else {
+      printUsage();
+    }
+    process.exitCode = 0;
+    return;
+  }
   if (parsedArgs.error !== undefined) {
     console.error(parsedArgs.error.message);
     process.exitCode = 1;

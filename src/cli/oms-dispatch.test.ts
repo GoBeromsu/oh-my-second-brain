@@ -141,6 +141,46 @@ describe("oms CLI dispatch", () => {
     expect(result.stdout).not.toMatch(/semantic/u);
   });
 
+  it.each([
+    { command: [] },
+    { command: ["setup"] },
+    { command: ["doctor"] },
+    { command: ["index"] },
+    { command: ["search"] },
+    { command: ["mcp"] },
+    { command: ["install"] },
+  ])("prints usage without side effects for $command --help", async ({ command }) => {
+    const vault = await makeVault();
+    const beforeVault = snapshotDir(vault);
+    const beforeHome = snapshotDir(smokeHome);
+    const result = runCli([...command, "--help", "--vault", vault]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toMatch(/Usage:|OMS search and index:/u);
+    expect(result.stdout).not.toContain("Update available");
+    expect(snapshotDir(vault)).toBe(beforeVault);
+    expect(snapshotDir(smokeHome)).toBe(beforeHome);
+  });
+
+  it("prints usage for -h without side effects", async () => {
+    const vault = await makeVault();
+    const beforeVault = snapshotDir(vault);
+    const result = runCli(["-h", "--vault", vault]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage:");
+    expect(snapshotDir(vault)).toBe(beforeVault);
+  });
+
+  it("rejects an unknown command even when help is requested", () => {
+    const result = runCli(["setpu", "--help"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("[oms] Unknown command: setpu");
+  });
+
   it("reports unknown hook subcommand with exit code 1", () => {
     const result = runCli(["hook"]);
 
