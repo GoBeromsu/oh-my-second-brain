@@ -11,6 +11,7 @@ export class CliArgumentError extends Error {
 
 export interface ParsedCliArgs {
   readonly command: string | undefined;
+  readonly help: boolean;
   readonly vault: string;
   readonly vaultExplicit: boolean;
   readonly yes: boolean;
@@ -43,7 +44,9 @@ export function isRuntimeSelection(value: string): value is RuntimeSelection {
 }
 
 export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): ParsedCliArgs {
-  const command = argv[0];
+  const firstArg = argv[0];
+  const command = firstArg === "--help" || firstArg === "-h" ? undefined : firstArg;
+  let help = firstArg === "--help" || firstArg === "-h";
   let vault = cwd;
   let vaultExplicit = false;
   let yes = false;
@@ -70,7 +73,9 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     const next = argv[i + 1];
-    if (arg === "--vault" && next) {
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+    } else if (arg === "--vault" && next) {
       vault = path.resolve(cwd, next);
       vaultExplicit = true;
       i++;
@@ -168,6 +173,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
 
   return {
     command,
+    help,
     vault,
     vaultExplicit,
     yes,
@@ -196,6 +202,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   function parsedArgsWithError(message: string): ParsedCliArgs {
     return {
       command,
+      help,
       vault,
       vaultExplicit,
       yes,

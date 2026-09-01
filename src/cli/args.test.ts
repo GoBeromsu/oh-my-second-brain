@@ -78,6 +78,18 @@ describe("CLI argument parser", () => {
     expect(parsed.unknownFlags).toEqual(["--runtime"]);
   });
 
+  it("parses help as a first-class flag rather than an unknown option", () => {
+    for (const args of [["--help"], ["-h"], ["setup", "--help"], ["mcp", "-h"]]) {
+      const parsed = parseCliArgs(args);
+
+      expect(parsed.help).toBe(true);
+      expect(parsed.unknownFlags).not.toContain("--help");
+      expect(parsed.unknownFlags).not.toContain("-h");
+    }
+    expect(parseCliArgs(["--help"]).command).toBeUndefined();
+    expect(parseCliArgs(["setup", "--help"]).command).toBe("setup");
+  });
+
   it("parses repeated link folders and distinguishes implicit vault defaults", () => {
     const implicit = parseCliArgs(["doctor"], "/tmp/oms-cli");
     const linked = parseCliArgs(
