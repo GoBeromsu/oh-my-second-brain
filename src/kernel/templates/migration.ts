@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
-import { parseDocument, stringify } from "yaml";
+import { parseDocument } from "yaml";
 import { parseNote } from "../conventions/frontmatter.js";
 import { excludedNoteMatcher } from "../conventions/note-exclude.js";
 
@@ -321,7 +321,11 @@ export async function applyTemplateMigration(vault: string, proposal: MigrationP
     || typeof manifest.approvalDigest !== "string"
     || typeof manifest.outputDigest !== "string"
   ) throw new Error("MIGRATION_APPROVAL_MISMATCH");
-  return executeTemplateTransaction(vault, manifest, request);
+  const receipt = await executeTemplateTransaction(vault, manifest, request);
+  if (request.dryRun !== true && (receipt.status === "applied" || receipt.status === "already-complete")) {
+    await rm(join(vault, ".oms", "taxonomy.yaml"), { force: true });
+  }
+  return receipt;
 }
 
 export function migrationProposalDigest(proposal: MigrationProposal): Digest {
@@ -528,11 +532,21 @@ function asJson(value: unknown): JsonValue {
   if (typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, member]) => [key, asJson(member)]));
   throw new Error("MIGRATION_TAXONOMY_INVALID: non-JSON taxonomy member");
 }
-function translatedTaxonomy(value: VerifiedFileState, proposal: MigrationProposal, inheritedAxes: GlobalAxes = {}): { readonly bytes: Uint8Array; readonly globalAxes: GlobalAxes; readonly targetFolders: ReadonlyMap<string, TemplateFolderPath> } {
-  if (value.state === "absent") return { bytes: bytes(stringify({ folders: {}, globalAxes: inheritedAxes })), globalAxes: inheritedAxes, targetFolders: new Map() };
-  const document = parseDocument(new TextDecoder().decode(value.bytes), { prettyErrors: false });
-  const source = document.toJS() as unknown;
-  if (document.errors.length > 0 || typeof source !== "object" || source === null || Array.isArray(source)) throw new Error("MIGRATION_TAXONOMY_INVALID: .oms/taxonomy.yaml");
+function translatedTaxonomy(value: VerifiedFileState, proposal: MigrationProposal, legacyYaml: boolean, inheritedAxes: GlobalAxes = {}): { readonly bytes: Uint8Array; readonly globalAxes: GlobalAxes; readonly targetFolders: ReadonlyMap<string, TemplateFolderPath> } {
+  if (value.state === "absent") return { bytes: bytes(`${JSON.stringify({ folders: {}, globalAxes: inheritedAxes }, null, 2)}\n`), globalAxes: inheritedAxes, targetFolders: new Map() };
+  let source: unknown;
+  try {
+    if (legacyYaml) {
+      const document = parseDocument(new TextDecoder().decode(value.bytes), { prettyErrors: false });
+      if (document.errors.length > 0) throw new Error("invalid YAML");
+      source = document.toJS() as unknown;
+    } else {
+      source = JSON.parse(new TextDecoder().decode(value.bytes)) as unknown;
+    }
+  } catch {
+    throw new Error(`MIGRATION_TAXONOMY_INVALID: ${legacyYaml ? ".oms/taxonomy.yaml" : ".oms/taxonomy.json"}`);
+  }
+  if (typeof source !== "object" || source === null || Array.isArray(source)) throw new Error(`MIGRATION_TAXONOMY_INVALID: ${legacyYaml ? ".oms/taxonomy.yaml" : ".oms/taxonomy.json"}`);
   const root = asJson(source) as unknown as Record<string, JsonValue>;
   const folders = root.folders;
   if (folders !== undefined && (typeof folders !== "object" || folders === null || Array.isArray(folders))) throw new Error("MIGRATION_TAXONOMY_INVALID: folders");
@@ -572,22 +586,22 @@ function translatedTaxonomy(value: VerifiedFileState, proposal: MigrationProposa
     }
   }
   const publishedAxes = { ...axes };
-  const folderOntology = deriveFolderOntologyAxis(folders, ".oms/taxonomy.yaml.folders");
+  const folderOntology = deriveFolderOntologyAxis(folders, ".oms/taxonomy.json.folders");
   if (folderOntology !== null) {
     if (Object.hasOwn(axes, "folder-ontology")) throw new Error("MIGRATION_TAXONOMY_INVALID: globalAxes.folder-ontology is reserved");
     axes["folder-ontology"] = folderOntology;
   }
   root.globalAxes = publishedAxes as unknown as JsonValue;
   delete root.axes;
-  return { bytes: bytes(stringify(root)), globalAxes: axes, targetFolders };
+  return { bytes: bytes(`${JSON.stringify(root, null, 2)}\n`), globalAxes: axes, targetFolders };
 }
 function inputFor(authority: readonly AuthorityEntry[], bindings: readonly TemplateBinding[], folder: TemplateFolderPath): InputV2 {
   return { version: 2, authority, placement: bindings.map(binding => ({ templateId: binding.templateId, destinationClass: binding.destinationClass, templateFolder: binding.destinationClass === "managed-default" ? folder : null, sourcePath: binding.sourcePath })) };
 }
-function authorityFor(policy: VerifiedFileState, taxonomy: VerifiedFileState, projection: VerifiedFileState, obsidian: VerifiedFileState, candidates: readonly TemplateCandidate[], includeLegacyProjection: boolean): AuthorityEntry[] {
+function authorityFor(policy: VerifiedFileState, taxonomy: VerifiedFileState, taxonomyPath: ".oms/taxonomy.yaml" | ".oms/taxonomy.json", projection: VerifiedFileState, obsidian: VerifiedFileState, candidates: readonly TemplateCandidate[], includeLegacyProjection: boolean): AuthorityEntry[] {
   const controls: AuthorityEntry[] = [];
   if (policy.state === "present") controls.push({ kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: policy.signature });
-  if (taxonomy.state === "present") controls.push({ kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.yaml", contentDigest: taxonomy.signature });
+  if (taxonomy.state === "present") controls.push({ kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: taxonomyPath, contentDigest: taxonomy.signature });
   if (includeLegacyProjection && projection.state === "present") controls.push({ kind: "legacy-contract", logicalId: "legacy-types", vaultRelativePath: ".oms/types.json", contentDigest: projection.signature });
   controls.push({ kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: ".obsidian/types.json", contentDigest: present(obsidian, ".obsidian/types.json").signature });
   return [...controls, ...candidates.map(candidate => ({ kind: "template" as const, logicalId: candidate.templateId, vaultRelativePath: candidate.sourcePath, contentDigest: sha(candidate.bytes) }))];
@@ -597,16 +611,23 @@ function authorityFor(policy: VerifiedFileState, taxonomy: VerifiedFileState, pr
 export async function buildMigrationManifest(vault: string, proposal: MigrationProposal, input: MigrationCompositionInput): Promise<TemplateCompositionManifest> {
   if (proposal.unresolved.length > 0) throw new Error("MIGRATION_UNRESOLVED_MAPPING");
   const root = resolve(vault);
-  const [policyState, taxonomyState, projectionState, obsidianState] = await Promise.all([
-    fileState(root, ".oms/template-policy.json"), fileState(root, ".oms/taxonomy.yaml"), fileState(root, ".oms/types.json"), fileState(root, ".obsidian/types.json"),
+  const [policyState, taxonomyState, legacyTaxonomyState, projectionState, obsidianState] = await Promise.all([
+    fileState(root, ".oms/template-policy.json"), fileState(root, ".oms/taxonomy.json"), fileState(root, ".oms/taxonomy.yaml"), fileState(root, ".oms/types.json"), fileState(root, ".obsidian/types.json"),
   ]);
   present(obsidianState, ".obsidian/types.json");
   const authority = await loadObsidianTypes(root);
   if (authority === null) throw new Error("MIGRATION_AUTHORITY_MISSING: .obsidian/types.json");
   const currentPolicy = policyState.state === "present" ? parseTemplatePolicy(new TextDecoder().decode(policyState.bytes)) : undefined;
-  if (taxonomyState.state === "present") {
-    const document = parseDocument(new TextDecoder().decode(taxonomyState.bytes), { prettyErrors: false });
-    if (document.errors.length > 0 || mapping(document.toJS({ mapAsMap: true })) === null) throw new Error("MIGRATION_TAXONOMY_INVALID: .oms/taxonomy.yaml");
+  const taxonomyInput = legacyTaxonomyState.state === "present" ? legacyTaxonomyState : taxonomyState;
+  if (taxonomyInput.state === "present") {
+    try {
+      const source = legacyTaxonomyState.state === "present"
+        ? parseDocument(new TextDecoder().decode(taxonomyInput.bytes), { prettyErrors: false }).toJS({ mapAsMap: true })
+        : JSON.parse(new TextDecoder().decode(taxonomyInput.bytes)) as unknown;
+      if (mapping(source) === null) throw new Error("invalid taxonomy");
+    } catch {
+      throw new Error(`MIGRATION_TAXONOMY_INVALID: ${legacyTaxonomyState.state === "present" ? ".oms/taxonomy.yaml" : ".oms/taxonomy.json"}`);
+    }
   }
   // `.oms/types.json` is legacy input during migration. It is intentionally not
   // accepted through the template-first projection parser.
@@ -631,7 +652,7 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
     );
   });
   const policyBytes = bytes(serializeTemplatePolicy(proposedPolicy));
-  const translated = translatedTaxonomy(taxonomyState, proposal, legacyContract.axes);
+  const translated = translatedTaxonomy(taxonomyInput, proposal, legacyTaxonomyState.state === "present", legacyContract.axes);
   const taxonomyBytes = translated.bytes;
   const sourceDescriptors = [
     { logicalId: "template-policy", signature: sha(policyBytes) },
@@ -663,13 +684,13 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
     };
   }))).sort((a, b) => a.templateId.localeCompare(b.templateId));
   const currentBindings = currentPolicy === undefined ? [] : Object.values(currentPolicy.templates).sort((a, b) => a.templateId.localeCompare(b.templateId));
-  const currentInput = inputFor(authorityFor(policyState, taxonomyState, projectionState, obsidianState, currentBindings.map(binding => candidateById.get(binding.templateId)!).filter((candidate): candidate is TemplateCandidate => candidate !== undefined), currentPolicy === undefined), currentBindings, currentPolicy?.templateFolder ?? proposal.templateFolder);
-  const proposedInput = inputFor(authorityFor({ state: "present", bytes: policyBytes, signature: sha(policyBytes) }, { state: "present", bytes: taxonomyBytes, signature: sha(taxonomyBytes) }, projectionState, obsidianState, proposal.candidates, currentPolicy === undefined), proposedBindings, proposedPolicy.templateFolder);
+  const currentInput = inputFor(authorityFor(policyState, taxonomyInput, legacyTaxonomyState.state === "present" ? ".oms/taxonomy.yaml" : ".oms/taxonomy.json", projectionState, obsidianState, currentBindings.map(binding => candidateById.get(binding.templateId)!).filter((candidate): candidate is TemplateCandidate => candidate !== undefined), currentPolicy === undefined), currentBindings, currentPolicy?.templateFolder ?? proposal.templateFolder);
+  const proposedInput = inputFor(authorityFor({ state: "present", bytes: policyBytes, signature: sha(policyBytes) }, { state: "present", bytes: taxonomyBytes, signature: sha(taxonomyBytes) }, ".oms/taxonomy.json", projectionState, obsidianState, proposal.candidates, currentPolicy === undefined), proposedBindings, proposedPolicy.templateFolder);
   const current = { input: currentInput, inputDigest: inputDigest(currentInput), bindings: currentBindings, resolvedTemplates: currentBindings.map(binding => { const candidate = candidateById.get(binding.templateId)!; return { templateId: binding.templateId, sourcePath: binding.sourcePath, inputSignature: inputDigest(currentInput), templateSignature: sha(candidate.bytes) }; }) };
   const proposed = { input: proposedInput, inputDigest: inputDigest(proposedInput), bindings: proposedBindings, resolvedTemplates: extracted.map((template, index) => ({ templateId: proposedBindings[index]!.templateId, sourcePath: template.sourcePath, inputSignature: derived.generatedFrom.inputSignature, templateSignature: template.sourceDigest })) };
   const controls: TemplateCompositionManifest["controls"] = [
     { kind: "policy", path: ".oms/template-policy.json", expectedCurrent: expectation(policyState), current: policyState, proposed: { state: "present", bytes: policyBytes, signature: sha(policyBytes) }, action: policyState.state === "present" && same(policyState.bytes, policyBytes) ? "verify-only" : "write" },
-    { kind: "taxonomy", path: ".oms/taxonomy.yaml", expectedCurrent: expectation(taxonomyState), current: taxonomyState, proposed: { state: "present", bytes: taxonomyBytes, signature: sha(taxonomyBytes) }, action: taxonomyState.state === "present" && same(taxonomyState.bytes, taxonomyBytes) ? "verify-only" : "write" },
+    { kind: "taxonomy", path: ".oms/taxonomy.json", expectedCurrent: expectation(taxonomyState), current: taxonomyState, proposed: { state: "present", bytes: taxonomyBytes, signature: sha(taxonomyBytes) }, action: taxonomyState.state === "present" && same(taxonomyState.bytes, taxonomyBytes) ? "verify-only" : "write" },
     { kind: "projection", path: ".oms/types.json", expectedCurrent: expectation(projectionState), current: projectionState, proposed: { state: "present", bytes: projectionBytes, signature: sha(projectionBytes) }, action: projectionState.state === "present" && same(projectionState.bytes, projectionBytes) ? "verify-only" : "write" },
   ];
   const mode: "create" | "update" = currentPolicy === undefined ? "create" : "update";

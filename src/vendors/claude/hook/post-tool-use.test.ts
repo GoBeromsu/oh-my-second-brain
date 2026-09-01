@@ -15,14 +15,14 @@ async function vault(notes: Record<string, string> = {}): Promise<string> {
   roots.push(root);
   await Promise.all([".oms", ".obsidian", "Templates", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
   const policy = `${JSON.stringify({ version: 1, templateFolder: "Templates", base: { fields: {} }, contracts: { note: { intent: "note", fields: { title: { required: true, type: "text" } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
-  const taxonomy = "folders:\n  notes:\n    template: note\n";
+  const taxonomy = JSON.stringify({ folders: { notes: { template: "note" } } });
   const obsidian = "{\"title\":\"text\"}\n";
   const template = "---\ntitle: template\n---\nbody\n";
   const descriptors = [{ logicalId: "template-policy", signature: sha(policy) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }, { path: "Templates/note.md", signature: sha(template) }];
   const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { required: true, type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") } } } }, null, 2)}\n`;
   await Promise.all([
     writeFile(path.join(root, ".oms", "template-policy.json"), policy, "utf8"),
-    writeFile(path.join(root, ".oms", "taxonomy.yaml"), taxonomy, "utf8"),
+    writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy, "utf8"),
     writeFile(path.join(root, ".oms", "types.json"), projection, "utf8"),
     writeFile(path.join(root, ".obsidian", "types.json"), obsidian, "utf8"),
     writeFile(path.join(root, "Templates", "note.md"), template, "utf8"),

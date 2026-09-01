@@ -160,8 +160,7 @@ describe("template migration planner", () => {
     if (taxonomyControl?.proposed.state !== "present" || projectionControl?.proposed.state !== "present") throw new Error("expected migration controls");
     const taxonomy = new TextDecoder().decode(taxonomyControl.proposed.bytes);
     const projection = new TextDecoder().decode(projectionControl.proposed.bytes);
-    expect(taxonomy).toContain("user-extension:");
-    expect(taxonomy).toContain("template: literature");
+    expect(JSON.parse(taxonomy)).toMatchObject({ "user-extension": { preserved: "yes" }, folders: { references: { template: "literature" } } });
     expect(projection).toContain("projection-extension");
   });
 
@@ -202,7 +201,7 @@ describe("template migration planner", () => {
       members: ["inbox", "references"],
       extensions: { intents: { inbox: "Unprocessed captures.", references: "Processed external sources." } },
     });
-    expect(new TextDecoder().decode(manifest.controls.find(control => control.kind === "taxonomy")!.proposed.bytes)).toContain("templates:");
+    expect(JSON.parse(new TextDecoder().decode(manifest.controls.find(control => control.kind === "taxonomy")!.proposed.bytes))).toMatchObject({ folders: { references: { templates: ["literature", "term"] } } });
     expect((await applyTemplateMigration(root, proposal, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
     const resolved = await loadResolvedTemplates(root);
     expect(resolved.templates.literature?.targetFolder).toBe("references");
@@ -248,7 +247,7 @@ describe("template migration planner", () => {
     const policyText = new TextDecoder().decode(policy.proposed.bytes);
     expect(policyText).toContain('"contract": "literature"');
     expect(policyText).toContain('"migrationProvenance"');
-    expect(new TextDecoder().decode(taxonomy.proposed.bytes)).toContain("template: literature--books");
+    expect(JSON.parse(new TextDecoder().decode(taxonomy.proposed.bytes))).toMatchObject({ folders: { books: { template: "literature--books" } } });
     const projectionJson = JSON.parse(new TextDecoder().decode(projection.proposed.bytes)) as {
       managed: { templates: Record<string, { fields: Record<string, unknown> }> };
     };

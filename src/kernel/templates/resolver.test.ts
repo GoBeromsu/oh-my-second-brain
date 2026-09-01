@@ -31,7 +31,7 @@ async function fixture(): Promise<string> {
       },
     },
   });
-  const taxonomy = "folders: {}\n";
+  const taxonomy = JSON.stringify({ folders: {} });
   const types = JSON.stringify({ types: { title: "text" } });
   const template = "---\ntitle: literal\n---\nBody\n";
   const sources: SourceDescriptor[] = [
@@ -63,7 +63,7 @@ async function fixture(): Promise<string> {
   });
   await Promise.all([
     writeFile(join(root, ".oms", "template-policy.json"), policy),
-    writeFile(join(root, ".oms", "taxonomy.yaml"), taxonomy),
+    writeFile(join(root, ".oms", "taxonomy.json"), taxonomy),
     writeFile(join(root, ".obsidian", "types.json"), types),
     writeFile(join(root, "Templates", "OMS", "note.md"), template),
     writeFile(join(root, ".oms", "types.json"), projection),
@@ -84,7 +84,7 @@ describe("loadResolvedTemplates", () => {
     [".oms/template-migration.json", "MIGRATION_INCOMPLETE"],
     [".oms/template-policy.json", "TEMPLATE_SOURCE_INVALID"],
     [".oms/types.json", "TEMPLATE_SOURCE_INVALID"],
-    [".oms/taxonomy.yaml", "TEMPLATE_SOURCE_INVALID"],
+    [".oms/taxonomy.json", "TEMPLATE_SOURCE_INVALID"],
   ])("rejects a vault with only %s", async (control, code) => {
     const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-partial-"));
     roots.push(root);
@@ -95,9 +95,9 @@ describe("loadResolvedTemplates", () => {
   });
 
   it.each([
-    [".oms/template-policy.json", ".oms/taxonomy.yaml"],
+    [".oms/template-policy.json", ".oms/taxonomy.json"],
     [".oms/template-policy.json", ".oms/types.json"],
-    [".oms/types.json", ".oms/taxonomy.yaml"],
+    [".oms/types.json", ".oms/taxonomy.json"],
   ])("rejects representative partial control sets: %s and %s", async (first, second) => {
     const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-partial-"));
     roots.push(root);
@@ -143,7 +143,7 @@ describe("loadResolvedTemplates", () => {
 
   it("resolves a signed actual template without writing the vault", async () => {
     const root = await fixture();
-    const before = await Promise.all([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.yaml", ".obsidian/types.json", "Templates/OMS/note.md"].map(async file => [file, await readFile(join(root, file), "utf8")] as const));
+    const before = await Promise.all([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.json", ".obsidian/types.json", "Templates/OMS/note.md"].map(async file => [file, await readFile(join(root, file), "utf8")] as const));
     const resolved = await loadResolvedTemplates(root);
     expect(Object.keys(resolved.templates)).toEqual(["note"]);
     expect(resolved.templates.note?.body).toBe("Body\n");
@@ -165,18 +165,10 @@ describe("loadResolvedTemplates", () => {
 
   it("rejects an authored axis that collides with the derived folder ontology", async () => {
     const root = await fixture();
-    await writeFile(join(root, ".oms", "taxonomy.yaml"), [
-      "folders:",
-      "  notes:",
-      "    intent: Working notes.",
-      "globalAxes:",
-      "  folder-ontology:",
-      "    kind: folder",
-      "    key: folder",
-      "    type: text",
-      "    members: [notes]",
-      "",
-    ].join("\n"));
+    await writeFile(join(root, ".oms", "taxonomy.json"), JSON.stringify({
+      folders: { notes: { intent: "Working notes." } },
+      globalAxes: { "folder-ontology": { kind: "folder", key: "folder", type: "text", members: ["notes"] } },
+    }));
     await expect(loadResolvedTemplates(root)).rejects.toThrow(/globalAxes\.folder-ontology is reserved/);
   });
 });

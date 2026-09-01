@@ -8,7 +8,7 @@ The vault is governed by user-owned template conventions in `.oms/`.
 
 - Actual Obsidian `.md` templates own note shape and body scaffolding.
 - `.obsidian/types.json` is read-only type authority.
-- The user-owned ontology remains active: `.oms/template-policy.json` records note/field meaning and policy; `.oms/taxonomy.yaml` records folder/link meaning and placement.
+- The user-owned ontology remains active: `.oms/template-policy.json` records note/field meaning and policy; `.oms/taxonomy.json` records folder/link meaning and placement.
 - `.oms/types.json` is derived; never hand-edit it.
 - Humans and agents use the same stable `templateId` rules.
 

@@ -145,12 +145,12 @@ async function makeTemplateVault(): Promise<string> {
     mkdir(path.join(vault, "Templates", "OMS"), { recursive: true }),
   ]);
   const policy = JSON.stringify({ version: 1, templateFolder: "Templates/OMS", base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true, intent: "Stable note identity." } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
-  const taxonomy = "folders:\n  notes:\n    intent: Working notes.\n    template: note\n";
+  const taxonomy = JSON.stringify({ folders: { notes: { intent: "Working notes.", template: "note" } } });
   const obsidianTypes = JSON.stringify({ types: { template: "text" } });
   const template = "---\ntemplate: note\n---\n<!-- oms:content -->\n";
   const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: digest(policy) }, { logicalId: "taxonomy", signature: digest(taxonomy) }, { logicalId: "obsidian-types", signature: digest(obsidianTypes) }, { path: "Templates/OMS/note.md", signature: digest(template) }];
   const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: { "folder-ontology": { kind: "folder", key: "folder", type: "text", intent: "Semantic meanings of vault folders.", members: ["notes"], extensions: { intents: { notes: "Working notes." } } } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", targetFolder: "notes", keyOrder: ["template"], fields: { template: { type: "text", required: true, intent: "Stable note identity." } }, views: [], naming: "{{slug}}.md", bodySignature: digest("<!-- oms:content -->\n") } } } });
-  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.yaml"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
+  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
   return vault;
 }
 

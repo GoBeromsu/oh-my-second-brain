@@ -46,6 +46,16 @@ export async function runDoctor(opts: {
   maxPerTemplate?: number;
 }): Promise<number> {
   try {
+    const legacyTaxonomy = path.join(opts.vault, ".oms", "taxonomy.yaml");
+    if (existsSync(legacyTaxonomy)) {
+      const taxonomy = path.join(opts.vault, ".oms", "taxonomy.json");
+      const message = existsSync(taxonomy)
+        ? "legacy .oms/taxonomy.yaml remains after conversion — remove it; .oms/taxonomy.json is authoritative"
+        : "legacy .oms/taxonomy.yaml is no longer read — run oms setup to convert to taxonomy.json";
+      if (opts.json) console.log(JSON.stringify({ vault: opts.vault, status: "needs-repair", diagnostics: [{ code: "LEGACY_TAXONOMY_YAML", path: ".oms/taxonomy.yaml", remediation: message }] }, null, 2));
+      else console.error(`[oms] ${message}`);
+      return 1;
+    }
     const diagnosis = await diagnoseTemplates({ vault: opts.vault, source: "explicit", maxPerTemplate: opts.maxPerTemplate });
     const hermesProvenance = await hermesProvenanceStatus();
     if (opts.json) {

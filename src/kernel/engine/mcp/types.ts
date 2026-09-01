@@ -166,7 +166,7 @@ export interface McpSemanticReceipt {
   readonly taxonomyIntents: readonly {
     readonly folder: string;
     readonly intent: string;
-    readonly source: ".oms/taxonomy.yaml";
+    readonly source: ".oms/taxonomy.json";
   }[];
   readonly warnings: readonly string[];
 }
@@ -352,7 +352,7 @@ export interface McpSemanticStoredContext {
   readonly pathPrefix: string;
   readonly context: string;
   readonly updatedAt: string;
-  readonly source: ".oms/taxonomy.yaml";
+  readonly source: ".oms/taxonomy.json";
 }
 
 /** Output of oms_semantic_contexts (mirrors SemanticContextResult). */

@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { parse as parseYaml } from "yaml";
 import { readStdinTimeout } from "./stdin.js";
 
 interface PreToolUsePayload {
@@ -36,13 +35,13 @@ export function isPathAllowed(relPath: string, registeredFolders: readonly strin
 }
 
 /**
- * Load registered folder keys from <vault>/.oms/taxonomy.yaml.
+ * Load registered folder keys from <vault>/.oms/taxonomy.json.
  * Returns null on any I/O or parse error (caller must fail-open).
  */
 export async function loadRegisteredFolders(vault: string): Promise<string[] | null> {
   try {
-    const raw = await readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf-8");
-    const parsed = parseYaml(raw) as Record<string, unknown>;
+    const raw = await readFile(path.join(vault, ".oms", "taxonomy.json"), "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
     const folders = parsed["folders"];
     if (!folders || typeof folders !== "object" || Array.isArray(folders)) return null;
     return Object.keys(folders as Record<string, unknown>);
@@ -108,7 +107,7 @@ export async function runPreToolUse(opts: { vault: string }): Promise<void> {
   // Load taxonomy — fail-open if unreadable or corrupt.
   const registeredFolders = await loadRegisteredFolders(vault);
   if (registeredFolders === null) {
-    process.stderr.write(`[oms-guard] taxonomy.yaml unreadable at ${vault} — fail-open\n`);
+    process.stderr.write(`[oms-guard] taxonomy.json unreadable at ${vault} — fail-open\n`);
     writeResponse({ continue: true, suppressOutput: true });
     return;
   }
@@ -126,7 +125,7 @@ export async function runPreToolUse(opts: { vault: string }): Promise<void> {
 
   const topFolder = relPath.split("/")[0] ?? relPath;
   const reason =
-    `[oms-guard] Blocked: "${topFolder}" is not registered in .oms/taxonomy.yaml.\n` +
+    `[oms-guard] Blocked: "${topFolder}" is not registered in .oms/taxonomy.json.\n` +
     `Vault: ${vault}\n` +
     `To register this folder run: oms setup --vault ${vault}\n` +
     `To bypass temporarily set: OMS_GUARD=off`;

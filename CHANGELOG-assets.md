@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **Guidance now identifies `.oms/taxonomy.json` as the user-owned folder/link authority.**
+
 ## [0.11.1] - 2026-09-01
 
 ## [0.11.0] - 2026-09-01

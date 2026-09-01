@@ -21,7 +21,7 @@ function digest(value: string): `sha256:${string}` {
 
 async function createTemplateAuthority(vault: string): Promise<void> {
   const policy = JSON.stringify({ version: 1, templateFolder: "Templates/OMS", base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
-  const taxonomy = "folders: {}\n";
+  const taxonomy = JSON.stringify({ folders: {} });
   const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", status: "select" } });
   const template = "---\ntemplate: note\ntitle: Untitled\nstatus: open\n---\n# Note\n<!-- oms:content -->\n";
   const sources: SourceDescriptor[] = [
@@ -32,7 +32,7 @@ async function createTemplateAuthority(vault: string): Promise<void> {
   ];
   const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title", "status"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [], naming: "{{slug}}.md", bodySignature: digest("# Note\n<!-- oms:content -->\n") } } } });
   await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
-  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.yaml"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
+  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
   const targetPath = path.join(vault, "references", "clean-architecture.md");
   const target = await readFile(targetPath, "utf-8");
   await writeFile(targetPath, target.replace(/^---\n/u, "---\ntemplate: note\n"), "utf-8");

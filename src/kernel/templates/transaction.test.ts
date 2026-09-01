@@ -75,7 +75,7 @@ import type {
 const encoder = new TextEncoder();
 const TEMPLATE = "---\ntitle: literal\n---\nBody\n";
 const UPDATED = "---\ntitle: changed\n---\nChanged\n";
-const TAXONOMY = "folders: {}\n";
+const TAXONOMY = JSON.stringify({ folders: {} });
 const OBSIDIAN = `${JSON.stringify({ types: { title: "text" } }, null, 2)}\n`;
 
 beforeEach(() => {
@@ -150,7 +150,7 @@ async function fixture(bindings: readonly TemplateBinding[] = [], sourceBytes: R
   const projectionBytes = projection(bindings, policyBytes, sourceBytes);
   await Promise.all([
     writeFile(path.join(vault, ".oms", "template-policy.json"), policyBytes),
-    writeFile(path.join(vault, ".oms", "taxonomy.yaml"), TAXONOMY),
+    writeFile(path.join(vault, ".oms", "taxonomy.json"), TAXONOMY),
     writeFile(path.join(vault, ".oms", "types.json"), projectionBytes),
     writeFile(path.join(vault, ".obsidian", "types.json"), OBSIDIAN),
   ]);
@@ -163,7 +163,7 @@ async function fixture(bindings: readonly TemplateBinding[] = [], sourceBytes: R
     version: 2,
     authority: [
       { kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: digest(policyBytes) },
-      { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.yaml", contentDigest: digest(TAXONOMY) },
+      { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: digest(TAXONOMY) },
       { kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: ".obsidian/types.json", contentDigest: digest(OBSIDIAN) },
       ...bindings.map(item => ({ kind: "template" as const, logicalId: item.templateId, vaultRelativePath: item.sourcePath, contentDigest: digest(sourceBytes[item.templateId] ?? TEMPLATE) })),
     ],

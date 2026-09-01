@@ -33,7 +33,7 @@ export interface Diagnostic { readonly code: DiagnosticCode; readonly templateId
 export type TemplateMutationMode = "create" | "update" | "reclassify" | "relocate-folder";
 export type LogicalOperationKind = TemplateMutationMode;
 export type ControlKind = "policy" | "taxonomy" | "projection";
-export type ControlPath = ".oms/template-policy.json" | ".oms/taxonomy.yaml" | ".oms/types.json";
+export type ControlPath = ".oms/template-policy.json" | ".oms/taxonomy.json" | ".oms/types.json";
 export type TransactionPath = TemplateSourcePath | ControlPath;
 export type TemplateTransactionMarkerPath = ".oms/template-migration.json" | ".oms/template-transaction.json" | ".oms/template-backfill.json" | ".oms/template-regenerate.json";
 export type FileExpectation = { readonly state: "absent" } | { readonly state: "present"; readonly signature: Digest };
@@ -45,7 +45,7 @@ export interface SourceTransition { readonly templateId: TemplateId; readonly pa
 export interface TemplateMove { readonly templateId: TemplateId; readonly strategy: "oms-managed-rename" | "register-already-moved" | "no-op"; readonly oldPath: TemplateSourcePath; readonly newPath: TemplateSourcePath; readonly sourceSignature: Digest; }
 export interface LogicalOperation { readonly kind: LogicalOperationKind; readonly templateId: TemplateId; readonly destinationClass: DestinationClass; readonly payloadDigest: Digest; readonly stableRelativeSuffix: null; }
 export interface PlannedPhysicalOutput { readonly finalVaultRelativePath: TransactionPath; readonly payloadDigest: Digest; }
-export interface TemplateCompositionManifest { readonly version: 1; readonly mode: TemplateMutationMode; readonly current: TemplateSemanticSnapshot; readonly proposed: TemplateSemanticSnapshot; readonly controls: readonly [ControlTransition<"policy", ".oms/template-policy.json">, ControlTransition<"taxonomy", ".oms/taxonomy.yaml">, ControlTransition<"projection", ".oms/types.json">]; readonly sources: readonly SourceTransition[]; readonly operations: readonly LogicalOperation[]; readonly diagnostics: readonly Diagnostic[]; readonly moves: readonly TemplateMove[]; readonly outputs: readonly PlannedPhysicalOutput[]; readonly approvalDigest: Digest; readonly outputDigest: Digest; }
+export interface TemplateCompositionManifest { readonly version: 1; readonly mode: TemplateMutationMode; readonly current: TemplateSemanticSnapshot; readonly proposed: TemplateSemanticSnapshot; readonly controls: readonly [ControlTransition<"policy", ".oms/template-policy.json">, ControlTransition<"taxonomy", ".oms/taxonomy.json">, ControlTransition<"projection", ".oms/types.json">]; readonly sources: readonly SourceTransition[]; readonly operations: readonly LogicalOperation[]; readonly diagnostics: readonly Diagnostic[]; readonly moves: readonly TemplateMove[]; readonly outputs: readonly PlannedPhysicalOutput[]; readonly approvalDigest: Digest; readonly outputDigest: Digest; }
 export interface SourceCasExpectation { readonly templateId: TemplateId; readonly path: TemplateSourcePath; readonly expected: FileExpectation; }
 export interface TemplateCasExpectation { readonly input: Digest; readonly controls: Readonly<{ policy: FileExpectation; taxonomy: FileExpectation; projection: FileExpectation; }>; readonly sources: readonly SourceCasExpectation[]; }
 export interface TemplateDryRunRequest { readonly dryRun: true; readonly approvedDigest?: never; }

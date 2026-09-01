@@ -92,10 +92,7 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
     },
   });
   const intentEntries = Object.entries(intents).sort(([left], [right]) => left.localeCompare(right));
-  const taxonomy = intentEntries.length === 0
-    ? "folders: {}\n"
-    : `folders:\n${intentEntries.map(([folder, intent]) =>
-      `  ${folder}:\n    intent: ${intent}\n`).join("")}`;
+  const taxonomy = JSON.stringify({ folders: Object.fromEntries(intentEntries.map(([folder, intent]) => [folder, { intent }])) });
   const types = JSON.stringify({ types: { status: "text", rating: "number", done: "boolean" } });
   const projectTemplate = "---\nstatus: active\nrating: 1\ndone: false\n---\nBody\n";
   const referenceTemplate = "---\nrating: 1\ndone: false\n---\nBody\n";
@@ -131,7 +128,7 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
     },
   });
   writeFileSync(path.join(dir, ".oms", "template-policy.json"), policy);
-  writeFileSync(path.join(dir, ".oms", "taxonomy.yaml"), taxonomy);
+  writeFileSync(path.join(dir, ".oms", "taxonomy.json"), taxonomy);
   writeFileSync(path.join(dir, ".obsidian", "types.json"), types);
   writeFileSync(path.join(dir, ".oms", "types.json"), projection);
   writeFileSync(path.join(dir, "Templates", "OMS", "project.md"), projectTemplate);
@@ -191,7 +188,7 @@ describe("McpEngineAdapter.semanticQuery", () => {
       unused: "No indexed documents",
     });
     // Parallel legacy context must never reach a model prompt.
-    writeFileSync(path.join(vault, "taxonomy.yaml"), `
+    writeFileSync(path.join(vault, "taxonomy.json"), `
 folders:
   notes:
     intent: Legacy context must not leak
@@ -239,12 +236,12 @@ folders:
         {
           folder: "notes",
           intent: "Permanent project notes",
-          source: ".oms/taxonomy.yaml",
+          source: ".oms/taxonomy.json",
         },
       ],
     });
     expect(result.receipt.warnings).toEqual([
-      'Indexed folder "inbox" has no intent in .oms/taxonomy.yaml.',
+      'Indexed folder "inbox" has no intent in .oms/taxonomy.json.',
       'Taxonomy folder "unused" has no indexed Markdown files.',
     ]);
   });
@@ -381,7 +378,7 @@ folders:
         {
           folder: "notes",
           intent: "Permanent project notes",
-          source: ".oms/taxonomy.yaml",
+          source: ".oms/taxonomy.json",
         },
       ],
     });
@@ -781,12 +778,12 @@ describe("McpEngineAdapter.semanticStatus", () => {
       available: true,
       taxonomyContext: {
         matched: [
-          { folder: "notes", intent: "Permanent notes", source: ".oms/taxonomy.yaml" },
+          { folder: "notes", intent: "Permanent notes", source: ".oms/taxonomy.json" },
         ],
         indexedWithoutIntent: ["inbox"],
         taxonomyWithoutIndexed: ["unused"],
         warnings: [
-          'Indexed folder "inbox" has no intent in .oms/taxonomy.yaml.',
+          'Indexed folder "inbox" has no intent in .oms/taxonomy.json.',
           'Taxonomy folder "unused" has no indexed Markdown files.',
         ],
       },
@@ -852,7 +849,7 @@ describe("McpEngineAdapter.listContexts", () => {
         collection: "notes",
         pathPrefix: "notes",
         context: "Permanent project notes",
-        source: ".oms/taxonomy.yaml",
+        source: ".oms/taxonomy.json",
       }],
     });
     if (!result.available) return;

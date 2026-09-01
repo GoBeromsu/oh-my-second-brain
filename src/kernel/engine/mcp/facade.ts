@@ -948,7 +948,7 @@ export class McpEngineAdapter {
       const indexedPaths = typeof store.listDocPaths === "function" ? store.listDocPaths() : [];
       const vault = opts.vault ?? this.vaultPath;
       const projection = await loadTaxonomyIntentProjection(vault, indexedPaths);
-      const taxonomyPath = path.join(vault, ".oms", "taxonomy.yaml");
+      const taxonomyPath = path.join(vault, ".oms", "taxonomy.json");
       const updatedAt = projection.matched.length === 0
         ? ""
         : statSync(taxonomyPath).mtime.toISOString();

@@ -62,9 +62,9 @@ async function makeTempVault(
 }
 
 describe("loadRegisteredFolders", () => {
-  it("returns registered folder keys from a valid taxonomy.yaml", async () => {
+  it("returns registered folder keys from a valid taxonomy.json", async () => {
     const { vaultPath, cleanup } = await makeTempVault({
-      ".oms/taxonomy.yaml": `version: 1\nfolders:\n  "00. Inbox":\n    intent: inbox\n    concept: null\n  "10. Time":\n    intent: time\n    concept: null\n`,
+      ".oms/taxonomy.json": JSON.stringify({ version: 1, folders: { "00. Inbox": { intent: "inbox", concept: null }, "10. Time": { intent: "time", concept: null } } }),
     });
     try {
       const folders = await loadRegisteredFolders(vaultPath);
@@ -75,7 +75,7 @@ describe("loadRegisteredFolders", () => {
     }
   });
 
-  it("returns null when taxonomy.yaml is missing (fail-open)", async () => {
+  it("returns null when taxonomy.json is missing (fail-open)", async () => {
     const { vaultPath, cleanup } = await makeTempVault({});
     try {
       const folders = await loadRegisteredFolders(vaultPath);
@@ -85,9 +85,9 @@ describe("loadRegisteredFolders", () => {
     }
   });
 
-  it("returns null when taxonomy.yaml contains invalid YAML (fail-open)", async () => {
+  it("returns null when taxonomy.json contains invalid YAML (fail-open)", async () => {
     const { vaultPath, cleanup } = await makeTempVault({
-      ".oms/taxonomy.yaml": "{ this is: [ not valid yaml",
+      ".oms/taxonomy.json": "{ this is: [ not valid yaml",
     });
     try {
       const folders = await loadRegisteredFolders(vaultPath);

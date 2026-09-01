@@ -109,9 +109,9 @@ describe("resolveEffectiveVault", () => {
     expect(resolved).toEqual({ vault: path.resolve(vault), scope: null, source: "vault" });
   });
 
-  it("treats a dir with .oms/taxonomy.yaml as the vault itself", async () => {
+  it("treats a dir with .oms/taxonomy.json as the vault itself", async () => {
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), "version: 1\nfolders: {}\n", "utf-8");
+    await writeFile(path.join(vault, ".oms", "taxonomy.json"), JSON.stringify({ version: 1, folders: {} }), "utf-8");
     const resolved = await resolveEffectiveVault(vault, {});
     expect(resolved.source).toBe("vault");
     expect(resolved.scope).toBeNull();

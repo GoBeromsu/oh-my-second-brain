@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+- **Breaking: taxonomy authority is JSON-only across setup and validation.** Vaults now publish `.oms/taxonomy.json`; setup converts a legacy YAML taxonomy only after approval, removes it on apply, and requires a newly approved digest because the signed authority path changes.
+
 ## [0.11.1] - 2026-09-01
 
 ### Fixed
