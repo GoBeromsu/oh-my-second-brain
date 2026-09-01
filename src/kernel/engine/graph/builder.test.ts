@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildGraph, buildNodeIndex, loadCachedGraph, loadNodeIndex, nodeSourceSignature, saveCachedGraph, saveNodeIndex } from "./builder.js";
+import { buildGraph, buildNodeIndex, loadCachedGraph, loadNodeIndex, nodeSourceSignature, saveCachedGraph, saveNodeIndex, TYPE_AFFINITY_MAX_GROUP, typeAffinityCapWarnings } from "./builder.js";
 import type { Digest, ResolvedConvention, TemplateFolderPath, TemplateId, TemplateSourcePath } from "../../templates/types.js";
 
 let vault: string;
@@ -43,6 +43,12 @@ async function note(file: string, frontmatter: string, body = ""): Promise<void>
   const destination = path.join(vault, file);
   await mkdir(path.dirname(destination), { recursive: true });
   await writeFile(destination, `---\n${frontmatter}\n---\n${body}`, "utf8");
+}
+
+async function typeAffinityGroup(templateId: string, count: number, directory = templateId): Promise<void> {
+  await Promise.all([...Array(count)].map((_, index) =>
+    note(`notes/${directory}/${index.toString().padStart(3, "0")}.md`, `template: ${templateId}`, "body"),
+  ));
 }
 
 beforeEach(async () => {
@@ -109,6 +115,48 @@ describe("template-bound graph construction", () => {
     const resolved = convention();
     expect((await buildNodeIndex({ vaultPath: vault, convention: resolved })).map(node => node.path)).toEqual(["notes/a.md", "notes/z.md"]);
     expect(await nodeSourceSignature(vault, resolved)).toBe(await nodeSourceSignature(vault, resolved));
+  });
+
+  it.each([63, 64, 65])("caps type-affinity groups at the %i-note boundary", async (count) => {
+    await typeAffinityGroup("note", count);
+    const graph = await buildGraph({ vaultPath: vault, convention: convention() });
+    const affinity = graph.filter((edge) => edge.kind === "type-affinity");
+    expect(affinity).toHaveLength(count <= TYPE_AFFINITY_MAX_GROUP ? count * (count - 1) : 0);
+    const groups = new Map([["note", Array.from({ length: count }, (_, index) => String(index))]]);
+    expect(typeAffinityCapWarnings(groups)).toEqual(count <= TYPE_AFFINITY_MAX_GROUP
+      ? []
+      : ['Skipped type-affinity edges for template "note": 65 notes exceeds the 64-note limit.']);
+  });
+
+  it("restores unbounded type-affinity only with its explicit environment opt-in", async () => {
+    await typeAffinityGroup("note", 65);
+    const previous = process.env["OMS_TYPE_AFFINITY_UNBOUNDED"];
+    process.env["OMS_TYPE_AFFINITY_UNBOUNDED"] = "1";
+    try {
+      const graph = await buildGraph({ vaultPath: vault, convention: convention() });
+      expect(graph.filter((edge) => edge.kind === "type-affinity")).toHaveLength(65 * 64);
+      expect(typeAffinityCapWarnings(new Map([["note", Array.from({ length: 65 }, (_, index) => String(index))]]))).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env["OMS_TYPE_AFFINITY_UNBOUNDED"];
+      else process.env["OMS_TYPE_AFFINITY_UNBOUNDED"] = previous;
+    }
+  });
+
+  it("counts only eligible groups in a mixed type-affinity build", async () => {
+    const resolved = convention();
+    const task = "task" as TemplateId;
+    const taskTemplate = {
+      ...resolved.templates[template]!,
+      id: task,
+      sourcePath: "Templates/task.md" as TemplateSourcePath,
+    };
+    await typeAffinityGroup("note", 63);
+    await typeAffinityGroup(task, 65);
+    const graph = await buildGraph({
+      vaultPath: vault,
+      convention: convention({ templates: { ...resolved.templates, [task]: taskTemplate } }),
+    });
+    expect(graph.filter((edge) => edge.kind === "type-affinity")).toHaveLength(63 * 62);
   });
 });
 
