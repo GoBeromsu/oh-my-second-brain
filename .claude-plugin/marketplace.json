@@ -10,7 +10,7 @@
     {
       "name": "oms",
       "description": "Oh My Second Brain convention layer for Obsidian vaults — capture, retrieve, and validate knowledge under a declared semantic convention.",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "author": {
         "name": "gobeumsu",
         "email": "gobeumsu@gmail.com"
@@ -37,5 +37,5 @@
       ]
     }
   ],
-  "version": "0.10.0"
+  "version": "0.10.1"
 }

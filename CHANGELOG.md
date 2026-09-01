@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-01
+
 ### Fixed
 
 - **Safety patch across CLI, kernel, and host adapters.** User-owned host configuration can no longer be damaged or silently skipped: Codex managed markers fail closed on ambiguity (#54), Hermes YAML is edited surgically inside a pre-imaged atomic transaction (#89), `--help` is side-effect-free everywhere (#55), and one malformed note or external Obsidian/Templater template source no longer disables vault-wide setup/doctor (#67).

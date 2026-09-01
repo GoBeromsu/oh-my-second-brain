@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-01
+
 ### Fixed
 
 - **`--help` is now a first-class, side-effect-free path.** (#55) Every recognized command plus the bare `oms --help`/`-h` prints usage and exits 0 before any vault resolution, host-config access, MCP server start, or update notice; `--help` never lands in unknown-flag handling, and an unknown command with `--help` still fails so typos are not hidden.

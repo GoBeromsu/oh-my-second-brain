@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-01
+
 ### Fixed
 
 - **Codex managed-marker rewrites fail closed on ambiguity.** (#54) The greedy regex span removal is replaced by a line scanner: exactly one ordered `BEGIN`/`END` pair enclosing `[mcp_servers.oms]` is rewritten in place; orphan, duplicate, reversed, or nested markers refuse to write a single byte and report the config path with 1-based marker line numbers plus manual removal steps. Marker-free legacy tables continue to be cleaned up normally.

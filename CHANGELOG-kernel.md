@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-01
+
 ### Fixed
 
 - **Host YAML configuration is now edited surgically, never reserialized.** (#89) `editYamlEntryPreservingComments` splices only the character range of the managed `mcp_servers.oms` entry, preserving every other byte — comments, key order, quoting style, wrapping, and non-ASCII content — and refuses unsafe documents (anchors/aliases, merge keys, tab indentation, multi-document, non-mapping roots) instead of silently rewriting them.
