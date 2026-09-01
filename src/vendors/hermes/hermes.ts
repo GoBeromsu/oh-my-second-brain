@@ -106,11 +106,55 @@ function canonicalSkillLayout(entries: readonly string[]): boolean {
     entries.every(entry => HERMES_SKILLS.includes(entry as (typeof HERMES_SKILLS)[number]));
 }
 
+type Semver = {
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+  readonly prerelease: readonly string[];
+};
+
+function parseSemver(version: string): Semver | null {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4]?.split(".") ?? [],
+  };
+}
+
+function compareSemver(left: Semver, right: Semver): number {
+  for (const key of ["major", "minor", "patch"] as const) {
+    if (left[key] !== right[key]) return left[key] < right[key] ? -1 : 1;
+  }
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    return left.prerelease.length === right.prerelease.length ? 0 : left.prerelease.length === 0 ? 1 : -1;
+  }
+  for (let index = 0; index < Math.max(left.prerelease.length, right.prerelease.length); index += 1) {
+    const leftIdentifier = left.prerelease[index];
+    const rightIdentifier = right.prerelease[index];
+    if (leftIdentifier === undefined || rightIdentifier === undefined) {
+      return leftIdentifier === undefined ? -1 : 1;
+    }
+    if (leftIdentifier === rightIdentifier) continue;
+    const leftNumeric = /^\d+$/.test(leftIdentifier);
+    const rightNumeric = /^\d+$/.test(rightIdentifier);
+    if (leftNumeric && rightNumeric) return Number(leftIdentifier) < Number(rightIdentifier) ? -1 : 1;
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftIdentifier < rightIdentifier ? -1 : 1;
+  }
+  return 0;
+}
+
 async function legacyOwnershipEvidence(skillTarget: string, adapterManifestTarget: string, expectedVersion: string): Promise<boolean> {
   if (!existsSync(skillTarget) || !existsSync(adapterManifestTarget)) return false;
   try {
     const manifest = JSON.parse(await readFile(adapterManifestTarget, "utf8")) as { version?: unknown };
-    if (typeof manifest.version !== "string" || manifest.version !== expectedVersion) return false;
+    if (typeof manifest.version !== "string") return false;
+    const legacyVersion = parseSemver(manifest.version);
+    const currentVersion = parseSemver(expectedVersion);
+    if (legacyVersion === null || currentVersion === null || compareSemver(legacyVersion, currentVersion) >= 0) return false;
     const entries = await readdir(skillTarget, { withFileTypes: true });
     if (!canonicalSkillLayout(entries.map(entry => entry.name)) || entries.some(entry => !entry.isDirectory())) return false;
     return HERMES_SKILLS.every(skill => {
@@ -145,7 +189,6 @@ export async function installHermes(options: HostOperationOptions, host: Harness
   const guidanceTarget = path.join(adapterTarget, "SOUL.md");
   const readmeTarget = path.join(adapterTarget, "README.md");
   const provenanceTarget = path.join(adapterTarget, "oms-provenance.json");
-  const staleProvenanceTarget = path.join(adapterTarget, ".oms-provenance.json");
   const messages = ["Installed Hermes-native Oh My Second Brain skill bundle and registered mcp_servers.oms in ~/.hermes/config.yaml."];
   const manifest = JSON.parse(await readFile(path.join(adapterSource, "hermes-manifest.json"), "utf8")) as { version?: unknown };
   const packageMetadata = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8")) as { version?: unknown };
@@ -158,7 +201,7 @@ export async function installHermes(options: HostOperationOptions, host: Harness
     for (const source of [skillSource, path.join(adapterSource, "hermes-manifest.json"), path.join(adapterSource, "hermes", "SOUL.md"), path.join(adapterSource, "hermes", "README.md")]) {
       if (!existsSync(source)) throw new Error(`Hermes install source is missing: ${source}`);
     }
-    for (const target of [legacyPluginTarget, legacyMcpPath, adapterTarget, skillTarget, configPath, provenanceTarget, staleProvenanceTarget]) refuseSymlink(target);
+    for (const target of [legacyPluginTarget, legacyMcpPath, adapterTarget, skillTarget, configPath, provenanceTarget]) refuseSymlink(target);
     const recorded = await readProvenance(provenanceTarget);
     const actualTreeDigest = existsSync(skillTarget) ? await computeTreeDigest(skillTarget) : null;
     if (recorded.raw !== null && recorded.provenance === null) {
@@ -185,7 +228,7 @@ export async function installHermes(options: HostOperationOptions, host: Harness
     if (ownership.action === "noop") {
       // Assets are identical; the MCP registration may still differ (for example a
       // new vault). Reconcile only the config commit under the same rollback rule.
-      if (!config.changed && !existsSync(staleProvenanceTarget)) {
+      if (!config.changed) {
         return {
           runtime: "hermes", action: "install", changed: false, skipped: true,
           paths: [adapterTarget, guidanceTarget, readmeTarget, skillTarget, provenanceTarget, configPath],
@@ -193,7 +236,6 @@ export async function installHermes(options: HostOperationOptions, host: Harness
         };
       }
       try {
-        if (existsSync(staleProvenanceTarget)) await rm(staleProvenanceTarget, { force: true });
         if (config.changed) await atomicWrite(configPath, Buffer.from(config.text, "utf8"));
         await verifyHermesInstall(configPath, skillTarget, options);
       } catch (error) {
@@ -255,7 +297,6 @@ export async function uninstallHermes(options: HostOperationOptions): Promise<Ho
   const configPath = path.join(hermesDir, "config.yaml");
   const adapterManifestTarget = path.join(adapterTarget, "hermes-manifest.json");
   const provenanceTarget = path.join(adapterTarget, "oms-provenance.json");
-  const staleProvenanceTarget = path.join(adapterTarget, ".oms-provenance.json");
   const recorded = await readProvenance(provenanceTarget);
   const actualTreeDigest = existsSync(skillTarget) ? await computeTreeDigest(skillTarget) : null;
   const packageMetadata = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8")) as { version?: unknown };
@@ -268,7 +309,7 @@ export async function uninstallHermes(options: HostOperationOptions): Promise<Ho
   const preImage = existsSync(configPath) ? await readFile(configPath) : undefined;
   const configRaw = preImage?.toString("utf8") ?? "";
   if (preImage && !preImage.equals(Buffer.from(configRaw, "utf8"))) throw new Error("Hermes config.yaml is not valid UTF-8");
-  for (const target of [adapterTarget, skillTarget, legacyPluginTarget, legacyMcpPath, configPath, provenanceTarget, staleProvenanceTarget]) refuseSymlink(target);
+  for (const target of [adapterTarget, skillTarget, legacyPluginTarget, legacyMcpPath, configPath, provenanceTarget]) refuseSymlink(target);
   const config = renderYamlEntryPreservingComments(configRaw, HERMES_MCP_ENTRY_PATH, { kind: "delete" });
   let changed = false;
   changed = ownsInstall && config.changed;

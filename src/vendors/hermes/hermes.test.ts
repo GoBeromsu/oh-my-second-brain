@@ -19,6 +19,7 @@ vi.mock("node:fs/promises", async importOriginal => {
 });
 
 const originalFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+const packageVersion = (JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { version: string }).version;
 const temporaryDirectories: string[] = [];
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -48,40 +49,47 @@ describe("installHermes transaction", () => {
     await expect(readFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"))).rejects.toThrow();
   });
 
-  it.each([
-    ["skills copy", (api: typeof fsPromises) => vi.mocked(api.cp).mockRejectedValueOnce(new Error("skills copy failed"))],
-    ["adapter copy", (api: typeof fsPromises) => vi.mocked(api.cp).mockImplementation(async (source, destination, options) => {
+  it.each(["default", "profiles/xia"].flatMap(root => [
+    [root, "skills copy", (api: typeof fsPromises) => vi.mocked(api.cp).mockRejectedValueOnce(new Error("skills copy failed"))],
+    [root, "adapter copy", (api: typeof fsPromises) => vi.mocked(api.cp).mockImplementation(async (source, destination, options) => {
       if (String(source).endsWith("hermes-manifest.json")) throw new Error("adapter copy failed");
       return await originalCp(source, destination, options);
     })],
-    ["config atomic write", (api: typeof fsPromises) => {
+    [root, "config atomic write", (api: typeof fsPromises) => {
       const write = vi.mocked(api.writeFile);
       write.mockImplementationOnce(async () => { throw new Error("config write failed"); });
       return write;
     }],
-    ["install verification", (api: typeof fsPromises) => vi.mocked(api.readdir).mockImplementation(async (directory, options) => {
-      if (String(directory).includes(".hermes/skills/knowledge-management/oms")) throw new Error("verification failed");
+    [root, "install verification", (api: typeof fsPromises) => vi.mocked(api.readdir).mockImplementation(async (directory, options) => {
+      if (String(directory).includes("skills/knowledge-management/oms")) throw new Error("verification failed");
       return await originalFs.readdir(directory, options);
     })],
-  ])("restores config and converges after a %s failure", async (_name, inject) => {
+  ]))("%s root restores config and converges after a %s failure", async (root, _name, inject) => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-"));
     temporaryDirectories.push(home);
-    const hermes = path.join(home, ".hermes");
+    const hermes = path.join(home, ".hermes", ...(root === "default" ? [] : root.split("/")));
     const config = path.join(hermes, "config.yaml");
     const original = "mcp_servers:\n  other: keep\n";
-    await mkdir(hermes);
-    await writeFile(config, original);
     const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
     if (!host) throw new Error("Hermes surface missing");
     const options = { action: "install" as const, runtime: "hermes" as const, vault: "/vault", homeDir: home, adapterRoot: path.resolve(".") };
-    const restore = inject(fsPromises);
+    const originalOverride = process.env.OMS_HERMES_HOME;
+    if (root !== "default") process.env.OMS_HERMES_HOME = hermes;
     try {
-      await expect(installHermes(options, host)).rejects.toThrow();
-      expect(await readFile(config, "utf8")).toBe(original);
+      await mkdir(hermes, { recursive: true });
+      await writeFile(config, original);
+      const restore = inject(fsPromises);
+      try {
+        await expect(installHermes(options, host)).rejects.toThrow();
+        expect(await readFile(config, "utf8")).toBe(original);
+      } finally {
+        restore.mockRestore();
+      }
+      await expect(installHermes(options, host)).resolves.toMatchObject({ changed: true });
     } finally {
-      restore.mockRestore();
+      if (originalOverride === undefined) delete process.env.OMS_HERMES_HOME;
+      else process.env.OMS_HERMES_HOME = originalOverride;
     }
-    await expect(installHermes(options, host)).resolves.toMatchObject({ changed: true });
   });
 
   it("preserves both errors when config rollback fails", async () => {
@@ -171,15 +179,10 @@ describe("installHermes transaction", () => {
     const provenanceFile = path.join(hermes, "adapters", "oms", "oms-provenance.json");
     const provenance = parseProvenance(await readFile(provenanceFile, "utf8"));
     expect(await readdir(skills)).toHaveLength(7);
-    const packageVersion = (JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { version: string }).version;
     expect(provenance).toMatchObject({ source: "npm", version: packageVersion, skillTreeDigest: await computeTreeDigest(skills) });
     const before = await readFile(provenanceFile, "utf8");
     await expect(installHermes(options, host)).resolves.toMatchObject({ changed: false, skipped: true });
     expect(await readFile(provenanceFile, "utf8")).toBe(before);
-    const staleFile = path.join(hermes, "adapters", "oms", ".oms-provenance.json");
-    await writeFile(staleFile, "stale metadata\n");
-    await expect(installHermes(options, host)).resolves.toMatchObject({ changed: true, skipped: false });
-    expect(existsSync(staleFile)).toBe(false);
   });
 
   it("refuses foreign provenance without changing the pre-existing tree", async () => {
@@ -200,7 +203,7 @@ describe("installHermes transaction", () => {
     expect(await readFile(path.join(skills, "foreign.txt"), "utf8")).toBe("foreign\n");
   });
 
-  it("adopts only the exact legacy seven-skill layout", async () => {
+  it("adopts a prior semver legacy layout and replaces its adapter directory", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-"));
     temporaryDirectories.push(home);
     const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
@@ -211,16 +214,20 @@ describe("installHermes transaction", () => {
     const skills = path.join(hermes, "skills", "knowledge-management", "oms");
     const provenance = path.join(hermes, "adapters", "oms", "oms-provenance.json");
     await rm(provenance);
-    await writeFile(path.join(skills, "write", "SKILL.md"), "legacy\n");
+    await writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"0.10.1"}\n');
+    await writeFile(path.join(hermes, "adapters", "oms", ".oms-provenance.json"), "stale metadata\n");
     await expect(installHermes(options, host)).resolves.toMatchObject({ changed: true });
     expect(parseProvenance(await readFile(provenance, "utf8"))).not.toBeNull();
+    expect(await readdir(path.join(hermes, "adapters", "oms"))).toEqual(["README.md", "SOUL.md", "hermes-manifest.json", "oms-provenance.json"]);
     await rm(provenance);
     await mkdir(path.join(skills, "unexpected"));
     await expect(installHermes(options, host)).rejects.toThrow("exact legacy OMS layout");
   });
 
   it.each([
-    ["a wrong manifest version", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"0.0.0"}\n')],
+    ["the current manifest version", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), `{"version":"${packageVersion}"}\n`)],
+    ["a higher manifest version", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"99.0.0"}\n')],
+    ["an invalid semver manifest", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"legacy"}\n')],
     ["a malformed manifest", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), "{not json\n")],
     ["a file in place of a canonical skill directory", async (hermes: string) => {
       const skill = path.join(hermes, "skills", "knowledge-management", "oms", "write");

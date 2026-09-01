@@ -1027,28 +1027,34 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     expect(await readFile(mcpPath, "utf-8")).toBe("[]\n");
   });
 
-  it("reconciles managed host stamps while retaining a provenance-validated Hermes install", async () => {
+  it.each(["default", "profiles/xia"])("%s root reconciles managed host stamps while retaining a provenance-validated Hermes install", async root => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-host-pointer-"));
     const first = path.join(home, "Vault A");
     const second = path.join(home, "Vault B");
-    await runHostOperation({ action: "install", runtime: "all", vault: first, homeDir: home, adapterRoot });
-    await runHostOperation({ action: "install", runtime: "all", vault: second, homeDir: home, adapterRoot });
+    const hermesRoot = path.join(home, ".hermes", ...(root === "default" ? [] : root.split("/")));
+    const originalOverride = process.env.OMS_HERMES_HOME;
+    if (root !== "default") process.env.OMS_HERMES_HOME = hermesRoot;
+    try {
+      await runHostOperation({ action: "install", runtime: "all", vault: first, homeDir: home, adapterRoot });
+      await runHostOperation({ action: "install", runtime: "all", vault: second, homeDir: home, adapterRoot });
 
-    const claudeMcp = await readFile(path.join(home, ".claude.json"), "utf-8");
-    const claudeHooks = await readFile(path.join(home, ".claude", "settings.json"), "utf-8");
-    const codex = await readFile(path.join(home, ".codex", "config.toml"), "utf-8");
-    const hermes = await readFile(path.join(home, ".hermes", "config.yaml"), "utf-8");
-    for (const managed of [claudeMcp, codex]) {
-      expect(managed).toContain(second);
-      expect(managed).not.toContain(first);
+      const claudeMcp = await readFile(path.join(home, ".claude.json"), "utf-8");
+      const claudeHooks = await readFile(path.join(home, ".claude", "settings.json"), "utf-8");
+      const codex = await readFile(path.join(home, ".codex", "config.toml"), "utf-8");
+      const hermes = await readFile(path.join(hermesRoot, "config.yaml"), "utf-8");
+      for (const managed of [claudeMcp, codex]) {
+        expect(managed).toContain(second);
+        expect(managed).not.toContain(first);
+      }
+      const hermesConfig = parse(hermes) as { readonly mcp_servers: { readonly oms: { readonly args: readonly string[] } } };
+      expect(hermesConfig.mcp_servers.oms.args).toEqual(["mcp", "--vault", second]);
+      expect(claudeHooks).toContain("Vault B");
+      expect(claudeHooks).not.toContain("Vault A");
+      expect(existsSync(path.join(home, ".oms"))).toBe(false);
+    } finally {
+      if (originalOverride === undefined) delete process.env.OMS_HERMES_HOME;
+      else process.env.OMS_HERMES_HOME = originalOverride;
     }
-    const hermesConfig = parse(hermes) as { readonly mcp_servers: { readonly oms: { readonly args: readonly string[] } } };
-    // Identical assets are a provenance no-op, but the MCP registration must
-    // still reconcile to the newly selected vault.
-    expect(hermesConfig.mcp_servers.oms.args).toEqual(["mcp", "--vault", second]);
-    expect(claudeHooks).toContain("Vault B");
-    expect(claudeHooks).not.toContain("Vault A");
-    expect(existsSync(path.join(home, ".oms"))).toBe(false);
   });
 
   it("install+uninstall Claude runtime writes and then removes hooks from settings.json", async () => {
