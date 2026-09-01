@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-01
+
 ### Changed
 
 - **Hermes provenance uses the canonical `oms-provenance.json` filename and `skillTreeDigest` field.** The former dot-file name is never read or specially handled; adapter-directory replacement owns cleanup. Legacy adoption requires a genuine older-version handoff: a parseable manifest whose semver is strictly lower than the running package, exactly seven canonical skill directories, and a `SKILL.md` in each — a same-version manifest without provenance is rejected as forged. Fault-injection and vault-reconcile matrices run on both the default and `profiles/xia` roots.

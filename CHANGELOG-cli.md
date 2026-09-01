@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-01
+
 ### Changed
 
 - **`oms doctor` includes one computed Hermes provenance status in both text and JSON output.** The resolved root is reported as `not-installed`, `match`, or `drift`, with package version, recorded version, and digest-match evidence.
