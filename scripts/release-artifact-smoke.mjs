@@ -159,6 +159,69 @@ function setupSmoke(packageRoot, vault, smokeHome) {
   console.log("[release:artifact-smoke] ok: setup dry-run/approved apply works from unpacked package.");
 }
 
+function canonicalCliSmoke(packageRoot, vault, smokeHome) {
+  const cli = path.join(packageRoot, "dist/cli/oms.js");
+  const env = smokeEnv(smokeHome, {
+    OMS_UPDATE_NOTICE: "0",
+    XDG_CACHE_HOME: path.join(smokeHome, ".cache"),
+  });
+  const invoke = (args) => spawnSync(process.execPath, [cli, ...args, "--vault", vault], {
+    cwd: packageRoot,
+    encoding: "utf-8",
+    env,
+  });
+  const expectExit = (args, expected) => {
+    const result = invoke(args);
+    if (result.status !== expected) {
+      process.stderr.write(result.stderr ?? "");
+      process.stdout.write(result.stdout ?? "");
+      fail(`packaged oms ${args.join(" ")} exited ${result.status}; expected ${expected}`);
+    }
+    return result;
+  };
+
+  const search = expectExit(["search", "agent retrieval"], 0);
+  const searchPayload = JSON.parse(search.stdout);
+  if (searchPayload.hits?.[0]?.path !== "Literature/semantic-retrieval.md") {
+    fail("packaged oms search did not return the smoke note");
+  }
+  expectExit(["index", "sync"], 0);
+  expectExit(["index", "status"], 0);
+  const document = expectExit(["doc", "get", "Literature/semantic-retrieval.md"], 0);
+  if (!document.stdout.includes("Semantic Retrieval")) {
+    fail("packaged oms doc get did not hydrate the smoke note");
+  }
+
+  const embed = expectExit(["embed"], 1);
+  const embedOutput = `${embed.stdout}\n${embed.stderr}`;
+  for (const expected of [
+    "OMS_EMBEDDING_PROVIDER",
+    "OMS_EMBEDDING_MODEL",
+    ".oms/models.json",
+    "oms setup --models-default",
+  ]) {
+    if (!embedOutput.includes(expected)) fail(`packaged oms embed guidance omitted ${expected}`);
+  }
+  const nestedEmbed = expectExit(["index", "embed"], 1);
+  const nestedEmbedOutput = `${nestedEmbed.stdout}\n${nestedEmbed.stderr}`;
+  if (!nestedEmbedOutput.includes("Unknown index subcommand")) {
+    fail("packaged oms index embed did not fail as an unknown index subcommand");
+  }
+  if (nestedEmbedOutput.includes("Embedding capability is unavailable for")) {
+    fail("packaged oms index embed reached the top-level embedding capability guard");
+  }
+  const expansion = expectExit(["search", "agent retrieval", "--expand"], 1);
+  const expansionOutput = `${expansion.stdout}\n${expansion.stderr}`;
+  if (!expansionOutput.includes("OMS_EMBEDDING_PROVIDER") || !expansionOutput.includes("OMS_EMBEDDING_MODEL")) {
+    fail("packaged oms search --expand did not enforce embedding admission before expansion");
+  }
+  const retiredSemantic = expectExit(["semantic"], 1);
+  if (!`${retiredSemantic.stdout}\n${retiredSemantic.stderr}`.includes("Unknown command: semantic")) {
+    fail("packaged oms semantic did not fail through the unknown-command boundary");
+  }
+  console.log("[release:artifact-smoke] ok: canonical search/index/doc/embed CLI works from unpacked package.");
+}
+
 function hostInstallSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
   const result = run(process.execPath, [cli, "install", "--runtime", "all", "--vault", vault, "--dry-run"], {
@@ -369,6 +432,7 @@ try {
   const vault = makeVault(tempRoot);
   if (runSetup) {
     setupSmoke(packageRoot, vault, smokeHome);
+    canonicalCliSmoke(packageRoot, vault, smokeHome);
     hostInstallSmoke(packageRoot, vault, smokeHome);
     updateSmoke(packageRoot, vault, smokeHome);
   }

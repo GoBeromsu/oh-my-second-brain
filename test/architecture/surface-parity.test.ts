@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { parseNote } from "../../src/kernel/conventions/frontmatter.js";
 import { harnessSurfaceRegistry } from "../../src/kernel/harness/surface-registry.js";
 import { omsMcpTools } from "../../src/mcp/server.js";
+import { SHARED_SKILLS_SOURCE } from "../../src/assets/shared-skills.js";
 
 /**
  * Surface-set parity gate.
@@ -18,14 +19,13 @@ import { omsMcpTools } from "../../src/mcp/server.js";
  *
  *   skills      - the authored skill set
  *   mcpTools    - a strict SUBSET of skills, namely those declaring `mcp_tool`
- *   cliCommands - an INDEPENDENT allowlist; `mcp`, `setup`, `install`,
- *                 `update`, `reconcile`, `audit`, `lint` and `hook` are
- *                 real CLI commands that are not skills and must never be
- *                 deleted to force literal equality.
+ *   cliCommands - an INDEPENDENT allowlist of every real CLI command,
+ *                 including the five public search commands. It is
+ *                 intentionally distinct from the skill and MCP-tool surfaces.
  *
  * Enforcing equality across all three would let a contributor satisfy the gate
- * by silently deleting CLI-only commands. That is the failure this shape exists
- * to prevent.
+ * by silently deleting a surface. That is the failure this shape exists to
+ * prevent.
  */
 
 interface SurfaceSets {
@@ -176,9 +176,17 @@ const CLEAN: SurfaceSets = {
     { name: "status", posture: "read", destructive: false, idempotent: true, openWorld: false },
     { name: "doctor", posture: "write", destructive: false, idempotent: false, openWorld: false },
   ],
-  cliCommands: ["mcp", "setup", "install", "update", "audit", "lint", "hook"],
+  cliCommands: [
+    "setup", "doctor", "audit", "lint", "link", "linkify",
+    "install", "uninstall", "update", "reconcile", "mcp", "hook",
+    "search", "index", "doc", "embed", "serve",
+  ],
   declaredMcpTools: ["write", "search", "link", "status", "doctor"],
-  dispatcherCliCommands: ["mcp", "setup", "install", "update", "audit", "lint", "hook"],
+  dispatcherCliCommands: [
+    "setup", "doctor", "audit", "lint", "link", "linkify",
+    "install", "uninstall", "update", "reconcile", "mcp", "hook",
+    "search", "index", "doc", "embed", "serve",
+  ],
 };
 
 describe("surface-set parity gate (rules)", () => {
@@ -251,12 +259,10 @@ describe("surface-set parity gate (rules)", () => {
   });
 
   it("does NOT require CLI commands to equal the skill set", () => {
-    // This is the anti-regression case: deleting CLI-only commands to force
-    // literal equality must not be a way to satisfy the gate.
     const violations = checkSurfaceSets(CLEAN, TARGET);
     expect(violations).toEqual([]);
-    expect(CLEAN.cliCommands).toContain("mcp");
-    expect(CLEAN.skills).not.toContain("mcp");
+    expect(CLEAN.cliCommands).toContain("index");
+    expect(CLEAN.skills).not.toContain("index");
   });
 
   it("fails when the CLI allowlist is emptied", () => {
@@ -273,12 +279,13 @@ const allowedSkillFrontmatterKeys = new Set(["name", "description", "aliases", "
 
 function realDispatcherCommands(): string[] {
   const omsSource = readFileSync(path.join(repoRoot, "src/cli/oms.ts"), "utf-8");
-  const semanticSource = readFileSync(path.join(repoRoot, "src/cli/semantic.ts"), "utf-8");
-  const directCommands = [...omsSource.matchAll(/\bcommand === "([^"]+)"/g)].map((match) => match[1]!);
-  const semanticCommands = semanticSource.match(/const TOP_LEVEL_COMMANDS = new Set\(\[([\s\S]*?)\]\);/);
-  expect(semanticCommands, "semantic dispatcher command set must be statically declared").not.toBeNull();
-  const semantic = [...semanticCommands![1].matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
-  return [...new Set([...directCommands, ...semantic])].sort();
+  const searchSource = readFileSync(path.join(repoRoot, "src/cli/search.ts"), "utf-8");
+  const directCommands = [...omsSource.matchAll(/\bcommand === "([^"]+)"/g)]
+    .map((match) => match[1]!);
+  const searchCommands = searchSource.match(/const TOP_LEVEL_COMMANDS = new Set\(\[([\s\S]*?)\]\);/);
+  expect(searchCommands, "search dispatcher command set must be statically declared").not.toBeNull();
+  const search = [...searchCommands![1].matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+  return [...new Set([...directCommands, ...search])].sort();
 }
 
 function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): SurfaceSets {
@@ -356,8 +363,8 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
         link: expect.any(Object),
       },
     },
-    limit: { type: "number", minimum: 0, default: 10 },
-    candidateLimit: { type: "number", minimum: 1 },
+    limit: { type: "integer", minimum: 0, default: 10 },
+    candidateLimit: { type: "integer", minimum: 1 },
     rerank: { type: "boolean", default: false },
     minScore: { type: "number", default: 0 },
     cursor: { type: "string" },
@@ -408,6 +415,148 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     dispatcherCliCommands: realDispatcherCommands(),
   };
 }
+
+const CURRENT_GUIDANCE_SCANNER_CATEGORIES = [
+  "registry-guidance",
+  "registry-rules",
+  "shared-skills",
+  "readmes",
+  "top-level-docs",
+] as const;
+
+type CurrentGuidanceScannerCategory = typeof CURRENT_GUIDANCE_SCANNER_CATEGORIES[number];
+
+interface CurrentGuidanceFile {
+  readonly category: CurrentGuidanceScannerCategory;
+  readonly path: string;
+  readonly content: string;
+}
+
+interface CurrentGuidanceViolation {
+  readonly category: CurrentGuidanceScannerCategory;
+  readonly path: string;
+  readonly retiredSpelling: string;
+}
+
+const RETIRED_GUIDANCE_SPELLINGS: readonly {
+  readonly retiredSpelling: string;
+  readonly pattern: RegExp;
+}[] = [
+  { retiredSpelling: "oms semantic", pattern: /\boms\s+semantic\b/g },
+  { retiredSpelling: "top-level collection/context/cleanup/http", pattern: /\boms\s+(?:collection|context|cleanup|http)\b/g },
+  { retiredSpelling: "top-level query/vsearch/get/multi-get/status", pattern: /\boms\s+(?:query|vsearch|get|multi-get|status)\b/g },
+  { retiredSpelling: "oms index embed", pattern: /\boms\s+index\s+embed\b/g },
+  { retiredSpelling: "--embedding-*", pattern: /--embedding-[A-Za-z0-9_-]+\b/g },
+];
+
+function currentGuidanceViolations(files: readonly CurrentGuidanceFile[]): CurrentGuidanceViolation[] {
+  return files.flatMap((file) => RETIRED_GUIDANCE_SPELLINGS.flatMap(({ retiredSpelling, pattern }) => {
+    pattern.lastIndex = 0;
+    return pattern.test(file.content)
+      ? [{ category: file.category, path: file.path, retiredSpelling }]
+      : [];
+  }));
+}
+
+function currentGuidanceFiles(): CurrentGuidanceFile[] {
+  const hostFiles = harnessSurfaceRegistry.hosts.flatMap((host) => [
+    ...host.guidanceFiles.map((file) => ({
+      category: "registry-guidance" as const,
+      path: path.join(host.adapterDir, file),
+    })),
+    ...host.ruleFiles.map((file) => ({
+      category: "registry-rules" as const,
+      path: path.join(host.adapterDir, file),
+    })),
+  ]);
+  const sharedSkillDirs = [...new Set(
+    harnessSurfaceRegistry.hosts.flatMap((host) => host.skillDirs),
+  )].sort();
+  const sharedSkills = sharedSkillDirs
+    .map((skillDir) => ({
+      category: "shared-skills" as const,
+      path: path.join(SHARED_SKILLS_SOURCE, skillDir, "SKILL.md"),
+    }));
+  // Only top-level current docs are guidance. Decision, research, measurement,
+  // and preregistration records are historical evidence and must not be rewritten.
+  const topLevelDocs = readdirSync(path.join(repoRoot, "docs"), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md") && !entry.name.startsWith("CHANGELOG"))
+    .map((entry) => ({
+      category: "top-level-docs" as const,
+      path: path.join("docs", entry.name),
+    }));
+  const files = [
+    ...hostFiles,
+    ...sharedSkills,
+    { category: "readmes" as const, path: "README.md" },
+    { category: "readmes" as const, path: "README.ko.md" },
+    ...topLevelDocs,
+  ];
+
+  return files.map((file) => ({
+    ...file,
+    content: readFileSync(path.join(repoRoot, file.path), "utf-8"),
+  }));
+}
+
+describe("current guidance CLI spellings", () => {
+  it("accepts canonical command fixtures", () => {
+    const fixtures: CurrentGuidanceFile[] = [
+      { category: "shared-skills", path: "accepted-search", content: "`oms search topic`" },
+      { category: "shared-skills", path: "accepted-doc", content: "`oms doc get note-id`" },
+      { category: "shared-skills", path: "accepted-embed", content: "`oms embed`" },
+      { category: "shared-skills", path: "accepted-index-status", content: "`oms index status`" },
+      { category: "shared-skills", path: "accepted-index-cleanup", content: "`oms index cleanup`" },
+    ];
+
+    expect(currentGuidanceViolations(fixtures)).toEqual([]);
+  });
+
+  it("rejects retired command and flag fixtures", () => {
+    const fixtures: CurrentGuidanceFile[] = [
+      { category: "shared-skills", path: "semantic", content: "`oms semantic query topic`" },
+      { category: "shared-skills", path: "collection", content: "`oms collection list`" },
+      { category: "shared-skills", path: "context", content: "`oms context list`" },
+      { category: "shared-skills", path: "cleanup", content: "`oms cleanup`" },
+      { category: "shared-skills", path: "http", content: "`oms http`" },
+      { category: "shared-skills", path: "query", content: "`oms query topic`" },
+      { category: "shared-skills", path: "vsearch", content: "`oms vsearch topic`" },
+      { category: "shared-skills", path: "get", content: "`oms get note.md`" },
+      { category: "shared-skills", path: "multi-get", content: "`oms multi-get a.md b.md`" },
+      { category: "shared-skills", path: "status", content: "`oms status`" },
+      { category: "shared-skills", path: "index-embed", content: "`oms index embed`" },
+      { category: "shared-skills", path: "embedding-default", content: "`oms setup --embedding-default`" },
+      { category: "shared-skills", path: "embedding-descriptor", content: "`oms setup --embedding-descriptor model.json`" },
+      { category: "shared-skills", path: "embedding-no-default", content: "`oms setup --embedding-no-default`" },
+    ];
+
+    expect(currentGuidanceViolations(fixtures).map((violation) => violation.path)).toEqual([
+      "semantic",
+      "collection",
+      "context",
+      "cleanup",
+      "http",
+      "query",
+      "vsearch",
+      "get",
+      "multi-get",
+      "status",
+      "index-embed",
+      "embedding-default",
+      "embedding-descriptor",
+      "embedding-no-default",
+    ]);
+  });
+
+  it("keeps shipped guidance on canonical CLI spellings while preserving history", () => {
+    const files = currentGuidanceFiles();
+    for (const category of CURRENT_GUIDANCE_SCANNER_CATEGORIES) {
+      expect(files.filter((file) => file.category === category), `${category} guidance scan must not be empty`).not.toEqual([]);
+    }
+
+    expect(currentGuidanceViolations(files)).toEqual([]);
+  });
+});
 
 describe("surface-set parity gate (live surface)", () => {
   it("reads the seven disk-authored skills, MCP registry, and CLI dispatcher", () => {

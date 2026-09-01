@@ -4,6 +4,11 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The kernel now manages model lifecycle explicitly and carries active-template taxonomy context through the canonical engine search path.** It reports unavailable capabilities honestly instead of silently claiming support.
+- **Local model execution now has one strict lifecycle.** Vault model selection outranks setup defaults, GGUF contexts wait for admitted work before disposal, cross-encoder reranking receives bounded note content rather than filenames, and the inconsistent Upstage branch is removed.
+
 ## [0.9.0] - 2026-08-31
 
 ### Changed

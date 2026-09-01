@@ -95,15 +95,75 @@ describe("dispatch — routing", () => {
     expect(results[0]!.docPath).toBe("vec-result.md");
   });
 
-  it("hyde with no hydeGenerator falls back to identity stub (embeds the query directly)", async () => {
+  it("embeds an expansion-produced hypothetical document without generating twice", async () => {
+    const store = makeStore([], [VEC_HIT]);
+    const embed = makeEmbed();
+    const hydeGenerator = vi.fn().mockRejectedValue(
+      new Error("must not run for an already generated document"),
+    );
+    const deps: DispatcherDeps = { store, embed, hydeGenerator };
+
+    const results = await dispatch([{
+      type: "hyde",
+      query: "A calm person remains undisturbed by external events.",
+      hypotheticalDocument: true,
+    }], deps);
+
+    expect(hydeGenerator).not.toHaveBeenCalled();
+    expect(embed.embed).toHaveBeenCalledWith(
+      "A calm person remains undisturbed by external events.",
+    );
+    expect(store.queryVec).toHaveBeenCalled();
+    expect(results[0]?.docPath).toBe("vec-result.md");
+  });
+
+  it("hyde with no hydeGenerator fails loudly instead of embedding the raw query", async () => {
+    // This previously fell back to an identity stub, so an explicit HyDE request
+    // silently became an ordinary vector search over the raw query while still
+    // reporting itself as HyDE. ADR-007 forbids exactly that substitution: the
+    // caller asked for a capability the engine did not have.
     const store = makeStore([], [VEC_HIT]);
     const embed = makeEmbed();
     const deps: DispatcherDeps = { store, embed };
 
-    await dispatch([{ type: "hyde", query: "fallback query" }], deps);
+    await expect(dispatch([{ type: "hyde", query: "fallback query" }], deps))
+      .rejects.toThrow(/requires a generation model/);
 
-    // Without hydeGenerator, embed is called with the original query string
-    expect(embed.embed).toHaveBeenCalledWith("fallback query");
+    // The degradation this guards against is observable here: nothing may be
+    // embedded and no vector search may run.
+    expect(embed.embed).not.toHaveBeenCalled();
+    expect(store.queryVec).not.toHaveBeenCalled();
+  });
+
+  it("names both the generation and embedding capabilities HyDE needs", async () => {
+    // Naming only the generator would send the user to install one model and then
+    // hit the second failure on the next attempt.
+    const deps: DispatcherDeps = { store: makeStore([], [VEC_HIT]), embed: makeEmbed() };
+
+    await expect(dispatch([{ type: "hyde", query: "q" }], deps)).rejects.toThrow(
+      /OMS_GENERATE_PROVIDER[\s\S]*OMS_GENERATE_MODEL[\s\S]*OMS_EMBEDDING_PROVIDER[\s\S]*OMS_EMBEDDING_MODEL/,
+    );
+  });
+
+  it("rejects generator output that is empty or merely echoes the query", async () => {
+    // A generator that returns its input reproduces the identity stub by another
+    // route, so it must fail rather than degrade into a vector search wearing
+    // HyDE's name.
+    for (const generated of ["", "   ", "  what is RRF?  "]) {
+      const store = makeStore([], [VEC_HIT]);
+      const embed = makeEmbed();
+      const deps: DispatcherDeps = {
+        store,
+        embed,
+        hydeGenerator: vi.fn().mockResolvedValue(generated),
+      };
+
+      await expect(dispatch([{ type: "hyde", query: "what is RRF?" }], deps)).rejects.toThrow(
+        /hypothetical document|returned the query unchanged/,
+      );
+      expect(embed.embed).not.toHaveBeenCalled();
+      expect(store.queryVec).not.toHaveBeenCalled();
+    }
   });
 
   it("graph sub-query calls graphTraverse with bfs GphQuery", async () => {
@@ -120,14 +180,14 @@ describe("dispatch — routing", () => {
     expect(results[0]!.docPath).toBe("graph-result.md");
   });
 
-  it("graph sub-query with no graphTraverse returns empty list", async () => {
+  it("graph sub-query with no graphTraverse fails loudly", async () => {
     const store = makeStore([], []);
     const embed = makeEmbed();
     const deps: DispatcherDeps = { store, embed };
 
-    const results = await dispatch([{ type: "graph", query: "seed.md" }], deps);
-
-    expect(results).toHaveLength(0);
+    await expect(dispatch([{ type: "graph", query: "seed.md" }], deps)).rejects.toThrow(
+      /requires a configured graph traversal backend/i,
+    );
   });
 
   it("empty subQueries returns empty list", async () => {
@@ -171,6 +231,23 @@ describe("dispatch — RRF fusion", () => {
     const results = await dispatch([{ type: "lex", query: "q" }], deps);
 
     expect(results[0]!.perTypeScores).toEqual({ lex: 0.88 });
+  });
+
+  it("hydrates fused candidates with content from any matching store result", async () => {
+    const store = makeStore(
+      [{ docPath: "note.md", chunkOrdinal: 2, score: 0.9 }],
+      [{ docPath: "note.md", chunkOrdinal: 2, score: 0.8, text: "chunk content" }],
+    );
+    const results = await dispatch(
+      [{ type: "lex", query: "q" }, { type: "vec", query: "q" }],
+      { store, embed: makeEmbed() },
+    );
+
+    expect(results).toEqual([expect.objectContaining({
+      docPath: "note.md",
+      chunkOrdinal: 2,
+      text: "chunk content",
+    })]);
   });
 
   it("default policy applies the shipped additive provenance boost", async () => {

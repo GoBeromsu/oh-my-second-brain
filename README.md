@@ -34,12 +34,33 @@ oms update     Check/apply a package update and reconcile adapters
 oms reconcile  Re-stamp hosts from the strict global vault pointer
 oms doctor     Diagnose template authority and derived state
 oms lint       Check broken [[wikilinks]] and orphan notes
-oms semantic   Manage native Markdown lexical/vector retrieval
+oms search <text>  Plain lexical search; --vec, --hyde, --expand, --max-queries 1..32, and --rerank are explicit
+oms embed      Generate embeddings for indexed notes
+oms index sync|status|cleanup|collections|contexts
+oms doc get|multi-get
+oms serve      Start the local search HTTP server
 oms mcp        Start the stdio MCP server
 oms hook       Run Claude pre/post tool-use vault guards
 ```
 
 `oh-my-second-brain` is the full command; `oms` is its short alias.
+
+`oms search <text>` is lexical-only. `--vec` and `--hyde` select their respective
+typed channels; `--expand` explicitly enables G004 expansion, `--max-queries`
+accepts an integer from 1 through 32, and `--rerank` is opt-in. `oms embed` is
+the sole embedding command; `oms index` has no embedding subcommand.
+
+Vector search requires a verified local embedding capability, selected by a
+complete `OMS_EMBEDDING_PROVIDER`/`OMS_EMBEDDING_MODEL` pair, the vault's
+`.oms/models.json` plus its verified installed receipt, or a setup-installed
+default. HyDE also requires a resolved generate capability; reranking requires
+a resolved rerank capability. Their complete environment pairs are
+`OMS_GENERATE_PROVIDER`/`OMS_GENERATE_MODEL` and
+`OMS_RERANK_PROVIDER`/`OMS_RERANK_MODEL`. Missing, incomplete, or uninstalled
+selections fail loudly. G004 expansion is an explicit
+available capability; it makes no replacement, parity, or outperformance claim.
+During setup, choose one local verified acquisition policy:
+`--models-default`, `--models-descriptor <path>`, or `--models-no-default`.
 
 ## MCP tools
 

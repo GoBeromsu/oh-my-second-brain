@@ -15,9 +15,9 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
       "             First run `setup --dry-run` to show an approval digest.",
       "             Apply only with `setup --yes --approved-digest <shown-digest>`.",
       "             --template-folder <path>   Discover templates in this safe vault-relative folder.",
-      "             --embedding-default       Install the pinned local embedding model (EmbeddingGemma-300M, 768d).",
-      "             --embedding-descriptor <path>  Install an operator-supplied model descriptor instead.",
-      "             --embedding-no-default    Waive model installation; vector search stays unavailable.",
+      "             --models-default          Install the pinned local model (EmbeddingGemma-300M, 768d).",
+      "             --models-descriptor <path> Install an operator-supplied model descriptor instead.",
+      "             --models-no-default       Waive model installation; vector search stays unavailable.",
     ],
   },
   { name: "install", line: "  install  Install Oh My Second Brain host adapters and MCP registration." },
@@ -49,7 +49,11 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
       "             --apply --yes     Rewrite notes in place; --apply alone refuses and writes nothing.",
     ],
   },
-  { name: "semantic", line: "  semantic Native markdown semantic index/search/get commands." },
+  { name: "search", line: "  search   Search indexed vault notes." },
+  { name: "index", line: "  index    Manage the native vault index." },
+  { name: "doc", line: "  doc      Retrieve indexed vault documents." },
+  { name: "embed", line: "  embed    Generate vector embeddings for indexed notes." },
+  { name: "serve", line: "  serve    Start the local search HTTP server." },
   { name: "mcp", line: "  mcp      Start the read/status MCP stdio server." },
   {
     name: "hook",
@@ -91,7 +95,7 @@ oh-my-second-brain — Oh My Second Brain convention layer for Obsidian vaults
 Usage:
   oh-my-second-brain setup [--vault <path>] [--template-folder <path>]
                            [--dry-run | --yes --approved-digest <sha256:...>] [--install-claude]
-                           [--embedding-default | --embedding-descriptor <path> | --embedding-no-default]
+                           [--models-default | --models-descriptor <path> | --models-no-default]
   oh-my-second-brain install [--vault <path>] [--runtime <${runtime}>] [--dry-run] [--execute] [--yes] [--json]
   oh-my-second-brain uninstall [--runtime <all|${registry.hosts.map((host) => host.runtime).join("|")}>] [--dry-run] [--execute] [--yes] [--json]
   oh-my-second-brain update [--check] [--dry-run] [--yes] [--runtime <${runtime}>] [--vault <path>]
@@ -101,7 +105,11 @@ Usage:
   oh-my-second-brain lint [--vault <path>] [--verbose] [--json]
   oh-my-second-brain link --vault <path> --folder <name> [--folder <name> ...] [--no-convention-note]
   oh-my-second-brain linkify [--vault <path>] [--folder <name>] [--apply --yes]
-  oh-my-second-brain semantic <query|status|get|multi-get|vsearch|search|sync|update|embed|collection|context|cleanup|serve|http> [options]
+  oh-my-second-brain search <text> [--lex <text>] [--vec <text>] [--hyde <text>] [--expand] [--max-queries <n>] [--rerank] [-n <n>]
+  oh-my-second-brain index <sync|status|cleanup|collections|contexts> [options]
+  oh-my-second-brain doc <get|multi-get> [options]
+  oh-my-second-brain embed [options]
+  oh-my-second-brain serve [options]
   oh-my-second-brain mcp [--vault <path>]
   oh-my-second-brain hook pre-tool-use [--vault <path>]
   oh-my-second-brain hook post-tool-use [--vault <path>]
@@ -128,13 +136,13 @@ Options:
   --apply          linkify: rewrite notes in place; must be combined with --yes.
   --no-convention-note
                   link: skip writing the managed OMS usage block to AGENTS.md.
-  --embedding-default
+  --models-default
                   setup: download and verify the pinned EmbeddingGemma-300M model into the
                   user-level cache, then select it for \`oms embed\` and vector search without
                   requiring OMS_EMBEDDING_PROVIDER / OMS_EMBEDDING_MODEL.
-  --embedding-descriptor <path>
+  --models-descriptor <path>
                   setup: install an operator-supplied model descriptor (SHA-256 verified).
-  --embedding-no-default
+  --models-no-default
                   setup: explicitly install no model; lexical search still works.
 `;
 }

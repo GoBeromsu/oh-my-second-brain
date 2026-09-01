@@ -1,326 +1,545 @@
 import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import path from "node:path";
+import {
+  canonicalModelIdentityKey,
+  MODEL_CAPABILITY_ENV_PAIRS,
+  parseModelsConfig,
+  resolveModelCapability,
+  type InstalledModelArtifact,
+  type ModelCapability,
+  type ModelCapabilityResolution,
+  type ModelsConfigV1,
+  type PortableModelSelection,
+} from "./config.js";
 
-/** The canonical environment variables for selecting an embedding model. */
-export const EMBEDDING_PROVIDER_ENV = "OMS_EMBEDDING_PROVIDER" as const;
-export const EMBEDDING_MODEL_ENV = "OMS_EMBEDDING_MODEL" as const;
-export const INSTALLED_DEFAULT_DESCRIPTOR = "default-model.json";
-export const CAPABILITY_RECEIPT = "capability-receipt.json";
+export const EMBEDDING_PROVIDER_ENV = MODEL_CAPABILITY_ENV_PAIRS.embed[0];
+export const EMBEDDING_MODEL_ENV = MODEL_CAPABILITY_ENV_PAIRS.embed[1];
+export const INSTALLED_MODELS_RECEIPT = "installed-models.json" as const;
+export const INSTALLED_MODELS_SCHEMA_VERSION = 1 as const;
 
-/**
- * The one pinned default embedding model, offered by `oms setup --embedding-default`.
- *
- * This is the same model qmd resolves from its own `DEFAULT_EMBED_MODEL_URI`
- * (`hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf`), so a
- * vault indexed by `oms embed` gets that toolchain's retrieval quality rather
- * than a lesser stand-in. `dimensions` is the model's native width and is
- * stored unfolded (ADR-007 P-A); `mrlDim: 0` records that no Matryoshka
- * truncation is applied.
- *
- * This constant is NOT a fallback. `resolveEmbeddingModel` never reaches for
- * it, because an implicit default would defeat the E-1 no-default contract in
- * `src/kernel/measurement/no-default-contract.ts`: with no environment pair and
- * an empty cache, embedding capability must stay honestly unavailable. The only
- * consumer is the explicit setup acquisition path, which verifies `sha256`
- * against the downloaded bytes before publishing them.
- *
- * `prefixScheme` reproduces EmbeddingGemma's asymmetric prompts byte-for-byte
- * as qmd formats them in `formatQueryForEmbedding` / `formatDocForEmbedding`,
- * including the document title: `{title}` is substituted per chunk, matching
- * qmd's `title: <title> | text: <text>` document prompt.
- */
-export const PINNED_DEFAULT_EMBEDDING_MODEL: EmbeddingModelDescriptor & {
-  readonly url: string;
-  readonly sha256: string;
-} = {
-  provider: "gguf",
-  model: "embeddinggemma-300M-Q8_0.gguf",
-  filename: "embeddinggemma-300M-Q8_0.gguf",
-  url: "https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M-Q8_0.gguf",
-  sha256: "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
-  dimensions: 768,
-  context: 2048,
-  mrlDim: 0,
-  normalization: "l2",
-  prefixScheme: JSON.stringify({
-    query: "task: search result | query: ",
-    passage: "title: {title} | text: ",
-  }),
-};
-
-/** Metadata needed to use an installed embedding model. */
 export interface EmbeddingModelDescriptor {
-  readonly provider: string;
-  /** Provider model id. For local providers this may be a filename. */
+  readonly provider: "gguf";
   readonly model: string;
-  /** Absolute path to a locally installed model, when applicable. */
-  readonly path?: string;
-  /** Alias accepted in descriptors produced by setup adapters. */
-  readonly modelPath?: string;
-  /** Source URL used by setup, when this model was acquired. */
+  readonly revision: string;
+  readonly sha256: string;
+  readonly dimensions: number;
+  readonly context: number;
+  readonly mrlDim: number;
+  readonly normalization: string;
+  readonly prefixScheme: "embeddinggemma-v1" | "qwen3-embedding-v1";
   readonly url?: string;
-  /** SHA-256 digest of the installed bytes, lowercase hexadecimal. */
-  readonly sha256?: string;
-  readonly dimensions?: number;
-  /** Canonical model context window in tokens. */
-  readonly context?: number;
-  /** Canonical context-length alias used by some setup adapters. */
-  readonly contextLength?: number;
-  readonly contextTokens?: number;
-  /** Optional Matryoshka (MRL) output width. */
-  readonly mrlDim?: number;
-  /** Declared output-vector normalization scheme. */
-  readonly normalization?: string;
-  /** Declared query/passage prefix scheme. */
-  readonly prefixScheme?: string;
-  /** Optional filename used for the cache artifact. */
   readonly filename?: string;
+  readonly path?: string;
 }
 
-export type ModelResolutionSource = "configured" | "installed-default" | "none";
+export interface InstalledModelsReceipt {
+  readonly schemaVersion: 1;
+  readonly artifacts: readonly InstalledModelArtifact[];
+  readonly defaults: readonly string[];
+}
 
-export interface EmbeddingCapabilityReceipt {
-  readonly kind: "embedding-capability";
-  readonly available: boolean;
-  readonly source: ModelResolutionSource | "setup";
-  readonly provider?: string;
-  readonly model?: string;
-  readonly modelPath?: string;
-  readonly cachePath?: string;
-  readonly sha256?: string;
-  readonly dimensions?: number;
-  readonly context?: number;
-  readonly contextLength?: number;
-  readonly contextTokens?: number;
-  readonly mrlDim?: number;
-  readonly normalization?: string;
-  readonly prefixScheme?: string;
-  readonly guidance: string;
+export interface ResolveEmbeddingModelOptions {
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly request?: PortableModelSelection;
+  readonly vaultConfig?: ModelsConfigV1 | null;
+  readonly installedReceipt?: InstalledModelsReceipt;
+  readonly cacheDir?: string;
 }
 
 export interface EmbeddingModelResolution {
   readonly available: boolean;
-  readonly source: ModelResolutionSource;
-  readonly provider?: string;
-  readonly model?: string;
-  readonly modelPath?: string;
+  readonly source: ModelCapabilityResolution["source"];
   readonly descriptor?: EmbeddingModelDescriptor;
-  readonly receipt: EmbeddingCapabilityReceipt;
-}
-
-export interface ResolveEmbeddingModelOptions {
-  /** Environment snapshot. Defaults to process.env. */
-  readonly env?: Readonly<Record<string, string | undefined>>;
-  /** Installed descriptor to use when the canonical env pair is absent. */
-  readonly installedDefault?: EmbeddingModelDescriptor | null;
-  /** Alias accepted for callers that call the descriptor a default model. */
-  readonly defaultModel?: EmbeddingModelDescriptor | null;
-  /** Optional cache root for automatic installed-default discovery. */
-  readonly cacheDir?: string;
-}
-
-const INCOMPLETE_CONFIG_ERROR =
-  `Embedding configuration is incomplete. Set both ${EMBEDDING_PROVIDER_ENV} and ${EMBEDDING_MODEL_ENV}.`;
-const NO_MODEL_GUIDANCE =
-  "No embedding model is configured. Run `oms setup --embedding-default` to install the pinned " +
-  `local model, or set ${EMBEDDING_PROVIDER_ENV} and ${EMBEDDING_MODEL_ENV} to choose your own ` +
-  "(`oms setup --embedding-descriptor <path>` installs an operator-supplied descriptor).";
-
-function trim(value: string | undefined): string {
-  return (value ?? "").trim();
-}
-
-function assertCompleteDescriptor(descriptor: EmbeddingModelDescriptor): void {
-  const context = descriptor.context ?? descriptor.contextLength ?? descriptor.contextTokens;
-  if (
-    !Number.isInteger(descriptor.dimensions) || descriptor.dimensions === undefined || descriptor.dimensions <= 0 ||
-    !Number.isInteger(context) || context === undefined || context <= 0 ||
-    !Number.isInteger(descriptor.mrlDim) || descriptor.mrlDim === undefined || descriptor.mrlDim < 0 ||
-    !trim(descriptor.normalization) ||
-    !trim(descriptor.prefixScheme)
-  ) {
-    throw new Error(
-      "Embedding descriptor is incomplete. dimensions/context/mrlDim/normalization/prefixScheme are required.",
-    );
-  }
-}
-
-function receiptFor(
-  resolution: Omit<EmbeddingModelResolution, "receipt">,
-  guidance: string,
-): EmbeddingCapabilityReceipt {
-  return {
-    kind: "embedding-capability",
-    available: resolution.available,
-    source: resolution.source,
-    ...(resolution.provider ? { provider: resolution.provider } : {}),
-    ...(resolution.model ? { model: resolution.model } : {}),
-    ...(resolution.modelPath ? { modelPath: resolution.modelPath } : {}),
-    ...(resolution.descriptor?.sha256 ? { sha256: resolution.descriptor.sha256 } : {}),
-    ...(resolution.descriptor?.dimensions !== undefined
-      ? { dimensions: resolution.descriptor.dimensions }
-      : {}),
-    ...(resolution.descriptor?.context !== undefined ? { context: resolution.descriptor.context } : {}),
-    ...(resolution.descriptor?.contextLength !== undefined
-      ? { contextLength: resolution.descriptor.contextLength }
-      : {}),
-    ...(resolution.descriptor?.contextTokens !== undefined
-      ? { contextTokens: resolution.descriptor.contextTokens }
-      : {}),
-    ...(resolution.descriptor?.mrlDim !== undefined ? { mrlDim: resolution.descriptor.mrlDim } : {}),
-    ...(resolution.descriptor?.normalization !== undefined
-      ? { normalization: resolution.descriptor.normalization }
-      : {}),
-    ...(resolution.descriptor?.prefixScheme !== undefined
-      ? { prefixScheme: resolution.descriptor.prefixScheme }
-      : {}),
-    guidance,
-  };
-}
-
-function withReceipt(
-  resolution: Omit<EmbeddingModelResolution, "receipt">,
-  guidance: string,
-): EmbeddingModelResolution {
-  return { ...resolution, receipt: receiptFor(resolution, guidance) };
-}
-
-/**
- * Resolve the one canonical embedding selection.
- *
- * A complete environment pair always wins. A half-pair is an error rather than
- * an invitation to silently use a different model. If neither environment
- * variable is set, an explicitly supplied installed descriptor is used, then
- * the result is an honest unavailable capability.
- */
-export function resolveEmbeddingModel(
-  options: ResolveEmbeddingModelOptions = {},
-): EmbeddingModelResolution {
-  const env = options.env ?? process.env;
-  const provider = trim(env[EMBEDDING_PROVIDER_ENV]);
-  const model = trim(env[EMBEDDING_MODEL_ENV]);
-
-  if ((provider === "") !== (model === "")) {
-    throw new Error(INCOMPLETE_CONFIG_ERROR);
-  }
-
-  if (provider !== "" && model !== "") {
-    const descriptor = options.installedDefault !== undefined
-      ? options.installedDefault
-      : options.defaultModel !== undefined
-        ? options.defaultModel
-        : readInstalledEmbeddingDefaultSync({ cacheDir: options.cacheDir });
-    if (descriptor !== null && descriptor !== undefined) {
-      const descriptorModel = trim(descriptor.path) || trim(descriptor.modelPath) || trim(descriptor.model);
-      if (trim(descriptor.provider) !== provider || descriptorModel !== model) {
-        throw new Error("Embedding descriptor does not match the configured provider/model.");
-      }
-      assertCompleteDescriptor(descriptor);
-    }
-    const resolution: Omit<EmbeddingModelResolution, "receipt"> = {
-      available: true,
-      source: "configured",
-      provider,
-      model,
-      ...(descriptor !== null && descriptor !== undefined ? { descriptor } : {}),
-    };
-    return withReceipt(resolution, "Embedding model selected from the canonical environment pair.");
-  }
-
-  // `null` explicitly disables discovery. With no override, setup's
-  // user-level descriptor is the second precedence tier.
-  const descriptor = options.installedDefault !== undefined
-    ? options.installedDefault
-    : options.defaultModel !== undefined
-      ? options.defaultModel
-      : readInstalledEmbeddingDefaultSync({ cacheDir: options.cacheDir });
-  if (descriptor !== null) {
-    const installedProvider = trim(descriptor.provider);
-    const installedModel = trim(descriptor.model);
-    if (installedProvider === "" || installedModel === "") {
-      throw new Error(
-        `Installed embedding default is invalid. It must name both a provider and model (${EMBEDDING_PROVIDER_ENV} / ${EMBEDDING_MODEL_ENV}).`,
-      );
-    }
-    const modelPath = trim(descriptor.path) || trim(descriptor.modelPath);
-    const resolution: Omit<EmbeddingModelResolution, "receipt"> = {
-      available: true,
-      source: "installed-default",
-      provider: installedProvider,
-      model: installedModel,
-      ...(modelPath ? { modelPath } : {}),
-      descriptor,
-    };
-    return withReceipt(
-      resolution,
-      `Using the installed default model. Set ${EMBEDDING_PROVIDER_ENV}=${installedProvider} and ${EMBEDDING_MODEL_ENV}=${modelPath || installedModel} to select it explicitly.`,
-    );
-  }
-
-  const resolution: Omit<EmbeddingModelResolution, "receipt"> = {
-    available: false,
-    source: "none",
-  };
-  return withReceipt(resolution, NO_MODEL_GUIDANCE);
-}
-
-/** Short alias for code that refers to this operation as model resolution. */
-export const resolveModel = resolveEmbeddingModel;
-
-/**
- * Cache root for downloaded model bytes. It is deliberately user-level and
- * never derived from a vault path. `cacheDir` can be supplied by setup/tests.
- */
-export function embeddingModelCacheDir(options: {
-  readonly cacheDir?: string;
-  readonly env?: Readonly<Record<string, string | undefined>>;
-  readonly homeDir?: string;
-} = {}): string {
-  if (options.cacheDir?.trim()) return path.resolve(options.cacheDir);
-  const env = options.env ?? process.env;
-  const xdg = trim(env["XDG_CACHE_HOME"]);
-  const root = xdg !== "" ? xdg : path.join(options.homeDir ?? homedir(), ".cache");
-  return path.resolve(root, "oms", "models");
-}
-
-export const getEmbeddingModelCacheDir = embeddingModelCacheDir;
-
-/** Read the setup-written descriptor synchronously for engine assembly. */
-export function readInstalledEmbeddingDefaultSync(options: {
-  readonly cacheDir?: string;
-} = {}): EmbeddingModelDescriptor | null {
-  try {
-    const parsed: unknown = JSON.parse(
-      readFileSync(path.join(embeddingModelCacheDir(options), INSTALLED_DEFAULT_DESCRIPTOR), "utf8"),
-    );
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const candidate = parsed as Partial<EmbeddingModelDescriptor>;
-    if (typeof candidate.provider !== "string" || typeof candidate.model !== "string") return null;
-    return candidate as EmbeddingModelDescriptor;
-  } catch {
-    return null;
-  }
+  readonly equivalentSources: ModelCapabilityResolution["equivalentSources"];
+  readonly shadowedSources: ModelCapabilityResolution["shadowedSources"];
+  readonly guidance?: string;
 }
 
 export interface AcquireEmbeddingModelOptions {
-  /** Descriptor must include URL and expected SHA-256 for setup acquisition. */
-  readonly descriptor: EmbeddingModelDescriptor & { readonly url: string; readonly sha256: string };
-  /** Optional explicit cache root. It must be outside `vault`, when provided. */
+  readonly descriptor: EmbeddingModelDescriptor & { readonly url: string };
   readonly cacheDir?: string;
-  /** Used only to reject an accidental cache path inside the vault. */
   readonly vault?: string;
-  /** Injection point for focused tests; production uses the global fetch. */
   readonly fetchImpl?: typeof fetch;
 }
 
 export interface AcquiredEmbeddingModel {
   readonly descriptor: EmbeddingModelDescriptor;
-  readonly modelPath: string;
   readonly cachePath: string;
-  readonly receipt: EmbeddingCapabilityReceipt;
+}
+
+interface ModelSetAcquisitionCommon {
+  readonly provider: "gguf";
+  readonly model: string;
+  readonly revision: string;
+  readonly sha256: string;
+  readonly promptScheme?: string;
+  readonly filename?: string;
+}
+
+/**
+ * Where the bytes come from: downloaded, or already on the user's disk.
+ *
+ * Modelled as a union rather than two optional fields so the compiler enforces what
+ * the parser enforces at runtime — exactly one source. With both optional, code that
+ * forgot to handle the local case would still typecheck and then fetch `undefined`.
+ */
+export type ModelSetAcquisitionSource =
+  | { readonly url: string; readonly path?: undefined }
+  | { readonly path: string; readonly url?: undefined };
+
+export type ModelSetAcquisitionArtifact = ModelSetAcquisitionCommon & ModelSetAcquisitionSource;
+
+export type EmbedModelSetAcquisitionArtifact = ModelSetAcquisitionCommon & ModelSetAcquisitionSource & {
+  readonly promptScheme: "embeddinggemma-v1" | "qwen3-embedding-v1";
+  readonly dimensions: number;
+  readonly contextLength: number;
+  readonly mrlDim: number;
+  readonly normalization: string;
+};
+
+export interface ModelSetAcquisitionManifest {
+  readonly schemaVersion: 1;
+  readonly embed: EmbedModelSetAcquisitionArtifact;
+  readonly rerank?: ModelSetAcquisitionArtifact;
+  readonly generate?: ModelSetAcquisitionArtifact & { readonly promptScheme: "qmd-query-expansion-v2.8.3" };
+}
+
+export interface AcquireModelSetOptions {
+  readonly manifest: ModelSetAcquisitionManifest | unknown;
+  readonly cacheDir?: string;
+  readonly vault?: string;
+  readonly fetchImpl?: typeof fetch;
+}
+
+export interface AcquiredModelSet {
+  readonly config: ModelsConfigV1;
+  readonly receipt: InstalledModelsReceipt;
+  readonly artifacts: readonly InstalledModelArtifact[];
+}
+
+const SHA256 = /^[a-f0-9]{64}$/;
+const MUTABLE_REVISIONS = new Set(["latest", "main", "master", "head"]);
+
+export const PINNED_DEFAULT_EMBEDDING_MODEL: EmbeddingModelDescriptor & { readonly url: string } = {
+  provider: "gguf",
+  model: "embeddinggemma-300M-Q8_0.gguf",
+  revision: "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12",
+  sha256: "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
+  dimensions: 768,
+  context: 2048,
+  mrlDim: 0,
+  normalization: "l2",
+  prefixScheme: "embeddinggemma-v1",
+  filename: "embeddinggemma-300M-Q8_0.gguf",
+  url: "https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/0f741b5a6585bd53aeb15cd1372c56f2a0f65e12/embeddinggemma-300M-Q8_0.gguf",
+};
+
+function fail(message: string): never {
+  throw new Error(`Invalid ${INSTALLED_MODELS_RECEIPT}: ${message}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) fail(`${label} contains unknown key "${key}".`);
+  }
+}
+
+function nonblank(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) {
+    fail(`${label} must be a nonblank string without surrounding whitespace.`);
+  }
+  return value;
+}
+
+function descriptorError(message: string): never {
+  throw new Error(`Invalid embedding model descriptor: ${message}`);
+}
+
+function descriptorString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) {
+    descriptorError(`${label} must be a nonblank string without surrounding whitespace.`);
+  }
+  return value;
+}
+
+function descriptorPositiveInteger(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    descriptorError(`${label} must be a positive integer.`);
+  }
+  return value;
+}
+
+function descriptorNonnegativeInteger(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    descriptorError(`${label} must be a nonnegative integer.`);
+  }
+  return value;
+}
+
+function assertDescriptor(value: unknown, requirePath: boolean): EmbeddingModelDescriptor {
+  if (!isRecord(value)) descriptorError("must be an object.");
+  const allowed = ["provider", "model", "revision", "sha256", "dimensions", "context", "mrlDim", "normalization", "prefixScheme", "url", "filename", "path"];
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) descriptorError(`contains unknown key "${key}".`);
+  }
+  if (value.provider !== "gguf") descriptorError('provider must be "gguf".');
+  const model = descriptorString(value.model, "model");
+  const revision = descriptorString(value.revision, "revision");
+  if (MUTABLE_REVISIONS.has(revision.toLowerCase())) descriptorError("revision must be immutable.");
+  const sha256 = descriptorString(value.sha256, "sha256");
+  if (!SHA256.test(sha256)) descriptorError("sha256 must be lowercase 64-character hexadecimal.");
+  const dimensions = descriptorPositiveInteger(value.dimensions, "dimensions");
+  const context = descriptorPositiveInteger(value.context, "context");
+  const mrlDim = descriptorNonnegativeInteger(value.mrlDim, "mrlDim");
+  const normalization = descriptorString(value.normalization, "normalization");
+  const prefixScheme = value.prefixScheme;
+  if (prefixScheme !== "embeddinggemma-v1" && prefixScheme !== "qwen3-embedding-v1") {
+    descriptorError("prefixScheme must be embeddinggemma-v1 or qwen3-embedding-v1.");
+  }
+  try {
+    canonicalModelIdentityKey({ provider: "gguf", model, revision, sha256, promptScheme: prefixScheme });
+  } catch {
+    descriptorError("provider/model/revision/sha256/prefixScheme must be a strict portable selection.");
+  }
+  const url = value.url === undefined ? undefined : descriptorString(value.url, "url");
+  const filename = value.filename === undefined ? undefined : descriptorString(value.filename, "filename");
+  const pathname = value.path === undefined ? undefined : descriptorString(value.path, "path");
+  if (pathname !== undefined && !path.isAbsolute(pathname)) descriptorError("path must be absolute.");
+  if (requirePath && pathname === undefined) descriptorError("path is required at runtime.");
+  return {
+    provider: "gguf", model, revision, sha256, dimensions, context,
+    mrlDim, normalization, prefixScheme,
+    ...(url === undefined ? {} : { url }), ...(filename === undefined ? {} : { filename }), ...(pathname === undefined ? {} : { path: pathname }),
+  };
+}
+
+/** Validate a strict acquisition/runtime embedding descriptor. */
+export function parseEmbeddingModelDescriptor(input: unknown, options: { readonly requirePath?: boolean } = {}): EmbeddingModelDescriptor {
+  return assertDescriptor(input, options.requirePath === true);
+}
+
+function parseSelection(value: unknown, index: number): PortableModelSelection {
+  if (!isRecord(value)) fail(`artifacts[${index}].selection must be an object.`);
+  exactKeys(value, ["provider", "model", "revision", "sha256", "promptScheme"], `artifacts[${index}].selection`);
+  if (value.provider !== "gguf") fail(`artifacts[${index}].selection.provider must be "gguf".`);
+  const model = nonblank(value.model, `artifacts[${index}].selection.model`);
+  const revision = nonblank(value.revision, `artifacts[${index}].selection.revision`);
+  const sha256 = nonblank(value.sha256, `artifacts[${index}].selection.sha256`);
+  const promptScheme = value.promptScheme;
+  if (promptScheme !== undefined && typeof promptScheme !== "string") {
+    fail(`artifacts[${index}].selection.promptScheme must be a string.`);
+  }
+  return {
+    provider: "gguf",
+    model,
+    revision,
+    sha256,
+    ...(promptScheme === undefined ? {} : { promptScheme }),
+  };
+}
+
+function positiveInteger(value: unknown, label: string): number {
+  if (!Number.isInteger(value) || typeof value !== "number" || value <= 0) {
+    fail(`${label} must be a positive integer.`);
+  }
+  return value;
+}
+
+function nonnegativeInteger(value: unknown, label: string): number {
+  if (!Number.isInteger(value) || typeof value !== "number" || value < 0) {
+    fail(`${label} must be a nonnegative integer.`);
+  }
+  return value;
+}
+
+function parseArtifact(value: unknown, index: number): InstalledModelArtifact {
+  if (!isRecord(value)) fail(`artifacts[${index}] must be an object.`);
+  exactKeys(value, ["capability", "selection", "path", "embedShape"], `artifacts[${index}]`);
+  if (value.capability !== "embed" && value.capability !== "rerank" && value.capability !== "generate") {
+    fail(`artifacts[${index}].capability is invalid.`);
+  }
+  const selection = parseSelection(value.selection, index);
+  try {
+    canonicalModelIdentityKey(selection);
+  } catch (error: unknown) {
+    fail(`artifacts[${index}].selection is invalid: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+  if (
+    (value.capability === "embed" && selection.promptScheme !== "embeddinggemma-v1" && selection.promptScheme !== "qwen3-embedding-v1") ||
+    (value.capability === "rerank" && selection.promptScheme !== undefined) ||
+    (value.capability === "generate" && selection.promptScheme !== "qmd-query-expansion-v2.8.3")
+  ) {
+    fail(`artifacts[${index}].selection does not match its capability.`);
+  }
+  const pathname = nonblank(value.path, `artifacts[${index}].path`);
+  if (!path.isAbsolute(pathname)) fail(`artifacts[${index}].path must be absolute.`);
+  if (value.capability !== "embed") {
+    if (value.embedShape !== undefined) fail(`artifacts[${index}].embedShape is only valid for embed.`);
+    return { capability: value.capability, selection, path: pathname };
+  }
+  if (!isRecord(value.embedShape)) fail(`artifacts[${index}].embedShape is required for embed.`);
+  exactKeys(value.embedShape, ["dimensions", "contextLength", "mrlDim", "normalization"], `artifacts[${index}].embedShape`);
+  const dimensions = positiveInteger(value.embedShape.dimensions, `artifacts[${index}].embedShape.dimensions`);
+  const contextLength = positiveInteger(value.embedShape.contextLength, `artifacts[${index}].embedShape.contextLength`);
+  const mrlDim = nonnegativeInteger(value.embedShape.mrlDim, `artifacts[${index}].embedShape.mrlDim`);
+  const normalization = nonblank(value.embedShape.normalization, `artifacts[${index}].embedShape.normalization`);
+  return { capability: "embed", selection, path: pathname, embedShape: { dimensions, contextLength, mrlDim, normalization } };
+}
+
+function acquisitionUrl(value: unknown, label: string): string {
+  const url = nonblank(value, `${label}.url`);
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { fail(`${label}.url must be an absolute https URL.`); }
+  if (parsed.protocol !== "https:") fail(`${label}.url must be an absolute https URL.`);
+  return url;
+}
+
+/**
+ * Validate an absolute path to a model file the user already has on disk.
+ *
+ * This exists because download was the only way in. Anyone who already runs these
+ * models locally — the common case, since the weights are shared with other tools —
+ * had to re-download gigabytes that were sitting on their filesystem, or hand-write
+ * the installed receipt through an internal API. A capability reachable only by
+ * hand-editing internal state is not a shipped capability.
+ *
+ * Registration is by reference, not by copy: re-copying a 2.9 GB GGUF to say "I have
+ * this file" wastes the disk the feature exists to save. The receipt readers already
+ * re-verify every artifact's path and checksum on load, so a file that later moves
+ * or changes fails loudly instead of silently serving different vectors.
+ */
+function acquisitionLocalPath(value: unknown, label: string): string {
+  const pathname = nonblank(value, `${label}.path`);
+  if (!path.isAbsolute(pathname)) fail(`${label}.path must be an absolute filesystem path.`);
+  if (pathname !== path.normalize(pathname)) {
+    fail(`${label}.path must be normalized, without "." or ".." segments.`);
+  }
+  return pathname;
+}
+
+function acquisitionFilename(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  const filename = nonblank(value, `${label}.filename`);
+  if (filename === "." || filename === ".." || /[\\/]/.test(filename) || path.basename(filename) !== filename) {
+    fail(`${label}.filename must be a portable basename.`);
+  }
+  return filename;
+}
+
+function portableManifestSelection(value: {
+  readonly provider: unknown;
+  readonly model: unknown;
+  readonly revision: unknown;
+  readonly sha256: unknown;
+  readonly promptScheme?: unknown;
+}, capability: ModelCapability): PortableModelSelection {
+  const selection = {
+    provider: value.provider,
+    model: value.model,
+    revision: value.revision,
+    sha256: value.sha256,
+    ...(value.promptScheme === undefined ? {} : { promptScheme: value.promptScheme }),
+  };
+  const parsed = parseModelsConfig({
+    schemaVersion: 1,
+    embed: capability === "embed"
+      ? selection
+      : { provider: "gguf", model: "placeholder.gguf", revision: "v1", sha256: "0".repeat(64), promptScheme: "embeddinggemma-v1" },
+    ...(capability === "rerank" ? { rerank: selection } : {}),
+    ...(capability === "generate" ? { generate: selection } : {}),
+  })[capability];
+  if (parsed === undefined) fail(`manifest.${capability} selection is required.`);
+  return parsed;
+}
+
+function parseManifestArtifact(value: unknown, capability: ModelCapability): ModelSetAcquisitionArtifact {
+  const label = `manifest.${capability}`;
+  if (!isRecord(value)) fail(`${label} must be an object.`);
+  const allowed = capability === "embed"
+    ? ["provider", "model", "revision", "sha256", "promptScheme", "url", "path", "filename", "dimensions", "contextLength", "mrlDim", "normalization"]
+    : ["provider", "model", "revision", "sha256", "promptScheme", "url", "path", "filename"];
+  exactKeys(value, allowed, label);
+  const selection = portableManifestSelection({
+    provider: value.provider,
+    model: value.model,
+    revision: value.revision,
+    sha256: value.sha256,
+    promptScheme: value.promptScheme,
+  }, capability);
+  // Exactly one source. Accepting both would leave it ambiguous which bytes the
+  // checksum refers to, and accepting neither gives nothing to install.
+  if (value.url !== undefined && value.path !== undefined) {
+    fail(`${label} must set either url or path, not both.`);
+  }
+  if (value.url === undefined && value.path === undefined) {
+    fail(`${label} must set either url (to download) or path (already on disk).`);
+  }
+  const source = value.path === undefined
+    ? { url: acquisitionUrl(value.url, label) }
+    : { path: acquisitionLocalPath(value.path, label) };
+  const filename = acquisitionFilename(value.filename, label);
+  const base = { ...selection, ...source, ...(filename === undefined ? {} : { filename }) };
+  if (capability !== "embed") return base;
+  return {
+    ...base,
+    dimensions: positiveInteger(value.dimensions, `${label}.dimensions`),
+    contextLength: positiveInteger(value.contextLength, `${label}.contextLength`),
+    mrlDim: nonnegativeInteger(value.mrlDim, `${label}.mrlDim`),
+    normalization: nonblank(value.normalization, `${label}.normalization`),
+  } as EmbedModelSetAcquisitionArtifact;
+}
+
+/** Parse a strict setup-only, portable multi-capability acquisition manifest. */
+export function parseModelSetAcquisitionManifest(input: string | unknown): ModelSetAcquisitionManifest {
+  let value: unknown = input;
+  if (typeof input === "string") {
+    try { value = JSON.parse(input); } catch { fail("acquisition manifest is not valid JSON."); }
+  }
+  if (!isRecord(value)) fail("acquisition manifest must be an object.");
+  exactKeys(value, ["schemaVersion", "embed", "rerank", "generate"], "acquisition manifest");
+  if (value.schemaVersion !== 1) fail("acquisition manifest schemaVersion must be 1.");
+  if (!("embed" in value)) fail("acquisition manifest embed is required.");
+  const embed = parseManifestArtifact(value.embed, "embed") as EmbedModelSetAcquisitionArtifact;
+  const rerank = value.rerank === undefined ? undefined : parseManifestArtifact(value.rerank, "rerank");
+  const generate = value.generate === undefined ? undefined : parseManifestArtifact(value.generate, "generate") as ModelSetAcquisitionManifest["generate"];
+  const entries: Array<[ModelCapability, ModelSetAcquisitionArtifact]> = [
+    ["embed", embed],
+    ...(rerank === undefined ? [] : [["rerank", rerank] as [ModelCapability, ModelSetAcquisitionArtifact]]),
+    ...(generate === undefined ? [] : [["generate", generate] as [ModelCapability, ModelSetAcquisitionArtifact]]),
+  ];
+  if (new Set(entries.map(([capability, entry]) => canonicalModelIdentityKey(
+    portableManifestSelection(entry, capability),
+  ))).size !== entries.length) {
+    fail("acquisition manifest must not contain duplicate model identities.");
+  }
+  return { schemaVersion: 1, embed, ...(rerank === undefined ? {} : { rerank }), ...(generate === undefined ? {} : { generate }) };
+}
+
+/** Convert a strict setup acquisition manifest into its portable runtime selection config. */
+export function modelsConfigFromAcquisitionManifest(input: ModelSetAcquisitionManifest | unknown): ModelsConfigV1 {
+  const manifest = parseModelSetAcquisitionManifest(input);
+  return parseModelsConfig({
+    schemaVersion: 1,
+    embed: portableManifestSelection(manifest.embed, "embed"),
+    ...(manifest.rerank === undefined ? {} : { rerank: portableManifestSelection(manifest.rerank, "rerank") }),
+    ...(manifest.generate === undefined ? {} : { generate: portableManifestSelection(manifest.generate, "generate") }),
+  });
+}
+
+/** Parse the strict setup-owned installed model-set receipt. */
+export function parseInstalledModelsReceipt(input: string | unknown): InstalledModelsReceipt {
+  let value: unknown = input;
+  if (typeof input === "string") {
+    try { value = JSON.parse(input); } catch { fail("is not valid JSON."); }
+  }
+  if (!isRecord(value)) fail("must be an object.");
+  exactKeys(value, ["schemaVersion", "artifacts", "defaults"], "top level");
+  if (value.schemaVersion !== INSTALLED_MODELS_SCHEMA_VERSION) fail(`schemaVersion must be ${INSTALLED_MODELS_SCHEMA_VERSION}.`);
+  if (!Array.isArray(value.artifacts)) fail("artifacts must be an array.");
+  if (!Array.isArray(value.defaults)) fail("defaults must be an array of nonblank identity keys.");
+  const artifacts = value.artifacts.map(parseArtifact);
+  const artifactKeys = artifacts.map((artifact) => `${artifact.capability}\u0000${canonicalModelIdentityKey(artifact.selection)}`);
+  if (new Set(artifactKeys).size !== artifactKeys.length) fail("artifacts must not contain duplicate capability and identity pairs.");
+  const defaults = value.defaults.map((entry, index) => {
+    if (typeof entry !== "string" || entry === "") {
+      fail(`defaults[${index}] must be a nonblank identity key.`);
+    }
+    return entry;
+  });
+  if (new Set(defaults).size !== defaults.length) fail("defaults must not contain duplicates.");
+  for (const identity of defaults) {
+    if (artifacts.filter((artifact) => canonicalModelIdentityKey(artifact.selection) === identity).length !== 1) {
+      fail("each default must identify exactly one artifact.");
+    }
+  }
+  return { schemaVersion: INSTALLED_MODELS_SCHEMA_VERSION, artifacts, defaults };
+}
+
+function sha256Bytes(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function verifyArtifactSync(artifact: InstalledModelArtifact): void {
+  let status;
+  try { status = statSync(artifact.path); } catch { fail("an installed artifact is missing or unreadable."); }
+  if (!status.isFile()) fail("an installed artifact is not a regular file.");
+  if (sha256Bytes(readFileSync(artifact.path)) !== artifact.selection.sha256) fail("an installed artifact checksum does not match its selection.");
+}
+
+async function verifyArtifact(artifact: InstalledModelArtifact): Promise<void> {
+  let status;
+  try { status = await stat(artifact.path); } catch { fail("an installed artifact is missing or unreadable."); }
+  if (!status.isFile()) fail("an installed artifact is not a regular file.");
+  if (sha256Bytes(await readFile(artifact.path)) !== artifact.selection.sha256) fail("an installed artifact checksum does not match its selection.");
+}
+
+export function embeddingModelCacheDir(options: { readonly cacheDir?: string; readonly env?: Readonly<Record<string, string | undefined>>; readonly homeDir?: string } = {}): string {
+  if (options.cacheDir?.trim()) return path.resolve(options.cacheDir);
+  const xdg = options.env?.XDG_CACHE_HOME?.trim() ?? process.env.XDG_CACHE_HOME?.trim() ?? "";
+  return path.resolve(xdg || path.join(options.homeDir ?? homedir(), ".cache"), "oms", "models");
+}
+
+/** Read and verify all installed model artifacts synchronously. Only a missing receipt is empty. */
+export function readInstalledModelsReceiptSync(options: { readonly cacheDir?: string } = {}): InstalledModelsReceipt {
+  const filename = path.join(embeddingModelCacheDir(options), INSTALLED_MODELS_RECEIPT);
+  let raw: string;
+  try { raw = readFileSync(filename, "utf8"); } catch (error: unknown) {
+    if (isRecord(error) && error.code === "ENOENT") return { schemaVersion: 1, artifacts: [], defaults: [] };
+    throw error;
+  }
+  const receipt = parseInstalledModelsReceipt(raw);
+  receipt.artifacts.forEach(verifyArtifactSync);
+  return receipt;
+}
+
+/** Read and verify all installed model artifacts. Only a missing receipt is empty. */
+export async function readInstalledModelsReceipt(options: { readonly cacheDir?: string } = {}): Promise<InstalledModelsReceipt> {
+  const filename = path.join(embeddingModelCacheDir(options), INSTALLED_MODELS_RECEIPT);
+  let raw: string;
+  try { raw = await readFile(filename, "utf8"); } catch (error: unknown) {
+    if (isRecord(error) && error.code === "ENOENT") return { schemaVersion: 1, artifacts: [], defaults: [] };
+    throw error;
+  }
+  const receipt = parseInstalledModelsReceipt(raw);
+  await Promise.all(receipt.artifacts.map(verifyArtifact));
+  return receipt;
+}
+
+function descriptorFromArtifact(artifact: InstalledModelArtifact): EmbeddingModelDescriptor {
+  if (artifact.capability !== "embed" || artifact.embedShape === undefined) throw new Error("Installed embed artifact is missing embed metadata.");
+  const shape: unknown = artifact.embedShape;
+  if (!isRecord(shape)) throw new Error("Installed embed artifact has invalid embed metadata.");
+  return parseEmbeddingModelDescriptor({
+    provider: artifact.selection.provider, model: artifact.selection.model, revision: artifact.selection.revision,
+    sha256: artifact.selection.sha256, dimensions: shape.dimensions, context: shape.contextLength,
+    mrlDim: shape.mrlDim, normalization: shape.normalization,
+    prefixScheme: artifact.selection.promptScheme, path: artifact.path,
+  }, { requirePath: true });
+}
+
+function resolutionFromCapability(result: ModelCapabilityResolution): EmbeddingModelResolution {
+  if (!result.available) return { available: false, source: result.source, equivalentSources: result.equivalentSources, shadowedSources: result.shadowedSources, ...(result.guidance === undefined ? {} : { guidance: result.guidance }) };
+  if (result.artifact === undefined) throw new Error("Resolved embedding model has no installed artifact.");
+  return { available: true, source: result.source, descriptor: descriptorFromArtifact(result.artifact), equivalentSources: result.equivalentSources, shadowedSources: result.shadowedSources };
+}
+
+/** Resolve embedding through the shared strict capability resolver; this never downloads. */
+export function resolveEmbeddingModel(options: ResolveEmbeddingModelOptions = {}): EmbeddingModelResolution {
+  const receipt = options.installedReceipt ?? readInstalledModelsReceiptSync({ cacheDir: options.cacheDir });
+  return resolutionFromCapability(resolveModelCapability({ capability: "embed", request: options.request, env: options.env, vaultConfig: options.vaultConfig, installedArtifacts: receipt.artifacts, setupDefaults: receipt.defaults }));
+}
+
+/** Async cache adapter over the shared strict capability resolver; this never downloads. */
+export async function resolveEmbeddingModelFromCache(options: ResolveEmbeddingModelOptions = {}): Promise<EmbeddingModelResolution> {
+  const receipt = options.installedReceipt ?? await readInstalledModelsReceipt({ cacheDir: options.cacheDir });
+  return resolutionFromCapability(resolveModelCapability({ capability: "embed", request: options.request, env: options.env, vaultConfig: options.vaultConfig, installedArtifacts: receipt.artifacts, setupDefaults: receipt.defaults }));
 }
 
 function isInside(child: string, parent: string): boolean {
@@ -328,157 +547,153 @@ function isInside(child: string, parent: string): boolean {
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
-function safeName(value: string): string {
-  const result = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return result || "model";
+function filenameFor(descriptor: EmbeddingModelDescriptor): string {
+  const name = descriptor.filename ?? descriptor.model;
+  return path.basename(name) || "model.gguf";
 }
 
-function extensionFromDescriptor(descriptor: EmbeddingModelDescriptor): string {
-  const candidate = descriptor.filename ?? descriptor.model;
-  const extension = path.extname(candidate);
-  return extension.length > 0 && extension.length <= 12 ? extension : ".bin";
+async function writeAtomic(filename: string, contents: Uint8Array | string): Promise<void> {
+  const temporary = `${filename}.${process.pid}.${Date.now()}.tmp`;
+  try { await writeFile(temporary, contents, { flag: "wx" }); await rename(temporary, filename); } finally { await rm(temporary, { force: true }); }
 }
 
-function modelFilename(descriptor: EmbeddingModelDescriptor): string {
-  const supplied = descriptor.filename?.trim();
-  if (supplied) return path.basename(supplied);
-  return `${safeName(descriptor.provider)}-${safeName(descriptor.model)}${extensionFromDescriptor(descriptor)}`;
+function manifestEntries(manifest: ModelSetAcquisitionManifest): readonly [ModelCapability, ModelSetAcquisitionArtifact][] {
+  return [
+    ["embed", manifest.embed],
+    ...(manifest.rerank === undefined ? [] : [["rerank", manifest.rerank] as [ModelCapability, ModelSetAcquisitionArtifact]]),
+    ...(manifest.generate === undefined ? [] : [["generate", manifest.generate] as [ModelCapability, ModelSetAcquisitionArtifact]]),
+  ];
 }
 
-function sha256Bytes(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
+function installedArtifact(capability: ModelCapability, acquisition: ModelSetAcquisitionArtifact, pathname: string): InstalledModelArtifact {
+  const selection: PortableModelSelection = {
+    provider: acquisition.provider, model: acquisition.model, revision: acquisition.revision, sha256: acquisition.sha256,
+    ...(acquisition.promptScheme === undefined ? {} : { promptScheme: acquisition.promptScheme }),
+  };
+  if (capability !== "embed") return { capability, selection, path: pathname };
+  const embed = acquisition as EmbedModelSetAcquisitionArtifact;
+  return {
+    capability: "embed", selection, path: pathname,
+    embedShape: { dimensions: embed.dimensions, contextLength: embed.contextLength, mrlDim: embed.mrlDim, normalization: embed.normalization },
+  };
 }
 
-function assertSha256(expected: string | undefined): string {
-  const normalized = (expected ?? "").trim().toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(normalized)) {
-    throw new Error("Embedding model SHA-256 must be a 64-character hexadecimal digest.");
-  }
-  return normalized;
-}
-
-async function readVerified(pathname: string, expected: string): Promise<Uint8Array | null> {
-  try {
-    const bytes = await readFile(pathname);
-    const actual = sha256Bytes(bytes);
-    if (actual !== expected) {
-      await rm(pathname, { force: true });
-      throw new Error(`Embedding model SHA-256 checksum mismatch: expected ${expected}, got ${actual}.`);
-    }
-    return bytes;
-  } catch (error) {
-    if (error instanceof Error && /checksum mismatch/.test(error.message)) throw error;
-    return null;
-  }
-}
-
-async function writeAtomic(pathname: string, bytes: Uint8Array | string): Promise<void> {
-  const temporary = `${pathname}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    await writeFile(temporary, bytes, { flag: "wx" });
-    await rename(temporary, pathname);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-}
-
-/**
- * Download and install a model for setup only.
- *
- * This function is intentionally not imported by the MCP server. It writes
- * only to the user-level model cache, verifies bytes before publishing them,
- * and leaves an installed-default descriptor plus capability receipt there for
- * future model resolution.
- */
-export async function acquireEmbeddingModel(
-  options: AcquireEmbeddingModelOptions,
-): Promise<AcquiredEmbeddingModel> {
-  const descriptor = options.descriptor;
-  const expected = assertSha256(descriptor.sha256);
-  const url = typeof descriptor.url === "string" ? descriptor.url.trim() : "";
-  if (url === "") {
-    throw new Error("Embedding model URL is required for setup acquisition.");
-  }
+/** Download, verify, and atomically publish a strict multi-capability setup receipt. */
+export async function acquireModelSet(options: AcquireModelSetOptions): Promise<AcquiredModelSet> {
+  const manifest = parseModelSetAcquisitionManifest(options.manifest);
   const cacheRoot = embeddingModelCacheDir({ cacheDir: options.cacheDir });
-  if (options.vault !== undefined && isInside(cacheRoot, path.resolve(options.vault))) {
-    throw new Error("Embedding model cache must be outside the vault.");
-  }
-
+  if (options.vault !== undefined && isInside(cacheRoot, path.resolve(options.vault))) throw new Error("Model cache must be outside the vault.");
   await mkdir(cacheRoot, { recursive: true });
-  const cachePath = path.join(cacheRoot, modelFilename(descriptor));
-  let bytes = await readVerified(cachePath, expected);
-  if (bytes === null) {
-    const fetchImpl = options.fetchImpl ?? fetch;
-    const response = await fetchImpl(url);
-    if (!response.ok) {
-      throw new Error(`Embedding model download failed: ${response.status} ${response.statusText}.`);
+  const current = await readInstalledModelsReceipt({ cacheDir: options.cacheDir });
+  const entries = manifestEntries(manifest);
+  const planned = entries.map(([capability, acquisition]) => {
+    // A local file is registered where it already lives. Copying it into the cache
+    // would double the disk cost of models that are often shared with other tools,
+    // which is the whole reason to point at them instead of re-downloading.
+    if (acquisition.path !== undefined) {
+      return {
+        capability,
+        acquisition,
+        cachePath: acquisition.path,
+        local: true as const,
+        artifact: installedArtifact(capability, acquisition, acquisition.path),
+      };
     }
-    bytes = new Uint8Array(await response.arrayBuffer());
-    const actual = sha256Bytes(bytes);
-    if (actual !== expected) {
-      throw new Error(`Embedding model SHA-256 checksum mismatch: expected ${expected}, got ${actual}.`);
-    }
-    await writeAtomic(cachePath, bytes);
-  }
-
-  const installed: EmbeddingModelDescriptor = {
-    ...descriptor,
-    path: cachePath,
-    sha256: expected,
-    filename: modelFilename(descriptor),
-  };
-  const descriptorPath = path.join(cacheRoot, INSTALLED_DEFAULT_DESCRIPTOR);
-  const receiptPath = path.join(cacheRoot, CAPABILITY_RECEIPT);
-  await writeAtomic(descriptorPath, `${JSON.stringify(installed, null, 2)}\n`);
-  const receipt: EmbeddingCapabilityReceipt = {
-    kind: "embedding-capability",
-    available: true,
-    source: "setup",
-    provider: installed.provider,
-    model: installed.model,
-    modelPath: cachePath,
-    cachePath,
-    sha256: expected,
-    ...(installed.dimensions !== undefined ? { dimensions: installed.dimensions } : {}),
-    ...(installed.context !== undefined ? { context: installed.context } : {}),
-    ...(installed.contextLength !== undefined ? { contextLength: installed.contextLength } : {}),
-    ...(installed.contextTokens !== undefined ? { contextTokens: installed.contextTokens } : {}),
-    ...(installed.mrlDim !== undefined ? { mrlDim: installed.mrlDim } : {}),
-    ...(installed.normalization !== undefined ? { normalization: installed.normalization } : {}),
-    ...(installed.prefixScheme !== undefined ? { prefixScheme: installed.prefixScheme } : {}),
-    guidance: `Model installed. Set ${EMBEDDING_PROVIDER_ENV}=${installed.provider} and ${EMBEDDING_MODEL_ENV}=${installed.path || installed.model} to select it.`,
-  };
-  await writeAtomic(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
-
-  return { descriptor: installed, modelPath: cachePath, cachePath, receipt };
-}
-
-/** Read the setup-written default descriptor without touching a vault. */
-export async function readInstalledEmbeddingDefault(options: {
-  readonly cacheDir?: string;
-} = {}): Promise<EmbeddingModelDescriptor | null> {
+    const filename = acquisition.filename ?? acquisition.model;
+    const cachePath = path.join(cacheRoot, `${capability}-${acquisition.sha256}-${filename}`);
+    return { capability, acquisition, cachePath, local: false as const, artifact: installedArtifact(capability, acquisition, cachePath) };
+  });
+  const staged: string[] = [];
   try {
-    const raw = await readFile(path.join(embeddingModelCacheDir(options), INSTALLED_DEFAULT_DESCRIPTOR), "utf8");
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const candidate = parsed as Partial<EmbeddingModelDescriptor>;
-    if (typeof candidate.provider !== "string" || typeof candidate.model !== "string") return null;
-    return candidate as EmbeddingModelDescriptor;
-  } catch {
-    return null;
+    for (let index = 0; index < planned.length; index += 1) {
+      const item = planned[index]!;
+      if (item.local) {
+        // Verify the declared checksum against the real bytes. Registration by
+        // reference is only safe because a wrong or moved file fails here rather
+        // than silently producing vectors from a different model.
+        let bytes: Uint8Array;
+        try {
+          const canonicalPath = await realpath(item.cachePath);
+          const metadata = await stat(canonicalPath);
+          if (!metadata.isFile()) {
+            throw new Error(`Model path for ${item.capability} is not a regular file: ${canonicalPath}`);
+          }
+          if (
+            options.vault !== undefined
+            && isInside(canonicalPath, await realpath(path.resolve(options.vault)))
+          ) {
+            throw new Error(
+              `Model file for ${item.capability} must stay outside the vault: ${canonicalPath}`,
+            );
+          }
+          // Persist the canonical target, not a mutable symlink spelling. Receipt
+          // verification therefore checks the exact file approved here.
+          item.cachePath = canonicalPath;
+          item.artifact = installedArtifact(item.capability, item.acquisition, canonicalPath);
+          bytes = await readFile(canonicalPath);
+        } catch (error: unknown) {
+          if (isRecord(error) && error.code === "ENOENT") {
+            throw new Error(`Model file not found for ${item.capability}: ${item.cachePath}`);
+          }
+          throw error;
+        }
+        if (sha256Bytes(bytes) !== item.acquisition.sha256) {
+          throw new Error(
+            `Model SHA-256 checksum mismatch for ${item.capability} at ${item.cachePath}.`,
+          );
+        }
+        continue;
+      }
+      try {
+        const existing = await readFile(item.cachePath);
+        if (sha256Bytes(existing) === item.acquisition.sha256) continue;
+      } catch (error: unknown) {
+        if (!isRecord(error) || error.code !== "ENOENT") throw error;
+      }
+      const response = await (options.fetchImpl ?? fetch)(item.acquisition.url);
+      if (!response.ok) throw new Error(`Model download failed: ${response.status} ${response.statusText}.`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (sha256Bytes(bytes) !== item.acquisition.sha256) throw new Error("Model SHA-256 checksum mismatch.");
+      const temporary = `${item.cachePath}.stage-${index}.tmp`;
+      await writeFile(temporary, bytes, { flag: "wx" });
+      staged.push(temporary);
+    }
+    for (const temporary of staged) {
+      const destination = temporary.replace(/\.stage-\d+\.tmp$/, "");
+      await rename(temporary, destination);
+    }
+    await Promise.all(planned.map((item) => verifyArtifact(item.artifact)));
+    const replacementKeys = new Set(planned.map((item) => `${item.capability}\u0000${canonicalModelIdentityKey(item.artifact.selection)}`));
+    const artifacts = [...current.artifacts.filter((item) => !replacementKeys.has(`${item.capability}\u0000${canonicalModelIdentityKey(item.selection)}`)), ...planned.map((item) => item.artifact)];
+    const manifestCapabilities = new Set(planned.map((item) => item.capability));
+    const oldDefaults = new Set(
+      current.artifacts.filter((item) => manifestCapabilities.has(item.capability)).map((item) => canonicalModelIdentityKey(item.selection)),
+    );
+    const defaults = [...current.defaults.filter((identity) => !oldDefaults.has(identity)), ...planned.map((item) => canonicalModelIdentityKey(item.artifact.selection))];
+    const receipt = parseInstalledModelsReceipt({ schemaVersion: 1, artifacts, defaults });
+    const config = modelsConfigFromAcquisitionManifest(manifest);
+    await writeAtomic(path.join(cacheRoot, INSTALLED_MODELS_RECEIPT), `${JSON.stringify(receipt, null, 2)}\n`);
+    return { config, receipt, artifacts: planned.map((item) => item.artifact) };
+  } finally {
+    await Promise.all(staged.map((temporary) => rm(temporary, { force: true })));
   }
 }
 
-/** Async resolver that consults the setup cache when no env pair is present. */
-export async function resolveEmbeddingModelFromCache(options: {
-  readonly env?: Readonly<Record<string, string | undefined>>;
-  readonly cacheDir?: string;
-} = {}): Promise<EmbeddingModelResolution> {
-  const provider = trim((options.env ?? process.env)[EMBEDDING_PROVIDER_ENV]);
-  const model = trim((options.env ?? process.env)[EMBEDDING_MODEL_ENV]);
-  if (provider !== "" || model !== "") return resolveEmbeddingModel({ env: options.env });
-  const installedDefault = await readInstalledEmbeddingDefault({ cacheDir: options.cacheDir });
-  return resolveEmbeddingModel({ env: options.env, installedDefault });
+/** Download, verify, and atomically merge one embed artifact through the model-set installer. */
+export async function acquireEmbeddingModel(options: AcquireEmbeddingModelOptions): Promise<AcquiredEmbeddingModel> {
+  const descriptor = parseEmbeddingModelDescriptor(options.descriptor);
+  if (descriptor.url === undefined) throw new Error("Embedding model URL is required for setup acquisition.");
+  const acquired = await acquireModelSet({
+    cacheDir: options.cacheDir, vault: options.vault, fetchImpl: options.fetchImpl,
+    manifest: {
+      schemaVersion: 1,
+      embed: {
+        provider: descriptor.provider, model: descriptor.model, revision: descriptor.revision, sha256: descriptor.sha256,
+        promptScheme: descriptor.prefixScheme, url: descriptor.url, filename: descriptor.filename,
+        dimensions: descriptor.dimensions, contextLength: descriptor.context, mrlDim: descriptor.mrlDim, normalization: descriptor.normalization,
+      },
+    },
+  });
+  const artifact = acquired.artifacts[0]!;
+  return { descriptor: descriptorFromArtifact(artifact), cachePath: artifact.path };
 }
-
-export const resolveModelFromCache = resolveEmbeddingModelFromCache;

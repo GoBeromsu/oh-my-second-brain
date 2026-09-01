@@ -111,6 +111,7 @@ function runCli(
       HOME: smokeHome,
       USERPROFILE: smokeHome,
       XDG_CONFIG_HOME: path.join(smokeHome, ".config"),
+      XDG_CACHE_HOME: path.join(smokeHome, ".cache"),
       ...env,
     },
     input,
@@ -134,9 +135,10 @@ describe("oms CLI dispatch", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("Compatibility alias: oms <command>");
-    for (const command of ["setup", "install", "uninstall", "update", "doctor", "audit", "lint", "link", "linkify", "semantic", "mcp", "hook"]) {
+    for (const command of ["setup", "install", "uninstall", "update", "doctor", "audit", "lint", "link", "linkify", "search", "index", "doc", "embed", "serve", "mcp", "hook"]) {
       expect(result.stdout).toContain(command);
     }
+    expect(result.stdout).not.toMatch(/semantic/u);
   });
 
   it("reports unknown hook subcommand with exit code 1", () => {
@@ -233,25 +235,33 @@ describe("oms CLI dispatch", () => {
     expect(audit.stderr).not.toContain("bundled");
   });
 
-  it("dispatches nested semantic status and rejects the retired top-level status alias", async () => {
+  it("dispatches index status and rejects retired command names", async () => {
     const vault = await makeVault();
-    const nested = runCli(["semantic", "status", "--vault", vault]);
-    const alias = runCli(["status", "--vault", vault]);
+    const nested = runCli(["index", "status", "--vault", vault]);
+    const alias = runCli(["semantic", "--vault", vault]);
 
     expect(nested.status).toBe(0);
     expect(nested.stdout).toContain('"available": true');
     expect(alias.status).toBe(1);
+    expect(alias.stderr).toContain("[oms] Unknown command: semantic");
   });
 
-  it.each(["query", "status", "get", "multi-get", "vsearch"])(
-    "rejects the retired top-level semantic %s alias",
+  it.each(["query", "status", "get", "multi-get", "vsearch", "collection", "context", "cleanup", "http"])(
+    "rejects the retired top-level %s alias",
     async (command) => {
       const vault = await makeVault();
       const result = runCli([command, "--vault", vault]);
 
       expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`[oms] Unknown command: ${command}`);
     },
   );
+
+  it("rejects the retired index embed route", async () => {
+    const result = runCli(["index", "embed"]);
+
+    expect(result.status).toBe(1);
+  });
 
   it("creates a vault bridge and resolves doctor through it", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "oms-cli-link-"));
@@ -283,7 +293,7 @@ describe("oms CLI dispatch", () => {
     expect(agents).toContain("<!-- oms:begin -->");
     expect(agents).toContain(`- Connected vault: ${path.basename(vault)}`);
     expect(agents).not.toContain(vault);
-    expect(agents).toContain("`oms semantic query \"what context should I know for this change?\"`");
+    expect(agents).toContain("`oms search \"what context should I know for this change?\"`");
     expect(agents).toContain("`oms mcp`");
 
     const doctor = runCli(["doctor"], undefined, undefined, repo);

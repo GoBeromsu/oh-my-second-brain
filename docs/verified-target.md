@@ -1,6 +1,6 @@
 # Verified target admission
 
-Reading can use the current directory, but mutation cannot guess a vault. OMS separates target resolution from verified-target admission. `status` and doctor diagnosis are read-only; note writes and doctor repairs require an admitted target.
+Reading can use the current directory, but mutation cannot guess a vault. OMS separates target resolution from verified-target admission. The status skill, `oms_status` MCP tool, and doctor diagnosis are read-only; note writes and doctor repairs require an admitted target.
 
 ## Resolution precedence
 
@@ -36,6 +36,16 @@ Setup follows this approval model: it recursively discovers existing templates a
 
 ## Read-only and repair operations
 
-`oms status` has no mutation path. `oms doctor` can diagnose from a read-only fallback, while regenerate and backfill operations require verified-target admission. Search remains lexical and projection-independent; it can be used without generated projection state.
+`oms index status` has no mutation path. `oms doctor` can diagnose from a
+read-only fallback, while regenerate and backfill operations require
+verified-target admission. `oms search <text>` remains lexical and
+projection-independent; it can be used without generated projection state.
+`--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit channels, and
+`--max-queries` accepts only integers from 1 through 32. Vector search requires
+the `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL` pair; HyDE additionally
+requires `OMS_GENERATE_PROVIDER` and `OMS_GENERATE_MODEL`, and reranking
+requires `OMS_RERANK_PROVIDER` and `OMS_RERANK_MODEL`. Missing or incomplete
+pairs fail loudly. G004 expansion is available when explicitly selected and
+makes no replacement, parity, or outperformance claim.
 
 For vault data and generated files, see [conventions](./conventions.md). For host registration, see [installation](./install.md).

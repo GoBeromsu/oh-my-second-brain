@@ -3,6 +3,7 @@ import type {
   McpSemanticQueryResult,
   McpSemanticSearchMode,
   McpSemanticTypedSearch,
+  McpSemanticExpandStrategy,
 } from "../engine/mcp/types.js";
 
 /**
@@ -13,6 +14,7 @@ import type {
  */
 export interface SearchRequest {
   readonly query?: string;
+  readonly strategy?: McpSemanticExpandStrategy;
   readonly searches?: readonly McpSemanticTypedSearch[];
   readonly mode?: McpSemanticSearchMode;
   readonly lex?: string;
@@ -39,6 +41,7 @@ export interface SearchRequest {
 export interface NormalizedSearchRequest {
   /** Plain natural-language query retained for an optional reranker. */
   readonly query?: string;
+  readonly strategy?: McpSemanticExpandStrategy;
   readonly searches: readonly McpSemanticTypedSearch[];
   readonly mode?: McpSemanticSearchMode;
   readonly limit?: number;
@@ -105,7 +108,46 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
   });
   const hasExplicitSearches = searches.length > 0 || shorthands.length > 0;
 
-  if (query !== undefined && hasExplicitSearches) {
+  if (request.strategy !== undefined) {
+    const strategy = request.strategy;
+    if (
+      strategy === null
+      || typeof strategy !== "object"
+      || Array.isArray(strategy)
+      || strategy.kind !== "expand"
+      || strategy.profile !== "qmd-v2.8.3"
+      || Object.keys(strategy).some((key) =>
+        key !== "kind" && key !== "profile" && key !== "maxQueries")
+    ) {
+      throw new InvalidSearchRequestError(
+        'strategy must be { kind: "expand", profile: "qmd-v2.8.3" }',
+      );
+    }
+    if (
+      strategy.maxQueries !== undefined
+      && (
+        !Number.isSafeInteger(strategy.maxQueries)
+        || strategy.maxQueries < 1
+        || strategy.maxQueries > 32
+      )
+    ) {
+      throw new InvalidSearchRequestError("strategy.maxQueries must be a safe integer between 1 and 32");
+    }
+    if (query === undefined) {
+      throw new InvalidSearchRequestError("expand strategy requires a non-empty query");
+    }
+    if (hasExplicitSearches) {
+      throw new InvalidSearchRequestError("expand strategy conflicts with explicit typed searches");
+    }
+    if (request.mode !== undefined && request.mode !== "query") {
+      throw new InvalidSearchRequestError(`expand strategy does not support mode "${request.mode}"`);
+    }
+    if (request.axes !== undefined) {
+      throw new InvalidSearchRequestError("expand strategy does not support axis queries");
+    }
+  }
+
+  if (request.strategy === undefined && query !== undefined && hasExplicitSearches) {
     throw new InvalidSearchRequestError(
       "'query' and explicit typed searches are contradictory; provide one representation",
     );
@@ -141,8 +183,17 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
       .map((collection) => collection.trim())
       .filter((collection) => collection !== ""),
   )];
-  if (request.limit !== undefined && (!Number.isFinite(request.limit) || request.limit < 0)) {
-    throw new InvalidSearchRequestError('"limit" must be a finite non-negative number');
+  if (request.limit !== undefined && (!Number.isSafeInteger(request.limit) || request.limit < 0)) {
+    throw new InvalidSearchRequestError('"limit" must be a safe non-negative integer');
+  }
+  if (
+    request.candidateLimit !== undefined
+    && (!Number.isSafeInteger(request.candidateLimit) || request.candidateLimit < 1)
+  ) {
+    throw new InvalidSearchRequestError('"candidateLimit" must be a safe positive integer');
+  }
+  if (request.minScore !== undefined && !Number.isFinite(request.minScore)) {
+    throw new InvalidSearchRequestError('"minScore" must be finite');
   }
   if (request.cursor !== undefined) {
     if (typeof request.cursor !== "string" || (request.cursor !== "" && !/^\d+$/u.test(request.cursor))) {
@@ -154,15 +205,16 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
   }
   return {
     query,
+    strategy: request.strategy,
     searches: hasExplicitSearches
       ? [...searches, ...shorthands]
+      : request.strategy !== undefined
+        ? []
       : query === undefined
         ? []
         : request.mode === "vsearch"
           ? [{ type: "vec", query }]
-          : request.mode === "query" || request.mode === "search"
-            ? [{ type: "lex", query }, { type: "vec", query }]
-            : [{ type: "lex", query }],
+          : [{ type: "lex", query }],
     mode: request.mode,
     limit: request.limit ?? 10,
     candidateLimit: request.candidateLimit,

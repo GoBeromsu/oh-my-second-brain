@@ -1,7 +1,7 @@
 import type { SemanticQueryOptions, SemanticSearchMode } from "../kernel/search/semantic-contract.js";
 import type { McpSemanticAxisValue, McpSemanticQueryAxes } from "../kernel/engine/mcp/types.js";
 
-export interface ParsedSemanticArgs {
+export interface ParsedSearchArgs {
   readonly positional: readonly string[];
   readonly options: Readonly<Record<string, string | boolean>>;
 }
@@ -19,7 +19,7 @@ function appendStringOption(
   options[key] = typeof prior === "string" && prior.length > 0 ? `${prior}\u0000${value}` : value;
 }
 
-export function parseSemanticArgs(argv: readonly string[]): ParsedSemanticArgs {
+export function parseSearchArgs(argv: readonly string[]): ParsedSearchArgs {
   const positional: string[] = [];
   const options: Record<string, string | boolean> = {};
   for (let i = 0; i < argv.length; i++) {
@@ -57,15 +57,17 @@ export function parseSemanticArgs(argv: readonly string[]): ParsedSemanticArgs {
     } else if (arg === "--pattern" || arg === "--ignore" || arg === "--update-command" || arg === "--host") {
       options[camelOption(arg)] = argv[i + 1] ?? "";
       i++;
-    } else if (arg === "--candidate-limit" || arg === "--port" || arg === "--max-docs-per-batch" || arg === "--max-batch-mb") {
+    } else if (arg === "--candidate-limit" || arg === "--max-queries" || arg === "--port" || arg === "--max-docs-per-batch" || arg === "--max-batch-mb") {
       options[camelOption(arg)] = argv[i + 1] ?? "";
       i++;
     } else if (arg === "--include-default") {
       options["includeDefault"] = true;
     } else if (arg === "--no-include-default") {
       options["includeDefault"] = false;
-    } else if (arg === "--line-numbers" || arg === "--full-path" || arg === "--force" || arg === "--all" || arg === "--full" || arg === "--pull" || arg === "--update" || arg === "--embed") {
+    } else if (arg === "--line-numbers" || arg === "--full-path" || arg === "--force" || arg === "--all" || arg === "--full" || arg === "--pull" || arg === "--update" || arg === "--embed" || arg === "--expand" || arg === "--rerank") {
       options[camelOption(arg)] = true;
+    } else if (arg === "--no-rerank") {
+      options["rerank"] = false;
     } else if (arg === "--no-embed") {
       options["embed"] = false;
     } else if (arg === "--no-line-numbers") {
@@ -74,6 +76,13 @@ export function parseSemanticArgs(argv: readonly string[]): ParsedSemanticArgs {
       positional.push(arg);
     }
   }
+  const command = positional[0];
+  if (
+    options["embed"] !== undefined
+    && (command === "embed" || (command === "index" && positional[1] === "sync"))
+  ) {
+    throw new Error('CLI "--embed" and "--no-embed" do not override the pinned embedding strategy.');
+  }
   return { positional, options };
 }
 
@@ -81,24 +90,24 @@ function camelOption(arg: string): string {
   return arg.slice(2).replace(/-([a-z])/gu, (_match: string, value: string) => value.toUpperCase());
 }
 
-export function stringOption(args: ParsedSemanticArgs, key: string): string | undefined {
+export function stringOption(args: ParsedSearchArgs, key: string): string | undefined {
   const value = args.options[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-export function booleanOption(args: ParsedSemanticArgs, key: string): boolean | undefined {
+export function booleanOption(args: ParsedSearchArgs, key: string): boolean | undefined {
   const value = args.options[key];
   return typeof value === "boolean" ? value : undefined;
 }
 
-export function numberOption(args: ParsedSemanticArgs, key: string): number | undefined {
+export function numberOption(args: ParsedSearchArgs, key: string): number | undefined {
   const value = stringOption(args, key);
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-export function stringListOption(args: ParsedSemanticArgs, key: string): readonly string[] | undefined {
+export function stringListOption(args: ParsedSearchArgs, key: string): readonly string[] | undefined {
   const value = stringOption(args, key);
   return value ? value.split(",").map((item) => item.trim()).filter((item) => item.length > 0) : undefined;
 }
@@ -107,10 +116,10 @@ export function printJson(write: (message: string) => void, value: unknown): voi
   write(JSON.stringify(value, null, 2));
 }
 
-export function semanticQueryOptions(
+export function searchQueryOptions(
   mode: SemanticSearchMode,
   vault: string,
-  args: ParsedSemanticArgs,
+  args: ParsedSearchArgs,
   query: string,
 ): SemanticQueryOptions {
   const requestedMode = stringOption(args, "mode");
@@ -120,18 +129,33 @@ export function semanticQueryOptions(
   const axes = queryAxesFromCli(args);
   const vec = stringOption(args, "vec");
   const hyde = stringOption(args, "hyde");
-  // The query/search CLI commands are intentionally lexical by default. A
-  // model is only consulted when the caller opts into --vec, --hyde, or the
-  // dedicated vsearch command; this keeps plain searches useful on a
-  // model-less vault without approximating a vector result.
-  const lex = stringOption(args, "lex")
-    ?? (mode === "vsearch" || vec !== undefined || hyde !== undefined || query.trim().length === 0
-      ? undefined
-      : query);
+  const expand = booleanOption(args, "expand") === true;
+  const maxQueries = strictMaxQueries(args);
+  if (expand && mode !== "query") {
+    throw new Error('CLI "--expand" is supported only by the "search" command.');
+  }
+  if (!expand && maxQueries !== undefined) throw new Error('CLI "--max-queries" requires "--expand".');
+  if (expand && (vec !== undefined || hyde !== undefined || stringOption(args, "lex") !== undefined || axes !== undefined)) {
+    throw new Error('CLI "--expand" conflicts with --lex, --vec, --hyde, and axis filters.');
+  }
+  // The canonical mapper owns lexical-only defaults. Only a caller-authored
+  // --lex flag becomes an explicit lexical channel.
+  const lex = stringOption(args, "lex");
   return {
     vault,
     query,
     mode,
+    ...(expand
+      ? {
+        strategy: {
+          kind: "expand" as const,
+          profile: "qmd-v2.8.3" as const,
+          ...(maxQueries === undefined
+            ? {}
+            : { maxQueries }),
+        },
+      }
+      : {}),
     collection: stringOption(args, "collection"),
     index: stringOption(args, "index"),
     limit: numberOption(args, "limit"),
@@ -147,7 +171,20 @@ export function semanticQueryOptions(
     full: booleanOption(args, "full"),
     fullPath: booleanOption(args, "fullPath"),
     candidateLimit: numberOption(args, "candidateLimit"),
+    rerank: booleanOption(args, "rerank"),
   };
+}
+
+function strictMaxQueries(args: ParsedSearchArgs): number | undefined {
+  const value = args.options["maxQueries"];
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string"
+    || !/^(?:[1-9]|[12]\d|3[0-2])$/u.test(value)
+  ) {
+    throw new Error('CLI "--max-queries" must be an integer between 1 and 32.');
+  }
+  return Number(value);
 }
 
 function axisScalar(value: string): McpSemanticAxisValue {
@@ -175,7 +212,7 @@ function axisList(
   return values.length === 1 ? values[0] : values;
 }
 
-function queryAxesFromCli(args: ParsedSemanticArgs): McpSemanticQueryAxes | undefined {
+function queryAxesFromCli(args: ParsedSearchArgs): McpSemanticQueryAxes | undefined {
   const folder = axisList(stringOption(args, "folder"));
   const link = axisList(stringOption(args, "link"));
   const fieldsRaw = stringOption(args, "field");

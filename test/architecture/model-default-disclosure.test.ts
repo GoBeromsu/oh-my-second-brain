@@ -8,7 +8,7 @@ import { absolute, pathExists } from "./repo-root.js";
  * `docs/measurements/model-default-deferral.md` withholds *automatic*
  * default-model acquisition until a green real-vault `model-default` manifest
  * exists, and separately records the vault owner's authorisation of the
- * explicit, opt-in `oms setup --embedding-default` install. Nothing in
+ * explicit, opt-in `oms setup --models-default` install. Nothing in
  * `package.json` or the workflows ever asks for that manifest — `check:measurement`
  * runs the `boost-c040` profile only — so the deferral can stay open indefinitely
  * while an installable default ships.
@@ -34,9 +34,15 @@ const DEFERRAL_DOC = "docs/measurements/model-default-deferral.md";
 const MODEL_SOURCE = "src/kernel/engine/embed/model.ts";
 const CLI_SOURCE = "src/cli/oms.ts";
 const CLI_ARGS = "src/cli/args.ts";
+/**
+ * Unconfigured-capability guidance moved here when model selection became a
+ * strict multi-capability contract. The gate follows the guidance to its real
+ * owner rather than passing because it stopped finding it.
+ */
+const GUIDANCE_SOURCE = "src/kernel/engine/embed/config.ts";
 
 const PINNED_CONSTANT = "PINNED_DEFAULT_EMBEDDING_MODEL";
-const DEFAULT_FLAG = "--embedding-default";
+const DEFAULT_FLAG = "--models-default";
 
 /**
  * Sentences that carry the unmeasured status. Each is matched as a regex so
@@ -88,7 +94,7 @@ async function shipsInstallableDefault(): Promise<boolean> {
 describe("installable default embedding model discloses its unmeasured status", () => {
   it("scans the real source and documentation paths", async () => {
     // A gate that silently stopped finding its own inputs would pass forever.
-    for (const relativePath of [DEFERRAL_DOC, MODEL_SOURCE, CLI_SOURCE, CLI_ARGS]) {
+    for (const relativePath of [DEFERRAL_DOC, MODEL_SOURCE, CLI_SOURCE, CLI_ARGS, GUIDANCE_SOURCE]) {
       expect(await pathExists(relativePath), `${relativePath} must exist for this gate to mean anything`).toBe(true);
     }
   });
@@ -118,24 +124,44 @@ describe("installable default embedding model discloses its unmeasured status", 
   it("keeps the unconfigured-vault guidance consistent with whether the flag exists", async () => {
     // The guidance a model-less vault prints is the one place that tells a user
     // how to get embeddings. If the pinned default is ever withdrawn, guidance
-    // still naming `--embedding-default` would send users to a command that no
+    // still naming the install flag would send users to a command that no
     // longer exists -- the same defect as the Korean README's long-dead
     // `OMS_MODEL_PATH`, which shipped for two releases telling people to set a
     // variable nothing reads. Enforced symmetrically: wired but unmentioned
     // hides the one-step path, mentioned but unwired is an outright lie.
-    const [model, ships] = await Promise.all([read(MODEL_SOURCE), shipsInstallableDefault()]);
-    const guidanceMentionsFlag = /No embedding model is configured[\s\S]{0,400}?--embedding-default/u.test(
-      model,
-    );
+    //
+    // Only `embed` has a pinned default, so only the embed remedy may name it.
+    // Pointing rerank/generate at the same flag would promise an install that
+    // does not happen, so the negative half is checked too.
+    const [guidanceSource, ships] = await Promise.all([
+      read(GUIDANCE_SOURCE),
+      shipsInstallableDefault(),
+    ]);
+    const embedRemedyNamesFlag = new RegExp(
+      `embed:\\s*"[^"]*${DEFAULT_FLAG}[^"]*"`,
+      "u",
+    ).test(guidanceSource);
 
     expect(
-      guidanceMentionsFlag,
+      embedRemedyNamesFlag,
       ships
-        ? `${MODEL_SOURCE} ships ${DEFAULT_FLAG} but its unconfigured-vault guidance does not name it, ` +
-          "so users are not told the one-step path exists."
-        : `${MODEL_SOURCE} no longer wires ${DEFAULT_FLAG}, but its unconfigured-vault guidance still ` +
-          "names it. Update the guidance so it does not point at a command that no longer exists.",
+        ? `${GUIDANCE_SOURCE} ships ${DEFAULT_FLAG} but its unconfigured-capability guidance does not ` +
+          "name it, so users are not told the one-step path exists."
+        : `${GUIDANCE_SOURCE} no longer wires ${DEFAULT_FLAG}, but its unconfigured-capability guidance ` +
+          "still names it. Update the guidance so it does not point at a command that no longer exists.",
     ).toBe(ships);
+
+    for (const capability of ["rerank", "generate"] as const) {
+      const capabilityNamesFlag = new RegExp(
+        `${capability}:\\s*"[^"]*${DEFAULT_FLAG}[^"]*"`,
+        "u",
+      ).test(guidanceSource);
+      expect(
+        capabilityNamesFlag,
+        `${GUIDANCE_SOURCE} points ${capability} at ${DEFAULT_FLAG}, which installs only the pinned ` +
+          "embed model. Name a remedy that actually installs a " + capability + " model.",
+      ).toBe(false);
+    }
   });
 
   it("records that no pipeline demands the model-default measurement", async () => {

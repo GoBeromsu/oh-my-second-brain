@@ -93,7 +93,7 @@ export async function handleSemanticTool(
   }
 
   if (name === "oms_semantic_status") {
-    return { ok: true, value: adapter.semanticStatus(semanticStatusOptionsFromArgs(vault, args)) };
+    return { ok: true, value: await adapter.semanticStatus(semanticStatusOptionsFromArgs(vault, args)) };
   }
 
   if (name === "oms_semantic_collections") {
@@ -101,7 +101,7 @@ export async function handleSemanticTool(
   }
 
   if (name === "oms_semantic_contexts") {
-    return { ok: true, value: adapter.listContexts(semanticStatusOptionsFromArgs(vault, args)) };
+    return { ok: true, value: await adapter.listContexts(semanticStatusOptionsFromArgs(vault, args)) };
   }
 
   if (name === "oms_semantic_cleanup") {

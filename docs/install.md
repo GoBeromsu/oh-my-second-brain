@@ -58,10 +58,39 @@ oms setup --vault /path/to/vault --dry-run
 Apply only with the exact digest reported by that dry run:
 
 ```bash
-oms setup --vault /path/to/vault --approved-digest <digest>
+oms setup --vault /path/to/vault --yes --approved-digest <digest>
 ```
 
 Setup never modifies notes and has no bundled defaults. `.obsidian/types.json` remains read-only; `.oms/template-policy.json` holds semantics, naming, and defaults; `.oms/types.json` is derived and must not be hand-edited.
+
+Choose model acquisition during setup with exactly one of these flags:
+
+- `--models-default`: acquire and verify the pinned local model.
+- `--models-descriptor <path>`: acquire and SHA-256-verify the operator-supplied descriptor.
+- `--models-no-default`: acquire no model; lexical search remains available.
+
+These are local verified acquisitions, not runtime downloads. Direct capability
+configuration requires complete pairs: vector search uses
+`OMS_EMBEDDING_PROVIDER` with `OMS_EMBEDDING_MODEL`; HyDE also uses
+`OMS_GENERATE_PROVIDER` with `OMS_GENERATE_MODEL`; reranking uses
+`OMS_RERANK_PROVIDER` with `OMS_RERANK_MODEL`. An incomplete or unavailable
+pair fails loudly.
+
+## Search, index, and documents
+
+```text
+oms search <text> [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank]
+oms embed
+oms index sync|status|cleanup|collections|contexts
+oms doc get|multi-get
+oms serve
+```
+
+A plain `oms search <text>` is lexical-only. Every non-lexical channel is
+explicit: `--vec`, `--hyde`, G004 `--expand`, and `--rerank`. G004 expansion is
+available only when selected; no replacement, parity, or outperformance claim
+is made. `oms embed` is the sole embedding command, and `oms index` has no
+embedding subcommand.
 
 ## Skills and MCP tools
 

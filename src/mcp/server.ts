@@ -83,7 +83,7 @@ function errorText(message: string): CallToolResult {
 
 class SemanticIndexUnavailableError extends Error {
   constructor() {
-    super("The semantic index has not been built yet. Run `oms semantic sync` to build it.");
+    super("The semantic index has not been built yet. Run `oms index sync` to build it.");
   }
 }
 
@@ -143,8 +143,9 @@ const axisScalar = { anyOf: [string, number, boolean] };
 const axisValue = { anyOf: [axisScalar, { type: "array", items: axisScalar }] };
 const fieldPredicate = { type: "object", additionalProperties: false, properties: { contains: axisValue, containsAll: { type: "array", items: axisScalar }, in: { type: "array", items: axisScalar }, between: { type: "array", items: axisScalar, minItems: 2, maxItems: 2 }, gte: axisScalar, gt: axisScalar, lte: axisScalar, lt: axisScalar, from: axisScalar, to: axisScalar } };
 const queryAxes = { type: "object", additionalProperties: false, properties: { template: string, folder: axisValue, field: { type: "object", additionalProperties: { anyOf: [axisValue, fieldPredicate] } }, link: axisValue } };
-const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { ...number, minimum: 0, default: 10 }, candidateLimit: { ...number, minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, intent: string, lex: string, vec: string, hyde: string, index: string, target: string, targets: stringArray, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean } as const;
-const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: number, maxNeighbors: number, useCache: boolean, semanticEnabled: boolean, semanticCollection: string, semanticLimit: number, semanticScope: { ...string, enum: ["global", "graph"] }, semanticMode: searchProperties.mode, semanticIntent: string, semanticSearches: searchProperties.searches, semanticLex: string, semanticVec: string, semanticHyde: string, semanticMinScore: number, semanticAll: boolean, semanticFormat: { ...string, enum: ["json", "files"] }, semanticFull: boolean, semanticLineNumbers: boolean, semanticFullPath: boolean, semanticIndex: string, semanticChunkStrategy: string, semanticCandidateLimit: number, semanticNoRerank: boolean, semanticHydrate: { ...string, enum: ["none", "top", "all", "targets"] }, semanticHydrateTargets: stringArray, semanticHydrateLineLimit: number, semanticHydrateMaxBytes: number, semanticHydrateFromLine: number, semanticHydrateLineCount: number } as const;
+const expandStrategy = { type: "object", additionalProperties: false, properties: { kind: { ...string, enum: ["expand"] }, profile: { ...string, enum: ["qmd-v2.8.3"] }, maxQueries: { type: "integer", minimum: 1, maximum: 32 } }, required: ["kind", "profile"] } as const;
+const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, strategy: expandStrategy, collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { type: "integer", minimum: 0, default: 10 }, candidateLimit: { type: "integer", minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, intent: string, lex: string, vec: string, hyde: string, index: string, target: string, targets: stringArray, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean } as const;
+const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: { type: "integer", minimum: 0 }, maxNeighbors: number, useCache: boolean, ...retrieveContextSemanticInputProperties } as const;
 const templateBinding = { type: "object", additionalProperties: false, properties: { templateId: string, destinationClass: { ...string, enum: ["managed-default", "registered-existing"] }, sourcePath: string, contract: string, naming: string }, required: ["templateId", "destinationClass", "sourcePath", "contract", "naming"] };
 const source = { type: "object", additionalProperties: false, properties: { path: string, content: string, publication: { ...string, enum: ["write", "verify-existing"] } }, required: ["path", "content", "publication"] };
 const expected = { expectedInputDigest: digestSchema, expectedPolicySignature: digestSchema, expectedTaxonomySignature: digestSchema, expectedProjectionSignature: digestSchema, expectedSourceSignatures: { type: "array", items: { type: "object", additionalProperties: false, properties: { templateId: string, path: string, signature: digestSchema }, required: ["templateId", "path", "signature"] } } };
@@ -372,7 +373,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   // (ADR-007). The engine's model-OPTIONAL surface (document reads,
   // retrieve_context's semantic leg, ReadResource) keys off this to decide
   // vec-capable vs core engine WITHOUT a no-model assembly throw.
-  const hasEmbeddingModel = embeddingConfigPresent;
+  const hasEmbeddingModel = (): boolean => embeddingConfigPresent(vault);
 
   // Adapter resolver for the model-OPTIONAL paths: the vec-capable engine when
   // the canonical embedding pair is configured, else the core (lex + file-based
@@ -408,20 +409,16 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       : getReadOnlyCoreSemanticEngine()?.adapter;
     return adapter ?? (await getEphemeralCoreSemanticEngine()).adapter;
   };
-  const hasExplicitEmbeddingIntent = (args: Record<string, unknown> | undefined): boolean =>
-    requiresEmbeddings({
-      mode: args?.["mode"] === "vsearch" ? "vsearch" : undefined,
-      vec: stringArg(args, "vec"),
-      hyde: stringArg(args, "hyde"),
-      searches: Array.isArray(args?.["searches"])
-        ? args["searches"].flatMap((search) =>
-          isRecord(search) &&
-          (search["type"] === "lex" || search["type"] === "vec" || search["type"] === "hyde") &&
-          typeof search["query"] === "string"
-            ? [{ type: search["type"], query: search["query"] }]
-            : [])
-        : undefined,
+  const hasExplicitEmbeddingIntent = (args: Record<string, unknown> | undefined): boolean => {
+    const queryOptions = semanticQueryOptionsFromArgs(vault, args);
+    return requiresEmbeddings({
+      mode: queryOptions.mode,
+      strategy: queryOptions.strategy,
+      vec: queryOptions.vec,
+      hyde: queryOptions.hyde,
+      searches: queryOptions.searches,
     });
+  };
   const searchBackend = new EngineSearchBackend(
     (requiresEmbeddings) => requiresEmbeddings
       ? (() => {

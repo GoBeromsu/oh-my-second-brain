@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { isSemanticCliCommand } from "../../cli/semantic.js";
+import { isSearchCliCommand } from "../../cli/search.js";
 import { omsMcpTools } from "../../mcp/server.js";
 import { resolveBundledAssetPaths } from "../runtime/assets.js";
 import { SHARED_SKILLS_SOURCE } from "../../assets/shared-skills.js";
@@ -35,15 +35,16 @@ async function fileExists(relativePath: string): Promise<boolean> {
 }
 
 describe("harness registry parity", () => {
-  it("declares semantic CLI commands accepted by the semantic router", () => {
-    const semanticCommands = harnessSurfaceRegistry.cliCommands
+  it("declares exactly the search router's canonical CLI commands", () => {
+    const commands = harnessSurfaceRegistry.cliCommands
       .filter((command) => command.owner === "semantic-engine")
       .map((command) => command.name);
 
-    expect(semanticCommands).not.toHaveLength(0);
-    for (const command of semanticCommands) {
-      expect(isSemanticCliCommand(command), command).toBe(true);
+    expect(commands).toEqual(["search", "index", "doc", "embed", "serve"]);
+    for (const command of commands) {
+      expect(isSearchCliCommand(command), command).toBe(true);
     }
+    expect(isSearchCliCommand("semantic")).toBe(false);
   });
 
   it("declares the live MCP tool names in order", () => {

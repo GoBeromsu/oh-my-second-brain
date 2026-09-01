@@ -51,4 +51,22 @@ describe("assembleGraphOnlyEngine", () => {
       expect((await engine.syncVault()).available).toBe(false);
     } finally { await engine.dispose(); }
   });
+
+  it("never constructs an injected reranker factory", async () => {
+    const vault = freshVault();
+    let constructions = 0;
+    const engine = assembleGraphOnlyEngine({
+      vault,
+      rerankerFactory: () => {
+        constructions += 1;
+        throw new Error("graph-only must not construct rerankers");
+      },
+    });
+    try {
+      await engine.adapter.graphBuild({}, vault);
+      expect(constructions).toBe(0);
+    } finally {
+      await engine.dispose();
+    }
+  });
 });

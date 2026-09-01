@@ -1009,12 +1009,12 @@ export function validateNoDefaultWaiver(waiver, profile) {
 export function verifyNoDefaultContract(contract) {
   if (!isRecord(contract) ||
       typeof contract.resolveEmbeddingModel !== "function" ||
-      typeof contract.defaultDescriptorExists !== "function" ||
+      typeof contract.installedReceiptExists !== "function" ||
       typeof contract.runMcp !== "function" ||
       typeof contract.fetch !== "function") {
     fail(
       "no-default assertion failed: runtime contract requires resolveEmbeddingModel, " +
-      "defaultDescriptorExists, runMcp, and fetch hooks",
+      "installedReceiptExists, runMcp, and fetch hooks",
     );
   }
 
@@ -1030,47 +1030,46 @@ export function verifyNoDefaultContract(contract) {
   };
   const emptyEnv = {};
   const verify = async () => {
-  if (await contract.defaultDescriptorExists()) {
-    fail("no-default assertion failed: no default descriptor pointer is introduced");
+  if (await contract.installedReceiptExists()) {
+    fail("no-default assertion failed: no installed-model receipt is introduced");
   }
 
   const unavailable = await contract.resolveEmbeddingModel({
     env: emptyEnv,
-    installedDefault: null,
     fetch,
   });
   if (unavailable?.available !== false ||
-      unavailable?.source !== "none" ||
-      unavailable?.provider !== undefined ||
-      unavailable?.model !== undefined ||
-      typeof unavailable?.receipt?.guidance !== "string" ||
-      !unavailable.receipt.guidance.includes("OMS_EMBEDDING_PROVIDER") ||
-      !unavailable.receipt.guidance.includes("OMS_EMBEDDING_MODEL") ||
-      await contract.defaultDescriptorExists()) {
-    fail("no-default assertion failed: no default descriptor pointer is introduced");
+      unavailable?.source !== "unavailable" ||
+      unavailable?.descriptor !== undefined ||
+      typeof unavailable?.guidance !== "string" ||
+      !unavailable.guidance.includes("OMS_EMBEDDING_PROVIDER") ||
+      !unavailable.guidance.includes("OMS_EMBEDDING_MODEL") ||
+      await contract.installedReceiptExists()) {
+    fail("no-default assertion failed: no installed-model receipt is introduced");
   }
 
   const configuredEnv = {
-    OMS_EMBEDDING_PROVIDER: "contract-provider",
-    OMS_EMBEDDING_MODEL: "contract-model",
+    OMS_EMBEDDING_PROVIDER: "gguf",
+    OMS_EMBEDDING_MODEL: "contract-model.gguf",
   };
-  const withoutWaiver = await contract.resolveEmbeddingModel({
-    env: configuredEnv,
-    installedDefault: null,
-    fetch,
-    waiverActive: false,
-  });
-  const withWaiver = await contract.resolveEmbeddingModel({
-    env: configuredEnv,
-    installedDefault: null,
-    fetch,
-    waiverActive: true,
-  });
+  // An explicit capability selection must behave identically whether or not a
+  // waiver is active, and it must never resolve to a model the caller did not
+  // ask for. Under the strict model contract an env pair naming a model that is
+  // not installed fails loudly rather than degrading, so normalise both a
+  // returned value and a thrown refusal into one comparable outcome.
+  const explicitOutcome = async (waiverActive) => {
+    try {
+      return { ok: true, value: await contract.resolveEmbeddingModel({ env: configuredEnv, fetch, waiverActive }) };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  const withoutWaiver = await explicitOutcome(false);
+  const withWaiver = await explicitOutcome(true);
   let halfPairError;
   try {
     await contract.resolveEmbeddingModel({
-      env: { OMS_EMBEDDING_PROVIDER: "contract-provider" },
-      installedDefault: null,
+      env: { OMS_EMBEDDING_PROVIDER: configuredEnv.OMS_EMBEDDING_PROVIDER },
       fetch,
       waiverActive: true,
     });
@@ -1078,11 +1077,12 @@ export function verifyNoDefaultContract(contract) {
     halfPairError = error;
   }
   const halfPairMessage = halfPairError instanceof Error ? halfPairError.message : String(halfPairError ?? "");
+  const divergedFromRequest = withoutWaiver.ok &&
+    withoutWaiver.value?.available === true &&
+    (withoutWaiver.value?.descriptor?.provider !== configuredEnv.OMS_EMBEDDING_PROVIDER ||
+      withoutWaiver.value?.descriptor?.model !== configuredEnv.OMS_EMBEDDING_MODEL);
   if (JSON.stringify(withoutWaiver) !== JSON.stringify(withWaiver) ||
-      withoutWaiver?.available !== true ||
-      withoutWaiver?.source !== "configured" ||
-      withoutWaiver?.provider !== configuredEnv.OMS_EMBEDDING_PROVIDER ||
-      withoutWaiver?.model !== configuredEnv.OMS_EMBEDDING_MODEL ||
+      divergedFromRequest ||
       !halfPairMessage.includes("OMS_EMBEDDING_PROVIDER") ||
       !halfPairMessage.includes("OMS_EMBEDDING_MODEL")) {
     fail("no-default assertion failed: explicit configuration behaviour is unchanged");

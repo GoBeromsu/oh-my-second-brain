@@ -22,13 +22,15 @@ import {
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { chunkDocument } from "./chunker.js";
+import { capabilityGuidance } from "./config.js";
 import { requireRealEmbeddingProvider } from "./provider.js";
 import { openEngineStore, openEngineStoreCore } from "./store.js";
 import { makeEmbeddingIdentity } from "./identity.js";
+import { engineStorePath } from "../paths.js";
 import type { EmbeddingProvider } from "../types.js";
 import type { ChunkerOptions, Chunk } from "../types.js";
+import { parseEmbeddingModelDescriptor, type EmbeddingModelDescriptor } from "./model.js";
 import type { EmbeddingIdentity, EngineStore } from "./store.js";
-import type { EmbeddingModelDescriptor } from "./model.js";
 import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
 
 // ---------------------------------------------------------------------------
@@ -55,18 +57,26 @@ export interface EngineSyncOptions {
   force?: boolean;
   /** Explicit embedding provider id (OMS_EMBEDDING_PROVIDER). */
   embeddingProvider?: string;
-  /** Explicit embedding model/id/path (OMS_EMBEDDING_MODEL). */
+  /** Explicit embedding model id for callers without a descriptor. */
   embeddingModel?: string;
-  /** Canonical descriptor supplied by setup; scalar fields override it. */
+  /** Immutable embedding revision for callers without a descriptor. */
+  embeddingRevision?: string;
+  /** Immutable lowercase artifact checksum for callers without a descriptor. */
+  embeddingSha256?: string;
+  /** Canonical descriptor supplied by setup; its fields are authoritative. */
   embeddingDescriptor?: EmbeddingModelDescriptor;
-  /** Descriptor-derived vector width (defaults to the provider's width). */
+  /**
+   * Caller-owned provider that already implements the descriptor above.
+   *
+   * Assembly uses this to share its model/context pool with sync instead of loading
+   * a second copy of the same GGUF. Direct callers normally omit it. Sync never
+   * disposes an injected provider; ownership remains with the caller.
+   */
+  embeddingProviderInstance?: EmbeddingProvider;
+  /** Vector width for callers without a descriptor. */
   embeddingDimensions?: number;
   /** Canonical descriptor context window in tokens. */
   embeddingContext?: number;
-  /** Descriptor-derived context length; no implicit identity default. */
-  embeddingContextLength?: number;
-  /** Setup descriptor alias for embeddingContextLength. */
-  embeddingContextTokens?: number;
   /** Descriptor-derived MRL output width. */
   embeddingMrlDim?: number;
   /** Descriptor-declared vector normalization scheme. */
@@ -128,6 +138,15 @@ export type GenerationSwapCrashPoint =
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".oms"]);
 
+/** qmd-compatible hidden-directory policy: tool state is not vault content. */
+function isSkippedDirectory(name: string): boolean {
+  // The explicit set documents the important cases; the prefix covers current and
+  // future tool state such as `.gjc`, `.claude`, `.codex`, `.obsidian`, and
+  // `.trash`. qmd's `**/*.md` glob excludes dot-directories by default, so indexing
+  // them would both pollute search results and invalidate parity measurements.
+  return name.startsWith(".") || SKIP_DIRS.has(name);
+}
+
 function isEnoent(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error &&
     (error as { code?: unknown }).code === "ENOENT";
@@ -144,7 +163,7 @@ export async function* walkMarkdown(dir: string, base: string): AsyncGenerator<s
     });
   }
   for (const entry of entries) {
-    if (SKIP_DIRS.has(entry.name)) continue;
+    if (isSkippedDirectory(entry.name)) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       yield* walkMarkdown(fullPath, base);
@@ -173,7 +192,7 @@ function explicitMarkdownFiles(
     if (relPath === ".." || relPath.startsWith("../") || !relPath.toLowerCase().endsWith(".md")) {
       throw new Error(`Embedding sync file must be a markdown path inside the vault: ${value}`);
     }
-    if (relPath.split("/").some((segment) => SKIP_DIRS.has(segment))) {
+    if (relPath.split("/").some((segment) => isSkippedDirectory(segment))) {
       throw new Error(`Embedding sync file is inside an ignored vault directory: ${value}`);
     }
     if (!isDocumentInCollection(relPath, collectionRelative)) continue;
@@ -213,18 +232,6 @@ function identityEquivalent(a: EmbeddingIdentity, b: EmbeddingIdentity): boolean
     }
   }
   return true;
-}
-
-interface ProviderIdentityMetadata {
-  readonly context?: number;
-  readonly contextLength?: number;
-  readonly mrlDim?: number;
-  readonly normalization?: string;
-  readonly prefixScheme?: string;
-}
-
-function providerIdentityMetadata(provider: EmbeddingProvider): ProviderIdentityMetadata {
-  return provider as EmbeddingProvider & ProviderIdentityMetadata;
 }
 
 /**
@@ -404,6 +411,60 @@ function isDocumentInCollection(docPath: string, collectionRoot: string): boolea
     docPath.startsWith(`${collectionRoot}/`);
 }
 
+const LOWERCASE_SHA256 = /^[a-f0-9]{64}$/;
+
+function requiredString(value: string | undefined, field: string): string {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) {
+    throw new Error(`Embedding ${field} is required.`);
+  }
+  return value;
+}
+
+/**
+ * Require a field whose absence means "no embedding capability is configured".
+ *
+ * Only `provider` and `model` carry this meaning. `oms embed` is the command that
+ * builds the index, so it is the surface most likely to be the first place a user
+ * discovers no model is configured — and it previously answered with a bare
+ * "Embedding provider is required.", stating the problem while withholding every
+ * way to fix it.
+ *
+ * The shape fields (revision, checksum, normalization, prompt scheme) deliberately
+ * keep the plain message. Their absence means an incomplete descriptor, not an
+ * unconfigured capability, and appending "set OMS_EMBEDDING_PROVIDER" there would
+ * send the reader to fix something that is already set.
+ */
+function requiredCapabilityString(value: string | undefined, field: string): string {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) {
+    throw new Error(`Embedding ${field} is required. ${capabilityGuidance("embed")}`);
+  }
+  return value;
+}
+
+function requiredPositiveInteger(value: number | undefined, field: string): number {
+  if (!Number.isInteger(value) || value === undefined || value <= 0) {
+    throw new Error(`Embedding ${field} must be a positive integer.`);
+  }
+  return value;
+}
+
+function requiredNonnegativeInteger(value: number | undefined, field: string): number {
+  if (!Number.isInteger(value) || value === undefined || value < 0) {
+    throw new Error(`Embedding ${field} must be a non-negative integer.`);
+  }
+  return value;
+}
+
+function rejectDescriptorOverride<T>(
+  explicit: T | undefined,
+  descriptor: T,
+  field: string,
+): void {
+  if (explicit !== undefined && explicit !== descriptor) {
+    throw new Error(`Embedding ${field} contradicts the authoritative embedding descriptor.`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Per-document sync
 // ---------------------------------------------------------------------------
@@ -496,6 +557,52 @@ async function syncDocument(opts: {
   if (toUpsert.length > 0) opts.store.upsert(toUpsert);
 }
 
+/**
+ * Sync documents through a dynamic worker pool when the provider owns independent
+ * contexts.
+ *
+ * Fixed batches leave lanes idle until the slowest document in each batch finishes.
+ * Workers instead take the next document as soon as their current one completes.
+ *
+ * A worker records the first failure and stops assigning new documents, but all
+ * workers already inside native embedding are awaited before rethrowing. That keeps
+ * teardown from closing SQLite or disposing the model under an in-flight call.
+ */
+async function syncEmbeddingDocuments(
+  files: AsyncIterable<string>,
+  provider: EmbeddingProvider,
+  syncOne: (relPath: string) => Promise<void>,
+): Promise<void> {
+  const concurrency = Math.max(1, Math.floor(provider.maxConcurrency ?? 1));
+  const selected: string[] = [];
+  for await (const relPath of files) selected.push(relPath);
+
+  let cursor = 0;
+  let firstFailure: unknown;
+  const worker = async (): Promise<void> => {
+    while (firstFailure === undefined) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= selected.length) return;
+      try {
+        await syncOne(selected[index]!);
+      } catch (error: unknown) {
+        firstFailure ??= error;
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, selected.length) },
+      () => worker(),
+    ),
+  );
+  if (firstFailure !== undefined) {
+    throw firstFailure;
+  }
+}
+
 async function rebuildGenerationAtomically(opts: {
   dbPath: string;
   vault: string;
@@ -545,26 +652,30 @@ async function rebuildGenerationAtomically(opts: {
       throw new Error("Vector layer unavailable while building the shadow generation.");
     }
 
+    // Capture the non-null handle for async workers. `shadow` itself remains
+    // nullable because the enclosing finally block takes ownership of closing it.
+    const shadowStore = shadow;
     const expectedDocs = new Set<string>();
-    for await (const relPath of selectedMarkdownFiles(
+    const selected = selectedMarkdownFiles(
       opts.vault,
       opts.collectionRoot,
       opts.collectionRelative,
       opts.files,
       opts.isExcluded,
-    )) {
+    );
+    await syncEmbeddingDocuments(selected, opts.provider, async (relPath) => {
       expectedDocs.add(relPath);
       await syncDocument({
         relPath,
         vault: opts.vault,
-        store: shadow,
+        store: shadowStore,
         provider: opts.provider,
         shouldEmbed: true,
         chunkerOpts: opts.chunkerOpts,
         counters: opts.counters,
         rebuildAllVectors: true,
       });
-    }
+    });
 
     crashAt(opts.crashPoint, "after-build");
 
@@ -658,7 +769,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
     path.isAbsolute(collectionRelative) ||
     collectionRelative === ".." ||
     collectionRelative.startsWith("../");
-  const dbPath = opts.dbPath ?? path.join(vault, ".oms", "engine-store.sqlite");
+  const dbPath = opts.dbPath ?? engineStorePath(vault);
   const shouldEmbed = opts.embed !== false;
   const force = opts.force === true;
   const persist = opts.persist !== false;
@@ -666,6 +777,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
   const warnings: string[] = [];
 
   let provider: EmbeddingProvider | null = null;
+  let ownsProvider = false;
   let store: EngineStore | null = opts.store ?? null;
   const ownsStore = opts.store === undefined;
 
@@ -716,76 +828,65 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
       };
     }
 
-    const descriptor = opts.embeddingDescriptor;
-    const embeddingProvider = (
-      opts.embeddingProvider ??
-      descriptor?.provider ??
-      ""
-    ).trim();
-    const embeddingModel = (
-      opts.embeddingModel ??
-      (descriptor?.path || descriptor?.modelPath) ??
-      descriptor?.model ??
-      ""
-    ).trim();
-    const embeddingDimensions = opts.embeddingDimensions ?? descriptor?.dimensions;
-    const embeddingContext = opts.embeddingContext ?? descriptor?.context;
-    const embeddingContextLength = opts.embeddingContextLength ?? descriptor?.contextLength;
-    const embeddingContextTokens = opts.embeddingContextTokens ?? descriptor?.contextTokens;
-    const embeddingMrlDim = opts.embeddingMrlDim ?? descriptor?.mrlDim;
-    const embeddingNormalization = opts.embeddingNormalization ?? descriptor?.normalization;
-    const embeddingPrefixScheme = opts.embeddingPrefixScheme ?? descriptor?.prefixScheme;
+    const descriptor = opts.embeddingDescriptor === undefined
+      ? undefined
+      : parseEmbeddingModelDescriptor(opts.embeddingDescriptor);
     if (descriptor !== undefined) {
-      const descriptorContext = embeddingContext ?? embeddingContextLength ?? embeddingContextTokens;
-      if (
-        typeof embeddingDimensions !== "number" ||
-        typeof descriptorContext !== "number" ||
-        typeof embeddingMrlDim !== "number" ||
-        typeof embeddingNormalization !== "string" ||
-        !embeddingNormalization.trim() ||
-        typeof embeddingPrefixScheme !== "string" ||
-        !embeddingPrefixScheme.trim()
-      ) {
-        throw new Error(
-          "Embedding descriptor is incomplete. dimensions/context/mrlDim/normalization/prefixScheme are required.",
-        );
-      }
+      rejectDescriptorOverride(opts.embeddingProvider, descriptor.provider, "provider");
+      rejectDescriptorOverride(opts.embeddingModel, descriptor.model, "model");
+      rejectDescriptorOverride(opts.embeddingRevision, descriptor.revision, "revision");
+      rejectDescriptorOverride(opts.embeddingSha256, descriptor.sha256, "sha256");
+      rejectDescriptorOverride(opts.embeddingDimensions, descriptor.dimensions, "dimensions");
+      rejectDescriptorOverride(opts.embeddingContext, descriptor.context, "context");
+      rejectDescriptorOverride(opts.embeddingMrlDim, descriptor.mrlDim, "mrlDim");
+      rejectDescriptorOverride(opts.embeddingNormalization, descriptor.normalization, "normalization");
+      rejectDescriptorOverride(opts.embeddingPrefixScheme, descriptor.prefixScheme, "prefixScheme");
     }
+    const embeddingProvider = descriptor?.provider ?? requiredCapabilityString(opts.embeddingProvider, "provider");
+    const embeddingModel = descriptor?.model ?? requiredCapabilityString(opts.embeddingModel, "model");
+    const runtimeModel = descriptor?.path ?? embeddingModel;
+    const embeddingRevision = descriptor?.revision ?? requiredString(opts.embeddingRevision, "revision");
+    const embeddingSha256 = descriptor?.sha256 ?? requiredString(opts.embeddingSha256, "sha256");
+    if (!LOWERCASE_SHA256.test(embeddingSha256)) {
+      throw new Error("Embedding sha256 must be lowercase 64-character hexadecimal.");
+    }
+    const embeddingDimensions = descriptor?.dimensions ??
+      requiredPositiveInteger(opts.embeddingDimensions, "dimensions");
+    const embeddingContext = descriptor?.context ??
+      requiredPositiveInteger(opts.embeddingContext, "context");
+    const embeddingMrlDim = descriptor?.mrlDim ??
+      requiredNonnegativeInteger(opts.embeddingMrlDim, "mrlDim");
+    const embeddingNormalization = descriptor?.normalization ??
+      requiredString(opts.embeddingNormalization, "normalization");
+    const embeddingPrefixScheme = descriptor?.prefixScheme ??
+      requiredString(opts.embeddingPrefixScheme, "prefixScheme");
 
-    provider = requireRealEmbeddingProvider({
+    provider = opts.embeddingProviderInstance ?? requireRealEmbeddingProvider({
       provider: embeddingProvider,
-      model: embeddingModel,
+      model: runtimeModel,
       dimensions: embeddingDimensions,
       context: embeddingContext,
-      contextLength: embeddingContextLength,
-      contextTokens: embeddingContextTokens,
       mrlDim: embeddingMrlDim,
       normalization: embeddingNormalization,
       prefixScheme: embeddingPrefixScheme,
     });
-    const metadata = providerIdentityMetadata(provider);
-    const contextLength =
-      embeddingContext ??
-      embeddingContextLength ??
-      embeddingContextTokens ??
-      metadata.context ??
-      metadata.contextLength;
-    const mrlDim = embeddingMrlDim ?? metadata.mrlDim;
-    const normalization = embeddingNormalization ?? metadata.normalization;
-    const prefixScheme = embeddingPrefixScheme ?? metadata.prefixScheme;
-    if (contextLength === undefined || mrlDim === undefined || normalization === undefined || prefixScheme === undefined) {
+    ownsProvider = opts.embeddingProviderInstance === undefined;
+    if (provider.dimensions !== embeddingDimensions) {
       throw new Error(
-        "Embedding descriptor is incomplete. dimensions/context/mrlDim/normalization/prefixScheme are required for vector sync.",
+        `Injected embedding provider exposes ${provider.dimensions} dimensions; ` +
+          `the configured descriptor requires ${embeddingDimensions}.`,
       );
     }
     const identity = makeEmbeddingIdentity({
       provider: embeddingProvider,
       model: embeddingModel,
-      dimensions: provider.dimensions,
-      contextLength,
-      mrlDim,
-      normalization,
-      prefixScheme,
+      revision: embeddingRevision,
+      sha256: embeddingSha256,
+      dimensions: embeddingDimensions,
+      contextLength: embeddingContext,
+      mrlDim: embeddingMrlDim,
+      normalization: embeddingNormalization,
+      prefixScheme: embeddingPrefixScheme,
     });
     configuredIdentity = identity;
 
@@ -917,25 +1018,30 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
     }
 
     if (!store) throw new Error("Internal error: engine store is null after preparation.");
+    // Capture the narrowed handle: `store` is intentionally nullable in the outer
+    // scope so finally can conditionally close it, and TS does not preserve that
+    // narrowing across async worker callbacks.
+    const liveStore = store;
     const counters: SyncCounters = { scanned: 0, added: 0, updated: 0, skipped: 0 };
-    for await (const relPath of selectedMarkdownFiles(
+    const selected = selectedMarkdownFiles(
       vault,
       collectionRoot,
       collectionRelative,
       opts.files,
       isExcluded,
-    )) {
+    );
+    await syncEmbeddingDocuments(selected, provider, async (relPath) => {
       await syncDocument({
         relPath,
         vault,
-        store,
+        store: liveStore,
         provider,
         shouldEmbed: true,
         chunkerOpts: opts.chunkerOpts,
         counters,
         rebuildAllVectors: false,
       });
-    }
+    });
 
     // Persist configured embedding identity only after a successful embed=true
     // incremental sync.
@@ -971,7 +1077,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
       generationSwapped,
     };
   } finally {
-    await provider?.dispose().catch(() => undefined);
+    if (ownsProvider) await provider?.dispose().catch(() => undefined);
     if (ownsStore) store?.close();
     releaseLock?.();
   }

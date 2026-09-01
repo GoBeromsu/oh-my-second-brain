@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
-import { ENGINE_EMBED_META_VERSION, type EmbeddingIdentity } from "./store.js";
+import type { EmbeddingIdentity } from "./store.js";
+
+export const ENGINE_EMBED_META_VERSION = "oms-embed-meta-v3";
+const SHA256 = /^[0-9a-f]{64}$/;
 
 /**
- * The five model-shape fields are part of the fingerprint.  Provider/model
- * remain explicit labels as well, so changing either the runtime or model
- * cannot silently reuse vectors produced by another configuration.
+ * The five model-shape fields and immutable artifact identity are part of the
+ * fingerprint, so a runtime, model, revision, or model binary change cannot
+ * silently reuse vectors produced by another configuration.
  */
 export interface EmbeddingShapeIdentity {
   readonly dimensions: number;
@@ -12,6 +15,19 @@ export interface EmbeddingShapeIdentity {
   readonly mrlDim: number;
   readonly normalization: string;
   readonly prefixScheme: string;
+}
+
+export interface EmbeddingModelIdentity {
+  readonly provider: string;
+  readonly model: string;
+  readonly revision: string;
+  readonly sha256: string;
+}
+
+function assertNonblank(value: string, field: string): void {
+  if (typeof value !== "string" || value.trim() === "" || value.includes("\u0000")) {
+    throw new Error(`Embedding identity ${field} is required.`);
+  }
 }
 
 function assertShape(input: EmbeddingShapeIdentity): void {
@@ -24,23 +40,28 @@ function assertShape(input: EmbeddingShapeIdentity): void {
   if (!Number.isInteger(input.mrlDim) || input.mrlDim < 0) {
     throw new Error("Embedding identity mrlDim must be a non-negative integer.");
   }
-  if (typeof input.normalization !== "string" || input.normalization.trim() === "") {
-    throw new Error("Embedding identity normalization is required.");
-  }
-  if (typeof input.prefixScheme !== "string" || input.prefixScheme.trim() === "") {
-    throw new Error("Embedding identity prefixScheme is required.");
+  assertNonblank(input.normalization, "normalization");
+  assertNonblank(input.prefixScheme, "prefixScheme");
+}
+
+function assertModel(input: EmbeddingModelIdentity): void {
+  assertNonblank(input.provider, "provider");
+  assertNonblank(input.model, "model");
+  assertNonblank(input.revision, "revision");
+  if (typeof input.sha256 !== "string" || !SHA256.test(input.sha256)) {
+    throw new Error("Embedding identity sha256 must be lowercase 64-character hexadecimal.");
   }
 }
 
-export function fingerprintEmbeddingIdentity(input: {
-  provider: string;
-  model: string;
-} & EmbeddingShapeIdentity): string {
+export function fingerprintEmbeddingIdentity(input: EmbeddingModelIdentity & EmbeddingShapeIdentity): string {
+  assertModel(input);
   assertShape(input);
   const raw = [
     ENGINE_EMBED_META_VERSION,
     input.provider,
     input.model,
+    input.revision,
+    input.sha256,
     String(input.dimensions),
     String(input.contextLength),
     String(input.mrlDim),
@@ -50,14 +71,26 @@ export function fingerprintEmbeddingIdentity(input: {
   return createHash("sha256").update(raw).digest("hex");
 }
 
-export function makeEmbeddingIdentity(input: {
-  provider: string;
-  model: string;
-} & EmbeddingShapeIdentity): EmbeddingIdentity {
+export function validateEmbeddingIdentity(identity: EmbeddingIdentity): void {
+  const { fingerprint, ...input } = identity;
+  assertModel(input);
   assertShape(input);
-  return {
+  if (typeof fingerprint !== "string" || !SHA256.test(fingerprint)) {
+    throw new Error("Embedding identity fingerprint must be lowercase 64-character hexadecimal.");
+  }
+  if (fingerprint !== fingerprintEmbeddingIdentity(input)) {
+    throw new Error("Embedding identity fingerprint does not match its fields.");
+  }
+}
+
+export function makeEmbeddingIdentity(input: EmbeddingModelIdentity & EmbeddingShapeIdentity): EmbeddingIdentity {
+  assertModel(input);
+  assertShape(input);
+  const identity: EmbeddingIdentity = {
     provider: input.provider,
     model: input.model,
+    revision: input.revision,
+    sha256: input.sha256,
     dimensions: input.dimensions,
     contextLength: input.contextLength,
     mrlDim: input.mrlDim,
@@ -65,4 +98,6 @@ export function makeEmbeddingIdentity(input: {
     prefixScheme: input.prefixScheme,
     fingerprint: fingerprintEmbeddingIdentity(input),
   };
+  validateEmbeddingIdentity(identity);
+  return identity;
 }

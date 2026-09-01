@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { composeResolvedTemplateFields, deriveFolderOntologyAxis, loadResolvedTemplates, sourceSignature } from "./resolver.js";
+import { composeResolvedTemplateFields, deriveFolderOntologyAxis, loadResolvedTemplates, loadResolvedTemplatesIfPresent, sourceSignature } from "./resolver.js";
 import type { Digest, SourceDescriptor } from "./types.js";
 
 const roots: string[] = [];
@@ -72,6 +72,44 @@ async function fixture(): Promise<string> {
 }
 
 describe("loadResolvedTemplates", () => {
+  it("returns null only when every OMS template control is absent", async () => {
+    const empty = await mkdtemp(join(tmpdir(), "oms-template-resolver-empty-"));
+    roots.push(empty);
+    await mkdir(join(empty, ".oms"));
+
+    await expect(loadResolvedTemplatesIfPresent(empty)).resolves.toBeNull();
+  });
+
+  it.each([
+    [".oms/template-migration.json", "MIGRATION_INCOMPLETE"],
+    [".oms/template-policy.json", "TEMPLATE_SOURCE_INVALID"],
+    [".oms/types.json", "TEMPLATE_SOURCE_INVALID"],
+    [".oms/taxonomy.yaml", "TEMPLATE_SOURCE_INVALID"],
+  ])("rejects a vault with only %s", async (control, code) => {
+    const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-partial-"));
+    roots.push(root);
+    await mkdir(join(root, ".oms"), { recursive: true });
+    await writeFile(join(root, control), "{}\n");
+
+    await expect(loadResolvedTemplatesIfPresent(root)).rejects.toThrow(code);
+  });
+
+  it.each([
+    [".oms/template-policy.json", ".oms/taxonomy.yaml"],
+    [".oms/template-policy.json", ".oms/types.json"],
+    [".oms/types.json", ".oms/taxonomy.yaml"],
+  ])("rejects representative partial control sets: %s and %s", async (first, second) => {
+    const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-partial-"));
+    roots.push(root);
+    await mkdir(join(root, ".oms"), { recursive: true });
+    await Promise.all([
+      writeFile(join(root, first), "{}\n"),
+      writeFile(join(root, second), "{}\n"),
+    ]);
+
+    await expect(loadResolvedTemplatesIfPresent(root)).rejects.toThrow("TEMPLATE_SOURCE_INVALID");
+  });
+
   it("derives deterministic folder ontology only from authored folder intents", () => {
     expect(deriveFolderOntologyAxis({ notes: { template: "note" } })).toBeNull();
     expect(deriveFolderOntologyAxis({

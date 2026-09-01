@@ -29,7 +29,7 @@ oms setup --vault /path/to/vault --dry-run
 The dry run changes neither templates nor notes. Apply the reviewed proposal only with its reported digest:
 
 ```bash
-oms setup --vault /path/to/vault --approved-digest <digest>
+oms setup --vault /path/to/vault --yes --approved-digest <digest>
 ```
 
 Setup has no bundled note shapes and never modifies vault notes. When one legacy concept routes to multiple folders, migration materializes deterministic template IDs such as `literature--books`, copies the source bytes into separately managed templates, and keeps the clones on the same migrated contract.
@@ -57,8 +57,21 @@ The runtime admits the target and operation before disk mutation. The resolved t
 
 ## Search and maintenance
 
-Search is lexical and independent of `.oms/types.json`. It can narrow by managed template, declared field, folder, and wikilink. Managed sources do not appear as ordinary note results.
+`oms search <text>` is plain lexical search and independent of `.oms/types.json`.
+`--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit opt-in channels;
+`--max-queries` accepts only integers from 1 through 32. It can narrow by managed
+template, declared field, folder, and wikilink. Managed sources do not appear as
+ordinary note results.
 
-OMS does not invent vector results. When no supported vector capability is available, it reports that fact rather than returning simulated semantic matches.
+OMS does not invent vector results. Vector search requires
+`OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL`; HyDE also requires
+`OMS_GENERATE_PROVIDER` and `OMS_GENERATE_MODEL`, while reranking requires
+`OMS_RERANK_PROVIDER` and `OMS_RERANK_MODEL`. Missing or incomplete capability
+pairs fail loudly rather than returning simulated matches. G004 expansion is
+available only when explicitly selected and makes no replacement, parity, or
+outperformance claim.
 
-Use `oms doctor` to diagnose state, regenerate derived projections, or backfill supported data. Repair is gated by the verified-target rule. Use `oms status` for read-only state reporting.
+Use `oms doctor` to diagnose state, regenerate derived projections, or backfill
+supported data. Repair is gated by the verified-target rule. Use `oms index
+status` for read-only index state reporting; the `status` skill and `oms_status`
+MCP tool remain read-only status surfaces.

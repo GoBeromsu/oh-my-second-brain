@@ -2,9 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it, expect } from "vitest";
+import Database from "better-sqlite3";
 import { openEngineStore, openEngineStoreCore, SQLITE_VEC_MAX_K } from "./store.js";
 import type { EngineStore } from "./store.js";
 import { createHashProjectionProvider } from "./hash-stub.test-helper.js";
+import { makeEmbeddingIdentity } from "./identity.js";
 
 const DIMS = 64;
 let dir: string;
@@ -55,11 +57,18 @@ describe("openEngineStore — upsert + queryLex", () => {
     expect(() => store.upsert(rows)).not.toThrow();
   });
 
-  it("given a matching row, when lexical search runs, then its document is returned", async () => {
+  it("queryLex returns hits for a matching term", async () => {
+    // Seeds its own row instead of relying on the preceding test having inserted
+    // one. Depending on a sibling test's writes made this pass in declaration
+    // order and fail under `--sequence.shuffle --sequence.seed=777`, where the
+    // query ran against a store nobody had populated yet: same commit, opposite
+    // results, decided by execution order.
     store.upsert([await makeRow("notes/alpha.md", 0, "retrieval augmented generation")]);
+
     const hits = store.queryLex("retrieval augmented", 5);
     const paths = hits.map((h) => h.docPath);
     expect(paths).toContain("notes/alpha.md");
+    expect(store.getChunkText?.("notes/alpha.md", 0)).toBe("retrieval augmented generation");
   });
 
   it("queryLex returns empty for unmatched query", () => {
@@ -67,13 +76,19 @@ describe("openEngineStore — upsert + queryLex", () => {
     expect(hits).toEqual([]);
   });
 
-  it("given multiple matches, when lexical search ranks them, then scores decrease", async () => {
+  it("queryLex hits have decreasing scores (rank-based)", async () => {
+    // Two rows of its own, for two reasons. Ordering needs at least two hits to
+    // mean anything, and the loop below is vacuous on an empty result: run in an
+    // order where nothing had been inserted, it asserted nothing while still
+    // reporting green.
     store.upsert([
-      await makeRow("notes/rank-one.md", 0, "retrieval retrieval retrieval"),
-      await makeRow("notes/rank-two.md", 0, "retrieval once"),
+      await makeRow("notes/rank-a.md", 0, "retrieval retrieval retrieval augmented"),
+      await makeRow("notes/rank-b.md", 0, "retrieval of one mention only"),
     ]);
+
     const hits = store.queryLex("retrieval", 5);
-    expect(hits.length).toBeGreaterThanOrEqual(2);
+
+    expect(hits.length).toBeGreaterThan(1);
     for (let i = 1; i < hits.length; i++) {
       expect(hits[i - 1]!.score).toBeGreaterThanOrEqual(hits[i]!.score);
     }
@@ -266,5 +281,80 @@ describe("openEngineStore — getShas + clearDocument", () => {
 
   it("clearDocument on unknown document does not throw", () => {
     expect(() => store.clearDocument("notes/ghost.md")).not.toThrow();
+  });
+});
+
+describe("embedding identity v3 persistence", () => {
+  function identity() {
+    return makeEmbeddingIdentity({
+      provider: "gguf",
+      model: "embedding.gguf",
+      revision: "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12",
+      sha256: "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
+      dimensions: 768,
+      contextLength: 2048,
+      mrlDim: 0,
+      normalization: "l2",
+      prefixScheme: "embeddinggemma-v1",
+    });
+  }
+
+  function withStore(run: (dbPath: string) => void): void {
+    const identityDir = mkdtempSync(path.join(tmpdir(), "oms-store-identity-test-"));
+    const dbPath = path.join(identityDir, "test.db");
+    try {
+      run(dbPath);
+    } finally {
+      rmSync(identityDir, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    ["vector-capable", (dbPath: string) => openEngineStore(dbPath, DIMS)],
+    ["core-only", (dbPath: string) => openEngineStoreCore(dbPath)],
+  ])("round-trips identity through the %s writer", (_mode, openStore) => {
+    withStore((dbPath) => {
+      const identityStore = openStore(dbPath);
+      try {
+        const expected = identity();
+        identityStore.writeEmbeddingIdentity(expected);
+        expect(identityStore.readEmbeddingIdentity()).toEqual(expected);
+      } finally {
+        identityStore.close();
+      }
+    });
+  });
+
+  it("rejects a partial identity row", () => {
+    withStore((dbPath) => {
+      const identityStore = openEngineStoreCore(dbPath);
+      identityStore.close();
+      const db = new Database(dbPath);
+      try {
+        db.prepare("UPDATE engine_meta SET embedding_provider = 'gguf' WHERE id = 1").run();
+      } finally {
+        db.close();
+      }
+      const reopened = openEngineStoreCore(dbPath);
+      try {
+        expect(() => reopened.readEmbeddingIdentity()).toThrow(/incomplete/);
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  it("rejects v2 metadata without altering its schema", () => {
+    withStore((dbPath) => {
+      const identityStore = openEngineStoreCore(dbPath);
+      identityStore.close();
+      const db = new Database(dbPath);
+      try {
+        db.prepare("UPDATE engine_meta SET embedding_schema_version = 'oms-embed-meta-v2' WHERE id = 1").run();
+      } finally {
+        db.close();
+      }
+      expect(() => openEngineStoreCore(dbPath)).toThrow(/incompatible/);
+    });
   });
 });

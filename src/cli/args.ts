@@ -30,10 +30,9 @@ export interface ParsedCliArgs {
   readonly json: boolean;
   readonly folders: readonly string[];
   readonly conventionNote: boolean;
-  readonly embeddingDescriptorPath: string | undefined;
-  readonly embeddingNoDefault: boolean;
-  /** setup: install the pinned default embedding model. */
-  readonly embeddingDefault: boolean;
+  readonly modelsDescriptorPath: string | undefined;
+  readonly modelsNoDefault: boolean;
+  readonly modelsDefault: boolean;
   readonly unknownFlags: readonly string[];
   readonly error: CliArgumentError | undefined;
 }
@@ -63,9 +62,9 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   let json = false;
   const folders: string[] = [];
   let conventionNote = true;
-  let embeddingDescriptorPath: string | undefined;
-  let embeddingNoDefault = false;
-  let embeddingDefault = false;
+  let modelsDescriptorPath: string | undefined;
+  let modelsNoDefault = false;
+  let modelsDefault = false;
   const unknownFlags: string[] = [];
 
   for (let i = 1; i < argv.length; i++) {
@@ -132,15 +131,38 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       i++;
     } else if (arg === "--no-convention-note") {
       conventionNote = false;
-    } else if (arg === "--embedding-descriptor" && next) {
-      embeddingDescriptorPath = path.resolve(cwd, next);
+    } else if (arg === "--models-descriptor") {
+      if (next === undefined || next === "" || next.startsWith("-")) {
+        return parsedArgsWithError(
+          "[oms] Missing value for --models-descriptor. Choose one of --models-default, --models-descriptor <path>, or --models-no-default.",
+        );
+      }
+      modelsDescriptorPath = path.resolve(cwd, next);
       i++;
-    } else if (arg === "--embedding-no-default") {
-      embeddingNoDefault = true;
-    } else if (arg === "--embedding-default") {
-      embeddingDefault = true;
+    } else if (arg === "--models-no-default") {
+      modelsNoDefault = true;
+    } else if (arg === "--models-default") {
+      modelsDefault = true;
+    } else if (arg === "--embedding-descriptor") {
+      unknownFlags.push(arg);
+      if (next !== undefined && !next.startsWith("--")) i++;
+    } else if (arg === "--embedding-default" || arg === "--embedding-no-default") {
+      unknownFlags.push(arg);
     } else if (arg !== undefined) {
       unknownFlags.push(arg);
+    }
+  }
+
+  if (command === "setup") {
+    const modelChoices = [
+      modelsDescriptorPath !== undefined ? "--models-descriptor" : undefined,
+      modelsDefault ? "--models-default" : undefined,
+      modelsNoDefault ? "--models-no-default" : undefined,
+    ].filter((flag): flag is string => flag !== undefined);
+    if (modelChoices.length > 1) {
+      return parsedArgsWithError(
+        `[oms] Mutually exclusive setup model options: ${modelChoices.join(" and ")}. Choose one of --models-default, --models-descriptor <path>, or --models-no-default.`,
+      );
     }
   }
 
@@ -164,9 +186,9 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     json,
     folders,
     conventionNote,
-    embeddingDescriptorPath,
-    embeddingNoDefault,
-    embeddingDefault,
+    modelsDescriptorPath,
+    modelsNoDefault,
+    modelsDefault,
     unknownFlags,
     error: undefined,
   };
@@ -192,9 +214,9 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       json,
         folders,
       conventionNote,
-      embeddingDescriptorPath,
-      embeddingNoDefault,
-      embeddingDefault,
+      modelsDescriptorPath,
+      modelsNoDefault,
+      modelsDefault,
       unknownFlags,
       error: new CliArgumentError(message),
     };

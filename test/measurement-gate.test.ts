@@ -41,10 +41,22 @@ function modelDefaultWaiver(): Record<string, unknown> {
   };
 }
 
+const emptyInstalledModelsReceipt = {
+  schemaVersion: 1 as const,
+  artifacts: [],
+  defaults: [],
+};
+
+function resolveWithoutInstalledModels(
+  options: Parameters<typeof resolveEmbeddingModel>[0] = {},
+) {
+  return resolveEmbeddingModel({ ...options, installedReceipt: emptyInstalledModelsReceipt });
+}
+
 function noDefaultContract(overrides: Record<string, unknown> = {}) {
   return {
-    resolveEmbeddingModel,
-    defaultDescriptorExists: () => false,
+    resolveEmbeddingModel: resolveWithoutInstalledModels,
+    installedReceiptExists: () => false,
     runMcp: () => undefined,
     fetch: () => undefined,
     ...overrides,
@@ -262,18 +274,18 @@ describe("R2 Phase D measurement gate", () => {
       await expect(contract.runMcp({ fetch: countedFetch, waiverActive: true }))
         .resolves.toBeUndefined();
       expect(networkCalls).toBe(0);
-      expect(contract.defaultDescriptorExists()).toBe(false);
+      expect(contract.installedReceiptExists()).toBe(false);
     } finally {
       rmSync(cacheDir, { recursive: true, force: true });
     }
   }, 30_000);
 
-  it("fails closed when the waiver path introduces a default descriptor pointer", async () => {
+  it("fails closed when the waiver path introduces an installed-model receipt", async () => {
     await expect(checkMeasurementManifest({
       profile: "model-default",
       waiver: modelDefaultWaiver(),
-      noDefaultContract: noDefaultContract({ defaultDescriptorExists: () => true }),
-    })).rejects.toThrow(/no default descriptor pointer is introduced/);
+      noDefaultContract: noDefaultContract({ installedReceiptExists: () => true }),
+    })).rejects.toThrow(/no installed-model receipt is introduced/);
   });
 
   it("fails closed when explicit configuration diverges or a half pair is not loud", async () => {
@@ -281,18 +293,22 @@ describe("R2 Phase D measurement gate", () => {
       env: Record<string, string>;
       waiverActive?: boolean;
     }) => {
-      if (options.waiverActive &&
-          options.env.OMS_EMBEDDING_PROVIDER &&
-          options.env.OMS_EMBEDDING_MODEL) {
+      if (options.env.OMS_EMBEDDING_PROVIDER && options.env.OMS_EMBEDDING_MODEL) {
+        // Reports success for a model the caller never selected: the capability
+        // resolver must never substitute a different provider for an explicit
+        // environment selection.
         return {
           available: true,
-          source: "configured",
-          provider: "different-provider",
-          model: options.env.OMS_EMBEDDING_MODEL,
-          receipt: { guidance: "" },
+          source: "environment",
+          descriptor: {
+            provider: "different-provider",
+            model: options.env.OMS_EMBEDDING_MODEL,
+          },
+          equivalentSources: [],
+          shadowedSources: [],
         };
       }
-      return resolveEmbeddingModel(options);
+      return resolveWithoutInstalledModels(options);
     };
     await expect(checkMeasurementManifest({
       profile: "model-default",
@@ -329,7 +345,7 @@ describe("R2 Phase D measurement gate", () => {
       if (options.env.OMS_EMBEDDING_PROVIDER && !options.env.OMS_EMBEDDING_MODEL) {
         throw new Error("model missing");
       }
-      return resolveEmbeddingModel(options);
+      return resolveWithoutInstalledModels(options);
     };
     await expect(checkMeasurementManifest({
       profile: "model-default",
