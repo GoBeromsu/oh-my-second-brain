@@ -108,6 +108,8 @@ oms serve
 A plain `oms search <text>` is lexical-only. Every non-lexical channel is
 explicit: `--vec`, `--hyde`, G004 `--expand`, and `--rerank`. G004 expansion is
 available only when selected; no replacement, parity, or outperformance claim
+is made.
+
 `oms embed` is the sole embedding command, and `oms index` has no
 embedding subcommand.
 
