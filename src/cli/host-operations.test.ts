@@ -86,6 +86,128 @@ describe("host installer/uninstaller", () => {
     expect(existsSync(path.join(codexDir, "skills", "oms-write"))).toBe(false);
   });
 
+  it("fails closed for ambiguous Codex managed markers while preserving config bytes", async () => {
+    const managedBlock = [
+      "# BEGIN OMS MANAGED MCP",
+      "# OMS MCP hookup for Codex CLI. Managed by `oms install/uninstall`.",
+      "[mcp_servers.oms]",
+      'command = "oms"',
+      "# END OMS MANAGED MCP",
+      "",
+    ].join("\n");
+    const fixtures = [
+      {
+        name: "orphan start",
+        content: `${managedBlock.replace("# END OMS MANAGED MCP\n", "")}[other]\nvalue = 1\n`,
+        markerLines: [1],
+      },
+      {
+        name: "orphan end",
+        content: 'model = "gpt-5"\n# END OMS MANAGED MCP\n',
+        markerLines: [2],
+      },
+      {
+        name: "duplicate pairs",
+        content: `${managedBlock}${managedBlock}`,
+        markerLines: [1, 5, 6, 10],
+      },
+      {
+        name: "nested markers",
+        content: [
+          "# BEGIN OMS MANAGED MCP",
+          "[mcp_servers.oms]",
+          "# BEGIN OMS MANAGED MCP",
+          "# END OMS MANAGED MCP",
+          "# END OMS MANAGED MCP",
+          "",
+        ].join("\n"),
+        markerLines: [1, 3, 4, 5],
+      },
+      {
+        name: "reversed markers",
+        content: "# END OMS MANAGED MCP\n[mcp_servers.oms]\n# BEGIN OMS MANAGED MCP\n",
+        markerLines: [1, 3],
+      },
+    ];
+
+    for (const fixture of fixtures) {
+      const home = await mkdtemp(path.join(tmpdir(), "oms-codex-ambiguous-"));
+      const configPath = path.join(home, ".codex", "config.toml");
+      await mkdir(path.dirname(configPath), { recursive: true });
+      await writeFile(configPath, fixture.content, "utf-8");
+
+      for (const action of ["install", "uninstall"] as const) {
+        const result = await runHostOperation({
+          action,
+          runtime: "codex",
+          vault: "/tmp/Vault",
+          homeDir: home,
+          adapterRoot,
+        });
+        expect(result[0]?.messages.join("\n"), fixture.name).toContain("FAILED:");
+        expect(result[0]?.messages.join("\n"), fixture.name).toContain(configPath);
+        for (const line of fixture.markerLines) {
+          expect(result[0]?.messages.join("\n"), fixture.name).toContain(`line ${line}`);
+        }
+        expect(result[0]?.messages.join("\n"), fixture.name).toContain("Manually remove every OMS managed MCP block");
+        expect(await readFile(configPath, "utf-8"), fixture.name).toBe(fixture.content);
+      }
+    }
+  });
+
+  it("replaces one valid Codex managed block in place and removes legacy-only config", async () => {
+    const prefix = 'model = "gpt-5"\n\n';
+    const suffix = '[other]\nvalue = "preserve me"\n';
+    const managedBlock = [
+      "# BEGIN OMS MANAGED MCP",
+      "# OMS MCP hookup for Codex CLI. Managed by `oms install/uninstall`.",
+      "[mcp_servers.oms]",
+      'command = "old-oms"',
+      "# END OMS MANAGED MCP",
+      "",
+    ].join("\n");
+    const home = await mkdtemp(path.join(tmpdir(), "oms-codex-valid-marker-"));
+    const configPath = path.join(home, ".codex", "config.toml");
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, `${prefix}${managedBlock}${suffix}`, "utf-8");
+
+    const installOptions = { action: "install" as const, runtime: "codex" as const, vault: "/tmp/Vault", homeDir: home, adapterRoot };
+    await runHostOperation(installOptions);
+    const installed = await readFile(configPath, "utf-8");
+    expect(installed.startsWith(prefix)).toBe(true);
+    expect(installed.endsWith(suffix)).toBe(true);
+    await runHostOperation(installOptions);
+    expect(await readFile(configPath, "utf-8")).toBe(installed);
+
+    await runHostOperation({ ...installOptions, action: "uninstall" });
+    expect(await readFile(configPath, "utf-8")).toBe(`${prefix}${suffix}`);
+
+    const legacyHome = await mkdtemp(path.join(tmpdir(), "oms-codex-legacy-"));
+    const legacyConfigPath = path.join(legacyHome, ".codex", "config.toml");
+    const legacy = 'model = "gpt-5"\n\n# OMS MCP hookup for Codex CLI. Managed by `oms install/uninstall`.\n[mcp_servers.oms]\ncommand = "oms"\n\n[other]\nvalue = 1\n';
+    await mkdir(path.dirname(legacyConfigPath), { recursive: true });
+    await writeFile(legacyConfigPath, legacy, "utf-8");
+    const legacyInstall = await runHostOperation({
+      action: "install",
+      runtime: "codex",
+      vault: "/tmp/Vault",
+      homeDir: legacyHome,
+      adapterRoot,
+    });
+    expect(legacyInstall[0]?.messages.join("\n")).not.toContain("FAILED:");
+    expect(await readFile(legacyConfigPath, "utf-8")).toContain("# BEGIN OMS MANAGED MCP");
+    await writeFile(legacyConfigPath, legacy, "utf-8");
+    const legacyResult = await runHostOperation({
+      action: "uninstall",
+      runtime: "codex",
+      vault: "/tmp/Vault",
+      homeDir: legacyHome,
+      adapterRoot,
+    });
+    expect(legacyResult[0]?.messages.join("\n")).not.toContain("FAILED:");
+    expect(await readFile(legacyConfigPath, "utf-8")).toBe('model = "gpt-5"\n\n[other]\nvalue = 1\n');
+  });
+
   it("removes only stale Codex OMS skill directories during install", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-install-codex-stale-"));
     const codexSkillsDir = path.join(home, ".codex", "skills");
@@ -591,8 +713,9 @@ describe("host installer/uninstaller", () => {
 
     const [result] = await runHostOperation({ action: "install", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
 
-    expect(result?.messages.join(" ")).toContain("not a supported YAML mapping");
+    expect(result?.messages.join(" ")).toContain("Refusing unsafe YAML edit: root must be a mapping");
     expect(await readFile(configPath, "utf-8")).toBe("- not\n- a mapping\n");
+    expect(existsSync(path.join(home, ".hermes", "skills", "knowledge-management", "oms"))).toBe(false);
   });
 
   it("dry-run reports all host plans without mutating home", async () => {
