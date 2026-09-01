@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-01
+
 ### Fixed
 
 - **Legacy taxonomy conversion is fully transaction-bounded.** YAML cleanup joins the approval hash with CAS/rollback/resume/receipts, doctor never reads YAML, and simultaneous JSON+YAML authorities fail closed with cleanup guidance.
