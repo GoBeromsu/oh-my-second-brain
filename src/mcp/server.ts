@@ -242,10 +242,18 @@ function operationSchema(tool: string): Tool["inputSchema"] {
   }
   return { type: "object", oneOf: branches };
 }
-function resolveOperation(tool: string, op: string | undefined): string | undefined {
+export function resolveOperation(tool: string, op: string | undefined): string | undefined {
   return operations[tool]?.find(
-    (operation) => operation.direct || operation.op === op,
+    (operation) => (operation.direct && op === undefined) || operation.op === op,
   )?.name;
+}
+
+export function unknownOperationMessage(tool: string, op: string | undefined): string {
+  const supported = (operations[tool] ?? [])
+    .map((operation) => operation.op)
+    .filter((operation): operation is string => operation !== undefined)
+    .sort();
+  return `Unknown operation "${op ?? "(missing)"}" for ${tool}. Supported operations: ${supported.join(", ") || "(none)"}.`;
 }
 
 export const omsMcpTools: Tool[] = [
@@ -473,7 +481,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     const publicName = request.params.name;
     const op = stringArg(args, "op");
     const name = resolveOperation(publicName, op);
-    if (!name) return errorText(`Unknown operation "${op ?? "(missing)"}" for ${publicName}.`);
+    if (!name) return errorText(unknownOperationMessage(publicName, op));
     if (publicName === "oms_search" && op === "query") {
       const searches = args?.["searches"];
       if (typeof args?.["query"] === "string" && Array.isArray(searches)) {

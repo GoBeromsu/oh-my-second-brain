@@ -11,7 +11,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { parse } from "yaml";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
-import { omsMcpTools } from "./server.js";
+import { omsMcpTools, resolveOperation, unknownOperationMessage } from "./server.js";
 import { sourceSignature } from "../kernel/templates/index.js";
 import type { SourceDescriptor } from "../kernel/templates/types.js";
 
@@ -323,6 +323,40 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(write({ op: "note", mode: "update", notePath: "notes/x.md", frontmatter: { title: "x" } }).valid).toBe(true);
     expect(write({ op: "note", templateId: "literature", mode: "create", folder: "references" }).valid).toBe(false);
     expect(JSON.stringify(toolByName.get("oms_search")!.inputSchema)).not.toContain("concept");
+  });
+
+  it("requires an op for routed tools and reports deterministic supported operations", () => {
+    const normalOperations = [
+      ["oms_write", "note", "write-note"],
+      ["oms_search", "query", "oms_semantic_query"],
+      ["oms_link", "suggest", "oms_link_suggest"],
+      ["oms_status", undefined, "oms_graph_status"],
+      ["oms_doctor", "audit", "oms_vault_audit"],
+    ] as const;
+    const schemas = new Map(omsMcpTools.map((tool) => [tool.name, tool.inputSchema as {
+      readonly required?: readonly string[];
+      readonly oneOf?: readonly { readonly required: readonly string[] }[];
+    }]));
+
+    for (const [tool, op, name] of normalOperations) {
+      expect(resolveOperation(tool, op), tool).toBe(name);
+      expect(resolveOperation(tool, "typo"), tool).toBeUndefined();
+      if (tool === "oms_status") {
+        expect(schemas.get(tool)?.required).not.toContain("op");
+        expect(unknownOperationMessage(tool, "typo")).toBe(
+          'Unknown operation "typo" for oms_status. Supported operations: (none).',
+        );
+      } else {
+        expect(resolveOperation(tool, undefined), tool).toBeUndefined();
+        expect(schemas.get(tool)?.oneOf?.every((branch) => branch.required.includes("op")), tool).toBe(true);
+        expect(unknownOperationMessage(tool, undefined), tool).toMatch(
+          new RegExp(`^Unknown operation "\\(missing\\)" for ${tool}\\. Supported operations: .+\\.$`),
+        );
+      }
+    }
+    expect(unknownOperationMessage("oms_search", undefined)).toBe(
+      'Unknown operation "(missing)" for oms_search. Supported operations: collections, context, contexts, get-document, lazy-load, multi-get-documents, query, status, templates.',
+    );
   });
 
   it("registers only the five public tools and retires detail aliases", () => {
