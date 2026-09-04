@@ -1,7 +1,7 @@
 ---
 name: write
 description: Write vault notes and manage Obsidian templates through the guarded template contract.
-mcp_tool: oms_write
+mcp_tool: write
 mcp_args:
   op: "note"
   mode: "create"
@@ -11,11 +11,11 @@ mcp_args:
 
 # write
 
-Use MCP `oms_write` for every vault-note or managed-template mutation. Do not use host Write/Edit for vault Markdown.
+Use MCP `write` for every vault-note or managed-template mutation. Do not use host Write/Edit for vault Markdown.
 
 ## Notes
 
-Translate the user's natural-language note kind into a stable ID returned by `oms_search { op: "templates" }`; never guess an ID.
+Translate the user's natural-language note kind into a stable ID returned by `search { op: "templates" }`; never guess an ID.
 
 ```text
 /write <template-id> [body]

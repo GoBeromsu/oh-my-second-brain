@@ -71,7 +71,7 @@ During setup, choose one local verified acquisition policy:
 
 `oms mcp` exposes exactly five public tools:
 
-`oms_write` · `oms_search` · `oms_link` · `oms_status` · `oms_doctor`
+`write` · `search` · `link` · `status` · `doctor`
 
 The seven skills (`write`, `search`, `link`, `distill`, `status`, `doctor`, `template`) are workflow guidance, not a tool-equality list. Detail capabilities remain `op` values under the five tools.
 

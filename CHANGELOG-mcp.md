@@ -4,6 +4,10 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP local tool names are now capability-only.** The `oms` server advertises `write`, `search`, `link`, `status`, and `doctor`, so qualifying hosts display `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor` rather than `oms_oms_*`. Raw MCP callers must migrate `oms_write` → `write`, `oms_search` → `search`, `oms_link` → `link`, `oms_status` → `status`, and `oms_doctor` → `doctor`.
+
 ## [0.12.2] - 2026-09-01
 
 ## [0.12.1] - 2026-09-01

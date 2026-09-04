@@ -1,7 +1,7 @@
 ---
 name: doctor
 description: Diagnose template authority and index problems, then run explicit repairs.
-mcp_tool: oms_doctor
+mcp_tool: doctor
 mcp_args:
   op: "validate"
 ---

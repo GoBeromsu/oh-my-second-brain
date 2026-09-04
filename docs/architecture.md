@@ -40,6 +40,16 @@ Search is lexical and works without `.oms/types.json`. It supports narrowing by 
 
 The CLI works independently of host integrations. Installable assets are under [`assets/`](../assets/): seven public skills (`write`, `search`, `link`, `distill`, `status`, `doctor`, and tool-less `template`) and host guidance. `assets/claude/`, `assets/codex/`, and `assets/hermes/` contain host-specific files.
 
-MCP is a separate API surface. `oms mcp` serves exactly five public tools: `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`. Skills are host-facing workflows; MCP tools are callable operations. Neither replaces the independent CLI.
+MCP is a separate API surface. `oms mcp` serves exactly five public capabilities: write, search, link, status, and doctor. Skills are host-facing workflows; MCP tools are callable operations. Neither replaces the independent CLI.
+
+### MCP namespace boundary
+
+The MCP server id is `oms`, while its local tool names are capability-only:
+`write`, `search`, `link`, `status`, and `doctor`. Qualifying supported hosts
+therefore display `oms_write`, `oms_search`, `oms_link`, `oms_status`, and
+`oms_doctor` exactly once; no supported host may render `oms_oms_*`. Raw MCP
+clients call the local names, so callers using the former `oms_write`,
+`oms_search`, `oms_link`, `oms_status`, or `oms_doctor` names must migrate to
+`write`, `search`, `link`, `status`, or `doctor`.
 
 See [conventions](./conventions.md) for vault data and [verified targets](./verified-target.md) for target resolution and mutation admission.

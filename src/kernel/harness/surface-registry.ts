@@ -92,11 +92,11 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
     { name: "serve", owner: "semantic-engine", stability: "experimental" },
   ],
   mcpTools: [
-    { name: "oms_write", owner: "capture", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
-    { name: "oms_search", owner: "retrieval", posture: "read", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
-    { name: "oms_link", owner: "capture", posture: "write", destructive: true, idempotent: false, openWorld: false, stability: "stable" },
-    { name: "oms_status", owner: "mcp", posture: "read", destructive: false, idempotent: true, openWorld: false, stability: "stable" },
-    { name: "oms_doctor", owner: "mcp", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
+    { name: "write", owner: "capture", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
+    { name: "search", owner: "retrieval", posture: "read", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
+    { name: "link", owner: "capture", posture: "write", destructive: true, idempotent: false, openWorld: false, stability: "stable" },
+    { name: "status", owner: "mcp", posture: "read", destructive: false, idempotent: true, openWorld: false, stability: "stable" },
+    { name: "doctor", owner: "mcp", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
   ],
   hosts: [
     {

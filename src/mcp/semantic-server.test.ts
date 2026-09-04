@@ -55,12 +55,12 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
     try {
       await client.connect(transport);
       await client.callTool({
-        name: "oms_doctor",
+        name: "doctor",
         arguments: { op: "sync-embeddings", embed: false },
       });
       const retrieve = textPayload(
         await client.callTool({
-          name: "oms_search",
+          name: "search",
           arguments: { op: "context",
             property: "tags",
             value: "agent-graph",
@@ -88,11 +88,11 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       const docid = "references/Agent Retrieval.md";
 
       const syncRaw = await client.callTool({
-        name: "oms_doctor",
+        name: "doctor",
         arguments: { op: "sync-embeddings", collection: "obsidian", ensureCollection: true, force: true, index: "brain" },
       });
       const queryCall = {
-        name: "oms_search",
+        name: "search",
         arguments: { op: "query", query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
       };
       if (hasModel) {
@@ -134,7 +134,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
         // default for callers who did not choose a strategy, never a substitute
         // for one that was asked for and cannot run.
         const explicitVec = await client.callTool({
-          name: "oms_search",
+          name: "search",
           arguments: {
             op: "query",
             searches: [{ type: "vec", query: "agent retrieval" }],
@@ -153,7 +153,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
 
         const lexOnlyQuery = textPayload(
           await client.callTool({
-            name: "oms_search",
+            name: "search",
             arguments: { op: "query", query: "", lex: "agent retrieval", collection: "obsidian", limit: 1 },
           }),
         );
@@ -166,13 +166,13 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
 
       const single = textPayload(
         await client.callTool({
-          name: "oms_search",
+          name: "search",
           arguments: { op: "get-document", target: `${docid}:1:20`, collection: "obsidian", fullPath: true },
         }),
       );
       const batch = textPayload(
         await client.callTool({
-          name: "oms_search",
+          name: "search",
           arguments: { op: "multi-get-documents", targets: ["references/*.md", docid], lineLimit: 40, maxBytes: 2048 },
         }),
       );

@@ -129,6 +129,15 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
     violations.push({ rule: "mcp-tools-populated", detail: "MCP tool registry is empty" });
   }
 
+  for (const tool of sets.mcpTools) {
+    if (tool.startsWith("oms_")) {
+      violations.push({ rule: "mcp-tool-local-name", detail: `MCP tool ${tool} must not repeat the oms server namespace` });
+    }
+    if (`oms_${tool}`.startsWith("oms_oms_")) {
+      violations.push({ rule: "mcp-tool-qualified-name", detail: `Qualified MCP tool oms_${tool} has a doubled oms namespace` });
+    }
+  }
+
   if (sets.cliCommands.length === 0) {
     violations.push({ rule: "cli-allowlist-populated", detail: "CLI command allowlist is empty" });
   }
@@ -155,6 +164,7 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
 }
 
 const TARGET = { skills: 7, tools: 5 } as const;
+const MCP_SERVER_ID = "oms";
 
 const CLEAN: SurfaceSets = {
   skills: ["write", "search", "link", "distill", "status", "doctor", "template"],
@@ -217,6 +227,15 @@ describe("surface-set parity gate (rules)", () => {
       TARGET,
     );
     expect(violations.map((v) => v.rule)).toContain("tools-subset-of-skills");
+  });
+
+  it("fails when a local tool repeats the server namespace", () => {
+    const violations = checkSurfaceSets(
+      { ...CLEAN, mcpTools: ["oms_write", "search", "link", "status", "doctor"] },
+      TARGET,
+    );
+    expect(violations.map((v) => v.rule)).toContain("mcp-tool-local-name");
+    expect(violations.map((v) => v.rule)).toContain("mcp-tool-qualified-name");
   });
 
   it("fails when the MCP server registers an extra tool absent from the registry", () => {
@@ -322,7 +341,7 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
   const mcpTools = harnessSurfaceRegistry.mcpTools.map((tool) => tool.name).sort();
   expect(mcpTools, "MCP tool registry must not be empty").not.toEqual([]);
   expect(mcpTools).toEqual(declaredMcpTools);
-  const searchTool = omsMcpTools.find((tool) => tool.name === "oms_search");
+  const searchTool = omsMcpTools.find((tool) => tool.name === "search");
   const searchOperations = (
     (searchTool?.inputSchema as {
       readonly oneOf?: readonly {
@@ -369,7 +388,7 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     minScore: { type: "number", default: 0 },
     cursor: { type: "string" },
   });
-  const doctorTool = omsMcpTools.find((tool) => tool.name === "oms_doctor");
+  const doctorTool = omsMcpTools.find((tool) => tool.name === "doctor");
   const doctorOperations = [...new Set((
     (doctorTool?.inputSchema as {
       readonly oneOf?: readonly {
@@ -561,6 +580,13 @@ describe("current guidance CLI spellings", () => {
 describe("surface-set parity gate (live surface)", () => {
   it("reads the seven disk-authored skills, MCP registry, and CLI dispatcher", () => {
     expect(checkSurfaceSets(liveSurfaceSets(), TARGET)).toEqual([]);
+    expect(harnessSurfaceRegistry.hosts, "supported host registry must not be empty").not.toEqual([]);
+    for (const host of harnessSurfaceRegistry.hosts) {
+      const qualifiedNames = omsMcpTools.map((tool) => `${MCP_SERVER_ID}_${tool.name}`);
+      expect(qualifiedNames, `${host.runtime} must not render a doubled OMS namespace`).not.toEqual(
+        expect.arrayContaining([expect.stringMatching(/^oms_oms_/)]),
+      );
+    }
   });
 
   it("fails when a registry CLI command is renamed without updating the dispatcher", () => {

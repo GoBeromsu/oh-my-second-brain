@@ -67,9 +67,10 @@ function cliCommands(text: string): string[] {
   return matches(text, /^oms [a-z-]+/gmu);
 }
 
-/** `oms_*` tool identifiers. */
+/** Capability-only MCP tool identifiers listed in the MCP surface line. */
 function toolNames(text: string): string[] {
-  return matches(text, /oms_[a-z_]+/gu);
+  const surfaceLine = text.split("\n").find((line) => line.includes("·"));
+  return surfaceLine === undefined ? [] : matches(surfaceLine, /(?:write|search|link|status|doctor)/gu);
 }
 
 /** `OMS_*` environment variable identifiers. */
@@ -83,7 +84,7 @@ function advertisedTools(serverSource: string): string[] {
   if (start === -1) throw new Error(`${MCP_SERVER} no longer declares omsMcpTools; update readme-parity.test.ts`);
   const end = serverSource.indexOf("\n];", start);
   if (end === -1) throw new Error(`${MCP_SERVER} omsMcpTools array is unterminated`);
-  return matches(serverSource.slice(start, end), /name: "(oms_[a-z_]+)"/gu).map((entry) =>
+  return matches(serverSource.slice(start, end), /name: "([a-z_]+)"/gu).map((entry) =>
     entry.replace(/^name: "|"$/gu, ""),
   );
 }

@@ -19,9 +19,9 @@ Use an existing stable `templateId` when updating or moving a template. A path o
 
 ## Workflow
 
-1. Read `oms_search { op: "templates" }` and the user's requested shape. Do not guess existing IDs or fields.
+1. Read `search { op: "templates" }` and the user's requested shape. Do not guess existing IDs or fields.
 2. Draft the exact Markdown and policy/taxonomy intent. Preserve unknown frontmatter, policy extensions, body bytes, and Obsidian property types.
-3. Call `oms_write { op: "template", ..., dryRun: true }` for create, update, reclassify, or relocate-folder.
+3. Call `write { op: "template", ..., dryRun: true }` for create, update, reclassify, or relocate-folder.
 4. Show the proposal, paths, diagnostics, and `approvalDigest` to the user.
 5. Apply only after the caller explicitly approves that exact digest. Submit the same request with `dryRun: false` and `approvedDigest`.
 6. Report the server-verified receipt and postconditions.

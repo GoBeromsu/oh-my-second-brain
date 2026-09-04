@@ -56,7 +56,7 @@ import {
 const SERVER_VERSION = readBundledPackageVersion();
 
 export const BASE_SERVER_INSTRUCTIONS =
-  "Oh My Second Brain exposes write, search, link, status, and doctor tools. oms_write and doctor repair operations are gated by a verified vault target (a vault inferred from the current directory is refused); oms_write also enforces vault confinement and contract validation.";
+  "Oh My Second Brain exposes write, search, link, status, and doctor tools. write and doctor repair operations are gated by a verified vault target (a vault inferred from the current directory is refused); write also enforces vault confinement and contract validation.";
 
 function jsonText(value: unknown): CallToolResult {
   return {
@@ -150,14 +150,14 @@ const templateBinding = { type: "object", additionalProperties: false, propertie
 const source = { type: "object", additionalProperties: false, properties: { path: string, content: string, publication: { ...string, enum: ["write", "verify-existing"] } }, required: ["path", "content", "publication"] };
 const expected = { expectedInputDigest: digestSchema, expectedPolicySignature: digestSchema, expectedTaxonomySignature: digestSchema, expectedProjectionSignature: digestSchema, expectedSourceSignatures: { type: "array", items: { type: "object", additionalProperties: false, properties: { templateId: string, path: string, signature: digestSchema }, required: ["templateId", "path", "signature"] } } };
 const operations: Record<string, readonly Operation[]> = {
-  oms_write: [
+  write: [
     { op: "note", name: "write-note", properties: { mode: { ...string, enum: ["create", "append", "update"] }, templateId: string, notePath: string, frontmatter, body: string, dryRun: boolean } },
     { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, ...expected, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode", "expectedInputDigest", "expectedPolicySignature", "expectedTaxonomySignature", "expectedProjectionSignature", "expectedSourceSignatures"] },
   ],
-  oms_search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "lazy-load", name: "oms_lazy_load_note", properties: { notePath: string }, required: ["notePath"] }, { op: "templates", name: "oms_list_templates" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "collections", name: "oms_semantic_collections", properties: { index: string } }, { op: "contexts", name: "oms_semantic_contexts", properties: { index: string } }, { op: "status", name: "oms_semantic_status", properties: { index: string } }, { op: "get-document", name: "oms_get_document", properties: searchProperties, required: ["target"] }, { op: "multi-get-documents", name: "oms_multi_get_documents", properties: searchProperties }],
-  oms_link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
-  oms_status: [{ name: "oms_graph_status", direct: true }],
-  oms_doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "regenerate-types", name: "oms_regenerate_types", properties: { dryRun: boolean, approvedDigest: digestSchema } }, { op: "backfill-defaults", name: "oms_backfill_defaults", properties: { notePath: string, dryRun: boolean, approvedDigest: digestSchema }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { collection: string, ensureCollection: boolean, update: boolean, embed: boolean, force: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number } }],
+  search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "lazy-load", name: "oms_lazy_load_note", properties: { notePath: string }, required: ["notePath"] }, { op: "templates", name: "oms_list_templates" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "collections", name: "oms_semantic_collections", properties: { index: string } }, { op: "contexts", name: "oms_semantic_contexts", properties: { index: string } }, { op: "status", name: "oms_semantic_status", properties: { index: string } }, { op: "get-document", name: "oms_get_document", properties: searchProperties, required: ["target"] }, { op: "multi-get-documents", name: "oms_multi_get_documents", properties: searchProperties }],
+  link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
+  status: [{ name: "oms_graph_status", direct: true }],
+  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "regenerate-types", name: "oms_regenerate_types", properties: { dryRun: boolean, approvedDigest: digestSchema } }, { op: "backfill-defaults", name: "oms_backfill_defaults", properties: { notePath: string, dryRun: boolean, approvedDigest: digestSchema }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { collection: string, ensureCollection: boolean, update: boolean, embed: boolean, force: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number } }],
 };
 interface SchemaBranch {
   readonly additionalProperties: false;
@@ -258,38 +258,38 @@ function unknownOperationMessage(tool: string, op: string | undefined): string {
 
 export const omsMcpTools: Tool[] = [
   {
-    name: "oms_write",
+    name: "write",
     title: "Oh My Second Brain write",
     description: "Write template-resolved vault notes and guarded template changes.",
-    inputSchema: operationSchema("oms_write"),
+    inputSchema: operationSchema("write"),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
-    name: "oms_search",
+    name: "search",
     title: "Oh My Second Brain search",
     description: "Retrieve vault context, template metadata, semantic search, and selected documents. `op` selects the operation.",
-    inputSchema: operationSchema("oms_search"),
+    inputSchema: operationSchema("search"),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
-    name: "oms_link",
+    name: "link",
     title: "Oh My Second Brain link",
     description: "Suggest or apply wikilinks; `op` selects the operation.",
-    inputSchema: operationSchema("oms_link"),
+    inputSchema: operationSchema("link"),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
   {
-    name: "oms_status",
+    name: "status",
     title: "Oh My Second Brain status",
     description: "Read-only health and statistics for the active vault.",
-    inputSchema: operationSchema("oms_status"),
+    inputSchema: operationSchema("status"),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: "oms_doctor",
+    name: "doctor",
     title: "Oh My Second Brain doctor",
     description: "Diagnose or repair the vault; `op` selects the operation.",
-    inputSchema: operationSchema("oms_doctor"),
+    inputSchema: operationSchema("doctor"),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
 ];
@@ -401,7 +401,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       ? getReadOnlySemanticEngine()?.adapter ?? engine.adapter
       : getReadOnlyCoreSemanticEngine()?.adapter ?? engine.adapter;
   const resolveDocumentAdapter = (publicName: string): McpEngineAdapter => {
-    if (publicName === "oms_search") return resolveReadOnlyDocumentAdapter();
+    if (publicName === "search") return resolveReadOnlyDocumentAdapter();
     return resolveCreatingDocumentAdapter();
   };
   const resolveReadOnlyIndexAdapter = (): McpEngineAdapter => {
@@ -482,7 +482,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     const op = stringArg(args, "op");
     const name = resolveOperation(publicName, op);
     if (!name) return errorText(unknownOperationMessage(publicName, op));
-    if (publicName === "oms_search" && op === "query") {
+    if (publicName === "search" && op === "query") {
       const searches = args?.["searches"];
       if (typeof args?.["query"] === "string" && Array.isArray(searches)) {
         return errorText('Provide exactly one of "query" or "searches" for query.');
@@ -505,7 +505,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           managedSourcePaths: convention.managedSourcePaths,
           derivedState: diagnosis,
           engineGraph,
-          writeTools: source === "cwd" ? "oms_write-disabled-target-unverified" : "oms_write-gated-by-verified-target-and-contract",
+          writeTools: source === "cwd" ? "write-disabled-target-unverified" : "write-gated-by-verified-target-and-contract",
           readTools: omsMcpTools.map(tool => tool.name),
         });
       } catch (error) {
@@ -515,10 +515,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           sourceOfTruth: ["actual Obsidian templates", ".obsidian/types.json", ".oms/template-policy.json", ".oms/types.json"],
           error: error instanceof Error ? error.message : String(error),
           counts: null,
-          derivedState: { status: "invalid", remediation: "run oms_doctor validate, then regenerate-types with an approved digest" },
+          derivedState: { status: "invalid", remediation: "run doctor validate, then regenerate-types with an approved digest" },
           engineGraph,
-          writeTools: source === "cwd" ? "oms_write-disabled-target-unverified" : "oms_write-disabled-invalid-template-projection",
-          readTools: ["oms_status"],
+          writeTools: source === "cwd" ? "write-disabled-target-unverified" : "write-disabled-invalid-template-projection",
+          readTools: ["status"],
         });
       }
     }
@@ -539,7 +539,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       const resolveRepairAdapter = (): McpEngineAdapter =>
         operation === "build-graph"
           ? engine.adapter
-          : publicName === "oms_search"
+          : publicName === "search"
             ? resolveReadOnlyDocumentAdapter()
             : operation === "semantic-cleanup" || (operation === "sync-embeddings" && args?.["embed"] === false)
               ? resolveCreatingDocumentAdapter()
@@ -712,7 +712,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       }
       const useEphemeralLexicalFallback =
         name === "oms_semantic_query" &&
-        publicName === "oms_search" &&
+        publicName === "search" &&
         !hasExplicitEmbeddingIntent(args) &&
         (hasEmbeddingModel()
           ? getReadOnlySemanticEngine() === null
@@ -725,12 +725,12 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         name !== "oms_semantic_cleanup" &&
         !(name === "oms_sync_embeddings" && args?.["embed"] === false) &&
         !isModelOptionalSemanticQueryOp(name, args, vault)
-          ? publicName === "oms_search"
+          ? publicName === "search"
             ? resolveReadOnlyIndexAdapter()
             : getSemanticEngine().adapter
           : isEngineDocumentOp(name)
             ? resolveDocumentAdapter(publicName)
-            : publicName === "oms_search"
+            : publicName === "search"
               ? resolveReadOnlyIndexAdapter()
               : resolveDocumentAdapter(publicName);
       const semanticToolResult = await handleSemanticTool(

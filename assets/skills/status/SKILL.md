@@ -1,7 +1,7 @@
 ---
 name: status
 description: Report read-only template, graph, and semantic-index health.
-mcp_tool: oms_status
+mcp_tool: status
 mcp_args: {}
 ---
 
