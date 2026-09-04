@@ -492,24 +492,21 @@ export class McpEngineAdapter {
       : axisFiltered.filter((node) => node.path === collection || node.path.startsWith(`${collection}/`));
     const query = subQueries.find((subQuery) => subQuery.type === "lex")?.query
       ?? (subQueries.length === 0 ? opts.query ?? "" : "");
-    const scored = filtered
-      .map((node) => {
-        const score = searchScore(node, query);
-        return {
-          docPath: node.path,
-          score,
-          ...(query.trim().length > 0 ? { perTypeScores: { lex: score } } : {}),
-        };
-      })
-      // An axis constraint narrows the corpus; it is not lexical evidence.
-      // Once a lexical query is supplied, do not return axis-only zero-score
-      // documents as query hits.
-      .filter((result) => query.trim().length === 0 || result.score > 0)
+    const hasLexicalQuery = query.trim().length > 0;
+    const scoredNodes = filtered.map((node) => ({ node, score: searchScore(node, query) }));
+    // An axis constraint narrows the corpus; it is not lexical evidence.
+    // Apply the lexical threshold once so hits and facets represent the same nodes.
+    const qualifyingNodes = scoredNodes.filter(({ score }) =>
+      (!hasLexicalQuery || score > 0) && (opts.minScore === undefined || score >= opts.minScore),
+    );
+    const scored = qualifyingNodes
+      .map(({ node, score }) => ({
+        docPath: node.path,
+        score,
+        ...(hasLexicalQuery ? { perTypeScores: { lex: score } } : {}),
+      }))
       .sort((left, right) => right.score - left.score || left.docPath.localeCompare(right.docPath));
-    const facetNodes = opts.minScore === undefined
-      ? filtered
-      : filtered.filter((node) => searchScore(node, query) >= opts.minScore!);
-    const facets: McpSemanticFacet[] = queryFacets(facetNodes).map((facet) => ({
+    const facets: McpSemanticFacet[] = queryFacets(qualifyingNodes.map(({ node }) => node)).map((facet) => ({
       ...facet,
       intent: facetIntent(facet, opts.intent),
     }));

@@ -648,6 +648,27 @@ folders:
     ]);
   });
 
+  it("applies lexical score thresholds consistently to axis hits and facets", async () => {
+    const v = freshVault();
+    writeFileSync(path.join(v, "notes", "matching.md"), "---\ntemplate: project\nstatus: active\n---\n# Needle\nneedle\n");
+    writeFileSync(path.join(v, "notes", "nonmatching.md"), "---\ntemplate: project\nstatus: archived\n---\n# Other\nunrelated text\n");
+    const adapter = new McpEngineAdapter(makeDeps(), v, undefined, undefined, false, false);
+
+    const result = await adapter.semanticQuery({
+      query: "needle",
+      axes: { folder: "notes" },
+      minScore: 0,
+      limit: 10,
+    });
+
+    expect(result).toMatchObject({ available: true, totalCount: 1 });
+    if (!result.available) return;
+    expect(result.hits.map((hit) => hit.path)).toEqual(["notes/matching.md"]);
+    expect(result.facets).toEqual(expect.not.arrayContaining([
+      expect.objectContaining({ axis: "field", key: "status", value: "archived" }),
+    ]));
+  });
+
   it("does not report lexical or vector evidence for an axis-only query", async () => {
     const v = freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v, undefined, undefined, false, false);
