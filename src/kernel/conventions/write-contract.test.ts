@@ -48,4 +48,25 @@ describe("evaluateResolvedTemplateContract", () => {
       expect.objectContaining({ field: "status", rule: "allowed-values" }),
     ]));
   });
+
+  it("admits a registered writer identifier", () => {
+    expect(evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30", created_by: "oms-agent" }, template, base, { field: "created_by", identifiers: ["oms-agent"] })).toEqual({ valid: true, violations: [] });
+  });
+
+  it("reports exactly one violation for an unregistered writer identifier", () => {
+    const writerTemplate = { ...template, fields: { ...template.fields, created_by: { type: "text", required: true } } };
+    const result = evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30", created_by: "unknown-agent" }, writerTemplate, base, { field: "created_by", identifiers: ["oms-agent"] });
+    expect(result.violations).toEqual([expect.objectContaining({ field: "created_by", rule: "writer-identity" })]);
+    expect(result.violations[0]?.message).toContain("unknown-agent");
+  });
+
+  it("reports exactly one violation when a configured writer field is missing", () => {
+    const writerTemplate = { ...template, fields: { ...template.fields, created_by: { type: "text", required: true } } };
+    const result = evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30" }, writerTemplate, base, { field: "created_by", identifiers: ["oms-agent"] });
+    expect(result.violations).toEqual([expect.objectContaining({ field: "created_by", rule: "writer-identity" })]);
+  });
+
+  it("does not enforce writer identity without a registry", () => {
+    expect(evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30", created_by: "unknown-agent" }, template, base)).toEqual({ valid: true, violations: [] });
+  });
 });

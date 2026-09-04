@@ -53,7 +53,7 @@ export async function auditNote(vault: string, relPath: string): Promise<string[
       return guidance([`${normalizedPath} references unknown template "${templateId}"; use a stable ID from the resolved template convention.`]);
     }
 
-    const result = evaluateResolvedTemplateContract(frontmatter as Record<string, JsonValue>, template, convention.base);
+    const result = evaluateResolvedTemplateContract(frontmatter as Record<string, JsonValue>, template, convention.base, convention.writers);
     if (result.valid) return [];
     return guidance([
       `${normalizedPath} violates template "${templateId}": ${result.violations.map(violation => `${violation.field} (${violation.rule})`).join(", ")}.`,

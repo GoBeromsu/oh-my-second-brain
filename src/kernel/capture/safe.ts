@@ -290,7 +290,7 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
       const payload = identityRejection(template);
       return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], payload.message, payload);
     }
-    const contract = evaluateResolvedTemplateContract(parsed.frontmatter as Record<string, JsonValue>, template, input.convention.base);
+    const contract = evaluateResolvedTemplateContract(parsed.frontmatter as Record<string, JsonValue>, template, input.convention.base, input.convention.writers);
     if (!contract.valid) return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, contract.violations, "Existing note violates the resolved template contract");
     const eol = raw.includes("\r\n") ? "\r\n" : "\n";
     const appendedBody = normalizeBody(input.body).replace(/\r\n|\r|\n/g, eol);
@@ -332,13 +332,13 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
     }
     const merged = orderedTemplateFrontmatter(template, { ...(parsed.frontmatter as Record<string, JsonValue>), ...caller });
     const body = input.body ?? parsed.body;
-    const contract = evaluateResolvedTemplateContract(merged, template, input.convention.base);
+    const contract = evaluateResolvedTemplateContract(merged, template, input.convention.base, input.convention.writers);
     if (!contract.valid) return templateResult("rejected", input, template, target.vaultRelativePath, merged, body, contract.violations, "Resulting note violates the resolved template contract");
     const staged = formatExistingNote(raw, parseNote(raw), merged, input.body);
     if (input.dryRun) return templateResult("written", input, template, target.vaultRelativePath, merged, body);
     await writeFile(target.absolutePath, staged, "utf-8");
     const persisted = parsePersistedNote(await (input.readBack ?? ((file: string) => readFile(file, "utf-8")))(target.absolutePath));
-    const persistedContract = evaluateResolvedTemplateContract(persisted.frontmatter as Record<string, JsonValue>, template, input.convention.base);
+    const persistedContract = evaluateResolvedTemplateContract(persisted.frontmatter as Record<string, JsonValue>, template, input.convention.base, input.convention.writers);
     if (!hasTemplateIdentity(persisted.frontmatter as Record<string, JsonValue>, template) || !persistedContract.valid || normalizeBody(persisted.body) !== normalizeBody(body)) {
       const payload = rejection("acceptance", "postcondition-failed", "Postcondition failed after update", "inspect the persisted note before retrying");
       return templateResult("rejected", input, template, target.vaultRelativePath, merged, body, persistedContract.violations, payload.message, payload);
@@ -396,18 +396,18 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
     return templateResult("rejected", input, template, notePath, fields, input.body, [], payload.message, payload);
   }
   const body = renderTemplateBody(template, input.body, title, defaults.resolvedAt);
-  const contract = evaluateResolvedTemplateContract(fields, template, input.convention.base);
+  const contract = evaluateResolvedTemplateContract(fields, template, input.convention.base, input.convention.writers);
   if (!contract.valid) return templateResult("ask", input, template, target.vaultRelativePath, fields, body, contract.violations, "Resolved template values violate the contract", rejection("admission", "contract-violation", "Resolved template values violate the contract", "correct the supplied fields and retry"));
   const prepared = preparedTemplateWrite(input, template, "create", target.vaultRelativePath, fields, body, defaults.resolvedAt);
   const staged = formatTemplateNote(template, prepared.frontmatter, prepared.body);
   const stagedParsed = parsePersistedNote(staged);
-  const stagedContract = evaluateResolvedTemplateContract(stagedParsed.frontmatter as Record<string, JsonValue>, template, input.convention.base);
+  const stagedContract = evaluateResolvedTemplateContract(stagedParsed.frontmatter as Record<string, JsonValue>, template, input.convention.base, input.convention.writers);
   if (!stagedContract.valid) return templateResult("rejected", input, template, prepared.notePath, fields, body, stagedContract.violations, "Rendered template note violates the contract", rejection("acceptance", "contract-violation", "Rendered template note violates the contract", "correct the supplied fields and retry"));
   if (input.dryRun) return { ...templateResult("written", input, template, prepared.notePath, fields, body), prepared };
   await mkdir(path.dirname(target.absolutePath), { recursive: true });
   await writeFile(target.absolutePath, staged, { encoding: "utf-8", flag: "wx" });
   const persisted = parsePersistedNote(await (input.readBack ?? ((file: string) => readFile(file, "utf-8")))(target.absolutePath));
-  const persistedContract = evaluateResolvedTemplateContract(persisted.frontmatter as Record<string, JsonValue>, template, input.convention.base);
+  const persistedContract = evaluateResolvedTemplateContract(persisted.frontmatter as Record<string, JsonValue>, template, input.convention.base, input.convention.writers);
   if (!hasTemplateIdentity(persisted.frontmatter as Record<string, JsonValue>, template) || !persistedContract.valid || normalizeBody(persisted.body) !== normalizeBody(prepared.body)) {
     const payload = rejection("acceptance", "postcondition-failed", "Postcondition failed after create", "inspect the persisted note before retrying");
     return templateResult("rejected", input, template, prepared.notePath, fields, body, persistedContract.violations, payload.message, payload);

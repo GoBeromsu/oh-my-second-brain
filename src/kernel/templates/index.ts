@@ -13,7 +13,7 @@ export type { LexicalNoteMatch, TemplateAxisQuery, TemplateIndexedNote, Template
 export type { ResolveDefaultsRequest, ResolvedDefaults, WriteMode } from "./defaults.js";
 export type { RenderNameRequest } from "./naming.js";
 export type { LoadResolvedTemplatesOptions } from "./resolver.js";
-export type { AuthorityEntry, AuthorityKind, BaseContract, ContractDefinition, DerivedProjection, DerivedTemplateProjection, DestinationClass, Diagnostic, DiagnosticCode, Digest, FieldDefault, FieldNormalize, FieldPolicy, GlobalAxis, GlobalAxes, InputV2, JsonValue, LogicalOperation, MigrationMarker, MigrationReceipt, PlacementEntry, PlannedPhysicalOutput, PreparedWrite, ResolvedConvention, ResolvedTemplate, TemplateBinding, TemplateFolderPath, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateCompositionManifest, TemplateCompositionOptions, TemplateTransactionReceipt } from "./types.js";
+export type { AuthorityEntry, AuthorityKind, BaseContract, ContractDefinition, DerivedProjection, DerivedTemplateProjection, DestinationClass, Diagnostic, DiagnosticCode, Digest, FieldDefault, FieldNormalize, FieldPolicy, GlobalAxis, GlobalAxes, InputV2, JsonValue, LogicalOperation, MigrationMarker, MigrationReceipt, PlacementEntry, PlannedPhysicalOutput, PreparedWrite, ResolvedConvention, ResolvedTemplate, TemplateBinding, TemplateFolderPath, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateCompositionManifest, TemplateCompositionOptions, TemplateTransactionReceipt, WriterRegistry } from "./types.js";
 export type { VaultPathVerificationOptions, VerifiedVaultPath } from "./paths.js";
 
 export { backfillDefaults, diagnoseTemplates, regenerateTypes } from "./doctor.js";
