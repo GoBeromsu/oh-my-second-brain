@@ -1,5 +1,4 @@
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
-import path from "node:path";
 import { computeTreeDigest, parseProvenance } from "./provenance.js";
 
 export type InstalledAssetKind = "hook" | "binary" | "skill-tree" | "registration";
