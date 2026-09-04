@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterNodesByAxis, filterNodesByQueryAxes, queryFacets } from "./node.js";
+import { filterNodesByAxis, filterNodesByQueryAxes, queryFacets, searchScore } from "./node.js";
 import type { EngineGraphNode } from "./node.js";
 
 const nodes: EngineGraphNode[] = [
@@ -28,5 +28,29 @@ describe("template graph node axes", () => {
 
   it("fails loudly for an unknown public axis", () => {
     expect(() => filterNodesByQueryAxes(nodes, { invalid: "value" } as never)).toThrow(/Unknown query axis/);
+  });
+
+  it("ranks greater query coverage above lower coverage regardless of path order", () => {
+    const higherCoverage: EngineGraphNode = { path: "notes/zulu.md", template: "note", folder: "notes", axes: {}, wikilinks: [], bodyPreview: "", searchTerms: new Set(["alpha", "beta"]) };
+    const lowerCoverage: EngineGraphNode = { path: "notes/alpha.md", template: "note", folder: "notes", axes: {}, wikilinks: [], bodyPreview: "", searchTerms: new Set(["alpha"]) };
+
+    expect(searchScore(higherCoverage, "alpha beta")).toBeGreaterThan(searchScore(lowerCoverage, "alpha beta"));
+  });
+
+  it("uses title coverage to break equal-coverage ties before path order", () => {
+    const titleMatch: EngineGraphNode = { path: "notes/alpha.md", template: "note", folder: "notes", axes: {}, wikilinks: [], bodyPreview: "", searchTerms: new Set(["alpha"]) };
+    const pathFirst: EngineGraphNode = { path: "notes/aaa.md", template: "note", folder: "notes", axes: {}, wikilinks: [], bodyPreview: "", searchTerms: new Set(["alpha"]) };
+
+    const ranked = [pathFirst, titleMatch].sort((left, right) =>
+      searchScore(right, "alpha") - searchScore(left, "alpha") || left.path.localeCompare(right.path),
+    );
+
+    expect(ranked.map(node => node.path)).toEqual(["notes/alpha.md", "notes/aaa.md"]);
+  });
+
+  it("scores nodes with no matching query terms as zero", () => {
+    const node: EngineGraphNode = { path: "notes/alpha.md", template: "note", folder: "notes", axes: {}, wikilinks: [], bodyPreview: "", searchTerms: new Set(["alpha"]) };
+
+    expect(searchScore(node, "beta")).toBe(0);
   });
 });

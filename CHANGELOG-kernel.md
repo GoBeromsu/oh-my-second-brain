@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- **Axis-narrowed search now ranks with a continuous coverage score, using title, declared-axis, and term-specificity signals to resolve equal coverage instead of integer token-count ties and alphabetical paths.** Zero-score padding is refused, and `minScore` filters hits and facets identically. Scores are now fractional: a previously meaningful `minScore: 1` ("at least one token") effectively requires perfect coverage, so callers must re-tune thresholds.
+
 ## [0.12.2] - 2026-09-01
 
 - **Setup preserves generated taxonomy template bindings and incrementally registers newly discovered templates.** (#104)

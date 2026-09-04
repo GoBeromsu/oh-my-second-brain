@@ -188,7 +188,15 @@ export function filterNodesByAxis(nodes: readonly EngineGraphNode[], filters: No
 
 export function searchScore(node: EngineGraphNode, query: string): number {
   const terms = new Set(tokenize(query));
-  let score = 0;
-  for (const term of terms) if (node.searchTerms.has(term)) score++;
-  return score;
+  if (terms.size === 0) return 0;
+  const matchedTerms = new Set([...terms].filter(term => node.searchTerms.has(term)));
+  if (matchedTerms.size === 0) return 0;
+  const titleTerms = new Set(tokenize(node.path.replace(/^.*\//u, "").replace(/\.md$/u, "")));
+  const axisTerms = new Set(Object.values(node.axes).flatMap(values => values.flatMap(value => tokenize(String(value)))));
+  const coverage = matchedTerms.size / terms.size;
+  const titleCoverage = [...matchedTerms].filter(term => titleTerms.has(term)).length / terms.size;
+  const axisCoverage = [...matchedTerms].filter(term => axisTerms.has(term)).length / terms.size;
+  const specificity = Math.min(1, matchedTerms.size / node.searchTerms.size);
+  // Scale secondary signals by query size so one additional matched term always outranks them.
+  return coverage + (titleCoverage * 0.1 + axisCoverage * 0.05 + specificity * 0.01) / terms.size;
 }
