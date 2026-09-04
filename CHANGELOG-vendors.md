@@ -8,6 +8,10 @@ Per-host adapter and installer changes belong here.
 
 - **Supported host guidance now names the single-qualified OMS tools.** Hermes, Claude, and Codex users see `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`, never `oms_oms_*`; raw MCP integrations must replace local calls `oms_write`/`oms_search`/`oms_link`/`oms_status`/`oms_doctor` with `write`/`search`/`link`/`status`/`doctor`.
 
+### Added
+
+- **Gajae-Code now has a marketplace-plugin skill channel at the package-root `skills/` convention path; previously it installed OMS successfully while silently discovering zero skills.**
+
 ## [0.12.2] - 2026-09-01
 
 ## [0.12.1] - 2026-09-01

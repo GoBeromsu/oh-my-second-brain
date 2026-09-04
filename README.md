@@ -88,6 +88,8 @@ npm install -g oh-my-second-brain
 oms install --runtime all --vault /path/to/vault --yes
 ```
 
+For Gajae-Code, install the npm package as a marketplace plugin: `gjc plugin install oms@oms`. GJC discovers the seven OMS skills at the package-root `skills/` convention path.
+
 Host installation records the canonical vault in `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json` and stamps `oms mcp --vault /path/to/vault` into each managed host entry. `install`, `update`, `reconcile`, and `uninstall` use that signed pointer only to maintain host stamps. Runtime write/search target resolution never reads it and keeps this precedence: explicit target, local vault controls, bridge, `OMS_VAULT`, then read-only cwd fallback.
 
 `OMS_VAULT` is the supported environment fallback when no explicit, local, or bridge target exists.

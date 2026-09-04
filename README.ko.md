@@ -90,6 +90,8 @@ npm install -g oh-my-second-brain
 oms install --runtime all --vault /path/to/vault --yes
 ```
 
+Gajae-Code에서는 npm 패키지를 marketplace plugin으로 설치한다: `gjc plugin install oms@oms`. GJC는 패키지 루트의 `skills/` convention path에서 일곱 OMS skill을 발견한다.
+
 호스트 설치는 canonical 볼트를 `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`에 기록하고 각 관리형 등록에 `oms mcp --vault /path/to/vault`를 넣는다. `install`, `update`, `reconcile`, `uninstall`만 이 서명된 포인터를 호스트 stamp 관리에 사용한다. 런타임 쓰기·검색 target 해석은 포인터를 읽지 않으며 명시적 target, 로컬 볼트 control, bridge, `OMS_VAULT`, 읽기 전용 cwd fallback 순서를 유지한다.
 
 `OMS_VAULT`는 명시적·로컬·bridge target이 없을 때 사용하는 지원 환경변수 fallback이다.
