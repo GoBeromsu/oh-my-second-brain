@@ -1,10 +1,10 @@
 /**
- * `oms_search` must not write.
+ * `search` must not write.
  *
  * The tool is annotated `readOnlyHint: true`, which is a promise to every MCP
  * host that calling it is safe on an untouched vault. This suite verifies the
  * promise the only way that actually proves it: by snapshotting the whole vault
- * tree, calling every advertised `oms_search` operation, and requiring the tree
+ * tree, calling every advertised `search` operation, and requiring the tree
  * to come back byte-identical.
  *
  * It deliberately does NOT enumerate the specific writes we know about
@@ -46,12 +46,12 @@ const repoRoot = path.resolve(__dirname, "../../");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
 /**
- * Every operation the `oms_search` schema advertises, with arguments valid for
+ * Every operation the `search` schema advertises, with arguments valid for
  * each, including the template identity listing. Derived from the live tool schema rather than hand-listed, so an
  * operation added later cannot quietly escape the read-only guarantee.
  */
 function advertisedSearchOperations(): { op: string; args: Record<string, unknown> }[] {
-  const search = omsMcpTools.find((tool) => tool.name === "oms_search");
+  const search = omsMcpTools.find((tool) => tool.name === "search");
   const schema = search?.inputSchema as {
     readonly oneOf?: readonly {
       readonly properties?: Record<string, { readonly const?: string }>;
@@ -165,7 +165,7 @@ async function makeTemplateVault(): Promise<string> {
  * `OMS_VAULT` makes the vault a verified write target. That is deliberate: it
  * means the search path is permitted to write and still must not. A cwd-inferred
  * target would have writes rejected by the admission layer anyway, so a clean
- * tree would prove nothing about `oms_search`'s own behaviour.
+ * tree would prove nothing about `search`'s own behaviour.
  */
 async function withClient<T>(vault: string, run: (client: Client) => Promise<T>): Promise<T> {
   const emptyHome = await mkdtemp(path.join(tmpdir(), "oms-readonly-home-"));
@@ -189,14 +189,14 @@ async function withClient<T>(vault: string, run: (client: Client) => Promise<T>)
 const vaults: string[] = [];
 const homes: string[] = [];
 
-describe("oms_search read-only guarantee", () => {
+describe("search read-only guarantee", () => {
   beforeAll(() => () =>
     Promise.all(
       [...vaults, ...homes].map((dir) => rm(dir, { recursive: true, force: true })),
     ));
 
   it("declares itself read-only", () => {
-    const search = omsMcpTools.find((tool) => tool.name === "oms_search");
+    const search = omsMcpTools.find((tool) => tool.name === "search");
     expect(search?.annotations?.readOnlyHint).toBe(true);
   });
 
@@ -205,7 +205,7 @@ describe("oms_search read-only guarantee", () => {
     vaults.push(vault);
     const before = await snapshotTree(vault);
     const result = await withClient(vault, (client) =>
-      client.callTool({ name: "oms_search", arguments: { op: "templates" } }),
+      client.callTool({ name: "search", arguments: { op: "templates" } }),
     );
     const payload = textPayload(result);
     expect(payload["templates"]).toMatchObject([{ fields: { template: { intent: "Stable note identity." } } }]);
@@ -230,7 +230,7 @@ describe("oms_search read-only guarantee", () => {
    * test rather than quietly invalidate the annotation above.
    */
   it("advertises no parameter that would let a caller trigger a write", () => {
-    const search = omsMcpTools.find((tool) => tool.name === "oms_search");
+    const search = omsMcpTools.find((tool) => tool.name === "search");
     const schema = JSON.stringify(search?.inputSchema ?? {});
 
     for (const knob of [
@@ -239,7 +239,7 @@ describe("oms_search read-only guarantee", () => {
       "embeddingSyncEmbed",
       "syncBeforeSearch",
     ]) {
-      expect(schema, `oms_search must not advertise ${knob}`).not.toContain(knob);
+      expect(schema, `search must not advertise ${knob}`).not.toContain(knob);
     }
 
     // Guard against a vacuous pass: the schema must still be the real one.
@@ -249,7 +249,7 @@ describe("oms_search read-only guarantee", () => {
     expect(schema).toContain("get-document");
 
     // The capability moved rather than vanished, so doctor must still offer it.
-    const doctor = omsMcpTools.find((tool) => tool.name === "oms_doctor");
+    const doctor = omsMcpTools.find((tool) => tool.name === "doctor");
     expect(JSON.stringify(doctor?.inputSchema ?? {})).toContain("sync-embeddings");
     expect(doctor?.annotations?.readOnlyHint).toBe(false);
   });
@@ -269,7 +269,7 @@ describe("oms_search read-only guarantee", () => {
     await withClient(vault, async (client) => {
       for (const { op, args } of operations) {
         try {
-          await client.callTool({ name: "oms_search", arguments: args });
+          await client.callTool({ name: "search", arguments: args });
         } catch (error) {
           // A missing index must degrade to a structured unavailable result,
           // not a transport-level throw.
@@ -302,7 +302,7 @@ describe("oms_search read-only guarantee", () => {
     const payload = await withClient(vault, async (client) =>
       textPayload(
         await client.callTool({
-          name: "oms_search",
+          name: "search",
           arguments: { op: "query", query: "retrieval", limit: 1 },
         }),
       ),
@@ -347,12 +347,12 @@ describe("oms_search read-only guarantee", () => {
     // and memoised its engine, not what it returned: the defect being guarded
     // is a read-only engine landing in a slot the repair then reuses.
     const served = await withClient(vault, (client) =>
-      client.callTool({ name: "oms_search", arguments: { op: "query", query: "alpha" } }),
+      client.callTool({ name: "search", arguments: { op: "query", query: "alpha" } }),
     );
     expect(textPayload(served)["available"]).toBe(true);
 
     const repaired = await withClient(vault, (client) =>
-      client.callTool({ name: "oms_doctor", arguments: { op: "sync-embeddings", embed: false } }),
+      client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", embed: false } }),
     );
     // Surface the server's own message on failure. Parsing first would throw on
     // the error path, which reports a JSON syntax error instead of the reason
@@ -364,7 +364,7 @@ describe("oms_search read-only guarantee", () => {
     expect([...tree.keys()].some((rel) => rel.includes("engine-store.sqlite"))).toBe(true);
 
     const hits = await withClient(vault, (client) =>
-      client.callTool({ name: "oms_search", arguments: { op: "query", query: "alpha" } }),
+      client.callTool({ name: "search", arguments: { op: "query", query: "alpha" } }),
     );
     const hitPayload = textPayload(hits);
     expect(hitPayload["available"]).toBe(true);
@@ -378,7 +378,7 @@ describe("oms_search read-only guarantee", () => {
     // Build the index through the write surface that is allowed to create it.
     await withClient(vault, async (client) => {
       await client.callTool({
-        name: "oms_doctor",
+        name: "doctor",
         arguments: { op: "sync-embeddings", embed: false },
       });
     });
@@ -390,11 +390,11 @@ describe("oms_search read-only guarantee", () => {
 
     const hits = await withClient(vault, async (client) => {
       for (const { args } of advertisedSearchOperations()) {
-        await client.callTool({ name: "oms_search", arguments: args });
+        await client.callTool({ name: "search", arguments: args });
       }
       return textPayload(
         await client.callTool({
-          name: "oms_search",
+          name: "search",
           arguments: { op: "query", query: "alpha" },
         }),
       );

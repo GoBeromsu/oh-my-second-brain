@@ -287,7 +287,7 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
     // without a model, so retrieve_context's semantic leg simply degrades to the
     // graph leg here; with a model present the engine handles the sync just as well.
     await client.callTool({
-      name: "oms_search",
+      name: "search",
       arguments: {
         op: "context",
         property: "tags",
@@ -322,18 +322,18 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
     // surface cutover; they are routed by `op`, not deleted. Calling them
     // through the public surface is what proves the demotion kept behaviour.
     const syncCall = {
-      name: "oms_doctor",
+      name: "doctor",
       arguments: { op: "sync-embeddings", collection: "vault" },
     };
     const queryCall = {
-      name: "oms_search",
+      name: "search",
       arguments: { op: "query", query: "agent retr", collection: "vault", limit: 1 },
     };
     // R4's public envelope keeps axis narrowing under the renamed `query` op;
     // this is deliberately a model-free lexical call so every release runner
     // exercises axes, paging, candidates, rerank selection, and receipt DTOs.
     const axisQuery = await client.callTool({
-      name: "oms_search",
+      name: "search",
       arguments: {
         op: "query",
         query: "agent retrieval",
@@ -403,7 +403,7 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
 
     // The public surface must be exactly the five tools.
     const publicTools = result.tools.map((tool) => tool.name).sort();
-    const expectedTools = ["oms_doctor", "oms_link", "oms_search", "oms_status", "oms_write"];
+    const expectedTools = ["doctor", "link", "search", "status", "write"];
     if (JSON.stringify(publicTools) !== JSON.stringify(expectedTools)) {
       fail(
         `MCP public tool surface drifted: expected ${expectedTools.join(", ")}, got ${publicTools.join(", ")}`,

@@ -84,29 +84,29 @@ describe("MCP detail-tool demotion", () => {
       };
       const demoted = ["oms_retrieve_by_axis", "oms_retrieve_context", "oms_lazy_load_note", "oms_semantic_query", "oms_semantic_collections", "oms_semantic_contexts", "oms_semantic_status", "oms_get_document", "oms_multi_get_documents", "oms_link_suggest", "oms_link_apply", "oms_graph_status", "oms_vault_audit", "oms_graph_build", "oms_semantic_cleanup", "oms_sync_embeddings", "query", "get", "multi_get", "status"];
       expect(names).not.toEqual(expect.arrayContaining(demoted));
-      expect(payload(await call("oms_status", {})).derivedState).toBeDefined();
-      expect(payload(await call("oms_doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
-      expect(payload(await call("oms_doctor", { op: "validate" })).status).toBeTypeOf("string");
-      expect(payload(await call("oms_doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
-      expect(payload(await call("oms_search", { op: "templates" })).templates).toBeInstanceOf(Array);
-      expect(payload(await call("oms_doctor", { op: "regenerate-types", dryRun: true })).status).toMatch(/planned|unchanged/);
-      expect(payload(await call("oms_search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
-      expect(payload(await call("oms_search", { op: "lazy-load", notePath: "references/clean-architecture.md" })).body).toBeTypeOf("string");
-      expect(payload(await call("oms_search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);
-      expect(payload(await call("oms_search", { op: "multi-get-documents", targets: ["references/clean-architecture.md"] })).documents).toBeInstanceOf(Array);
-      const suggested = payload(await call("oms_link", { op: "suggest", notePath: "references/clean-architecture.md" }));
+      expect(payload(await call("status", {})).derivedState).toBeDefined();
+      expect(payload(await call("doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
+      expect(payload(await call("doctor", { op: "validate" })).status).toBeTypeOf("string");
+      expect(payload(await call("doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
+      expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
+      expect(payload(await call("doctor", { op: "regenerate-types", dryRun: true })).status).toMatch(/planned|unchanged/);
+      expect(payload(await call("search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
+      expect(payload(await call("search", { op: "lazy-load", notePath: "references/clean-architecture.md" })).body).toBeTypeOf("string");
+      expect(payload(await call("search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);
+      expect(payload(await call("search", { op: "multi-get-documents", targets: ["references/clean-architecture.md"] })).documents).toBeInstanceOf(Array);
+      const suggested = payload(await call("link", { op: "suggest", notePath: "references/clean-architecture.md" }));
       expect(suggested.baseContentHash).toBeTypeOf("string");
-      const apply = await call("oms_link", { op: "apply", notePath: "references/clean-architecture.md", baseContentHash: "0".repeat(64), candidateIds: [] });
+      const apply = await call("link", { op: "apply", notePath: "references/clean-architecture.md", baseContentHash: "0".repeat(64), candidateIds: [] });
       expect(apply.content[0]?.type).toBe("text");
       for (const op of ["query", "collections", "contexts", "status"]) {
-        const result = await call("oms_search", { op, ...(op === "query" ? { query: "architecture" } : {}) });
+        const result = await call("search", { op, ...(op === "query" ? { query: "architecture" } : {}) });
         expect(result.content[0]?.type).toBe("text");
         expect(result.content[0]?.type === "text" ? result.content[0].text : "").toMatch(
           /OMS_EMBEDDING_PROVIDER|available|collections|contexts/,
         );
       }
       for (const op of ["cleanup", "sync-embeddings"]) {
-        const result = await call("oms_doctor", { op });
+        const result = await call("doctor", { op });
         expect(result.content[0]?.type).toBe("text");
         expect(result.content[0]?.type === "text" ? result.content[0].text : "").toMatch(
           /OMS_EMBEDDING_PROVIDER|available/,

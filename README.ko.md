@@ -73,7 +73,7 @@ Setup에서는 로컬 검증 acquisition 정책 하나를 선택한다:
 
 `oms mcp`는 정확히 다섯 개의 공개 도구를 노출한다:
 
-`oms_write` · `oms_search` · `oms_link` · `oms_status` · `oms_doctor`
+`write` · `search` · `link` · `status` · `doctor`
 
 일곱 스킬(`write`, `search`, `link`, `distill`, `status`, `doctor`, `template`)은 워크플로 안내이며 MCP 도구와 같은 집합이 아니다. 세부 기능은 다섯 도구의 `op` 값으로 제공한다.
 
