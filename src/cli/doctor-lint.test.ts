@@ -3,7 +3,17 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { inspectInstalledAssets } from "../kernel/install/asset-health.js";
 import { computeTreeDigest } from "../kernel/install/provenance.js";
+
+vi.mock("../kernel/install/asset-health.js", () => ({
+  inspectInstalledAssets: vi.fn(async () => ({
+    status: "ok",
+    assets: [
+      { id: "hook:oms-guard", kind: "hook", declaredPath: "/bin/oms-guard", realPath: "/bin/oms-guard", state: "ok", remediation: "" },
+    ],
+  })),
+}));
 
 vi.mock("../kernel/templates/index.js", () => ({
   diagnoseTemplates: vi.fn(async () => ({
@@ -49,7 +59,11 @@ describe("doctor Hermes provenance", () => {
 
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       expect(await runDoctor({ vault: "/vault", json: true })).toBe(0);
-      const json = JSON.parse(String(log.mock.calls[0]?.[0])) as { hermesProvenance: unknown };
+      const json = JSON.parse(String(log.mock.calls[0]?.[0])) as { hermesProvenance: unknown; installAssets: unknown };
+      expect(json.installAssets).toEqual({
+        status: "ok",
+        assets: [{ id: "hook:oms-guard", kind: "hook", declaredPath: "/bin/oms-guard", realPath: "/bin/oms-guard", state: "ok", remediation: "" }],
+      });
       expect(json.hermesProvenance).toEqual(
         state === "not-installed"
           ? { state, packageVersion, recordedVersion: null, digestMatch: null }
@@ -66,5 +80,24 @@ describe("doctor Hermes provenance", () => {
       if (originalOverride === undefined) delete process.env.OMS_HERMES_HOME;
       else process.env.OMS_HERMES_HOME = originalOverride;
     }
+  });
+
+  it("includes degraded install assets in text doctor output", async () => {
+    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({
+      status: "degraded",
+      assets: [{
+        id: "binary:oms-guard",
+        kind: "binary",
+        declaredPath: "/bin/oms-guard",
+        realPath: null,
+        state: "dangling-symlink",
+        remediation: "oms install --host claude",
+      }],
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    expect(await runDoctor({ vault: "/vault" })).toBe(0);
+    expect(log.mock.calls.map(call => call[0])).toContain("Install assets: degraded (1 of 1 unusable).");
+    expect(log.mock.calls.map(call => call[0])).toContain("  [DANGLING_SYMLINK] /bin/oms-guard — oms install --host claude");
   });
 });
