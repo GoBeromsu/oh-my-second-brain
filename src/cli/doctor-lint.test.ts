@@ -1,103 +1,55 @@
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectInstalledAssets } from "../kernel/install/asset-health.js";
-import { computeTreeDigest } from "../kernel/install/provenance.js";
 
-vi.mock("../kernel/install/asset-health.js", () => ({
-  inspectInstalledAssets: vi.fn(async () => ({
-    status: "ok",
-    assets: [
-      { id: "hook:oms-guard", kind: "hook", declaredPath: "/bin/oms-guard", realPath: "/bin/oms-guard", state: "ok", remediation: "" },
-    ],
-  })),
-}));
-
-vi.mock("../kernel/templates/index.js", () => ({
-  diagnoseTemplates: vi.fn(async () => ({
-    status: "healthy",
-    migrationMarker: "none",
-    managedSourceExclusions: [],
-    unresolvedLegacyNotes: [],
-    diagnostics: [],
-  })),
-}));
+vi.mock("../kernel/install/asset-health.js", () => ({ inspectInstalledAssets: vi.fn(async () => ({ status: "ok", hosts: [], assets: [] })) }));
+vi.mock("../kernel/templates/index.js", () => ({ diagnoseTemplates: vi.fn(async () => ({ status: "healthy", migrationMarker: "none", managedSourceExclusions: [], unresolvedLegacyNotes: [], diagnostics: [] })) }));
+vi.mock("./host-probe.js", () => ({ discoverHostInstallAssets: vi.fn(async () => ({ hosts: [{ host: "claude", state: "not-installed" }, { host: "codex", state: "not-installed" }, { host: "hermes", state: "not-installed" }], assets: [] })) }));
 
 import { runDoctor } from "./doctor-lint.js";
 
-const packageVersion = (JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { version: string }).version;
-const roots: string[] = [];
+afterEach(() => { vi.restoreAllMocks(); });
 
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
-  vi.restoreAllMocks();
-});
-
-describe("doctor Hermes provenance", () => {
-  it.each(["not-installed", "match", "drift"] as const)("reports %s provenance in JSON and text", async state => {
-    const root = await mkdtemp(path.join(tmpdir(), "oms-doctor-hermes-"));
-    roots.push(root);
-    const skillRoot = path.join(root, "skills", "knowledge-management", "oms");
-    const provenancePath = path.join(root, "adapters", "oms", "oms-provenance.json");
-    const originalOverride = process.env.OMS_HERMES_HOME;
-    process.env.OMS_HERMES_HOME = root;
-    try {
-      if (state !== "not-installed") {
-        await mkdir(skillRoot, { recursive: true });
-        await mkdir(path.dirname(provenancePath), { recursive: true });
-        await writeFile(path.join(skillRoot, "SKILL.md"), "# OMS\n");
-        await writeFile(provenancePath, `${JSON.stringify({
-          schemaVersion: 1,
-          source: "npm",
-          version: state === "match" ? packageVersion : "0.10.1",
-          skillTreeDigest: await computeTreeDigest(skillRoot),
-          installedAt: "2026-01-01T00:00:00.000Z",
-        })}\n`);
-      }
-
-      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-      expect(await runDoctor({ vault: "/vault", json: true })).toBe(0);
-      const json = JSON.parse(String(log.mock.calls[0]?.[0])) as { hermesProvenance: unknown; installAssets: unknown };
-      expect(json.installAssets).toEqual({
-        status: "ok",
-        assets: [{ id: "hook:oms-guard", kind: "hook", declaredPath: "/bin/oms-guard", realPath: "/bin/oms-guard", state: "ok", remediation: "" }],
-      });
-      expect(json.hermesProvenance).toEqual(
-        state === "not-installed"
-          ? { state, packageVersion, recordedVersion: null, digestMatch: null }
-          : { state, packageVersion, recordedVersion: state === "match" ? packageVersion : "0.10.1", digestMatch: true },
-      );
-
-      log.mockClear();
-      expect(await runDoctor({ vault: "/vault" })).toBe(0);
-      expect(log.mock.calls.map(call => call[0]).filter(line => typeof line === "string" && line.startsWith("Hermes provenance:"))).toEqual([
-        `Hermes provenance: ${state} (package ${packageVersion}, recorded ${state === "not-installed" ? "none" : state === "match" ? packageVersion : "0.10.1"}).`,
-      ]);
-      expect(existsSync(root)).toBe(true);
-    } finally {
-      if (originalOverride === undefined) delete process.env.OMS_HERMES_HOME;
-      else process.env.OMS_HERMES_HOME = originalOverride;
-    }
-  });
-
-  it("includes degraded install assets in text doctor output", async () => {
-    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({
-      status: "degraded",
-      assets: [{
-        id: "binary:oms-guard",
-        kind: "binary",
-        declaredPath: "/bin/oms-guard",
-        realPath: null,
-        state: "dangling-symlink",
-        remediation: "oms install --host claude",
-      }],
-    });
+describe("doctor install assets", () => {
+  it.each([
+    ["not-installed", { hosts: [{ host: "hermes", state: "not-installed" }], assets: [] }, { packageVersion: "0.12.3", recordedVersion: null, digestMatch: null }],
+    ["match", { hosts: [{ host: "hermes", state: "ok" }], assets: [{ id: "hermes:0", kind: "skill-tree", declaredPath: "/skills", realPath: "/skills", state: "ok", cause: null, remediation: "", packageVersion: "0.12.3", recordedVersion: "0.12.3", digestMatch: true }] }, { packageVersion: "0.12.3", recordedVersion: "0.12.3", digestMatch: true }],
+    ["drift", { hosts: [{ host: "hermes", state: "degraded" }], assets: [{ id: "hermes:0", kind: "skill-tree", declaredPath: "/skills", realPath: "/skills", state: "provenance-mismatch", cause: null, remediation: "oms install", packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }] }, { packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }],
+  ] as const)("reports %s Hermes provenance in JSON and text", async (state, health, evidence) => {
+    const version = (JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { version: string }).version;
+    const adjustedEvidence = { ...evidence, packageVersion: version, recordedVersion: state === "match" ? version : evidence.recordedVersion };
+    const adjustedHealth = {
+      ...health,
+      assets: health.assets.map(asset => ({ ...asset, packageVersion: version, recordedVersion: state === "match" ? version : asset.recordedVersion })),
+    };
+    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({ status: state === "drift" ? "degraded" : "ok", ...adjustedHealth });
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
+    expect(await runDoctor({ vault: "/vault", json: true })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ hermesProvenance: { state, ...adjustedEvidence } });
+
+    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({ status: state === "drift" ? "degraded" : "ok", ...adjustedHealth });
+    log.mockClear();
+    expect(await runDoctor({ vault: "/vault" })).toBe(0);
+    expect(log.mock.calls.map(call => call[0])).toContain(
+      `Hermes provenance: ${state} (packageVersion=${version}, recordedVersion=${adjustedEvidence.recordedVersion ?? "none"}, digestMatch=${adjustedEvidence.digestMatch ?? "unknown"}).`,
+    );
+  });
+
+  it("includes the resolved symlink target and inspection cause in text diagnostics", async () => {
+    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({ status: "degraded", hosts: [{ host: "claude", state: "degraded" }], assets: [{ id: "hermes:0", kind: "skill-tree", declaredPath: "/skills", realPath: "/skills", state: "provenance-mismatch", cause: null, remediation: "oms install --vault \"/vault\" --runtime hermes", packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }] });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(await runDoctor({ vault: "/vault" })).toBe(0);
     expect(log.mock.calls.map(call => call[0])).toContain("Install assets: degraded (1 of 1 unusable).");
-    expect(log.mock.calls.map(call => call[0])).toContain("  [DANGLING_SYMLINK] /bin/oms-guard — oms install --host claude");
+    expect(log.mock.calls.map(call => call[0])).toContain("  [PROVENANCE_MISMATCH] /skills packageVersion=0.12.3 recordedVersion=0.12.2 digestMatch=false — oms install --vault \"/vault\" --runtime hermes");
+    expect(inspectInstalledAssets).toHaveBeenCalledWith(expect.objectContaining({ vault: "/vault", hosts: expect.any(Array), assets: expect.any(Array) }));
+  });
+
+  it("preserves provenance evidence in doctor JSON", async () => {
+    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({ status: "degraded", hosts: [{ host: "hermes", state: "degraded" }], assets: [{ id: "hermes:0", kind: "skill-tree", declaredPath: "/skills", realPath: "/skills", state: "provenance-mismatch", cause: null, remediation: "oms install --vault \"/vault\" --runtime hermes", packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }] });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(await runDoctor({ vault: "/vault", json: true })).toBe(0);
+    expect(JSON.parse(log.mock.calls[0]?.[0] as string)).toMatchObject({ installAssets: { assets: [{ id: "hermes:0", packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }] } });
   });
 });

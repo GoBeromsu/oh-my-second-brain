@@ -12,8 +12,8 @@ const MANAGED_CODEX_END = "# END OMS MANAGED MCP";
 const CODEX_SKILL_PREFIX = "oms-";
 const CODEX_RULE_FILENAME = "oms.md";
 
-function codexManagedBlock(options: HostOperationOptions): string {
-  const args = mcpArgs(options).map(jsonString).join(", ");
+function codexManagedBlockForVault(vault: string): string {
+  const args = mcpArgs({ vault } as HostOperationOptions).map(jsonString).join(", ");
   return [
     MANAGED_CODEX_START,
     "# OMS MCP hookup for Codex CLI. Managed by `oms install/uninstall`.",
@@ -27,6 +27,23 @@ function codexManagedBlock(options: HostOperationOptions): string {
     MANAGED_CODEX_END,
     "",
   ].join("\n");
+}
+
+
+/** Recognizes exactly the managed MCP block rendered by this adapter. */
+export function isCodexOmsRegistration(content: string, configPath = "Codex config"): boolean {
+  const block = managedCodexBlock(content, configPath);
+  if (block === undefined) return false;
+  const managed = content.slice(block.start, block.end);
+  const vault = /^args = \["mcp", "--vault", ("(?:[^"\\]|\\.)*")\]$/m.exec(managed)?.[1];
+  if (vault === undefined) return false;
+  let parsedVault: unknown;
+  try {
+    parsedVault = JSON.parse(vault);
+  } catch {
+    return false;
+  }
+  return typeof parsedVault === "string" && managed === codexManagedBlockForVault(parsedVault);
 }
 
 function isCodexOMSTable(line: string): boolean {
@@ -210,8 +227,8 @@ export async function installCodex(options: HostOperationOptions, host: HarnessH
   const original = existsSync(configPath) ? await readFile(configPath, "utf-8") : "";
   const removed = removeManagedCodexBlock(original, configPath);
   const next = removed.block === undefined
-    ? `${removed.content.trimEnd()}\n\n${codexManagedBlock(options)}`
-    : `${original.slice(0, removed.block.start)}${codexManagedBlock(options)}${original.slice(removed.block.end)}`;
+    ? `${removed.content.trimEnd()}\n\n${codexManagedBlockForVault(options.vault)}`
+    : `${original.slice(0, removed.block.start)}${codexManagedBlockForVault(options.vault)}${original.slice(removed.block.end)}`;
   let nativePaths: string[] = [];
   if (!options.dryRun) {
     await mkdir(path.dirname(configPath), { recursive: true });

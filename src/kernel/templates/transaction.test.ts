@@ -59,7 +59,7 @@ import { buildMigrationManifest, planTemplateMigration } from "./migration.js";
 import { normalizeTemplateSourcePath } from "./paths.js";
 import { serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest, sourceSignature } from "./resolver.js";
-import { executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
+import { completedTemplateTransaction, executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
 import type {
   Digest,
   InputV2,
@@ -629,6 +629,67 @@ describe("guarded template transactions", () => {
         expect(retry.outputDigest).toBe(first.outputDigest);
       }
       expect(await tree(item.vault)).toEqual(before);
+    } finally { await cleanup(item); }
+  });
+
+  it("materializes only a verified completed receipt for its approved digest", async () => {
+    const item = await fixture();
+    try {
+      const manifest = await compose(item, createChange());
+      const applied = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+      expect(applied.status).toBe("applied");
+
+      const completed = await completedTemplateTransaction(item.vault, manifest.approvalDigest, {
+        inputDigest: manifest.proposed.inputDigest,
+        outputs: manifest.outputs.map((output) => ({ finalVaultRelativePath: output.finalVaultRelativePath })),
+      });
+
+      expect(completed?.transactionId).toBe(createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32));
+      expect(completed?.inputDigest).toBe(manifest.proposed.inputDigest);
+      expect(completed?.outputDigest).toBe(manifest.outputDigest);
+      expect(await completedTemplateTransaction(item.vault, digest("different"), {
+        inputDigest: manifest.proposed.inputDigest,
+        outputs: manifest.outputs.map((output) => ({ finalVaultRelativePath: output.finalVaultRelativePath })),
+      })).toBeNull();
+    } finally { await cleanup(item); }
+  });
+
+  it("rejects a completed transaction when only its input digest differs", async () => {
+    const item = await fixture();
+    try {
+      const manifest = await compose(item, createChange());
+      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+      expect(await completedTemplateTransaction(item.vault, manifest.approvalDigest, {
+        inputDigest: digest("different-input"),
+        outputs: manifest.outputs.map((output) => ({ finalVaultRelativePath: output.finalVaultRelativePath })),
+      })).toBeNull();
+    } finally { await cleanup(item); }
+  });
+
+  it.each([
+    [".oms/template-policy.json", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, ".oms/template-policy.json"), "drift"); }],
+    [".oms/taxonomy.json", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, ".oms/taxonomy.json"), "drift"); }],
+    [".oms/types.json", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, ".oms/types.json"), "drift"); }],
+    ["the requested source", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, requested), UPDATED); }],
+    ["a different registered source", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, other), UPDATED); }],
+  ])("rejects a completed transaction after drift in %s", async (_name, mutate) => {
+    const item = await fixture();
+    try {
+      const first = await compose(item, createChange());
+      expect((await executeTemplateTransaction(item.vault, first, { approvedDigest: first.approvalDigest })).status).toBe("applied");
+      const other = first.proposed.bindings[0]!;
+      const requested = binding("second", "Templates/OMS/second.md", "managed-default");
+      const second = await buildTemplateCompositionManifest(item.vault, {
+        mode: "create",
+        binding: requested,
+        source: { path: requested.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" },
+      }, nextOptions(first));
+      expect((await executeTemplateTransaction(item.vault, second, { approvedDigest: second.approvalDigest })).status).toBe("applied");
+      await mutate(item.vault, requested.sourcePath, other.sourcePath);
+      expect(await completedTemplateTransaction(item.vault, second.approvalDigest, {
+        inputDigest: second.proposed.inputDigest,
+        outputs: second.outputs.map((output) => ({ finalVaultRelativePath: output.finalVaultRelativePath })),
+      })).toBeNull();
     } finally { await cleanup(item); }
   });
 

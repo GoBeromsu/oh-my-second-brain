@@ -27,6 +27,25 @@ const HERMES_SKILL_NAME = "oms";
 const HERMES_MCP_ENTRY_PATH = ["mcp_servers", "oms"] as const;
 const HERMES_SKILLS = ["distill", "doctor", "link", "search", "status", "template", "write"] as const;
 
+/** Recognizes the MCP entry rendered and verified by the Hermes adapter. */
+export function isHermesOmsRegistration(raw: string): boolean {
+  const document = parseDocument(raw);
+  if (document.errors.length > 0) throw new Error(document.errors.map(error => error.message).join("; "));
+  const parsed = document.toJS() as unknown;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const servers = (parsed as Record<string, unknown>)["mcp_servers"];
+  if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return false;
+  const entry = (servers as Record<string, unknown>)["oms"];
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const actual = entry as Record<string, unknown>;
+  const args = actual["args"];
+  return actual["command"] === "oms"
+    && actual["enabled"] === true
+    && Array.isArray(args)
+    && typeof args[2] === "string"
+    && args.join("\0") === ["mcp", "--vault", args[2]].join("\0");
+}
+
 function refuseSymlink(target: string): void {
   if (existsSync(target) && lstatSync(target).isSymbolicLink()) {
     throw new InstallTargetSymlinkError(target);
@@ -52,21 +71,15 @@ async function rollbackConfig(configPath: string, preImage: Buffer | undefined, 
 
 async function verifyHermesInstall(configPath: string, skillTarget: string, options: HostOperationOptions): Promise<void> {
   const raw = existsSync(configPath) ? await readFile(configPath) : Buffer.alloc(0);
-  const document = parseDocument(raw.toString("utf8"));
-  const parsed = document.toJS() as Record<string, unknown> | null;
-  const servers = parsed?.mcp_servers;
-  const entry = servers && typeof servers === "object" ? (servers as Record<string, unknown>).oms : undefined;
-  const expected = mcpServerEntry(options);
-  const actual = entry as Record<string, unknown>;
-  if (
-    document.errors.length > 0 ||
-    !entry ||
-    typeof entry !== "object" ||
-    actual.command !== expected.command ||
-    actual.enabled !== true ||
-    !Array.isArray(actual.args) ||
-    actual.args.join("\0") !== (expected.args as string[]).join("\0")
-  ) {
+  const text = raw.toString("utf8");
+  if (!isHermesOmsRegistration(text)) {
+    throw new Error("Hermes config verification failed: mcp_servers.oms does not match the expected entry");
+  }
+  const document = parseDocument(text);
+  const parsed = document.toJS() as Record<string, unknown>;
+  const servers = parsed.mcp_servers as Record<string, unknown>;
+  const actual = servers.oms as { readonly args: readonly string[] };
+  if (actual.args[2] !== options.vault) {
     throw new Error("Hermes config verification failed: mcp_servers.oms does not match the expected entry");
   }
   const installed = new Set(await readdir(skillTarget));

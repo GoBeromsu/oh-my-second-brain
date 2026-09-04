@@ -159,6 +159,9 @@ const operations: Record<string, readonly Operation[]> = {
   status: [{ name: "oms_graph_status", direct: true }],
   doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "regenerate-types", name: "oms_regenerate_types", properties: { dryRun: boolean, approvedDigest: digestSchema } }, { op: "backfill-defaults", name: "oms_backfill_defaults", properties: { notePath: string, dryRun: boolean, approvedDigest: digestSchema }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { collection: string, ensureCollection: boolean, update: boolean, embed: boolean, force: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number } }],
 };
+export const demotedOperationNames = Object.values(operations)
+  .flatMap((toolOperations) => toolOperations.map((operation) => operation.name))
+  .sort((left, right) => left.localeCompare(right));
 interface SchemaBranch {
   readonly additionalProperties: false;
   readonly properties: Record<string, object>;
@@ -540,9 +543,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       const resolveRepairAdapter = (): McpEngineAdapter =>
         operation === "build-graph"
           ? engine.adapter
-          : publicName === "search"
-            ? resolveReadOnlyDocumentAdapter()
-            : operation === "semantic-cleanup" || (operation === "sync-embeddings" && args?.["embed"] === false)
+          : operation === "semantic-cleanup" || (operation === "sync-embeddings" && args?.["embed"] === false)
               ? resolveCreatingDocumentAdapter()
               : getSemanticEngine().adapter;
 
@@ -559,29 +560,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     if (name === "oms_list_templates") {
       const convention = await loadResolvedTemplates(vault);
       return jsonText({ vault, inputSignature: convention.inputSignature, templates: Object.values(convention.templates).map(template => ({ templateId: template.id, destinationClass: template.destinationClass, sourcePath: template.sourcePath, targetFolder: template.targetFolder, fields: template.fields, views: template.views, inputSignature: template.inputSignature, templateSignature: template.templateSignature })), axes: deriveTemplateRetrievalAxes(convention) });
-    }
-
-    if (name === "oms_retrieve_by_axis") {
-      // Engine-owned (graph-only swap): axis-first retrieval over the native
-      // node index, built lazily off the filesystem — no embedding model needed.
-      const limitValue = args?.["limit"];
-      const result = await engine.adapter.retrieveByAxis({
-        template: stringArg(args, "template"),
-        folder: stringArg(args, "folder"),
-        property: stringArg(args, "property"),
-        value: stringArg(args, "value"),
-        wikilink: stringArg(args, "wikilink"),
-        query: stringArg(args, "query"),
-        limit: typeof limitValue === "number" ? limitValue : undefined,
-      });
-      // Axis metadata (folder/axes/wikilinks) is carried inside each
-      // hit's `context` field as a JSON string — callers must parse it (RISK-6).
-      return jsonText({
-        vault,
-        mode: "axis-first-search-second",
-        bodyPolicy: "lazy-load",
-        ...result,
-      });
     }
 
     if (name === "oms_retrieve_context") {

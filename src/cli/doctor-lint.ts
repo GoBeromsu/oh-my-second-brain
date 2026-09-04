@@ -3,10 +3,9 @@ import { readFile } from "node:fs/promises";
 import { detectLinkIssues } from "../kernel/conventions/lint.js";
 import { formatLintReport } from "../kernel/conventions/report.js";
 import { inspectInstalledAssets } from "../kernel/install/asset-health.js";
-import { hostHome } from "../kernel/install/common.js";
-import { computeTreeDigest, parseProvenance } from "../kernel/install/provenance.js";
 import { diagnoseTemplates } from "../kernel/templates/index.js";
 import path from "node:path";
+import { discoverHostInstallAssets } from "./host-probe.js";
 
 export type HermesProvenanceStatus = {
   readonly state: "not-installed" | "match" | "drift";
@@ -15,29 +14,28 @@ export type HermesProvenanceStatus = {
   readonly digestMatch: boolean | null;
 };
 
-async function hermesProvenanceStatus(): Promise<HermesProvenanceStatus> {
-  const hermesRoot = hostHome(undefined, ".hermes", "OMS_HERMES_HOME");
-  const skillRoot = path.join(hermesRoot, "skills", "knowledge-management", "oms");
-  const provenancePath = path.join(hermesRoot, "adapters", "oms", "oms-provenance.json");
-  const packageMetadata = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")) as { version?: unknown };
-  const packageVersion = typeof packageMetadata.version === "string" ? packageMetadata.version : null;
-  if (!existsSync(provenancePath) || !existsSync(skillRoot)) {
-    return { state: "not-installed", packageVersion, recordedVersion: null, digestMatch: null };
-  }
-  try {
-    const provenance = parseProvenance(await readFile(provenancePath, "utf8"));
-    const digestMatch = provenance === null ? false : provenance.skillTreeDigest === await computeTreeDigest(skillRoot);
-    if (provenance !== null && packageVersion !== null && provenance.version === packageVersion && digestMatch) {
-      return { state: "match", packageVersion, recordedVersion: provenance.version, digestMatch };
-    }
-    return { state: "drift", packageVersion, recordedVersion: provenance?.version ?? null, digestMatch };
-  } catch {
-    return { state: "drift", packageVersion, recordedVersion: null, digestMatch: false };
-  }
+async function packageVersion(): Promise<string | null> {
+  const metadata = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")) as { version?: unknown };
+  return typeof metadata.version === "string" ? metadata.version : null;
+}
+
+async function hermesProvenanceStatus(status: Awaited<ReturnType<typeof inspectInstalledAssets>>): Promise<HermesProvenanceStatus> {
+  const installed = status.hosts.find(host => host.host === "hermes")?.state !== "not-installed";
+  const asset = status.assets.find(candidate => candidate.id === "hermes:0");
+  const version = asset?.packageVersion ?? await packageVersion();
+  if (!installed) return { state: "not-installed", packageVersion: version, recordedVersion: null, digestMatch: null };
+  const recordedVersion = asset?.recordedVersion ?? null;
+  const digestMatch = asset?.digestMatch ?? false;
+  return {
+    state: version !== null && recordedVersion === version && digestMatch ? "match" : "drift",
+    packageVersion: version,
+    recordedVersion,
+    digestMatch,
+  };
 }
 
 function formatHermesProvenanceStatus(status: HermesProvenanceStatus): string {
-  return `Hermes provenance: ${status.state} (package ${status.packageVersion ?? "unknown"}, recorded ${status.recordedVersion ?? "none"}).`;
+  return `Hermes provenance: ${status.state} (packageVersion=${status.packageVersion ?? "unknown"}, recordedVersion=${status.recordedVersion ?? "none"}, digestMatch=${status.digestMatch ?? "unknown"}).`;
 }
 
 function formatInstallAssets(status: Awaited<ReturnType<typeof inspectInstalledAssets>>): string {
@@ -65,8 +63,9 @@ export async function runDoctor(opts: {
       return 1;
     }
     const diagnosis = await diagnoseTemplates({ vault: opts.vault, source: "explicit", maxPerTemplate: opts.maxPerTemplate });
-    const hermesProvenance = await hermesProvenanceStatus();
-    const installAssets = await inspectInstalledAssets();
+    const hostEvidence = await discoverHostInstallAssets();
+    const installAssets = await inspectInstalledAssets({ vault: opts.vault, ...hostEvidence });
+    const hermesProvenance = await hermesProvenanceStatus(installAssets);
     if (opts.json) {
       console.log(JSON.stringify({ vault: opts.vault, ...diagnosis, hermesProvenance, installAssets }, null, 2));
       return 0;
@@ -79,8 +78,19 @@ export async function runDoctor(opts: {
     if (diagnosis.unresolvedLegacyNotes.length > 0) {
       console.log(`Unresolved legacy notes: ${diagnosis.unresolvedLegacyNotes.length}.`);
     }
-    for (const item of [...diagnosis.diagnostics, ...installAssets.assets.filter(asset => asset.state !== "ok").map(asset => ({ code: asset.state.toUpperCase().replace(/-/g, "_"), path: asset.declaredPath, remediation: asset.remediation }))]) {
-      console.log(`  [${item.code}]${item.path === undefined ? "" : ` ${item.path}`} — ${item.remediation}`);
+    for (const item of [...diagnosis.diagnostics, ...installAssets.assets.filter(asset => asset.state !== "ok").map(asset => ({
+      code: asset.state.toUpperCase().replace(/-/g, "_"),
+      path: asset.realPath !== null && asset.realPath !== asset.declaredPath ? `${asset.declaredPath} -> ${asset.realPath}` : asset.declaredPath,
+      remediation: asset.remediation,
+      cause: asset.cause,
+      packageVersion: asset.packageVersion,
+      recordedVersion: asset.recordedVersion,
+      digestMatch: asset.digestMatch,
+    }))]) {
+      const provenance = "packageVersion" in item && "recordedVersion" in item && "digestMatch" in item
+        ? ` packageVersion=${item.packageVersion ?? "unknown"} recordedVersion=${item.recordedVersion ?? "unknown"} digestMatch=${item.digestMatch ?? "unknown"}`
+        : "";
+      console.log(`  [${item.code}]${item.path === undefined ? "" : ` ${item.path}`}${"cause" in item && item.cause !== null ? ` (${item.cause})` : ""}${provenance} — ${item.remediation}`);
     }
     console.log("");
   } catch (error) {

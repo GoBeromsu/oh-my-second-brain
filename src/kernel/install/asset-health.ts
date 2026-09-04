@@ -1,19 +1,26 @@
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { harnessSurfaceRegistry } from "../harness/surface-registry.js";
-import { hostHome } from "./common.js";
 import { computeTreeDigest, parseProvenance } from "./provenance.js";
 
-export type InstalledAssetKind = "hook" | "binary" | "skill-tree";
-export type InstalledAssetState = "ok" | "missing" | "dangling-symlink" | "not-executable" | "not-a-file" | "provenance-mismatch";
+export type InstalledAssetKind = "hook" | "binary" | "skill-tree" | "registration";
+export type InstalledAssetState = "ok" | "missing" | "dangling-symlink" | "not-executable" | "not-a-file" | "provenance-mismatch" | "inspection-error";
+export type InstalledHostState = "not-installed" | "ok" | "degraded";
 
 export interface InstalledAssetDeclaration {
   readonly id: string;
   readonly kind: InstalledAssetKind;
   readonly declaredPath: string;
+  readonly host?: string;
   readonly provenancePath?: string;
+  /** Expected source version for a provenance-backed asset, injected by the composition root. */
+  readonly provenanceVersion?: string;
+  readonly evidence?: { readonly state: InstalledAssetState; readonly cause: string | null };
   readonly remediation?: string;
+}
+
+export interface InstalledHostDeclaration {
+  readonly host: string;
+  readonly state: InstalledHostState;
 }
 
 export interface InstalledAssetHealth {
@@ -22,114 +29,116 @@ export interface InstalledAssetHealth {
   readonly declaredPath: string;
   readonly realPath: string | null;
   readonly state: InstalledAssetState;
+  readonly cause: string | null;
   readonly remediation: string;
+  readonly packageVersion?: string | null;
+  readonly recordedVersion?: string | null;
+  readonly digestMatch?: boolean | null;
 }
+
+export interface InstalledHostHealth extends InstalledHostDeclaration {}
 
 export interface InstalledAssetInspectionOptions {
   readonly assets?: readonly InstalledAssetDeclaration[];
-  readonly hostHomes?: Readonly<Partial<Record<"claude" | "codex" | "hermes", string>>>;
-  readonly registry?: typeof harnessSurfaceRegistry;
-  readonly packageRoot?: string;
-  readonly binaryDirectories?: readonly string[];
+  readonly hosts?: readonly InstalledHostDeclaration[];
+  readonly vault?: string;
 }
 
 export interface InstalledAssetInspection {
   readonly status: "ok" | "degraded";
+  readonly hosts: readonly InstalledHostHealth[];
   readonly assets: readonly InstalledAssetHealth[];
 }
 
-function packageRoot(): string {
-  return path.dirname(fileURLToPath(new URL("../../../package.json", import.meta.url)));
+export function installRemediationCommand(vault: string, host: string): string {
+  return `oms install --vault ${JSON.stringify(vault)} --runtime ${host}`;
 }
 
-function remediation(asset: InstalledAssetDeclaration): string {
+function remediation(asset: InstalledAssetDeclaration, vault: string): string {
   if (asset.remediation !== undefined) return asset.remediation;
-  return asset.kind === "skill-tree" ? "oms install --host hermes" : "oms install --host claude";
+  return asset.host === undefined ? "oms install" : installRemediationCommand(vault, asset.host);
 }
 
-async function binaryPath(binaryDirectories: readonly string[], binary: string, fallback: string): Promise<string> {
-  for (const directory of binaryDirectories) {
-    const candidate = path.join(directory, binary);
-    try {
-      await lstat(candidate);
-      return candidate;
-    } catch {
-      continue;
-    }
+function errorCode(error: unknown): string | null {
+  return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : null;
+}
+
+function absent(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function health(
+  asset: InstalledAssetDeclaration,
+  vault: string,
+  state: InstalledAssetState,
+  realPath: string | null,
+  cause: string | null,
+  provenance?: Pick<InstalledAssetHealth, "packageVersion" | "recordedVersion" | "digestMatch">,
+): InstalledAssetHealth {
+  return { id: asset.id, kind: asset.kind, declaredPath: asset.declaredPath, realPath, state, cause, remediation: state === "ok" ? "" : remediation(asset, vault), ...provenance };
+}
+
+async function inspectAsset(asset: InstalledAssetDeclaration, vault: string): Promise<InstalledAssetHealth> {
+  if (asset.kind === "registration") {
+    const evidence = asset.evidence ?? { state: "missing" as const, cause: null };
+    return health(asset, vault, evidence.state, null, evidence.cause);
   }
-  return path.join(binaryDirectories[0] ?? fallback, binary);
-}
-
-async function defaultAssets(options: InstalledAssetInspectionOptions): Promise<readonly InstalledAssetDeclaration[]> {
-  const registry = options.registry ?? harnessSurfaceRegistry;
-  const root = options.packageRoot ?? packageRoot();
-  const binaryDirectories = options.binaryDirectories ?? (process.env.PATH?.split(path.delimiter) ?? []);
-  const hermesHome = options.hostHomes?.hermes ?? hostHome(undefined, ".hermes", "OMS_HERMES_HOME");
-  const hooks = await Promise.all(registry.hooks.map(async hook => [
-    { id: `hook:${hook.bin}`, kind: "hook" as const, declaredPath: path.join(root, hook.path) },
-    { id: `binary:${hook.bin}`, kind: "binary" as const, declaredPath: await binaryPath(binaryDirectories, hook.bin, root) },
-  ]));
-  return [
-    ...hooks.flat(),
-    {
-      id: "skill-tree:hermes",
-      kind: "skill-tree",
-      declaredPath: path.join(hermesHome, "skills", "knowledge-management", "oms"),
-      provenancePath: path.join(hermesHome, "adapters", "oms", "oms-provenance.json"),
-    },
-  ];
-}
-
-function missingHealth(asset: InstalledAssetDeclaration, state: "missing" | "dangling-symlink"): InstalledAssetHealth {
-  return { id: asset.id, kind: asset.kind, declaredPath: asset.declaredPath, realPath: null, state, remediation: remediation(asset) };
-}
-
-async function inspectAsset(asset: InstalledAssetDeclaration): Promise<InstalledAssetHealth> {
-  let entry;
+  let entry: Awaited<ReturnType<typeof lstat>>;
   try {
     entry = await lstat(asset.declaredPath);
-  } catch {
-    return missingHealth(asset, "missing");
+  } catch (error) {
+    return health(asset, vault, absent(error) ? "missing" : "inspection-error", null, errorCode(error));
   }
   let resolved: string;
   try {
     resolved = await realpath(asset.declaredPath);
-  } catch {
-    return missingHealth(asset, entry.isSymbolicLink() ? "dangling-symlink" : "missing");
+  } catch (error) {
+    return health(asset, vault, entry.isSymbolicLink() && absent(error) ? "dangling-symlink" : "inspection-error", null, errorCode(error));
   }
-  let target;
+  let target: Awaited<ReturnType<typeof stat>>;
   try {
     target = await stat(asset.declaredPath);
-  } catch {
-    return missingHealth(asset, entry.isSymbolicLink() ? "dangling-symlink" : "missing");
+  } catch (error) {
+    return health(asset, vault, entry.isSymbolicLink() && absent(error) ? "dangling-symlink" : "inspection-error", null, errorCode(error));
   }
   if (asset.kind === "skill-tree") {
-    if (!target.isDirectory()) {
-      return { id: asset.id, kind: asset.kind, declaredPath: asset.declaredPath, realPath: resolved, state: "not-a-file", remediation: remediation(asset) };
+    if (!target.isDirectory()) return health(asset, vault, "not-a-file", resolved, null);
+    try {
+      const provenance = asset.provenancePath === undefined ? null : parseProvenance(await readFile(asset.provenancePath, "utf8"));
+      const digest = await computeTreeDigest(resolved);
+      const evidence = {
+        packageVersion: asset.provenanceVersion ?? null,
+        recordedVersion: provenance?.version ?? null,
+        digestMatch: provenance === null ? false : provenance.skillTreeDigest === digest,
+      };
+      if (
+        provenance === null ||
+        !evidence.digestMatch ||
+        (asset.provenanceVersion !== undefined && provenance.version !== asset.provenanceVersion)
+      ) return health(asset, vault, "provenance-mismatch", resolved, null, evidence);
+      return health(asset, vault, "ok", resolved, null, evidence);
+    } catch (error) {
+      return health(asset, vault, absent(error) ? "provenance-mismatch" : "inspection-error", resolved, errorCode(error), {
+        packageVersion: asset.provenanceVersion ?? null,
+        recordedVersion: null,
+        digestMatch: false,
+      });
     }
-    if (asset.provenancePath !== undefined) {
-      try {
-        const provenance = parseProvenance(await readFile(asset.provenancePath, "utf8"));
-        if (provenance === null || provenance.skillTreeDigest !== await computeTreeDigest(resolved)) {
-          return { id: asset.id, kind: asset.kind, declaredPath: asset.declaredPath, realPath: resolved, state: "provenance-mismatch", remediation: remediation(asset) };
-        }
-      } catch {
-        return { id: asset.id, kind: asset.kind, declaredPath: asset.declaredPath, realPath: resolved, state: "provenance-mismatch", remediation: remediation(asset) };
-      }
-    }
-    return { id: asset.id, kind: asset.kind, declaredPath: asset.declaredPath, realPath: resolved, state: "ok", remediation: "" };
   }
-  if (!target.isFile()) {
-    return { id: asset.id, kind: asset.kind, declaredPath: asset.declaredPath, realPath: resolved, state: "not-a-file", remediation: remediation(asset) };
-  }
-  if ((target.mode & 0o111) === 0) {
-    return { id: asset.id, kind: asset.kind, declaredPath: asset.declaredPath, realPath: resolved, state: "not-executable", remediation: remediation(asset) };
-  }
-  return { id: asset.id, kind: asset.kind, declaredPath: asset.declaredPath, realPath: resolved, state: "ok", remediation: "" };
+  if (!target.isFile()) return health(asset, vault, "not-a-file", resolved, null);
+  if ((target.mode & 0o111) === 0) return health(asset, vault, "not-executable", resolved, null);
+  return health(asset, vault, "ok", resolved, null);
 }
 
 export async function inspectInstalledAssets(options: InstalledAssetInspectionOptions = {}): Promise<InstalledAssetInspection> {
-  const declarations = options.assets ?? await defaultAssets(options);
-  const assets = await Promise.all(declarations.map(inspectAsset));
-  return { status: assets.every(asset => asset.state === "ok") ? "ok" : "degraded", assets };
+  const declarations = options.assets ?? [];
+  const assets = await Promise.all(declarations.map(asset => inspectAsset(asset, options.vault ?? process.cwd())));
+  const hostDeclarations = options.hosts ?? [...new Set(declarations.flatMap(asset => asset.host === undefined ? [] : [asset.host]))].map(host => ({ host, state: "ok" as const }));
+  const hosts: InstalledHostHealth[] = hostDeclarations.map((host): InstalledHostHealth => {
+    const hostAssets = assets.filter((_, index) => declarations[index]?.host === host.host);
+    if (host.state === "not-installed") return host;
+    return { host: host.host, state: host.state === "degraded" || !hostAssets.every(asset => asset.state === "ok") ? "degraded" : "ok" };
+  });
+  return { status: assets.every(asset => asset.state === "ok") && hosts.every(host => host.state !== "degraded") ? "ok" : "degraded", hosts, assets };
 }

@@ -26,10 +26,12 @@ import {
   type HostVaultPointerReceipt,
 } from "../kernel/install/pointer.js";
 import { formatUpdateResult, runUpdate } from "../kernel/update/update.js";
-import { installClaude, uninstallClaude } from "../vendors/claude/claude.js";
-import { installCodex, uninstallCodex } from "../vendors/codex/codex.js";
-import { installHermes, uninstallHermes } from "../vendors/hermes/hermes.js";
+import { installClaude, isOmsHookEntry, uninstallClaude } from "../vendors/claude/claude.js";
+import { installCodex, isCodexOmsRegistration, uninstallCodex } from "../vendors/codex/codex.js";
+import { installHermes, isHermesOmsRegistration, uninstallHermes } from "../vendors/hermes/hermes.js";
 import { readCurrentPackageVersion } from "./update-notice.js";
+
+export { isCodexOmsRegistration, isHermesOmsRegistration, isOmsHookEntry };
 
 /** Everything the host commands need from the parsed argv, plus the adapter root. */
 export interface HostCommandContext {

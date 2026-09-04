@@ -60,10 +60,45 @@ describe("evaluateResolvedTemplateContract", () => {
     expect(result.violations[0]?.message).toContain("unknown-agent");
   });
 
-  it("reports exactly one violation when a configured writer field is missing", () => {
+  it("enforces the writer field policy and registry independently", () => {
+    const writerTemplate = {
+      ...template,
+      fields: { ...template.fields, created_by: { type: "select", required: true, allowedValues: ["human"] } },
+    };
+    const writers = { field: "created_by", identifiers: ["human", "oms-agent"] };
+
+    const result = evaluateResolvedTemplateContract(
+      { title: "note", created: "2026-08-30", created_by: "oms-agent" },
+      writerTemplate,
+      base,
+      writers,
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.violations).toEqual([
+      expect.objectContaining({ field: "created_by", rule: "allowed-values" }),
+    ]);
+
+    const unregistered = evaluateResolvedTemplateContract(
+      { title: "note", created: "2026-08-30", created_by: "human" },
+      writerTemplate,
+      base,
+      { field: "created_by", identifiers: ["oms-agent"] },
+    );
+
+    expect(unregistered.valid).toBe(false);
+    expect(unregistered.violations).toEqual([
+      expect.objectContaining({ field: "created_by", rule: "writer-identity" }),
+    ]);
+  });
+
+  it("reports field policy and writer identity violations when a configured writer field is missing", () => {
     const writerTemplate = { ...template, fields: { ...template.fields, created_by: { type: "text", required: true } } };
     const result = evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30" }, writerTemplate, base, { field: "created_by", identifiers: ["oms-agent"] });
-    expect(result.violations).toEqual([expect.objectContaining({ field: "created_by", rule: "writer-identity" })]);
+    expect(result.violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "created_by", rule: "required" }),
+      expect.objectContaining({ field: "created_by", rule: "writer-identity" }),
+    ]));
   });
 
   it("does not enforce writer identity without a registry", () => {

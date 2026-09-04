@@ -8,6 +8,8 @@ import type {
   LogicalOperation,
   PlacementEntry,
   PlannedPhysicalOutput,
+  TemplateBinding,
+  TemplatePolicy,
 } from "./types.js";
 
 const encoder = new TextEncoder();
@@ -141,6 +143,37 @@ function placements(entries: readonly PlacementEntry[]): PlacementEntry[] {
     }
   }
   return result;
+}
+
+/** Builds the authority and placement payload shared by registration, resolution, and repair. */
+export function templateInput(
+  policy: TemplatePolicy,
+  controls: {
+    readonly policy: Digest;
+    readonly taxonomy: Digest;
+    readonly obsidianTypes: Digest;
+    readonly obsidianTypesPath: string;
+  },
+  bindings: readonly TemplateBinding[],
+  sourceDigest: (binding: TemplateBinding) => Digest,
+): InputV2 {
+  const authority: AuthorityEntry[] = [
+    { kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: controls.policy },
+    { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: controls.taxonomy },
+    { kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: controls.obsidianTypesPath, contentDigest: controls.obsidianTypes },
+    ...bindings.map((binding) => ({ kind: "template" as const, logicalId: binding.templateId, vaultRelativePath: binding.sourcePath, contentDigest: sourceDigest(binding) })),
+  ];
+  authority.sort((left, right) => left.kind.localeCompare(right.kind) || left.logicalId.localeCompare(right.logicalId));
+  return {
+    version: 2,
+    authority,
+    placement: bindings.map((binding) => ({
+      templateId: binding.templateId,
+      destinationClass: binding.destinationClass,
+      templateFolder: binding.destinationClass === "managed-default" ? policy.templateFolder : null,
+      sourcePath: binding.sourcePath,
+    })),
+  };
 }
 
 export function inputDigest(input: InputV2): Digest {

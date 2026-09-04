@@ -14,8 +14,8 @@ export interface RetrievalView { readonly name: string; readonly keys: readonly 
 export interface ContractDefinition extends BaseContract { readonly intent: string; readonly views: readonly RetrievalView[]; }
 export interface TemplateBinding { readonly templateId: TemplateId; readonly destinationClass: DestinationClass; readonly sourcePath: TemplateSourcePath; readonly contract: string; readonly naming: string; readonly extensions?: Extensions; }
 /** User-owned registry of accepted writer identifiers for the frontmatter field that records authorship. */
-export interface WriterRegistry { readonly field: string; readonly identifiers: readonly string[]; }
-export interface TemplatePolicy { readonly version: 1; readonly templateFolder: TemplateFolderPath; readonly base: BaseContract; readonly contracts: Readonly<Record<string, ContractDefinition>>; readonly templates: Readonly<Record<string, TemplateBinding>>; readonly writers?: WriterRegistry; readonly extensions?: Extensions; }
+export interface WriterRegistry { readonly field: string; readonly identifiers: readonly string[]; readonly extensions?: Extensions; }
+export interface TemplatePolicy { readonly version: 1 | 2; readonly templateFolder: TemplateFolderPath; readonly base: BaseContract; readonly contracts: Readonly<Record<string, ContractDefinition>>; readonly templates: Readonly<Record<string, TemplateBinding>>; readonly writers?: WriterRegistry; readonly extensions?: Extensions; }
 export interface GlobalAxis { readonly kind: "folder" | "link"; readonly key: string; readonly type: ObsidianContractType; readonly intent?: string; readonly members: readonly JsonValue[]; readonly extensions?: Extensions; }
 export type GlobalAxes = Readonly<Record<string, GlobalAxis>>;
 export interface SourceDescriptor { readonly logicalId?: string; readonly path?: string; readonly signature: Digest; readonly extensions?: Extensions; }

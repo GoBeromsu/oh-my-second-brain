@@ -9,6 +9,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { sourceSignature } from "../kernel/templates/index.js";
 import type { SourceDescriptor } from "../kernel/templates/types.js";
 import { createHash } from "node:crypto";
+import { demotedOperationNames } from "./server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../");
@@ -82,8 +83,7 @@ describe("MCP detail-tool demotion", () => {
         expectAdvertisedArguments(tool!, arguments_);
         return client.callTool({ name, arguments: arguments_ });
       };
-      const demoted = ["oms_retrieve_by_axis", "oms_retrieve_context", "oms_lazy_load_note", "oms_semantic_query", "oms_semantic_collections", "oms_semantic_contexts", "oms_semantic_status", "oms_get_document", "oms_multi_get_documents", "oms_link_suggest", "oms_link_apply", "oms_graph_status", "oms_vault_audit", "oms_graph_build", "oms_semantic_cleanup", "oms_sync_embeddings", "query", "get", "multi_get", "status"];
-      expect(names).not.toEqual(expect.arrayContaining(demoted));
+      expect(names).not.toEqual(expect.arrayContaining(demotedOperationNames));
       expect(payload(await call("status", {})).derivedState).toBeDefined();
       expect(payload(await call("doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
       expect(payload(await call("doctor", { op: "validate" })).status).toBeTypeOf("string");

@@ -100,6 +100,30 @@ describe("validateHarnessRegistry", () => {
     );
   });
 
+  it("rejects the shipped skills mirror as a runtime asset root", () => {
+    const base = cloneRegistry();
+    const registry: HarnessSurfaceRegistry = {
+      ...base,
+      packageAssets: {
+        ...base.packageAssets,
+        runtimeAssetRoots: [
+          ...base.packageAssets.runtimeAssetRoots,
+          { id: "skills-mirror", path: "skills/write", owner: "runtime" },
+        ],
+      },
+    };
+
+    expect(validateHarnessRegistry(registry)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "forbidden_path",
+          surface: "packageAssets.runtimeAssetRoots.skills-mirror",
+          value: "skills/write",
+        }),
+      ]),
+    );
+  });
+
   it("reports registry paths that traverse into protected or source surfaces", () => {
     const base = cloneRegistry();
     const registry: HarnessSurfaceRegistry = {

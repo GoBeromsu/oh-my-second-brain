@@ -10,6 +10,7 @@ MCP server tools and resources belong here.
 
 ### Changed
 
+- **`status.writeTools` response values were renamed from `oms_write-*` to `write-*` with the capability-only tool surface.** Raw MCP clients that consume this diagnostic field must migrate those response strings alongside the five public tool names.
 - **MCP local tool names are now capability-only.** The `oms` server advertises `write`, `search`, `link`, `status`, and `doctor`, so qualifying hosts display `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor` rather than `oms_oms_*`. Raw MCP callers must migrate `oms_write` → `write`, `oms_search` → `search`, `oms_link` → `link`, `oms_status` → `status`, and `oms_doctor` → `doctor`.
 
 ## [0.12.2] - 2026-09-01

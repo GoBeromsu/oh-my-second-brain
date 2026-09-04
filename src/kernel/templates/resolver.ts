@@ -3,11 +3,11 @@ import { readFile, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { loadObsidianTypes } from "../contracts/index.js";
 import { extractTemplate, parseTemplate } from "./extract.js";
-import { approvalDigest, canonicalJson, inputDigest, outputDigest } from "./canonical.js";
+import { approvalDigest, canonicalJson, inputDigest, outputDigest, templateInput } from "./canonical.js";
 import { normalizeTemplateFolderPath, normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
 import { applyTemplatePolicyChange, parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { templateMigrationAdmission } from "./transaction.js";
-import type { BaseContract, DerivedProjection, Digest, FieldPolicy, GlobalAxes, GlobalAxis, InputV2, JsonValue, ResolvedConvention, ResolvedTemplate, SourceDescriptor, SourceTransition, TemplateCompositionManifest, TemplateCompositionOptions, TemplateFolderPath, TemplateMove, TemplateSemanticChange, TemplateSemanticSnapshot, TemplateSourcePath, VerifiedFileState } from "./types.js";
+import type { BaseContract, DerivedProjection, Digest, FieldPolicy, GlobalAxes, GlobalAxis, JsonValue, ResolvedConvention, ResolvedTemplate, SourceDescriptor, SourceTransition, TemplateCompositionManifest, TemplateCompositionOptions, TemplateFolderPath, TemplateMove, TemplateSemanticChange, TemplateSemanticSnapshot, TemplateSourcePath, VerifiedFileState } from "./types.js";
 
 const SAFE_INBOX = normalizeTemplateFolderPath("Inbox");
 
@@ -445,8 +445,10 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     transitions.push({ templateId: binding.templateId, path: binding.sourcePath, expectedCurrent: current.state === "present" ? { state: "present", signature: current.signature } : { state: "absent" }, current, proposed, action: proposal === undefined || proposal.publication === "verify-existing" ? "verify-only" : "write" });
   }
   const makeSnapshot = (policy: import("./types.js").TemplatePolicy, policyDigest: Digest, taxonomyDigest: Digest, obsidianDigest: Digest, bindings: readonly import("./types.js").TemplateBinding[], sourceState: (binding: import("./types.js").TemplateBinding) => VerifiedFileState, resolvedInputSignature: Digest): TemplateSemanticSnapshot => {
-    const authority = [{ kind: "policy" as const, logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: policyDigest }, { kind: "taxonomy" as const, logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: taxonomyDigest }, { kind: "obsidian-types" as const, logicalId: "obsidian-types", vaultRelativePath: obsidianPath, contentDigest: obsidianDigest }, ...bindings.map(binding => { const state = sourceState(binding); return { kind: "template" as const, logicalId: binding.templateId, vaultRelativePath: binding.sourcePath, contentDigest: state.state === "present" ? state.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source absent") }; })].sort((a,b) => a.kind.localeCompare(b.kind) || a.logicalId.localeCompare(b.logicalId));
-    const input: InputV2 = { version: 2, authority, placement: bindings.map(binding => ({ templateId: binding.templateId, destinationClass: binding.destinationClass, templateFolder: binding.destinationClass === "managed-default" ? policy.templateFolder : null, sourcePath: binding.sourcePath })) };
+    const input = templateInput(policy, { policy: policyDigest, taxonomy: taxonomyDigest, obsidianTypes: obsidianDigest, obsidianTypesPath: obsidianPath }, bindings, (binding) => {
+      const source = sourceState(binding);
+      return source.state === "present" ? source.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source absent");
+    });
     return { input, inputDigest: inputDigest(input), bindings, resolvedTemplates: bindings.map(binding => { const source = sourceState(binding); return { templateId: binding.templateId, sourcePath: binding.sourcePath, inputSignature: resolvedInputSignature, templateSignature: source.state === "present" ? source.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source absent") }; }) };
   };
   const current = makeSnapshot(
