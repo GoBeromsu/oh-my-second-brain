@@ -16,7 +16,7 @@ import {
 } from "../kernel/capture/safe.js";
 import { lazyLoadNoteBody } from "../kernel/graph/cache.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { backfillDefaults, buildTemplateCompositionManifest, buildTemplateNoteIndex, deriveTemplateRetrievalAxes, diagnoseTemplates, executeTemplateTransaction, loadResolvedTemplates, normalizeTemplateFolderPath, normalizeTemplateSourcePath, regenerateTypes, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH, verifyTemplateSourcePath } from "../kernel/templates/index.js";
+import { backfillDefaults, buildTemplateCompositionManifest, buildTemplateNoteIndex, deriveTemplateRetrievalAxes, diagnoseTemplates, executeTemplateTransaction, loadResolvedTemplates, registerExistingTemplate, normalizeTemplateFolderPath, normalizeTemplateSourcePath, regenerateTypes, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH, verifyTemplateSourcePath } from "../kernel/templates/index.js";
 import type { Digest, JsonValue, SourceProposal, TemplateBinding, TemplateCasExpectation, TemplateCompositionOptions, TemplateSemanticChange } from "../kernel/templates/types.js";
 import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { retrieveMorningContext } from "../kernel/search/morning.js";
@@ -152,7 +152,7 @@ const expected = { expectedInputDigest: digestSchema, expectedPolicySignature: d
 const operations: Record<string, readonly Operation[]> = {
   write: [
     { op: "note", name: "write-note", properties: { mode: { ...string, enum: ["create", "append", "update"] }, templateId: string, notePath: string, frontmatter, body: string, dryRun: boolean } },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, ...expected, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode", "expectedInputDigest", "expectedPolicySignature", "expectedTaxonomySignature", "expectedProjectionSignature", "expectedSourceSignatures"] },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "register-existing"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, ...expected, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode", "expectedInputDigest", "expectedPolicySignature", "expectedTaxonomySignature", "expectedProjectionSignature", "expectedSourceSignatures"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "lazy-load", name: "oms_lazy_load_note", properties: { notePath: string }, required: ["notePath"] }, { op: "templates", name: "oms_list_templates" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "collections", name: "oms_semantic_collections", properties: { index: string } }, { op: "contexts", name: "oms_semantic_contexts", properties: { index: string } }, { op: "status", name: "oms_semantic_status", properties: { index: string } }, { op: "get-document", name: "oms_get_document", properties: searchProperties, required: ["target"] }, { op: "multi-get-documents", name: "oms_multi_get_documents", properties: searchProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
@@ -199,22 +199,23 @@ function operationSchema(tool: string): Tool["inputSchema"] {
     }
     if (op === "template") {
       const shared = { op: { ...string, const: op }, ...expected };
-      const modes: readonly { readonly mode: string; readonly properties: Record<string, object>; readonly required: readonly string[] }[] = [
+      const modes: readonly { readonly mode: string; readonly properties: Record<string, object>; readonly required: readonly string[]; readonly expected?: boolean }[] = [
         { mode: "create", properties: { binding: templateBinding, source }, required: ["binding", "source"] },
         { mode: "update", properties: { templateId: string, binding: templateBinding, source }, required: ["templateId", "binding", "source"] },
         { mode: "reclassify", properties: { templateId: string, toClass: { ...string, enum: ["managed-default", "registered-existing"] } }, required: ["templateId", "toClass"] },
         { mode: "relocate-folder", properties: { templateFolder: string }, required: ["templateFolder"] },
+        { mode: "register-existing", properties: { templateId: string, sourcePath: string, contract: string, naming: string }, required: ["templateId", "sourcePath", "contract", "naming"], expected: false },
       ];
       for (const item of modes) {
-        const mutationRequired = ["op", "mode", ...Object.keys(expected), ...item.required];
+        const mutationRequired = ["op", "mode", ...(item.expected === false ? [] : Object.keys(expected)), ...item.required];
         branches.push({
           additionalProperties: false,
-          properties: { ...shared, mode: { const: item.mode }, ...item.properties, dryRun: { const: true } },
+          properties: { ...(item.expected === false ? { op: { ...string, const: op } } : shared), mode: { const: item.mode }, ...item.properties, dryRun: { const: true } },
           required: [...mutationRequired, "dryRun"],
         });
         branches.push({
           additionalProperties: false,
-          properties: { ...shared, mode: { const: item.mode }, ...item.properties, dryRun: { const: false }, approvedDigest: digestSchema },
+          properties: { ...(item.expected === false ? { op: { ...string, const: op } } : shared), mode: { const: item.mode }, ...item.properties, dryRun: { const: false }, approvedDigest: digestSchema },
           required: [...mutationRequired, "approvedDigest"],
         });
       }
@@ -886,6 +887,16 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           return errorText("Template resume requires transactionId and the exact approvedDigest.");
         }
         return jsonText(await resumeTemplateTransaction(vault, resumeId, resumeApproval, TEMPLATE_MUTATION_MARKER_PATH));
+      }
+
+      if (stringArg(args, "mode") === "register-existing") {
+        const templateId = stringArg(args, "templateId");
+        const sourcePath = stringArg(args, "sourcePath");
+        const contract = stringArg(args, "contract");
+        const naming = stringArg(args, "naming");
+        const request = guardedTemplateRequest(args);
+        if (templateId === undefined || sourcePath === undefined || contract === undefined || naming === undefined || request === undefined) return errorText("Template registration requires templateId, sourcePath, contract, naming, and dryRun:true or an approvedDigest.");
+        return jsonText(await registerExistingTemplate(vault, { templateId, sourcePath, contract, naming }, request));
       }
 
       const expectedInputDigest = stringArg(args, "expectedInputDigest");

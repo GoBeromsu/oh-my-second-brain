@@ -4,6 +4,10 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+### Added
+
+- **`write { op: "template", mode: "register-existing" }` registers a template that already lives in your vault.** Point it at a vault-relative Markdown path with an explicit stable `templateId`, the contract you authored, and a naming rule; the server reads the file as the shape authority and derives every control and source signature itself, so you no longer hand-assemble four expected digests and re-send the template's own bytes to register a file that is already on disk. The dry-run → `approvalDigest` → apply contract and its CAS checks are unchanged, and the source template is verified in place — never copied, rewritten, moved, or renamed. Re-registering an identical binding is refused as `TEMPLATE_ALREADY_REGISTERED` rather than a bare identity collision.
+
 ### Changed
 
 - **MCP local tool names are now capability-only.** The `oms` server advertises `write`, `search`, `link`, `status`, and `doctor`, so qualifying hosts display `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor` rather than `oms_oms_*`. Raw MCP callers must migrate `oms_write` → `write`, `oms_search` → `search`, `oms_link` → `link`, `oms_status` → `status`, and `oms_doctor` → `doctor`.

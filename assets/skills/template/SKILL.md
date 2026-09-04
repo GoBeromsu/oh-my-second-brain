@@ -22,8 +22,9 @@ Use an existing stable `templateId` when updating or moving a template. A path o
 1. Read `search { op: "templates" }` and the user's requested shape. Do not guess existing IDs or fields.
 2. Draft the exact Markdown and policy/taxonomy intent. Preserve unknown frontmatter, policy extensions, body bytes, and Obsidian property types.
 3. Call `write { op: "template", ..., dryRun: true }` for create, update, reclassify, or relocate-folder.
-4. Show the proposal, paths, diagnostics, and `approvalDigest` to the user.
-5. Apply only after the caller explicitly approves that exact digest. Submit the same request with `dryRun: false` and `approvedDigest`.
-6. Report the server-verified receipt and postconditions.
+4. To adopt a template that already exists in the vault, call `write { op: "template", mode: "register-existing", templateId, sourcePath, contract, naming, dryRun: true }` instead. The server reads the file as the shape authority and derives every signature itself; you supply no `expected*` digests and no template bytes.
+5. Show the proposal, paths, diagnostics, and `approvalDigest` to the user.
+6. Apply only after the caller explicitly approves that exact digest. Submit the same request with `dryRun: false` and `approvedDigest`.
+7. Report the server-verified receipt and postconditions.
 
 Reject unsupported expressions, unsafe paths, unresolved legacy mappings, stale signatures, and identity changes. Never self-approve, silently fall back to a legacy Concept reader, or directly mutate managed template/control files.
