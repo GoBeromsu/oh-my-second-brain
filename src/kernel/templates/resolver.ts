@@ -303,7 +303,7 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
   }
   const expected = managed({ base: policy.base, globalAxes: taxonomy.globalAxes, templates: {} }, templates);
   if (canonicalJson(expected) !== canonicalJson(projection.managed)) fail("PROJECTION_PAYLOAD_TAMPERED", "managed projection does not equal the canonical resolved template projection");
-  return { base: policy.base, templates: Object.fromEntries(Object.entries(templates).sort(([a], [b]) => a.localeCompare(b))), globalAxes: taxonomy.globalAxes, managedSourcePaths: sourcePaths, inputSignature: actualInput };
+  return { base: policy.base, templates: Object.fromEntries(Object.entries(templates).sort(([a], [b]) => a.localeCompare(b))), globalAxes: taxonomy.globalAxes, ...(policy.writers === undefined ? {} : { writers: policy.writers }), managedSourcePaths: sourcePaths, inputSignature: actualInput };
 }
 
 /**

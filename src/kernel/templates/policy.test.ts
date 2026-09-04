@@ -32,6 +32,25 @@ describe("template policy", () => {
     expect(serializeTemplatePolicy(parseTemplatePolicy(serialized))).toBe(serialized);
   });
 
+  it("parses and serializes a user-owned writer registry", () => {
+    const parsed = parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: ["oms-agent", "claude"] } });
+    const serialized = serializeTemplatePolicy(parsed);
+    expect(parsed.writers).toEqual({ field: "created_by", identifiers: ["oms-agent", "claude"] });
+    expect(JSON.parse(serialized).writers).toEqual({ field: "created_by", identifiers: ["oms-agent", "claude"] });
+    expect(serializeTemplatePolicy(parseTemplatePolicy(serialized))).toBe(serialized);
+  });
+
+  it("rejects malformed writer registries", () => {
+    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: 1, identifiers: ["oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: "oms-agent" } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: [] } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: ["oms-agent", "oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
+  });
+
+  it("does not serialize a writer registry when none is configured", () => {
+    expect(JSON.parse(serializeTemplatePolicy(parseTemplatePolicy(policy())))).not.toHaveProperty("writers");
+  });
+
   it("validates static and dynamic defaults, types, and URL format", () => {
     expect(() => parseTemplatePolicy({ ...policy(), base: { fields: { ...policy().base.fields, n: { type: "number", default: { kind: "literal", value: "1" } } } } })).toThrow("DEFAULT_TYPE_MISMATCH");
     expect(() => parseTemplatePolicy({ ...policy(), base: { fields: { ...policy().base.fields, url: { type: "text", format: "url", default: { kind: "literal", value: "not-a-url" } } } } })).toThrow("FORMAT_URL_INVALID");

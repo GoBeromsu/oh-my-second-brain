@@ -2,7 +2,7 @@ import type {
   BaseContract, ContractDefinition, DerivedProjection, DerivedTemplateProjection, DestinationClass,
   Extensions, FieldDefault, FieldPolicy, GlobalAxes, GlobalAxis, JsonValue, ObsidianContractType,
   RetrievalView, SourceDescriptor, TemplateBinding, TemplateFolderPath, TemplateId, TemplatePolicy,
-  TemplateSourcePath,
+  TemplateSourcePath, WriterRegistry,
 } from "./types.js";
 import {
   deriveManagedSourcePath,
@@ -14,7 +14,7 @@ import { validateBaseSpecialization } from "./defaults.js";
 
 const TYPES = ["text", "string", "select", "number", "boolean", "checkbox", "date", "datetime", "list", "multitext", "multi", "tags", "aliases", "file"] as const;
 const TYPE_SET = new Set<string>(TYPES);
-const RESERVED_POLICY = new Set(["version", "templateFolder", "base", "contracts", "templates", "extensions"]);
+const RESERVED_POLICY = new Set(["version", "templateFolder", "base", "contracts", "templates", "writers", "extensions"]);
 const RESERVED_PROJECTION = new Set(["version", "generatedFrom", "managed", "extensions"]);
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
@@ -23,7 +23,7 @@ export { validateTemplateId } from "./paths.js";
 export const TEMPLATE_POLICY_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: true,
   required: ["version", "templateFolder", "base", "contracts", "templates"],
-  properties: { version: { const: 1 }, templateFolder: { type: "string", minLength: 1 }, base: { type: "object" }, contracts: { type: "object" }, templates: { type: "object" }, extensions: { type: "object", additionalProperties: true } },
+  properties: { version: { const: 1 }, templateFolder: { type: "string", minLength: 1 }, base: { type: "object" }, contracts: { type: "object" }, templates: { type: "object" }, writers: { type: "object", required: ["field", "identifiers"] }, extensions: { type: "object", additionalProperties: true } },
 } as const;
 export const DERIVED_PROJECTION_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: true,
@@ -82,13 +82,21 @@ function parseBase(value: unknown, where: string, managedKeys: readonly string[]
   const preserved = extensions(input, reserved, where);
   return { fields: parsed, ...(preserved === undefined ? {} : { extensions: preserved }) };
 }
+function parseWriters(value: unknown, where: string): WriterRegistry {
+  const input = record(value, where);
+  const field = string(input.field, `${where}.field`);
+  if (!Array.isArray(input.identifiers) || input.identifiers.length === 0) fail("TEMPLATE_POLICY_INVALID", `${where}.identifiers must be a non-empty array of unique non-empty strings`);
+  const identifiers = input.identifiers.map((identifier, index) => string(identifier, `${where}.identifiers[${index}]`));
+  if (new Set(identifiers).size !== identifiers.length) fail("TEMPLATE_POLICY_INVALID", `${where}.identifiers must contain unique strings`);
+  return { field, identifiers };
+}
 function parseViews(value: unknown, where: string, fields: Readonly<Record<string, FieldPolicy>>): readonly RetrievalView[] { if (!Array.isArray(value)) fail("TEMPLATE_POLICY_INVALID", `${where} must be an array`); const names = new Set<string>(); return value.map((item, index) => { const input = record(item, `${where}[${index}]`); const name = string(input.name, `${where}[${index}].name`); if (names.has(name)) fail("TEMPLATE_POLICY_INVALID", `${where} contains duplicate view ${name}`); names.add(name); if (!Array.isArray(input.keys) || input.keys.some(key => typeof key !== "string" || !Object.hasOwn(fields, key))) fail("TEMPLATE_POLICY_DANGLING_FIELD", `${where}[${index}].keys references an unknown field`); return { name, keys: [...input.keys], ...(extensions(input, new Set(["name", "keys", "extensions"]), `${where}[${index}]`) === undefined ? {} : { extensions: extensions(input, new Set(["name", "keys", "extensions"]), `${where}[${index}]`) }) }; }); }
 function merge(base: BaseContract, contract: ContractDefinition, _name: string): void {
   validateBaseSpecialization(base, { fields: contract.fields });
 }
 function parseBinding(value: unknown, where: string, folder: TemplateFolderPath, key: string, contracts: Readonly<Record<string, ContractDefinition>>): TemplateBinding { const input = record(value, where); const id = validateTemplateId(string(input.templateId, `${where}.templateId`)); if (id !== key) fail("TEMPLATE_POLICY_INVALID", `${where}.templateId must equal its stable map key`); const destinationClass = input.destinationClass; if (destinationClass !== "managed-default" && destinationClass !== "registered-existing") fail("TEMPLATE_POLICY_INVALID", `${where}.destinationClass is invalid`); const source = normalizeTemplateSourcePath(string(input.sourcePath, `${where}.sourcePath`)); if (destinationClass === "managed-default" && source !== deriveManagedSourcePath(folder, id)) fail("TEMPLATE_RECLASSIFY_PATH_MISMATCH", `${where}.sourcePath must be ${deriveManagedSourcePath(folder, id)}`); const contract = string(input.contract, `${where}.contract`); if (!Object.hasOwn(contracts, contract)) fail("TEMPLATE_POLICY_INVALID", `${where}.contract does not exist`); return { templateId: id, destinationClass: destinationClass as DestinationClass, sourcePath: source, contract, naming: string(input.naming, `${where}.naming`), ...(extensions(input, new Set(["templateId", "destinationClass", "sourcePath", "contract", "naming", "extensions"]), where) === undefined ? {} : { extensions: extensions(input, new Set(["templateId", "destinationClass", "sourcePath", "contract", "naming", "extensions"]), where) }) }; }
 
-export function parseTemplatePolicy(input: string | unknown): TemplatePolicy { let value: unknown = input; if (typeof input === "string") try { value = JSON.parse(input) as unknown; } catch { fail("TEMPLATE_POLICY_INVALID", "JSON parse failed"); } const root = record(value, "policy"); if (root.version !== 1) fail("TEMPLATE_POLICY_INVALID", "policy.version must be 1"); const folder = normalizeTemplateFolderPath(string(root.templateFolder, "policy.templateFolder")); const base = parseBase(root.base, "policy.base"); const rawContracts = record(root.contracts, "policy.contracts"); const contracts: Record<string, ContractDefinition> = {}; for (const [name, raw] of Object.entries(rawContracts)) { const parsed = parseBase(raw, `policy.contracts.${name}`, ["intent", "views"]); const source = record(raw, `policy.contracts.${name}`); const fields = { ...base.fields, ...parsed.fields }; const contract = { ...parsed, intent: string(source.intent, `policy.contracts.${name}.intent`), views: parseViews(source.views, `policy.contracts.${name}.views`, fields) }; merge(base, contract, name); contracts[string(name, "policy.contracts key")] = contract; } const rawTemplates = record(root.templates, "policy.templates"); const templates: Record<string, TemplateBinding> = {}; const sources = new Set<string>(); for (const [key, binding] of Object.entries(rawTemplates)) { const parsed = parseBinding(binding, `policy.templates.${key}`, folder, key, contracts); if (sources.has(parsed.sourcePath)) fail("TEMPLATE_SOURCE_DUPLICATE", `${parsed.sourcePath} is bound more than once`); sources.add(parsed.sourcePath); templates[key] = parsed; } return { version: 1, templateFolder: folder, base, contracts, templates, ...(extensions(root, RESERVED_POLICY, "policy") === undefined ? {} : { extensions: extensions(root, RESERVED_POLICY, "policy") }) }; }
+export function parseTemplatePolicy(input: string | unknown): TemplatePolicy { let value: unknown = input; if (typeof input === "string") try { value = JSON.parse(input) as unknown; } catch { fail("TEMPLATE_POLICY_INVALID", "JSON parse failed"); } const root = record(value, "policy"); if (root.version !== 1) fail("TEMPLATE_POLICY_INVALID", "policy.version must be 1"); const folder = normalizeTemplateFolderPath(string(root.templateFolder, "policy.templateFolder")); const base = parseBase(root.base, "policy.base"); const rawContracts = record(root.contracts, "policy.contracts"); const contracts: Record<string, ContractDefinition> = {}; for (const [name, raw] of Object.entries(rawContracts)) { const parsed = parseBase(raw, `policy.contracts.${name}`, ["intent", "views"]); const source = record(raw, `policy.contracts.${name}`); const fields = { ...base.fields, ...parsed.fields }; const contract = { ...parsed, intent: string(source.intent, `policy.contracts.${name}.intent`), views: parseViews(source.views, `policy.contracts.${name}.views`, fields) }; merge(base, contract, name); contracts[string(name, "policy.contracts key")] = contract; } const rawTemplates = record(root.templates, "policy.templates"); const templates: Record<string, TemplateBinding> = {}; const sources = new Set<string>(); for (const [key, binding] of Object.entries(rawTemplates)) { const parsed = parseBinding(binding, `policy.templates.${key}`, folder, key, contracts); if (sources.has(parsed.sourcePath)) fail("TEMPLATE_SOURCE_DUPLICATE", `${parsed.sourcePath} is bound more than once`); sources.add(parsed.sourcePath); templates[key] = parsed; } const writers = root.writers === undefined ? undefined : parseWriters(root.writers, "policy.writers"); return { version: 1, templateFolder: folder, base, contracts, templates, ...(writers === undefined ? {} : { writers }), ...(extensions(root, RESERVED_POLICY, "policy") === undefined ? {} : { extensions: extensions(root, RESERVED_POLICY, "policy") }) }; }
 function stable(value: JsonValue): JsonValue { if (Array.isArray(value)) return value.map(stable); if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, member]) => [key, stable(member)])); return value; }
 export function serializeTemplatePolicy(policy: TemplatePolicy): string { return `${JSON.stringify(stable(policyToJson(parseTemplatePolicy(policy))), null, 2)}\n`; }
 function policyToJson(policy: TemplatePolicy): JsonValue {
@@ -102,6 +110,7 @@ function policyToJson(policy: TemplatePolicy): JsonValue {
     templates: Object.fromEntries(
       Object.entries(policy.templates).sort(([left], [right]) => left.localeCompare(right)),
     ),
+    ...(policy.writers === undefined ? {} : { writers: policy.writers }),
     ...(policy.extensions === undefined ? {} : { extensions: policy.extensions }),
   }, "policy");
 }
