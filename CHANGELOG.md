@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+- **The shipped dependency tree no longer carries known advisories.** `npm run audit` had begun failing on every pull request for a reason none of them introduced: `fast-uri` picked up four host-confusion and SSRF advisories across its whole `3.x` range, and `qs` two more through Express. Both are pinned forward through the existing `overrides` block — `fast-uri` to `^4.1.4` and a new `qs` pin to `^6.16.0` — so the audit gate reports zero vulnerabilities and CI can tell a real regression from inherited noise again.
+
 ## [0.12.2] - 2026-09-01
 
 ### Fixed
