@@ -45,6 +45,10 @@ Do not hand-edit generated projection data. Change a managed template through th
 
 The apply step uses compare-and-swap, so a template changed after review cannot be mutated by an obsolete approval.
 
+## Register an existing template
+
+For an existing vault template, call `write { op: "template", mode: "register-existing", templateId, sourcePath, contract, naming, dryRun: true }`, then repeat it with the returned `approvedDigest`. Registration reads and verifies the existing Markdown in place: it never copies, renames, moves, or rewrites the source. Markdown supplies structural shape only; author the named semantic contract in `.oms/template-policy.json` first. A later source edit is reconciled by `doctor { op: "regenerate-types" }`, which rebuilds generated `.oms/types.json` from current verified authorities.
+
 ## Writing notes
 
 OMS resolves a `ResolvedTemplate` before writing. Available modes are:

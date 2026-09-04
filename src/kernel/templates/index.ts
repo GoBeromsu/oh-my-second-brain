@@ -7,6 +7,8 @@ export { renderNoteName, slugify } from "./naming.js";
 export { canonicalPathKey, deriveManagedSourcePath, deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, validateTemplateId, verifyTemplateFolderPath, verifyTemplateSourcePath, verifyVaultPath } from "./paths.js";
 export { loadResolvedTemplates, sourceSignature, buildTemplateCompositionManifest } from "./resolver.js";
 export { executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
+export { registerExistingTemplate } from "./register.js";
+export type { RegisterExistingTemplateRequest } from "./register.js";
 export type { ExtractedTemplate, TemplateExpression } from "./extract.js";
 export type { SearchableAxis, TemplateAxisSet, TemplateFieldAxis, TemplateIdentityAxis, TemplateRetrievalAxes } from "./axes.js";
 export type { LexicalNoteMatch, TemplateAxisQuery, TemplateIndexedNote, TemplateNoteIndex } from "./note-index.js";

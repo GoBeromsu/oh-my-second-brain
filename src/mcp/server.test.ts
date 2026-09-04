@@ -322,6 +322,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(write({ op: "note", mode: "update", notePath: "notes/x.md" }).valid).toBe(false);
     expect(write({ op: "note", mode: "update", notePath: "notes/x.md", frontmatter: { title: "x" } }).valid).toBe(true);
     expect(write({ op: "note", templateId: "literature", mode: "create", folder: "references" }).valid).toBe(false);
+    // register-existing derives every signature server-side from the vault, so it
+    // is the one template mode that must NOT demand the four expected* digests.
+    expect(write({ op: "template", mode: "register-existing", templateId: "people", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}", dryRun: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "register-existing", templateId: "people", contract: "people", naming: "{{name}}", dryRun: true }).valid).toBe(false);
+    expect(write({ op: "template", mode: "register-existing", templateId: "people", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}" }).valid).toBe(false);
     expect(JSON.stringify(toolByName.get("search")!.inputSchema)).not.toContain("concept");
   });
 

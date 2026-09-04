@@ -13,6 +13,10 @@ A vault composes four authorities:
 
 Every managed template inherits one vault-wide `BaseContract`. A stable `templateId` does not depend on source path or content digest. `.oms/types.json` is a derived, validated write/search projection and is never user-authored authority.
 
+## Existing-template registration
+
+`write { op: "template", mode: "register-existing" }` accepts only stable `templateId`, vault-relative `sourcePath`, existing policy `contract`, and `naming`. It extracts Markdown structure, composes it with the four authorities above, and publishes only `.oms` controls after dry-run approval. The source is a verify-only transaction boundary; source or control drift rejects apply. `doctor { op: "regenerate-types" }` derives a fresh projection from an edited registered source rather than accepting hand-authored `.oms/types.json`.
+
 ## Prepare → Admission Check → Write → Evaluate
 
 All note and control mutations follow one pipeline:
