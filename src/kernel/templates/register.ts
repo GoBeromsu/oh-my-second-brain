@@ -2,13 +2,13 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { inputDigest } from "./canonical.js";
+import { inputDigest, templateInput } from "./canonical.js";
 import { parseTemplate } from "./extract.js";
 import { normalizeTemplateSourcePath, validateTemplateId, verifyTemplateSourcePath } from "./paths.js";
 import { parseTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest } from "./resolver.js";
-import { executeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
-import type { AuthorityEntry, Digest, FileExpectation, GuardedTemplateRequest, InputV2, TemplateBinding, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
+import { completedTemplateTransaction, executeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
+import type { Digest, FileExpectation, GuardedTemplateRequest, TemplateBinding, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
 
 export interface RegisterExistingTemplateRequest {
   readonly templateId: string;
@@ -41,18 +41,23 @@ function registrationInput(
   taxonomyState: Extract<VerifiedFileState, { readonly state: "present" }>,
   obsidianState: Extract<VerifiedFileState, { readonly state: "present" }>,
   sources: readonly { readonly templateId: string; readonly path: TemplateSourcePath; readonly state: VerifiedFileState }[],
-): InputV2 {
-  const authority: AuthorityEntry[] = [
-    { kind: "policy" as const, logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: policyState.signature },
-    { kind: "taxonomy" as const, logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: taxonomyState.signature },
-    { kind: "obsidian-types" as const, logicalId: "obsidian-types", vaultRelativePath: ".obsidian/types.json", contentDigest: obsidianState.signature },
-  ];
+): ReturnType<typeof templateInput> {
+  const digests = new Map<string, Digest>();
   for (const source of sources) {
     if (source.state.state === "absent") throw new Error(`TEMPLATE_SOURCE_INVALID: registered template source (${source.path}) is missing`);
-    authority.push({ kind: "template", logicalId: source.templateId, vaultRelativePath: source.path, contentDigest: source.state.signature });
+    digests.set(source.templateId, source.state.signature);
   }
-  authority.sort((a, b) => a.kind.localeCompare(b.kind) || a.logicalId.localeCompare(b.logicalId));
-  return { version: 2, authority, placement: Object.values(policy.templates).map(binding => ({ templateId: binding.templateId, destinationClass: binding.destinationClass, templateFolder: binding.destinationClass === "managed-default" ? policy.templateFolder : null, sourcePath: binding.sourcePath })) };
+  const bindings = Object.values(policy.templates);
+  return templateInput(
+    policy,
+    { policy: policyState.signature, taxonomy: taxonomyState.signature, obsidianTypes: obsidianState.signature, obsidianTypesPath: ".obsidian/types.json" },
+    bindings,
+    (binding) => {
+      const value = digests.get(binding.templateId);
+      if (value === undefined) throw new Error(`TEMPLATE_SOURCE_INVALID: registered template source (${binding.sourcePath}) is missing`);
+      return value;
+    },
+  );
 }
 
 /** Registers a user-owned template in place; only OMS control files are published. */
@@ -81,8 +86,43 @@ export async function registerExistingTemplate(vault: string, request: RegisterE
     // "bound to something else" is what makes a replayed apply actionable: the
     // first needs no work, the second is a real identity collision.
     const identical = bound.destinationClass === "registered-existing" && bound.sourcePath === sourcePath && bound.contract === request.contract && bound.naming === request.naming;
-    if (identical) throw new Error(`TEMPLATE_ALREADY_REGISTERED: ${templateId} is already registered at ${sourcePath} with this contract and naming; no change is required`);
-    throw new Error(`TEMPLATE_ID_DUPLICATE: templateId ${templateId} is already registered`);
+    if (!identical) throw new Error(`TEMPLATE_ID_DUPLICATE: templateId ${templateId} is already registered`);
+    if (guard.approvedDigest === undefined) {
+      throw new Error(`TEMPLATE_ALREADY_REGISTERED: ${templateId} is already registered at ${sourcePath} with this contract and naming; no change is required`);
+    }
+    const sources = await Promise.all(Object.values(policy.templates).map(async (binding) => ({
+      templateId: binding.templateId,
+      path: binding.sourcePath,
+      state: await state(join(vault, binding.sourcePath)),
+    })));
+    const input = registrationInput(policy, policyState, taxonomyState, obsidianState, sources);
+    const completed = await completedTemplateTransaction(vault, guard.approvedDigest, {
+      inputDigest: inputDigest(input),
+      outputs: [
+        { finalVaultRelativePath: ".oms/template-policy.json" },
+        { finalVaultRelativePath: ".oms/taxonomy.json" },
+        { finalVaultRelativePath: ".oms/types.json" },
+        ...sources.map((item) => ({ finalVaultRelativePath: item.path })),
+      ],
+    }, TEMPLATE_MUTATION_MARKER_PATH);
+    if (completed !== null) {
+      return {
+        status: "already-complete",
+        mode: "create",
+        transactionId: completed.transactionId,
+        currentInputDigest: completed.inputDigest,
+        inputDigest: completed.inputDigest,
+        approvedDigest: completed.approvalDigest,
+        outputDigest: completed.outputDigest,
+        operations: [{ kind: "create", templateId, destinationClass: bound.destinationClass, payloadDigest: sourceState.signature, stableRelativeSuffix: null }],
+        moves: [],
+        writtenPaths: [],
+        deletedPaths: [],
+        verified: completed.verified,
+        markerState: "complete",
+      };
+    }
+    throw new Error("TEMPLATE_TRANSACTION_REPLAY_MISMATCH: completed registration does not match current controls and registered sources; request a new dry-run");
   }
   const sources = await Promise.all(Object.values(policy.templates).map(async binding => ({ templateId: binding.templateId, path: binding.sourcePath, state: await state(join(vault, binding.sourcePath)) })));
   const input = registrationInput(policy, policyState, taxonomyState, obsidianState, sources);

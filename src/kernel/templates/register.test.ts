@@ -104,11 +104,41 @@ it("refuses a templateId already bound to a different source", async () => {
     .rejects.toThrow(/^TEMPLATE_ID_DUPLICATE:/u);
 });
 
-it("names an identical re-registration as already registered rather than a collision", async () => {
-  const vault = await fixture();
+async function completeTwoRegistrations(vault: string): Promise<{ readonly approvalDigest: string; readonly otherPath: string; }> {
+  const otherPath = "Templates/manual/other.template.md";
+  const otherRequest = { ...request, templateId: "other", sourcePath: otherPath };
+  await writeFile(join(vault, otherPath), source.replace("Person", "Other"));
   await register(vault);
-  const sourceBytes = await readFile(join(vault, request.sourcePath));
-  await expect(registerExistingTemplate(vault, request, { dryRun: true }))
-    .rejects.toThrow(/^TEMPLATE_ALREADY_REGISTERED:/u);
-  expect(await readFile(join(vault, request.sourcePath))).toEqual(sourceBytes);
+  const planned = await registerExistingTemplate(vault, otherRequest, { dryRun: true });
+  if (planned.status !== "planned") throw new Error("expected second registration plan");
+  expect((await registerExistingTemplate(vault, otherRequest, { approvedDigest: planned.approvalDigest })).status).toBe("applied");
+  return { approvalDigest: planned.approvalDigest, otherPath };
+}
+
+it.each([
+  ["policy", ".oms/template-policy.json", async (vault: string, otherPath: string): Promise<void> => { await writeFile(join(vault, ".oms/template-policy.json"), `${await readFile(join(vault, ".oms/template-policy.json"), "utf8")}\n`); }],
+  ["taxonomy", ".oms/taxonomy.json", async (vault: string, otherPath: string): Promise<void> => { await writeFile(join(vault, ".oms/taxonomy.json"), "{\"folders\":{\"changed\":{}}}\n"); }],
+  ["projection", ".oms/types.json", async (vault: string, otherPath: string): Promise<void> => { await writeFile(join(vault, ".oms/types.json"), "{\"changed\":true}\n"); }],
+  ["requested source", "Templates/manual/other.template.md", async (vault: string, otherPath: string): Promise<void> => { await writeFile(join(vault, otherPath), source.replace("Other", "Changed")); }],
+  ["different registered source", request.sourcePath, async (vault: string, otherPath: string): Promise<void> => { await writeFile(join(vault, request.sourcePath), source.replace("Person", "Changed")); }],
+])("rejects a completed registration replay after %s drift", async (_name, _path, mutate) => {
+  const vault = await fixture();
+  const { approvalDigest, otherPath } = await completeTwoRegistrations(vault);
+  await mutate(vault, otherPath);
+  await expect(registerExistingTemplate(vault, { ...request, templateId: "other", sourcePath: otherPath }, { approvedDigest: approvalDigest }))
+    .rejects.toThrow(/^TEMPLATE_TRANSACTION_REPLAY_MISMATCH:/u);
+});
+
+it("returns a verified completion receipt when a successful registration response is lost", async () => {
+  const vault = await fixture();
+  const planned = await registerExistingTemplate(vault, request, { dryRun: true });
+  if (planned.status !== "planned") throw new Error("expected plan");
+  const applied = await registerExistingTemplate(vault, request, { approvedDigest: planned.approvalDigest });
+  expect(applied.status).toBe("applied");
+  const before = await Promise.all((await tree(vault)).map(async path => [path, await readFile(join(vault, path))] as const));
+
+  const replayed = await registerExistingTemplate(vault, request, { approvedDigest: planned.approvalDigest });
+
+  expect(replayed.status).toBe("already-complete");
+  expect(await Promise.all((await tree(vault)).map(async path => [path, await readFile(join(vault, path))] as const))).toEqual(before);
 });

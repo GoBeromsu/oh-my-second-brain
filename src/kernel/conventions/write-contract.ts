@@ -51,7 +51,6 @@ export function evaluateResolvedTemplateContract(
 
   for (const [field, policy] of Object.entries(fields)) {
     const value = frontmatter[field];
-    if (writers?.field === field) continue;
     if (policy.required === true && empty(value)) {
       violations.push({ field, rule: "required", message: `Field "${field}" is required.` });
       continue;

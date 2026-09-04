@@ -4,14 +4,14 @@ import { join, relative, resolve } from "node:path";
 
 import { admitWriteTarget } from "../capture/safe.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
-import { approvalDigest, inputDigest, outputDigest } from "./canonical.js";
+import { approvalDigest, inputDigest, outputDigest, templateInput } from "./canonical.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { excludedNoteMatcher } from "../conventions/note-exclude.js";
 import { normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
 import { parseDerivedProjection, parseTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest, loadResolvedTemplates } from "./resolver.js";
 import { executeTemplateTransaction, templateMigrationAdmission, templateMigrationMarkerState } from "./transaction.js";
-import type { AuthorityEntry, Digest, FileExpectation, GuardedTemplateRequest, InputV2, TemplateCompositionManifest, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
+import type { Digest, FileExpectation, GuardedTemplateRequest, InputV2, TemplateCompositionManifest, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
 
 export interface TemplateDoctorTarget { readonly vault: string; readonly source: WriteTargetSource; readonly maxPerTemplate?: number; }
 export interface TemplateDoctorDiagnostic { readonly code: string; readonly path?: string; readonly templateId?: TemplateId; readonly remediation: string; }
@@ -123,16 +123,26 @@ export async function regenerateTypes(input: RegenerateTypesRequest): Promise<Te
       const current = await state(root, binding.sourcePath);
       return { templateId: binding.templateId, path: binding.sourcePath, expected: expectation(current), current };
     }));
-    const authority: AuthorityEntry[] = [
-      { kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: (controls[0] as Extract<VerifiedFileState, { state: "present" }>).signature },
-      { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: (controls[1] as Extract<VerifiedFileState, { state: "present" }>).signature },
-      { kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: ".obsidian/types.json", contentDigest: (controls[3] as Extract<VerifiedFileState, { state: "present" }>).signature },
-    ];
+    const sourceDigests = new Map<string, Digest>();
     for (const source of sources) {
       if (source.current.state === "absent") throw new Error("TEMPLATE_SOURCE_INVALID");
-      authority.push({ kind: "template", logicalId: source.templateId, vaultRelativePath: source.path, contentDigest: source.current.signature });
+      sourceDigests.set(source.templateId, source.current.signature);
     }
-    const regenerationInput: InputV2 = { version: 2, authority: authority.sort((left, right) => left.kind.localeCompare(right.kind) || left.logicalId.localeCompare(right.logicalId)), placement: Object.values(policy.templates).map(binding => ({ templateId: binding.templateId, destinationClass: binding.destinationClass, templateFolder: binding.destinationClass === "managed-default" ? policy.templateFolder : null, sourcePath: binding.sourcePath })) };
+    const regenerationInput = templateInput(
+      policy,
+      {
+        policy: (controls[0] as Extract<VerifiedFileState, { state: "present" }>).signature,
+        taxonomy: (controls[1] as Extract<VerifiedFileState, { state: "present" }>).signature,
+        obsidianTypes: (controls[3] as Extract<VerifiedFileState, { state: "present" }>).signature,
+        obsidianTypesPath: ".obsidian/types.json",
+      },
+      Object.values(policy.templates),
+      (binding) => {
+        const source = sourceDigests.get(binding.templateId);
+        if (source === undefined) throw new Error("TEMPLATE_SOURCE_INVALID");
+        return source;
+      },
+    );
     const manifest = await buildTemplateCompositionManifest(root, { mode: "relocate-folder", templateFolder: policy.templateFolder }, {
       expected: { input: inputDigest(regenerationInput), controls: { policy: expectation(controls[0]!), taxonomy: expectation(controls[1]!), projection: expectation(controls[2]!) }, sources: sources.map(({ templateId, path, expected }) => ({ templateId, path, expected })) },
       taxonomy: { expectedCurrent: expectation(controls[1]!), proposedBytes: (controls[1] as Extract<VerifiedFileState, { state: "present" }>).bytes, action: "verify-only" },

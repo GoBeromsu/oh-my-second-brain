@@ -8,7 +8,7 @@
  *   2. expands each seed's neighbourhood along three reason kinds —
  *      property-value (shared frontmatter axis), wikilink (out-going link),
  *      backlink (incoming link),
- *   3. scores neighbours as reasons×10 + lexical query overlap,
+ *   3. ranks neighbours by reason count, then lexical query overlap,
  *   4. returns the top seeds + neighbours with their connection reasons.
  *
  * Edges are produced by builder.ts with fully resolved vault-relative paths,
@@ -164,16 +164,20 @@ export function exploreEngineGraph(
     }
   }
 
-  // 3. score neighbours = reasons×10 + lexical query overlap (seeds excluded)
+  // 3. Rank neighbours lexicographically: connection evidence is primary and
+  // lexical overlap resolves ties. Keep score in the same lexical unit as seeds.
   const neighbors: EngineGraphExploreNode[] = [];
   for (const [npath, reasons] of neighborReasons) {
     if (seedSet.has(npath)) continue;
     const node = nodeByPath.get(npath);
     if (node === undefined) continue;
-    const score = reasons.length * 10 + searchScore(node, query);
+    const score = searchScore(node, query);
     neighbors.push({ ...node, score, reasons });
   }
-  neighbors.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  neighbors.sort((a, b) =>
+    b.reasons.length - a.reasons.length ||
+    b.score - a.score ||
+    a.path.localeCompare(b.path));
   const maxNeighbors = clamp(opts.maxNeighbors ?? 10, 0, 100);
   const topNeighbors = neighbors.slice(0, maxNeighbors);
 

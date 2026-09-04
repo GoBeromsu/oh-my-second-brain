@@ -47,11 +47,6 @@ const STABILITIES: readonly HarnessStability[] = ["stable", "experimental", "com
  * `assets/` holds all vendor runtime assets, including the single authored
  * skill source and host-specific guidance, hooks, and rules.
  *
- * `skills/` is the root skill surface GJC discovers by convention at
- * `<plugin-root>/skills/<name>/SKILL.md`. It is generated from `assets/skills/`
- * by `scripts/sync-gjc-skills.mjs` and held byte-identical to it by
- * `test/architecture/gjc-skill-surface.test.ts`, so it ships without becoming a
- * second authored copy.
  */
 const PACKAGE_PATH_PREFIXES = [
   "assets/",
@@ -59,8 +54,9 @@ const PACKAGE_PATH_PREFIXES = [
   "dist/",
   "docs/",
   "scripts/",
-  "skills/",
 ] as const;
+
+const SKILLS_PREFIX = "skills/";
 
 /**
  * Root-level files and directories that ship whole.
@@ -222,6 +218,9 @@ function validatePackagePath(
   }
   const underPrefix = PACKAGE_PATH_PREFIXES.some(
     (prefix) => normalizedPath === prefix.slice(0, -1) || normalizedPath.startsWith(prefix),
+  ) || (
+    (surface.startsWith("packageAssets.npmFiles.") || surface.startsWith("packageAssets.releaseRequiredPaths."))
+    && (normalizedPath === SKILLS_PREFIX.slice(0, -1) || normalizedPath.startsWith(SKILLS_PREFIX))
   );
   const underRootEntry = PACKAGE_ROOT_ENTRIES.some(
     (entry) => normalizedPath === entry || normalizedPath.startsWith(`${entry}/`),

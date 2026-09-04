@@ -1,4 +1,9 @@
+import { createHash } from "node:crypto";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { describe, expect, it } from "vitest";
+import { TEMPLATE_POLICY_SCHEMA } from "../contracts/index.js";
+import { sourceSignature } from "./resolver.js";
+import type { Digest } from "./types.js";
 import { parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy, validateDerivedProjection, validateTemplateId } from "./policy.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -32,23 +37,82 @@ describe("template policy", () => {
     expect(serializeTemplatePolicy(parseTemplatePolicy(serialized))).toBe(serialized);
   });
 
-  it("parses and serializes a user-owned writer registry", () => {
-    const parsed = parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: ["oms-agent", "claude"] } });
+  it("parses and serializes a v2 user-owned writer registry with preserved extensions", () => {
+    const parsed = parseTemplatePolicy({ ...policy(), version: 2, writers: { field: "created_by", identifiers: ["oms-agent", "claude"], owner: "vault" } });
     const serialized = serializeTemplatePolicy(parsed);
-    expect(parsed.writers).toEqual({ field: "created_by", identifiers: ["oms-agent", "claude"] });
-    expect(JSON.parse(serialized).writers).toEqual({ field: "created_by", identifiers: ["oms-agent", "claude"] });
+    expect(parsed.writers).toEqual({ field: "created_by", identifiers: ["oms-agent", "claude"], extensions: { owner: "vault" } });
+    expect(JSON.parse(serialized).writers).toEqual({ field: "created_by", identifiers: ["oms-agent", "claude"], extensions: { owner: "vault" } });
     expect(serializeTemplatePolicy(parseTemplatePolicy(serialized))).toBe(serialized);
   });
 
   it("rejects malformed writer registries", () => {
-    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: 1, identifiers: ["oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
-    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: "oms-agent" } })).toThrow("TEMPLATE_POLICY_INVALID");
-    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: [] } })).toThrow("TEMPLATE_POLICY_INVALID");
-    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: ["oms-agent", "oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), version: 2, writers: { field: 1, identifiers: ["oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), version: 2, writers: { field: "created_by", identifiers: "oms-agent" } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), version: 2, writers: { field: "created_by", identifiers: [] } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), version: 2, writers: { field: "created_by", identifiers: ["oms-agent", "oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
   });
 
-  it("does not serialize a writer registry when none is configured", () => {
-    expect(JSON.parse(serializeTemplatePolicy(parseTemplatePolicy(policy())))).not.toHaveProperty("writers");
+  it("keeps v1 writers as byte-identical preserved extensions without enabling enforcement", () => {
+    const legacy = JSON.stringify({ ...policy(), writers: { field: "created_by", identifiers: ["oms-agent"] } });
+    const parsed = parseTemplatePolicy(legacy);
+
+    expect(parsed.writers).toBeUndefined();
+    expect(parsed.extensions?.writers).toEqual({ field: "created_by", identifiers: ["oms-agent"] });
+    expect(serializeTemplatePolicy(parseTemplatePolicy(serializeTemplatePolicy(parsed)))).toBe(serializeTemplatePolicy(parsed));
+  });
+
+  it("keeps the exported schema aligned with versioned writer-registry parsing", () => {
+    const validate = new AjvJsonSchemaValidator().getValidator(TEMPLATE_POLICY_SCHEMA);
+    const parserAccepts = (input: unknown): boolean => {
+      try {
+        parseTemplatePolicy(input);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    for (const writers of ["legacy writer metadata", { owner: "vault", agents: ["oms-agent"] }]) {
+      const legacy = { ...policy(), writers };
+      expect(validate(legacy).valid).toBe(true);
+      expect(parserAccepts(legacy)).toBe(true);
+      expect(parseTemplatePolicy(legacy).extensions?.writers).toEqual(writers);
+    }
+
+    const managed = { ...policy(), version: 2, writers: { field: "created_by", identifiers: ["oms-agent"] } };
+    expect(validate(managed).valid).toBe(true);
+    expect(parserAccepts(managed)).toBe(true);
+
+    for (const malformed of [
+      { field: "created_by", identifiers: [] },
+      { field: " ", identifiers: ["oms-agent"] },
+    ]) {
+      const invalid = { ...policy(), version: 2, writers: malformed };
+      expect(validate(invalid).valid).toBe(false);
+      expect(parserAccepts(invalid)).toBe(false);
+    }
+  });
+
+  it("retains the canonical v1 bytes when no writer registry is configured", () => {
+    const canonicalV1 = `{
+  "base": {
+    "fields": {}
+  },
+  "contracts": {},
+  "extensions": {
+    "owner": "vault"
+  },
+  "templateFolder": "Templates/OMS",
+  "templates": {},
+  "version": 1
+}
+`;
+
+    const serialized = serializeTemplatePolicy(parseTemplatePolicy(canonicalV1));
+    expect(serialized).toBe(canonicalV1);
+    expect(createHash("sha256").update(serialized).digest("hex")).toBe("bb75390b7b96c53707c9f70e2bf244d5efa58d72e14f0d4a0184d2e816f0de2e");
+    const policyDigest: Digest = "sha256:bb75390b7b96c53707c9f70e2bf244d5efa58d72e14f0d4a0184d2e816f0de2e";
+    expect(sourceSignature([{ logicalId: "template-policy", signature: policyDigest }])).toBe("sha256:0411011d9acc46f1f91484e055dc1c1849baaba7c97b459029c4d2cd72a5f1ad");
   });
 
   it("validates static and dynamic defaults, types, and URL format", () => {

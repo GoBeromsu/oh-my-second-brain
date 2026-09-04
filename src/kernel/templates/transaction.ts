@@ -285,6 +285,51 @@ export async function resumeTemplateTransaction(
   return executeTemplateTransaction(vault, manifest, { approvedDigest }, markerPath);
 }
 
+/** Returns a verified receipt for an already completed durable transaction. */
+export interface CompletedTemplateTransaction {
+  readonly transactionId: string;
+  readonly inputDigest: Digest;
+  readonly approvalDigest: Digest;
+  readonly outputDigest: Digest;
+  readonly verified: readonly TransactionVerifiedPath[];
+}
+
+export interface CompletedTemplateTransactionExpectation {
+  readonly inputDigest: Digest;
+  readonly outputs: readonly { readonly finalVaultRelativePath: TransactionPath; }[];
+}
+
+export async function completedTemplateTransaction(
+  vault: string,
+  approvedDigest: Digest,
+  expected: CompletedTemplateTransactionExpectation,
+  markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH,
+): Promise<CompletedTemplateTransaction | null> {
+  const active = await readMarker(vault, markerPath);
+  if (
+    active.state !== "valid" ||
+    active.marker.status !== "complete" ||
+    active.marker.approvalDigest !== approvedDigest
+  ) {
+    return null;
+  }
+  const states = await Promise.all(expected.outputs.map(async (item) => ({ path: item.finalVaultRelativePath, state: await state(vault, item.finalVaultRelativePath) })));
+  if (states.some((item) => item.state.state === "absent")) return null;
+  const currentOutputs = states.map((item) => {
+    if (item.state.state === "absent") throw new Error("unreachable absent completed output");
+    return { finalVaultRelativePath: item.path, payloadDigest: item.state.signature };
+  });
+  const currentOutputDigest = outputDigest(currentOutputs);
+  if (active.marker.inputDigest !== expected.inputDigest || active.marker.outputDigest !== currentOutputDigest) return null;
+  return {
+    transactionId: active.marker.transactionId,
+    inputDigest: active.marker.inputDigest,
+    approvalDigest: active.marker.approvalDigest,
+    outputDigest: active.marker.outputDigest,
+    verified: states.map((item) => verified(item.path, item.state)),
+  };
+}
+
 /** Publishes a pre-composed manifest; semantic composition is intentionally outside this module. */
 export async function executeTemplateTransaction(vault: string, manifest: TemplateCompositionManifest, request: GuardedTemplateRequest, markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH): Promise<TemplateTransactionReceipt> {
   if (!isMarkerPath(markerPath)) throw new TypeError("TEMPLATE_SOURCE_UNSAFE: marker path is not approved");

@@ -495,21 +495,16 @@ export class McpEngineAdapter {
     const hasLexicalQuery = query.trim().length > 0;
     const scoredNodes = filtered.map((node) => ({ node, score: searchScore(node, query) }));
     // An axis constraint narrows the corpus; it is not lexical evidence.
-    // Apply the lexical threshold once so hits and facets represent the same nodes.
-    const qualifyingNodes = scoredNodes.filter(({ score }) =>
-      (!hasLexicalQuery || score > 0) && (opts.minScore === undefined || score >= opts.minScore),
-    );
-    const scored = qualifyingNodes
+    // Candidate selection only establishes lexical relevance. Reranking and the
+    // final threshold below decide the result set shared by hits and facets.
+    const lexicalCandidates = scoredNodes.filter(({ score }) => !hasLexicalQuery || score > 0);
+    const scored = lexicalCandidates
       .map(({ node, score }) => ({
         docPath: node.path,
         score,
         ...(hasLexicalQuery ? { perTypeScores: { lex: score } } : {}),
       }))
       .sort((left, right) => right.score - left.score || left.docPath.localeCompare(right.docPath));
-    const facets: McpSemanticFacet[] = queryFacets(qualifyingNodes.map(({ node }) => node)).map((facet) => ({
-      ...facet,
-      intent: facetIntent(facet, opts.intent),
-    }));
     const candidateLimit = opts.candidateLimit ?? UNBOUNDED_CANDIDATE_LIMIT;
     const candidates = scored.slice(0, candidateLimit);
     const shouldRerank = opts.rerank === true && opts.noRerank !== true;
@@ -538,9 +533,25 @@ export class McpEngineAdapter {
         });
       })
       : candidates;
+    // Pipeline order: candidate selection → rerank → final minScore → facets
+    // and totalCount (in the mapper) → pagination. Do not threshold earlier:
+    // reranking owns the final score.
+    const minScore = opts.minScore;
+    const finalRanked = minScore === undefined
+      ? ranked
+      : ranked.filter((result) => result.score >= minScore);
+    const nodeByPath = new Map(lexicalCandidates.map(({ node }) => [node.path, node]));
+    const facets: McpSemanticFacet[] = queryFacets(
+      finalRanked.flatMap((result) => {
+        const node = nodeByPath.get(result.docPath);
+        return node === undefined ? [] : [node];
+      }),
+    ).map((facet) => ({
+      ...facet,
+      intent: facetIntent(facet, opts.intent),
+    }));
     const hasNonLexSearch = subQueries.some((search) => search.type !== "lex");
-    const result = retrievalResultsToQueryResult(ranked, {
-      minScore: opts.minScore,
+    const result = retrievalResultsToQueryResult(finalRanked, {
       limit: resultPageLimit(opts),
       cursor: opts.cursor,
       intent: opts.intent,

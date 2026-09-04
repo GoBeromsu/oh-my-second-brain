@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { harnessSurfaceRegistry } from "../../kernel/harness/surface-registry.js";
 import { computeTreeDigest, parseProvenance } from "../../kernel/install/provenance.js";
+import { discoverHostInstallAssets } from "../../cli/host-probe.js";
 import { installHermes, uninstallHermes } from "./hermes.js";
 
 vi.mock("node:fs/promises", async importOriginal => {
@@ -123,6 +124,41 @@ describe("installHermes transaction", () => {
       );
     } finally {
       readdir.mockRestore();
+      write.mockRestore();
+    }
+  });
+
+  it("rejects the same disabled registration through installer verification and host probing", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-"));
+    temporaryDirectories.push(home);
+    const hermes = path.join(home, ".hermes");
+    const config = path.join(hermes, "config.yaml");
+    const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
+    if (!host) throw new Error("Hermes surface missing");
+    let mutatedRegistration: string | undefined;
+    const write = vi.mocked(fsPromises.writeFile).mockImplementation(async (file, data, options) => {
+      await originalWriteFile(file, data, options);
+      if (path.basename(String(file)).startsWith(".config.yaml.oms-")) {
+        mutatedRegistration = Buffer.from(data).toString("utf8").replace("enabled: true", "enabled: false");
+        await originalWriteFile(file, mutatedRegistration);
+      }
+    });
+    const previousHermesHome = process.env.OMS_HERMES_HOME;
+    process.env.OMS_HERMES_HOME = hermes;
+    try {
+      const options = { action: "install" as const, runtime: "hermes" as const, vault: "/vault", homeDir: home, adapterRoot: path.resolve(".") };
+      await expect(installHermes(options, host)).rejects.toThrow("Hermes config verification failed");
+      if (mutatedRegistration === undefined) throw new Error("Hermes installer did not render a registration");
+      await mkdir(path.join(hermes, "skills", "knowledge-management", "oms"), { recursive: true });
+      await originalWriteFile(config, mutatedRegistration);
+      const discovered = await discoverHostInstallAssets();
+      expect(discovered.assets).toContainEqual(expect.objectContaining({
+        id: "registration:hermes",
+        evidence: { state: "missing", cause: null },
+      }));
+    } finally {
+      if (previousHermesHome === undefined) delete process.env.OMS_HERMES_HOME;
+      else process.env.OMS_HERMES_HOME = previousHermesHome;
       write.mockRestore();
     }
   });

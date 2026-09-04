@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- **The shipped GJC skills mirror is now checked file-for-file against authored skills, with drift failures directing contributors to `npm run sync:skills`.**
+
 ### Changed
 
 - **Supported host guidance now names the single-qualified OMS tools.** Hermes, Claude, and Codex users see `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`, never `oms_oms_*`; raw MCP integrations must replace local calls `oms_write`/`oms_search`/`oms_link`/`oms_status`/`oms_doctor` with `write`/`search`/`link`/`status`/`doctor`.

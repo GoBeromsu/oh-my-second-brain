@@ -669,6 +669,34 @@ folders:
     ]));
   });
 
+  it("derives reranked threshold facets from the same final hit set", async () => {
+    const v = freshVault();
+    const rerank = vi.fn().mockResolvedValue([
+      { docPath: "notes/beta.md", chunkOrdinal: 0, score: 0.9 },
+      { docPath: "notes/alpha.md", chunkOrdinal: 0, score: 0.1 },
+    ]);
+    const adapter = new McpEngineAdapter(makeDeps(), v, undefined, { rerank }, false, false);
+
+    const result = await adapter.semanticQuery({
+      query: "alpha",
+      axes: { folder: "notes" },
+      rerank: true,
+      minScore: 0.5,
+      limit: 10,
+    });
+
+    expect(result).toMatchObject({ available: true, totalCount: 1 });
+    if (!result.available) return;
+    expect(result.hits.map((hit) => hit.path)).toEqual(["notes/beta.md"]);
+    expect(result.facets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ axis: "template", value: "reference", count: 1 }),
+    ]));
+    expect(result.facets).toEqual(expect.not.arrayContaining([
+      expect.objectContaining({ axis: "template", value: "project" }),
+      expect.objectContaining({ axis: "field", key: "status", value: "active" }),
+    ]));
+  });
+
   it("does not report lexical or vector evidence for an axis-only query", async () => {
     const v = freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v, undefined, undefined, false, false);
