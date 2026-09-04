@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { detectLinkIssues } from "../kernel/conventions/lint.js";
 import { formatLintReport } from "../kernel/conventions/report.js";
+import { inspectInstalledAssets } from "../kernel/install/asset-health.js";
 import { hostHome } from "../kernel/install/common.js";
 import { computeTreeDigest, parseProvenance } from "../kernel/install/provenance.js";
 import { diagnoseTemplates } from "../kernel/templates/index.js";
@@ -39,6 +40,13 @@ function formatHermesProvenanceStatus(status: HermesProvenanceStatus): string {
   return `Hermes provenance: ${status.state} (package ${status.packageVersion ?? "unknown"}, recorded ${status.recordedVersion ?? "none"}).`;
 }
 
+function formatInstallAssets(status: Awaited<ReturnType<typeof inspectInstalledAssets>>): string {
+  const unusable = status.assets.filter(asset => asset.state !== "ok").length;
+  return unusable === 0
+    ? `Install assets: ok (${status.assets.length} checked).`
+    : `Install assets: degraded (${unusable} of ${status.assets.length} unusable).`;
+}
+
 export async function runDoctor(opts: {
   vault: string;
   verbose?: boolean;
@@ -58,18 +66,20 @@ export async function runDoctor(opts: {
     }
     const diagnosis = await diagnoseTemplates({ vault: opts.vault, source: "explicit", maxPerTemplate: opts.maxPerTemplate });
     const hermesProvenance = await hermesProvenanceStatus();
+    const installAssets = await inspectInstalledAssets();
     if (opts.json) {
-      console.log(JSON.stringify({ vault: opts.vault, ...diagnosis, hermesProvenance }, null, 2));
+      console.log(JSON.stringify({ vault: opts.vault, ...diagnosis, hermesProvenance, installAssets }, null, 2));
       return 0;
     }
     console.log(`\nOh My Second Brain doctor: ${diagnosis.status}.`);
     console.log(`Migration marker: ${diagnosis.migrationMarker}.`);
     console.log(`Managed template sources excluded: ${diagnosis.managedSourceExclusions.length}.`);
     console.log(formatHermesProvenanceStatus(hermesProvenance));
+    console.log(formatInstallAssets(installAssets));
     if (diagnosis.unresolvedLegacyNotes.length > 0) {
       console.log(`Unresolved legacy notes: ${diagnosis.unresolvedLegacyNotes.length}.`);
     }
-    for (const item of diagnosis.diagnostics) {
+    for (const item of [...diagnosis.diagnostics, ...installAssets.assets.filter(asset => asset.state !== "ok").map(asset => ({ code: asset.state.toUpperCase().replace(/-/g, "_"), path: asset.declaredPath, remediation: asset.remediation }))]) {
       console.log(`  [${item.code}]${item.path === undefined ? "" : ` ${item.path}`} — ${item.remediation}`);
     }
     console.log("");
