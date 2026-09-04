@@ -46,6 +46,12 @@ const STABILITIES: readonly HarnessStability[] = ["stable", "experimental", "com
  *
  * `assets/` holds all vendor runtime assets, including the single authored
  * skill source and host-specific guidance, hooks, and rules.
+ *
+ * `skills/` is the root skill surface GJC discovers by convention at
+ * `<plugin-root>/skills/<name>/SKILL.md`. It is generated from `assets/skills/`
+ * by `scripts/sync-gjc-skills.mjs` and held byte-identical to it by
+ * `test/architecture/gjc-skill-surface.test.ts`, so it ships without becoming a
+ * second authored copy.
  */
 const PACKAGE_PATH_PREFIXES = [
   "assets/",
@@ -53,6 +59,7 @@ const PACKAGE_PATH_PREFIXES = [
   "dist/",
   "docs/",
   "scripts/",
+  "skills/",
 ] as const;
 
 /**
