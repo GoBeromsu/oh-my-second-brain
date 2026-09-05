@@ -4,6 +4,10 @@ import { join, relative, resolve } from "node:path";
 
 import { admitWriteTarget } from "../capture/safe.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
+import { readBundledPackageVersion } from "../runtime/assets.js";
+import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../runtime/event-journal.js";
+import { readRuntimeEvents } from "../runtime/event-read.js";
+import { summarizeRuntimeHistory, type RuntimeHistorySummary } from "../runtime/event-summary.js";
 import { approvalDigest, inputDigest, outputDigest, templateInput } from "./canonical.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { excludedNoteMatcher } from "../conventions/note-exclude.js";
@@ -15,7 +19,7 @@ import type { DerivedProjection, Digest, FileExpectation, GuardedTemplateRequest
 
 export interface TemplateDoctorTarget { readonly vault: string; readonly source: WriteTargetSource; readonly maxPerTemplate?: number; }
 export interface TemplateDoctorDiagnostic { readonly code: string; readonly path?: string; readonly templateId?: TemplateId; readonly expected?: Digest; readonly actual?: Digest; readonly remediation: string; }
-export interface TemplateDoctorDiagnosis { readonly status: "healthy" | "needs-repair"; readonly diagnostics: readonly TemplateDoctorDiagnostic[]; readonly managedSourceExclusions: readonly string[]; readonly unresolvedLegacyNotes: readonly string[]; readonly migrationMarker: "absent" | "in-progress" | "complete" | "invalid"; }
+export interface TemplateDoctorDiagnosis { readonly status: "healthy" | "needs-repair"; readonly diagnostics: readonly TemplateDoctorDiagnostic[]; readonly managedSourceExclusions: readonly string[]; readonly unresolvedLegacyNotes: readonly string[]; readonly migrationMarker: "absent" | "in-progress" | "complete" | "invalid"; readonly history?: RuntimeHistorySummary; readonly runtimeWarnings?: readonly string[]; }
 export interface RegenerateTypesRequest { readonly target: TemplateDoctorTarget; readonly request: GuardedTemplateRequest; }
 export interface BackfillDefaultsRequest { readonly target: TemplateDoctorTarget; readonly notePath: string; readonly request: GuardedTemplateRequest; }
 export type TemplateDoctorRepair = TemplateTransactionReceipt | { readonly status: "rejected"; readonly code: string; readonly remediation: string; };
@@ -94,7 +98,7 @@ async function projectionDriftDiagnostics(
 }
 
 /** Read-only health report for template authorities, projection, legacy notes, and transaction state. */
-export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<TemplateDoctorDiagnosis> {
+async function diagnoseTemplatesInternal(target: TemplateDoctorTarget): Promise<TemplateDoctorDiagnosis> {
   const root = resolve(target.vault);
   const migrationMarker = await templateMigrationMarkerState(root);
   if (migrationMarker === "in-progress" || migrationMarker === "invalid") {
@@ -142,6 +146,83 @@ export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<T
     return count < target.maxPerTemplate;
   });
   return { status: unique.size === 0 ? "healthy" : "needs-repair", diagnostics: bounded, managedSourceExclusions: policy === null ? [] : Object.values(policy.templates).map(deriveTemplateSourcePath), unresolvedLegacyNotes: [], migrationMarker };
+}
+
+function ledgerWarning(error: unknown): string {
+  const detail = error instanceof Error ? error.message.replace(/^LEDGER_APPEND_FAILED:\s*/, "") : String(error);
+  return `LEDGER_APPEND_FAILED: ${detail}. Runtime history is incomplete; verify the external OMS runtime ledger.`;
+}
+
+/** Diagnoses current bytes, then records the check and each authority/source observation externally. */
+export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<TemplateDoctorDiagnosis> {
+  const root = resolve(target.vault);
+  const invocation = createRuntimeInvocation({ surface: "kernel", operation: "template-check", packageVersion: readBundledPackageVersion() });
+  let diagnosis: TemplateDoctorDiagnosis;
+  try {
+    diagnosis = await diagnoseTemplatesInternal(target);
+  } catch (error: unknown) {
+    try {
+      appendRuntimeEvent(createRuntimeEvent(invocation, {
+        kind: "template-check",
+        outcome: "failure",
+      }), { vaultPath: root });
+    } catch { /* The diagnosis failure remains authoritative. */ }
+    throw error;
+  }
+  const warnings: string[] = [];
+  try {
+    const previous = readRuntimeEvents({ vaultPath: root, kinds: ["template-verification"] }).events;
+    appendRuntimeEvent(createRuntimeEvent(invocation, {
+      kind: "template-check",
+      outcome: diagnosis.status === "healthy" ? "success" : "failure",
+    }), { vaultPath: root });
+    let policy: TemplatePolicy | null = null;
+    try { policy = parseTemplatePolicy(await readFile(join(root, ".oms/template-policy.json"), "utf8")); }
+    catch { /* The failed authority observation below remains explicit. */ }
+    const observations = [
+      { path: ".oms/template-policy.json", templateId: null },
+      { path: ".oms/taxonomy.json", templateId: null },
+      { path: ".obsidian/types.json", templateId: null },
+      ...(policy === null ? [] : Object.values(policy.templates).map(binding => ({
+        path: deriveTemplateSourcePath(binding),
+        templateId: binding.templateId as string,
+      }))),
+    ];
+    for (const observation of observations) {
+      const current = await state(root, observation.path);
+      const prior = previous.find(event =>
+        event.notePath === observation.path &&
+        event.templateId === observation.templateId
+      );
+      const currentSignature = current.state === "present" ? current.signature : null;
+      const priorSignature = prior?.templateSignature ?? prior?.inputSignature ?? null;
+      const changed = prior !== undefined && priorSignature !== currentSignature;
+      const event = createRuntimeEvent(invocation, {
+        kind: "template-verification",
+        outcome: current.state === "present" ? "success" : "observation-gap",
+        eventTime: null,
+        templateId: observation.templateId,
+        notePath: observation.path,
+        ...(observation.templateId === null ? { inputSignature: currentSignature } : { templateSignature: currentSignature }),
+      });
+      appendRuntimeEvent(changed ? {
+        ...event,
+        changedBetweenFrom: prior.observedAt,
+        changedBetweenTo: event.observedAt,
+      } : event, { vaultPath: root });
+    }
+  } catch (error: unknown) {
+    warnings.push(ledgerWarning(error));
+  }
+  try {
+    return {
+      ...diagnosis,
+      history: summarizeRuntimeHistory({ vaultPath: root }),
+      ...(warnings.length === 0 ? {} : { runtimeWarnings: warnings }),
+    };
+  } catch (error: unknown) {
+    return { ...diagnosis, runtimeWarnings: [...warnings, ledgerWarning(error)] };
+  }
 }
 
 /** Recomputes only the derived projection and delegates all publication to the guarded transaction. */

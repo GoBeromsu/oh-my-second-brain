@@ -18,6 +18,8 @@ The MCP server is started with `oms mcp`. Claude uses `.mcp.json`, Codex uses `.
 All hosts expose the same five MCP tools. Registering an existing template remains
 an operation of `write`, not a sixth tool:
 
+Status and template listings report runtime history for the current host and vault only. This history is stored outside the vault, not in the engine store or convention controls. Report logging failures and observation gaps explicitly; do not merge another host's history or treat absent events as inactivity.
+
 ```json
 {
   "op": "template",

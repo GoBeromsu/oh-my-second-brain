@@ -4,5 +4,6 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "test/**/*.test.ts"],
     environment: "node",
+    setupFiles: ["test/runtime-journal-setup.ts"],
   },
 });

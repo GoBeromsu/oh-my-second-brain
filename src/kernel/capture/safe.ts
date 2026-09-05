@@ -1,5 +1,6 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { stringify as yamlStringify } from "yaml";
 import { parseNote } from "../conventions/frontmatter.js";
 import { evaluateResolvedTemplateContract, type TemplateContractViolation } from "../conventions/write-contract.js";
@@ -8,6 +9,10 @@ import { resolveDefaults } from "../templates/defaults.js";
 import { renderNoteName } from "../templates/naming.js";
 import { formatObsidianTime } from "../templates/obsidian-core-time.js";
 import { normalizeTemplateSourcePath, verifyVaultPath } from "../templates/paths.js";
+import { loadResolvedTemplates } from "../templates/resolver.js";
+import { readBundledPackageVersion } from "../runtime/assets.js";
+import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../runtime/event-journal.js";
+import { RuntimeLedgerError, type RuntimeEventOutcome } from "../runtime/event-types.js";
 import type { JsonValue, PreparedWrite, ResolvedConvention, ResolvedTemplate } from "../templates/types.js";
 
 export type WriteMode = "create" | "append" | "update";
@@ -124,6 +129,7 @@ export interface TemplateWriteReceipt {
   readonly inputSignature: string;
   readonly templateSignature: string;
   readonly postconditionVerified: true;
+  readonly runtimeWarnings?: readonly string[];
 }
 
 export interface TemplateWriteResult {
@@ -138,6 +144,7 @@ export interface TemplateWriteResult {
   readonly reason?: string;
   readonly rejection?: WriteRejection;
   readonly receipt?: TemplateWriteReceipt;
+  readonly runtimeWarnings?: readonly string[];
 }
 
 function templateResult(
@@ -290,10 +297,30 @@ function preparedTemplateWrite(
 
 /**
  */
-export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): Promise<TemplateWriteResult> {
+async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput): Promise<TemplateWriteResult> {
   const caller = input.frontmatter ?? {};
   const targetRejection = await admitWriteTarget(input.target);
   if (targetRejection) return templateResult("rejected", input, undefined, input.notePath ?? "", caller, input.body ?? "", [], targetRejection.message, targetRejection);
+  let authoritative: ResolvedConvention;
+  try {
+    authoritative = await loadResolvedTemplates(input.target.vault);
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const payload = templateRejection(
+      "contract-violation",
+      `TEMPLATE_SOURCE_DRIFT: current template authorities could not be verified (${detail})`,
+      "reload the resolved convention or run regenerate-types, then retry",
+    );
+    return templateResult("rejected", input, templateFor(input), input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
+  }
+  if (!isDeepStrictEqual(authoritative, input.convention)) {
+    const payload = templateRejection(
+      "contract-violation",
+      "TEMPLATE_SOURCE_DRIFT: supplied resolved convention does not match current template authorities",
+      "reload the resolved convention and retry",
+    );
+    return templateResult("rejected", input, templateFor(input), input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
+  }
   if (containsExternalDelimiter(caller) || input.body !== undefined && containsExternalDelimiter(input.body)) {
     const payload = templateRejection(
       "contract-violation",
@@ -489,4 +516,70 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
     return templateResult("rejected", input, template, prepared.notePath, fields, body, persistedContract.violations, payload.message, payload);
   }
   return { ...templateResult("written", input, template, prepared.notePath, fields, body), prepared, receipt: { resolvedVault: input.target.vault, resolutionSource: input.target.source, templateId: template.id, notePath: prepared.notePath, mode: "create", resolvedAt: prepared.resolvedAt, writtenPaths: [prepared.notePath], inputSignature: template.inputSignature, templateSignature: template.templateSignature, postconditionVerified: true } };
+}
+
+function eventOutcome(result: TemplateWriteResult, dryRun: boolean): RuntimeEventOutcome {
+  if (result.status === "rejected" || result.status === "ask") return "rejected";
+  return dryRun ? "unchanged" : "success";
+}
+
+function ledgerWarning(error: unknown): string {
+  const detail = error instanceof RuntimeLedgerError
+    ? error.message.replace(/^LEDGER_APPEND_FAILED:\s*/, "")
+    : error instanceof Error ? error.message : String(error);
+  return `LEDGER_APPEND_FAILED: ${detail}`;
+}
+
+function presentSignature(value: string | undefined): string | undefined {
+  return value === undefined || value.length === 0 ? undefined : value;
+}
+
+/**
+ * Verifies and writes a note while recording one external runtime-history event.
+ * Journal failure is visible but never rolls back or changes a successful vault write.
+ */
+export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): Promise<TemplateWriteResult> {
+  const invocation = createRuntimeInvocation({
+    surface: "kernel",
+    operation: `note:${input.mode}`,
+    packageVersion: readBundledPackageVersion(),
+  });
+  let result: TemplateWriteResult;
+  try {
+    result = await writeResolvedTemplateNoteInternal(input);
+  } catch (error: unknown) {
+    const event = createRuntimeEvent(invocation, {
+      kind: "note-write",
+      outcome: "failure",
+      templateId: input.templateId,
+      notePath: input.notePath,
+      inputSignature: presentSignature(input.convention.inputSignature),
+      templateSignature: presentSignature(input.templateId === undefined ? undefined : input.convention.templates[input.templateId]?.templateSignature),
+    });
+    try { appendRuntimeEvent(event, { vaultPath: input.target.vault }); }
+    catch { /* The original write failure remains authoritative. */ }
+    throw error;
+  }
+  const template = result.templateId === null ? undefined : input.convention.templates[result.templateId];
+  const successfulMutation = result.status === "written" && !input.dryRun;
+  const event = createRuntimeEvent(invocation, {
+    kind: "note-write",
+    outcome: eventOutcome(result, input.dryRun),
+    ...(successfulMutation ? { eventTime: new Date().toISOString() } : {}),
+    templateId: result.templateId,
+    notePath: result.notePath === "" ? undefined : result.notePath,
+    inputSignature: presentSignature(template?.inputSignature ?? input.convention.inputSignature),
+    templateSignature: presentSignature(template?.templateSignature),
+  });
+  try {
+    appendRuntimeEvent(event, { vaultPath: input.target.vault });
+    return result;
+  } catch (error: unknown) {
+    const runtimeWarnings = [...(result.runtimeWarnings ?? []), ledgerWarning(error)];
+    return {
+      ...result,
+      runtimeWarnings,
+      ...(result.receipt === undefined ? {} : { receipt: { ...result.receipt, runtimeWarnings } }),
+    };
+  }
 }
