@@ -68,7 +68,7 @@ describe("Issue #58: Verified-target write kernel", () => {
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp"],
+      args: [distCli, "serve", "mcp"],
       cwd: tmpDocuments,
       env: { HOME: tmpHome, PATH: process.env.PATH ?? "" },
       stderr: "pipe",
@@ -147,7 +147,7 @@ describe("Issue #58: Verified-target write kernel", () => {
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp"],
+      args: [distCli, "serve", "mcp"],
       cwd: tmpDocuments,
       env: { HOME: tmpHome, OMS_VAULT: tmpVault, PATH: process.env.PATH ?? "" },
       stderr: "pipe",

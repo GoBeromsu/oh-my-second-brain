@@ -57,7 +57,7 @@ The public sets are intentionally different:
 - five capability-only local MCP tools: `write`, `search`, `link`, `status`, `doctor`;
 - an independent CLI command allowlist.
 
-Detail capabilities remain `op` values under the five tools. Host adapters differ natively, but all register the same MCP runtime and stamp the selected vault into their managed `oms mcp --vault` entry. That stamp never changes runtime resolution precedence: explicit target, local vault controls, bridge, `OMS_VAULT`, then read-only cwd fallback.
+Detail capabilities remain exclusive `op`/`mode` values under the five tools. Host adapters differ natively, but all register the same MCP runtime and stamp the selected vault into their managed `oms serve mcp --vault` entry. That stamp never changes runtime resolution precedence: explicit target, local vault controls, bridge, `OMS_VAULT`, then read-only cwd fallback.
 
 The runtime server id is `oms`; qualifying hosts render those local names as
 `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`, never

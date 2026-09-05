@@ -34,7 +34,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       stderr: "pipe",
       // StdioClientTransport sandboxes the child env to a safe default subset,
@@ -56,7 +56,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       await client.connect(transport);
       await client.callTool({
         name: "doctor",
-        arguments: { op: "sync-embeddings", embed: false },
+        arguments: { op: "sync-embeddings", mode: "sync" },
       });
       const retrieve = textPayload(
         await client.callTool({
@@ -89,11 +89,11 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
 
       const syncRaw = await client.callTool({
         name: "doctor",
-        arguments: { op: "sync-embeddings", collection: "obsidian", ensureCollection: true, force: true, index: "brain" },
+        arguments: { op: "sync-embeddings", mode: "repair", collection: "obsidian", ensureCollection: true, index: "brain" },
       });
       const queryCall = {
         name: "search",
-        arguments: { op: "query", query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
+        arguments: { op: "query", mode: "query", query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
       };
       if (hasModel) {
         // Real engine path: sync builds the native store, query retrieves from it.
@@ -173,7 +173,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       const batch = textPayload(
         await client.callTool({
           name: "search",
-          arguments: { op: "multi-get-documents", targets: ["references/*.md", docid], lineLimit: 40, maxBytes: 2048 },
+          arguments: { op: "get-document", targets: ["references/*.md", docid], lineLimit: 40, maxBytes: 2048 },
         }),
       );
       expect((single.documents as Array<Record<string, unknown>>)[0]).toEqual(

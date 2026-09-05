@@ -65,7 +65,25 @@ describe("template command", () => {
     await runTemplateCommand(["show", "note", "--vault", root]); expect(output().template.id).toBe("note");
     await runTemplateCommand(["scan", "--vault", root]); expect(scan).toHaveBeenCalledWith(root);
     await runTemplateCommand(["check", "--vault", root]); expect(diagnose).toHaveBeenCalledWith({ vault: root, source: "explicit" });
+    expect(output()).toMatchObject({ vault: root, status: "healthy", diagnostics: [] });
+    expect(process.exitCode).toBe(0);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("reports needs-repair as warning-only while preserving rejected and inconsistent failures", async () => {
+    const root = await vault();
+    diagnose.mockResolvedValueOnce({ status: "needs-repair", diagnostics: [{ code: "TEMPLATE_CONTROL_MISSING" }] });
+    await runTemplateCommand(["check", "--vault", root]);
+    expect(output()).toMatchObject({
+      vault: root,
+      status: "needs-repair",
+      diagnostics: [{ code: "TEMPLATE_CONTROL_MISSING" }],
+    });
+    expect(process.exitCode).toBe(0);
+
+    execute.mockResolvedValueOnce({ status: "inconsistent", diagnostics: [] });
+    await runTemplateCommand(["default", "note", "--vault", root, "--dry-run"]);
+    expect(process.exitCode).toBe(1);
   });
 
   it("registers folders as manual by default and never invents a creation default", async () => {

@@ -34,7 +34,7 @@ function codexConfig(vault = "/vault"): string {
     "# BEGIN OMS MANAGED MCP",
     "[mcp_servers.oms]",
     'command = "oms"',
-    `args = ["mcp", "--vault", "${vault}"]`,
+    `args = ["serve", "mcp", "--vault", "${vault}"]`,
     "",
     "[mcp_servers.oms.env]",
     'OMS_AGENT_RUNTIME = "codex"',
@@ -48,7 +48,7 @@ function hermesConfig(vault = "/vault"): string {
     "mcp_servers:",
     "  oms:",
     "    command: oms",
-    `    args: [mcp, --vault, ${vault}]`,
+    `    args: [serve, mcp, --vault, ${vault}]`,
     "    enabled: true",
     "",
   ].join("\n");
@@ -145,7 +145,7 @@ describe("discoverHostInstallAssets", () => {
     const codex = path.join(home.codex, "config.toml");
     for (const mutation of [
       (raw: string) => raw.replace('command = "oms"', 'command = "other"'),
-      (raw: string) => raw.replace('args = ["mcp", "--vault", "/vault"]', 'args = ["mcp", "--other", "/vault"]'),
+      (raw: string) => raw.replace('args = ["serve", "mcp", "--vault", "/vault"]', 'args = ["serve", "mcp", "--other", "/vault"]'),
       (raw: string) => raw.replace('OMS_AGENT_RUNTIME = "codex"', 'OMS_AGENT_RUNTIME = "other"'),
     ]) {
       await installCodex(options, hostSurfaceForRuntime("codex"));

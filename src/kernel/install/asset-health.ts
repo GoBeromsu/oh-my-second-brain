@@ -50,12 +50,12 @@ export interface InstalledAssetInspection {
 }
 
 export function installRemediationCommand(vault: string, host: string): string {
-  return `oms install --vault ${JSON.stringify(vault)} --runtime ${host}`;
+  return `oms host install --runtime ${host} --vault ${JSON.stringify(vault)}`;
 }
 
 function remediation(asset: InstalledAssetDeclaration, vault: string): string {
   if (asset.remediation !== undefined) return asset.remediation;
-  return asset.host === undefined ? "oms install" : installRemediationCommand(vault, asset.host);
+  return installRemediationCommand(vault, asset.host ?? "auto");
 }
 
 function errorCode(error: unknown): string | null {

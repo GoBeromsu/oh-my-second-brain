@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -24,6 +24,7 @@ import {
 import { installClaude, uninstallClaude } from "../vendors/claude/claude.js";
 import { installCodex, uninstallCodex } from "../vendors/codex/codex.js";
 import { installHermes, uninstallHermes } from "../vendors/hermes/hermes.js";
+import { runHostCommand } from "./host-commands.js";
 
 async function runVendorHostOperation(
   options: HostOperationOptions,
@@ -71,7 +72,7 @@ describe("host installer/uninstaller", () => {
     expect(installed).toContain("# BEGIN OMS MANAGED MCP");
     expect(installed).toContain("[mcp_servers.oms]");
     expect(installed).toContain('command = "oms"');
-    expect(installed).toContain('args = ["mcp", "--vault", "/tmp/Vault"]');
+    expect(installed).toContain('args = ["serve", "mcp", "--vault", "/tmp/Vault"]');
     expect(installed).toContain("[other]");
     expect(existsSync(path.join(codexDir, "plugins", "oms", "AGENTS.md"))).toBe(true);
     expect(existsSync(path.join(codexDir, "rules", "oms.md"))).toBe(true);
@@ -89,7 +90,7 @@ describe("host installer/uninstaller", () => {
   it("fails closed for ambiguous Codex managed markers while preserving config bytes", async () => {
     const managedBlock = [
       "# BEGIN OMS MANAGED MCP",
-      "# OMS MCP hookup for Codex CLI. Managed by `oms install/uninstall`.",
+      "# OMS MCP hookup for Codex CLI. Managed by `oms host install/remove`.",
       "[mcp_servers.oms]",
       'command = "oms"',
       "# END OMS MANAGED MCP",
@@ -160,15 +161,20 @@ describe("host installer/uninstaller", () => {
     }
   });
 
-  it("replaces one valid Codex managed block in place and removes legacy-only config", async () => {
+  it("replaces one valid Codex managed block in place and refuses unowned legacy config", async () => {
     const prefix = 'model = "gpt-5"\n\n';
     const suffix = '[mcp_servers.oms.unmanaged]\nvalue = "preserve me"\n\n[other]\nvalue = "preserve me too"\n';
     const managedBlock = [
-      "  # BEGIN OMS MANAGED MCP",
-      "# OMS MCP hookup for Codex CLI. Managed by `oms install/uninstall`.",
+      "# BEGIN OMS MANAGED MCP",
+      "# OMS MCP hookup for Codex CLI. Managed by `oms host install/remove`.",
+      "# Codex-native rules live in ~/.codex/rules/oms.md; skills live in ~/.codex/skills/oms-*.",
       "[mcp_servers.oms]",
-      'command = "old-oms"',
-      "  # END OMS MANAGED MCP",
+      'command = "oms"',
+      'args = ["serve", "mcp", "--vault", "/tmp/Old Vault"]',
+      "",
+      "[mcp_servers.oms.env]",
+      'OMS_AGENT_RUNTIME = "codex"',
+      "# END OMS MANAGED MCP",
       "",
     ].join("\n");
     const home = await mkdtemp(path.join(tmpdir(), "oms-codex-valid-marker-"));
@@ -199,9 +205,9 @@ describe("host installer/uninstaller", () => {
       homeDir: legacyHome,
       adapterRoot,
     });
-    expect(legacyInstall[0]?.messages.join("\n")).not.toContain("FAILED:");
-    expect(await readFile(legacyConfigPath, "utf-8")).toContain("# BEGIN OMS MANAGED MCP");
-    await writeFile(legacyConfigPath, legacy, "utf-8");
+    expect(legacyInstall[0]?.messages.join("\n")).toContain("FAILED:");
+    expect(legacyInstall[0]?.messages.join("\n")).toContain("Refusing to replace unowned mcp_servers.oms");
+    expect(await readFile(legacyConfigPath, "utf-8")).toBe(legacy);
     const legacyResult = await runHostOperation({
       action: "uninstall",
       runtime: "codex",
@@ -210,7 +216,7 @@ describe("host installer/uninstaller", () => {
       adapterRoot,
     });
     expect(legacyResult[0]?.messages.join("\n")).not.toContain("FAILED:");
-    expect(await readFile(legacyConfigPath, "utf-8")).toBe('model = "gpt-5"\n\n[other]\nvalue = 1\n');
+    expect(await readFile(legacyConfigPath, "utf-8")).toBe(legacy);
   });
 
   it("removes only stale Codex OMS skill directories during install", async () => {
@@ -588,10 +594,10 @@ describe("host installer/uninstaller", () => {
 
     await runHostOperation({ action: "install", runtime: "claude", vault: "/tmp/Vault", homeDir: home, adapterRoot });
 
-    const written = JSON.parse(await readFile(claudeJsonPath, "utf-8")) as {
+    const written = JSON.parse(await readFile(path.join(home, ".claude.json"), "utf-8")) as {
       mcpServers: { oms: { command: string; args: string[] } };
     };
-    expect(written.mcpServers.oms).toEqual({ command: "oms", args: ["mcp", "--vault", "/tmp/Vault"] });
+    expect(written.mcpServers.oms).toEqual({ command: "oms", args: ["serve", "mcp", "--vault", "/tmp/Vault"] });
     // Claude Code's user scope is the dotfile `~/.claude.json`. The dotless
     // sibling `~/claude.json` is read by nothing, so writing there would leave
     // the registration inert while every assertion above still passed.
@@ -608,7 +614,7 @@ describe("host installer/uninstaller", () => {
     const raw = await readFile(claudeJsonPath, "utf-8");
     expect(raw.match(/"oms"\s*:/g)).toHaveLength(1);
     const written = JSON.parse(raw) as { mcpServers: { oms: { command: string; args: string[] } } };
-    expect(written.mcpServers.oms).toEqual({ command: "oms", args: ["mcp", "--vault", "/tmp/Vault"] });
+    expect(written.mcpServers.oms).toEqual({ command: "oms", args: ["serve", "mcp", "--vault", "/tmp/Vault"] });
   });
 
   it("uninstall removes the Claude user-scope MCP entry", async () => {
@@ -777,6 +783,54 @@ describe("host installer/uninstaller", () => {
     expect(parsed.dryRun).toBe(true);
     expect(parsed.results[0]?.cleanup).toEqual([]);
     expect(parsed.results[0]?.messages.join(" ")).toContain("scope local");
+  });
+});
+
+describe("public host command", () => {
+  it.each(["update", "uninstall", "reconcile", "upgrade"])("rejects retired or unknown leaf %s before any host or package operation", async leaf => {
+    const output: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation(value => output.push(String(value)));
+    try {
+      await runHostCommand([leaf]);
+      expect(process.exitCode).toBe(1);
+      expect(JSON.parse(output.at(-1)!)).toMatchObject({ status: "rejected" });
+    } finally {
+      process.exitCode = 0;
+      log.mockRestore();
+    }
+  });
+
+  it("rejects package flags on host sync rather than coupling package update to host registration sync", async () => {
+    const output: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation(value => output.push(String(value)));
+    try {
+      await runHostCommand(["sync", "--check"]);
+      expect(process.exitCode).toBe(1);
+      expect(JSON.parse(output.at(-1)!)).toMatchObject({ status: "rejected" });
+      expect(output.at(-1)).toContain("unknown flag --check");
+    } finally {
+      process.exitCode = 0;
+      log.mockRestore();
+    }
+  });
+
+  it("rejects an unsupported runtime before resolving or admitting a vault target", async () => {
+    const output: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation(value => output.push(String(value)));
+    try {
+      await runHostCommand(["install", "--runtime", "banana"]);
+      expect(process.exitCode).toBe(1);
+      expect(JSON.parse(output.at(-1)!)).toMatchObject({
+        status: "rejected",
+        diagnostics: [{
+          code: "HOST_ARGS_INVALID",
+          remediation: "HOST_ARGS_INVALID: unsupported runtime banana",
+        }],
+      });
+    } finally {
+      process.exitCode = 0;
+      log.mockRestore();
+    }
   });
 });
 
@@ -1047,7 +1101,7 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
         expect(managed).not.toContain(first);
       }
       const hermesConfig = parse(hermes) as { readonly mcp_servers: { readonly oms: { readonly args: readonly string[] } } };
-      expect(hermesConfig.mcp_servers.oms.args).toEqual(["mcp", "--vault", second]);
+      expect(hermesConfig.mcp_servers.oms.args).toEqual(["serve", "mcp", "--vault", second]);
       expect(claudeHooks).toContain("Vault B");
       expect(claudeHooks).not.toContain("Vault A");
       expect(existsSync(path.join(home, ".oms"))).toBe(false);

@@ -1,10 +1,10 @@
 /**
- * `oms linkify` — batch retrofit of `[[wikilinks]]` over EXISTING vault notes.
+ * Shared batch retrofit of `[[wikilinks]]` over existing vault notes.
  *
  * Report-only by default. Mutation requires BOTH `--apply` and `--yes`, checked
  * before any note is read, so a half-typed command can never reach the disk.
  *
- * The command owns scope and reporting only: span detection stays in
+ * This compatibility-free internal API owns scope and reporting only: span detection stays in
  * engine/linkify (pure), and every write goes through the capture kernel's
  * `writeNote`, which keeps path safety, the resolved template contract, and the
  * postcondition read-back unduplicated here.

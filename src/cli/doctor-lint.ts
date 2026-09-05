@@ -118,3 +118,6 @@ export async function runLint(opts: {
   }
   return 0;
 }
+
+/** Shared lint implementation exposed through the `link check` family leaf. */
+export const runLinkCheck = runLint;

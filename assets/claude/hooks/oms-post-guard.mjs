@@ -3,8 +3,8 @@
  * oms-post-guard — thin PostToolUse wrapper for Claude Code settings.json.
  *
  * Filters vault-relevant Write/Edit completions and delegates to
- * `oms hook post-tool-use --vault <vault>` for frontmatter audit and
- * graph cache debounce. Vault 무관 호출은 spawn 없이 즉시 통과.
+ * `oms hook post --vault <vault>` for advisory frontmatter audit.
+ * Vault 무관 호출은 spawn 없이 즉시 통과.
  *
  * Configuration (env vars set by the settings.json hook definition):
  *   OMS_VAULT        — primary vault path
@@ -92,16 +92,16 @@ async function main() {
     const { cmd, prefix } = resolveOmsCommand();
     const result = spawnSync(
       cmd,
-      [...prefix, "hook", "post-tool-use", "--vault", targetVault],
+      [...prefix, "hook", "post", "--vault", targetVault],
       { input: rawInput, encoding: "utf-8", timeout: 30000 },
     );
-    // Forward any additionalContext output from the post-tool-use hook.
+    // Forward any additionalContext output from the post hook.
     if (result.status === 0 && result.stdout && result.stdout.trim()) {
       process.stdout.write(result.stdout);
     }
     if (result.stderr) process.stderr.write("[oms-post-guard] " + result.stderr);
   } catch {
-    // Fail silently — post-tool-use is advisory.
+    // Fail silently — the post hook is advisory.
   }
 }
 

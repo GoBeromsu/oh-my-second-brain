@@ -2,7 +2,7 @@
   "mcpServers": {
     "oms": {
       "command": "oms",
-      "args": ["mcp"]
+      "args": ["serve", "mcp"]
     }
   }
 }

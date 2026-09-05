@@ -16,7 +16,7 @@ function codexManagedBlockForVault(vault: string): string {
   const args = mcpArgs({ vault } as HostOperationOptions).map(jsonString).join(", ");
   return [
     MANAGED_CODEX_START,
-    "# OMS MCP hookup for Codex CLI. Managed by `oms install/uninstall`.",
+    "# OMS MCP hookup for Codex CLI. Managed by `oms host install/remove`.",
     "# Codex-native rules live in ~/.codex/rules/oms.md; skills live in ~/.codex/skills/oms-*.",
     "[mcp_servers.oms]",
     'command = "oms"',
@@ -35,7 +35,7 @@ export function isCodexOmsRegistration(content: string, configPath = "Codex conf
   const block = managedCodexBlock(content, configPath);
   if (block === undefined) return false;
   const managed = content.slice(block.start, block.end);
-  const vault = /^args = \["mcp", "--vault", ("(?:[^"\\]|\\.)*")\]$/m.exec(managed)?.[1];
+  const vault = /^args = \["serve", "mcp", "--vault", ("(?:[^"\\]|\\.)*")\]$/m.exec(managed)?.[1];
   if (vault === undefined) return false;
   let parsedVault: unknown;
   try {
@@ -146,35 +146,9 @@ function removeManagedCodexBlock(
       block,
     };
   }
-  const lines = content.split(/\r?\n/);
-  const output: string[] = [];
-  let removedLegacy = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? "";
-    const trimmed = line.trim();
-    if (isCodexOMSTable(trimmed)) {
-      removedLegacy = true;
-      i++;
-      while (i < lines.length) {
-        const next = (lines[i] ?? "").trim();
-        const isTable = /^\[[^\]]+\]$/.test(next);
-        if (isTable && !isCodexOMSTable(next)) {
-          i--;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (line.includes("OMS MCP hookup for Codex CLI")) {
-      removedLegacy = true;
-      continue;
-    }
-    output.push(line);
-  }
   return {
-    content: `${output.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`,
-    removed: removedLegacy,
+    content,
+    removed: false,
     block: undefined,
   };
 }
@@ -226,6 +200,9 @@ export async function installCodex(options: HostOperationOptions, host: HarnessH
   const configPath = path.join(codexDir, "config.toml");
   const original = existsSync(configPath) ? await readFile(configPath, "utf-8") : "";
   const removed = removeManagedCodexBlock(original, configPath);
+  if (removed.block === undefined && original.split(/\r?\n/).some(line => isCodexOMSTable(line.trim()))) {
+    throw new Error(`Refusing to replace unowned mcp_servers.oms in ${configPath}`);
+  }
   const next = removed.block === undefined
     ? `${removed.content.trimEnd()}\n\n${codexManagedBlockForVault(options.vault)}`
     : `${original.slice(0, removed.block.start)}${codexManagedBlockForVault(options.vault)}${original.slice(removed.block.end)}`;

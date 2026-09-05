@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,11 +15,12 @@ function runCli(
   args: readonly string[],
   cwd: string,
   env: Readonly<Record<string, string | undefined>> = {},
+  cli = distCli,
 ) {
-  if (!existsSync(distCli)) {
+  if (!existsSync(cli)) {
     throw new Error("dist/cli/oms.js is missing; run npm run build before update e2e tests.");
   }
-  return spawnSync(process.execPath, [distCli, ...args], {
+  return spawnSync(process.execPath, [cli, ...args], {
     cwd,
     env: {
       ...process.env,
@@ -38,15 +39,46 @@ function makeTempRoot(prefix: string): string {
   return root;
 }
 
+function makeInstalledCli(prefix: string): string {
+  const packageRoot = path.join(prefix, "lib", "node_modules", "oh-my-second-brain");
+  mkdirSync(packageRoot, { recursive: true });
+  cpSync(path.join(repoRoot, "dist"), path.join(packageRoot, "dist"), { recursive: true });
+  cpSync(path.join(repoRoot, "package.json"), path.join(packageRoot, "package.json"));
+  symlinkSync(path.join(repoRoot, "node_modules"), path.join(packageRoot, "node_modules"), "dir");
+  return path.join(packageRoot, "dist", "cli", "oms.js");
+}
+
+function installFakeNpm(bin: string, prefix: string, installError: string, hostMarker: string): void {
+  mkdirSync(bin, { recursive: true });
+  const npm = path.join(bin, "npm");
+  writeFileSync(npm, `#!/bin/sh
+if [ "$1" = "prefix" ] && [ "$2" = "-g" ]; then
+  printf '%s\\n' "${prefix}"
+  exit 0
+fi
+printf '%s\\n' "${installError}" >&2
+exit 23
+`, "utf-8");
+  chmodSync(npm, 0o755);
+  const packageBin = path.join(prefix, "bin");
+  mkdirSync(packageBin, { recursive: true });
+  const oms = path.join(packageBin, "oms");
+  writeFileSync(oms, `#!/bin/sh
+touch "${hostMarker}"
+exit 0
+`, "utf-8");
+  chmodSync(oms, 0o755);
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("oms update isolated e2e", () => {
+describe("oms package update isolated e2e", () => {
   it("refuses a non-TTY update without --yes and leaves the cwd untouched", () => {
     const cwd = makeTempRoot("oms-update-non-tty-");
     const home = makeTempRoot("oms-update-home-");
-    const result = runCli(["update", "--runtime", "codex", "--vault", cwd], cwd, {
+    const result = runCli(["package", "update"], cwd, {
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
     });
@@ -56,77 +88,86 @@ describe("oms update isolated e2e", () => {
     expect(readdirSync(cwd)).toEqual([]);
   });
 
-  it("keeps --dry-run non-mutating while showing both update commands", () => {
+  it("keeps --dry-run non-mutating while separating package install from host sync", () => {
     const cwd = makeTempRoot("oms-update-dry-run-");
     const home = makeTempRoot("oms-update-home-");
-    const result = runCli(["update", "--runtime", "codex", "--vault", cwd, "--dry-run"], cwd, {
+    const result = runCli(["package", "update", "--dry-run"], cwd, {
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
     });
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("npm install -g oh-my-second-brain@latest");
-    expect(result.stdout).toContain("reconcile --runtime codex");
+    expect(result.stdout).toContain("oms host sync");
+    expect(result.stdout).not.toContain("reconcile");
     expect(readdirSync(cwd)).toEqual([]);
   });
 
-  it("uses the installed host pointer before building the reconciliation plan", () => {
-    const cwd = makeTempRoot("oms-update-env-cwd-");
-    const target = makeTempRoot("oms-update-env-target-");
+  it("checks for package updates without requiring a host pointer or changing the vault", () => {
+    const cwd = makeTempRoot("oms-update-check-cwd-");
     const home = makeTempRoot("oms-update-home-");
-    const env = {
+    const omsDir = path.join(cwd, ".oms");
+    mkdirSync(omsDir);
+    const owned = path.join(omsDir, "user-owned.txt");
+    writeFileSync(owned, "must remain unchanged\n", "utf-8");
+    const before = readFileSync(owned, "utf-8");
+
+    const result = runCli(["package", "check"], cwd, {
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
-    };
-    const installed = runCli(["install", "--runtime", "codex", "--vault", target, "--yes"], cwd, env);
-    expect(installed.status).toBe(0);
-    const result = runCli(["update", "--runtime", "codex", "--dry-run"], cwd, {
-      ...env,
-      OMS_VAULT: makeTempRoot("oms-update-ignored-env-"),
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(`--vault ${realpathSync(target)}`);
-    expect(readdirSync(cwd)).toEqual([]);
+    expect(result.stdout).toContain("Update available");
+    expect(result.stdout).not.toContain("host vault pointer");
+    expect(readFileSync(owned, "utf-8")).toBe(before);
   });
 
-  it("rejects an inferred cwd target instead of writing to an unverified directory", () => {
-    const cwd = makeTempRoot("oms-update-cwd-reject-");
-    const omsDir = path.join(cwd, ".oms");
-    mkdirSync(omsDir);
-    writeFileSync(path.join(omsDir, "user-owned.txt"), "must remain unchanged\n", "utf-8");
-    const before = readFileSync(path.join(omsDir, "user-owned.txt"), "utf-8");
-
-    const result = runCli(["update", "--runtime", "codex"], cwd, {
-      HOME: makeTempRoot("oms-update-home-"),
-      XDG_CONFIG_HOME: path.join(makeTempRoot("oms-update-config-"), ".config"),
-      OMS_VAULT: undefined,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("No OMS host vault pointer exists");
-    expect(readFileSync(path.join(omsDir, "user-owned.txt"), "utf-8")).toBe(before);
-  });
-
-  it("rejects a source-tree binary before npm can mutate a global installation", () => {
+  it("rejects a source-tree binary before npm can mutate a package or host integration", () => {
     const cwd = makeTempRoot("oms-update-source-tree-");
+    const home = makeTempRoot("oms-update-home-");
     const omsDir = path.join(cwd, ".oms");
     mkdirSync(omsDir);
-    writeFileSync(path.join(omsDir, "user-owned.txt"), "must remain unchanged\n", "utf-8");
+    const owned = path.join(omsDir, "user-owned.txt");
+    writeFileSync(owned, "must remain unchanged\n", "utf-8");
     const beforeOmsHash = createHash("sha256")
-      .update(readFileSync(path.join(omsDir, "user-owned.txt")))
+      .update(readFileSync(owned))
       .digest("hex");
+    const hostMarker = path.join(home, "host-sync-ran");
 
-    const result = runCli(["update", "--runtime", "hermes", "--vault", cwd, "--yes"], cwd, {
-      HOME: makeTempRoot("oms-update-home-"),
+    const result = runCli(["package", "update", "--yes"], cwd, {
+      HOME: home,
     });
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("not owned by a global npm prefix");
     expect(result.stdout).toContain("npm prefix -g");
     const afterOmsHash = createHash("sha256")
-      .update(readFileSync(path.join(omsDir, "user-owned.txt")))
+      .update(readFileSync(owned))
       .digest("hex");
     expect(afterOmsHash).toBe(beforeOmsHash);
+    expect(existsSync(hostMarker)).toBe(false);
+  });
+
+  it("reports package installation failure without running host sync or changing the vault", () => {
+    const cwd = makeTempRoot("oms-update-install-failure-");
+    const prefix = makeTempRoot("oms-update-prefix-");
+    const bin = path.join(makeTempRoot("oms-update-fake-bin-"), "bin");
+    const cli = makeInstalledCli(prefix);
+    const hostMarker = path.join(cwd, "host-sync-ran");
+    installFakeNpm(bin, realpathSync(prefix), "synthetic install refused", hostMarker);
+    const owned = path.join(cwd, "user-owned.txt");
+    writeFileSync(owned, "must remain unchanged\n", "utf-8");
+    const before = readFileSync(owned, "utf-8");
+
+    const result = runCli(["package", "update", "--yes"], cwd, {
+      PATH: `${bin}${path.delimiter}${process.env["PATH"] ?? ""}`,
+    }, cli);
+
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}${result.stderr}`).toContain("npm update failed: synthetic install refused");
+    expect(result.stdout).not.toContain("Successfully updated");
+    expect(readFileSync(owned, "utf-8")).toBe(before);
+    expect(existsSync(hostMarker)).toBe(false);
   });
 });

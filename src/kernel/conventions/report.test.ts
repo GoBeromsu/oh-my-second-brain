@@ -19,6 +19,9 @@ describe("formatLintReport", () => {
   it("caps details unless verbose", () => {
     const result = { totalNotes: 2, brokenLinks: Array.from({ length: 6 }, (_, index) => ({ notePath: "a.md", target: `T${index}` })), orphanPaths: ["a.md", "b.md"] };
     expect(formatLintReport(result, { vault: "/vault" })).toContain("and 1 more");
+    expect(formatLintReport(result, { vault: "/vault" })).toContain("Run `oms link check --verbose`");
+    expect(formatLintReport(result, { vault: "/vault" })).not.toContain("oms lint");
     expect(formatLintReport(result, { vault: "/vault", verbose: true })).toContain("[[T5]]");
+    expect(formatLintReport(result, { vault: "/vault", verbose: true })).not.toContain("Run `oms link check --verbose`");
   });
 });

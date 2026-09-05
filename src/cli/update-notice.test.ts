@@ -19,7 +19,7 @@ describe("CLI update notice", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("Update available: 0.1.7 -> 0.1.8");
-    expect(messages[0]).toContain("oms update --yes");
+    expect(messages[0]).toContain("oms package update --yes");
   });
 
   it("does not query or print when update notices are disabled", async () => {

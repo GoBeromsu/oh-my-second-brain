@@ -224,7 +224,7 @@ describe("loadTaxonomyIntentProjection", () => {
 
     await expect(loadTaxonomyIntentProjection(vault, ["notes/a.md"])).rejects.toThrow(state);
     await expect(loadTaxonomyIntentProjection(vault, ["notes/a.md"])).rejects.toThrow(
-      "Run oms doctor --vault <vault>",
+      "Run oms template check --vault <vault>",
     );
   });
 });

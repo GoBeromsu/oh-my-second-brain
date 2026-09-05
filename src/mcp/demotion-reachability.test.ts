@@ -73,7 +73,7 @@ describe("MCP detail-tool demotion", () => {
     const vault = await mkdtemp(path.join(tmpdir(), "oms-demotion-"));
     await cp(fixtureVault, vault, { recursive: true });
     await createTemplateAuthority(vault);
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [distCli, "mcp", "--vault", vault], cwd: repoRoot, stderr: "pipe" }));
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [distCli, "serve", "mcp", "--vault", vault], cwd: repoRoot, stderr: "pipe" }));
     try {
       const names = (await client.listTools()).tools.map((tool) => tool.name);
       const tools = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]));
@@ -83,30 +83,42 @@ describe("MCP detail-tool demotion", () => {
         expectAdvertisedArguments(tool!, arguments_);
         return client.callTool({ name, arguments: arguments_ });
       };
+      expect(names).toEqual(["write", "search", "link", "status", "doctor"]);
       expect(names).not.toEqual(expect.arrayContaining(demotedOperationNames));
       expect(payload(await call("status", {})).derivedState).toBeDefined();
       expect(payload(await call("doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
       expect(payload(await call("doctor", { op: "validate" })).status).toBeTypeOf("string");
       expect(payload(await call("doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
+      expect(payload(await call("search", { op: "template-scan" })).candidates).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
       expect(payload(await call("doctor", { op: "regenerate-types", dryRun: true })).status).toMatch(/planned|unchanged/);
+      const beforeBackfill = await readFile(path.join(vault, "references/clean-architecture.md"));
+      const backfill = payload(await call("doctor", { op: "backfill-defaults", notePath: "references/clean-architecture.md", dryRun: true }));
+      expect(backfill).toMatchObject({ status: "rejected", code: "MIGRATION_NOTE_IDENTITY_UNRESOLVED" });
+      expect(await readFile(path.join(vault, "references/clean-architecture.md"))).toEqual(beforeBackfill);
       expect(payload(await call("search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
-      expect(payload(await call("search", { op: "lazy-load", notePath: "references/clean-architecture.md" })).body).toBeTypeOf("string");
       expect(payload(await call("search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);
-      expect(payload(await call("search", { op: "multi-get-documents", targets: ["references/clean-architecture.md"] })).documents).toBeInstanceOf(Array);
+      expect(payload(await call("search", { op: "get-document", targets: ["references/clean-architecture.md"] })).documents).toBeInstanceOf(Array);
       const suggested = payload(await call("link", { op: "suggest", notePath: "references/clean-architecture.md" }));
       expect(suggested.baseContentHash).toBeTypeOf("string");
       const apply = await call("link", { op: "apply", notePath: "references/clean-architecture.md", baseContentHash: "0".repeat(64), candidateIds: [] });
       expect(apply.content[0]?.type).toBe("text");
-      for (const op of ["query", "collections", "contexts", "status"]) {
-        const result = await call("search", { op, ...(op === "query" ? { query: "architecture" } : {}) });
+      for (const view of ["status", "collections", "contexts"]) {
+        const result = await call("search", { op: "index-status", view });
         expect(result.content[0]?.type).toBe("text");
         expect(result.content[0]?.type === "text" ? result.content[0].text : "").toMatch(
           /OMS_EMBEDDING_PROVIDER|available|collections|contexts/,
         );
       }
-      for (const op of ["cleanup", "sync-embeddings"]) {
-        const result = await call("doctor", { op });
+      const query = await call("search", { op: "query", query: "architecture" });
+      expect(query.content[0]?.type).toBe("text");
+      const cleanup = await call("doctor", { op: "cleanup" });
+      expect(cleanup.content[0]?.type).toBe("text");
+      expect(cleanup.content[0]?.type === "text" ? cleanup.content[0].text : "").toMatch(
+        /OMS_EMBEDDING_PROVIDER|available/,
+      );
+      for (const mode of ["sync", "embed", "repair"]) {
+        const result = await call("doctor", { op: "sync-embeddings", mode });
         expect(result.content[0]?.type).toBe("text");
         expect(result.content[0]?.type === "text" ? result.content[0].text : "").toMatch(
           /OMS_EMBEDDING_PROVIDER|available/,

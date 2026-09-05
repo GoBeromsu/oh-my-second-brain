@@ -3,7 +3,6 @@ import { constants, realpathSync } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
-import type { RuntimeSelection } from "../install/hosts.js";
 
 export interface UpdateRunnerCall {
   readonly exitCode: number;
@@ -22,17 +21,10 @@ export type UpdateRunner = (
   options: UpdateRunnerOptions,
 ) => UpdateRunnerCall | Promise<UpdateRunnerCall>;
 
-interface ReconcileCommand {
-  readonly command: string;
-  readonly argsPrefix: readonly string[];
-}
-
 export interface RunUpdateOptions {
   readonly currentVersion: string | null;
   readonly latestVersion?: string;
   readonly packageName?: string;
-  readonly runtime: RuntimeSelection;
-  readonly vault: string;
   readonly check?: boolean;
   readonly dryRun?: boolean;
   readonly yes?: boolean;
@@ -43,7 +35,6 @@ export interface RunUpdateOptions {
   readonly interactive?: boolean;
   /** Confirmation hook used by the CLI and deterministic tests. */
   readonly confirm?: () => boolean | Promise<boolean>;
-  readonly executeExternal?: boolean;
   readonly timeoutMs?: number;
   readonly runner?: UpdateRunner;
   /** Injectable only to make ownership topology deterministic in tests. */
@@ -60,9 +51,7 @@ export interface UpdateResult {
   readonly updateAvailable: boolean;
   /** Whether npm installed a package during this invocation. */
   readonly packageMutated: boolean;
-  /** Whether reconciliation reported a host-state change. */
-  readonly hostReconciled: boolean;
-  /** Whether this invocation changed either the package or a host. */
+  /** Whether this invocation installed the package. */
   readonly mutated: boolean;
   readonly message: string;
   readonly commands: readonly string[];
@@ -177,7 +166,7 @@ function compareNumericStrings(left: string, right: string): number {
 async function confirmUpdate(): Promise<boolean> {
   const readline = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = await readline.question("[oms] Update package and refresh host adapters? [y/N] ");
+    const answer = await readline.question("[oms] Update package? [y/N] ");
     return /^(?:y|yes)$/i.test(answer.trim());
   } catch {
     return false;
@@ -219,19 +208,7 @@ export async function resolveLatestVersion(options: {
   return { ok: true, version };
 }
 
-function buildReconcileArgs(options: {
-  readonly runtime: RuntimeSelection;
-  readonly vault: string;
-  readonly executeExternal: boolean;
-}): readonly string[] {
-  const args = ["reconcile", "--runtime", options.runtime, "--vault", options.vault, "--json"];
-  if (options.executeExternal) {
-    args.push("--execute");
-  }
-  return args;
-}
-
-function buildReconcileCommand(options: RunUpdateOptions): ReconcileCommand {
+function runningPackagePrefix(options: RunUpdateOptions): string {
   const entrypoint = options.entrypoint ?? process.argv[1];
   if (entrypoint === undefined) {
     throw new Error("The running OMS binary path is unavailable.");
@@ -243,20 +220,9 @@ function buildReconcileCommand(options: RunUpdateOptions): ReconcileCommand {
     throw new Error(`The running OMS binary is not owned by a global npm prefix: ${binary}`);
   }
   if (posixIndex !== -1) {
-    const prefix = binary.slice(0, posixIndex);
-    return { command: path.join(prefix, "bin", "oms"), argsPrefix: [] };
+    return binary.slice(0, posixIndex);
   }
-  const prefix = binary.slice(0, winIndex);
-  return {
-    command: path.win32.join(prefix, "oms.cmd"),
-    argsPrefix: [],
-  };
-}
-
-function runningPrefix(reconcile: ReconcileCommand): string {
-  return reconcile.command.includes("\\")
-    ? path.win32.dirname(reconcile.command)
-    : path.dirname(path.dirname(reconcile.command));
+  return binary.slice(0, winIndex);
 }
 
 function samePrefix(left: string, right: string): boolean {
@@ -270,15 +236,15 @@ async function resolveNpmTopology(
   runner: UpdateRunner,
   timeoutMs: number,
 ): Promise<
-  | { readonly ok: true; readonly reconcile: ReconcileCommand }
+  | { readonly ok: true }
   | { readonly ok: false; readonly error: string }
 > {
-  let reconcile: ReconcileCommand;
+  let packagePrefix: string;
   try {
-    reconcile = buildReconcileCommand(options);
+    packagePrefix = runningPackagePrefix(options);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return { ok: false, error: `${detail} Run \`npm prefix -g\` and use that installation's \`oms reconcile\` command manually.` };
+    return { ok: false, error: `${detail} Run \`npm prefix -g\`, install from that prefix with \`npm install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run \`oms host sync\`.` };
   }
 
   const prefixResult = await runner("npm", ["prefix", "-g"], { timeoutMs });
@@ -287,15 +253,14 @@ async function resolveNpmTopology(
     const detail = prefixResult.stderr.trim() || prefixResult.stdout.trim() || "npm prefix -g failed";
     return {
       ok: false,
-      error: `Unable to resolve npm's global prefix: ${detail}. Run \`npm prefix -g\` and then \`${reconcile.command} reconcile\` manually.`,
+      error: `Unable to resolve npm's global prefix: ${detail}. Run \`npm prefix -g\`, then \`npm install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` and \`oms host sync\`.`,
     };
   }
 
-  const resolvedRunningPrefix = runningPrefix(reconcile);
-  if (!samePrefix(resolvedRunningPrefix, npmPrefix)) {
+  if (!samePrefix(packagePrefix, npmPrefix)) {
     return {
       ok: false,
-      error: `Refusing to update: running OMS binary belongs to ${resolvedRunningPrefix} (version ${options.currentVersion ?? "unknown"}), but npm prefix -g resolved ${npmPrefix} (target version ${options.latestVersion ?? "latest"}). Run \`npm --prefix ${resolvedRunningPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` and then \`${reconcile.command} reconcile --runtime ${options.runtime} --vault ${options.vault}\` manually.`,
+      error: `Refusing to update: running OMS binary belongs to ${packagePrefix} (version ${options.currentVersion ?? "unknown"}), but npm prefix -g resolved ${npmPrefix} (target version ${options.latestVersion ?? "latest"}). Run \`npm --prefix ${packagePrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run the newly installed \`oms host sync\`.`,
     };
   }
   try {
@@ -304,22 +269,10 @@ async function resolveNpmTopology(
     const detail = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
-      error: `Refusing to update: npm global prefix ${npmPrefix} is not writable: ${detail}. Run \`npm --prefix ${npmPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` manually after restoring write access, then \`${reconcile.command} reconcile --runtime ${options.runtime} --vault ${options.vault}\` manually.`,
+      error: `Refusing to update: npm global prefix ${npmPrefix} is not writable: ${detail}. After restoring write access, run \`npm --prefix ${npmPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run the newly installed \`oms host sync\`.`,
     };
   }
-  return { ok: true, reconcile };
-}
-
-function hostReconciled(stdout: string): boolean {
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (typeof parsed !== "object" || parsed === null || !("results" in parsed)) return false;
-    return Array.isArray(parsed.results) && parsed.results.some((result) =>
-      typeof result === "object" && result !== null && (result as { changed?: unknown }).changed === true,
-    );
-  } catch {
-    return false;
-  }
+  return { ok: true };
 }
 
 export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult> {
@@ -339,7 +292,6 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       latestVersion: "unknown",
       updateAvailable: false,
       packageMutated: false,
-      hostReconciled: false,
       mutated: false,
       message: `Update check failed: ${latest.error}`,
       commands: [],
@@ -351,15 +303,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
   const updateAvailable =
     currentVersion === null || compareVersions(currentVersion, latest.version) < 0;
   const npmArgs = ["install", "-g", `${packageName}@latest`];
-  const reconcileArgs = buildReconcileArgs({
-    runtime: options.runtime,
-    vault: options.vault,
-    executeExternal: options.executeExternal === true,
-  });
-  const commands = [
-    formatCommand("npm", npmArgs),
-    formatCommand("oms", reconcileArgs),
-  ];
+  const commands = [formatCommand("npm", npmArgs)];
 
   if (options.dryRun === true || options.check === true) {
     return {
@@ -368,12 +312,11 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       latestVersion: latest.version,
       updateAvailable,
       packageMutated: false,
-      hostReconciled: false,
       mutated: false,
       message: updateAvailable
         ? `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}.`
-        : `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}); reconciliation is planned.`,
-      commands: updateAvailable ? commands : [formatCommand("oms", reconcileArgs)],
+        : `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}).`,
+      commands: updateAvailable ? commands : [],
       errors: [],
     };
   }
@@ -386,7 +329,6 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         latestVersion: latest.version,
         updateAvailable: true,
         packageMutated: false,
-        hostReconciled: false,
         mutated: false,
         message: `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}. Refusing to update without --yes when stdin is not a TTY.`,
         commands,
@@ -407,7 +349,6 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         latestVersion: latest.version,
         updateAvailable: true,
         packageMutated: false,
-        hostReconciled: false,
         mutated: false,
         message: "Update cancelled; no changes were made.",
         commands,
@@ -416,25 +357,21 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
     }
   }
 
-  const topology = await resolveNpmTopology(options, runner, timeoutMs);
-  if (!topology.ok) {
-    return {
-      success: false,
-      currentVersion,
-      latestVersion: latest.version,
-      updateAvailable,
-      packageMutated: false,
-      hostReconciled: false,
-      mutated: false,
-      message: topology.error,
-      commands,
-      errors: [topology.error],
-    };
-  }
-  const reconcile = topology.reconcile;
-  const installedReconcileArgs = [...reconcile.argsPrefix, ...reconcileArgs];
-
   if (updateAvailable) {
+    const topology = await resolveNpmTopology(options, runner, timeoutMs);
+    if (!topology.ok) {
+      return {
+        success: false,
+        currentVersion,
+        latestVersion: latest.version,
+        updateAvailable,
+        packageMutated: false,
+        mutated: false,
+        message: topology.error,
+        commands,
+        errors: [topology.error],
+      };
+    }
     const npmResult = await runner("npm", npmArgs, { timeoutMs });
     if (npmResult.exitCode !== 0) {
       const error = npmResult.stderr.trim() || npmResult.stdout.trim() || "npm install failed";
@@ -444,7 +381,6 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         latestVersion: latest.version,
         updateAvailable: true,
         packageMutated: false,
-        hostReconciled: false,
         mutated: false,
         message: `npm update failed: ${error}`,
         commands,
@@ -453,40 +389,17 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
     }
   }
 
-  const reconcileResult = await runner(reconcile.command, installedReconcileArgs, {
-    timeoutMs,
-    env: { OMS_UPDATE_RECONCILE: "1" },
-  });
-  if (reconcileResult.exitCode !== 0) {
-    const error =
-      reconcileResult.stderr.trim() || reconcileResult.stdout.trim() || "runtime reconciliation failed";
-    return {
-      success: false,
-      currentVersion,
-      latestVersion: latest.version,
-      updateAvailable,
-      packageMutated: updateAvailable,
-      hostReconciled: false,
-      mutated: updateAvailable,
-      message: `${updateAvailable ? `Updated package to ${latest.version}, but` : "Package is already up to date, but"} reconciliation failed: ${error}. Resume with \`${reconcile.command} ${installedReconcileArgs.join(" ")}\`.`,
-      commands,
-      errors: [error],
-    };
-  }
-
-  const reconciled = hostReconciled(reconcileResult.stdout);
   return {
     success: true,
     currentVersion,
     latestVersion: latest.version,
     updateAvailable,
     packageMutated: updateAvailable,
-    hostReconciled: reconciled,
-    mutated: updateAvailable || reconciled,
+    mutated: updateAvailable,
     message: updateAvailable
-      ? `Successfully updated Oh My Second Brain from ${currentVersion ?? "unknown"} to ${latest.version}.`
-      : `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}); runtime reconciliation completed.`,
-    commands,
+      ? `Successfully updated Oh My Second Brain from ${currentVersion ?? "unknown"} to ${latest.version}. Run the newly installed \`oms host sync\` to refresh host integrations.`
+      : `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}).`,
+    commands: updateAvailable ? commands : [],
     errors: [],
   };
 }
@@ -517,7 +430,7 @@ export async function checkUpdateNotice(
 }
 
 export function formatUpdateResult(result: UpdateResult): string {
-  const lines = [`[oms update] ${result.message}`];
+  const lines = [`[oms package] ${result.message}`];
   if (result.updateAvailable && !result.mutated) {
     lines.push("");
     lines.push("Planned commands:");
@@ -525,7 +438,7 @@ export function formatUpdateResult(result: UpdateResult): string {
       lines.push(`  ${command}`);
     }
     lines.push("");
-    lines.push("Run `oms update --yes` to perform the package update and refresh host adapters.");
+    lines.push("Run `oms package update --yes` to install the package. Then run the newly installed `oms host sync` to refresh host integrations.");
   }
   if (result.errors.length > 0) {
     lines.push("");
@@ -541,6 +454,6 @@ export function formatUpdateNotice(notice: UpdateNotice | null): string {
   if (notice === null) return "";
   return [
     `[oms] Update available: ${notice.currentVersion ?? "unknown"} -> ${notice.latestVersion}.`,
-    "Run `oms update --dry-run` to preview or `oms update --yes` to update and refresh host adapters.",
+    "Run `oms package check` to inspect the release or `oms package update --yes` to install it. Then run the newly installed `oms host sync` to refresh host integrations.",
   ].join("\n");
 }

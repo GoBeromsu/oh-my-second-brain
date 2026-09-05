@@ -12,7 +12,6 @@ import {
   writeResolvedTemplateNote,
   type WriteMode,
 } from "../kernel/capture/safe.js";
-import { lazyLoadNoteBody } from "../kernel/graph/cache.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import { backfillDefaults, buildTemplateNoteIndex, deriveTemplateRetrievalAxes, diagnoseTemplates, loadResolvedTemplates, registerExistingTemplate, normalizeTemplateFolderPath, normalizeTemplateSourcePath, regenerateTypes, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "../kernel/templates/index.js";
 import type { Digest, JsonValue, SourceProposal, TemplateBinding, TemplateSemanticChange } from "../kernel/templates/types.js";
@@ -45,6 +44,7 @@ import {
 } from "../kernel/semantic/semantic-engine.js";
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
 import { executeTemplateOperation } from "../kernel/templates/operations.js";
+import { planTemplateMigration } from "../kernel/templates/migration.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
@@ -173,7 +173,8 @@ const axisValue = { anyOf: [axisScalar, { type: "array", items: axisScalar }] };
 const fieldPredicate = { type: "object", additionalProperties: false, properties: { contains: axisValue, containsAll: { type: "array", items: axisScalar }, in: { type: "array", items: axisScalar }, between: { type: "array", items: axisScalar, minItems: 2, maxItems: 2 }, gte: axisScalar, gt: axisScalar, lte: axisScalar, lt: axisScalar, from: axisScalar, to: axisScalar } };
 const queryAxes = { type: "object", additionalProperties: false, properties: { template: string, folder: axisValue, field: { type: "object", additionalProperties: { anyOf: [axisValue, fieldPredicate] } }, link: axisValue } };
 const expandStrategy = { type: "object", additionalProperties: false, properties: { kind: { ...string, enum: ["expand"] }, profile: { ...string, enum: ["qmd-v2.8.3"] }, maxQueries: { type: "integer", minimum: 1, maximum: 32 } }, required: ["kind", "profile"] } as const;
-const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, strategy: expandStrategy, collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { type: "integer", minimum: 0, default: 10 }, candidateLimit: { type: "integer", minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, intent: string, lex: string, vec: string, hyde: string, index: string, target: string, targets: stringArray, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean } as const;
+const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, strategy: expandStrategy, collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { type: "integer", minimum: 0, default: 10 }, candidateLimit: { type: "integer", minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, intent: string, lex: string, vec: string, hyde: string, index: string } as const;
+const documentProperties = { target: string, targets: stringArray, notePath: string, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean, collection: string, collections: stringArray, index: string } as const;
 const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: { type: "integer", minimum: 0 }, maxNeighbors: number, useCache: boolean, ...retrieveContextSemanticInputProperties } as const;
 const renderer = { ...string, enum: ["obsidian-core", "templater", "none"] };
 const templateBinding = { type: "object", additionalProperties: false, properties: { templateId: string, destinationClass: { ...string, enum: ["managed-default", "registered-existing"] }, renderer, sourceFolder: string, sourcePath: string, contract: string, naming: string }, required: ["templateId", "destinationClass", "renderer", "sourceFolder", "sourcePath", "contract", "naming"] };
@@ -182,15 +183,15 @@ const templateFolder = { type: "object", additionalProperties: false, properties
 const operations: Record<string, readonly Operation[]> = {
   write: [
     { op: "note", name: "write-note", properties: { mode: { ...string, enum: ["create", "append", "update"] }, templateId: string, notePath: string, frontmatter, body: string, dryRun: boolean } },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "regenerate", "remove", "default", "register-folder", "register-existing"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, folder: templateFolder, deleteSource: boolean, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode"] },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "register-existing"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, folder: templateFolder, deleteSource: boolean, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode"] },
   ],
-  search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "lazy-load", name: "oms_lazy_load_note", properties: { notePath: string }, required: ["notePath"] }, { op: "templates", name: "oms_list_templates" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "collections", name: "oms_semantic_collections", properties: { index: string } }, { op: "contexts", name: "oms_semantic_contexts", properties: { index: string } }, { op: "status", name: "oms_semantic_status", properties: { index: string } }, { op: "get-document", name: "oms_get_document", properties: searchProperties, required: ["target"] }, { op: "multi-get-documents", name: "oms_multi_get_documents", properties: searchProperties }],
+  search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
-  status: [{ name: "oms_graph_status", direct: true }],
-  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "regenerate-types", name: "oms_regenerate_types", properties: { dryRun: boolean, approvedDigest: digestSchema } }, { op: "backfill-defaults", name: "oms_backfill_defaults", properties: { notePath: string, dryRun: boolean, approvedDigest: digestSchema }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { collection: string, ensureCollection: boolean, update: boolean, embed: boolean, force: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number } }],
+  status: [{ name: "oms_graph_status", direct: true }, { op: "graph", name: "oms_graph_status" }],
+  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "regenerate-types", name: "oms_regenerate_types", properties: { dryRun: boolean, approvedDigest: digestSchema } }, { op: "backfill-defaults", name: "oms_backfill_defaults", properties: { notePath: string, dryRun: boolean, approvedDigest: digestSchema }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, ensureCollection: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number }, required: ["mode"] }],
 };
-export const demotedOperationNames = Object.values(operations)
-  .flatMap((toolOperations) => toolOperations.map((operation) => operation.name))
+export const demotedOperationNames = [...new Set(Object.values(operations)
+  .flatMap((toolOperations) => toolOperations.map((operation) => operation.name)))]
   .sort((left, right) => left.localeCompare(right));
 interface SchemaBranch {
   readonly additionalProperties: false;
@@ -202,6 +203,15 @@ interface SchemaBranch {
 function operationSchema(tool: string): Tool["inputSchema"] {
   const toolOperations = operations[tool];
   if (!toolOperations) throw new Error(`Missing MCP operation definition for ${tool}.`);
+  if (tool === "status") {
+    return {
+      type: "object",
+      oneOf: [
+        { additionalProperties: false, properties: {} },
+        { additionalProperties: false, properties: { op: { ...string, const: "graph" } }, required: ["op"] },
+      ],
+    };
+  }
   if (toolOperations.length === 1 && toolOperations[0]?.direct) {
     const { properties = {}, required = [] } = toolOperations[0];
     return { type: "object", additionalProperties: false, properties, required: [...required] };
@@ -215,6 +225,11 @@ function operationSchema(tool: string): Tool["inputSchema"] {
       branches.push({
         additionalProperties: false,
         properties: { op: { ...string, const: "note" }, mode: { const: "create" }, templateId: string, frontmatter, body: string, dryRun: boolean },
+        required: ["op", "mode", "templateId", "body"],
+      });
+      branches.push({
+        additionalProperties: false,
+        properties: { op: { ...string, const: "note" }, mode: { const: "create" }, frontmatter, body: string, dryRun: boolean },
         required: ["op", "mode", "body"],
       });
       branches.push({
@@ -237,7 +252,6 @@ function operationSchema(tool: string): Tool["inputSchema"] {
         { mode: "update", properties: { templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] } }, required: ["templateId", "binding", "source"] },
         { mode: "reclassify", properties: { templateId: string, toClass: { ...string, enum: ["managed-default", "registered-existing"] } }, required: ["templateId", "toClass"] },
         { mode: "relocate-folder", properties: { templateFolder: string }, required: ["templateFolder"] },
-        { mode: "regenerate", properties: {}, required: [] },
         { mode: "remove", properties: { templateId: string, deleteSource: boolean }, required: ["templateId", "deleteSource"] },
         { mode: "default", properties: { templateId: string }, required: ["templateId"] },
         { mode: "register-folder", properties: { folder: templateFolder }, required: ["folder"] },
@@ -265,6 +279,33 @@ function operationSchema(tool: string): Tool["inputSchema"] {
         },
         required: ["op", "transactionId", "approvedDigest"],
       });
+      continue;
+    }
+    if (op === "templates") {
+      branches.push({ additionalProperties: false, properties: { op: { ...string, const: op } }, required: ["op"] });
+      branches.push({ additionalProperties: false, properties: { op: { ...string, const: op }, templateId: string }, required: ["op", "templateId"] });
+      continue;
+    }
+    if (op === "query") {
+      const queryProperties: Record<string, object> = { ...properties, op: { ...string, const: op } };
+      const { searches: _explicitSearches, lex: _explicitLex, vec: _explicitVec, hyde: _explicitHyde, ...explicitModeProperties } = queryProperties;
+      const { mode: _implicitMode, searches: _implicitSearches, ...implicitQueryProperties } = queryProperties;
+      const { mode: _typedMode, query: _typedQuery, ...implicitTypedProperties } = queryProperties;
+      branches.push({ additionalProperties: false, properties: explicitModeProperties, required: ["op", "mode", "query"] });
+      branches.push({ additionalProperties: false, properties: implicitQueryProperties, required: ["op", "query"] });
+      branches.push({
+        additionalProperties: false,
+        properties: implicitTypedProperties,
+        required: ["op"],
+        anyOf: [{ required: ["searches"] }, { required: ["vec"] }, { required: ["hyde"] }],
+      });
+      continue;
+    }
+    if (op === "get-document") {
+      const common = { ...properties, op: { ...string, const: op } };
+      branches.push({ additionalProperties: false, properties: common, required: ["op", "target"] });
+      branches.push({ additionalProperties: false, properties: common, required: ["op", "targets"] });
+      branches.push({ additionalProperties: false, properties: common, required: ["op", "notePath", "fromLine", "lineCount"] });
       continue;
     }
     if (op === "regenerate-types" || op === "backfill-defaults") {
@@ -518,13 +559,32 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
     const op = stringArg(args, "op");
-    const name = resolveOperation(publicName, op);
+    let name = resolveOperation(publicName, op);
     if (!name) return errorText(unknownOperationMessage(publicName, op));
     if (publicName === "search" && op === "query") {
       const searches = args?.["searches"];
       if (typeof args?.["query"] === "string" && Array.isArray(searches)) {
         return errorText('Provide exactly one of "query" or "searches" for query.');
       }
+    }
+    if (name === "oms_index_status") {
+      const view = stringArg(args, "view");
+      name = view === "status"
+        ? "oms_semantic_status"
+        : view === "collections"
+          ? "oms_semantic_collections"
+          : "oms_semantic_contexts";
+    }
+    if (name === "oms_get_document" && Array.isArray(args?.["targets"])) {
+      name = "oms_multi_get_documents";
+    } else if (name === "oms_get_document" && typeof args?.["notePath"] === "string") {
+      args = {
+        ...args,
+        target: `${args["notePath"]}:${args["fromLine"]}:${args["lineCount"]}`,
+      };
+      delete args["notePath"];
+      delete args["fromLine"];
+      delete args["lineCount"];
     }
     if (name === "oms_graph_status") {
       const engineGraph = await engine.adapter.graphStatus(vault).catch(() => null);
@@ -566,6 +626,18 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     try {
     if (name === "oms_graph_build" || name === "oms_semantic_cleanup" || name === "oms_sync_embeddings") {
       const operation = name === "oms_graph_build" ? "build-graph" : name === "oms_semantic_cleanup" ? "semantic-cleanup" : "sync-embeddings";
+      if (name === "oms_sync_embeddings") {
+        const mode = stringArg(args, "mode");
+        args = {
+          ...args,
+          ...(mode === "sync"
+            ? { update: true, embed: false }
+            : mode === "embed"
+              ? { update: true, embed: true }
+              : { update: true, embed: true, force: true }),
+        };
+        delete args["mode"];
+      }
       // A FACTORY, not a value. JavaScript evaluates an argument expression
       // before entering the callee, so passing a constructed adapter here would
       // open - and therefore create - `<vault>/.oms/engine-store.sqlite` before
@@ -595,7 +667,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
     if (name === "oms_list_templates") {
       const convention = await loadResolvedTemplates(vault);
-      const templates = Object.values(convention.templates);
+      const templateId = stringArg(args, "templateId");
+      const templates = templateId === undefined
+        ? Object.values(convention.templates)
+        : Object.values(convention.templates).filter(template => template.id === templateId);
       const runtimeWarnings = recordTemplateList(vault, templates);
       return jsonText({
         vault,
@@ -604,6 +679,27 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         axes: deriveTemplateRetrievalAxes(convention),
         ...runtimeHistory(vault),
         ...(runtimeWarnings.length === 0 ? {} : { runtimeWarnings }),
+      });
+    }
+
+    if (name === "oms_template_scan") {
+      const proposal = await planTemplateMigration(vault);
+      return jsonText({
+        templateFolders: proposal.templateFolders,
+        candidates: proposal.candidates.map(candidate => ({
+          templateId: candidate.templateId,
+          sourcePath: candidate.sourcePath,
+          renderer: candidate.renderer,
+          filledBy: candidate.filledBy,
+          bodyExternal: candidate.bodyExternal,
+          selected: proposal.bindings.some(binding => binding.templateId === candidate.templateId && binding.sourcePath === candidate.sourcePath),
+          samples: candidate.contractFromNotes?.samples ?? 0,
+          coverage: candidate.contractFromNotes?.coverage ?? {},
+          diagnostics: [...candidate.rendererDiagnostics, ...(candidate.contractFromNotes?.diagnostics ?? [])],
+        })),
+        diagnostics: proposal.diagnostics,
+        unresolved: proposal.unresolved,
+        inputDigest: proposal.inputDigest,
       });
     }
 
@@ -770,15 +866,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         return jsonText(semanticToolResult.value);
       }
     }
-
-    if (name === "oms_lazy_load_note") {
-      const notePath = stringArg(args, "notePath");
-      if (!notePath) {
-        return errorText('Missing required string argument "notePath".');
-      }
-      return jsonText(await lazyLoadNoteBody(vault, notePath));
-    }
-
 
     if (name === "oms_vault_audit") {
       if (

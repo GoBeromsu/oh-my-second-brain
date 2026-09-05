@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { harnessSurfaceRegistry } from "../../kernel/harness/surface-registry.js";
 import { computeTreeDigest, parseProvenance } from "../../kernel/install/provenance.js";
 import { discoverHostInstallAssets } from "../../cli/host-probe.js";
-import { installHermes, uninstallHermes } from "./hermes.js";
+import { installHermes, isHermesOmsRegistration, uninstallHermes } from "./hermes.js";
 
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -27,6 +27,32 @@ afterEach(async () => {
 });
 
 describe("installHermes transaction", () => {
+  it("recognizes only the new managed serve mcp launch", () => {
+    const registration = (args: string, command = "oms") =>
+      `mcp_servers:\n  oms:\n    command: ${command}\n    args: ${args}\n    enabled: true\n`;
+    expect(isHermesOmsRegistration(registration("[serve, mcp, --vault, /vault]"))).toBe(true);
+    expect(isHermesOmsRegistration(registration("[mcp, --vault, /vault]"))).toBe(false);
+    expect(isHermesOmsRegistration(registration("[serve, http, --vault, /vault]"))).toBe(false);
+    expect(isHermesOmsRegistration(registration("[serve, mcp, --vault, /vault]", "custom"))).toBe(false);
+  });
+
+  it("preserves an unowned custom OMS registration during removal", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-custom-"));
+    temporaryDirectories.push(home);
+    const config = path.join(home, ".hermes", "config.yaml");
+    const custom = "mcp_servers:\n  oms:\n    command: custom-runner\n    args: [keep]\n    enabled: true\n";
+    await mkdir(path.dirname(config), { recursive: true });
+    await writeFile(config, custom);
+
+    await expect(uninstallHermes({
+      action: "uninstall",
+      runtime: "hermes",
+      vault: "/vault",
+      homeDir: home,
+    })).resolves.toMatchObject({ changed: false, skipped: true });
+    expect(await readFile(config, "utf8")).toBe(custom);
+  });
+
   it("rejects an unsafe config before writing OMS-owned targets", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-"));
     temporaryDirectories.push(home);
@@ -214,6 +240,20 @@ describe("installHermes transaction", () => {
     const skills = path.join(hermes, "skills", "knowledge-management", "oms");
     const provenanceFile = path.join(hermes, "adapters", "oms", "oms-provenance.json");
     const provenance = parseProvenance(await readFile(provenanceFile, "utf8"));
+    const config = await readFile(path.join(hermes, "config.yaml"), "utf8");
+    expect(config).toContain("- serve");
+    expect(isHermesOmsRegistration(config)).toBe(true);
+    const previousHermesHome = process.env.OMS_HERMES_HOME;
+    process.env.OMS_HERMES_HOME = hermes;
+    try {
+      expect((await discoverHostInstallAssets()).assets).toContainEqual(expect.objectContaining({
+        id: "registration:hermes",
+        evidence: { state: "ok", cause: null },
+      }));
+    } finally {
+      if (previousHermesHome === undefined) delete process.env.OMS_HERMES_HOME;
+      else process.env.OMS_HERMES_HOME = previousHermesHome;
+    }
     expect(await readdir(skills)).toHaveLength(7);
     expect(provenance).toMatchObject({ source: "npm", version: packageVersion, skillTreeDigest: await computeTreeDigest(skills) });
     const before = await readFile(provenanceFile, "utf8");

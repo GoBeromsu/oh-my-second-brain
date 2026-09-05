@@ -48,7 +48,9 @@ Search is lexical and works without `.oms/types.json`. It supports narrowing by 
 
 The CLI works independently of host integrations. Installable assets are under [`assets/`](../assets/): seven public skills (`write`, `search`, `link`, `distill`, `status`, `doctor`, and tool-less `template`) and host guidance. `assets/claude/`, `assets/codex/`, and `assets/hermes/` contain host-specific files.
 
-MCP is a separate API surface. `oms mcp` serves exactly five public capabilities: write, search, link, status, and doctor. Skills are host-facing workflows; MCP tools are callable operations. Neither replaces the independent CLI.
+MCP is a separate API surface. `oms serve mcp` serves exactly five public capabilities: write, search, link, status, and doctor. Skills are host-facing workflows; MCP tools are callable operations. Neither replaces the independent CLI.
+
+The [command map](./cli-map.md) assigns each capability one CLI leaf and, where exposed, one exclusive MCP operation or mode. `bridge` owns repository-to-vault links; `link` owns note wikilinks. `package update` installs OMS, while `host sync` refreshes host registrations separately. `serve mcp` and `serve http` must not create a vault engine store on startup. Retired top-level commands are not aliases.
 
 ### MCP namespace boundary
 

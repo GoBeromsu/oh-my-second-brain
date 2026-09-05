@@ -2,7 +2,7 @@
   "name": "oms",
   "version": "0.13.0",
   "description": "Oh My Second Brain convention layer for Obsidian vaults — Codex native rules, skills, and MCP adapter.",
-  "_note": "oms install writes Codex MCP config, installs ~/.codex/rules/oms.md, and installs ~/.codex/skills/oms-*.",
+  "_note": "oms host install writes Codex MCP config and provenance, installs ~/.codex/rules/oms.md, and installs the seven shared skills under ~/.codex/skills/oms-*.",
   "skills": "./assets/skills/",
   "mcpServers": "./.mcp.codex.json"
 }

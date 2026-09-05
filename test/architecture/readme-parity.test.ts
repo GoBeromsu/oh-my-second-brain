@@ -11,7 +11,7 @@ import { absolute, assertNonVacuous, collectFiles } from "./repo-root.js";
  *
  *   1. it told readers to set `OMS_MODEL_PATH`, a name nothing reads;
  *   2. it advertised eleven retired detail operations as the MCP surface;
- *   3. it credited `oms doctor` with `oms lint`'s job and omitted `lint`.
+ *   3. it credited one retired top-level alias with another alias's job.
  *
  * Each was found by hand, after shipping. Nothing read `README.ko.md`, so
  * nothing could have caught them.
@@ -67,10 +67,22 @@ function cliCommands(text: string): string[] {
   return matches(text, /^oms [a-z-]+/gmu);
 }
 
+/** Canonical command-family surfaces before the aligned prose description. */
+function cliSurfaces(text: string): string[] {
+  return sorted(
+    text
+      .split("\n")
+      .filter((line) => line.startsWith("oms "))
+      .map((line) => line.split(/\s{2,}/u, 1)[0] ?? ""),
+  );
+}
+
 /** Capability-only MCP tool identifiers listed in the MCP surface line. */
 function toolNames(text: string): string[] {
   const surfaceLine = text.split("\n").find((line) => line.includes("·"));
-  return surfaceLine === undefined ? [] : matches(surfaceLine, /(?:write|search|link|status|doctor)/gu);
+  return surfaceLine === undefined
+    ? []
+    : matches(surfaceLine, /`([a-z][a-z-]*)`/gu).map((entry) => entry.slice(1, -1));
 }
 
 /** `OMS_*` environment variable identifiers. */
@@ -89,6 +101,56 @@ function advertisedTools(serverSource: string): string[] {
   );
 }
 
+const CLI_FAMILIES = [
+  "oms bridge",
+  "oms graph",
+  "oms hook",
+  "oms host",
+  "oms index",
+  "oms link",
+  "oms model",
+  "oms note",
+  "oms package",
+  "oms search",
+  "oms serve",
+  "oms setup",
+  "oms status",
+  "oms template",
+] as const;
+
+const MCP_TOOLS = ["doctor", "link", "search", "status", "write"] as const;
+
+const CLI_SURFACES = [
+  "oms bridge add|remove|status",
+  "oms graph build|status",
+  "oms hook pre|post",
+  "oms host install|remove|sync|status",
+  "oms index sync|embed|repair|status|clean",
+  "oms link check|suggest|apply",
+  "oms model install|select|waive|status",
+  "oms note create|append|update|audit|backfill|get",
+  "oms package check|update",
+  "oms search query|context",
+  "oms serve mcp|http",
+  "oms setup",
+  "oms status",
+  "oms template scan|list|show|add|update|move|remove|default|check|regenerate-types",
+] as const;
+
+const CURRENT_CLI_SURFACES = [
+  "oms search query",
+  "oms search context",
+  "oms index sync|embed|repair|status|clean",
+  "oms index status --view status|collections|contexts",
+  "oms note create|append|update|audit|backfill|get",
+  "oms host install|remove|sync|status",
+  "oms package check|update",
+  "oms serve mcp|http",
+] as const;
+
+const RETIRED_TOP_LEVEL =
+  /\boms (?:doctor|audit|reconcile|linkify|embed|doc|mcp|lint|install|uninstall|update)\b/gu;
+
 describe("README.md and README.ko.md agree on product facts", () => {
   it("advertises the same MCP tools both languages, matching the server", async () => {
     // Checked against the server rather than language-to-language: the Korean
@@ -99,20 +161,22 @@ describe("README.md and README.ko.md agree on product facts", () => {
     const advertised = advertisedTools(server);
 
     assertNonVacuous(advertised, `${MCP_SERVER} omsMcpTools entries`);
+    expect(advertised).toEqual(MCP_TOOLS);
     expect(toolNames(section(en, SECTIONS.mcp[EN], EN))).toEqual(advertised);
     expect(toolNames(section(ko, SECTIONS.mcp[KO], KO))).toEqual(advertised);
   });
 
-  it("lists the same CLI commands in both languages", async () => {
-    // `oms lint` was missing from the Korean list while its job was wrongly
-    // attributed to `oms doctor`. Both files abbreviate the full command
-    // allowlist, so English is the reference for which subset is shown; what
-    // must not differ is *which* subset.
+  it("lists the complete current CLI families and synchronized canonical surfaces", async () => {
     const [en, ko] = await Promise.all([read(EN), read(KO)]);
-    const english = cliCommands(section(en, SECTIONS.cli[EN], EN));
-
-    assertNonVacuous(english, `${EN} CLI block commands`);
-    expect(cliCommands(section(ko, SECTIONS.cli[KO], KO))).toEqual(english);
+    for (const [file, source] of [[EN, en], [KO, ko]] as const) {
+      const cli = section(source, SECTIONS.cli[file], file);
+      expect(cliCommands(cli)).toEqual(CLI_FAMILIES);
+      expect(cliSurfaces(cli)).toEqual(CLI_SURFACES);
+      for (const surface of CURRENT_CLI_SURFACES) {
+        expect(cli, `${file} omits current surface ${surface}`).toContain(surface);
+      }
+      expect(matches(source, RETIRED_TOP_LEVEL), `${file} contains retired top-level guidance`).toEqual([]);
+    }
   });
 
   it("never instructs readers to set an environment variable nothing reads", async () => {

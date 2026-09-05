@@ -11,8 +11,8 @@ Actual Obsidian Markdown templates own note shape and body scaffolding. The user
 | User intent | Preferred surface |
 |---|---|
 | inspect and adopt templates | `oms setup --vault <path> --dry-run`, then `--yes --approved-digest <digest>` |
-| install host integration | `oms install --runtime codex --vault <path> --yes` |
-| diagnose or repair | `$oms-doctor` or `oms doctor --vault <path>` |
+| install host integration | `oms host install --runtime codex --vault <path> --yes` |
+| diagnose or repair | `$oms-doctor` or `oms template check --vault <path>`; repairs require an approved digest |
 | write a note | `$oms-write` / MCP `oms_write` with a stable `templateId` |
 | retrieve knowledge | `$oms-search` / MCP `oms_search`; discover IDs with `op: "templates"` |
 

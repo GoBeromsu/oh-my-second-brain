@@ -13,7 +13,7 @@ Claude's manifest retains its explicit skill array; Codex's manifest retains its
 
 `assets/skills/` remains the sole authored skill source. The root `skills/` tree is a committed generated mirror for GJC only: it cannot be a symlink because npm drops that symlink from packed artifacts. `npm run sync:skills` regenerates it, and the architecture gate requires matching directories and byte-identical `SKILL.md` files.
 
-The MCP server is started with `oms mcp`. Claude uses `.mcp.json`, Codex uses `.mcp.codex.json`, and Hermes receives its registration in `~/.hermes/config.yaml`.
+The MCP server is started with `oms serve mcp`; `oms serve http` starts the HTTP surface. Neither server creates a vault engine store merely by starting. Claude uses `.mcp.json`, Codex uses `.mcp.codex.json`, and Hermes receives its registration in `~/.hermes/config.yaml`.
 
 All hosts expose the same five MCP tools. Registering an existing template remains
 an operation of `write`, not a sixth tool:
@@ -40,5 +40,11 @@ Status and template listings report runtime history for the current host and vau
 `approvedDigest`.
 
 Host agents may propose Core-template copies of external templates, but the kernel never transpiles or executes Templater. Inspect `renderer` and `filledBy` contract metadata before note creation. Ask for missing Obsidian-filled values; an external body or `none` renderer requires another Core template rather than raw script copying. Existing-note contract proposals show sample coverage and remain subject to exact approval and verified postconditions.
+
+Host lifecycle is explicit: `oms host install|remove|sync|status`. Package
+lifecycle is separate: `oms package check|update` never syncs hosts as a side
+effect. Model lifecycle is `oms model install|select|waive|status`. OMS exposes
+no host launcher, and bridge management is limited to `oms bridge
+add|remove|status` rather than an invented repair action.
 
 To add a host, add a clearly named `assets/<host>/` directory for host-only files, preserve shared skills in `assets/skills/`, declare every shipped path in the harness registry, and keep installer destinations explicit.

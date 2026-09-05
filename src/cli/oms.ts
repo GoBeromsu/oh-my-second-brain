@@ -7,60 +7,153 @@ import { runPreToolUse } from "../vendors/claude/hook/pre-tool-use.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { runMcpServer } from "../mcp/server.js";
-import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
 import {
   PINNED_DEFAULT_EMBEDDING_MODEL,
   type ModelSetAcquisitionManifest,
 } from "../kernel/engine/embed/model.js";
 import { parseCliArgs } from "./args.js";
-import { runAudit } from "./audit.js";
-import { runDoctor, runLint } from "./doctor-lint.js";
-import {
-  runInstallOrUninstall,
-  runUpdateCommand,
-  runReconcile,
-  type HostCommandContext,
-} from "./host-commands.js";
-import { runLink } from "./link-command.js";
-import { runLinkify } from "./linkify.js";
-import { isSearchCliCommand, runSearchCli } from "./search.js";
+import { runGraphCommand } from "./graph-command.js";
+import { runHostCommand, runModelCommand } from "./host-commands.js";
+import { runBridgeCommand, runLinkFamilyCommand } from "./link-command.js";
+import { runNoteCommand } from "./note-command.js";
+import { runPackageCommand } from "./package-command.js";
+import { runSearchCommand, runIndexFamilyCommand } from "./search.js";
+import { runServeHttp } from "./serve-http.js";
 import { runSetup } from "./setup-command.js";
+import { runStatusCommand } from "./status-command.js";
 import { runTemplateCommand, templateUsage } from "./template-command.js";
-import { searchUsage } from "./search-usage.js";
 import { maybePrintUpdateNotice } from "./update-notice.js";
 import { mainUsageCommandNames, printUsage } from "./usage.js";
 
 export { buildClaudeInstallPlan } from "./claude-install-plan.js";
 export type { ClaudeInstallPlan } from "./claude-install-plan.js";
-export { runDoctor, runLint } from "./doctor-lint.js";
-export { runAudit } from "./audit.js";
-export {
-  formatLinkResult,
-  runLink,
-} from "./link-command.js";
-export { runLinkify } from "./linkify.js";
 export {
   runSetup,
   type SetupPrompt,
 } from "./setup-command.js";
 export { maybePrintUpdateNotice } from "./update-notice.js";
 
-const bundledAssets = resolveBundledAssetPaths();
-
-function shouldResolveBridgeVault(command: string | undefined, vaultExplicit: boolean): boolean {
-  return (
-    !vaultExplicit &&
-    (command === "audit" ||
-      command === "linkify" ||
-      command === "doctor" ||
-      command === "lint" ||
-      command === "mcp" ||
-      isSearchCliCommand(command))
-  );
-}
-
 function isKnownCommand(command: string | undefined): boolean {
   return command === undefined || mainUsageCommandNames().includes(command);
+}
+
+const RETIRED_COMMAND_GUIDANCE: Readonly<Record<string, string>> = {
+  doctor: "Use `oms template check`, `oms note audit`, or `oms index repair`.",
+  audit: "Use `oms note audit`.",
+  reconcile: "Use `oms host sync`.",
+  linkify: "Use `oms link suggest` or `oms link apply`.",
+  embed: "Use `oms index embed`.",
+  doc: "Use `oms note get`.",
+  mcp: "Use `oms serve mcp`.",
+  lint: "Use `oms link check`.",
+  install: "Use `oms host install`.",
+  uninstall: "Use `oms host remove`.",
+  update: "Use `oms package update`.",
+};
+
+function parseVaultFlag(argv: readonly string[]): string | undefined {
+  let vault: string | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token !== "--vault") throw new Error(`Unknown option: ${token}`);
+    if (vault !== undefined) throw new Error("Duplicate option: --vault");
+    const value = argv[++index];
+    if (value === undefined || value.startsWith("--")) throw new Error("Missing value for --vault");
+    vault = path.resolve(value);
+  }
+  return vault;
+}
+
+async function effectiveTarget(explicitVault: string | undefined): Promise<{
+  readonly vault: string;
+  readonly source: WriteTargetSource;
+}> {
+  if (explicitVault !== undefined) return { vault: explicitVault, source: "explicit" };
+  const resolved = await resolveEffectiveVault(process.cwd(), process.env);
+  return { vault: resolved.vault, source: resolved.source };
+}
+
+async function runServeCommand(argv: readonly string[]): Promise<void> {
+  process.exitCode = 0;
+  const [leaf, ...leafArgs] = argv;
+  if (leaf === "--help" || leaf === "-h") {
+    console.log("Usage: oms serve <mcp|http> [options]");
+    return;
+  }
+  if (
+    (leaf === "mcp" || leaf === "http")
+    && leafArgs.length === 1
+    && (leafArgs[0] === "--help" || leafArgs[0] === "-h")
+  ) {
+    console.log(
+      leaf === "mcp"
+        ? "Usage: oms serve mcp [--vault <path>]"
+        : "Usage: oms serve http [--vault <path>] [--index <path>] [--host <host>] [--port <port>]",
+    );
+    return;
+  }
+  if (leaf === "mcp") {
+    const target = await effectiveTarget(parseVaultFlag(leafArgs));
+    await runMcpServer(target);
+    return;
+  }
+  if (leaf === "http") {
+    let explicitVault: string | undefined;
+    let indexPath: string | undefined;
+    let host: string | undefined;
+    let port: number | undefined;
+    const seen = new Set<string>();
+    for (let index = 0; index < leafArgs.length; index += 1) {
+      const token = leafArgs[index];
+      const value = leafArgs[index + 1];
+      if (!["--vault", "--index", "--host", "--port"].includes(token ?? "")) {
+        throw new Error(`Unknown serve http option: ${token}`);
+      }
+      if (seen.has(token!)) throw new Error(`Duplicate serve http option: ${token}`);
+      seen.add(token!);
+      if (value === undefined || value.startsWith("--")) throw new Error(`Missing value for ${token}`);
+      index += 1;
+      if (token === "--vault") explicitVault = path.resolve(value);
+      else if (token === "--index") indexPath = path.resolve(value);
+      else if (token === "--host") host = value;
+      else {
+        const parsedPort = Number.parseInt(value, 10);
+        if (`${parsedPort}` !== value || parsedPort < 0 || parsedPort > 65_535) {
+          throw new Error(`Invalid port: ${value}`);
+        }
+        port = parsedPort;
+      }
+    }
+    const target = await effectiveTarget(explicitVault);
+    const server = await runServeHttp({ vault: target.vault, index: indexPath, host, port });
+    console.log(JSON.stringify({ status: "listening", url: server.url, vault: target.vault, source: target.source }));
+    return;
+  }
+  throw new Error("Usage: oms serve <mcp|http> [options]");
+}
+
+async function runHookCommand(argv: readonly string[]): Promise<void> {
+  process.exitCode = 0;
+  const [leaf, ...leafArgs] = argv;
+  if (leaf === "--help" || leaf === "-h") {
+    console.log("Usage: oms hook <pre|post> [--vault <path>]");
+    return;
+  }
+  if (
+    (leaf === "pre" || leaf === "post")
+    && leafArgs.length === 1
+    && (leafArgs[0] === "--help" || leafArgs[0] === "-h")
+  ) {
+    console.log(`Usage: oms hook ${leaf} [--vault <path>]`);
+    return;
+  }
+  if (leaf === "pre-tool-use" || leaf === "post-tool-use") {
+    throw new Error(`Hook leaf \`${leaf}\` is retired. Use \`oms hook ${leaf === "pre-tool-use" ? "pre" : "post"}\`.`);
+  }
+  if (leaf !== "pre" && leaf !== "post") throw new Error("Usage: oms hook <pre|post> [--vault <path>]");
+  const target = await effectiveTarget(parseVaultFlag(leafArgs));
+  if (leaf === "pre") await runPreToolUse({ vault: target.vault });
+  else await runPostToolUse({ vault: target.vault });
 }
 
 async function main(): Promise<void> {
@@ -73,13 +166,8 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    if (parsedArgs.command === "template") {
-      console.log(templateUsage());
-    } else if (isSearchCliCommand(parsedArgs.command)) {
-      console.log(searchUsage());
-    } else {
-      printUsage();
-    }
+    if (parsedArgs.command === "template") console.log(templateUsage());
+    else printUsage();
     process.exitCode = 0;
     return;
   }
@@ -88,48 +176,19 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  let {
+  const {
     command,
     vault,
-    vaultExplicit,
     yes,
     approvedDigest,
     templateFolders,
-    maxPerTemplate,
-    apply,
     installClaude,
-    runtime,
     dryRun,
-    executeExternal,
-    checkUpdate,
-    timeoutMs,
-    agentVault,
-    verbose,
-    json,
-    folders,
-    conventionNote,
     modelsDescriptorPath,
     modelsNoDefault,
     modelsDefault,
     unknownFlags,
   } = parsedArgs;
-
-  // `mcp` keeps the FULL resolution result: the write surface trusts every
-  // source except `cwd`, so the server needs the source, not just the path.
-  let mcpTarget: { vault: string; scope: string[] | null; source: WriteTargetSource } | undefined;
-  if ((command === "update" || command === "reconcile") && unknownFlags.length > 0) {
-    console.error(`[oms] Unsupported update option: ${unknownFlags.join(", ")}`);
-    process.exitCode = 1;
-    return;
-  }
-  if (command === "mcp") {
-    mcpTarget = vaultExplicit
-      ? { vault, scope: null, source: "explicit" }
-      : await resolveEffectiveVault(process.cwd(), process.env);
-    vault = mcpTarget.vault;
-  } else if (shouldResolveBridgeVault(command, vaultExplicit)) {
-    vault = (await resolveEffectiveVault(process.cwd(), process.env)).vault;
-  }
 
   if (command === "template") {
     await runTemplateCommand(argv.slice(1));
@@ -187,93 +246,58 @@ async function main(): Promise<void> {
       modelsNoDefault,
     });
     if (!dryRun && outcome === "completed") await maybePrintUpdateNotice();
+  } else if (command === "note") {
+    await runNoteCommand(argv.slice(1));
   } else if (command === "link") {
-    process.exitCode = await runLink({
-      cwd: process.cwd(),
-      vault,
-      vaultExplicit,
-      folders,
-      conventionNote,
-    });
-    await maybePrintUpdateNotice();
-  } else if (command === "install" || command === "uninstall") {
-    process.exitCode = await runInstallOrUninstall(command, hostContext());
-    if (process.exitCode === 0) await maybePrintUpdateNotice();
-  } else if (command === "update") {
-    process.exitCode = await runUpdateCommand(hostContext());
-  } else if (command === "reconcile") {
-    process.exitCode = await runReconcile(hostContext());
-  } else if (command === "doctor") {
-    process.exitCode = await runDoctor({ vault, verbose, json, maxPerTemplate });
-    await maybePrintUpdateNotice();
-  } else if (command === "audit") {
-    process.exitCode = await runAudit({
-      vault,
-      json,
-      folder: folders[0],
-      });
-    await maybePrintUpdateNotice();
-  } else if (command === "linkify") {
-    process.exitCode = await runLinkify({
-      vault,
-      folder: folders[0],
-      apply,
-      yes,
-    });
-    await maybePrintUpdateNotice();
-  } else if (command === "lint") {
-    process.exitCode = await runLint({ vault, verbose, json });
-    await maybePrintUpdateNotice();
-  } else if (isSearchCliCommand(command)) {
-    process.exitCode = await runSearchCli({
-      argv,
-      vault,
-    });
-    await maybePrintUpdateNotice();
-  } else if (command === "mcp") {
-    await runMcpServer({
-      vault,
-      source: mcpTarget?.source ?? "explicit",
-    });
-  } else if (command === "hook") {
-    const subcommand = argv[1];
-    if (subcommand === "pre-tool-use") {
-      await runPreToolUse({ vault });
-    } else if (subcommand === "post-tool-use") {
-      await runPostToolUse({ vault });
+    if (argv[1]?.startsWith("-") && argv[1] !== "--help" && argv[1] !== "-h") {
+      console.error("[oms] Repository linking moved to `oms bridge add|remove|status`.");
+      process.exitCode = 1;
     } else {
-      console.error(`[oms] Unknown hook subcommand: ${subcommand ?? "(none)"}`);
-      console.error("Usage: oms hook <pre-tool-use|post-tool-use> [--vault <path>]");
+      await runLinkFamilyCommand(argv.slice(1));
+    }
+  } else if (command === "bridge") {
+    await runBridgeCommand(argv.slice(1));
+  } else if (command === "search") {
+    await runSearchCommand(argv.slice(1));
+  } else if (command === "index") {
+    await runIndexFamilyCommand(argv.slice(1));
+  } else if (command === "graph") {
+    await runGraphCommand(argv.slice(1));
+  } else if (command === "host") {
+    await runHostCommand(argv.slice(1));
+  } else if (command === "package") {
+    await runPackageCommand(argv.slice(1));
+  } else if (command === "model") {
+    await runModelCommand(argv.slice(1));
+  } else if (command === "serve") {
+    try {
+      await runServeCommand(argv.slice(1));
+    } catch (error: unknown) {
+      console.error(`[oms] ${error instanceof Error ? error.message : String(error)}`);
       process.exitCode = 1;
     }
+  } else if (command === "hook") {
+    try {
+      await runHookCommand(argv.slice(1));
+    } catch (error: unknown) {
+      console.error(`[oms] ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+  } else if (command === "status") {
+    await runStatusCommand(argv.slice(1));
   } else if (command === undefined) {
     // No command at all is a request for help, not an error.
     printUsage();
     process.exitCode = 0;
   } else {
-    // An unrecognised command must fail. Printing usage and exiting 0 makes a
-    // typo look like success, and makes a removed command indistinguishable
-    // from a working one - which is how the retired qmd aliases went unnoticed.
-    console.error(`[oms] Unknown command: ${command}`);
+    const retiredGuidance = RETIRED_COMMAND_GUIDANCE[command];
+    console.error(
+      retiredGuidance === undefined
+        ? `[oms] Unknown command: ${command}`
+        : `[oms] Command \`${command}\` is retired. ${retiredGuidance}`,
+    );
     printUsage();
     process.exitCode = 1;
-  }
-
-  function hostContext(): HostCommandContext {
-    return {
-      vault,
-      vaultExplicit,
-      runtime,
-      agentVault,
-      dryRun,
-      executeExternal,
-      yes,
-      json,
-      checkUpdate,
-      timeoutMs,
-      unknownFlags,
-      adapterRoot: bundledAssets.packageRoot,
-    };
   }
 }
 

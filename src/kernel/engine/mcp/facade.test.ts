@@ -252,7 +252,7 @@ folders:
     ]);
   });
 
-  it("reports template-contract diagnostics and doctor guidance for expansion", async () => {
+  it("reports template-contract diagnostics and template-check guidance for expansion", async () => {
     const vault = freshVault();
     rmSync(path.join(vault, ".oms", "types.json"));
     const adapter = new McpEngineAdapter(
@@ -272,7 +272,8 @@ folders:
     expect(result.available).toBe(false);
     if (result.available) return;
     expect(result.reason).toContain("TEMPLATE_SOURCE_INVALID");
-    expect(result.reason).toContain("Run oms doctor --vault <vault>");
+    expect(result.reason).toContain("Run oms template check --vault <vault>");
+    expect(result.reason).toContain("approved oms template regenerate-types dry-run/apply flow");
   });
 
   it("reports generate-unavailable for expansion without an expander", async () => {
@@ -390,7 +391,7 @@ folders:
     });
   });
 
-  it("reports template-contract diagnostics and doctor guidance for reranking", async () => {
+  it("reports template-contract diagnostics and template-check guidance for reranking", async () => {
     const vault = freshVault();
     writeFileSync(path.join(vault, ".oms", "template-migration.json"), "{}\n");
     const adapter = new McpEngineAdapter(
@@ -407,7 +408,8 @@ folders:
     expect(result.available).toBe(false);
     if (result.available) return;
     expect(result.reason).toContain("MIGRATION_INCOMPLETE");
-    expect(result.reason).toContain("Run oms doctor --vault <vault>");
+    expect(result.reason).toContain("Run oms template check --vault <vault>");
+    expect(result.reason).toContain("approved oms template regenerate-types dry-run/apply flow");
   });
 
   it("does not download a model while serving an MCP query", async () => {

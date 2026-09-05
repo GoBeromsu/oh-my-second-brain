@@ -1,10 +1,11 @@
+import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { engineStorePath } from "../kernel/engine/paths.js";
-import { runSearchCli } from "./search.js";
+import { runIndexFamilyCommand } from "./search.js";
 
 const roots: string[] = [];
 
@@ -24,37 +25,62 @@ function createCorruptStore(vault: string): void {
   }
 }
 
+beforeEach(() => {
+  process.exitCode = 0;
+  vi.spyOn(console, "log").mockImplementation(() => undefined);
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+});
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("oms index repair", () => {
-  it("requires the space-form closed mode enum with no duplicate or positional values", async () => {
+describe("index family", () => {
+  it("requires the closed repair mode and rejects retired leaves", async () => {
     const vault = await makeVault();
     for (const argv of [
-      ["index", "repair"],
-      ["index", "repair", "--mode=rebuild"],
-      ["index", "repair", "--mode", "rebuild", "--mode", "drop"],
-      ["index", "repair", "--mode", "other"],
-      ["index", "repair", "--mode", "rebuild", "extra"],
+      ["repair"],
+      ["repair", "--mode=rebuild"],
+      ["repair", "--mode", "rebuild", "--mode", "drop"],
+      ["repair", "--mode", "other"],
+      ["repair", "--mode", "rebuild", "extra"],
+      ["sync", "--force"],
+      ["sync", "--embed"],
+      ["embed", "--force"],
+      ["cleanup"],
+      ["collections"],
+      ["contexts"],
     ]) {
-      const writeError = vi.fn();
-      expect(await runSearchCli({ argv, vault, write: vi.fn(), writeError })).toBe(1);
-      expect(writeError).toHaveBeenCalled();
+      await runIndexFamilyCommand([...argv, "--vault", vault]);
+      expect(process.exitCode).toBe(1);
     }
   });
 
-  it("accepts --dry-run and reports the repair plan without opening the store", async () => {
+  it("rejects overlapping and cross-leaf flags before creating a vault store", async () => {
+    for (const argv of [
+      ["sync", "--embed"],
+      ["sync", "--force"],
+      ["embed", "--force"],
+      ["embed", "--dry-run"],
+      ["clean", "--mode", "rebuild"],
+      ["repair", "--collection", "default", "--mode", "rebuild"],
+      ["status", "--dry-run"],
+      ["sync", "--unexpected"],
+    ]) {
+      const vault = await makeVault();
+      await runIndexFamilyCommand([...argv, "--vault", vault]);
+      expect(process.exitCode, argv.join(" ")).toBe(1);
+      expect(existsSync(engineStorePath(vault)), argv.join(" ")).toBe(false);
+    }
+  });
+
+  it("dry-run repair reports a plan for the verified target", async () => {
     const vault = await makeVault();
     createCorruptStore(vault);
-    const write = vi.fn();
-    expect(await runSearchCli({
-      argv: ["index", "repair", "--mode", "rebuild", "--dry-run"],
-      vault,
-      write,
-      writeError: vi.fn(),
-    })).toBe(0);
-    expect(JSON.parse(write.mock.calls[0]![0] as string)).toMatchObject({
+    await runIndexFamilyCommand(["repair", "--mode", "rebuild", "--dry-run", "--vault", vault]);
+    expect(process.exitCode).toBe(0);
+    expect(JSON.parse(vi.mocked(console.log).mock.calls[0]![0] as string)).toMatchObject({
       mode: "rebuild",
       dryRun: true,
       reindexRequired: true,
@@ -62,40 +88,33 @@ describe("oms index repair", () => {
     });
   });
 
-  it("quotes the rebuild command when status detects a corrupt legacy store", async () => {
+  it("status is read-only and does not create a missing store", async () => {
     const vault = await makeVault();
-    createCorruptStore(vault);
-    const writeError = vi.fn();
-    expect(await runSearchCli({ argv: ["index", "status"], vault, write: vi.fn(), writeError })).toBe(1);
-    expect(writeError).toHaveBeenCalledWith(expect.stringContaining("oms index repair --mode rebuild"));
+    await rm(path.join(vault, ".oms"), { recursive: true });
+    await runIndexFamilyCommand(["status", "--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(existsSync(engineStorePath(vault))).toBe(false);
+    expect(console.error).toHaveBeenCalledWith("No engine store; run `oms index sync`.");
   });
 
-  it("removes the corrupt-store status failure after rebuild", async () => {
+  it("quotes the verified repair command for a corrupt store", async () => {
     const vault = await makeVault();
     createCorruptStore(vault);
-    expect(await runSearchCli({
-      argv: ["index", "repair", "--mode", "rebuild"],
-      vault,
-      write: vi.fn(),
-      writeError: vi.fn(),
-    })).toBe(0);
-    const writeError = vi.fn();
-    await runSearchCli({ argv: ["index", "status"], vault, write: vi.fn(), writeError });
-    expect(writeError).not.toHaveBeenCalledWith(expect.stringContaining("oms index repair --mode rebuild"));
-  }, 15_000);
+    await runIndexFamilyCommand(["status", "--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("oms index repair --mode rebuild"));
+  });
 
-  it("reports a missing store after drop and directs the user to sync", async () => {
+  it("retains the explicit rebuild repair capability", async () => {
     const vault = await makeVault();
     createCorruptStore(vault);
-    expect(await runSearchCli({
-      argv: ["index", "repair", "--mode", "drop"],
-      vault,
-      write: vi.fn(),
-      writeError: vi.fn(),
-    })).toBe(0);
+    await runIndexFamilyCommand(["repair", "--mode", "rebuild", "--vault", vault]);
+    expect(process.exitCode).toBe(0);
 
-    const writeError = vi.fn();
-    expect(await runSearchCli({ argv: ["index", "status"], vault, write: vi.fn(), writeError })).toBe(1);
-    expect(writeError).toHaveBeenCalledWith("No engine store; run `oms index sync`.");
+    vi.mocked(console.error).mockClear();
+    await runIndexFamilyCommand(["status", "--vault", vault]);
+    expect(console.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("oms index repair --mode rebuild"),
+    );
   });
 });

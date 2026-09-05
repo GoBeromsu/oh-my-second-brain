@@ -1,6 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
+import { engineStorePath } from "../kernel/engine/paths.js";
 import type {
   SemanticQueryOptions,
   SemanticSearchMode,
@@ -31,6 +37,22 @@ interface RouteContext {
   readonly adapter: McpEngineAdapter;
 }
 
+interface EngineSnapshot {
+  readonly dbPath: string | undefined;
+  dispose(): Promise<void>;
+}
+
+interface CapturedFile {
+  readonly bytes: Buffer;
+  readonly digest: string;
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly ctimeMs: number;
+  readonly ino: number;
+}
+
+const SNAPSHOT_ATTEMPTS = 3;
+
 const HTTP_METHODS: Readonly<Record<string, string>> = {
   "/health": "GET",
   "/search": "POST",
@@ -44,6 +66,86 @@ function safeHost(host: string | undefined): string {
     throw new Error("OMS search HTTP server only binds to localhost without authentication.");
   }
   return selected;
+}
+
+function digest(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function captureFile(filename: string): Promise<CapturedFile | null> {
+  try {
+    const before = await stat(filename);
+    const bytes = await readFile(filename);
+    const after = await stat(filename);
+    if (
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs ||
+      before.ino !== after.ino ||
+      bytes.byteLength !== after.size
+    ) return null;
+    return {
+      bytes,
+      digest: digest(bytes),
+      size: after.size,
+      mtimeMs: after.mtimeMs,
+      ctimeMs: after.ctimeMs,
+      ino: after.ino,
+    };
+  } catch (error) {
+    if (error instanceof Error && "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function sameCapture(left: CapturedFile | null, right: CapturedFile | null): boolean {
+  if (left === null || right === null) return left === right;
+  return left.digest === right.digest &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs &&
+    left.ino === right.ino;
+}
+
+/**
+ * Capture a stable committed view without ever opening the source with SQLite.
+ *
+ * Main DB and WAL are read twice with metadata and SHA-256 comparisons. A
+ * concurrent change retries the whole pair; persistent churn fails loudly
+ * rather than serving a stale DB-only fallback. SQLite recovery runs only on
+ * the copied pair in the OS temp directory, where regenerating SHM is harmless.
+ */
+async function snapshotEngineStore(vault: string): Promise<EngineSnapshot> {
+  const source = engineStorePath(vault);
+  if (!existsSync(source)) return { dbPath: undefined, dispose: async () => undefined };
+
+  const directory = await mkdtemp(path.join(tmpdir(), "oms-http-engine-"));
+  const dbPath = path.join(directory, "engine-store.sqlite");
+  try {
+    for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS; attempt += 1) {
+      const firstMain = await captureFile(source);
+      const firstWal = await captureFile(`${source}-wal`);
+      const secondMain = await captureFile(source);
+      const secondWal = await captureFile(`${source}-wal`);
+      if (firstMain !== null &&
+        sameCapture(firstMain, secondMain) &&
+        sameCapture(firstWal, secondWal)) {
+        await writeFile(dbPath, firstMain.bytes);
+        if (firstWal !== null) await writeFile(`${dbPath}-wal`, firstWal.bytes);
+        return {
+          dbPath,
+          dispose: () => rm(directory, { recursive: true, force: true }),
+        };
+      }
+    }
+    throw new Error(
+      `Engine store changed while capturing a read-only HTTP snapshot at "${source}". Retry when the current write completes.`,
+    );
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
@@ -168,13 +270,22 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
 export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpServer> {
   const host = safeHost(opts.host);
   const port = opts.port ?? 8765;
-  // Single engine per server: vec-capable when configured, else lexical and
-  // document operations remain available while vector and HyDE requests fail loud.
-  const session = createEngineSession(opts.vault, {
-    write: true,
-    modelCacheDir: opts.modelCacheDir,
-    modelEnv: opts.modelEnv,
-  });
+  const snapshot = await snapshotEngineStore(opts.vault);
+  // Opening the transport is read-only: reuse an existing store when present,
+  // otherwise serve through an in-memory core. Neither path creates vault state.
+  // Vector and HyDE requests still fail loudly when embeddings are unavailable.
+  let session: ReturnType<typeof createEngineSession>;
+  try {
+    session = createEngineSession(opts.vault, {
+      write: false,
+      dbPath: snapshot.dbPath,
+      modelCacheDir: opts.modelCacheDir,
+      modelEnv: opts.modelEnv,
+    });
+  } catch (error) {
+    await snapshot.dispose().catch(() => undefined);
+    throw error;
+  }
   const ctx: RouteContext = { vault: opts.vault, index: opts.index, adapter: session.adapter };
   const server: Server = createServer((request, response) => {
     void routeRequest(ctx, request, response);
@@ -189,6 +300,7 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
     });
   } catch (error) {
     await session.dispose().catch(() => undefined);
+    await snapshot.dispose().catch(() => undefined);
     throw error;
   }
   const address = server.address();
@@ -199,9 +311,12 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => {
-          void session.dispose().catch(() => undefined);
-          if (error) reject(error);
-          else resolve();
+          void (async () => {
+            await session.dispose().catch(() => undefined);
+            await snapshot.dispose().catch(() => undefined);
+            if (error) reject(error);
+            else resolve();
+          })();
         });
       }),
   };

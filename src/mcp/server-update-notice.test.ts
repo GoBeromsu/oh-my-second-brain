@@ -12,7 +12,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
-// `oms mcp` doesn't write a global vault registry today, but nothing here
+// `oms serve mcp` doesn't write a global vault registry today, but nothing here
 // should rely on that staying true - HOME/USERPROFILE are pointed at a
 // throwaway directory instead of the real inherited one, the same way
 // src/cli/oms-dispatch.test.ts isolates its CLI child processes.
@@ -70,7 +70,7 @@ async function installedVersion(): Promise<string> {
 async function instructionsWithStateDir(stateDir: string): Promise<string | undefined> {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [distCli, "mcp", "--vault", fixtureVault],
+    args: [distCli, "serve", "mcp", "--vault", fixtureVault],
     cwd: repoRoot,
     stderr: "pipe",
     env: {
@@ -115,7 +115,7 @@ describe("MCP server instructions update nudge", () => {
       expect(lines).toHaveLength(2);
       expect(lines[0]).toContain("Oh My Second Brain exposes write, search, link, status, and doctor tools");
       expect(lines[1]).toContain(`${current} -> 99.0.0`);
-      expect(lines[1]).toContain("oms update --yes");
+      expect(lines[1]).toContain("oms package update --yes");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

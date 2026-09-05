@@ -3,6 +3,7 @@
     "oms": {
       "command": "oms",
       "args": [
+        "serve",
         "mcp",
         "--vault",
         "."
