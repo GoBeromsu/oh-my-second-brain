@@ -26,7 +26,8 @@ export interface RepairEngineStoreOptions {
  */
 export function repairEngineStore(options: RepairEngineStoreOptions): EngineStoreRepairPlan {
   const storePath = engineStorePath(options.vault);
-  const backupPath = existsSync(storePath) ? backupStorePath(storePath, options.now?.() ?? new Date()) : null;
+  const sourcePaths = storeWithSidecars(storePath).filter((candidate) => existsSync(candidate));
+  const backupPath = sourcePaths.length > 0 ? availableBackupStorePath(storePath, options.now?.() ?? new Date()) : null;
   const plan: EngineStoreRepairPlan = {
     mode: options.mode,
     storePath,
@@ -36,7 +37,7 @@ export function repairEngineStore(options: RepairEngineStoreOptions): EngineStor
   };
   if (options.dryRun) return plan;
 
-  if (backupPath !== null) moveStoreWithSidecars(storePath, backupPath);
+  if (backupPath !== null) moveStoreWithSidecars(storePath, backupPath, sourcePaths);
   if (options.mode === "rebuild") {
     const store = openEngineStoreCore(storePath);
     store.close();
@@ -49,9 +50,23 @@ function backupStorePath(storePath: string, now: Date): string {
   return `${storePath}.backup-${timestamp}`;
 }
 
-function moveStoreWithSidecars(storePath: string, backupPath: string): void {
-  renameSync(storePath, backupPath);
-  for (const suffix of ["-wal", "-shm"] as const) {
-    if (existsSync(`${storePath}${suffix}`)) renameSync(`${storePath}${suffix}`, `${backupPath}${suffix}`);
+function availableBackupStorePath(storePath: string, now: Date): string {
+  const base = backupStorePath(storePath, now);
+  let candidate = base;
+  let sequence = 1;
+  while (storeWithSidecars(candidate).some((backup) => existsSync(backup))) {
+    candidate = `${base}-${sequence}`;
+    sequence += 1;
+  }
+  return candidate;
+}
+
+function storeWithSidecars(storePath: string): readonly string[] {
+  return [storePath, `${storePath}-wal`, `${storePath}-shm`];
+}
+
+function moveStoreWithSidecars(storePath: string, backupPath: string, sourcePaths: readonly string[]): void {
+  for (const sourcePath of sourcePaths) {
+    renameSync(sourcePath, `${backupPath}${sourcePath.slice(storePath.length)}`);
   }
 }

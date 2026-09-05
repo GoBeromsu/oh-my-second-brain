@@ -117,13 +117,16 @@ describe("MCP detail-tool demotion", () => {
       expect(cleanup.content[0]?.type === "text" ? cleanup.content[0].text : "").toMatch(
         /OMS_EMBEDDING_PROVIDER|available/,
       );
-      for (const mode of ["sync", "embed", "repair"]) {
+      for (const mode of ["sync", "embed"]) {
         const result = await call("doctor", { op: "sync-embeddings", mode });
         expect(result.content[0]?.type).toBe("text");
         expect(result.content[0]?.type === "text" ? result.content[0].text : "").toMatch(
           /OMS_EMBEDDING_PROVIDER|available/,
         );
       }
+      expect(payload(await call("doctor", {
+        op: "sync-embeddings", mode: "repair", repairMode: "rebuild", dryRun: true,
+      }))).toMatchObject({ mode: "rebuild", dryRun: true, resolvedVault: vault });
       await expect(client.listResourceTemplates()).rejects.toThrow(/Method not found/);
     } finally { await client.close(); await rm(vault, { recursive: true, force: true }); }
   }, 120_000);

@@ -344,7 +344,12 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(search({ op: "collections" }).valid).toBe(false);
     expect(doctor({ op: "sync-embeddings", mode: "sync" }).valid).toBe(true);
     expect(doctor({ op: "sync-embeddings", mode: "embed" }).valid).toBe(true);
-    expect(doctor({ op: "sync-embeddings", mode: "repair" }).valid).toBe(true);
+    expect(doctor({ op: "sync-embeddings", mode: "repair" }).valid).toBe(false);
+    expect(doctor({ op: "sync-embeddings", mode: "repair", repairMode: "rebuild" }).valid).toBe(true);
+    expect(doctor({ op: "sync-embeddings", mode: "repair", repairMode: "drop", dryRun: true }).valid).toBe(true);
+    expect(doctor({ op: "sync-embeddings", mode: "repair", repairMode: "vacuum" }).valid).toBe(false);
+    expect(doctor({ op: "sync-embeddings", mode: "sync", repairMode: "drop" }).valid).toBe(false);
+    expect(doctor({ op: "sync-embeddings", mode: "embed", dryRun: true }).valid).toBe(false);
     expect(doctor({ op: "sync-embeddings", mode: "sync", embed: false }).valid).toBe(false);
     expect(write({
       op: "template",
@@ -1150,8 +1155,13 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
 
-      for (const op of ["build-graph", "cleanup", "sync-embeddings"]) {
-        const repair = textPayload(await client.callTool({ name: "doctor", arguments: { op } }));
+      for (const [op, arguments_] of [
+        ["build-graph", { op: "build-graph" }],
+        ["cleanup", { op: "cleanup" }],
+        ["sync-embeddings", { op: "sync-embeddings", mode: "sync" }],
+        ["repair-index", { op: "sync-embeddings", mode: "repair", repairMode: "drop" }],
+      ] as const) {
+        const repair = textPayload(await client.callTool({ name: "doctor", arguments: arguments_ }));
         expect(repair).toMatchObject({
           status: "rejected",
           rejection: {
@@ -1368,6 +1378,10 @@ Valid frontmatter remains available to retrieve.
       const status = textPayload(await client.callTool({ name: "status", arguments: {} }));
       expect(status.writeTools).toBe("write-gated-by-verified-target-and-contract");
       expect(status.history).toEqual(expect.objectContaining({ verifications: expect.any(Number) }));
+      const graph = textPayload(await client.callTool({ name: "status", arguments: { op: "graph" } }));
+      expect(graph).toEqual(expect.objectContaining({ available: expect.any(Boolean) }));
+      expect(graph).not.toHaveProperty("writeTools");
+      expect(graph).not.toHaveProperty("derivedState");
 
       const listed = textPayload(await client.callTool({ name: "search", arguments: { op: "templates" } }));
       expect(listed.history).toEqual(expect.objectContaining({

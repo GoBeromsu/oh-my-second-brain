@@ -137,6 +137,11 @@ describe("repairEngineStore", () => {
     const vault = await makeVault();
     legacyStore(vault, "normal");
     const before = await authorityHashes(vault);
+    const storePath = engineStorePath(vault);
+    await Promise.all([
+      writeFile(`${storePath}-wal`, "wal"),
+      writeFile(`${storePath}-shm`, "shm"),
+    ]);
     const result = repairEngineStore({
       vault,
       mode: "drop",
@@ -145,8 +150,49 @@ describe("repairEngineStore", () => {
 
     expect(result).toMatchObject({ reindexRequired: true, dryRun: false });
     await expect(stat(result.backupPath!)).resolves.toBeDefined();
-    await expect(stat(engineStorePath(vault))).rejects.toThrow();
-    expect(openEngineStoreCoreReadOnly(engineStorePath(vault))).toBeNull();
+    await expect(stat(`${result.backupPath!}-wal`)).resolves.toBeDefined();
+    await expect(stat(`${result.backupPath!}-shm`)).resolves.toBeDefined();
+    await expect(stat(storePath)).rejects.toThrow();
+    await expect(stat(`${storePath}-wal`)).rejects.toThrow();
+    await expect(stat(`${storePath}-shm`)).rejects.toThrow();
+    expect(openEngineStoreCoreReadOnly(storePath)).toBeNull();
     expect(await authorityHashes(vault)).toEqual(before);
+  });
+
+  it("does not overwrite a prior backup with the same timestamp", async () => {
+    const vault = await makeVault();
+    const storePath = engineStorePath(vault);
+    legacyStore(vault, "normal");
+    const now = () => new Date("2026-09-01T10:00:00.000Z");
+
+    const first = repairEngineStore({ vault, mode: "rebuild", now });
+    const firstBackup = await readFile(first.backupPath!);
+    const second = repairEngineStore({ vault, mode: "drop", now });
+
+    expect(second.backupPath).toBe(`${first.backupPath!}-1`);
+    expect(await readFile(first.backupPath!)).toEqual(firstBackup);
+    await expect(stat(second.backupPath!)).resolves.toBeDefined();
+    await expect(stat(storePath)).rejects.toThrow();
+  });
+
+  it("preserves orphan SQLite sidecars and removes them from the source paths", async () => {
+    const vault = await makeVault();
+    const storePath = engineStorePath(vault);
+    await Promise.all([
+      writeFile(`${storePath}-wal`, "orphan wal"),
+      writeFile(`${storePath}-shm`, "orphan shm"),
+    ]);
+
+    const result = repairEngineStore({
+      vault,
+      mode: "drop",
+      now: () => new Date("2026-09-01T10:00:00.000Z"),
+    });
+
+    expect(result.backupPath).not.toBeNull();
+    await expect(stat(`${result.backupPath!}-wal`)).resolves.toBeDefined();
+    await expect(stat(`${result.backupPath!}-shm`)).resolves.toBeDefined();
+    await expect(stat(`${storePath}-wal`)).rejects.toThrow();
+    await expect(stat(`${storePath}-shm`)).rejects.toThrow();
   });
 });

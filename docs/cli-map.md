@@ -2,7 +2,7 @@
 
 OMS exposes fourteen CLI command families and exactly five MCP tools. CLI commands that have no MCP equivalent remain first-class CLI capabilities; MCP detail operations are discriminated by `op` and never become extra tools.
 
-The five fixed MCP tools are `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`.
+The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doctor`. The server id is `oms`; the tables below use the host-qualified spellings `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`, not additional wire tools.
 
 ## Template
 
@@ -55,18 +55,18 @@ Link operations edit wikilinks. Bridge operations manage target resolution metad
 
 | CLI | MCP tool | `op` | Required discriminator |
 |---|---|---|---|
-| `oms search query` | `oms_search` | `query` | `mode=query|search|vsearch`; `query` XOR `searches` |
+| `oms search query` | `oms_search` | `query` | Optional explicit `mode=query|search|vsearch` with `query`; typed `searches` and lexical/vector/HyDE shorthand omit `mode`. |
 | `oms search context` | `oms_search` | `context` | none |
 | `oms index sync` | `oms_doctor` | `sync-embeddings` | `mode=sync` |
 | `oms index embed` | `oms_doctor` | `sync-embeddings` | `mode=embed` |
-| `oms index repair` | `oms_doctor` | `sync-embeddings` | `mode=repair` |
+| `oms index repair --mode <mode>` | `oms_doctor` | `sync-embeddings` | `mode=repair`; `repairMode` is `rebuild` or `drop`; optional `dryRun` |
 | `oms index status` | `oms_search` | `index-status` | `view=status|collections|contexts` |
 | `oms index clean` | `oms_doctor` | `cleanup` | none |
 | `oms graph build` | `oms_doctor` | `build-graph` | none |
 | `oms graph status` | `oms_status` | `graph` | none |
 | `oms status` | `oms_status` | absent | Read-only aggregate view. |
 
-Index sync, embed, and repair are exclusive modes, not combinable `embed` or `force` booleans. The collections and contexts capabilities are views of `index-status`, not standalone search operations.
+Index sync, embed, and repair are exclusive modes, not combinable `embed` or `force` booleans. Repair performs the same verified store backup and rebuild/drop through CLI and MCP; it is not forced embedding. The collections and contexts capabilities are views of `index-status`, not standalone search operations. Graph status returns graph-only health; the zero-argument status tool returns the aggregate view.
 
 ## CLI-only lifecycle and servers
 

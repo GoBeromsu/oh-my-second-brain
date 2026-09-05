@@ -2,7 +2,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 
 import { runEngineSession } from "./engine-session.js";
-import { assembleGraphOnlyEngine } from "../kernel/engine/assemble.js";
+import * as engineAssembly from "../kernel/engine/assemble.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
@@ -94,12 +94,20 @@ export async function runStatusCommand(argv: readonly string[]): Promise<void> {
       }
     }
 
-    const graphEngine = assembleGraphOnlyEngine({ vault: resolved.vault });
     let graph: unknown;
     try {
-      graph = await graphEngine.adapter.graphStatus(resolved.vault);
-    } finally {
-      await graphEngine.dispose();
+      const graphEngine = engineAssembly.assembleGraphOnlyEngine({ vault: resolved.vault });
+      try {
+        graph = await graphEngine.adapter.graphStatus(resolved.vault);
+      } finally {
+        await graphEngine.dispose();
+      }
+    } catch (error: unknown) {
+      graph = {
+        available: false,
+        reason: error instanceof Error ? error.message : String(error),
+        diagnostics: [diagnostic(error)],
+      };
     }
     console.log(JSON.stringify({
       vault: resolved.vault,

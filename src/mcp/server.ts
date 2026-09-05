@@ -1,4 +1,5 @@
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -188,7 +189,7 @@ const operations: Record<string, readonly Operation[]> = {
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
   status: [{ name: "oms_graph_status", direct: true }, { op: "graph", name: "oms_graph_status" }],
-  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "regenerate-types", name: "oms_regenerate_types", properties: { dryRun: boolean, approvedDigest: digestSchema } }, { op: "backfill-defaults", name: "oms_backfill_defaults", properties: { notePath: string, dryRun: boolean, approvedDigest: digestSchema }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, ensureCollection: boolean, pull: boolean, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number }, required: ["mode"] }],
+  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "regenerate-types", name: "oms_regenerate_types", properties: { dryRun: boolean, approvedDigest: digestSchema } }, { op: "backfill-defaults", name: "oms_backfill_defaults", properties: { notePath: string, dryRun: boolean, approvedDigest: digestSchema }, required: ["notePath"] }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number, repairMode: { ...string, enum: ["rebuild", "drop"] }, dryRun: boolean }, required: ["mode"] }],
 };
 export const demotedOperationNames = [...new Set(Object.values(operations)
   .flatMap((toolOperations) => toolOperations.map((operation) => operation.name)))]
@@ -308,6 +309,16 @@ function operationSchema(tool: string): Tool["inputSchema"] {
       branches.push({ additionalProperties: false, properties: common, required: ["op", "notePath", "fromLine", "lineCount"] });
       continue;
     }
+    if (op === "sync-embeddings") {
+      const common = { op: { ...string, const: op } };
+      const syncProperties = { ...common, mode: { const: "sync" }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number };
+      const embedProperties = { ...common, mode: { const: "embed" }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number };
+      const repairProperties = { ...common, mode: { const: "repair" }, repairMode: { ...string, enum: ["rebuild", "drop"] }, dryRun: boolean };
+      branches.push({ additionalProperties: false, properties: syncProperties, required: ["op", "mode"] });
+      branches.push({ additionalProperties: false, properties: embedProperties, required: ["op", "mode"] });
+      branches.push({ additionalProperties: false, properties: repairProperties, required: ["op", "mode", "repairMode"] });
+      continue;
+    }
     if (op === "regenerate-types" || op === "backfill-defaults") {
       const unguarded: Record<string, object> = {};
       for (const [key, value] of Object.entries(base)) {
@@ -398,63 +409,34 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   // No model load, no SQLite store, no watcher: side-effect-free per boot (R2).
   const engine = assembleGraphOnlyEngine({ vault });
 
-  // Creating semantic engines are shared by all non-search tools, including
-  // doctor repairs which must initialize a missing store.
-  let semanticEngine: AssembledEngine | null = null;
-  const getSemanticEngine = (): AssembledEngine => {
-    if (semanticEngine === null) {
-      semanticEngine = assembleFullSemanticEngine(vault, opts.reranker);
-    }
-    return semanticEngine;
+  // SQLite-backed engines are request-scoped: a later request must observe an
+  // externally replaced store, and repair must not leave an open handle aimed
+  // at a renamed backup. Async-local ownership keeps concurrent requests apart.
+  const requestEngines = new AsyncLocalStorage<AssembledEngine[]>();
+  const own = <T extends AssembledEngine | null>(assembled: T): T => {
+    if (assembled !== null) requestEngines.getStore()?.push(assembled);
+    return assembled;
   };
+  const getSemanticEngine = (): AssembledEngine =>
+    own(assembleFullSemanticEngine(vault, opts.reranker));
 
   // Core semantic engine (lazy): lex + file-based document reads with NO model.
   // vec/HyDE fail fast (the core store has no vec0 table). This is the model-less
   // backend for the document/retrieve_context paths after the src/search teardown.
-  let coreSemanticEngine: AssembledEngine | null = null;
-  const getCoreSemanticEngine = (): AssembledEngine => {
-    if (coreSemanticEngine === null) {
-      coreSemanticEngine = assembleCoreSemanticEngine({ vault, reranker: opts.reranker });
-    }
-    return coreSemanticEngine;
-  };
+  const getCoreSemanticEngine = (): AssembledEngine =>
+    own(assembleCoreSemanticEngine({ vault, reranker: opts.reranker }));
 
-  // Search owns independent read-only slots so it cannot poison doctor repair.
-  let readOnlySemanticEngine: AssembledEngine | null | undefined;
-  const getReadOnlySemanticEngine = (): AssembledEngine | null => {
-    if (readOnlySemanticEngine === undefined) {
-      readOnlySemanticEngine = assembleEngineReadOnly({
+  const getReadOnlySemanticEngine = (): AssembledEngine | null =>
+    own(assembleEngineReadOnly({
         vault,
         embeddingProvider: process.env["OMS_EMBEDDING_PROVIDER"],
         embeddingModel: process.env["OMS_EMBEDDING_MODEL"],
         reranker: opts.reranker,
-      });
-    }
-    return readOnlySemanticEngine;
-  };
-  let readOnlyCoreSemanticEngine: AssembledEngine | null | undefined;
-  const getReadOnlyCoreSemanticEngine = (): AssembledEngine | null => {
-    if (readOnlyCoreSemanticEngine === undefined) {
-      readOnlyCoreSemanticEngine = assembleCoreSemanticEngineReadOnly({ vault, reranker: opts.reranker });
-    }
-    return readOnlyCoreSemanticEngine;
-  };
-  let ephemeralCoreSemanticEngine: AssembledEngine | null = null;
-  let ephemeralCoreSemanticEnginePromise: Promise<AssembledEngine> | null = null;
-  const getEphemeralCoreSemanticEngine = async (): Promise<AssembledEngine> => {
-    if (ephemeralCoreSemanticEngine !== null) return ephemeralCoreSemanticEngine;
-    if (ephemeralCoreSemanticEnginePromise === null) {
-      ephemeralCoreSemanticEnginePromise = (async () => {
-        const assembled = assembleEphemeralCoreSemanticEngine({ vault, reranker: opts.reranker });
-        ephemeralCoreSemanticEngine = assembled;
-        return assembled;
-      })().catch((error: unknown) => {
-        ephemeralCoreSemanticEnginePromise = null;
-        throw error;
-      });
-    }
-    return ephemeralCoreSemanticEnginePromise;
-  };
+      }));
+  const getReadOnlyCoreSemanticEngine = (): AssembledEngine | null =>
+    own(assembleCoreSemanticEngineReadOnly({ vault, reranker: opts.reranker }));
+  const getEphemeralCoreSemanticEngine = async (): Promise<AssembledEngine> =>
+    own(assembleEphemeralCoreSemanticEngine({ vault, reranker: opts.reranker }));
 
   // A real embedding provider is configured iff the canonical pair is set
   // (ADR-007). The engine's model-OPTIONAL surface (document reads,
@@ -534,21 +516,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
   server.onclose = () => {
     void engine.dispose().catch(() => undefined);
-    if (semanticEngine !== null) {
-      void semanticEngine.dispose().catch(() => undefined);
-    }
-    if (coreSemanticEngine !== null) {
-      void coreSemanticEngine.dispose().catch(() => undefined);
-    }
-    if (readOnlySemanticEngine !== null && readOnlySemanticEngine !== undefined) {
-      void readOnlySemanticEngine.dispose().catch(() => undefined);
-    }
-    if (readOnlyCoreSemanticEngine !== null && readOnlyCoreSemanticEngine !== undefined) {
-      void readOnlyCoreSemanticEngine.dispose().catch(() => undefined);
-    }
-    if (ephemeralCoreSemanticEngine !== null) {
-      void ephemeralCoreSemanticEngine.dispose().catch(() => undefined);
-    }
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -556,6 +523,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const owned: AssembledEngine[] = [];
+    return requestEngines.run(owned, async () => {
+      try {
+        return await (async () => {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
     const op = stringArg(args, "op");
@@ -585,6 +556,9 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       delete args["notePath"];
       delete args["fromLine"];
       delete args["lineCount"];
+    }
+    if (name === "oms_graph_status" && publicName === "status" && op === "graph") {
+      return jsonText(await engine.adapter.graphStatus(vault));
     }
     if (name === "oms_graph_status") {
       const engineGraph = await engine.adapter.graphStatus(vault).catch(() => null);
@@ -625,16 +599,21 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
     try {
     if (name === "oms_graph_build" || name === "oms_semantic_cleanup" || name === "oms_sync_embeddings") {
+      const mode = name === "oms_sync_embeddings" ? stringArg(args, "mode") : undefined;
+      if (name === "oms_sync_embeddings" && mode === "repair") {
+        const repair = await repairDoctor({
+          operation: "repair-index",
+          vault,
+          source,
+          args: { repairMode: args?.["repairMode"], ...(args?.["dryRun"] === undefined ? {} : { dryRun: args["dryRun"] }) },
+        });
+        return repair.kind === "error" ? errorText(repair.message) : jsonText(repair.value);
+      }
       const operation = name === "oms_graph_build" ? "build-graph" : name === "oms_semantic_cleanup" ? "semantic-cleanup" : "sync-embeddings";
       if (name === "oms_sync_embeddings") {
-        const mode = stringArg(args, "mode");
         args = {
           ...args,
-          ...(mode === "sync"
-            ? { update: true, embed: false }
-            : mode === "embed"
-              ? { update: true, embed: true }
-              : { update: true, embed: true, force: true }),
+          ...(mode === "sync" ? { update: true, embed: false } : { update: true, embed: true }),
         };
         delete args["mode"];
       }
@@ -1136,6 +1115,11 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       }
       return errorText(`Oh My Second Brain MCP error: ${error instanceof Error ? error.message : String(error)}`);
     }
+        })();
+      } finally {
+        await Promise.allSettled(owned.map(assembled => assembled.dispose()));
+      }
+    });
   });
 
   return server;

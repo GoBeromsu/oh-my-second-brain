@@ -7,7 +7,7 @@ vi.mock("../kernel/install/asset-health.js", () => ({ inspectInstalledAssets: vi
 vi.mock("../kernel/templates/index.js", () => ({ diagnoseTemplates: vi.fn(async () => ({ status: "healthy", migrationMarker: "none", managedSourceExclusions: [], unresolvedLegacyNotes: [], diagnostics: [] })) }));
 vi.mock("./host-probe.js", () => ({ discoverHostInstallAssets: vi.fn(async () => ({ hosts: [{ host: "claude", state: "not-installed" }, { host: "codex", state: "not-installed" }, { host: "hermes", state: "not-installed" }], assets: [] })) }));
 
-import { runDoctor } from "./doctor-lint.js";
+import { runDoctor } from "./link-check.js";
 
 afterEach(() => { vi.restoreAllMocks(); });
 

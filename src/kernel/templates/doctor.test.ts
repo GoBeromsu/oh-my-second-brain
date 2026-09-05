@@ -1,16 +1,27 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { backfillDefaults, diagnoseTemplates, regenerateTypes } from "./doctor.js";
+import * as eventJournal from "../runtime/event-journal.js";
+import * as eventRead from "../runtime/event-read.js";
 import { summarizeRuntimeHistory } from "../runtime/event-summary.js";
 import { loadResolvedTemplates, sourceSignature } from "./resolver.js";
 import type { Digest } from "./types.js";
 
 const roots: string[] = [];
 const sha = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
+async function vaultSnapshot(root: string, directory = root): Promise<readonly [string, string][]> {
+  const entries: Array<[string, string]> = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) entries.push(...await vaultSnapshot(root, absolute));
+    else entries.push([path.relative(root, absolute).replaceAll("\\", "/"), sha(await readFile(absolute, "utf8"))]);
+  }
+  return entries.sort(([left], [right]) => left.localeCompare(right));
+}
 async function vault(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "oms-template-doctor-"));
   roots.push(root);
@@ -131,6 +142,68 @@ describe("template doctor", () => {
       templates: {},
     });
     expect(existsSync(runtimeRoot)).toBe(false);
+  });
+
+  it("keeps diagnosis authoritative and vault bytes unchanged when journal append fails", async () => {
+    const root = await vault();
+    const before = await vaultSnapshot(root);
+    const append = vi.spyOn(eventJournal, "appendRuntimeEvent").mockImplementation(() => {
+      throw new Error("LEDGER_APPEND_FAILED: injected external append failure");
+    });
+    try {
+      const diagnosis = await diagnoseTemplates({ vault: root, source: "explicit" });
+      expect(diagnosis.status).toBe("healthy");
+      expect(diagnosis.diagnostics).toEqual([]);
+      expect(diagnosis.runtimeWarnings).toContain(
+        "LEDGER_APPEND_FAILED: injected external append failure. Runtime history is incomplete; verify the external OMS runtime ledger.",
+      );
+      expect(diagnosis.history).toEqual({
+        events: 0, uses: 0, verifications: 0, gaps: 0, templates: {},
+      });
+      expect(await vaultSnapshot(root)).toEqual(before);
+    } finally {
+      append.mockRestore();
+    }
+  });
+
+  it("returns diagnosis evidence without fabricated history when journal reads fail", async () => {
+    const root = await vault();
+    await writeFile(path.join(root, "Templates", "note.md"), "---\ntitle: changed\n---\nbody\n");
+    const before = await vaultSnapshot(root);
+    const read = vi.spyOn(eventRead, "readRuntimeEvents").mockImplementation(() => {
+      throw new Error("LEDGER_APPEND_FAILED: injected external read failure");
+    });
+    try {
+      const diagnosis = await diagnoseTemplates({ vault: root, source: "explicit" });
+      expect(diagnosis.status).toBe("needs-repair");
+      expect(diagnosis.diagnostics).toContainEqual(expect.objectContaining({
+        code: "TEMPLATE_SOURCE_DRIFT",
+        path: "Templates/note.md",
+      }));
+      expect(diagnosis.history).toBeUndefined();
+      expect(diagnosis.runtimeWarnings).toEqual([
+        "LEDGER_APPEND_FAILED: injected external read failure. Runtime history is incomplete; verify the external OMS runtime ledger.",
+        "LEDGER_APPEND_FAILED: injected external read failure. Runtime history is incomplete; verify the external OMS runtime ledger.",
+      ]);
+      expect(await vaultSnapshot(root)).toEqual(before);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it("preserves the original diagnosis exception when secondary journal append also fails", async () => {
+    const root = await vault();
+    await rm(root, { recursive: true, force: true });
+    await writeFile(root, "not a vault directory");
+    const append = vi.spyOn(eventJournal, "appendRuntimeEvent").mockImplementation(() => {
+      throw new Error("LEDGER_APPEND_FAILED: secondary failure");
+    });
+    try {
+      await expect(diagnoseTemplates({ vault: root, source: "explicit" })).rejects.toMatchObject({ code: "ENOTDIR" });
+      expect(append).toHaveBeenCalledTimes(1);
+    } finally {
+      append.mockRestore();
+    }
   });
 
   it("caps vault-level findings with maxPerTemplate", async () => {

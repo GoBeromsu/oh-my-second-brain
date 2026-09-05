@@ -7,7 +7,7 @@
  * - A core-only open path must exist for lex-only operation without embedding config.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
@@ -16,6 +16,7 @@ import {
   ENGINE_EMBED_META_VERSION,
   validateEmbeddingIdentity,
 } from "./identity.js";
+import { createEngineStoreReadSnapshot } from "./read-snapshot.js";
 
 export { ENGINE_EMBED_META_VERSION } from "./identity.js";
 
@@ -804,31 +805,23 @@ const REQUIRED_CORE_TABLES = [
 ] as const;
 
 /**
- * Open an engine store that already exists, creating nothing.
+ * Open a stable external copy of an existing engine store.
  *
- * `fileMustExist` is what enforces the read-only guarantee that matters: a
- * search on a vault with no index must not bring one into being. The connection
- * itself is writable, and that is deliberate.
- *
- * SQLite's `readonly: true` was tried first and rejected. The store runs in WAL
- * mode, and a read-only connection to a WAL database still needs the `-shm`
- * shared-memory index. SQLite creates it, and a read-only connection cannot
- * check-point or remove it on close, so every search left `engine-store.sqlite-shm`
- * and `-wal` behind in the user's vault. A writable connection creates the same
- * sidecars transiently and cleans them up when it closes, so it leaves the vault
- * genuinely untouched. Refusing to create beats being unable to tidy up.
- *
- * Write protection is therefore enforced above this line, not by SQLite: the
- * store returned by `openReadOnlyStore` prepares only SELECT statements and every
- * mutator throws.
+ * SQLite never opens the source path. This matters even for reads: opening a WAL
+ * database can create or modify its SHM and WAL sidecars. The snapshot includes
+ * committed WAL bytes and is disposed together with the returned connection.
  */
-function openExistingCoreStore(dbPath: string): Database.Database | null {
-  if (!existsSync(dbPath)) return null;
+function openExistingCoreStore(
+  dbPath: string,
+): { readonly db: Database.Database; dispose(): void } | null {
+  const snapshot = createEngineStoreReadSnapshot(dbPath);
+  if (snapshot === null) return null;
 
   let db: Database.Database;
   try {
-    db = new Database(dbPath, { fileMustExist: true });
+    db = new Database(snapshot.dbPath, { fileMustExist: true });
   } catch (error) {
+    snapshot.dispose();
     throw new EngineStoreOpenError(
       "corrupt-or-incompatible",
       `Engine store is unavailable at "${dbPath}": ${error instanceof Error ? error.message : String(error)}`,
@@ -878,9 +871,13 @@ function openExistingCoreStore(dbPath: string): Database.Database | null {
         `Embedding metadata version "${version?.embedding_schema_version}" is incompatible; expected "${ENGINE_EMBED_META_VERSION}".`,
       );
     }
-    return db;
+    return { db, dispose: snapshot.dispose };
   } catch (error) {
-    db.close();
+    try {
+      db.close();
+    } finally {
+      snapshot.dispose();
+    }
     if (error instanceof EngineStoreOpenError) {
       throw error;
     }
@@ -902,9 +899,11 @@ function openReadOnlyStore(
   dbPath: string,
   opts: { readonly sqliteVecLoader?: SqliteVecLoader; readonly vectors?: boolean } = {},
 ): EngineStore | null {
-  const db = openExistingCoreStore(dbPath);
-  if (db === null) return null;
+  const opened = openExistingCoreStore(dbPath);
+  if (opened === null) return null;
+  const { db, dispose } = opened;
 
+  try {
   const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
     `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
@@ -1004,7 +1003,11 @@ function openReadOnlyStore(
       }
     },
     close(): void {
-      db.close();
+      try {
+        db.close();
+      } finally {
+        dispose();
+      }
     },
     readEmbeddingIdentity(): EmbeddingIdentity | null {
       return decodeEmbeddingIdentity(stmtReadIdentity.get());
@@ -1022,6 +1025,19 @@ function openReadOnlyStore(
       return stmtListDocPaths.all().map((row) => row.doc_path);
     },
   };
+  } catch (error) {
+    try {
+      db.close();
+    } finally {
+      dispose();
+    }
+    if (error instanceof EngineStoreOpenError) throw error;
+    throw new EngineStoreOpenError(
+      "corrupt-or-incompatible",
+      `Engine store at "${dbPath}" is corrupt or unreadable: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 /** Open an existing core store for reads without creating files or schema. */

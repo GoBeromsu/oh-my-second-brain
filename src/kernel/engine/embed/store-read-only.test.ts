@@ -1,28 +1,27 @@
-/**
- * Write protection for the read-only engine store.
- *
- * The read-only opener deliberately uses a WRITABLE SQLite connection with
- * `fileMustExist: true` rather than SQLite's `readonly: true`. The reason is in
- * `openExistingCoreStore`: a read-only connection to a WAL database needs the
- * `-shm` sidecar, creates it, and then cannot remove it on close, so every
- * search left files behind in the user's vault.
- *
- * That trade means SQLite is no longer the thing stopping a write. These tests
- * cover the guarantee that replaced it: the store refuses to create anything
- * that is not already there, and every mutator on the returned handle throws.
- * If someone later "simplifies" a mutator into a real statement, this fails.
- */
-import { describe, it, expect, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { afterAll, describe, expect, it } from "vitest";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import {
   openEngineStoreCore,
   openEngineStoreCoreReadOnly,
+  openEngineStoreReadOnly,
+  type EngineStore,
 } from "./store.js";
+import { createEngineStoreReadSnapshot } from "./read-snapshot.js";
 
 const roots: string[] = [];
+const SNAPSHOT_PREFIX = "oms-engine-read-";
 
 afterAll(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
@@ -34,110 +33,177 @@ function scratch(): string {
   return root;
 }
 
+function directoryImage(root: string): ReadonlyArray<readonly [string, string]> {
+  if (!existsSync(root)) return [];
+  const image: Array<readonly [string, string]> = [];
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const filename = path.join(directory, entry.name);
+      const relative = path.relative(root, filename);
+      if (entry.isDirectory()) {
+        image.push([`${relative}/`, "directory"]);
+        visit(filename);
+      } else {
+        image.push([relative, readFileSync(filename).toString("base64")]);
+      }
+    }
+  };
+  visit(root);
+  return image.sort(([left], [right]) => left.localeCompare(right));
+}
+
+function snapshotDirectories(): string[] {
+  return readdirSync(tmpdir()).filter((name) => name.startsWith(SNAPSHOT_PREFIX)).sort();
+}
+
+const readonlyOpeners: ReadonlyArray<readonly [string, (dbPath: string) => EngineStore | null]> = [
+  ["core", openEngineStoreCoreReadOnly],
+  ["vector", (dbPath) => openEngineStoreReadOnly(dbPath, 8)],
+];
+
 describe("read-only engine store", () => {
-  it("creates nothing when the store is absent", () => {
+  it("creates no source or snapshot files when the store is absent", () => {
     const root = scratch();
     const dbPath = path.join(root, ".oms", "engine-store.sqlite");
+    const snapshotsBefore = snapshotDirectories();
 
     expect(openEngineStoreCoreReadOnly(dbPath)).toBeNull();
 
-    // Not just the database: the enclosing directory must not be conjured
-    // either. Creating `.oms/` on a read is the original defect.
-    expect(existsSync(path.join(root, ".oms"))).toBe(false);
-    expect(readdirSync(root)).toEqual([]);
+    expect(directoryImage(root)).toEqual([]);
+    expect(snapshotDirectories()).toEqual(snapshotsBefore);
   });
 
-  it("reports an existing but foreign database as absent instead of adopting it", () => {
+  it("rejects a foreign database without changing it and cleans its snapshot", () => {
     const root = scratch();
     const dir = path.join(root, ".oms");
     mkdirSync(dir, { recursive: true });
     const dbPath = path.join(dir, "engine-store.sqlite");
-
-    // A real SQLite database that is not ours: it exists, it opens, and it has
-    // none of the engine tables. The opener must decline it rather than adopt
-    // it, and must not try to add the missing schema to someone else's file.
     const foreign = new Database(dbPath);
     foreign.exec("CREATE TABLE unrelated (a TEXT);");
     foreign.close();
-    const before = readdirSync(dir).sort();
+    const sourceBefore = directoryImage(root);
+    const snapshotsBefore = snapshotDirectories();
 
     expect(() => openEngineStoreCoreReadOnly(dbPath)).toThrow(/corrupt or incompatible/i);
-    expect(readdirSync(dir).sort()).toEqual(before);
 
-    // Declining must be about the schema, not about the path: a genuine store
-    // at the same location still opens.
-    const real = openEngineStoreCore(path.join(dir, "real.sqlite"));
-    real.close();
-    const opened = openEngineStoreCoreReadOnly(path.join(dir, "real.sqlite"));
-    expect(opened).not.toBeNull();
-    // Close it: an open connection legitimately holds `-shm`/`-wal` on disk.
-    opened!.close();
+    expect(directoryImage(root)).toEqual(sourceBefore);
+    expect(snapshotDirectories()).toEqual(snapshotsBefore);
   });
 
-  it("rejects every mutation on a store that does exist", () => {
+  it("fails loudly when WAL metadata changes during every capture boundary", () => {
+    const root = scratch();
+    const dbPath = path.join(root, "direct.sqlite");
+    writeFileSync(dbPath, "main");
+    writeFileSync(`${dbPath}-wal`, "wal");
+    const snapshotsBefore = snapshotDirectories();
+    let mutations = 0;
+
+    expect(() => createEngineStoreReadSnapshot(dbPath, {
+      afterRead: (filename) => {
+        if (filename === `${dbPath}-wal`) {
+          appendFileSync(filename, Buffer.from([mutations]));
+          mutations += 1;
+        }
+      },
+    })).toThrow(/changed while capturing/i);
+
+    expect(mutations).toBeGreaterThanOrEqual(3);
+    expect(snapshotDirectories()).toEqual(snapshotsBefore);
+  });
+
+  it("rejects a TMPDIR inside the source vault before creating anything", () => {
     const root = scratch();
     const dbPath = path.join(root, ".oms", "engine-store.sqlite");
-
-    // Build a real store through the creating path, then reopen it read-only.
     const writable = openEngineStoreCore(dbPath);
-    writable.upsertLex([
-      { docPath: "notes/alpha.md", ordinal: 0, text: "alpha mentions retrieval", sha: "sha-alpha" },
-    ]);
     writable.close();
-
-    const store = openEngineStoreCoreReadOnly(dbPath);
-    expect(store).not.toBeNull();
+    const inside = path.join(root, "tmp");
+    mkdirSync(inside);
+    const sourceBefore = directoryImage(root);
+    const previousTmpdir = process.env.TMPDIR;
 
     try {
-      // Reads still work, otherwise this proves nothing about writes.
-      expect(store!.queryLex("retrieval", 5).length).toBeGreaterThan(0);
-
-      expect(() =>
-        store!.upsertLex([
-          { docPath: "notes/beta.md", ordinal: 0, text: "beta", sha: "sha-beta" },
-        ]),
-      ).toThrow(/reading only/i);
-      expect(() => store!.clearDocument("notes/alpha.md")).toThrow(/reading only/i);
-      expect(() =>
-        store!.writeEmbeddingIdentity({
-          provider: "gguf",
-          model: "fake",
-          dimensions: 8,
-          fingerprint: "fp",
-        }),
-      ).toThrow(/reading only/i);
+      process.env.TMPDIR = inside;
+      expect(() => openEngineStoreCoreReadOnly(dbPath)).toThrow(
+        /temporary directory .* is inside source vault/i,
+      );
+      expect(directoryImage(root)).toEqual(sourceBefore);
     } finally {
-      store!.close();
-    }
-
-    // The rejected writes must not have landed by another route.
-    const reopened = openEngineStoreCoreReadOnly(dbPath);
-    try {
-      expect(reopened!.listDocPaths()).toEqual(["notes/alpha.md"]);
-    } finally {
-      reopened!.close();
+      if (previousTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTmpdir;
     }
   });
 
-  it("leaves no WAL sidecars behind after a read", () => {
+  describe.each(readonlyOpeners)("%s opener", (_name, openReadOnly) => {
+    it("does not change any source directory byte while a closed store is open or after close", () => {
+      const root = scratch();
+      const dbPath = path.join(root, ".oms", "engine-store.sqlite");
+      const writable = openEngineStoreCore(dbPath);
+      writable.upsertLex([
+        { docPath: "notes/alpha.md", ordinal: 0, text: "alpha mentions retrieval", sha: "sha-alpha" },
+      ]);
+      writable.close();
+      const sourceBefore = directoryImage(root);
+      const snapshotsBefore = snapshotDirectories();
+
+      const store = openReadOnly(dbPath);
+      expect(store).not.toBeNull();
+      expect(store!.queryLex("retrieval", 5)).toHaveLength(1);
+      expect(directoryImage(root)).toEqual(sourceBefore);
+      expect(snapshotDirectories()).not.toEqual(snapshotsBefore);
+
+      store!.close();
+      expect(directoryImage(root)).toEqual(sourceBefore);
+      expect(snapshotDirectories()).toEqual(snapshotsBefore);
+    });
+
+    it("reads WAL-only committed content without changing the active writer tree", () => {
+      const root = scratch();
+      const dbPath = path.join(root, ".oms", "engine-store.sqlite");
+      const writable = openEngineStoreCore(dbPath);
+      const mainBeforeWrite = readFileSync(dbPath);
+      writable.upsertLex([
+        { docPath: "notes/wal.md", ordinal: 0, text: "committed wal sentinel", sha: "sha-wal" },
+      ]);
+      expect(readFileSync(dbPath)).toEqual(mainBeforeWrite);
+      expect(readFileSync(`${dbPath}-wal`).byteLength).toBeGreaterThan(0);
+      const sourceBefore = directoryImage(root);
+      const snapshotsBefore = snapshotDirectories();
+
+      const store = openReadOnly(dbPath);
+      expect(store).not.toBeNull();
+      expect(store!.queryLex("sentinel", 5).map((hit) => hit.docPath)).toEqual(["notes/wal.md"]);
+      expect(directoryImage(root)).toEqual(sourceBefore);
+
+      store!.close();
+      expect(directoryImage(root)).toEqual(sourceBefore);
+      expect(snapshotDirectories()).toEqual(snapshotsBefore);
+      writable.close();
+    });
+  });
+
+  it("rejects every mutation on an existing store", () => {
     const root = scratch();
     const dbPath = path.join(root, ".oms", "engine-store.sqlite");
-
     const writable = openEngineStoreCore(dbPath);
     writable.upsertLex([
       { docPath: "notes/alpha.md", ordinal: 0, text: "alpha", sha: "sha-alpha" },
     ]);
     writable.close();
 
-    const before = readdirSync(path.join(root, ".oms")).sort();
-
-    const store = openEngineStoreCoreReadOnly(dbPath);
-    store!.queryLex("alpha", 5);
-    store!.close();
-
-    // This is the concrete reason `readonly: true` was rejected. A read-only
-    // connection creates `-shm`/`-wal` and cannot clean them up; if someone
-    // reintroduces it, these appear here.
-    expect(readdirSync(path.join(root, ".oms")).sort()).toEqual(before);
+    const store = openEngineStoreCoreReadOnly(dbPath)!;
+    try {
+      expect(() => store.upsertLex([
+        { docPath: "notes/beta.md", ordinal: 0, text: "beta", sha: "sha-beta" },
+      ])).toThrow(/reading only/i);
+      expect(() => store.clearDocument("notes/alpha.md")).toThrow(/reading only/i);
+      expect(() => store.writeEmbeddingIdentity({
+        provider: "gguf",
+        model: "fake",
+        dimensions: 8,
+        fingerprint: "fp",
+      })).toThrow(/reading only/i);
+    } finally {
+      store.close();
+    }
   });
 });

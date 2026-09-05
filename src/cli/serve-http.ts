@@ -1,12 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
-import { engineStorePath } from "../kernel/engine/paths.js";
 import type {
   SemanticQueryOptions,
   SemanticSearchMode,
@@ -25,6 +19,8 @@ export interface ServeHttpOptions {
   readonly index?: string;
   readonly host?: string;
   readonly port?: number;
+  /** Caller-owned adapter seam. When supplied, the server never disposes it. */
+  readonly adapter?: McpEngineAdapter;
   /** Test/embedding seam; production omission uses the standard user cache. */
   readonly modelCacheDir?: string;
   /** Test seam: prevents ambient model environment from changing server behavior. */
@@ -34,24 +30,10 @@ export interface ServeHttpOptions {
 interface RouteContext {
   readonly vault: string;
   readonly index?: string;
-  readonly adapter: McpEngineAdapter;
+  readonly adapter?: McpEngineAdapter;
+  readonly modelCacheDir?: string;
+  readonly modelEnv?: Readonly<Record<string, string | undefined>>;
 }
-
-interface EngineSnapshot {
-  readonly dbPath: string | undefined;
-  dispose(): Promise<void>;
-}
-
-interface CapturedFile {
-  readonly bytes: Buffer;
-  readonly digest: string;
-  readonly size: number;
-  readonly mtimeMs: number;
-  readonly ctimeMs: number;
-  readonly ino: number;
-}
-
-const SNAPSHOT_ATTEMPTS = 3;
 
 const HTTP_METHODS: Readonly<Record<string, string>> = {
   "/health": "GET",
@@ -66,86 +48,6 @@ function safeHost(host: string | undefined): string {
     throw new Error("OMS search HTTP server only binds to localhost without authentication.");
   }
   return selected;
-}
-
-function digest(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-async function captureFile(filename: string): Promise<CapturedFile | null> {
-  try {
-    const before = await stat(filename);
-    const bytes = await readFile(filename);
-    const after = await stat(filename);
-    if (
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs ||
-      before.ino !== after.ino ||
-      bytes.byteLength !== after.size
-    ) return null;
-    return {
-      bytes,
-      digest: digest(bytes),
-      size: after.size,
-      mtimeMs: after.mtimeMs,
-      ctimeMs: after.ctimeMs,
-      ino: after.ino,
-    };
-  } catch (error) {
-    if (error instanceof Error && "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-function sameCapture(left: CapturedFile | null, right: CapturedFile | null): boolean {
-  if (left === null || right === null) return left === right;
-  return left.digest === right.digest &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.ctimeMs === right.ctimeMs &&
-    left.ino === right.ino;
-}
-
-/**
- * Capture a stable committed view without ever opening the source with SQLite.
- *
- * Main DB and WAL are read twice with metadata and SHA-256 comparisons. A
- * concurrent change retries the whole pair; persistent churn fails loudly
- * rather than serving a stale DB-only fallback. SQLite recovery runs only on
- * the copied pair in the OS temp directory, where regenerating SHM is harmless.
- */
-async function snapshotEngineStore(vault: string): Promise<EngineSnapshot> {
-  const source = engineStorePath(vault);
-  if (!existsSync(source)) return { dbPath: undefined, dispose: async () => undefined };
-
-  const directory = await mkdtemp(path.join(tmpdir(), "oms-http-engine-"));
-  const dbPath = path.join(directory, "engine-store.sqlite");
-  try {
-    for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS; attempt += 1) {
-      const firstMain = await captureFile(source);
-      const firstWal = await captureFile(`${source}-wal`);
-      const secondMain = await captureFile(source);
-      const secondWal = await captureFile(`${source}-wal`);
-      if (firstMain !== null &&
-        sameCapture(firstMain, secondMain) &&
-        sameCapture(firstWal, secondWal)) {
-        await writeFile(dbPath, firstMain.bytes);
-        if (firstWal !== null) await writeFile(`${dbPath}-wal`, firstWal.bytes);
-        return {
-          dbPath,
-          dispose: () => rm(directory, { recursive: true, force: true }),
-        };
-      }
-    }
-    throw new Error(
-      `Engine store changed while capturing a read-only HTTP snapshot at "${source}". Retry when the current write completes.`,
-    );
-  } catch (error) {
-    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
-  }
 }
 
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
@@ -164,45 +66,150 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function stringField(value: Record<string, unknown>, key: string): string | undefined {
+class HttpInputError extends Error {}
+
+function bodyRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new HttpInputError("Request body must be a JSON object.");
+  return value;
+}
+
+function onlyFields(value: Record<string, unknown>, allowed: ReadonlySet<string>): void {
+  const unknown = Object.keys(value).find((key) => !allowed.has(key));
+  if (unknown !== undefined) throw new HttpInputError(`Unknown request field: ${unknown}.`);
+}
+
+function stringField(
+  value: Record<string, unknown>,
+  key: string,
+  required = false,
+): string | undefined {
   const field = value[key];
-  return typeof field === "string" ? field : undefined;
+  if (field === undefined) {
+    if (required) throw new HttpInputError(`Field "${key}" is required.`);
+    return undefined;
+  }
+  if (typeof field !== "string" || (required && field.length === 0)) {
+    throw new HttpInputError(`Field "${key}" must be ${required ? "a non-empty " : "a "}string.`);
+  }
+  return field;
 }
 
 function numberField(value: Record<string, unknown>, key: string): number | undefined {
   const field = value[key];
-  return typeof field === "number" ? field : undefined;
+  if (field === undefined) return undefined;
+  if (typeof field !== "number" || !Number.isFinite(field)) {
+    throw new HttpInputError(`Field "${key}" must be a finite number.`);
+  }
+  return field;
 }
 
 function booleanField(value: Record<string, unknown>, key: string): boolean | undefined {
   const field = value[key];
-  return typeof field === "boolean" ? field : undefined;
+  if (field === undefined) return undefined;
+  if (typeof field !== "boolean") throw new HttpInputError(`Field "${key}" must be a boolean.`);
+  return field;
 }
 
 function stringArrayField(value: Record<string, unknown>, key: string): string[] {
   const field = value[key];
-  return Array.isArray(field) && field.every((item) => typeof item === "string") ? field : [];
+  if (!Array.isArray(field) || field.length === 0 ||
+    !field.every((item) => typeof item === "string" && item.length > 0)) {
+    throw new HttpInputError(`Field "${key}" must be a non-empty array of non-empty strings.`);
+  }
+  return field;
+}
+
+const SEARCH_FIELDS = new Set([
+  "query", "strategy", "searches", "collection", "limit", "minScore", "intent",
+  "candidateLimit", "rerank", "lex", "vec", "hyde",
+]);
+const GET_FIELDS = new Set([
+  "target", "collection", "fromLine", "lineCount", "lineNumbers", "fullPath",
+]);
+const MULTI_GET_FIELDS = new Set([
+  "targets", "collection", "lineLimit", "maxBytes", "lineNumbers", "fullPath",
+]);
+
+function strategyField(record: Record<string, unknown>): McpSemanticExpandStrategy | undefined {
+  const strategy = record["strategy"];
+  if (strategy === undefined) return undefined;
+  if (!isRecord(strategy)) throw new HttpInputError('Field "strategy" must be an object.');
+  onlyFields(strategy, new Set(["kind", "profile", "maxQueries"]));
+  if (strategy["kind"] !== "expand" || strategy["profile"] !== "qmd-v2.8.3") {
+    throw new HttpInputError('Field "strategy" requires kind "expand" and profile "qmd-v2.8.3".');
+  }
+  const maxQueries = numberField(strategy, "maxQueries");
+  if (maxQueries !== undefined && (!Number.isInteger(maxQueries) || maxQueries <= 0)) {
+    throw new HttpInputError('Field "strategy.maxQueries" must be a positive integer.');
+  }
+  return { kind: "expand", profile: "qmd-v2.8.3", ...(maxQueries === undefined ? {} : { maxQueries }) };
+}
+
+function searchesField(record: Record<string, unknown>): readonly SemanticTypedSearch[] | undefined {
+  const searches = record["searches"];
+  if (searches === undefined) return undefined;
+  if (!Array.isArray(searches) || searches.length === 0) {
+    throw new HttpInputError('Field "searches" must be a non-empty array.');
+  }
+  return searches.map((entry, index) => {
+    if (!isRecord(entry)) throw new HttpInputError(`Field "searches[${index}]" must be an object.`);
+    onlyFields(entry, new Set(["type", "query"]));
+    if (entry["type"] !== "lex" && entry["type"] !== "vec" && entry["type"] !== "hyde") {
+      throw new HttpInputError(`Field "searches[${index}].type" must be lex, vec, or hyde.`);
+    }
+    const query = stringField(entry, "query", true)!;
+    return { type: entry["type"], query };
+  });
 }
 
 function queryOptions(ctx: RouteContext, mode: SemanticSearchMode, body: unknown): SemanticQueryOptions {
-  const record = isRecord(body) ? body : {};
+  const record = bodyRecord(body);
+  onlyFields(record, SEARCH_FIELDS);
+  const query = stringField(record, "query");
+  const searches = searchesField(record);
+  const lex = stringField(record, "lex");
+  const vec = stringField(record, "vec");
+  const hyde = stringField(record, "hyde");
+  if (query === undefined && searches === undefined && lex === undefined && vec === undefined && hyde === undefined) {
+    throw new HttpInputError('Search requires one of "query", "searches", "lex", "vec", or "hyde".');
+  }
+  if (query !== undefined && searches !== undefined) {
+    throw new HttpInputError('Fields "query" and "searches" are mutually exclusive.');
+  }
   return {
     vault: ctx.vault,
     index: ctx.index,
     mode,
-    query: stringField(record, "query") ?? "",
-    strategy: record["strategy"] as McpSemanticExpandStrategy | undefined,
-    searches: record["searches"] as readonly SemanticTypedSearch[] | undefined,
+    query,
+    strategy: strategyField(record),
+    searches,
     collection: stringField(record, "collection"),
     limit: numberField(record, "limit"),
     minScore: numberField(record, "minScore"),
     intent: stringField(record, "intent"),
     candidateLimit: numberField(record, "candidateLimit"),
     rerank: booleanField(record, "rerank"),
-    lex: stringField(record, "lex"),
-    vec: stringField(record, "vec"),
-    hyde: stringField(record, "hyde"),
+    lex,
+    vec,
+    hyde,
   };
+}
+
+async function withRequestAdapter<T>(
+  ctx: RouteContext,
+  operation: (adapter: McpEngineAdapter) => Promise<T>,
+): Promise<T> {
+  if (ctx.adapter !== undefined) return operation(ctx.adapter);
+  const session = createEngineSession(ctx.vault, {
+    write: false,
+    modelCacheDir: ctx.modelCacheDir,
+    modelEnv: ctx.modelEnv,
+  });
+  try {
+    return await operation(session.adapter);
+  } finally {
+    await session.dispose();
+  }
 }
 
 async function routeRequest(ctx: RouteContext, request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -220,7 +227,10 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
 
   try {
     if (request.method === "GET" && pathName === "/health") {
-      const status = await ctx.adapter.semanticStatus({ vault: ctx.vault, index: ctx.index });
+      const status = await withRequestAdapter(
+        ctx,
+        (adapter) => adapter.semanticStatus({ vault: ctx.vault, index: ctx.index }),
+      );
       sendJson(response, 200, {
         ok: status.available,
         storage: status.available ? status.storage : "oms-native-json",
@@ -230,27 +240,37 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
     }
     if (request.method === "POST" && pathName === "/search") {
       const body = await readJsonBody(request);
-      sendJson(response, 200, await ctx.adapter.semanticQuery(queryOptions(ctx, "search", body)));
+      const options = queryOptions(ctx, "search", body);
+      sendJson(response, 200, await withRequestAdapter(
+        ctx,
+        (adapter) => adapter.semanticQuery(options),
+      ));
       return;
     }
     if (request.method === "POST" && pathName === "/get") {
       const body = await readJsonBody(request);
-      const record = isRecord(body) ? body : {};
-      sendJson(response, 200, await ctx.adapter.getDocument({
+      const record = bodyRecord(body);
+      onlyFields(record, GET_FIELDS);
+      const options = {
         vault: ctx.vault,
-        target: stringField(record, "target") ?? "",
+        target: stringField(record, "target", true)!,
         collection: stringField(record, "collection"),
         fromLine: numberField(record, "fromLine"),
         lineCount: numberField(record, "lineCount"),
         lineNumbers: booleanField(record, "lineNumbers"),
         fullPath: booleanField(record, "fullPath"),
-      }));
+      };
+      sendJson(response, 200, await withRequestAdapter(
+        ctx,
+        (adapter) => adapter.getDocument(options),
+      ));
       return;
     }
     if (request.method === "POST" && pathName === "/multi-get") {
       const body = await readJsonBody(request);
-      const record = isRecord(body) ? body : {};
-      sendJson(response, 200, await ctx.adapter.multiGetDocuments({
+      const record = bodyRecord(body);
+      onlyFields(record, MULTI_GET_FIELDS);
+      const options = {
         vault: ctx.vault,
         targets: stringArrayField(record, "targets"),
         collection: stringField(record, "collection"),
@@ -258,35 +278,43 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
         maxBytes: numberField(record, "maxBytes"),
         lineNumbers: booleanField(record, "lineNumbers"),
         fullPath: booleanField(record, "fullPath"),
-      }));
+      };
+      sendJson(response, 200, await withRequestAdapter(
+        ctx,
+        (adapter) => adapter.multiGetDocuments(options),
+      ));
       return;
     }
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
-    sendJson(response, 500, { ok: false, reason: detail });
+    sendJson(response, error instanceof HttpInputError || error instanceof SyntaxError ? 400 : 500, {
+      ok: false,
+      reason: detail,
+    });
   }
 }
 
 export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpServer> {
   const host = safeHost(opts.host);
   const port = opts.port ?? 8765;
-  const snapshot = await snapshotEngineStore(opts.vault);
-  // Opening the transport is read-only: reuse an existing store when present,
-  // otherwise serve through an in-memory core. Neither path creates vault state.
-  // Vector and HyDE requests still fail loudly when embeddings are unavailable.
-  let session: ReturnType<typeof createEngineSession>;
-  try {
-    session = createEngineSession(opts.vault, {
+  // Verify the normal engine path before listening, then release its immutable
+  // snapshot. Each request acquires a fresh read-only snapshot so external index
+  // syncs become visible without sharing or disposing another request's engine.
+  if (opts.adapter === undefined) {
+    const readiness = createEngineSession(opts.vault, {
       write: false,
-      dbPath: snapshot.dbPath,
       modelCacheDir: opts.modelCacheDir,
       modelEnv: opts.modelEnv,
     });
-  } catch (error) {
-    await snapshot.dispose().catch(() => undefined);
-    throw error;
+    await readiness.dispose();
   }
-  const ctx: RouteContext = { vault: opts.vault, index: opts.index, adapter: session.adapter };
+  const ctx: RouteContext = {
+    vault: opts.vault,
+    index: opts.index,
+    adapter: opts.adapter,
+    modelCacheDir: opts.modelCacheDir,
+    modelEnv: opts.modelEnv,
+  };
   const server: Server = createServer((request, response) => {
     void routeRequest(ctx, request, response);
   });
@@ -299,8 +327,6 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
       });
     });
   } catch (error) {
-    await session.dispose().catch(() => undefined);
-    await snapshot.dispose().catch(() => undefined);
     throw error;
   }
   const address = server.address();
@@ -311,12 +337,8 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => {
-          void (async () => {
-            await session.dispose().catch(() => undefined);
-            await snapshot.dispose().catch(() => undefined);
-            if (error) reject(error);
-            else resolve();
-          })();
+          if (error) reject(error);
+          else resolve();
         });
       }),
   };

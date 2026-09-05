@@ -100,7 +100,7 @@ export async function runDoctor(opts: {
   return 0;
 }
 
-export async function runLint(opts: {
+export async function runLinkCheck(opts: {
   vault: string;
   verbose?: boolean;
   json?: boolean;
@@ -118,6 +118,3 @@ export async function runLint(opts: {
   }
   return 0;
 }
-
-/** Shared lint implementation exposed through the `link check` family leaf. */
-export const runLinkCheck = runLint;

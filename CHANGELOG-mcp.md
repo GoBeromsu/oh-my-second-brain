@@ -6,6 +6,7 @@ MCP server tools and resources belong here.
 
 ### Changed
 
+- `status { op: "graph" }` returns graph-only health, while omitted `op` retains aggregate health. Doctor `sync-embeddings` repair mode requires `repairMode: "rebuild"` or `"drop"`, matching CLI store repair rather than silently forcing embeddings. (#125)
 - **MCP detail capabilities have exclusive operation and mode boundaries.** (#125) Document lookup, index views, template inspection and embedding synchronization no longer overlap through duplicate operations or booleans. All capabilities remain under the same five tools, with schema and dispatch validated together.
 - Template operations include guarded `register-folder`, `remove`, and `default` modes, with current signatures derived by the server. Update move strategies are validated consistently; note creation may omit its ID only when a default binding is declared. No additional MCP tool is introduced. (#124)
 - Status and template listings expose local runtime observation history separately from the vault contract. Missing observations are reported as gaps, not inactivity; reading history never creates a vault store. (#123)

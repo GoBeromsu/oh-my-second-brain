@@ -7,11 +7,11 @@ import {
 } from "./search-args.js";
 import { runEngineSession } from "./engine-session.js";
 import { searchUsage } from "./search-usage.js";
-import { repairEngineStore } from "../kernel/engine/embed/repair.js";
 import { engineStoreDiagnostic } from "../kernel/engine/embed/store.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import { existsSync } from "node:fs";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
+import { repairDoctor } from "../kernel/doctor/service.js";
 
 export interface IndexCommandOptions {
   readonly args: ParsedSearchArgs;
@@ -97,7 +97,6 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
   };
 
   if (command === "repair") {
-    if (!ensureMutableTarget()) return 1;
     const mode = stringOption(args, "mode");
     if (args.positional.some((value) => value.startsWith("--mode="))) {
       writeError('CLI "--mode=rebuild" is unsupported; use "--mode rebuild".');
@@ -120,8 +119,21 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
       return 1;
     }
     if (!onlyOptions(["mode", "dryRun"])) return 1;
-    printJson(write, repairEngineStore({ vault, mode, dryRun: booleanOption(args, "dryRun") }));
-    return 0;
+    const result = await repairDoctor({
+      operation: "repair-index",
+      vault,
+      source: options.source,
+      args: {
+        repairMode: mode,
+        ...(booleanOption(args, "dryRun") === true ? { dryRun: true } : {}),
+      },
+    });
+    if (result.kind === "completed" || result.kind === "rejected") {
+      printJson(write, result.value);
+      return result.kind === "completed" ? 0 : 1;
+    }
+    writeError(result.message);
+    return 1;
   }
 
   if (command === "sync") {

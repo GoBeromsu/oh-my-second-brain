@@ -3,12 +3,14 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { admitWriteTarget } from "../capture/safe.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
+import { repairEngineStore, type EngineStoreRepairPlan } from "../engine/embed/repair.js";
+import { openEngineStoreCoreReadOnly } from "../engine/embed/store.js";
 import { walkMarkdown } from "../engine/embed/sync.js";
 import { engineStorePath } from "../engine/paths.js";
 import { handleSemanticTool } from "../semantic/semantic-retrieve.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 
-export type DoctorRepairOperation = "build-graph" | "semantic-cleanup" | "sync-embeddings";
+export type DoctorRepairOperation = "build-graph" | "repair-index" | "semantic-cleanup" | "sync-embeddings";
 
 type SemanticIndexPostcondition = {
   readonly kind: "semantic-index";
@@ -32,6 +34,25 @@ export type DoctorRepairReceipt =
       readonly resolutionSource: WriteTargetSource;
       readonly written: { readonly paths: readonly string[]; readonly summary: Record<string, unknown> };
       readonly postcondition: SemanticIndexPostcondition;
+    }
+  | {
+      readonly operation: "repair-index";
+      readonly resolvedVault: string;
+      readonly resolutionSource: WriteTargetSource;
+      readonly written: { readonly paths: readonly string[]; readonly summary: EngineStoreRepairPlan };
+      readonly postcondition?: {
+        readonly kind: "engine-store";
+        readonly mode: "rebuild";
+        readonly databasePath: string;
+        readonly integrity: "ok";
+        readonly tables: readonly string[];
+        readonly backupPaths: readonly string[];
+      } | {
+        readonly kind: "engine-store-absent";
+        readonly mode: "drop";
+        readonly absentPaths: readonly string[];
+        readonly backupPaths: readonly string[];
+      };
     };
 
 export type DoctorRepairResult =
@@ -58,6 +79,104 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function repairIndexArgs(args: Record<string, unknown> | undefined): { readonly repairMode: "rebuild" | "drop"; readonly dryRun?: boolean } {
+  if (!args || (args["repairMode"] !== "rebuild" && args["repairMode"] !== "drop")) {
+    throw new TypeError('Doctor repair "repair-index" requires repairMode "rebuild" or "drop".');
+  }
+  if (args["dryRun"] !== undefined && typeof args["dryRun"] !== "boolean") {
+    throw new TypeError('Doctor repair "repair-index" dryRun must be a boolean.');
+  }
+  const unsupported = Object.keys(args).filter((key) => key !== "repairMode" && key !== "dryRun");
+  if (unsupported.length > 0) {
+    throw new TypeError(`Doctor repair "repair-index" received unsupported arguments: ${unsupported.join(", ")}.`);
+  }
+  return { repairMode: args["repairMode"], ...(args["dryRun"] === undefined ? {} : { dryRun: args["dryRun"] }) };
+}
+
+async function existingPaths(paths: readonly string[]): Promise<string[]> {
+  const found = await Promise.all(paths.map(async (candidate) => {
+    try {
+      await stat(candidate);
+      return candidate;
+    } catch (error) {
+      if (isRecord(error) && error["code"] === "ENOENT") return null;
+      throw error;
+    }
+  }));
+  return found.filter((candidate): candidate is string => candidate !== null);
+}
+
+async function repairIndexReceipt(
+  plan: EngineStoreRepairPlan,
+  sourceFiles: readonly string[],
+  resolvedVault: string,
+  resolutionSource: WriteTargetSource,
+): Promise<DoctorRepairReceipt> {
+  const sourcePaths = [plan.storePath, `${plan.storePath}-wal`, `${plan.storePath}-shm`];
+  const backupPaths = plan.backupPath === null
+    ? []
+    : sourceFiles.map((sourceFile) => `${plan.backupPath}${sourceFile.slice(plan.storePath.length)}`);
+
+  if (plan.dryRun) {
+    return {
+      operation: "repair-index",
+      resolvedVault,
+      resolutionSource,
+      written: { paths: [], summary: plan },
+    };
+  }
+
+  const existingBackups = await existingPaths(backupPaths);
+  if (existingBackups.length !== backupPaths.length) {
+    throw new Error("Engine store repair postcondition failed: a preserved backup is missing.");
+  }
+
+  if (plan.mode === "drop") {
+    const remaining = await existingPaths(sourcePaths);
+    if (remaining.length > 0) {
+      throw new Error(`Engine store repair postcondition failed: drop left source files: ${remaining.join(", ")}.`);
+    }
+    return {
+      operation: "repair-index",
+      resolvedVault,
+      resolutionSource,
+      written: { paths: backupPaths, summary: plan },
+      postcondition: { kind: "engine-store-absent", mode: "drop", absentPaths: sourcePaths, backupPaths },
+    };
+  }
+
+  let database: Database.Database;
+  try {
+    database = new Database(plan.storePath, { readonly: true, fileMustExist: true });
+  } catch (error) {
+    throw new Error("Engine store repair postcondition failed: rebuilt store could not be read.", { cause: error });
+  }
+  let tables: string[];
+  try {
+    const integrity = database.pragma("integrity_check", { simple: true });
+    if (integrity !== "ok") throw new Error(`Engine store repair postcondition failed: SQLite integrity check returned ${String(integrity)}.`);
+    tables = (database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name").all() as { name: string }[]).map((row) => row.name);
+    const missing = ["engine_meta", "engine_chunk_meta", "engine_chunk_fts"].filter((table) => !tables.includes(table));
+    if (missing.length > 0) throw new Error(`Engine store repair postcondition failed: rebuilt schema is missing ${missing.join(", ")}.`);
+  } finally {
+    database.close();
+  }
+  try {
+    const store = openEngineStoreCoreReadOnly(plan.storePath);
+    if (store === null) throw new Error("rebuilt store is absent");
+    store.close();
+  } catch (error) {
+    throw new Error("Engine store repair postcondition failed: rebuilt schema is incompatible.", { cause: error });
+  }
+  return {
+    operation: "repair-index",
+    resolvedVault,
+    resolutionSource,
+    written: { paths: [plan.storePath, ...backupPaths], summary: plan },
+    postcondition: { kind: "engine-store", mode: "rebuild", databasePath: plan.storePath, integrity: "ok", tables, backupPaths },
+  };
+}
+
 export async function repairDoctor(
   { operation, vault, source, args, resolveAdapter }: {
     readonly operation: DoctorRepairOperation;
@@ -75,8 +194,18 @@ export async function repairDoctor(
     readonly resolveAdapter?: () => McpEngineAdapter;
   },
 ): Promise<DoctorRepairResult> {
+  const indexArgs = operation === "repair-index" ? repairIndexArgs(args) : undefined;
   const rejection = await admitWriteTarget({ vault, source });
   if (rejection) return { kind: "rejected", value: { status: "rejected", rejection, resolvedVault: vault, resolutionSource: source } };
+
+  if (operation === "repair-index") {
+    const { repairMode, dryRun } = indexArgs!;
+    const storePath = engineStorePath(vault);
+    const sourceFiles = await existingPaths([storePath, `${storePath}-wal`, `${storePath}-shm`]);
+    const plan = repairEngineStore({ vault, mode: repairMode, dryRun });
+    const receipt = await repairIndexReceipt(plan, sourceFiles, vault, source);
+    return { kind: "completed", value: { ...plan, resolvedVault: vault, resolutionSource: source, receipt } };
+  }
 
   if (operation === "build-graph") {
     if (!resolveAdapter) throw new Error('Doctor repair "build-graph" requires a graph adapter.');

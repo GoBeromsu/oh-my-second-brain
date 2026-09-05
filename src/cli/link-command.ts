@@ -12,7 +12,7 @@ import { applyLinksForNote, suggestLinksForNote } from "../kernel/link/workflow.
 import { writeConventionUsageSection } from "../kernel/link/convention-note.js";
 import { lstat, readlink, rm, unlink } from "node:fs/promises";
 import path from "node:path";
-import { runLinkCheck } from "./doctor-lint.js";
+import { runLinkCheck } from "./link-check.js";
 
 type Options = Record<string, string | boolean | string[]>;
 interface Parsed {

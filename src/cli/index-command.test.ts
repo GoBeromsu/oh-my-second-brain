@@ -1,11 +1,13 @@
 import { existsSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import { runIndexFamilyCommand } from "./search.js";
+import { runIndexCommand } from "./index-command.js";
+import { parseSearchArgs } from "./search-args.js";
 
 const roots: string[] = [];
 
@@ -85,6 +87,13 @@ describe("index family", () => {
       dryRun: true,
       reindexRequired: true,
       backupPath: expect.any(String),
+      resolvedVault: vault,
+      resolutionSource: "explicit",
+      receipt: {
+        operation: "repair-index",
+        resolvedVault: vault,
+        resolutionSource: "explicit",
+      },
     });
   });
 
@@ -116,5 +125,26 @@ describe("index family", () => {
     expect(console.error).not.toHaveBeenCalledWith(
       expect.stringContaining("oms index repair --mode rebuild"),
     );
+  });
+
+  it("rejects a cwd-inferred repair without changing the target", async () => {
+    const vault = await makeVault();
+    createCorruptStore(vault);
+    const before = new Uint8Array(await readFile(engineStorePath(vault)));
+    const write = vi.fn();
+    const writeError = vi.fn();
+
+    const code = await runIndexCommand({
+      args: parseSearchArgs(["index", "repair", "--mode", "drop"]),
+      vault,
+      source: "cwd",
+      write,
+      writeError,
+    });
+
+    expect(code).toBe(1);
+    expect(write).toHaveBeenCalledWith(expect.stringContaining('"status": "rejected"'));
+    expect(writeError).not.toHaveBeenCalled();
+    expect(new Uint8Array(await readFile(engineStorePath(vault)))).toEqual(before);
   });
 });

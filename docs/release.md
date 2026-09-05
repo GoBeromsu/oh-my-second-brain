@@ -107,7 +107,7 @@ With that flag the version heading is inserted below an intact empty `## [Unrele
 8. `npm run release:artifact-smoke`
 9. `npm run release:plugin`
 
-`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and exercises approved setup/template mutations, `host install|sync|remove`, `package check|update`, `serve http|mcp`, canonical note/search/index commands, and the five-tool MCP surface from the extracted package root. All child processes use an isolated home, and the smoke verifies that the operator's real `~/.oms` metadata did not change.
+`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and exercises approved setup/template mutations, `host install|sync|remove`, `package check|update`, `serve http|mcp`, canonical note/search/index commands, and the five-tool MCP surface from the extracted package root. All child processes use an isolated home. A metadata-only guard (not a byte-content digest) verifies that the operator's real `~/.oms` tree and exact OMS-managed Hermes config/skill/adapter paths did not change; symlinks are recorded but never traversed.
 
 When the release ships the `boost-additive` baseline, `check:measurement`
 passes the `boost-c040` gate with a receipt and does not require
@@ -180,20 +180,42 @@ finishes its own workflow by invoking the retired `reconcile` command, but only
 **after** it has installed the new package. That call is old-client behavior,
 not a public compatibility promise in v0.14.
 
-Rehearse the supported boundary in an isolated external prefix: install the
-published old package version there, let its updater install the candidate new
-package, then invoke the new package's canonical host reconciliation command:
+`release:artifact-smoke` rehearses the supported boundary without invoking the
+old updater. It installs published `0.13.0` globally into a disposable prefix,
+uses that old binary's `install --runtime hermes` to create legitimate prior
+OMS ownership, externally installs the candidate tarball globally into the same
+prefix, then invokes the new binary's canonical `host sync`:
 
 ```bash
-prefix="$(mktemp -d)"
-npm install --prefix "$prefix" oh-my-second-brain@0.13.0
-npm install --prefix "$prefix" ./oh-my-second-brain-0.14.0.tgz
-"$prefix/node_modules/.bin/oms" host sync --runtime all --vault /path/to/rehearsal-vault --dry-run
+export npm_config_prefix="$(mktemp -d)"
+export HOME="$(mktemp -d)"
+export USERPROFILE="$HOME"
+export XDG_CONFIG_HOME="$HOME/xdg-config"
+export XDG_CACHE_HOME="$HOME/xdg-cache"
+export OMS_HERMES_HOME="$HOME/hermes"
+npm install -g oh-my-second-brain@0.13.0
+"$npm_config_prefix/bin/oms" install --runtime hermes --vault "$HOME/vault" --yes
+npm install -g ./oh-my-second-brain-0.14.0.tgz
+"$npm_config_prefix/bin/oms" host sync --runtime hermes --vault "$HOME/vault"
 ```
 
-The rehearsal must use a disposable `HOME`/`USERPROFILE` and vault. A successful
-test proves package-to-package upgrade and the new `host sync` surface; it does
-not justify keeping retired reconciliation or top-level update aliases.
+The automated rehearsal additionally isolates npm cache/config, XDG data,
+runtime journal, and Hermes home; preserves an unrelated custom Hermes setting;
+checks the installed manifest version, seven skill files, canonical
+`serve mcp` registration, and five-tool discovery through the actual new global
+binary. It does not scan active Hermes logs, databases, unrelated profiles, or
+profile home links, which may change concurrently. It never accesses a private
+vault or upgrades a real host application.
+
+Until the prescribed release command bumps the repository to `0.14.0`, the
+candidate tarball still reports `0.13.0`. The gate therefore labels this
+`old release 0.13.0 -> candidate artifact`; the exact same procedure becomes a
+true `0.13.0 -> 0.14.0` rehearsal automatically after
+`npm run release -- 0.14.0`. No version carrier is edited by hand.
+
+A successful test proves package-to-package replacement and the new `host sync`
+surface; it does not justify keeping retired reconciliation or top-level update
+aliases.
 
 ## Claude plugin validation
 

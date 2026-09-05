@@ -1,9 +1,12 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { assembleCoreSemanticEngine, assembleGraphOnlyEngine } from "../engine/assemble.js";
+import * as engineStoreRepair from "../engine/embed/repair.js";
+import { engineStorePath } from "../engine/paths.js";
 import { sourceSignature } from "../templates/index.js";
 import type { SourceDescriptor } from "../templates/types.js";
 import { repairDoctor } from "./service.js";
@@ -38,6 +41,7 @@ async function makeVault(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
   roots = [];
 });
@@ -71,6 +75,150 @@ describe("doctor repair service", () => {
 
     expect(result).toMatchObject({ kind: "rejected", value: { status: "rejected" } });
     expect(resolved, "adapter factory was invoked despite a rejected target").toBe(0);
+  });
+
+  it("rejects repair-index cwd targets before touching a corrupt store", async () => {
+    const vault = await makeVault();
+    const storePath = engineStorePath(vault);
+    const corrupt = Buffer.from("not a sqlite database");
+    await writeFile(storePath, corrupt);
+
+    const result = await repairDoctor({
+      operation: "repair-index",
+      vault,
+      source: "cwd",
+      args: { repairMode: "rebuild" },
+      resolveAdapter: () => {
+        throw new Error("repair-index must never construct an adapter");
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "rejected", value: { rejection: { code: "target-unverified" } } });
+    expect(await readFile(storePath)).toEqual(corrupt);
+  });
+
+  it("rebuilds a corrupt engine store and returns schema and integrity readback", async () => {
+    const vault = await makeVault();
+    const storePath = engineStorePath(vault);
+    await writeFile(storePath, "corrupt engine store");
+
+    const result = await repairDoctor({
+      operation: "repair-index",
+      vault,
+      source: "vault",
+      args: { repairMode: "rebuild" },
+      resolveAdapter: () => {
+        throw new Error("repair-index must never construct an adapter");
+      },
+    });
+
+    expect(result.kind).toBe("completed");
+    if (result.kind !== "completed") return;
+    expect(result.value).toMatchObject({
+      mode: "rebuild",
+      storePath,
+      dryRun: false,
+      resolvedVault: vault,
+      resolutionSource: "vault",
+      receipt: {
+        operation: "repair-index",
+        written: { paths: expect.arrayContaining([storePath]) },
+        postcondition: {
+          kind: "engine-store",
+          mode: "rebuild",
+          databasePath: storePath,
+          integrity: "ok",
+          tables: expect.arrayContaining(["engine_meta", "engine_chunk_meta", "engine_chunk_fts"]),
+        },
+      },
+    });
+    await expect(stat(result.value["backupPath"] as string)).resolves.toBeDefined();
+  });
+
+  it("drops the engine store and sidecars while preserving all three backups", async () => {
+    const vault = await makeVault();
+    const storePath = engineStorePath(vault);
+    await Promise.all([
+      writeFile(storePath, "corrupt engine store"),
+      writeFile(`${storePath}-wal`, "wal"),
+      writeFile(`${storePath}-shm`, "shm"),
+    ]);
+
+    const result = await repairDoctor({
+      operation: "repair-index",
+      vault,
+      source: "vault",
+      args: { repairMode: "drop" },
+    });
+
+    expect(result.kind).toBe("completed");
+    if (result.kind !== "completed") return;
+    const receipt = result.value["receipt"] as {
+      postcondition: { absentPaths: string[]; backupPaths: string[] };
+    };
+    expect(receipt.postcondition.absentPaths).toEqual([storePath, `${storePath}-wal`, `${storePath}-shm`]);
+    expect(receipt.postcondition.backupPaths).toHaveLength(3);
+    for (const sourcePath of receipt.postcondition.absentPaths) await expect(stat(sourcePath)).rejects.toThrow();
+    for (const backupPath of receipt.postcondition.backupPaths) await expect(stat(backupPath)).resolves.toBeDefined();
+  });
+
+  it("reports a dry-run plan without changes or a fabricated repaired postcondition", async () => {
+    const vault = await makeVault();
+    const storePath = engineStorePath(vault);
+    const corrupt = Buffer.from("corrupt engine store");
+    await writeFile(storePath, corrupt);
+
+    const result = await repairDoctor({
+      operation: "repair-index",
+      vault,
+      source: "vault",
+      args: { repairMode: "rebuild", dryRun: true },
+    });
+
+    expect(result.kind).toBe("completed");
+    if (result.kind !== "completed") return;
+    expect(await readFile(storePath)).toEqual(corrupt);
+    expect(result.value).toMatchObject({
+      mode: "rebuild",
+      dryRun: true,
+      receipt: { operation: "repair-index", written: { paths: [] } },
+    });
+    expect((result.value["receipt"] as { postcondition?: unknown }).postcondition).toBeUndefined();
+  });
+
+  it.each([
+    undefined,
+    {},
+    { repairMode: "force" },
+    { repairMode: "rebuild", dryRun: "yes" },
+    { repairMode: "drop", extra: true },
+  ])("rejects invalid repair-index arguments %#", async (args) => {
+    const vault = await makeVault();
+    await expect(repairDoctor({
+      operation: "repair-index",
+      vault,
+      source: "vault",
+      args,
+    })).rejects.toThrow('Doctor repair "repair-index"');
+  });
+
+  it("does not return a success receipt when rebuilt-store readback fails", async () => {
+    const vault = await makeVault();
+    const storePath = engineStorePath(vault);
+    await writeFile(storePath, "corrupt engine store");
+    const actualRepair = engineStoreRepair.repairEngineStore;
+    vi.spyOn(engineStoreRepair, "repairEngineStore").mockImplementation((options) => {
+      const plan = actualRepair(options);
+      rmSync(plan.storePath);
+      return plan;
+    });
+
+    await expect(repairDoctor({
+      operation: "repair-index",
+      vault,
+      source: "vault",
+      args: { repairMode: "rebuild" },
+    })).rejects.toThrow("Engine store repair postcondition failed");
   });
 
   it("builds a graph and constructs its receipt from the persisted cache", async () => {

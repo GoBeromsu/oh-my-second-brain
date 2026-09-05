@@ -16,8 +16,6 @@ import { readInstalledModelsReceiptSync } from "../kernel/engine/embed/model.js"
 export interface EngineSessionOptions {
   readonly write: boolean;
   readonly embed?: boolean;
-  /** Existing engine snapshot path used by read-only transports. */
-  readonly dbPath?: string;
   readonly modelCacheDir?: string;
   readonly modelEnv?: Readonly<Record<string, string | undefined>>;
 }
@@ -54,7 +52,6 @@ export function createEngineSession(vault: string, options: EngineSessionOptions
 
   const modelInputs = {
     vault,
-    ...(options.dbPath === undefined ? {} : { dbPath: options.dbPath }),
     modelsConfig: readModelsConfigSync(vault),
     installedModelsReceipt: readInstalledModelsReceiptSync(
       options.modelCacheDir === undefined ? {} : { cacheDir: options.modelCacheDir },

@@ -37,4 +37,12 @@ describe("template-native MCP surface", () => {
     expect(validate("search", { op: "index-status", view: "contexts" })).toBe(true);
     expect(validate("search", { op: "collections" })).toBe(false);
   });
+
+  it("keeps index repair exclusive from sync and embed options", () => {
+    expect(validate("doctor", { op: "sync-embeddings", mode: "repair", repairMode: "rebuild" })).toBe(true);
+    expect(validate("doctor", { op: "sync-embeddings", mode: "repair", repairMode: "drop", dryRun: true })).toBe(true);
+    expect(validate("doctor", { op: "sync-embeddings", mode: "repair" })).toBe(false);
+    expect(validate("doctor", { op: "sync-embeddings", mode: "sync", repairMode: "drop" })).toBe(false);
+    expect(validate("doctor", { op: "sync-embeddings", mode: "embed", dryRun: true })).toBe(false);
+  });
 });
