@@ -24,6 +24,7 @@ export interface ExtractedTemplate {
   readonly body: string;
   readonly contentMarker: boolean;
 }
+export interface ParseTemplateOptions { readonly renderer?: "obsidian-core" | "templater"; }
 
 const EXPRESSION: Readonly<Record<string, TemplateExpression>> = {
   "{{title}}": { kind: "title" },
@@ -50,7 +51,7 @@ function value(input: unknown, path: string, field: string): JsonValue {
 }
 
 function expression(input: string, path: string, field: string): TemplateExpression | undefined {
-  const templater = /<%[\s\S]*?%>/.exec(input)?.[0] ?? /<%/.exec(input)?.[0];
+  const templater = /<%[\s\S]*?%>/.exec(input)?.[0] ?? /<%|%>/.exec(input)?.[0];
   if (templater !== undefined) return fail(path, field, templater);
   if (!input.includes("{{")) return undefined;
   const supported = EXPRESSION[input];
@@ -100,7 +101,7 @@ function preprocessBareExpressions(yaml: string): { readonly yaml: string; reado
 }
 
 /** Parses a template without normalizing authored bytes or YAML key order. */
-export function parseTemplate(sourcePath: string, bytes: Uint8Array): ExtractedTemplate {
+export function parseTemplate(sourcePath: string, bytes: Uint8Array, options: ParseTemplateOptions = {}): ExtractedTemplate {
   const normalized = normalizeTemplateSourcePath(sourcePath);
   const raw = Buffer.from(bytes).toString("utf8");
   const bom = raw.startsWith("\ufeff");
@@ -129,8 +130,8 @@ export function parseTemplate(sourcePath: string, bytes: Uint8Array): ExtractedT
     const authored = typeof parsed === "string" ? prepared.values.get(parsed) ?? parsed : parsed;
     keyOrder.push(key);
     frontmatter[key] = authored;
-    validateExpressions(authored, normalized, key);
-    if (typeof authored === "string") {
+    if (options.renderer !== "templater") validateExpressions(authored, normalized, key);
+    if (options.renderer !== "templater" && typeof authored === "string") {
       const parsedExpression = expression(authored, normalized, key);
       if (parsedExpression !== undefined) expressions[key] = parsedExpression;
     }
@@ -138,10 +139,12 @@ export function parseTemplate(sourcePath: string, bytes: Uint8Array): ExtractedT
   const body = content.slice(close[0].length);
   const markers = body.match(/(?:^|\r?\n)<!-- oms:content -->(?=\r?\n|$)/g) ?? [];
   if (markers.length > 1) throw new Error(`TEMPLATE_SOURCE_INVALID: ${normalized} contains multiple oms content markers`);
-  const matches = body.match(/{{[\s\S]*?}}/g) ?? [];
-  for (const token of matches) expression(token, normalized, "body");
-  const templater = /<%[\s\S]*?%>/.exec(body)?.[0] ?? /<%/.exec(body)?.[0];
-  if (templater !== undefined) fail(normalized, "body", templater);
+  if (options.renderer !== "templater") {
+    const matches = body.match(/{{[\s\S]*?}}/g) ?? [];
+    for (const token of matches) expression(token, normalized, "body");
+    const templater = /<%[\s\S]*?%>/.exec(body)?.[0] ?? /<%|%>/.exec(body)?.[0];
+    if (templater !== undefined) fail(normalized, "body", templater);
+  }
   return { sourcePath: normalized, sourceDigest: digest(bytes), bom, eol, finalNewline, keyOrder, frontmatter, expressions, body, contentMarker: markers.length === 1 };
 }
 

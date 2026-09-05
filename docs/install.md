@@ -68,6 +68,8 @@ The current-directory fallback is read-only for mutation purposes. See [verified
 
 ## Template setup
 
+Review renderer metadata and observed-contract coverage as well as source paths. Templater sources are contract inputs, never scripts OMS executes; script-first sources without sample notes remain unobserved and unbound. See [renderer boundaries](./conventions.md#setup-and-migration) for refusal diagnostics and proposal limits.
+
 Select one or more template source folders and review the proposal:
 
 ```bash

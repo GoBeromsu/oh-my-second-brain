@@ -53,6 +53,10 @@ For example, `.oms/taxonomy.json` can place that note type elsewhere:
 
 ## Setup and migration
 
+Bindings distinguish `renderer: "obsidian-core" | "templater" | "none"`. Parsable Templater frontmatter contributes its field contract, not executable defaults: `filledBy: "obsidian"` fields need caller values (`FIELD_FILLED_BY_OBSIDIAN`). External body tags and `none` note creation are rejected with `TEMPLATE_RENDERER_EXTERNAL`; raw `<%` tags must never reach a written note.
+
+Script-first sources obtain contract proposals from existing notes matching template identity or explicit taxonomy placement. Proposals show sample counts and field coverage; no matching notes means `TEMPLATE_CONTRACT_UNOBSERVED`, not unused. Proposal limits are 262144 source bytes, 64 fields, 50 samples, and path depth 16. Exceeding limits is reported as `TEMPLATE_PROPOSAL_OVERSIZE`, not silently truncated. Hosts may propose a converted Core template copy, but OMS validates supported syntax, paths, contracts, signatures, and approved transactions rather than transpiling or executing scripts.
+
 Run setup to discover templates recursively and inspect the proposed migration:
 
 ```bash

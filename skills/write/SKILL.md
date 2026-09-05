@@ -34,3 +34,5 @@ Template creation, updates, reclassification, and template-folder relocation use
 Never self-approve, hand-edit the derived `.oms/types.json`, or directly edit a managed template.
 
 Responses are `ask`, `written`, or `rejected`. Resolve named violations and retry; never invent missing required values.
+
+Renderer rules for `op: "note"`: OMS renders supported Core expressions, never Templater scripts. A `templater` template needs a caller value for every `filledBy: "obsidian"` field (`FIELD_FILLED_BY_OBSIDIAN` asks for them) and is rejected when its body contains external delimiters (`TEMPLATE_RENDERER_EXTERNAL`); a `none` template is always rejected for note creation. Point the user at an `obsidian-core` template or propose a converted copy through `/template` instead of pasting raw Templater tags. Caller-supplied values and body must not contain raw external tags either.

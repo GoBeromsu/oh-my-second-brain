@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { loadObsidianTypes } from "../contracts/index.js";
-import { extractTemplate, parseTemplate } from "./extract.js";
+import { parseTemplate } from "./extract.js";
 import { approvalDigest, canonicalJson, inputDigest, outputDigest, templateInput } from "./canonical.js";
 import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
 import { applyTemplatePolicyChange, parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
+import { classifyTemplateRenderer } from "./renderer.js";
 import { templateMigrationAdmission } from "./transaction.js";
-import type { BaseContract, DerivedProjection, Digest, FieldPolicy, GlobalAxes, GlobalAxis, JsonValue, ResolvedConvention, ResolvedTemplate, SourceDescriptor, SourceTransition, TemplateCompositionManifest, TemplateCompositionOptions, TemplateFolderPath, TemplateMove, TemplateSemanticChange, TemplateSemanticSnapshot, TemplateSourcePath, VerifiedFileState } from "./types.js";
+import type { BaseContract, DerivedProjection, Digest, FieldPolicy, GlobalAxes, GlobalAxis, JsonValue, ResolvedConvention, ResolvedTemplate, SourceDescriptor, SourceTransition, TemplateCompositionManifest, TemplateCompositionOptions, TemplateFolderPath, TemplateMove, TemplateRenderer, TemplateSemanticChange, TemplateSemanticSnapshot, TemplateSourcePath, VerifiedFileState } from "./types.js";
 
 export interface LoadResolvedTemplatesOptions {
   readonly policyPath?: string;
@@ -25,6 +26,67 @@ const TEMPLATE_CONTROL_PATHS = [
 
 function sha256(value: Uint8Array | string): Digest {
   return `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
+}
+export interface ResolvedClassifiedTemplateSource {
+  readonly sourcePath: TemplateSourcePath;
+  readonly sourceDigest: Digest;
+  readonly bom: boolean;
+  readonly eol: "lf" | "crlf";
+  readonly finalNewline: boolean;
+  readonly keyOrder: readonly string[];
+  readonly frontmatter: Readonly<Record<string, JsonValue>>;
+  readonly body: string;
+  readonly filledBy: readonly string[];
+  readonly bodyExternal: boolean;
+}
+
+/**
+ * Classifies and validates one source without executing renderer code.
+ * Host-authored proposal paths are bounded to keep recursive discovery finite.
+ */
+export function resolveClassifiedTemplateSource(
+  sourcePath: string,
+  bytes: Uint8Array,
+  requestedRenderer: TemplateRenderer,
+): ResolvedClassifiedTemplateSource {
+  const path = normalizeTemplateSourcePath(sourcePath);
+  if (path.split("/").length > 16) fail("TEMPLATE_SOURCE_INVALID", `${path} exceeds the maximum source path depth of 16`);
+  const classification = classifyTemplateRenderer(path, bytes);
+  const fatal = classification.diagnostics.find(diagnostic =>
+    diagnostic.code === "TEMPLATE_PROPOSAL_OVERSIZE"
+    || diagnostic.code === "TEMPLATE_SOURCE_INVALID"
+    || diagnostic.code === "TEMPLATE_EXPRESSION_UNSUPPORTED",
+  );
+  if (fatal !== undefined) fail(fatal.code, `${path}${fatal.field === undefined ? "" : `:${fatal.field}`}${fatal.message === undefined ? "" : `: ${fatal.message}`}`);
+  if (classification.renderer !== requestedRenderer) {
+    fail("TEMPLATE_SOURCE_INVALID", `${path} renderer ${classification.renderer} does not match requested renderer ${requestedRenderer}`);
+  }
+  if (requestedRenderer === "none") {
+    const raw = Buffer.from(bytes).toString("utf8");
+    return {
+      sourcePath: path,
+      sourceDigest: sha256(bytes),
+      bom: raw.startsWith("\ufeff"),
+      eol: raw.includes("\r\n") ? "crlf" : "lf",
+      finalNewline: raw.endsWith("\n"),
+      keyOrder: [],
+      frontmatter: {},
+      body: "",
+      filledBy: [],
+      bodyExternal: classification.bodyExternal,
+    };
+  }
+  if (classification.template === undefined) fail("TEMPLATE_SOURCE_INVALID", `${path} has no observable template contract`);
+  if (requestedRenderer === "templater") {
+    const raw = Buffer.from(bytes).toString("utf8");
+    const withoutExternalTags = raw.replace(/<%[\s\S]*?%>/g, "external");
+    parseTemplate(path, new TextEncoder().encode(withoutExternalTags));
+  }
+  return {
+    ...classification.template,
+    filledBy: classification.filledBy,
+    bodyExternal: classification.bodyExternal,
+  };
 }
 async function templateControlExists(vault: string, path: string): Promise<boolean> {
   try {
@@ -139,6 +201,49 @@ export function composeResolvedTemplateFields(base: BaseContract, fields: Readon
   }
   return result;
 }
+
+function rendererFields(
+  base: BaseContract,
+  fields: Readonly<Record<string, FieldPolicy>>,
+  values: Readonly<Record<string, JsonValue>>,
+  obsidian: Readonly<Record<string, FieldPolicy["type"]>>,
+  filledBy: readonly string[],
+): Readonly<Record<string, FieldPolicy>> {
+  const external = new Set([
+    ...filledBy,
+    ...Object.entries(base.fields).filter(([, field]) => field.filledBy === "obsidian").map(([key]) => key),
+    ...Object.entries(fields).filter(([, field]) => field.filledBy === "obsidian").map(([key]) => key),
+  ]);
+  const placeholder = (type: FieldPolicy["type"]): JsonValue => {
+    if (type === "number") return 0;
+    if (type === "boolean" || type === "checkbox") return false;
+    if (type === "list" || type === "multitext" || type === "multi" || type === "tags" || type === "aliases") return [];
+    if (type === "date") return "1970-01-01";
+    if (type === "datetime") return "1970-01-01T00:00:00.000Z";
+    return "";
+  };
+  const observable: Record<string, JsonValue> = Object.fromEntries(Object.entries(values).filter(([key]) => !external.has(key)));
+  for (const key of external) observable[key] = placeholder(obsidian[key] ?? fields[key]?.type ?? base.fields[key]?.type);
+  const resolved: Record<string, FieldPolicy> = { ...composeResolvedTemplateFields(base, fields, observable, obsidian) };
+  for (const key of external) resolved[key] = { ...(resolved[key] ?? {}), ...(fields[key] ?? {}), filledBy: "obsidian" };
+  return resolved;
+}
+function policyContractFields(
+  base: BaseContract,
+  fields: Readonly<Record<string, FieldPolicy>>,
+  obsidian: Readonly<Record<string, FieldPolicy["type"]>>,
+): Readonly<Record<string, FieldPolicy>> {
+  return Object.fromEntries([...new Set([...Object.keys(base.fields), ...Object.keys(fields)])].map(key => {
+    const baseField = base.fields[key] ?? {};
+    const policyField = fields[key] ?? {};
+    const declared = policyField.type ?? baseField.type;
+    const explicit = obsidian[key];
+    if (explicit !== undefined && declared !== undefined && explicit !== declared) fail("OBSIDIAN_TYPE_CONFLICT", `field ${key} has Obsidian type ${explicit} but policy type ${declared}`);
+    const type = explicit ?? declared;
+    if (type === undefined) fail("TEMPLATE_TYPE_UNRESOLVED", `field ${key} has no type authority`);
+    return [key, { ...baseField, ...policyField, type }];
+  }));
+}
 function bodySignature(body: string): Digest { return sha256(body); }
 function managed(projection: DerivedProjection["managed"], templates: Readonly<Record<string, ResolvedTemplate>>): DerivedProjection["managed"] {
   return {
@@ -147,6 +252,7 @@ function managed(projection: DerivedProjection["managed"], templates: Readonly<R
     templates: Object.fromEntries(Object.entries(templates).map(([id, template]) => [id, {
       templateId: template.id,
       destinationClass: template.destinationClass,
+      renderer: template.renderer,
       sourcePath: template.sourcePath,
       targetFolder: template.targetFolder,
       keyOrder: template.keyOrder,
@@ -278,8 +384,12 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
     const normalized = normalizeTemplateSourcePath(extra);
     if (!seen.has(normalized)) fail("TEMPLATE_SOURCE_INVALID", `explicit source ${normalized} is not a registered template`);
   }
-  await Promise.all(bindings.map(binding => verifyTemplateSourcePath(root, deriveTemplateSourcePath(binding))));
-  const extracted = await Promise.all(bindings.map(binding => extractTemplate(root, deriveTemplateSourcePath(binding))));
+  const verified = await Promise.all(bindings.map(binding => verifyTemplateSourcePath(root, deriveTemplateSourcePath(binding))));
+  const extracted = await Promise.all(bindings.map(async (binding, index) => {
+    const path = deriveTemplateSourcePath(binding);
+    const bytes = new Uint8Array(await readFile(verified[index]!.absolutePath));
+    return resolveClassifiedTemplateSource(path, bytes, binding.renderer);
+  }));
   const descriptors: SourceDescriptor[] = [
     { logicalId: "template-policy", signature: policyRaw.signature },
     { logicalId: "taxonomy", signature: taxonomyRaw.signature },
@@ -297,10 +407,13 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
     const template = extracted[index]!;
     const contract = policy.contracts[binding.contract];
     if (contract === undefined) fail("TEMPLATE_POLICY_DANGLING_FIELD", `template ${binding.templateId} references unknown contract ${binding.contract}`);
-    const fields = composeResolvedTemplateFields(policy.base, contract.fields, template.frontmatter, obsidian.types);
+    const fields = binding.renderer === "none"
+      ? policyContractFields(policy.base, contract.fields, obsidian.types)
+      : rendererFields(policy.base, contract.fields, template.frontmatter, obsidian.types, template.filledBy);
     templates[binding.templateId] = {
       id: binding.templateId,
       destinationClass: binding.destinationClass,
+      renderer: binding.renderer,
       sourcePath: template.sourcePath,
       targetFolder: requireTaxonomyPlacement(taxonomy, binding.templateId),
       bom: template.bom,
@@ -509,16 +622,19 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     const source = requiredSource(binding.templateId, proposedSourceStates.get(binding.templateId));
     if (source.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `proposed source is absent for ${binding.templateId}`);
     const bindingSourcePath = deriveTemplateSourcePath(binding);
-    const parsed = parseTemplate(bindingSourcePath, source.bytes);
+    const parsed = resolveClassifiedTemplateSource(bindingSourcePath, source.bytes, binding.renderer);
     const contract = proposedPolicy.contracts[binding.contract];
     if (contract === undefined) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `contract is missing for ${binding.templateId}`);
     proposedTemplates[binding.templateId] = {
       templateId: binding.templateId,
       destinationClass: binding.destinationClass,
+      renderer: binding.renderer,
       sourcePath: bindingSourcePath,
       targetFolder: requireTaxonomyPlacement(proposedTaxonomy, binding.templateId),
       keyOrder: parsed.keyOrder,
-      fields: composeResolvedTemplateFields(proposedPolicy.base, contract.fields, parsed.frontmatter, obsidian.types),
+      fields: binding.renderer === "none"
+        ? policyContractFields(proposedPolicy.base, contract.fields, obsidian.types)
+        : rendererFields(proposedPolicy.base, contract.fields, parsed.frontmatter, obsidian.types, parsed.filledBy),
       views: contract.views,
       naming: binding.naming,
       bodySignature: bodySignature(parsed.body),

@@ -59,6 +59,7 @@ async function fixture(): Promise<string> {
       note: {
         templateId: "note",
         destinationClass: "managed-default",
+        renderer: "obsidian-core",
         sourceFolder: "Templates/OMS",
         sourcePath: "Templates/OMS/note.md",
         contract: "note",
@@ -85,6 +86,7 @@ async function fixture(): Promise<string> {
         note: {
           templateId: "note",
           destinationClass: "managed-default",
+          renderer: "obsidian-core",
           sourcePath: "Templates/OMS/note.md",
           targetFolder: "notes",
           keyOrder: ["template", "title", "status"],

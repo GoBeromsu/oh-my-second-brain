@@ -22,8 +22,8 @@ describe("InputV2 canonical identity", () => {
       base: { fields: {} },
       contracts: {},
       templates: {
-        zebra: { templateId: "zebra", destinationClass: "registered-existing", sourceFolder: "Templates/zebra" as TemplatePolicy["templates"][string]["sourceFolder"], sourcePath: "Templates/zebra/zebra.md" as TemplatePolicy["templates"][string]["sourcePath"], contract: "zebra", naming: "{{title}}" },
-        alpha: { templateId: "alpha", destinationClass: "managed-default", sourceFolder: "Templates/OMS" as TemplatePolicy["templates"][string]["sourceFolder"], sourcePath: "Templates/OMS/alpha.md" as TemplatePolicy["templates"][string]["sourcePath"], contract: "alpha", naming: "{{title}}" },
+        zebra: { templateId: "zebra", destinationClass: "registered-existing", renderer: "obsidian-core", sourceFolder: "Templates/zebra" as TemplatePolicy["templates"][string]["sourceFolder"], sourcePath: "Templates/zebra/zebra.md" as TemplatePolicy["templates"][string]["sourcePath"], contract: "zebra", naming: "{{title}}" },
+        alpha: { templateId: "alpha", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS" as TemplatePolicy["templates"][string]["sourceFolder"], sourcePath: "Templates/OMS/alpha.md" as TemplatePolicy["templates"][string]["sourcePath"], contract: "alpha", naming: "{{title}}" },
       },
     };
     const bindings = Object.values(policy.templates);

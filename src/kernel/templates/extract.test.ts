@@ -45,6 +45,8 @@ describe("parseTemplate", () => {
     }
     expect(() => parseTemplate("Templates/OMS/note.md", Buffer.from("---\ntitle: literal\n---\n<% tp.date.now() %>\n")))
       .toThrow(/TEMPLATE_EXPRESSION_UNSUPPORTED.*body.*<% tp\.date\.now\(\) %>/);
+    expect(() => parseTemplate("Templates/OMS/note.md", Buffer.from("---\ntitle: literal\n---\nunmatched %>\n")))
+      .toThrow(/TEMPLATE_EXPRESSION_UNSUPPORTED.*body.*%>/);
     expect(() => parseTemplate("Templates/OMS/note.md", Buffer.from("---\ntitle: '<% tp.file.title %>'\n---\n")))
       .toThrow(/TEMPLATE_EXPRESSION_UNSUPPORTED.*title/);
   });

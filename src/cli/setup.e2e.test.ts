@@ -139,17 +139,46 @@ describe("template-first setup", () => {
     const root = await fresh(); await authority(root); await template(root);
     await writeFile(path.join(root, "Templates", "mail.template.md"), "---\nsubject: <% tp.file.title %>\n---\nbody\n");
     await writeFile(path.join(root, "Templates", "zt-cite.eta.md"), "<%= it.title %>\n");
+    await writeFile(path.join(root, ".oms", "taxonomy.json"), JSON.stringify({ folders: {}, templates: { note: { templateFolder: "Notes" }, mail: { templateFolder: "Mail" } } }));
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
       expect(await runSetup({ vault: root, yes: true, dryRun: true, templateFolders: ["Templates"] })).toBe("completed");
       const shown = JSON.parse(String(log.mock.calls[0]?.[0]));
       expect(shown.diagnostics).toEqual(expect.arrayContaining([
-        expect.objectContaining({ code: "TEMPLATE_EXPRESSION_UNSUPPORTED", path: "Templates/mail.template.md", field: "subject" }),
-        expect.objectContaining({ code: "TEMPLATE_SOURCE_INVALID", path: "Templates/zt-cite.eta.md" }),
+        expect.objectContaining({ code: "FIELD_FILLED_BY_OBSIDIAN", path: "Templates/mail.template.md", field: "subject" }),
+        expect.objectContaining({ code: "TEMPLATE_CONTRACT_UNOBSERVED", path: "Templates/zt-cite.eta.md" }),
       ]));
-      expect(shown.receipt.operations.map((item: { templateId: string }) => item.templateId)).toEqual(["note"]);
+      expect(shown.templateCandidates).toEqual(expect.arrayContaining([
+        expect.objectContaining({ templateId: "mail", renderer: "templater", filledBy: ["subject"], samples: 0, coverage: {}, selected: true }),
+        expect.objectContaining({ templateId: "zt-cite", renderer: "none", samples: 0, coverage: {}, selected: false }),
+      ]));
+      expect(shown.receipt.operations.map((item: { templateId: string }) => item.templateId)).toEqual(["mail", "note"]);
       expect(shown.starterTemplates).toEqual([]);
       expect(process.exitCode ?? 0).toBe(0);
+    } finally { log.mockRestore(); }
+  });
+
+  it("round-trips an approved Templater proposal with source signatures and no execution", async () => {
+    const root = await fresh(); await authority(root);
+    await mkdir(path.join(root, "Templates"), { recursive: true });
+    const source = "---\ntemplate: mail\nsubject: <% tp.file.title %>\n---\nbody\n";
+    await writeFile(path.join(root, "Templates", "mail.md"), source);
+    await writeFile(path.join(root, ".oms", "taxonomy.json"), JSON.stringify({ folders: {}, templates: { mail: { templateFolder: "Mail" } } }));
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      expect(await runSetup({ vault: root, yes: true, dryRun: true, templateFolders: ["Templates"] })).toBe("completed");
+      const shown = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(shown.templateCandidates).toContainEqual(expect.objectContaining({ templateId: "mail", renderer: "templater", filledBy: ["subject"], selected: true }));
+      expect(shown.policyProposal.templates.mail).toMatchObject({ renderer: "templater", sourcePath: "Templates/mail.md" });
+      expect(shown.receipt.status).toBe("planned");
+      log.mockClear();
+      expect(await runSetup({ vault: root, yes: true, templateFolders: ["Templates"], approvedDigest: shown.approvalDigest })).toBe("completed");
+      expect(await readFile(path.join(root, "Templates", "mail.md"), "utf8")).toBe(source);
+      const projectionText = await readFile(path.join(root, ".oms", "types.json"), "utf8");
+      const projection = JSON.parse(projectionText);
+      expect(projection.generatedFrom.sources).toContainEqual(expect.objectContaining({ path: "Templates/mail.md", signature: expect.stringMatching(/^sha256:/) }));
+      expect(projection.managed.templates.mail).toMatchObject({ renderer: "templater", fields: { subject: { filledBy: "obsidian" } } });
+      expect(projectionText).not.toContain("<%");
     } finally { log.mockRestore(); }
   });
 

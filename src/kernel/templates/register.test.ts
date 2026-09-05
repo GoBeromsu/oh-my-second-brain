@@ -34,7 +34,7 @@ async function tree(root: string, directory = root): Promise<string[]> {
   return found.sort();
 }
 
-const request = { templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}" };
+const request = { templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", renderer: "obsidian-core" as const, filledBy: [] as readonly string[], contract: "people", naming: "{{name}}" };
 
 async function register(vault: string, overrides: Partial<typeof request> = {}): Promise<void> {
   const input = { ...request, ...overrides };
@@ -46,7 +46,7 @@ async function register(vault: string, overrides: Partial<typeof request> = {}):
 
 it("registers an existing source in place and derives its projection", async () => {
   const vault = await fixture(); const path = join(vault, "Templates/manual/people.template.md"); const before = await readFile(path);
-  const request = { templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}" };
+  const request = { templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", renderer: "obsidian-core" as const, filledBy: [] as readonly string[], contract: "people", naming: "{{name}}" };
   const planned = await registerExistingTemplate(vault, request, { dryRun: true });
   expect(planned.status).toBe("planned");
   if (planned.status !== "planned") throw new Error("expected plan");
@@ -54,7 +54,30 @@ it("registers an existing source in place and derives its projection", async () 
   expect(applied.status).toBe("applied"); expect(await readFile(path)).toEqual(before);
   const registeredPolicy = parseTemplatePolicy(await readFile(join(vault, ".oms/template-policy.json"), "utf8"));
   expect(registeredPolicy.templates.people?.sourceFolder).toBe("Templates/manual");
+  expect(registeredPolicy.templates.people?.renderer).toBe("obsidian-core");
   const types = await readFile(join(vault, ".oms/types.json"), "utf8"); expect(types).toContain('"people"'); expect(types).toContain('"name"');
+});
+
+it("classifies Templater fields without executing them and rejects a renderer mismatch", async () => {
+  const vault = await fixture();
+  await writeFile(join(vault, request.sourcePath), '---\nname: "<% tp.file.title %>"\ntags: []\n---\n<% tp.system.prompt() %>\n');
+  const templaterRequest = { ...request, renderer: "templater" as const, filledBy: ["name"] };
+  const planned = await registerExistingTemplate(vault, templaterRequest, { dryRun: true });
+  expect(planned.status).toBe("planned");
+  await expect(registerExistingTemplate(vault, { ...templaterRequest, renderer: "obsidian-core" }, { dryRun: true }))
+    .rejects.toThrow(/requested renderer obsidian-core does not match observed renderer templater/u);
+  await expect(registerExistingTemplate(vault, { ...templaterRequest, filledBy: [] }, { dryRun: true }))
+    .rejects.toThrow(/requested filledBy fields do not match observed template fields/u);
+});
+
+it("registers a script-first source only against its declared policy contract", async () => {
+  const vault = await fixture();
+  await writeFile(join(vault, request.sourcePath), "<%*\nconst title = await tp.system.prompt('Title');\n%>\n");
+  const scriptRequest = { ...request, renderer: "none" as const, filledBy: [] };
+  const planned = await registerExistingTemplate(vault, scriptRequest, { dryRun: true });
+  expect(planned.status).toBe("planned");
+  await expect(registerExistingTemplate(vault, { ...scriptRequest, contract: "unobserved" }, { dryRun: true }))
+    .rejects.toThrow(/^TEMPLATE_CONTRACT_UNKNOWN:/u);
 });
 
 it("exposes the registered template through the resolved convention the listing reads", async () => {

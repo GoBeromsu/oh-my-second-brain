@@ -87,8 +87,8 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
       reference: { intent: "reference note.", fields: { rating: { type: "number" }, done: { type: "boolean" } }, views: [] },
     },
     templates: {
-      project: { templateId: "project", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/project.md", contract: "project", naming: "{{title}}" },
-      reference: { templateId: "reference", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/reference.md", contract: "reference", naming: "{{title}}" },
+      project: { templateId: "project", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/project.md", renderer: "obsidian-core", contract: "project", naming: "{{title}}" },
+      reference: { templateId: "reference", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", contract: "reference", naming: "{{title}}" },
     },
   });
   const intentEntries = Object.entries(intents).sort(([left], [right]) => left.localeCompare(right));
@@ -128,8 +128,8 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
     managed: {
       base: { fields: {} }, globalAxes: folderOntology,
       templates: {
-        project: { templateId: "project", destinationClass: "managed-default", sourcePath: "Templates/OMS/project.md", targetFolder: "Inbox", keyOrder: ["status", "rating", "done"], fields: { status: field("text"), rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: digest("Body\n") },
-        reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", targetFolder: "Inbox", keyOrder: ["rating", "done"], fields: { rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: digest("Body\n") },
+        project: { templateId: "project", destinationClass: "managed-default", sourcePath: "Templates/OMS/project.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["status", "rating", "done"], fields: { status: field("text"), rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: digest("Body\n") },
+        reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["rating", "done"], fields: { rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: digest("Body\n") },
       },
     },
   });

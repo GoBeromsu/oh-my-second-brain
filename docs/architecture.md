@@ -26,6 +26,8 @@ Taxonomy controls placement without deciding a template's keys. Its `templateFol
 
 ## Lifecycle
 
+Renderer classification separates executable Obsidian templates from OMS note scaffolds. Templater frontmatter supplies a contract with Obsidian-filled fields; script-first sources derive proposals from observed notes. The kernel validates bounded host proposals and transaction evidence, never executes scripts or provides a Templater transpiler.
+
 Setup selects folders only from repeated explicit `--template-folder` arguments or saved valid-v3 registrations. Explicit folders use `auto` proposal mode and the first is the template-creation default; saved modes are retained. Obsidian, Templater, and bounded vault-walk evidence is suggestion-only and carries provenance, never automatic selection. Without a selection, non-interactive setup is blocked and produces no approval digest. There are no invented `Templates` or `Inbox` defaults.
 
 Setup recursively discovers templates within selected folders, produces a migration proposal, and leaves notes unchanged. Unsupported policy versions fail closed at runtime. Setup exposes replaced legacy fields as `droppedKeys`, preserves writers and unknown extensions in its proposed v3 policy, and includes the old policy bytes in compare-and-swap approval. A resolved dry run exposes proposed state; applying requires the exact `--approved-digest` returned by that dry run.

@@ -234,6 +234,30 @@ function identityRejection(template: ResolvedTemplate): WriteRejection {
   );
 }
 
+function externalRendererRejection(template: ResolvedTemplate): WriteRejection | undefined {
+  if (template.renderer === "none") {
+    return templateRejection(
+      "contract-violation",
+      `TEMPLATE_RENDERER_EXTERNAL: template ${template.id} has no OMS renderer`,
+      "select an obsidian-core template",
+    );
+  }
+  if (template.renderer === "templater" && (template.body.includes("<%") || template.body.includes("%>"))) {
+    return templateRejection(
+      "contract-violation",
+      `TEMPLATE_RENDERER_EXTERNAL: template ${template.id} requires external body rendering`,
+      "select an obsidian-core template",
+    );
+  }
+  return undefined;
+}
+
+function containsExternalDelimiter(value: JsonValue): boolean {
+  if (typeof value === "string") return value.includes("<%") || value.includes("%>");
+  if (Array.isArray(value)) return value.some(containsExternalDelimiter);
+  return value !== null && typeof value === "object" && Object.values(value).some(containsExternalDelimiter);
+}
+
 function hasTemplateIdentity(frontmatter: Readonly<Record<string, JsonValue>>, template: ResolvedTemplate): boolean {
   return frontmatter.template === template.id;
 }
@@ -270,6 +294,14 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
   const caller = input.frontmatter ?? {};
   const targetRejection = await admitWriteTarget(input.target);
   if (targetRejection) return templateResult("rejected", input, undefined, input.notePath ?? "", caller, input.body ?? "", [], targetRejection.message, targetRejection);
+  if (containsExternalDelimiter(caller) || input.body !== undefined && containsExternalDelimiter(input.body)) {
+    const payload = templateRejection(
+      "contract-violation",
+      "TEMPLATE_RENDERER_EXTERNAL: caller content contains an external template delimiter",
+      "remove raw Templater delimiters and provide resolved values",
+    );
+    return templateResult("rejected", input, templateFor(input), input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
+  }
 
   let template = input.mode === "create" ? templateFor(input) : undefined;
   if (input.mode === "create" && template === undefined) {
@@ -301,6 +333,10 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
     if (!hasTemplateIdentity(parsed.frontmatter as Record<string, JsonValue>, template)) {
       const payload = identityRejection(template);
       return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], payload.message, payload);
+    }
+    const externalRenderer = externalRendererRejection(template);
+    if (externalRenderer !== undefined) {
+      return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], externalRenderer.message, externalRenderer);
     }
     const contract = evaluateResolvedTemplateContract(parsed.frontmatter as Record<string, JsonValue>, template, input.convention.base, input.convention.writers);
     if (!contract.valid) return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, contract.violations, "Existing note violates the resolved template contract");
@@ -342,6 +378,10 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
       const payload = identityRejection(template);
       return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], payload.message, payload);
     }
+    const externalRenderer = externalRendererRejection(template);
+    if (externalRenderer !== undefined) {
+      return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], externalRenderer.message, externalRenderer);
+    }
     const merged = orderedTemplateFrontmatter(template, { ...(parsed.frontmatter as Record<string, JsonValue>), ...caller });
     const body = input.body ?? parsed.body;
     const contract = evaluateResolvedTemplateContract(merged, template, input.convention.base, input.convention.writers);
@@ -359,6 +399,28 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
   }
 
   if (template === undefined) throw new Error("TEMPLATE_IDENTITY_INVALID: create template is unresolved");
+  const externalRenderer = externalRendererRejection(template);
+  if (externalRenderer !== undefined) {
+    return templateResult("rejected", input, template, input.notePath ?? "", caller, input.body ?? "", [], externalRenderer.message, externalRenderer);
+  }
+  const missingFilledBy = Object.entries(template.fields)
+    .filter(([key, field]) => field.filledBy === "obsidian" && !Object.hasOwn(caller, key))
+    .map(([key]) => key)
+    .sort((left, right) => left.localeCompare(right));
+  if (missingFilledBy.length > 0) {
+    const message = `FIELD_FILLED_BY_OBSIDIAN: caller values are required for ${missingFilledBy.join(", ")}`;
+    return templateResult(
+      "ask",
+      input,
+      template,
+      input.notePath ?? "",
+      caller,
+      input.body ?? "",
+      missingFilledBy.map(field => ({ field, rule: "required", message })),
+      message,
+      templateRejection("contract-violation", message, `provide caller values for ${missingFilledBy.join(", ")} and retry`),
+    );
+  }
   if (input.body === undefined) {
     const payload = templateRejection("body-missing", "create requires a body", "pass body content for the new note");
     return templateResult("rejected", input, template, input.notePath ?? "", caller, "", [], payload.message, payload);
@@ -379,7 +441,9 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
   let defaults: ReturnType<typeof resolveDefaults>;
   try {
     resolvedAt = resolvedInstant(input.resolvedAt);
-    const renderedTemplate = Object.fromEntries(Object.entries(template.frontmatterTemplate).map(([key, value]) => [key, renderExpressions(value, template, key, title, resolvedAt)]));
+    const renderedTemplate = Object.fromEntries(Object.entries(template.frontmatterTemplate)
+      .filter(([key]) => template.fields[key]?.filledBy !== "obsidian")
+      .map(([key, value]) => [key, renderExpressions(value, template, key, title, resolvedAt)]));
     defaults = resolveDefaults({
       mode: "create",
       fields: { ...input.convention.base.fields, ...template.fields },

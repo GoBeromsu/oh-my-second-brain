@@ -29,7 +29,7 @@ export const TEMPLATE_POLICY_SCHEMA = {
     version: { const: 3 },
     templateFolders: { type: "array", items: { type: "object", required: ["path", "mode"], additionalProperties: true, properties: { path: { type: "string", minLength: 1 }, mode: { enum: ["auto", "manual"] }, default: { const: true }, extensions: { type: "object", additionalProperties: true } } } },
     defaultTemplate: { type: "string", pattern: "^[a-z0-9]+(?:-{1,2}[a-z0-9]+)*$" },
-    base: { type: "object" }, contracts: { type: "object" }, templates: { type: "object" },
+    base: { type: "object" }, contracts: { type: "object" }, templates: { type: "object", additionalProperties: { type: "object", properties: { renderer: { enum: ["obsidian-core", "templater", "none"] } } } },
     writers: { type: "object", required: ["field", "identifiers"], properties: { field: { type: "string", pattern: "\\S" }, identifiers: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", pattern: "\\S" } }, extensions: { type: "object", additionalProperties: true } } },
     extensions: { type: "object", additionalProperties: true },
   },
@@ -61,7 +61,7 @@ function compatible(type: ObsidianContractType, value: JsonValue): boolean {
   return typeof value === "string";
 }
 function parseField(value: unknown, where: string): FieldPolicy {
-  const input = record(value, where); const reserved = new Set(["type", "required", "normalize", "allowedValues", "format", "default", "allowTemplateDefault", "immutable", "intent", "extensions"]);
+  const input = record(value, where); const reserved = new Set(["type", "required", "normalize", "allowedValues", "format", "default", "allowTemplateDefault", "immutable", "intent", "filledBy", "extensions"]);
   const type = input.type === undefined ? undefined : policyType(input.type, `${where}.type`);
   const required = input.required === undefined ? undefined : input.required;
   if (required !== undefined && typeof required !== "boolean") fail("TEMPLATE_POLICY_INVALID", `${where}.required must be boolean`);
@@ -79,7 +79,9 @@ function parseField(value: unknown, where: string): FieldPolicy {
   if (allowTemplateDefault !== undefined && typeof allowTemplateDefault !== "boolean") fail("TEMPLATE_POLICY_INVALID", `${where}.allowTemplateDefault must be boolean`);
   if (immutable !== undefined && typeof immutable !== "boolean") fail("TEMPLATE_POLICY_INVALID", `${where}.immutable must be boolean`);
   const intent = input.intent === undefined ? undefined : string(input.intent, `${where}.intent`);
-  return { ...(type === undefined ? {} : { type }), ...(required === undefined ? {} : { required }), ...(normalize === undefined ? {} : { normalize }), ...(allowedValues === undefined ? {} : { allowedValues: [...allowedValues] as readonly string[] }), ...(format === undefined ? {} : { format }), ...(defaultValue === undefined ? {} : { default: defaultValue }), ...(allowTemplateDefault === undefined ? {} : { allowTemplateDefault }), ...(immutable === undefined ? {} : { immutable }), ...(intent === undefined ? {} : { intent }), ...(extensions(input, reserved, where) === undefined ? {} : { extensions: extensions(input, reserved, where) }) };
+  const filledBy = input.filledBy === undefined ? undefined : input.filledBy;
+  if (filledBy !== undefined && filledBy !== "obsidian") fail("TEMPLATE_POLICY_INVALID", `${where}.filledBy is invalid`);
+  return { ...(type === undefined ? {} : { type }), ...(required === undefined ? {} : { required }), ...(normalize === undefined ? {} : { normalize }), ...(allowedValues === undefined ? {} : { allowedValues: [...allowedValues] as readonly string[] }), ...(format === undefined ? {} : { format }), ...(defaultValue === undefined ? {} : { default: defaultValue }), ...(allowTemplateDefault === undefined ? {} : { allowTemplateDefault }), ...(immutable === undefined ? {} : { immutable }), ...(intent === undefined ? {} : { intent }), ...(filledBy === undefined ? {} : { filledBy }), ...(extensions(input, reserved, where) === undefined ? {} : { extensions: extensions(input, reserved, where) }) };
 }
 function validUrl(value: string): boolean { try { const url = new URL(value); return url.protocol === "http:" || url.protocol === "https:"; } catch { return false; } }
 function parseBase(value: unknown, where: string, managedKeys: readonly string[] = []): BaseContract {
@@ -127,6 +129,8 @@ function parseBinding(value: unknown, where: string, folders: readonly TemplateF
   if (id !== key) fail("TEMPLATE_POLICY_INVALID", `${where}.templateId must equal its stable map key`);
   if (input.destinationClass !== "managed-default" && input.destinationClass !== "registered-existing") fail("TEMPLATE_POLICY_INVALID", `${where}.destinationClass is invalid`);
   const destinationClass = input.destinationClass as DestinationClass;
+  const renderer = input.renderer === undefined ? "obsidian-core" : input.renderer;
+  if (renderer !== "obsidian-core" && renderer !== "templater" && renderer !== "none") fail("TEMPLATE_POLICY_INVALID", `${where}.renderer is invalid`);
   const sourceFolder = normalizeTemplateFolderPath(string(input.sourceFolder, `${where}.sourceFolder`));
   selectTemplateFolder(folders, sourceFolder);
   const sourcePath = normalizeTemplateSourcePath(string(input.sourcePath, `${where}.sourcePath`));
@@ -134,9 +138,9 @@ function parseBinding(value: unknown, where: string, folders: readonly TemplateF
   if (destinationClass === "managed-default" && sourcePath !== deriveManagedSourcePath(sourceFolder, id)) fail("TEMPLATE_RECLASSIFY_PATH_MISMATCH", `${where}.sourcePath must be ${deriveManagedSourcePath(sourceFolder, id)}`);
   const contract = string(input.contract, `${where}.contract`);
   if (!Object.hasOwn(contracts, contract)) fail("TEMPLATE_POLICY_INVALID", `${where}.contract does not exist`);
-  const reserved = new Set(["templateId", "destinationClass", "sourceFolder", "sourcePath", "contract", "naming", "extensions"]);
+  const reserved = new Set(["templateId", "destinationClass", "renderer", "sourceFolder", "sourcePath", "contract", "naming", "extensions"]);
   const preserved = extensions(input, reserved, where);
-  return { templateId: id, destinationClass, sourceFolder, sourcePath, contract, naming: string(input.naming, `${where}.naming`), ...(preserved === undefined ? {} : { extensions: preserved }) };
+  return { templateId: id, destinationClass, renderer, sourceFolder, sourcePath, contract, naming: string(input.naming, `${where}.naming`), ...(preserved === undefined ? {} : { extensions: preserved }) };
 }
 
 export function parseTemplatePolicy(input: string | unknown): TemplatePolicy {
@@ -241,10 +245,12 @@ export function parseDerivedProjection(input: string | unknown): DerivedProjecti
     if (templateId !== id) fail("PROJECTION_INVALID", `managed.templates.${id}.templateId must equal its stable map key`);
     if (item.destinationClass !== "managed-default" && item.destinationClass !== "registered-existing") fail("PROJECTION_INVALID", `managed.templates.${id}.destinationClass is invalid`);
     const destinationClass = item.destinationClass as DestinationClass;
+    if (item.renderer !== "obsidian-core" && item.renderer !== "templater" && item.renderer !== "none") fail("PROJECTION_INVALID", `managed.templates.${id}.renderer is invalid`);
+    const renderer: DerivedTemplateProjection["renderer"] = item.renderer;
     const sourcePath = normalizeTemplateSourcePath(string(item.sourcePath, `managed.templates.${id}.sourcePath`));
     const naming = string(item.naming, `managed.templates.${id}.naming`);
-    const preserved = extensions(item, new Set(["templateId", "destinationClass", "sourcePath", "targetFolder", "keyOrder", "fields", "views", "naming", "bodySignature", "extensions"]), `managed.templates.${id}`);
-    const template = { templateId, destinationClass, sourcePath, naming, ...(preserved === undefined ? {} : { extensions: preserved }) };
+    const preserved = extensions(item, new Set(["templateId", "destinationClass", "renderer", "sourcePath", "targetFolder", "keyOrder", "fields", "views", "naming", "bodySignature", "extensions"]), `managed.templates.${id}`);
+    const template = { templateId, destinationClass, renderer, sourcePath, naming, ...(preserved === undefined ? {} : { extensions: preserved }) };
     if (!Array.isArray(item.keyOrder) || item.keyOrder.some(key => typeof key !== "string")) fail("PROJECTION_INVALID", `managed.templates.${id}.keyOrder is invalid`);
     const fields = parseBase({ fields: item.fields }, `managed.templates.${id}`).fields;
     const views = parseViews(item.views, `managed.templates.${id}.views`, fields);

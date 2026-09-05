@@ -13,12 +13,12 @@ async function vault(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "oms-template-doctor-"));
   roots.push(root);
   await Promise.all([".oms", ".obsidian", "Templates", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
-  const policy = `${JSON.stringify({ version: 3, templateFolders: [{ path: "Templates", mode: "manual", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: {}, views: [] } }, templates: { note: { templateId: "note", destinationClass: "registered-existing", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
+  const policy = `${JSON.stringify({ version: 3, templateFolders: [{ path: "Templates", mode: "manual", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: {}, views: [] } }, templates: { note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
   const taxonomy = JSON.stringify({ folders: { notes: { concept: "note", template: "note" } } });
   const obsidian = "{\"title\":\"text\"}\n";
   const template = "---\ntitle: template\n---\nbody\n";
   const descriptors = [{ logicalId: "template-policy", signature: sha(policy) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }, { path: "Templates/note.md", signature: sha(template) }];
-  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "registered-existing", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") } } } }, null, 2)}\n`;
+  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") } } } }, null, 2)}\n`;
   await Promise.all([
     writeFile(path.join(root, ".oms", "template-policy.json"), policy, "utf8"),
     writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy, "utf8"),
@@ -44,6 +44,7 @@ async function addSecondTemplate(root: string): Promise<void> {
   policy.templates.reference = {
     templateId: "reference",
     destinationClass: "managed-default",
+    renderer: "obsidian-core",
     sourceFolder: "Templates",
     sourcePath: "Templates/reference.md",
     contract: "reference",
@@ -71,8 +72,8 @@ async function addSecondTemplate(root: string): Promise<void> {
       base: { fields: {} },
       globalAxes: {},
       templates: {
-        note: { templateId: "note", destinationClass: "registered-existing", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") },
-        reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/reference.md", targetFolder: "references", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("reference body\n") },
+        note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") },
+        reference: { templateId: "reference", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/reference.md", targetFolder: "references", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("reference body\n") },
       },
     },
   };
@@ -210,6 +211,7 @@ describe("template doctor", () => {
         note: {
           templateId: "note",
           destinationClass: "managed-default",
+          renderer: "obsidian-core",
           sourceFolder: "Templates",
           sourcePath: "Templates/note.md",
           contract: "note",
@@ -218,6 +220,7 @@ describe("template doctor", () => {
         reference: {
           templateId: "reference",
           destinationClass: "registered-existing",
+          renderer: "obsidian-core",
           sourceFolder: "Imported",
           sourcePath: "Imported/reference.md",
           contract: "reference",
