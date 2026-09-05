@@ -229,8 +229,13 @@ function templateRejection(code: WriteRejection["code"], message: string, remedi
   return rejection("admission", code, message, remediation);
 }
 
+function selectedTemplateId(input: TemplateWriteNoteInput): string | undefined {
+  return input.templateId ?? (input.mode === "create" ? input.convention.defaultTemplate : undefined);
+}
+
 function templateFor(input: TemplateWriteNoteInput): ResolvedTemplate | undefined {
-  return input.templateId === undefined ? undefined : input.convention.templates[input.templateId];
+  const templateId = selectedTemplateId(input);
+  return templateId === undefined ? undefined : input.convention.templates[templateId];
 }
 
 function identityRejection(template: ResolvedTemplate): WriteRejection {
@@ -330,9 +335,19 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     return templateResult("rejected", input, templateFor(input), input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
   }
 
+  if (input.mode === "create" && input.templateId === undefined && input.convention.defaultTemplate === undefined) {
+    const message = "TEMPLATE_DEFAULT_UNDECLARED: create requires an explicit templateId or declared defaultTemplate";
+    const payload = templateRejection("contract-violation", message, "declare policy.defaultTemplate or pass an explicit templateId");
+    return templateResult("ask", input, undefined, input.notePath ?? "", caller, input.body ?? "", [], message, payload);
+  }
   let template = input.mode === "create" ? templateFor(input) : undefined;
   if (input.mode === "create" && template === undefined) {
-    const payload = templateRejection("args-invalid", "templateId does not identify a resolved template", "load a resolved convention and pass one of its stable template IDs");
+    const selected = selectedTemplateId(input);
+    const payload = templateRejection(
+      "args-invalid",
+      `TEMPLATE_DEFAULT_UNDECLARED: selected template ${selected ?? "<missing>"} does not identify a resolved template`,
+      "repair policy.defaultTemplate or pass an explicit resolved templateId",
+    );
     return templateResult("rejected", input, undefined, input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
   }
 

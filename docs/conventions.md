@@ -53,6 +53,8 @@ For example, `.oms/taxonomy.json` can place that note type elsewhere:
 
 ## Setup and migration
 
+`oms template` exposes guarded registration, creation, update, movement, removal, and default selection alongside readonly inspection. A default note binding is explicitly selected with `template default <id>`; it never follows folder order or the source-folder creation default. Binding removal retains existing source files, and deleting bytes requires an explicit managed-source deletion request. All mutations derive current signatures server-side and require the exact reviewed approval digest.
+
 Template use and checks verify current authoritative files, not an N-day freshness window. Runtime observations are permanent external history, separate from `.oms/` controls. Actual event time, observation time, and registration time are distinct; unknown external modification times remain unknown, with observed change intervals when evidence exists. Missing use observations do not mean a template is unused. Journal failures are reported as `LEDGER_APPEND_FAILED` without undoing a successful note write.
 
 Bindings distinguish `renderer: "obsidian-core" | "templater" | "none"`. Parsable Templater frontmatter contributes its field contract, not executable defaults: `filledBy: "obsidian"` fields need caller values (`FIELD_FILLED_BY_OBSIDIAN`). External body tags and `none` note creation are rejected with `TEMPLATE_RENDERER_EXTERNAL`; raw `<%` tags must never reach a written note.

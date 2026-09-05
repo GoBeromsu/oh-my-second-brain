@@ -20,7 +20,8 @@ import { SHARED_SKILLS_SOURCE } from "../../src/assets/shared-skills.js";
  *   skills      - the authored skill set
  *   mcpTools    - a strict SUBSET of skills, namely those declaring `mcp_tool`
  *   cliCommands - an INDEPENDENT allowlist of every real CLI command,
- *                 including the five public search commands. It is
+ *                 including the five public search commands and the guarded
+ *                 template command family. It is
  *                 intentionally distinct from the skill and MCP-tool surfaces.
  *
  * Enforcing equality across all three would let a contributor satisfy the gate
@@ -187,13 +188,13 @@ const CLEAN: SurfaceSets = {
     { name: "doctor", posture: "write", destructive: false, idempotent: false, openWorld: false },
   ],
   cliCommands: [
-    "setup", "doctor", "audit", "lint", "link", "linkify",
+    "setup", "doctor", "audit", "lint", "link", "linkify", "template",
     "install", "uninstall", "update", "reconcile", "mcp", "hook",
     "search", "index", "doc", "embed", "serve",
   ],
   declaredMcpTools: ["write", "search", "link", "status", "doctor"],
   dispatcherCliCommands: [
-    "setup", "doctor", "audit", "lint", "link", "linkify",
+    "setup", "doctor", "audit", "lint", "link", "linkify", "template",
     "install", "uninstall", "update", "reconcile", "mcp", "hook",
     "search", "index", "doc", "embed", "serve",
   ],
@@ -281,6 +282,7 @@ describe("surface-set parity gate (rules)", () => {
     const violations = checkSurfaceSets(CLEAN, TARGET);
     expect(violations).toEqual([]);
     expect(CLEAN.cliCommands).toContain("index");
+    expect(CLEAN.cliCommands).toContain("template");
     expect(CLEAN.skills).not.toContain("index");
   });
 

@@ -433,7 +433,7 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
   }
   const expected = managed({ base: policy.base, globalAxes: taxonomy.globalAxes, templates: {} }, templates);
   if (!isDeepStrictEqual(expected, projection.managed)) fail("PROJECTION_PAYLOAD_TAMPERED", "managed projection does not equal the canonical resolved template projection");
-  return { base: policy.base, templates: Object.fromEntries(Object.entries(templates).sort(([a], [b]) => a.localeCompare(b))), globalAxes: taxonomy.globalAxes, ...(policy.writers === undefined ? {} : { writers: policy.writers }), managedSourcePaths: sourcePaths, inputSignature: actualInput };
+  return { base: policy.base, templates: Object.fromEntries(Object.entries(templates).sort(([a], [b]) => a.localeCompare(b))), ...(policy.defaultTemplate === undefined ? {} : { defaultTemplate: policy.defaultTemplate }), globalAxes: taxonomy.globalAxes, ...(policy.writers === undefined ? {} : { writers: policy.writers }), managedSourcePaths: sourcePaths, inputSignature: actualInput };
 }
 
 /**
@@ -583,6 +583,21 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     const proposed = proposal === undefined ? current : { state: "present" as const, bytes: new Uint8Array(proposal.bytes), signature: manifestDigest(proposal.bytes) };
     transitions.push({ templateId: binding.templateId, path: bindingSourcePath, expectedCurrent: current.state === "present" ? { state: "present", signature: current.signature } : { state: "absent" }, current, proposed, action: proposal === undefined || proposal.publication === "verify-existing" ? "verify-only" : "write" });
   }
+  if (change.mode === "remove") {
+    const removed = currentPolicy.templates[change.templateId];
+    if (removed === undefined) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "removed binding is absent");
+    const removedPath = deriveTemplateSourcePath(removed);
+    const current = requiredSource(removed.templateId, currentSources.get(removed.templateId));
+    if (current.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "removed source is absent");
+    transitions.push({
+      templateId: removed.templateId,
+      path: removedPath,
+      expectedCurrent: { state: "present", signature: current.signature },
+      current,
+      proposed: change.deleteSource ? { state: "absent" } : current,
+      action: change.deleteSource ? "delete" : "verify-only",
+    });
+  }
   const makeSnapshot = (policy: import("./types.js").TemplatePolicy, policyDigest: Digest, taxonomyDigest: Digest, obsidianDigest: Digest, bindings: readonly import("./types.js").TemplateBinding[], sourceState: (binding: import("./types.js").TemplateBinding) => VerifiedFileState, resolvedInputSignature: Digest): TemplateSemanticSnapshot => {
     const input = templateInput(policy, { policy: policyDigest, taxonomy: taxonomyDigest, obsidianTypes: obsidianDigest, obsidianTypesPath: obsidianPath }, bindings, (binding) => {
       const source = sourceState(binding);
@@ -687,24 +702,26 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
   const affectedIds = new Set<string>();
   if (change.mode === "create") affectedIds.add(change.binding.templateId);
   else if (change.mode === "update") affectedIds.add(change.templateId);
+  else if (change.mode === "remove" || change.mode === "default") affectedIds.add(change.templateId);
   else if (change.mode === "reclassify") {
     if (currentPolicy.templates[change.templateId]?.destinationClass !== change.toClass) affectedIds.add(change.templateId);
   } else if (change.mode === "relocate-folder") {
     for (const binding of proposedBindings) if (binding.destinationClass === "managed-default") affectedIds.add(binding.templateId);
-  } else {
+  } else if (change.mode === "regenerate") {
     for (const binding of proposedBindings) affectedIds.add(binding.templateId);
   }
-  const operations = proposedBindings
-    .filter(binding => affectedIds.has(binding.templateId))
-    .map(binding => {
+  const operationBindings = change.mode === "remove"
+    ? [currentPolicy.templates[change.templateId]!]
+    : proposedBindings.filter(binding => affectedIds.has(binding.templateId));
+  const operations = operationBindings.map(binding => {
       const source = requiredTransition(binding.templateId, deriveTemplateSourcePath(binding), transitions);
-      const proposedSource = source.proposed;
-      if (proposedSource.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "operation source is absent");
+      const operationSource = source.proposed.state === "present" ? source.proposed : source.current;
+      if (operationSource.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "operation source is absent");
       return {
         kind: change.mode,
         templateId: binding.templateId,
         destinationClass: binding.destinationClass,
-        payloadDigest: proposedSource.signature,
+        payloadDigest: operationSource.signature,
         stableRelativeSuffix: null,
       };
     });

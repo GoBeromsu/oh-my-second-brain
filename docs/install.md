@@ -106,6 +106,23 @@ configuration requires complete pairs: vector search uses
 `OMS_RERANK_PROVIDER` with `OMS_RERANK_MODEL`. An incomplete or unavailable
 pair fails loudly.
 
+## Template commands
+
+Use `oms template list`, `show <id>`, and `scan` for proposals and inspection; `check` verifies current authority and reports runtime observations. Mutations use `--dry-run` followed by the same request with `--yes --approved-digest <digest>`:
+
+```text
+oms template add <folder> --mode manual --dry-run
+oms template add <file> --id <id> --contract <contract> --dry-run
+oms template add --id <id> --from <content.md> --folder <registered-folder> --dry-run
+oms template update <id> --naming <pattern> --dry-run
+oms template move --folder <registered-folder> --dry-run
+oms template remove <id> --dry-run
+oms template default <id> --dry-run
+oms template regenerate-types --dry-run
+```
+
+Pass `--vault <path>` for an explicit target. New source files use a registered creation folder, never an invented directory. Removal keeps the source unless `--delete-source` is explicitly requested for an OMS-managed source; registered-existing sources cannot be deleted through this operation. Change the default binding before removing it. `default <id>` chooses the note binding, not the template creation folder. Note creation without a template ID uses only that declared binding, or fails with `TEMPLATE_DEFAULT_UNDECLARED`.
+
 ## Search, index, and documents
 
 ```text

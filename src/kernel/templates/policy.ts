@@ -322,6 +322,17 @@ export function applyTemplatePolicyChange(current: TemplatePolicy, change: impor
       if (binding.destinationClass === "managed-default") templates[id] = { ...binding, sourceFolder: folder, sourcePath: deriveManagedSourcePath(folder, binding.templateId) };
     }
     return parseTemplatePolicy({ ...current, templates });
+  } else if (change.mode === "remove") {
+    const binding = templates[change.templateId];
+    if (binding === undefined) fail("TEMPLATE_SOURCE_INVALID", "template does not exist");
+    if (current.defaultTemplate === change.templateId) fail("TEMPLATE_POLICY_INVALID", "choose a new default template before removing the current default");
+    if (change.deleteSource && binding.destinationClass === "registered-existing") fail("TEMPLATE_SOURCE_INVALID", "registered-existing template sources cannot be deleted");
+    delete templates[change.templateId];
+  } else if (change.mode === "default") {
+    if (templates[change.templateId] === undefined) fail("TEMPLATE_SOURCE_INVALID", "template does not exist");
+    return parseTemplatePolicy({ ...current, defaultTemplate: change.templateId });
+  } else if (change.mode === "register-folder") {
+    return parseTemplatePolicy({ ...current, templateFolders: [...current.templateFolders, change.folder] });
   }
   return parseTemplatePolicy({ ...current, templates });
 }

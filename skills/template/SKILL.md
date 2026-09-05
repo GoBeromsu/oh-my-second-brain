@@ -31,10 +31,12 @@ You may **propose** an `obsidian-core` copy of a Templater template when the map
 
 1. Read `search { op: "templates" }` and the user's requested shape. Do not guess existing IDs or fields.
 2. Draft the exact Markdown and policy/taxonomy intent. Preserve unknown frontmatter, policy extensions, body bytes, and Obsidian property types.
-3. Call `write { op: "template", ..., dryRun: true }` for create, update, reclassify, or relocate-folder.
+3. Call `write { op: "template", ..., dryRun: true }` for create, update, reclassify, relocate-folder, register-folder, remove, or default. Current signatures are derived and verified by the server, not hand-assembled by the host.
 4. To adopt a template that already exists in the vault, call `write { op: "template", mode: "register-existing", templateId, sourceFolder, sourcePath, renderer, filledBy, contract, naming, dryRun: true }` instead. `filledBy` lists Obsidian-filled field names (an empty array for a Core template). The server verifies the proposed metadata against the source and derives every signature itself; you supply no `expected*` digests and no template bytes.
 5. Show the proposal, paths, diagnostics, and `approvalDigest` to the user.
 6. Apply only after the caller explicitly approves that exact digest. Submit the same request with `dryRun: false` and `approvedDigest`.
 7. Report the server-verified receipt and postconditions.
+
+CLI uses `oms template list`, `show`, `scan`, `add`, `update`, `remove`, `move`, `check`, `default`, and `regenerate-types`. Mutations require `--dry-run`, then the same request with `--yes --approved-digest`. `add <folder>` registers a source folder; `add <file> --id` registers existing bytes; `add --id --from` proposes a new source inside an explicitly registered creation folder. `default <id>` chooses the default note binding, not the source creation folder. Removal keeps registered-existing files; `--delete-source` applies only to managed sources. Never remove the current default without selecting another binding first.
 
 Reject unsupported expressions, unsafe paths, unresolved legacy mappings, stale signatures, and identity changes. Never self-approve, silently fall back to a legacy Concept reader, or directly mutate managed template/control files.

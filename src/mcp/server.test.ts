@@ -309,6 +309,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       frontmatter: { title: "Schema Valid", "source-url": "https://example.com/schema-valid" },
       body: "A schema-valid write payload.",
     }).valid).toBe(true);
+    expect(write({ op: "note", mode: "create", body: "Uses the declared default template." }).valid).toBe(true);
     expect(status({}).valid).toBe(true);
     expect(status({ op: "status" }).valid).toBe(false);
     expect(write({
@@ -322,23 +323,23 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(write({ op: "note", mode: "update", notePath: "notes/x.md" }).valid).toBe(false);
     expect(write({ op: "note", mode: "update", notePath: "notes/x.md", frontmatter: { title: "x" } }).valid).toBe(true);
     expect(write({ op: "note", templateId: "literature", mode: "create", folder: "references" }).valid).toBe(false);
-    const templateCas = {
-      expectedInputDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      expectedPolicySignature: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      expectedTaxonomySignature: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      expectedProjectionSignature: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      expectedSourceSignatures: [],
-    };
     const templateSource = { path: "Templates/OMS/people.md", content: "---\ntemplate: people\n---\n", publication: "write" };
     const templateBinding = { templateId: "people", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/people.md", contract: "people", naming: "{{name}}" };
-    expect(write({ op: "template", mode: "create", binding: templateBinding, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "create", binding: templateBinding, source: templateSource, dryRun: true }).valid).toBe(true);
     const { sourceFolder: _sourceFolder, ...bindingWithoutSourceFolder } = templateBinding;
-    expect(write({ op: "template", mode: "create", binding: bindingWithoutSourceFolder, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "create", binding: { ...templateBinding, sourceFolder: 42 }, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "update", templateId: "people", binding: templateBinding, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(true);
-    expect(write({ op: "template", mode: "update", templateId: "people", binding: bindingWithoutSourceFolder, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(false);
-    // register-existing derives every signature server-side from the vault, so it
-    // is the one template mode that must NOT demand the four expected* digests.
+    expect(write({ op: "template", mode: "create", binding: bindingWithoutSourceFolder, source: templateSource, dryRun: true }).valid).toBe(false);
+    expect(write({ op: "template", mode: "create", binding: { ...templateBinding, sourceFolder: 42 }, source: templateSource, dryRun: true }).valid).toBe(false);
+    expect(write({ op: "template", mode: "update", templateId: "people", binding: templateBinding, source: templateSource, moveStrategy: "oms-managed-rename", dryRun: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "update", templateId: "people", binding: bindingWithoutSourceFolder, source: templateSource, dryRun: true }).valid).toBe(false);
+    expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false, dryRun: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "default", templateId: "people", dryRun: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "register-folder", folder: { path: "Templates/manual", mode: "manual", default: true }, dryRun: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "regenerate", dryRun: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false, source: templateSource, dryRun: true }).valid).toBe(false);
+    expect(write({ op: "template", mode: "default", templateId: "people", deleteSource: false, dryRun: true }).valid).toBe(false);
+    expect(write({ op: "template", mode: "register-folder", folder: { path: "Templates/manual", mode: "manual", default: false }, dryRun: true }).valid).toBe(false);
+    expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false }).valid).toBe(false);
+    expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false, dryRun: true, expectedInputDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }).valid).toBe(false);
     const registration = { op: "template", mode: "register-existing", templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", renderer: "obsidian-core", filledBy: [], contract: "people", naming: "{{name}}", dryRun: true };
     expect(write(registration).valid).toBe(true);
     expect(write({ ...registration, sourceFolder: undefined }).valid).toBe(false);

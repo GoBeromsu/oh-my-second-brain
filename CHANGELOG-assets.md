@@ -4,6 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- Template and write guidance share the guarded CLI/MCP verbs and distinguish default note bindings from source-folder creation defaults. (#124)
 - Status guidance distinguishes permanent external observation history from vault-owned convention files and avoids claiming inactivity from missing events. (#123)
 - **Template and write skills distinguish external renderers from OMS note creation.** (#122) Hosts propose converted copies or observed contracts for user approval; the kernel validates them without executing scripts. Guidance explains missing Obsidian-filled values, external-body refusals, and unobserved contracts.
 ## [0.13.0] - 2026-09-05

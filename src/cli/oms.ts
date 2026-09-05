@@ -25,6 +25,7 @@ import { runLink } from "./link-command.js";
 import { runLinkify } from "./linkify.js";
 import { isSearchCliCommand, runSearchCli } from "./search.js";
 import { runSetup } from "./setup-command.js";
+import { runTemplateCommand, templateUsage } from "./template-command.js";
 import { searchUsage } from "./search-usage.js";
 import { maybePrintUpdateNotice } from "./update-notice.js";
 import { mainUsageCommandNames, printUsage } from "./usage.js";
@@ -72,7 +73,9 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    if (isSearchCliCommand(parsedArgs.command)) {
+    if (parsedArgs.command === "template") {
+      console.log(templateUsage());
+    } else if (isSearchCliCommand(parsedArgs.command)) {
       console.log(searchUsage());
     } else {
       printUsage();
@@ -128,7 +131,9 @@ async function main(): Promise<void> {
     vault = (await resolveEffectiveVault(process.cwd(), process.env)).vault;
   }
 
-  if (command === "setup") {
+  if (command === "template") {
+    await runTemplateCommand(argv.slice(1));
+  } else if (command === "setup") {
     const canonicalModelFlags =
       "--models-default, --models-descriptor <path>, or --models-no-default";
     if (unknownFlags.length > 0) {

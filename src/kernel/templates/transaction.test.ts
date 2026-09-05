@@ -55,7 +55,7 @@ vi.mock("node:fs/promises", async importOriginal => {
 
 import { inputDigest } from "./canonical.js";
 import { normalizeTemplateSourcePath } from "./paths.js";
-import { serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
+import { parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest, sourceSignature } from "./resolver.js";
 import { readRuntimeEvents } from "../runtime/event-read.js";
 import { completedTemplateTransaction, executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
@@ -266,6 +266,80 @@ function injectSecondary(operation: "write" | "remove" | "read", suffix: string)
 }
 
 describe("guarded template transactions", () => {
+  it("registers an explicit folder and selects an existing default through guarded policy transactions", async () => {
+    const current = binding("note", "Templates/OMS/note.md");
+    const item = await fixture([current]);
+    try {
+      const registered = await compose(item, { mode: "register-folder", folder: { path: folder("Imported"), mode: "manual" } });
+      expect((await executeTemplateTransaction(item.vault, registered, { approvedDigest: registered.approvalDigest })).status).toBe("applied");
+      const afterRegistration = parseTemplatePolicy(await readFile(path.join(item.vault, ".oms/template-policy.json"), "utf8"));
+      expect(afterRegistration.templateFolders).toContainEqual({ path: "Imported", mode: "manual" });
+      const selected = await buildTemplateCompositionManifest(item.vault, { mode: "default", templateId: current.templateId }, nextOptions(registered));
+      expect((await executeTemplateTransaction(item.vault, selected, { approvedDigest: selected.approvalDigest })).status).toBe("applied");
+      expect(parseTemplatePolicy(await readFile(path.join(item.vault, ".oms/template-policy.json"), "utf8")).defaultTemplate).toBe("note");
+      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
+      expect(events).toContainEqual(expect.objectContaining({ kind: "template-folder-register", outcome: "success" }));
+      expect(events).toContainEqual(expect.objectContaining({ kind: "template-default", templateId: "note", outcome: "success" }));
+      expect(events.some(event => event.kind === "template-create")).toBe(false);
+    } finally { await cleanup(item); }
+  });
+
+  it("removes a registered binding while preserving its source and supports exact replay", async () => {
+    const current = binding("note", "External/note.md", "registered-existing");
+    const item = await fixture([current]);
+    try {
+      const manifest = await compose(item, { mode: "remove", templateId: current.templateId, deleteSource: false });
+      const applied = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+      expect(applied.status).toBe("applied");
+      expect(await readFile(path.join(item.vault, current.sourcePath), "utf8")).toBe(TEMPLATE);
+      expect(parseTemplatePolicy(await readFile(path.join(item.vault, ".oms/template-policy.json"), "utf8")).templates).toEqual({});
+      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("already-complete");
+      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
+      expect(events.filter(event => event.kind === "template-remove")).toHaveLength(1);
+      expect(events.some(event => event.kind === "template-create")).toBe(false);
+    } finally { await cleanup(item); }
+  });
+
+  it("deletes a managed source only when explicitly requested and verifies absence", async () => {
+    const current = binding("note", "Templates/OMS/note.md");
+    const item = await fixture([current]);
+    try {
+      const manifest = await compose(item, { mode: "remove", templateId: current.templateId, deleteSource: true });
+      const applied = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+      expect(applied.status).toBe("applied");
+      await expect(readFile(path.join(item.vault, current.sourcePath))).rejects.toMatchObject({ code: "ENOENT" });
+      if (applied.status === "applied") expect(applied.verified).toContainEqual({ path: current.sourcePath, state: "absent" });
+      expect(readRuntimeEvents({ vaultPath: item.vault }).events).toContainEqual(
+        expect.objectContaining({ kind: "template-remove", templateId: "note", outcome: "success" }),
+      );
+    } finally { await cleanup(item); }
+  });
+
+  it("refuses registered source deletion and removal of the selected default", async () => {
+    const registered = binding("note", "External/note.md", "registered-existing");
+    const item = await fixture([registered]);
+    try {
+      await expect(compose(item, { mode: "remove", templateId: registered.templateId, deleteSource: true })).rejects.toThrow(/registered-existing template sources cannot be deleted/);
+      const selected = await compose(item, { mode: "default", templateId: registered.templateId });
+      expect((await executeTemplateTransaction(item.vault, selected, { approvedDigest: selected.approvalDigest })).status).toBe("applied");
+      await expect(buildTemplateCompositionManifest(item.vault, { mode: "remove", templateId: registered.templateId, deleteSource: false }, nextOptions(selected))).rejects.toThrow(/choose a new default template/);
+      expect(await readFile(path.join(item.vault, registered.sourcePath), "utf8")).toBe(TEMPLATE);
+    } finally { await cleanup(item); }
+  });
+
+  it("rejects stale approval for removal without changing policy or source", async () => {
+    const current = binding("note", "Templates/OMS/note.md");
+    const item = await fixture([current]);
+    try {
+      const manifest = await compose(item, { mode: "remove", templateId: current.templateId, deleteSource: true });
+      await writeFile(path.join(item.vault, ".oms/taxonomy.json"), `${TAXONOMY}\n`);
+      const beforePolicy = await readFile(path.join(item.vault, ".oms/template-policy.json"));
+      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("rejected");
+      expect(await readFile(path.join(item.vault, ".oms/template-policy.json"))).toEqual(beforePolicy);
+      expect(await readFile(path.join(item.vault, current.sourcePath), "utf8")).toBe(TEMPLATE);
+    } finally { await cleanup(item); }
+  });
+
   it("records each apply invocation and actual template creation without changing the approved digest", async () => {
     const item = await fixture();
     try {

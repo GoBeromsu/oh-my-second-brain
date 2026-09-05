@@ -38,6 +38,7 @@ describe("CLI usage text", () => {
       "lint",
       "link",
       "linkify",
+      "template",
       "search",
       "index",
       "doc",
