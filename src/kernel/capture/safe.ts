@@ -1,4 +1,4 @@
-import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stringify as yamlStringify } from "yaml";
 import { parseNote } from "../conventions/frontmatter.js";
@@ -162,7 +162,6 @@ function orderedTemplateFrontmatter(
 }
 
 function renderTemplateBody(template: ResolvedTemplate, content: string, title: string, resolvedAt: string): string {
-  const marker = "<!-- oms:content -->";
   const rendered = renderExpressions(template.body, template, "body", title, resolvedAt);
   if (typeof rendered !== "string") throw new Error("TEMPLATE_SOURCE_INVALID: template body must be a string");
   const standalone = /(^|\r?\n)<!-- oms:content -->(?=\r?\n|$)/g;

@@ -1,8 +1,8 @@
 import type {
   BaseContract, ContractDefinition, DerivedProjection, DerivedTemplateProjection, DestinationClass,
-  Extensions, FieldDefault, FieldPolicy, GlobalAxes, GlobalAxis, JsonValue, ObsidianContractType,
-  RetrievalView, SourceDescriptor, TemplateBinding, TemplateFolderPath, TemplateId, TemplatePolicy,
-  TemplateSourcePath, WriterRegistry,
+  Extensions, FieldDefault, FieldPolicy, GlobalAxis, JsonValue, ObsidianContractType,
+  RetrievalView, SourceDescriptor, TemplateBinding, TemplateFolderPath, TemplatePolicy,
+  WriterRegistry,
 } from "./types.js";
 import {
   deriveManagedSourcePath,
