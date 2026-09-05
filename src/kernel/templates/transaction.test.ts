@@ -96,7 +96,7 @@ function sourcePath(value: string): TemplateSourcePath { return value as Templat
 function folder(value: string): TemplateFolderPath { return value as TemplateFolderPath; }
 function binding(templateId: string, source: string, destinationClass: TemplateBinding["destinationClass"] = "managed-default"): TemplateBinding {
   const sourceFolder = folder(source.slice(0, source.lastIndexOf("/")));
-  return { templateId: id(templateId), destinationClass, sourceFolder, sourcePath: sourcePath(source), contract: "note", naming: "{{title}}" };
+  return { templateId: id(templateId), destinationClass, renderer: "obsidian-core", sourceFolder, sourcePath: sourcePath(source), contract: "note", naming: "{{title}}" };
 }
 function policy(bindings: readonly TemplateBinding[], templateFolder = "Templates/OMS", registeredFolders: readonly string[] = []): TemplatePolicy {
   const paths = new Set([templateFolder, "Moved", ...registeredFolders, ...bindings.map(item => item.sourceFolder)]);
@@ -124,6 +124,7 @@ function projection(bindings: readonly TemplateBinding[], policyBytes: string, s
       templates: Object.fromEntries(bindings.map(item => [item.templateId, {
         templateId: item.templateId,
         destinationClass: item.destinationClass,
+        renderer: "obsidian-core",
         sourcePath: item.sourcePath,
         targetFolder: folder("Notes"),
         keyOrder: ["title"],

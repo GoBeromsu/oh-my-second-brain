@@ -3,17 +3,19 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { inputDigest, templateInput } from "./canonical.js";
-import { parseTemplate } from "./extract.js";
 import { deriveTemplateSourcePath, isTemplateSourceInFolder, normalizeTemplateFolderPath, normalizeTemplateSourcePath, selectTemplateFolder, validateTemplateId, verifyTemplateSourcePath } from "./paths.js";
 import { parseTemplatePolicy } from "./policy.js";
+import { classifyTemplateRenderer } from "./renderer.js";
 import { buildTemplateCompositionManifest } from "./resolver.js";
 import { completedTemplateTransaction, executeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
-import type { Digest, FileExpectation, GuardedTemplateRequest, TemplateBinding, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
+import type { Digest, FileExpectation, GuardedTemplateRequest, TemplateBinding, TemplatePolicy, TemplateRenderer, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
 
 export interface RegisterExistingTemplateRequest {
   readonly templateId: string;
   readonly sourceFolder: string;
   readonly sourcePath: string;
+  readonly renderer: TemplateRenderer;
+  readonly filledBy: readonly string[];
   readonly contract: string;
   readonly naming: string;
 }
@@ -69,7 +71,24 @@ export async function registerExistingTemplate(vault: string, request: RegisterE
   const source = await verifyTemplateSourcePath(vault, sourcePath);
   const sourceState = await state(source.absolutePath);
   if (sourceState.state === "absent") throw new Error(`TEMPLATE_SOURCE_INVALID: registered template source (${sourcePath}) is missing`);
-  parseTemplate(sourcePath, sourceState.bytes);
+  const classification = classifyTemplateRenderer(sourcePath, sourceState.bytes);
+  if (classification.renderer !== request.renderer) {
+    throw new Error(`TEMPLATE_SOURCE_INVALID: requested renderer ${request.renderer} does not match observed renderer ${classification.renderer}`);
+  }
+  if (
+    request.filledBy.length !== classification.filledBy.length ||
+    request.filledBy.some((field, index) => field !== classification.filledBy[index])
+  ) {
+    throw new Error("TEMPLATE_SOURCE_INVALID: requested filledBy fields do not match observed template fields");
+  }
+  const blockingClassification = classification.diagnostics.find(diagnostic =>
+    diagnostic.code !== "TEMPLATE_RENDERER_EXTERNAL" &&
+    diagnostic.code !== "FIELD_FILLED_BY_OBSIDIAN" &&
+    !(diagnostic.code === "TEMPLATE_CONTRACT_UNOBSERVED" && classification.renderer === "none")
+  );
+  if (blockingClassification !== undefined) {
+    throw new Error(`${blockingClassification.code}: registered template source (${sourcePath}) could not be classified`);
+  }
 
   const [policyState, taxonomyState, projectionState, obsidianState] = await Promise.all([
     state(join(vault, ".oms/template-policy.json")), state(join(vault, ".oms/taxonomy.json")),
@@ -91,7 +110,7 @@ export async function registerExistingTemplate(vault: string, request: RegisterE
     // Registration is one-shot. Separating "already in the requested state" from
     // "bound to something else" is what makes a replayed apply actionable: the
     // first needs no work, the second is a real identity collision.
-    const identical = bound.destinationClass === "registered-existing" && bound.sourceFolder === sourceFolder && deriveTemplateSourcePath(bound) === sourcePath && bound.contract === request.contract && bound.naming === request.naming;
+    const identical = bound.destinationClass === "registered-existing" && bound.renderer === request.renderer && bound.sourceFolder === sourceFolder && deriveTemplateSourcePath(bound) === sourcePath && bound.contract === request.contract && bound.naming === request.naming;
     if (!identical) throw new Error(`TEMPLATE_ID_DUPLICATE: templateId ${templateId} is already registered`);
     if (guard.approvedDigest === undefined) {
       throw new Error(`TEMPLATE_ALREADY_REGISTERED: ${templateId} is already registered at ${sourcePath} with this contract and naming; no change is required`);
@@ -132,7 +151,7 @@ export async function registerExistingTemplate(vault: string, request: RegisterE
   }
   const sources = await Promise.all(Object.values(policy.templates).map(async binding => ({ templateId: binding.templateId, path: deriveTemplateSourcePath(binding), state: await state(join(vault, deriveTemplateSourcePath(binding))) })));
   const input = registrationInput(policy, policyState, taxonomyState, obsidianState, sources);
-  const binding: TemplateBinding = { templateId, destinationClass: "registered-existing", sourceFolder, sourcePath, contract: request.contract, naming: request.naming };
+  const binding: TemplateBinding = { templateId, destinationClass: "registered-existing", renderer: request.renderer, sourceFolder, sourcePath, contract: request.contract, naming: request.naming };
   const manifest = await buildTemplateCompositionManifest(vault, { mode: "create", binding, source: { path: sourcePath, bytes: sourceState.bytes, publication: "verify-existing" } }, {
     expected: {
       input: inputDigest(input),

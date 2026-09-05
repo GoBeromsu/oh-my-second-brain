@@ -3,19 +3,20 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { composeResolvedTemplateFields, deriveFolderOntologyAxis, loadResolvedTemplates, loadResolvedTemplatesIfPresent, requireTaxonomyPlacement, sourceSignature, taxonomyRouting } from "./resolver.js";
+import { composeResolvedTemplateFields, deriveFolderOntologyAxis, loadResolvedTemplates, loadResolvedTemplatesIfPresent, requireTaxonomyPlacement, resolveClassifiedTemplateSource, sourceSignature, taxonomyRouting } from "./resolver.js";
 import type { Digest, SourceDescriptor } from "./types.js";
 
 const roots: string[] = [];
 const digest = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
-async function fixture(options: { readonly placement?: boolean; readonly dateExample?: boolean } = {}): Promise<string> {
+async function fixture(options: { readonly placement?: boolean; readonly dateExample?: boolean; readonly renderer?: "obsidian-core" | "templater" | "none" } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-"));
   roots.push(root);
   await mkdir(join(root, ".oms"), { recursive: true });
   await mkdir(join(root, ".obsidian"), { recursive: true });
   await mkdir(join(root, "Templates", "OMS"), { recursive: true });
+  const renderer = options.renderer ?? "obsidian-core";
   const policy = JSON.stringify({
     version: 3,
     templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
@@ -25,6 +26,7 @@ async function fixture(options: { readonly placement?: boolean; readonly dateExa
       note: {
         templateId: "note",
         destinationClass: "managed-default",
+        renderer,
         sourceFolder: "Templates/OMS",
         sourcePath: "Templates/OMS/note.md",
         contract: "note",
@@ -35,8 +37,15 @@ async function fixture(options: { readonly placement?: boolean; readonly dateExa
   const taxonomy = JSON.stringify(options.placement === false
     ? { folders: {} }
     : { folders: { "Notes/Published": { templates: ["note"] } } });
-  const types = JSON.stringify({ types: { title: "text", ...(options.dateExample ? { date: "date" } : {}) } });
-  const template = options.dateExample ? "---\ntitle: literal\ndate: \"{{date}}\"\n---\nBody\n" : "---\ntitle: literal\n---\nBody\n";
+  const types = JSON.stringify({ types: { title: "text", ...(options.dateExample || renderer === "templater" ? { date: "date" } : {}) } });
+  const template = renderer === "templater"
+    ? "---\ntitle: literal\ndate: '<% tp.date.now(\"YYYY-MM-DD\") %>'\n---\nBody\n"
+    : renderer === "none" ? "<%* tR += 'Synthetic external template'; %>\n"
+    : options.dateExample ? "---\ntitle: literal\ndate: \"{{date}}\"\n---\nBody\n" : "---\ntitle: literal\n---\nBody\n";
+  const keyOrder = renderer === "none" ? [] : renderer === "templater" || options.dateExample ? ["title", "date"] : ["title"];
+  const projectedFields = renderer === "none"
+    ? options.dateExample ? { date: { type: "date" } } : {}
+    : { title: { type: "text" }, ...(renderer === "templater" ? { date: { type: "date", filledBy: "obsidian" } } : options.dateExample ? { date: { type: "date" } } : {}) };
   const sources: SourceDescriptor[] = [
     { logicalId: "template-policy", signature: digest(policy) },
     { logicalId: "taxonomy", signature: digest(taxonomy) },
@@ -53,13 +62,14 @@ async function fixture(options: { readonly placement?: boolean; readonly dateExa
         note: {
           templateId: "note",
           destinationClass: "managed-default",
+          renderer,
           sourcePath: "Templates/OMS/note.md",
           targetFolder: "Notes/Published",
-          keyOrder: options.dateExample ? ["title", "date"] : ["title"],
-          fields: { title: { type: "text" }, ...(options.dateExample ? { date: { type: "date" } } : {}) },
+          keyOrder,
+          fields: projectedFields,
           views: [],
           naming: "{{title}}",
-          bodySignature: digest("Body\n"),
+          bodySignature: digest(renderer === "none" ? "" : "Body\n"),
         },
       },
     },
@@ -75,6 +85,38 @@ async function fixture(options: { readonly placement?: boolean; readonly dateExa
 }
 
 describe("loadResolvedTemplates", () => {
+  it.each(["create", "update"])("rejects an oversize %s source proposal before composition", mode => {
+    const source = new TextEncoder().encode(`---\ntitle: note\n---\n${"x".repeat(262_145)}`);
+    expect(() => resolveClassifiedTemplateSource(`Templates/OMS/${mode}.md`, source, "obsidian-core"))
+      .toThrow(/TEMPLATE_PROPOSAL_OVERSIZE/);
+  });
+
+  it("rejects requested renderer mismatch and invalid Core expressions inside Templater sources", () => {
+    const core = new TextEncoder().encode("---\ntitle: note\n---\nBody\n");
+    expect(() => resolveClassifiedTemplateSource("Templates/OMS/note.md", core, "templater"))
+      .toThrow(/TEMPLATE_SOURCE_INVALID.*renderer obsidian-core does not match requested renderer templater/);
+    const invalidMixed = new TextEncoder().encode("---\ncreated: '<% tp.date.now() %>'\n---\n{{date:YYYY[year]}}\n");
+    expect(() => resolveClassifiedTemplateSource("Templates/OMS/note.md", invalidMixed, "templater"))
+      .toThrow(/TEMPLATE_EXPRESSION_UNSUPPORTED/);
+  });
+
+  it("accepts script-first renderer-none sources without fabricating an observed body", () => {
+    const source = new TextEncoder().encode("<%* await host.propose() %>\n");
+    expect(resolveClassifiedTemplateSource("Templates/OMS/script.md", source, "none")).toMatchObject({
+      keyOrder: [],
+      frontmatter: {},
+      body: "",
+      bodyExternal: true,
+    });
+  });
+
+  it("bounds host proposal source paths to sixteen segments", () => {
+    const source = new TextEncoder().encode("---\ntitle: note\n---\nBody\n");
+    const path = `${Array.from({ length: 16 }, (_, index) => `folder-${index}`).join("/")}/note.md`;
+    expect(() => resolveClassifiedTemplateSource(path, source, "obsidian-core"))
+      .toThrow(/TEMPLATE_SOURCE_INVALID.*maximum source path depth of 16/);
+  });
+
   it("returns null only when every OMS template control is absent", async () => {
     const empty = await mkdtemp(join(tmpdir(), "oms-template-resolver-empty-"));
     roots.push(empty);
@@ -139,6 +181,39 @@ describe("loadResolvedTemplates", () => {
           targetFolder: "Notes/Published",
         },
       },
+    });
+  });
+
+  it("resolves Templater frontmatter as caller-filled contract without evaluating external tags", async () => {
+    const root = await fixture({ renderer: "templater" });
+
+    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
+      templates: {
+        note: {
+          renderer: "templater",
+          fields: { date: { filledBy: "obsidian" } },
+          frontmatterTemplate: { date: "<% tp.date.now(\"YYYY-MM-DD\") %>" },
+          body: "Body\n",
+        },
+      },
+    });
+  });
+
+  it("resolves renderer-none bindings from policy contract only while retaining signed source identity", async () => {
+    const root = await fixture({ renderer: "none", dateExample: true });
+
+    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
+      templates: {
+        note: {
+          renderer: "none",
+          sourcePath: "Templates/OMS/note.md",
+          keyOrder: [],
+          fields: { date: { type: "date" } },
+          frontmatterTemplate: {},
+          body: "",
+        },
+      },
+      managedSourcePaths: ["Templates/OMS/note.md"],
     });
   });
 

@@ -4,6 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **Template and write skills distinguish external renderers from OMS note creation.** (#122) Hosts propose converted copies or observed contracts for user approval; the kernel validates them without executing scripts. Guidance explains missing Obsidian-filled values, external-body refusals, and unobserved contracts.
 ## [0.13.0] - 2026-09-05
 
 - **The npm package now ships a generated root `skills/` mirror of the single authored `assets/skills/` source for Gajae-Code, whose convention scan previously found zero OMS skills silently.**

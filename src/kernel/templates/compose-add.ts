@@ -40,7 +40,7 @@ export function composeTemplateAdd(folders: readonly TemplateFolderRegistration[
   const template = parseTemplate(sourcePath, request.bytes);
   const destinationClass = sourcePath === deriveManagedSourcePath(folder.path, templateId) ? "managed-default" : "registered-existing";
   return {
-    binding: { templateId, destinationClass, sourceFolder: folder.path, sourcePath, contract: request.contract, naming: request.naming },
+    binding: { templateId, destinationClass, renderer: "obsidian-core", sourceFolder: folder.path, sourcePath, contract: request.contract, naming: request.naming },
     source: { path: sourcePath, bytes: request.bytes, publication: "write" },
     template,
   };

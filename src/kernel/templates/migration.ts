@@ -6,20 +6,36 @@ import { excludedNoteMatcher } from "../conventions/note-exclude.js";
 import { loadObsidianTypes } from "../contracts/index.js";
 import { approvalDigest, canonicalJson, inputDigest, outputDigest } from "./canonical.js";
 import { composeTemplateAdd, starterTemplateBytes } from "./compose-add.js";
-import { parseTemplate, TemplateExpressionError } from "./extract.js";
+import { deriveContractFromNotes, type DerivedContractFromNotes } from "./contract-from-notes.js";
+import { parseTemplate } from "./extract.js";
+import { classifyTemplateRenderer } from "./renderer.js";
 import { parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { composeResolvedTemplateFields, sourceSignature, taxonomyRouting } from "./resolver.js";
 import { isTemplateSourceInFolder, normalizeTemplateSourcePath, validateTemplateId, verifyTemplateControlPath, normalizeTemplateControlPath, verifyTemplateFolderPath, verifyTemplateSourcePath } from "./paths.js";
 import { executeTemplateTransaction } from "./transaction.js";
-import type { AuthorityEntry, BaseContract, DerivedProjection, Digest, Extensions, FileExpectation, GuardedTemplateRequest, InputV2, JsonValue, TemplateBinding, TemplateCompositionManifest, TemplateFolderPath, TemplateFolderRegistration, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
+import type { AuthorityEntry, BaseContract, ContractDefinition, DerivedProjection, Diagnostic, Digest, Extensions, FieldPolicy, FileExpectation, GuardedTemplateRequest, InputV2, JsonValue, TemplateBinding, TemplateCompositionManifest, TemplateFolderPath, TemplateFolderRegistration, TemplateId, TemplatePolicy, TemplateRenderer, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-export type MigrationDiagnosticCode = "MIGRATION_UNRESOLVED_MAPPING" | "TEMPLATE_ID_DUPLICATE" | "TEMPLATE_SOURCE_DUPLICATE" | "MIGRATION_TEMPLATE_UNSAFE" | "MIGRATION_TEMPLATE_INVALID" | "MIGRATION_NOTE_INVALID" | "MIGRATION_NOTE_IDENTITY_UNRESOLVED" | "MIGRATION_TAXONOMY_INVALID" | "TEMPLATE_FOLDER_SELECTION_REQUIRED" | "TEMPLATE_PLACEMENT_UNDECLARED" | "TEMPLATE_POLICY_VERSION_UNSUPPORTED" | "TEMPLATE_EXPRESSION_UNSUPPORTED" | "TEMPLATE_SOURCE_INVALID" | "TEMPLATE_CANDIDATE_INCOMPATIBLE";
+export type MigrationDiagnosticCode = "MIGRATION_UNRESOLVED_MAPPING" | "TEMPLATE_ID_DUPLICATE" | "TEMPLATE_SOURCE_DUPLICATE" | "MIGRATION_TEMPLATE_UNSAFE" | "MIGRATION_TEMPLATE_INVALID" | "MIGRATION_NOTE_INVALID" | "MIGRATION_NOTE_IDENTITY_UNRESOLVED" | "MIGRATION_TAXONOMY_INVALID" | "TEMPLATE_FOLDER_SELECTION_REQUIRED" | "TEMPLATE_PLACEMENT_UNDECLARED" | "TEMPLATE_POLICY_VERSION_UNSUPPORTED" | "TEMPLATE_EXPRESSION_UNSUPPORTED" | "TEMPLATE_SOURCE_INVALID" | "TEMPLATE_CANDIDATE_INCOMPATIBLE" | "FIELD_FILLED_BY_OBSIDIAN" | "TEMPLATE_RENDERER_EXTERNAL" | "TEMPLATE_CONTRACT_UNOBSERVED" | "TEMPLATE_PROPOSAL_OVERSIZE" | "TEMPLATE_PROPOSAL_TYPE_CONFLICT" | "TEMPLATE_CONTRACT_NOTE_INVALID" | "TEMPLATE_CONTRACT_READ_FAILED";
 /** `blocking` diagnostics stop approval; per-file diagnostics only exclude that file. */
 export interface MigrationDiagnostic { readonly code: MigrationDiagnosticCode; readonly message: string; readonly path?: string; readonly templateId?: TemplateId; readonly field?: string; readonly remediation?: string; readonly blocking: boolean; }
 export interface RegisteredTemplate { readonly templateId: string; readonly sourcePath: string; }
-export interface TemplateCandidate { readonly templateId: TemplateId; readonly sourceFolder: TemplateFolderPath; readonly sourcePath: TemplateSourcePath; readonly bytes: Uint8Array; readonly destinationClass: TemplateBinding["destinationClass"]; readonly publication: "verify-existing" | "write"; }
+export interface TemplateCandidate {
+  readonly templateId: TemplateId;
+  readonly sourceFolder: TemplateFolderPath;
+  readonly sourcePath: TemplateSourcePath;
+  readonly bytes: Uint8Array;
+  readonly destinationClass: TemplateBinding["destinationClass"];
+  readonly publication: "verify-existing" | "write";
+  readonly renderer: TemplateRenderer;
+  /** Frontmatter keys Obsidian fills through Templater; never copied raw into notes. */
+  readonly filledBy: readonly string[];
+  readonly bodyExternal: boolean;
+  readonly rendererDiagnostics: readonly Diagnostic[];
+  /** Present for `renderer: none`; the contract Obsidian's existing notes exhibit. */
+  readonly contractFromNotes?: DerivedContractFromNotes;
+}
 export interface ExistingNoteIdentity { readonly path: string; readonly templateId: string | null; }
 export interface MigrationProposal {
   readonly templateFolders: readonly TemplateFolderRegistration[];
@@ -48,12 +64,6 @@ function fileIssue(code: MigrationDiagnosticCode, message: string, path: string,
 export function proposedTemplateId(pathname: string): TemplateId | null {
   const slug = basename(pathname, ".md").replace(/\.(template|eta)$/i, "").normalize("NFC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   try { return validateTemplateId(slug); } catch { return null; }
-}
-function incompatibility(error: unknown, pathname: string): MigrationDiagnostic {
-  if (error instanceof TemplateExpressionError) return fileIssue("TEMPLATE_EXPRESSION_UNSUPPORTED", error.message, pathname, "Use Obsidian core tags ({{title}}, {{date}}, {{time}}, {{date:FMT}}, {{time:FMT}}) or propose a converted copy through the host agent", { field: error.location });
-  const text = message(error);
-  const code: MigrationDiagnosticCode = text.startsWith("TEMPLATE_SOURCE_INVALID") ? "TEMPLATE_SOURCE_INVALID" : "TEMPLATE_CANDIDATE_INCOMPATIBLE";
-  return fileIssue(code, text, pathname, "Give the file YAML frontmatter that parses as a mapping, or leave it unregistered");
 }
 function isMissing(error: unknown): boolean { return error instanceof Error && "code" in error && error.code === "ENOENT"; }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
@@ -96,7 +106,12 @@ async function readCandidate(root: string, pathname: string, templateId: string,
   const sourceFolder = [...folders].sort((a, b) => b.path.length - a.path.length).find(folder => isTemplateSourceInFolder(sourcePath, folder.path))?.path;
   if (sourceFolder === undefined) throw new Error("Template source is outside the selected registered folders");
   const verified = await verifyTemplateSourcePath(root, sourcePath);
-  return { templateId: validateTemplateId(templateId), sourceFolder, sourcePath, bytes: new Uint8Array(await readFile(verified.absolutePath)), destinationClass, publication: "verify-existing" };
+  const bytes = new Uint8Array(await readFile(verified.absolutePath));
+  const classified = classifyTemplateRenderer(sourcePath, bytes);
+  return { templateId: validateTemplateId(templateId), sourceFolder, sourcePath, bytes, destinationClass, publication: "verify-existing", renderer: classified.renderer, filledBy: classified.filledBy, bodyExternal: classified.bodyExternal, rendererDiagnostics: classified.diagnostics };
+}
+function sourceParse(candidate: Pick<TemplateCandidate, "renderer" | "sourcePath" | "bytes">) {
+  return candidate.renderer === "templater" ? parseTemplate(candidate.sourcePath, candidate.bytes, { renderer: "templater" }) : parseTemplate(candidate.sourcePath, candidate.bytes);
 }
 async function discover(root: string, folders: readonly TemplateFolderRegistration[], diagnostics: MigrationDiagnostic[], scannedMarkdown: Set<string>): Promise<TemplateCandidate[]> {
   const candidates: TemplateCandidate[] = [];
@@ -152,7 +167,140 @@ function snapshotInput(folders: readonly TemplateFolderRegistration[], authority
   return { version: 2, templateFolders: folders, authority, placement: bindings.map(binding => ({ templateId: binding.templateId, destinationClass: binding.destinationClass, sourceFolder: binding.sourceFolder, templateFolder: binding.destinationClass === "managed-default" ? binding.sourceFolder : null, sourcePath: binding.sourcePath })) };
 }
 function authorities(states: readonly { readonly kind: AuthorityEntry["kind"]; readonly logicalId: string; readonly path: string; readonly state: VerifiedFileState }[], candidates: readonly TemplateCandidate[]): AuthorityEntry[] {
-  return [...states.flatMap(({ kind, logicalId, path, state }) => state.state === "present" ? [{ kind, logicalId, vaultRelativePath: path, contentDigest: state.signature }] : []), ...candidates.map(candidate => ({ kind: "template" as const, logicalId: candidate.templateId, vaultRelativePath: candidate.sourcePath, contentDigest: sha(candidate.bytes) }))];
+  return [
+    ...states.flatMap(({ kind, logicalId, path, state }) => state.state === "present" ? [{ kind, logicalId, vaultRelativePath: path, contentDigest: state.signature }] : []),
+    ...candidates.map(candidate => ({ kind: "template" as const, logicalId: candidate.templateId, vaultRelativePath: candidate.sourcePath, contentDigest: sha(candidate.bytes) })),
+    ...candidates.flatMap(candidate => candidate.contractFromNotes?.sampleSources.map((sample, index) => ({
+      kind: "template" as const,
+      logicalId: `${candidate.templateId}#sample-${index + 1}`,
+      vaultRelativePath: sample.path,
+      contentDigest: sample.digest as Digest,
+    })) ?? []),
+  ];
+}
+function proposalDiagnostic(diagnostic: Diagnostic | DerivedContractFromNotes["diagnostics"][number], candidate: TemplateCandidate): MigrationDiagnostic {
+  const code = diagnostic.code as MigrationDiagnosticCode;
+  const field = "field" in diagnostic ? diagnostic.field : undefined;
+  const message = "message" in diagnostic && diagnostic.message !== undefined
+    ? diagnostic.message
+    : code === "FIELD_FILLED_BY_OBSIDIAN"
+      ? `Obsidian must fill ${field ?? "this field"}; OMS will not execute the external expression`
+      : code === "TEMPLATE_RENDERER_EXTERNAL"
+        ? "Template uses an external renderer"
+        : code;
+  const remediation = code === "TEMPLATE_RENDERER_EXTERNAL" && candidate.bodyExternal
+    ? "Propose a host-authored Obsidian Core replacement, or remove external expressions from the body"
+    : code === "FIELD_FILLED_BY_OBSIDIAN"
+      ? "Keep the field under Obsidian authority; OMS will not execute its expression"
+      : code === "TEMPLATE_CONTRACT_UNOBSERVED"
+        ? "Add an existing note identified by this template or taxonomy placement before selecting it"
+        : code === "TEMPLATE_PROPOSAL_OVERSIZE"
+          ? "Reduce the source below the proposal limits; input is never truncated"
+          : "Resolve this diagnostic before selecting the candidate";
+  return fileIssue(code, message, diagnostic.path ?? candidate.sourcePath, remediation, {
+    templateId: candidate.templateId,
+    ...(field === undefined ? {} : { field }),
+  });
+}
+function canProposeBinding(candidate: TemplateCandidate): boolean {
+  if (candidate.rendererDiagnostics.some(item => item.code === "TEMPLATE_PROPOSAL_OVERSIZE")) return false;
+  if (candidate.renderer === "templater") return !candidate.bodyExternal;
+  if (candidate.renderer === "none") return candidate.contractFromNotes?.status === "observed";
+  return candidate.rendererDiagnostics.length === 0;
+}
+function generatedContract(candidate: TemplateCandidate): ContractDefinition | undefined {
+  if (candidate.renderer === "templater") {
+    const template = sourceParse(candidate);
+    const external = new Set(candidate.filledBy);
+    return {
+      fields: Object.fromEntries(template.keyOrder.map(key => [key, external.has(key) ? { filledBy: "obsidian" as const } : {}])),
+      intent: `Observed ${candidate.templateId} template convention`,
+      views: [],
+    };
+  }
+  if (candidate.renderer === "none" && candidate.contractFromNotes?.status === "observed") {
+    return { fields: candidate.contractFromNotes.fields, intent: `Observed ${candidate.templateId} note convention`, views: [] };
+  }
+  return undefined;
+}
+function generatedContractId(candidate: TemplateCandidate, current?: TemplatePolicy): string {
+  if (candidate.templateId !== "base" && current?.contracts[candidate.templateId] === undefined) return candidate.templateId;
+  let id = `${candidate.templateId}-proposal`;
+  while (current?.contracts[id] !== undefined) id = `${id}-new`;
+  return id;
+}
+function projectionFields(
+  base: BaseContract,
+  fields: Readonly<Record<string, FieldPolicy>>,
+  values: Readonly<Record<string, JsonValue>>,
+  obsidian: Readonly<Record<string, FieldPolicy["type"]>>,
+  filledBy: readonly string[],
+  renderer: TemplateRenderer,
+): Readonly<Record<string, FieldPolicy>> {
+  if (renderer === "none") {
+    return Object.fromEntries([...new Set([...Object.keys(base.fields), ...Object.keys(fields)])].map(key => {
+      const value = { ...base.fields[key], ...fields[key] };
+      const type = obsidian[key] ?? value.type;
+      if (type === undefined) throw new Error(`TEMPLATE_TYPE_UNRESOLVED: field ${key} has no type authority`);
+      return [key, { ...value, type }];
+    }));
+  }
+  const external = new Set(filledBy);
+  const observable = Object.fromEntries(Object.entries(values).filter(([key]) => !external.has(key)));
+  const observableFields = Object.fromEntries(Object.entries(fields).filter(([key]) => !external.has(key)));
+  const resolved: Record<string, FieldPolicy> = { ...composeResolvedTemplateFields(base, observableFields, observable, obsidian) };
+  for (const key of filledBy) resolved[key] = { ...fields[key], ...resolved[key], filledBy: "obsidian" };
+  return resolved;
+}
+async function deriveCandidateContracts(
+  root: string,
+  candidates: readonly TemplateCandidate[],
+  taxonomyState: VerifiedFileState,
+  diagnostics?: MigrationDiagnostic[],
+): Promise<void> {
+  const none = candidates.filter(candidate => candidate.renderer === "none" && !candidate.rendererDiagnostics.some(item => item.code === "TEMPLATE_PROPOSAL_OVERSIZE"));
+  if (none.length === 0) return;
+  let routing: ReturnType<typeof taxonomyRouting> | undefined;
+  if (taxonomyState.state === "present") {
+    try { routing = taxonomyRouting(".oms/taxonomy.json", taxonomyState.bytes); }
+    catch (error: unknown) {
+      diagnostics?.push(issue("MIGRATION_TAXONOMY_INVALID", message(error), ".oms/taxonomy.json"));
+      return;
+    }
+  }
+  const obsidian = await loadObsidianTypes(root);
+  const excludedPaths = candidates.map(candidate => candidate.sourcePath);
+  for (const candidate of none) {
+    const target = routing?.targetFolders.get(candidate.templateId);
+    const derived = await deriveContractFromNotes(root, {
+      templateId: candidate.templateId,
+      ...(target === undefined ? {} : { folders: [target] }),
+      excludedPaths,
+      ...(obsidian === null ? {} : { obsidianTypes: obsidian.types }),
+    });
+    (candidate as { contractFromNotes?: DerivedContractFromNotes }).contractFromNotes = derived;
+    if (derived.status === "observed") {
+      (candidate as { rendererDiagnostics: readonly Diagnostic[] }).rendererDiagnostics = candidate.rendererDiagnostics.filter(item => item.code !== "TEMPLATE_CONTRACT_UNOBSERVED");
+    }
+    diagnostics?.push(...derived.diagnostics.map(item => proposalDiagnostic(item, candidate)));
+  }
+}
+async function assertSampleEvidenceCurrent(root: string, proposal: MigrationProposal): Promise<void> {
+  const selected = proposal.candidates.filter(candidate => proposal.bindings.some(binding => binding.templateId === candidate.templateId) && candidate.renderer === "none");
+  if (selected.length === 0) return;
+  const taxonomyState = await fileState(root, ".oms/taxonomy.json");
+  const copies: TemplateCandidate[] = proposal.candidates.map(candidate => {
+    const copy = { ...candidate } as { contractFromNotes?: DerivedContractFromNotes };
+    delete copy.contractFromNotes;
+    return copy as TemplateCandidate;
+  });
+  await deriveCandidateContracts(root, copies, taxonomyState);
+  for (const candidate of selected) {
+    const current = copies.find(item => item.templateId === candidate.templateId && item.sourcePath === candidate.sourcePath)?.contractFromNotes;
+    if (current === undefined || canonicalJson(current) !== canonicalJson(candidate.contractFromNotes)) {
+      throw new Error(`MIGRATION_APPROVAL_MISMATCH: observed samples changed for ${candidate.templateId}`);
+    }
+  }
 }
 /** Read-only scan. Only explicit selections or an existing v3 registration select folders. */
 export async function planTemplateMigration(vault: string, options: MigrationOptions = {}): Promise<MigrationProposal> {
@@ -197,11 +345,6 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
   }
   candidates.sort((a, b) => a.templateId.localeCompare(b.templateId) || a.sourcePath.localeCompare(b.sourcePath));
   const pinned = new Set([...explicitlyRegistered, ...Object.keys(currentPolicy?.templates ?? {})]);
-  for (const candidate of [...candidates]) {
-    if (pinned.has(candidate.templateId)) continue;
-    try { parseTemplate(candidate.sourcePath, candidate.bytes); }
-    catch (error: unknown) { diagnostics.push(incompatibility(error, candidate.sourcePath)); candidates.splice(candidates.indexOf(candidate), 1); }
-  }
   const byId = new Map<string, TemplateCandidate[]>();
   for (const candidate of candidates) byId.set(candidate.templateId, [...(byId.get(candidate.templateId) ?? []), candidate]);
   for (const [templateId, group] of byId) {
@@ -219,37 +362,64 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
       const starter = composeTemplateAdd(folders, { templateId: "note", sourceFolder: defaultFolder.path, bytes: starterTemplateBytes("note"), contract: "base", naming: "{{date}}-{{slug}}.md" });
       const collision = await fileState(root, starter.source.path);
       if (collision.state === "present") diagnostics.push(issue("MIGRATION_TEMPLATE_INVALID", "Starter path exists but is not a compatible template", starter.source.path));
-      else candidates.push({ templateId: starter.binding.templateId, sourceFolder: starter.binding.sourceFolder, sourcePath: starter.source.path, bytes: starter.source.bytes, destinationClass: starter.binding.destinationClass, publication: "write" });
+      else candidates.push({ templateId: starter.binding.templateId, sourceFolder: starter.binding.sourceFolder, sourcePath: starter.source.path, bytes: starter.source.bytes, destinationClass: starter.binding.destinationClass, publication: "write", renderer: "obsidian-core", filledBy: [], bodyExternal: false, rendererDiagnostics: [] });
     } catch (error: unknown) { diagnostics.push(issue("MIGRATION_TEMPLATE_INVALID", message(error), defaultFolder.path)); }
   }
-  if (candidates.length === 0 && !diagnostics.some(item => item.blocking)) diagnostics.push(issue("TEMPLATE_CANDIDATE_INCOMPATIBLE", "No compatible template remains in the selected folders"));
+  const taxonomy = await fileState(root, ".oms/taxonomy.json");
+  await deriveCandidateContracts(root, candidates, taxonomy, diagnostics);
+  for (const candidate of candidates) diagnostics.push(...candidate.rendererDiagnostics.map(item => proposalDiagnostic(item, candidate)));
+  if (!candidates.some(candidate => canProposeBinding(candidate) || pinned.has(candidate.templateId)) && !diagnostics.some(item => item.blocking)) {
+    diagnostics.push(issue("TEMPLATE_CANDIDATE_INCOMPATIBLE", "No approvable template remains in the selected folders"));
+  }
   const paths = new Set(candidates.map(candidate => candidate.sourcePath));
-  const bindings = candidates.filter(candidate => currentPolicy?.templates[candidate.templateId] !== undefined || explicitlyRegistered.has(candidate.templateId) || folders.find(folder => folder.path === candidate.sourceFolder)?.mode === "auto").map((candidate): TemplateBinding => currentPolicy?.templates[candidate.templateId] ?? ({ templateId: candidate.templateId, sourceFolder: candidate.sourceFolder, sourcePath: candidate.sourcePath, destinationClass: candidate.destinationClass, contract: "base", naming: "{{date}}-{{slug}}.md" }));
+  const bindings = candidates.filter(candidate => {
+    if (currentPolicy?.templates[candidate.templateId] !== undefined) return true;
+    return canProposeBinding(candidate) && (explicitlyRegistered.has(candidate.templateId) || folders.find(folder => folder.path === candidate.sourceFolder)?.mode === "auto");
+  }).map((candidate): TemplateBinding => currentPolicy?.templates[candidate.templateId] ?? ({
+    templateId: candidate.templateId,
+    sourceFolder: candidate.sourceFolder,
+    sourcePath: candidate.sourcePath,
+    destinationClass: candidate.destinationClass,
+    renderer: candidate.renderer,
+    contract: generatedContract(candidate) === undefined ? "base" : generatedContractId(candidate, currentPolicy),
+    naming: "{{date}}-{{slug}}.md",
+  }));
   const managedSourcePaths = [...paths].sort() as TemplateSourcePath[];
   const existingNotes = await notes(root, new Set(managedSourcePaths), diagnostics);
   const droppedKeys = droppedPolicyKeys(policyState, currentPolicy);
   const unresolved = diagnostics.filter(item => item.blocking);
   const common = { templateFolders: folders, candidates, bindings, existingNotes, managedSourcePaths, policyState, ...(currentPolicy === undefined ? {} : { currentPolicy }), droppedKeys, diagnostics, unresolved };
   if (unresolved.length > 0) return common;
-  const [taxonomy, obsidian] = await Promise.all([fileState(root, ".oms/taxonomy.json"), fileState(root, ".obsidian/types.json")]);
+  const obsidian = await fileState(root, ".obsidian/types.json");
   const input = snapshotInput(folders, authorities([{ kind: "policy", logicalId: "template-policy", path: ".oms/template-policy.json", state: policyState }, { kind: "taxonomy", logicalId: "taxonomy", path: ".oms/taxonomy.json", state: taxonomy }, { kind: "obsidian-types", logicalId: "obsidian-types", path: ".obsidian/types.json", state: obsidian }], candidates), bindings);
   return { ...common, input, inputDigest: inputDigest(input) };
 }
 function proposedPolicy(proposal: MigrationProposal, base: BaseContract): TemplatePolicy {
+  const generated = Object.fromEntries(proposal.candidates.flatMap(candidate => {
+    const contract = generatedContract(candidate);
+    const binding = proposal.bindings.find(item => item.templateId === candidate.templateId);
+    const contractId = generatedContractId(candidate, proposal.currentPolicy);
+    return contract === undefined || binding?.contract !== contractId ? [] : [[contractId, contract]];
+  }));
   if (proposal.currentPolicy !== undefined) {
     const current = proposal.currentPolicy;
-    const contracts = proposal.bindings.some(binding => binding.contract === "base") && current.contracts.base === undefined ? { ...current.contracts, base: { ...base, intent: "Template convention", views: [] } } : current.contracts;
+    const contracts = {
+      ...generated,
+      ...current.contracts,
+      ...(proposal.bindings.some(binding => binding.contract === "base") && current.contracts.base === undefined ? { base: { ...base, intent: "Template convention", views: [] } } : {}),
+    };
     return parseTemplatePolicy(serializeTemplatePolicy({ ...current, templateFolders: proposal.templateFolders, contracts, templates: Object.fromEntries(proposal.bindings.map(binding => [binding.templateId, binding])) }));
   }
   const raw = opaqueObject(proposal.policyState);
   const preserved = raw === null ? {} : Object.fromEntries(Object.entries(raw).filter(([key]) => !REPLACED_KEYS.has(key)));
-  return parseTemplatePolicy(JSON.stringify({ ...preserved, version: 3, templateFolders: proposal.templateFolders, base, contracts: { base: { ...base, intent: "Template convention", views: [] } }, templates: Object.fromEntries(proposal.bindings.map(binding => [binding.templateId, binding])) }));
+  return parseTemplatePolicy(JSON.stringify({ ...preserved, version: 3, templateFolders: proposal.templateFolders, base, contracts: { base: { ...base, intent: "Template convention", views: [] }, ...generated }, templates: Object.fromEntries(proposal.bindings.map(binding => [binding.templateId, binding])) }));
 }
 /** Compose against observed bytes; unsupported policy is retained as an opaque CAS input. */
 export async function buildMigrationManifest(vault: string, proposal: MigrationProposal, input: MigrationCompositionInput): Promise<TemplateCompositionManifest> {
   if (proposal.unresolved.length > 0 || proposal.inputDigest === undefined) throw new Error("MIGRATION_UNRESOLVED_MAPPING");
   if (proposal.bindings.length === 0) throw new Error("MIGRATION_UNRESOLVED_MAPPING: select templates before approving a convention");
   const root = resolve(vault);
+  await assertSampleEvidenceCurrent(root, proposal);
   const [policyState, taxonomyState, projectionState, obsidianState] = await Promise.all([fileState(root, ".oms/template-policy.json"), fileState(root, ".oms/taxonomy.json"), fileState(root, ".oms/types.json"), fileState(root, ".obsidian/types.json")]);
   if (!unchanged(policyState, proposal.policyState)) throw new Error("MIGRATION_APPROVAL_MISMATCH: policy changed after inspection");
   if (obsidianState.state !== "present") throw new Error("MIGRATION_AUTHORITY_MISSING: .obsidian/types.json");
@@ -264,7 +434,10 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
   const extracted = bindings.map(binding => {
     const candidate = candidateById.get(binding.templateId);
     if (candidate === undefined || candidate.sourcePath !== binding.sourcePath) throw new Error(`MIGRATION_UNRESOLVED_MAPPING: ${binding.templateId}`);
-    return parseTemplate(binding.sourcePath, candidate.bytes);
+    if (binding.renderer === "none") {
+      return { sourcePath: binding.sourcePath, sourceDigest: sha(candidate.bytes), keyOrder: [] as readonly string[], frontmatter: {} as Readonly<Record<string, JsonValue>>, body: "", filledBy: [] as readonly string[] };
+    }
+    return { ...sourceParse({ ...candidate, renderer: binding.renderer }), filledBy: binding.renderer === "templater" ? candidate.filledBy : [] };
   });
   const descriptors = [{ logicalId: "template-policy", signature: sha(policyBytes) }, { logicalId: "taxonomy", signature: sha(taxonomyBytes) }, { logicalId: "obsidian-types", signature: obsidianState.signature }, ...extracted.map(template => ({ path: template.sourcePath, signature: template.sourceDigest }))];
   const resolvedSignature = sourceSignature(descriptors);
@@ -278,7 +451,19 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
       const template = extracted[index]!;
       const contract = policy.contracts[binding.contract];
       if (contract === undefined) throw new Error(`MIGRATION_UNRESOLVED_MAPPING: ${binding.contract}`);
-      return [binding.templateId, { templateId: binding.templateId, destinationClass: binding.destinationClass, sourcePath: binding.sourcePath, targetFolder, keyOrder: template.keyOrder, fields: composeResolvedTemplateFields(policy.base, contract.fields, template.frontmatter, obsidian.types), views: contract.views, naming: binding.naming, bodySignature: sha(bytes(template.body)) }];
+      return [binding.templateId, {
+        templateId: binding.templateId,
+        destinationClass: binding.destinationClass,
+        renderer: binding.renderer,
+        sourcePath: binding.sourcePath,
+        targetFolder,
+        keyOrder: template.keyOrder,
+        fields: projectionFields(policy.base, contract.fields, template.frontmatter, obsidian.types, template.filledBy, binding.renderer),
+        views: contract.views,
+        naming: binding.naming,
+        bodySignature: sha(bytes(template.body)),
+        ...(binding.extensions === undefined ? {} : { extensions: binding.extensions }),
+      }];
     })) },
   };
   const projectionBytes = bytes(serializeDerivedProjection(derived));
@@ -315,6 +500,7 @@ export async function applyTemplateMigration(vault: string, proposal: MigrationP
   if (proposal.unresolved.length > 0 || proposal.inputDigest === undefined) throw new Error("MIGRATION_UNRESOLVED_MAPPING");
   if (manifest === null || typeof manifest !== "object" || !Array.isArray(manifest.controls) || manifest.controls.length !== 3 || manifest.current === undefined || manifest.proposed === undefined || !Array.isArray(manifest.sources) || !Array.isArray(manifest.operations) || !Array.isArray(manifest.outputs) || !Array.isArray(manifest.moves)) throw new Error("MIGRATION_APPROVAL_MISMATCH");
   if (request === null || typeof request !== "object" || (request.dryRun === true ? request.approvedDigest !== undefined : typeof request.approvedDigest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(request.approvedDigest))) throw new Error("MIGRATION_APPROVAL_MISMATCH");
+  await assertSampleEvidenceCurrent(resolve(vault), proposal);
   return executeTemplateTransaction(vault, manifest, request);
 }
 export function migrationProposalDigest(proposal: MigrationProposal): Digest {

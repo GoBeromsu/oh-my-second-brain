@@ -6,6 +6,7 @@ MCP server tools and resources belong here.
 
 ### Changed
 
+- Template writes respect renderer and Obsidian-filled field contracts, rejecting external bodies and unresolved values without copying raw Templater tags. The five-tool surface and digest-approved transaction boundary are unchanged. (#122)
 - The search receipt field `drift` was renamed to `indexDrift`; no compatibility alias is retained.
 - **`write { op: "template", mode: "register-existing" }` now requires `sourceFolder` together with `sourcePath`.** The folder must be a registered v3 template source folder containing the existing Markdown file. This keeps template source identity distinct from taxonomy note placement while retaining the existing dry-run, approval-digest, and compare-and-swap flow. The MCP surface remains exactly five public tools.
 

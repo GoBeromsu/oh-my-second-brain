@@ -25,6 +25,8 @@ an operation of `write`, not a sixth tool:
   "templateId": "note",
   "sourceFolder": "Team/Curated Shapes",
   "sourcePath": "Team/Curated Shapes/note.md",
+  "renderer": "obsidian-core",
+  "filledBy": [],
   "contract": "note",
   "naming": "{{date}}-{{slug}}.md",
   "dryRun": true
@@ -34,5 +36,7 @@ an operation of `write`, not a sixth tool:
 `sourceFolder` is required and must be a registered template folder containing
 `sourcePath`. Apply only by repeating the operation with the returned
 `approvedDigest`.
+
+Host agents may propose Core-template copies of external templates, but the kernel never transpiles or executes Templater. Inspect `renderer` and `filledBy` contract metadata before note creation. Ask for missing Obsidian-filled values; an external body or `none` renderer requires another Core template rather than raw script copying. Existing-note contract proposals show sample coverage and remain subject to exact approval and verified postconditions.
 
 To add a host, add a clearly named `assets/<host>/` directory for host-only files, preserve shared skills in `assets/skills/`, declare every shipped path in the harness registry, and keep installer destinations explicit.

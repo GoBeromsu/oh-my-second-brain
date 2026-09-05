@@ -20,23 +20,23 @@ function templateDigest(value: string): `sha256:${string}` {
 }
 
 async function createMcpTemplateAuthority(vault: string): Promise<void> {
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }], base: { fields: {} }, contracts: { literature: { intent: "A source.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [] } }, templates: { literature: { templateId: "literature", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{slug}}.md" } } });
+  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }], base: { fields: {} }, contracts: { literature: { intent: "A source.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [] } }, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{slug}}.md" } } });
   const taxonomy = JSON.stringify({ folders: {}, templates: { literature: { templateFolder: "Inbox" } } });
   const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", "source-url": "text" } });
   const template = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n# Literature\n<!-- oms:content -->\n";
   const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: templateDigest(policy) }, { logicalId: "taxonomy", signature: templateDigest(taxonomy) }, { logicalId: "obsidian-types", signature: templateDigest(obsidianTypes) }, { path: "Templates/OMS/literature.md", signature: templateDigest(template) }];
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { literature: { templateId: "literature", destinationClass: "managed-default", sourcePath: "Templates/OMS/literature.md", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: templateDigest("# Literature\n<!-- oms:content -->\n") } } } });
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/literature.md", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: templateDigest("# Literature\n<!-- oms:content -->\n") } } } });
   await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
   await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "literature.md"), template)]);
 }
 
 async function createLinkTemplateAuthority(vault: string): Promise<void> {
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }], base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
+  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }], base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
   const taxonomy = JSON.stringify({ folders: {}, templates: { note: { templateFolder: "Inbox" } } });
   const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", aliases: "aliases" } });
   const template = "---\ntemplate: note\ntitle: Untitled\n---\n<!-- oms:content -->\n";
   const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: templateDigest(policy) }, { logicalId: "taxonomy", signature: templateDigest(taxonomy) }, { logicalId: "obsidian-types", signature: templateDigest(obsidianTypes) }, { path: "Templates/OMS/note.md", signature: templateDigest(template) }];
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: templateDigest("<!-- oms:content -->\n") } } } });
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: templateDigest("<!-- oms:content -->\n") } } } });
   await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
   await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
 }
@@ -330,19 +330,25 @@ describe("Oh My Second Brain MCP stdio server", () => {
       expectedSourceSignatures: [],
     };
     const templateSource = { path: "Templates/OMS/people.md", content: "---\ntemplate: people\n---\n", publication: "write" };
-    const templateBinding = { templateId: "people", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/people.md", contract: "people", naming: "{{name}}" };
+    const templateBinding = { templateId: "people", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/people.md", contract: "people", naming: "{{name}}" };
     expect(write({ op: "template", mode: "create", binding: templateBinding, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(true);
-    const bindingWithoutSourceFolder = { templateId: "people", destinationClass: "managed-default", sourcePath: "Templates/OMS/people.md", contract: "people", naming: "{{name}}" };
+    const { sourceFolder: _sourceFolder, ...bindingWithoutSourceFolder } = templateBinding;
     expect(write({ op: "template", mode: "create", binding: bindingWithoutSourceFolder, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(false);
     expect(write({ op: "template", mode: "create", binding: { ...templateBinding, sourceFolder: 42 }, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(false);
     expect(write({ op: "template", mode: "update", templateId: "people", binding: templateBinding, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(true);
     expect(write({ op: "template", mode: "update", templateId: "people", binding: bindingWithoutSourceFolder, source: templateSource, ...templateCas, dryRun: true }).valid).toBe(false);
     // register-existing derives every signature server-side from the vault, so it
     // is the one template mode that must NOT demand the four expected* digests.
-    expect(write({ op: "template", mode: "register-existing", templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}", dryRun: true }).valid).toBe(true);
-    expect(write({ op: "template", mode: "register-existing", templateId: "people", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}", dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "register-existing", templateId: "people", sourceFolder: 42, sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}", dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "register-existing", templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}" }).valid).toBe(false);
+    const registration = { op: "template", mode: "register-existing", templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", renderer: "obsidian-core", filledBy: [], contract: "people", naming: "{{name}}", dryRun: true };
+    expect(write(registration).valid).toBe(true);
+    expect(write({ ...registration, sourceFolder: undefined }).valid).toBe(false);
+    expect(write({ ...registration, sourceFolder: 42 }).valid).toBe(false);
+    expect(write({ ...registration, renderer: "kernel-templater" }).valid).toBe(false);
+    expect(write({ ...registration, filledBy: ["title", 42] }).valid).toBe(false);
+    const { renderer: _renderer, ...registrationWithoutRenderer } = registration;
+    expect(write(registrationWithoutRenderer).valid).toBe(false);
+    const { dryRun: _dryRun, ...unguardedRegistration } = registration;
+    expect(write(unguardedRegistration).valid).toBe(false);
     expect(JSON.stringify(toolByName.get("search")!.inputSchema)).not.toContain("concept");
   });
 

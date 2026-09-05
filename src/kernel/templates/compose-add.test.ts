@@ -9,7 +9,7 @@ const request = { templateId: "note", bytes: starterTemplateBytes("note"), contr
 describe("composeTemplateAdd", () => {
   it("derives a managed path inside the default folder and returns a write proposal", () => {
     const composed = composeTemplateAdd(folders, request);
-    expect(composed.binding).toEqual({ templateId: "note", destinationClass: "managed-default", sourceFolder: "Custom", sourcePath: "Custom/note.md", contract: "base", naming: "{{date}}-{{slug}}.md" });
+    expect(composed.binding).toEqual({ templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Custom", sourcePath: "Custom/note.md", contract: "base", naming: "{{date}}-{{slug}}.md" });
     expect(composed.source).toMatchObject({ path: "Custom/note.md", publication: "write" });
     expect(composed.template.frontmatter).toEqual({ template: "note" });
     expect(composed.template.contentMarker).toBe(true);

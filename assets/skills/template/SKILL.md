@@ -15,14 +15,24 @@ Turn the user's natural-language note design into an actual Obsidian Markdown te
 - `.oms/taxonomy.json` owns folder/link `intent`, note placement, and global axes.
 - `.oms/types.json` is derived state. Never edit it directly.
 
-Use an existing stable `templateId` when updating or moving a template. A path or digest change never creates a new identity. New OMS-managed templates default to `<templateFolder>/<templateId>.md`; registered existing templates keep their explicitly verified `sourcePath`.
+Use an existing stable `templateId` when updating or moving a template. A path or digest change never creates a new identity. New OMS-managed templates default to `<sourceFolder>/<templateId>.md` inside a registered template folder (the folder marked `default: true` unless you name another registered folder); registered existing templates keep their explicitly verified `sourcePath`.
+
+## Renderers
+
+Every binding carries `renderer`. Obsidian renders; OMS validates.
+
+- `obsidian-core`: only `{{title}}`, `{{date}}`, `{{time}}`, `{{date:FMT}}`, `{{time:FMT}}` appear. OMS can create notes from it.
+- `templater`: `<% %>` appears and the YAML frontmatter parses. OMS extracts the key/type contract; every field whose value is a Templater tag is `filledBy: "obsidian"`. OMS never copies a raw tag into a note and never runs Templater: a note write without caller values for those fields returns `FIELD_FILLED_BY_OBSIDIAN` (ask the user), and a Templater body returns `TEMPLATE_RENDERER_EXTERNAL`.
+- `none`: script-first or no frontmatter. The contract comes from notes Obsidian already produced (`contract-from-notes`), with the sample count and field coverage shown in the proposal; zero samples is `TEMPLATE_CONTRACT_UNOBSERVED`, not unused.
+
+You may **propose** an `obsidian-core` copy of a Templater template when the mapping is exact: `tp.date.now("FMT")` -> `{{date:FMT}}` / `{{time:FMT}}`, `tp.file.title` -> `{{title}}`. Anything else has no faithful mapping; do not invent one. Submit the converted bytes as a new template through the guarded flow; the kernel validates syntax, contract, path, signatures, and CAS, and the user approves the digest.
 
 ## Workflow
 
 1. Read `search { op: "templates" }` and the user's requested shape. Do not guess existing IDs or fields.
 2. Draft the exact Markdown and policy/taxonomy intent. Preserve unknown frontmatter, policy extensions, body bytes, and Obsidian property types.
 3. Call `write { op: "template", ..., dryRun: true }` for create, update, reclassify, or relocate-folder.
-4. To adopt a template that already exists in the vault, call `write { op: "template", mode: "register-existing", templateId, sourcePath, contract, naming, dryRun: true }` instead. The server reads the file as the shape authority and derives every signature itself; you supply no `expected*` digests and no template bytes.
+4. To adopt a template that already exists in the vault, call `write { op: "template", mode: "register-existing", templateId, sourceFolder, sourcePath, renderer, filledBy, contract, naming, dryRun: true }` instead. `filledBy` lists Obsidian-filled field names (an empty array for a Core template). The server verifies the proposed metadata against the source and derives every signature itself; you supply no `expected*` digests and no template bytes.
 5. Show the proposal, paths, diagnostics, and `approvalDigest` to the user.
 6. Apply only after the caller explicitly approves that exact digest. Submit the same request with `dryRun: false` and `approvedDigest`.
 7. Report the server-verified receipt and postconditions.

@@ -30,6 +30,7 @@ function convention(naming = "{{date}}-{{slug}}.md"): ResolvedConvention {
       note: {
         id: "note",
         destinationClass: "managed-default",
+        renderer: "obsidian-core",
         sourcePath: "Templates/OMS/note.md",
         targetFolder: "notes",
         bom: false,
@@ -270,6 +271,87 @@ describe("template-first verified write modes", () => {
     expect(dryRun.body).toBe("At 10:11:12\nbody text\n");
     expect(persisted.prepared).toEqual(dryRun.prepared);
     expect(await readFile(join(root, persisted.notePath), "utf8")).toContain("formatted: 2026/08/30");
+  });
+
+  it("requires caller values for Templater-filled fields and never persists raw external tags", async () => {
+    const root = await vault();
+    const current = convention();
+    const templaterConvention: ResolvedConvention = {
+      ...current,
+      templates: {
+        note: {
+          ...current.templates.note!,
+          renderer: "templater",
+          fields: {
+            ...current.templates.note!.fields,
+            created: { type: "date", filledBy: "obsidian" },
+          },
+          frontmatterTemplate: {
+            template: "note",
+            status: "OPEN",
+            created: "<% tp.date.now(\"YYYY-MM-DD\") %>",
+          },
+        },
+      },
+    };
+    const missing = await writeResolvedTemplateNote({
+      ...createInput(root),
+      convention: templaterConvention,
+      dryRun: false,
+    });
+    expect(missing).toMatchObject({
+      status: "ask",
+      reason: "FIELD_FILLED_BY_OBSIDIAN: caller values are required for created",
+    });
+    await expect(readFile(join(root, "notes", "2026-08-30-hello-world.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const input = {
+      ...createInput(root),
+      convention: templaterConvention,
+      frontmatter: {
+        ...createInput(root).frontmatter,
+        created: "2026-08-30",
+      },
+    };
+    const dryRun = await writeResolvedTemplateNote({ ...input, dryRun: true });
+    const written = await writeResolvedTemplateNote({ ...input, dryRun: false });
+    expect(written.prepared).toEqual(dryRun.prepared);
+    expect(await readFile(join(root, written.notePath), "utf8")).not.toContain("<%");
+  });
+
+  it("rejects external Templater bodies and renderer-none templates without writing", async () => {
+    const root = await vault();
+    const current = convention();
+    for (const template of [
+      { ...current.templates.note!, renderer: "templater" as const, body: "<% tp.file.cursor() %>\n" },
+      { ...current.templates.note!, renderer: "templater" as const, body: "malformed %> body\n" },
+      { ...current.templates.note!, renderer: "none" as const },
+    ]) {
+      const result = await writeResolvedTemplateNote({
+        ...createInput(root),
+        convention: { ...current, templates: { note: template } },
+        dryRun: false,
+      });
+      expect(result).toMatchObject({ status: "rejected" });
+      expect(result.reason).toContain("TEMPLATE_RENDERER_EXTERNAL");
+    }
+    await expect(readFile(join(root, "notes", "2026-08-30-hello-world.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([
+    { body: "raw <% malformed" },
+    { body: "nested <% outer <% inner %> %>" },
+    { frontmatter: { title: "Hello", source: "https://example.test", nested: ["raw %> delimiter"] } },
+  ])("rejects caller-provided external delimiters before writing: %o", async external => {
+    const root = await vault();
+    const result = await writeResolvedTemplateNote({
+      ...createInput(root),
+      ...external,
+      dryRun: false,
+    });
+    expect(result).toMatchObject({ status: "rejected" });
+    expect(result.reason).toContain("TEMPLATE_RENDERER_EXTERNAL");
+    await expect(readFile(join(root, "notes", "2026-08-30-hello-world.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fails loudly for an unsupported formatted token during rendering", async () => {
