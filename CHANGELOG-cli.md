@@ -5,6 +5,8 @@ Changes to the `oms` command surface belong here.
 ## [Unreleased]
 
 - **Breaking: `oms setup --template-folder <path>` is repeatable and template folders are always selected explicitly.** (#120) Repeated paths are registered in `auto` scan/proposal mode, with the first explicit path becoming the template-creation default (separate from the note `defaultTemplate`). Without flags, setup reuses saved v3 folder registrations only; Obsidian and Templater settings are displayed as numbered dry-run candidates but are never selected automatically. An unresolved selection is blocked with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and no approval digest.
+- **Setup dry-runs now expose `diagnostics` and `starterTemplates` instead of failing at the first incompatible file.** (#121) Each excluded template names its error, path, field when applicable, and remediation, while compatible files remain reviewable; an all-incompatible selection is blocked with `TEMPLATE_CANDIDATE_INCOMPATIBLE`. When the selected default folder is empty, `starterTemplates` shows the proposed `note.md`, which is written only by an approved apply.
+- **Doctor now reports template drift one file at a time.** (#121) Every `TEMPLATE_SOURCE_DRIFT` result includes the path, expected and actual SHA-256 signatures, remediation, and the registered template ID when available, making `regenerate-types` review specific rather than generic.
 
 ## [0.13.0] - 2026-09-05
 

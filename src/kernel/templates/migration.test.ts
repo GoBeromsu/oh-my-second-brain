@@ -68,13 +68,77 @@ describe("explicit multi-folder setup", () => {
     expect(proposal.bindings[0]).toMatchObject({ templateId: "chosen-id", sourceFolder: "Custom", destinationClass: "registered-existing" });
     expect(await readFile(path.join(root, "Custom/Unusual Name.md"), "utf8")).toBe(body);
   });
-  it("rejects duplicate IDs across different folders", async () => {
+  it("excludes only colliding files and keeps compatible siblings", async () => {
+    const root = await fixture();
+    await put(root, "Custom/agent/meeting.md", body);
+    await put(root, "Custom/manual/meeting.md", body);
+    const proposal = await planTemplateMigration(root, { templateFolders: folders });
+    const duplicates = proposal.diagnostics.filter(item => item.code === "TEMPLATE_ID_DUPLICATE");
+    expect(duplicates.map(item => item.path).sort()).toEqual(["Custom/agent/meeting.md", "Custom/manual/meeting.md"]);
+    expect(duplicates.every(item => item.blocking === false && item.remediation?.includes("explicit"))).toBe(true);
+    expect(proposal.bindings.map(item => item.templateId)).toEqual(["note"]);
+    expect(proposal.unresolved).toEqual([]);
+    expect(proposal.inputDigest).toBeDefined();
+  });
+  it("blocks when every file collides and nothing compatible remains", async () => {
     const root = await fresh();
     await put(root, "Custom/note.md", body);
     await put(root, "Other/note.md", body);
     const proposal = await planTemplateMigration(root, { templateFolders: [...folders, { path: "Other", mode: "auto" }] });
-    expect(proposal.unresolved.map(item => item.code)).toContain("TEMPLATE_ID_DUPLICATE");
+    expect(proposal.diagnostics.filter(item => item.code === "TEMPLATE_ID_DUPLICATE")).toHaveLength(2);
+    expect(proposal.unresolved.map(item => item.code)).toEqual(["TEMPLATE_CANDIDATE_INCOMPATIBLE"]);
     expect(proposal.inputDigest).toBeUndefined();
+  });
+  it("strips .template/.eta suffixes into stable IDs", async () => {
+    const root = await fixture();
+    await put(root, "Custom/Daily Note.template.md", body);
+    await put(root, "Custom/zt-cite.eta.md", body);
+    const proposal = await planTemplateMigration(root, { templateFolders: folders });
+    expect(proposal.candidates.map(item => item.templateId)).toEqual(["daily-note", "note", "zt-cite"]);
+  });
+  it("reports incompatible files individually and proceeds with compatible ones", async () => {
+    const root = await fixture();
+    await put(root, "Custom/templater.md", "---\ntitle: <% tp.file.title %>\n---\nbody\n");
+    await put(root, "Custom/custom.md", "---\ntitle: {{unknown}}\n---\nbody\n");
+    await put(root, "Custom/plain.md", "no frontmatter\n");
+    await put(root, "Custom/formatted.md", "---\ntemplate: formatted\ncreated: \"{{date:YYYY-MM-DD}}\"\n---\nbody\n");
+    const proposal = await planTemplateMigration(root, { templateFolders: folders });
+    const byPath = new Map(proposal.diagnostics.map(item => [item.path, item]));
+    expect(byPath.get("Custom/templater.md")).toMatchObject({ code: "TEMPLATE_EXPRESSION_UNSUPPORTED", field: "title", blocking: false });
+    expect(byPath.get("Custom/custom.md")).toMatchObject({ code: "TEMPLATE_EXPRESSION_UNSUPPORTED", blocking: false });
+    expect(byPath.get("Custom/plain.md")).toMatchObject({ code: "TEMPLATE_SOURCE_INVALID", blocking: false });
+    expect(proposal.diagnostics.every(item => item.remediation !== undefined)).toBe(true);
+    expect(proposal.bindings.map(item => item.templateId)).toEqual(["formatted", "note"]);
+    expect(proposal.unresolved).toEqual([]);
+    expect(proposal.inputDigest).toBeDefined();
+  });
+  it("proposes a starter template only for an empty default folder and writes it on approval", async () => {
+    const root = await fresh();
+    await put(root, ".obsidian/types.json", JSON.stringify({ types: { template: "text" } }));
+    await put(root, ".oms/taxonomy.json", JSON.stringify({ folders: {}, templates: { note: { templateFolder: "Notes" } } }));
+    await mkdir(path.join(root, "Custom"), { recursive: true });
+    const proposal = await planTemplateMigration(root, { templateFolders: folders });
+    expect(proposal.candidates).toMatchObject([{ templateId: "note", sourcePath: "Custom/note.md", publication: "write", destinationClass: "managed-default" }]);
+    expect(proposal.unresolved).toEqual([]);
+    const manifest = await buildMigrationManifest(root, proposal, { base: { fields: {} } });
+    expect(manifest.sources[0]).toMatchObject({ path: "Custom/note.md", action: "write", expectedCurrent: { state: "absent" } });
+    expect((await applyTemplateMigration(root, proposal, manifest, { dryRun: true })).status).toBe("planned");
+    expect(existsSync(path.join(root, "Custom/note.md"))).toBe(false);
+    expect((await applyTemplateMigration(root, proposal, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+    expect(await readFile(path.join(root, "Custom/note.md"), "utf8")).toBe("---\ntemplate: note\n---\n<!-- oms:content -->\n");
+    expect((await loadResolvedTemplates(root)).templates.note?.targetFolder).toBe("Notes");
+    const rescan = await planTemplateMigration(root);
+    expect(rescan.candidates.map(item => item.publication)).toEqual(["verify-existing"]);
+  });
+  it("does not propose a starter for a non-default or non-empty folder", async () => {
+    const root = await fixture();
+    await put(root, "Custom/plain.md", "no frontmatter\n");
+    await rm(path.join(root, "Custom/note.md"));
+    const proposal = await planTemplateMigration(root, { templateFolders: folders });
+    expect(proposal.candidates).toEqual([]);
+    expect(proposal.unresolved.map(item => item.code)).toEqual(["TEMPLATE_CANDIDATE_INCOMPATIBLE"]);
+    const noDefault = await planTemplateMigration(root, { templateFolders: [{ path: "Empty", mode: "auto" }] });
+    expect(noDefault.candidates).toEqual([]);
   });
   it("rejects repeated explicit source registration", async () => {
     const root = await fixture();
@@ -93,7 +157,9 @@ describe("explicit multi-folder setup", () => {
     await symlink(path.join(root, "Custom"), path.join(root, "Linked"));
     await symlink(path.join(root, "Custom/note.md"), path.join(root, "Custom/link.md"));
     const proposal = await planTemplateMigration(root, { templateFolders: [...folders, { path: "Linked", mode: "auto" }] });
-    expect(proposal.unresolved.filter(item => item.code === "MIGRATION_TEMPLATE_UNSAFE")).toHaveLength(2);
+    expect(proposal.diagnostics.filter(item => item.code === "MIGRATION_TEMPLATE_UNSAFE")).toHaveLength(2);
+    expect(proposal.unresolved.map(item => item.path)).toEqual(["Linked"]);
+    expect(proposal.bindings.map(item => item.sourcePath)).toEqual(["Custom/note.md"]);
   });
   it("reports malformed ordinary notes per file", async () => {
     const root = await fixture();

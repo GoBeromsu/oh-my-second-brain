@@ -219,7 +219,7 @@ export function retrievalResultsToQueryResult(
     readonly facetValues?: readonly McpSemanticFacet[];
     readonly usedChannels?: readonly McpSemanticReceipt["usedChannels"][number][];
     readonly approximated?: boolean;
-    readonly drift?: boolean;
+    readonly indexDrift?: boolean;
     readonly requestedStrategy?: McpSemanticReceipt["requestedStrategy"];
     readonly generatedSearches?: McpSemanticReceipt["generatedSearches"];
     readonly rerankApplied?: boolean;
@@ -265,7 +265,7 @@ export function retrievalResultsToQueryResult(
   const receipt: McpSemanticReceipt = {
     usedChannels,
     approximated: opts.approximated ?? false,
-    drift: opts.drift ?? false,
+    indexDrift: opts.indexDrift ?? false,
     requestedStrategy: opts.requestedStrategy ?? "plain",
     generatedSearches: opts.generatedSearches ?? [],
     rerankApplied: opts.rerankApplied ?? false,
@@ -328,7 +328,7 @@ export function queryResultUnavailable(
     receipt: {
       usedChannels: receipt.usedChannels ?? [],
       approximated: receipt.approximated ?? false,
-      drift: receipt.drift ?? false,
+      indexDrift: receipt.indexDrift ?? false,
       requestedStrategy: receipt.requestedStrategy ?? "plain",
       generatedSearches: receipt.generatedSearches ?? [],
       rerankApplied: receipt.rerankApplied ?? false,

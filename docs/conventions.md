@@ -70,7 +70,13 @@ oms setup --vault /path/to/vault --yes --approved-digest <digest>
 
 Repeat `--template-folder` to select source folders explicitly. Explicit selections use `auto` proposal mode, and the first path is the template-creation default. With no flags, setup reuses modes from a valid saved v3 policy. Obsidian core settings, Templater settings, and the read-only vault walk provide candidates only; provenance is reported as `explicit`, `stored-v3`, `obsidian-core`, `templater-folder`, `templater-file-templates`, `templater-startup`, or `vault-walk`. Candidates never select or persist a folder. Consequently, an unselected non-interactive run is blocked with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and has no approval digest. OMS does not invent `Templates` or `Inbox` defaults.
 
+Discovery isolates incompatible files instead of aborting the whole scan. Dry-run `diagnostics` identify `TEMPLATE_EXPRESSION_UNSUPPORTED`, `TEMPLATE_SOURCE_INVALID`, or `TEMPLATE_ID_DUPLICATE` with a path, field when applicable, blocking status, and remediation; only that file is excluded. If every selected candidate is incompatible, setup blocks with `TEMPLATE_CANDIDATE_INCOMPATIBLE`. Proposed template IDs strip `.template` or `.eta` before slugging.
+
+Obsidian core `{{date:FMT}}` and `{{time:FMT}}` expressions support `YYYY YY MM M DD D HH H hh h mm m ss s A a`, separated by `-`, `/`, `.`, `:`, space, or `T`. Bracket literals such as `[text]` are unsupported and appear in diagnostics. A `date` or `datetime` property containing a supported tag is compatible with that property type.
+
 Setup has no bundled note shapes and never modifies vault notes. `.oms/taxonomy.json` is the only taxonomy authority. Setup does not parse or convert legacy `taxonomy.yaml` or concept YAML files and leaves them untouched. An unsupported template-policy version fails closed at runtime; setup retains the old bytes as a compare-and-swap input, preserves writers and unknown extensions in its proposed v3 document, and names replaced legacy fields in `droppedKeys` for dry-run review.
+
+When the selected default template folder is empty, the dry run lists a starter `note.md` under `starterTemplates`; this is a proposal rather than a bundled runtime fallback. Only an approved apply writes it, using the same guarded setup transaction. Doctor likewise reports each changed source or authority separately as `TEMPLATE_SOURCE_DRIFT`, with `templateId` when registered, `path`, `expected`, `actual`, and regeneration remediation.
 
 ## Managed template mutation
 

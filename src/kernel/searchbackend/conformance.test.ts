@@ -385,7 +385,7 @@ describe("EngineSearchBackend collection envelope", () => {
           receipt: {
             usedChannels: [path === "first" ? "lex" as const : "vec" as const],
             approximated: path !== "first",
-            drift: path === "first",
+            indexDrift: path === "first",
           },
         };
       }),
@@ -411,7 +411,7 @@ describe("EngineSearchBackend collection envelope", () => {
       receipt: {
         usedChannels: ["lex", "vec"],
         approximated: true,
-        drift: true,
+        indexDrift: true,
       },
     });
     if (result.available) expect(result.hits).toHaveLength(1);
@@ -435,7 +435,7 @@ describe("EngineSearchBackend collection envelope", () => {
         totalCount: 1,
         facets: [],
         cursor: null,
-        receipt: { usedChannels: ["lex" as const], approximated: false, drift: false },
+        receipt: { usedChannels: ["lex" as const], approximated: false, indexDrift: false },
       })),
     } as unknown as McpEngineAdapter;
     const backend = new EngineSearchBackend(adapter, "/vault");

@@ -135,6 +135,39 @@ describe("template-first setup", () => {
     expect(existsSync(path.join(root, ".oms", "template-policy.json"))).toBe(false);
   });
 
+  it("dry-runs a mixed folder with per-file diagnostics and only compatible candidates", async () => {
+    const root = await fresh(); await authority(root); await template(root);
+    await writeFile(path.join(root, "Templates", "mail.template.md"), "---\nsubject: <% tp.file.title %>\n---\nbody\n");
+    await writeFile(path.join(root, "Templates", "zt-cite.eta.md"), "<%= it.title %>\n");
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      expect(await runSetup({ vault: root, yes: true, dryRun: true, templateFolders: ["Templates"] })).toBe("completed");
+      const shown = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(shown.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "TEMPLATE_EXPRESSION_UNSUPPORTED", path: "Templates/mail.template.md", field: "subject" }),
+        expect.objectContaining({ code: "TEMPLATE_SOURCE_INVALID", path: "Templates/zt-cite.eta.md" }),
+      ]));
+      expect(shown.receipt.operations.map((item: { templateId: string }) => item.templateId)).toEqual(["note"]);
+      expect(shown.starterTemplates).toEqual([]);
+      expect(process.exitCode ?? 0).toBe(0);
+    } finally { log.mockRestore(); }
+  });
+
+  it("creates an approved starter template for an empty default folder", async () => {
+    const root = await fresh(); await authority(root);
+    await mkdir(path.join(root, "Templates"), { recursive: true });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      expect(await runSetup({ vault: root, yes: true, dryRun: true, templateFolders: ["Templates"] })).toBe("completed");
+      const shown = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(shown.starterTemplates).toEqual(["Templates/note.md"]);
+      expect(existsSync(path.join(root, "Templates", "note.md"))).toBe(false);
+      await runSetup({ vault: root, yes: true, templateFolders: ["Templates"], approvedDigest: shown.approvalDigest });
+      expect(await readFile(path.join(root, "Templates", "note.md"), "utf8")).toBe("---\ntemplate: note\n---\n<!-- oms:content -->\n");
+      await expect(readFile(path.join(root, ".oms", "template-policy.json"), "utf8")).resolves.toContain('"sourcePath": "Templates/note.md"');
+    } finally { log.mockRestore(); }
+  });
+
   it("shows the full replacement policy and its observed preimage without publishing", async () => {
     const root = await fresh(); await authority(root); await template(root);
     const original = JSON.stringify({ version: 1, templateFolder: "Old", writers: { field: "author", identifiers: ["human"] }, personal: { keep: true } });

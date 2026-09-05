@@ -1,26 +1,16 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isMap, isScalar, parseDocument } from "yaml";
+import { parseObsidianTimeFormat, TemplateExpressionError } from "./obsidian-core-time.js";
 import { normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
 import type { Digest, JsonValue, TemplateSourcePath } from "./types.js";
 
 export type TemplateExpression =
   | { readonly kind: "title" }
-  | { readonly kind: "date" }
-  | { readonly kind: "time" };
+  | { readonly kind: "date"; readonly format?: string }
+  | { readonly kind: "time"; readonly format?: string };
 
-export class TemplateExpressionError extends Error {
-  readonly code = "TEMPLATE_EXPRESSION_UNSUPPORTED";
-
-  constructor(
-    readonly sourcePath: string,
-    readonly location: string,
-    readonly rawToken: string,
-  ) {
-    super(`TEMPLATE_EXPRESSION_UNSUPPORTED: ${sourcePath}:${location}: ${rawToken}`);
-    this.name = "TemplateExpressionError";
-  }
-}
+export { TemplateExpressionError } from "./obsidian-core-time.js";
 
 export interface ExtractedTemplate {
   readonly sourcePath: TemplateSourcePath;
@@ -60,10 +50,21 @@ function value(input: unknown, path: string, field: string): JsonValue {
 }
 
 function expression(input: string, path: string, field: string): TemplateExpression | undefined {
+  const templater = /<%[\s\S]*?%>/.exec(input)?.[0] ?? /<%/.exec(input)?.[0];
+  if (templater !== undefined) return fail(path, field, templater);
   if (!input.includes("{{")) return undefined;
   const supported = EXPRESSION[input];
   if (supported !== undefined) return supported;
   const token = /{{[\s\S]*?}}/.exec(input)?.[0] ?? input;
+  const formatted = /^{{(date|time):(.+)}}$/.exec(input);
+  if (formatted !== null) {
+    try {
+      parseObsidianTimeFormat(formatted[2]!);
+    } catch {
+      return fail(path, field, token);
+    }
+    return { kind: formatted[1] as "date" | "time", format: formatted[2]! };
+  }
   return fail(path, field, token);
 }
 
@@ -138,7 +139,9 @@ export function parseTemplate(sourcePath: string, bytes: Uint8Array): ExtractedT
   const markers = body.match(/(?:^|\r?\n)<!-- oms:content -->(?=\r?\n|$)/g) ?? [];
   if (markers.length > 1) throw new Error(`TEMPLATE_SOURCE_INVALID: ${normalized} contains multiple oms content markers`);
   const matches = body.match(/{{[\s\S]*?}}/g) ?? [];
-  for (const token of matches) if (EXPRESSION[token] === undefined) fail(normalized, "body", token);
+  for (const token of matches) expression(token, normalized, "body");
+  const templater = /<%[\s\S]*?%>/.exec(body)?.[0] ?? /<%/.exec(body)?.[0];
+  if (templater !== undefined) fail(normalized, "body", templater);
   return { sourcePath: normalized, sourceDigest: digest(bytes), bom, eol, finalNewline, keyOrder, frontmatter, expressions, body, contentMarker: markers.length === 1 };
 }
 

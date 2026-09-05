@@ -156,7 +156,7 @@ export interface McpSemanticFacet {
 export interface McpSemanticReceipt {
   readonly usedChannels: readonly McpSemanticTypedSearchType[];
   readonly approximated: boolean;
-  readonly drift: boolean;
+  readonly indexDrift: boolean;
   /** Plain lexical, caller-authored typed channels, or model-generated expansion. */
   readonly requestedStrategy: "plain" | "explicit" | "expand";
   /** Validated model output; empty for plain and caller-authored typed requests. */

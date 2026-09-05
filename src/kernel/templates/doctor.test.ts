@@ -30,6 +30,54 @@ async function vault(): Promise<string> {
   return root;
 }
 async function note(root: string, content = "---\nconcept: note\ncustom: keep\n---\nbody\r\n"): Promise<void> { await writeFile(path.join(root, "notes", "one.md"), content, "utf8"); }
+async function addSecondTemplate(root: string): Promise<void> {
+  const policyPath = path.join(root, ".oms", "template-policy.json");
+  const taxonomyPath = path.join(root, ".oms", "taxonomy.json");
+  const projectionPath = path.join(root, ".oms", "types.json");
+  const reference = "---\ntitle: reference\n---\nreference body\n";
+  await writeFile(path.join(root, "Templates", "reference.md"), reference);
+  const policy = JSON.parse(await readFile(policyPath, "utf8")) as {
+    templates: Record<string, unknown>;
+    contracts: Record<string, unknown>;
+  };
+  policy.contracts.reference = { intent: "reference", fields: {}, views: [] };
+  policy.templates.reference = {
+    templateId: "reference",
+    destinationClass: "managed-default",
+    sourceFolder: "Templates",
+    sourcePath: "Templates/reference.md",
+    contract: "reference",
+    naming: "{{slug}}.md",
+  };
+  const policyText = `${JSON.stringify(policy)}\n`;
+  await writeFile(policyPath, policyText);
+  const taxonomy = JSON.parse(await readFile(taxonomyPath, "utf8")) as { templates?: Record<string, unknown> };
+  taxonomy.templates = { ...(taxonomy.templates ?? {}), reference: { templateFolder: "references" } };
+  const taxonomyText = JSON.stringify(taxonomy);
+  await writeFile(taxonomyPath, taxonomyText);
+  const obsidian = await readFile(path.join(root, ".obsidian", "types.json"), "utf8");
+  const noteSource = await readFile(path.join(root, "Templates", "note.md"), "utf8");
+  const descriptors = [
+    { logicalId: "template-policy", signature: sha(policyText) },
+    { logicalId: "taxonomy", signature: sha(taxonomyText) },
+    { logicalId: "obsidian-types", signature: sha(obsidian) },
+    { path: "Templates/note.md", signature: sha(noteSource) },
+    { path: "Templates/reference.md", signature: sha(reference) },
+  ];
+  const projection = {
+    version: "oms.types.v1",
+    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors },
+    managed: {
+      base: { fields: {} },
+      globalAxes: {},
+      templates: {
+        note: { templateId: "note", destinationClass: "registered-existing", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") },
+        reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/reference.md", targetFolder: "references", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("reference body\n") },
+      },
+    },
+  };
+  await writeFile(projectionPath, `${JSON.stringify(projection, null, 2)}\n`);
+}
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
 describe("template doctor", () => {
@@ -37,6 +85,7 @@ describe("template doctor", () => {
     const root = await vault();
     const before = await readFile(path.join(root, ".oms", "types.json"), "utf8");
     expect((await diagnoseTemplates({ vault: root, source: "cwd" })).status).toBe("healthy");
+    expect((await diagnoseTemplates({ vault: root, source: "cwd" })).diagnostics.filter(item => item.code === "TEMPLATE_SOURCE_DRIFT")).toEqual([]);
     expect(await readFile(path.join(root, ".oms", "types.json"), "utf8")).toBe(before);
   });
 
@@ -74,7 +123,64 @@ describe("template doctor", () => {
   it("reports projection drift", async () => {
     const root = await vault();
     await writeFile(path.join(root, "Templates", "note.md"), "---\ntitle: changed\n---\nbody\n", "utf8");
-    expect((await diagnoseTemplates({ vault: root, source: "explicit" })).diagnostics.some(item => item.code === "TEMPLATE_SOURCE_DRIFT")).toBe(true);
+    expect((await diagnoseTemplates({ vault: root, source: "explicit" })).diagnostics).toContainEqual({
+      code: "TEMPLATE_SOURCE_DRIFT",
+      templateId: "note",
+      path: "Templates/note.md",
+      expected: sha("---\ntitle: template\n---\nbody\n"),
+      actual: sha("---\ntitle: changed\n---\nbody\n"),
+      remediation: "run regenerate-types with the returned approval digest",
+    });
+  });
+  it("reports each changed registered source with its projection and actual signatures", async () => {
+    const root = await vault();
+    await addSecondTemplate(root);
+    const changedNote = "---\ntitle: changed note\n---\nbody\n";
+    const changedReference = "---\ntitle: changed reference\n---\nreference body\n";
+    await Promise.all([
+      writeFile(path.join(root, "Templates", "note.md"), changedNote),
+      writeFile(path.join(root, "Templates", "reference.md"), changedReference),
+    ]);
+
+    const drift = (await diagnoseTemplates({ vault: root, source: "explicit" })).diagnostics
+      .filter(item => item.code === "TEMPLATE_SOURCE_DRIFT");
+    expect(drift).toEqual([
+      {
+        code: "TEMPLATE_SOURCE_DRIFT",
+        templateId: "note",
+        path: "Templates/note.md",
+        expected: sha("---\ntitle: template\n---\nbody\n"),
+        actual: sha(changedNote),
+        remediation: "run regenerate-types with the returned approval digest",
+      },
+      {
+        code: "TEMPLATE_SOURCE_DRIFT",
+        templateId: "reference",
+        path: "Templates/reference.md",
+        expected: sha("---\ntitle: reference\n---\nreference body\n"),
+        actual: sha(changedReference),
+        remediation: "run regenerate-types with the returned approval digest",
+      },
+    ]);
+  });
+  it("reports changed policy authority at its vault-relative control path", async () => {
+    const root = await vault();
+    const policyPath = path.join(root, ".oms", "template-policy.json");
+    const original = await readFile(policyPath, "utf8");
+    const policy = JSON.parse(original) as Record<string, unknown>;
+    policy.extensions = { retained: true };
+    const changed = `${JSON.stringify(policy)}\n`;
+    await writeFile(policyPath, changed);
+
+    const drift = (await diagnoseTemplates({ vault: root, source: "explicit" })).diagnostics
+      .filter(item => item.code === "TEMPLATE_SOURCE_DRIFT");
+    expect(drift).toEqual([{
+      code: "TEMPLATE_SOURCE_DRIFT",
+      path: ".oms/template-policy.json",
+      expected: sha(original),
+      actual: sha(changed),
+      remediation: "run regenerate-types with the returned approval digest",
+    }]);
   });
   it("regenerates a drifted projection from dry-run to approved apply", async () => {
     const root = await vault();

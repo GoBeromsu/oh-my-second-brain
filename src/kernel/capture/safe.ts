@@ -6,6 +6,7 @@ import { evaluateResolvedTemplateContract, type TemplateContractViolation } from
 import { rejection, type WriteRejection, type WriteTargetSource } from "../conventions/write-protocol.js";
 import { resolveDefaults } from "../templates/defaults.js";
 import { renderNoteName } from "../templates/naming.js";
+import { formatObsidianTime } from "../templates/obsidian-core-time.js";
 import { normalizeTemplateSourcePath, verifyVaultPath } from "../templates/paths.js";
 import type { JsonValue, PreparedWrite, ResolvedConvention, ResolvedTemplate } from "../templates/types.js";
 
@@ -69,8 +70,20 @@ function renderExpressions(
   if (typeof value === "string") {
     return value.replace(/{{[\s\S]*?}}/g, (rawToken) => {
       if (rawToken === "{{title}}") return title;
-      if (rawToken === "{{date}}") return resolvedAt.slice(0, 10);
-      if (rawToken === "{{time}}") return resolvedAt.slice(11, 16);
+      const formatted = /^{{(date|time)(?::(.+))?}}$/.exec(rawToken);
+      if (formatted !== null) {
+        const kind = formatted[1] as "date" | "time";
+        const format = formatted[2] ?? "";
+        // resolvedAt is canonical ISO. UTC getters preserve the existing Z-instant
+        // default bytes while still routing all Core Templates tags through one formatter.
+        const instant = new Date(resolvedAt);
+        const utcWallClock = new Date(
+          instant.getUTCFullYear(), instant.getUTCMonth(), instant.getUTCDate(),
+          instant.getUTCHours(), instant.getUTCMinutes(), instant.getUTCSeconds(),
+        );
+        try { return formatObsidianTime(format, utcWallClock, kind); }
+        catch { return expressionError(template, location, rawToken); }
+      }
       return expressionError(template, location, rawToken);
     });
   }

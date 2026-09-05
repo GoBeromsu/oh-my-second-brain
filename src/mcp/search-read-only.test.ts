@@ -315,7 +315,7 @@ describe("search read-only guarantee", () => {
     expect(payload["receipt"]).toEqual(expect.objectContaining({
       usedChannels: expect.any(Array),
       approximated: expect.any(Boolean),
-      drift: expect.any(Boolean),
+      indexDrift: expect.any(Boolean),
     }));
     const hits = (payload["hits"] as { path?: string }[] | undefined) ?? [];
     expect(hits.length).toBeGreaterThan(0);

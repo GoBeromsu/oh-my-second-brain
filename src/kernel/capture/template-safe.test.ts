@@ -248,6 +248,51 @@ describe("template-first verified write modes", () => {
     expect(result.prepared?.resolvedAt).toBe("2026-08-30T10:11:12.000Z");
   });
 
+  it("renders formatted date and time tags identically for dry-run and persistence", async () => {
+    const root = await vault();
+    const current = convention();
+    const formattedConvention: ResolvedConvention = {
+      ...current,
+      templates: {
+        note: {
+          ...current.templates.note!,
+          keyOrder: [...current.templates.note!.keyOrder, "formatted"],
+          fields: { ...current.templates.note!.fields, formatted: { type: "text" } },
+          frontmatterTemplate: { template: "note", status: "OPEN", formatted: "{{date:YYYY/MM/DD}}" },
+          body: "At {{time:HH:mm:ss}}\n<!-- oms:content -->\n",
+        },
+      },
+    };
+    const input = { ...createInput(root), convention: formattedConvention, resolvedAt: "2026-08-30T19:11:12+09:00" };
+    const dryRun = await writeResolvedTemplateNote({ ...input, dryRun: true });
+    const persisted = await writeResolvedTemplateNote({ ...input, dryRun: false });
+    expect(dryRun.frontmatter.formatted).toBe("2026/08/30");
+    expect(dryRun.body).toBe("At 10:11:12\nbody text\n");
+    expect(persisted.prepared).toEqual(dryRun.prepared);
+    expect(await readFile(join(root, persisted.notePath), "utf8")).toContain("formatted: 2026/08/30");
+  });
+
+  it("fails loudly for an unsupported formatted token during rendering", async () => {
+    const root = await vault();
+    const current = convention();
+    const invalidConvention: ResolvedConvention = {
+      ...current,
+      templates: {
+        note: {
+          ...current.templates.note!,
+          body: "{{date:YYYY[year]}}\n<!-- oms:content -->\n",
+        },
+      },
+    };
+    await expect(writeResolvedTemplateNote({ ...createInput(root), convention: invalidConvention, dryRun: true }))
+      .rejects.toMatchObject({
+        code: "TEMPLATE_EXPRESSION_UNSUPPORTED",
+        sourcePath: "Templates/OMS/note.md",
+        location: "body",
+        rawToken: "{{date:YYYY[year]}}",
+      });
+  });
+
   it("requires a non-empty title when the template renders title", async () => {
     const root = await vault();
     const current = convention();

@@ -11,10 +11,10 @@ import { deriveTemplateSourcePath, normalizeTemplateSourcePath, verifyTemplateSo
 import { parseDerivedProjection, parseTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest, loadResolvedTemplates } from "./resolver.js";
 import { executeTemplateTransaction, templateMigrationAdmission, templateMigrationMarkerState } from "./transaction.js";
-import type { Digest, FileExpectation, GuardedTemplateRequest, InputV2, TemplateCompositionManifest, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
+import type { DerivedProjection, Digest, FileExpectation, GuardedTemplateRequest, InputV2, TemplateCompositionManifest, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
 
 export interface TemplateDoctorTarget { readonly vault: string; readonly source: WriteTargetSource; readonly maxPerTemplate?: number; }
-export interface TemplateDoctorDiagnostic { readonly code: string; readonly path?: string; readonly templateId?: TemplateId; readonly remediation: string; }
+export interface TemplateDoctorDiagnostic { readonly code: string; readonly path?: string; readonly templateId?: TemplateId; readonly expected?: Digest; readonly actual?: Digest; readonly remediation: string; }
 export interface TemplateDoctorDiagnosis { readonly status: "healthy" | "needs-repair"; readonly diagnostics: readonly TemplateDoctorDiagnostic[]; readonly managedSourceExclusions: readonly string[]; readonly unresolvedLegacyNotes: readonly string[]; readonly migrationMarker: "absent" | "in-progress" | "complete" | "invalid"; }
 export interface RegenerateTypesRequest { readonly target: TemplateDoctorTarget; readonly request: GuardedTemplateRequest; }
 export interface BackfillDefaultsRequest { readonly target: TemplateDoctorTarget; readonly notePath: string; readonly request: GuardedTemplateRequest; }
@@ -60,6 +60,39 @@ async function invalidNotes(vault: string): Promise<readonly string[]> {
   return invalid.sort();
 }
 
+const LOGICAL_SOURCE_PATHS: Readonly<Record<string, string>> = {
+  "template-policy": ".oms/template-policy.json",
+  taxonomy: ".oms/taxonomy.json",
+  "obsidian-types": ".obsidian/types.json",
+};
+
+async function projectionDriftDiagnostics(
+  vault: string,
+  projection: DerivedProjection,
+  policy: TemplatePolicy,
+): Promise<readonly TemplateDoctorDiagnostic[]> {
+  const templateIds = new Map<string, TemplateId>(
+    Object.values(policy.templates).map(binding => [binding.sourcePath, binding.templateId]),
+  );
+  const diagnostics: TemplateDoctorDiagnostic[] = [];
+  for (const source of projection.generatedFrom.sources) {
+    const path = source.path ?? (source.logicalId === undefined ? undefined : LOGICAL_SOURCE_PATHS[source.logicalId] ?? source.logicalId);
+    if (path === undefined) continue;
+    const current = await state(vault, path);
+    if (current.state !== "present" || current.signature === source.signature) continue;
+    const templateId = source.path === undefined ? undefined : templateIds.get(source.path);
+    diagnostics.push({
+      code: "TEMPLATE_SOURCE_DRIFT",
+      path,
+      ...(templateId === undefined ? {} : { templateId }),
+      expected: source.signature,
+      actual: current.signature,
+      remediation: "run regenerate-types with the returned approval digest",
+    });
+  }
+  return diagnostics;
+}
+
 /** Read-only health report for template authorities, projection, legacy notes, and transaction state. */
 export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<TemplateDoctorDiagnosis> {
   const root = resolve(target.vault);
@@ -81,13 +114,21 @@ export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<T
   }
   const diagnostics: TemplateDoctorDiagnostic[] = [];
   let policy: TemplatePolicy | null = null;
+  let projection: DerivedProjection | null = null;
   try { policy = parseTemplatePolicy(await readFile(join(root, ".oms/template-policy.json"), "utf8")); }
   catch (error: unknown) { diagnostics.push({ code: code(error), path: ".oms/template-policy.json", remediation: "restore a valid template policy before repairing the projection" }); }
-  try { parseDerivedProjection(await readFile(join(root, ".oms/types.json"), "utf8")); }
+  try { projection = parseDerivedProjection(await readFile(join(root, ".oms/types.json"), "utf8")); }
   catch (error: unknown) { diagnostics.push({ code: code(error), path: ".oms/types.json", remediation: "run regenerate-types with the returned approval digest" }); }
   if (policy !== null) {
+    const drift = projection === null ? [] : await projectionDriftDiagnostics(root, projection, policy);
+    diagnostics.push(...drift);
     try { await loadResolvedTemplates(root); }
-    catch (error: unknown) { diagnostics.push({ code: code(error), remediation: "run regenerate-types after correcting the named authority or template source" }); }
+    catch (error: unknown) {
+      const errorCode = code(error);
+      if (errorCode !== "TEMPLATE_SOURCE_DRIFT") {
+        diagnostics.push({ code: errorCode, remediation: "run regenerate-types after correcting the named authority or template source" });
+      }
+    }
   }
   for (const path of await invalidNotes(root)) diagnostics.push({ code: "MIGRATION_NOTE_INVALID", path, remediation: "repair the note frontmatter before migration" });
   const unique = new Map<string, TemplateDoctorDiagnostic>();

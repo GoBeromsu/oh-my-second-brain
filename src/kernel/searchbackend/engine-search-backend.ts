@@ -97,7 +97,7 @@ export class EngineSearchBackend implements SearchBackend {
         totalCount: unavailable.totalCount ?? 0,
         facets: unavailable.facets ?? [],
         cursor: unavailable.cursor ?? null,
-        receipt: unavailable.receipt ?? { usedChannels: [], approximated: false, drift: false },
+        receipt: unavailable.receipt ?? { usedChannels: [], approximated: false, indexDrift: false },
         ...(normalized.intent === undefined && unavailable.intent === undefined
           ? {}
           : { intent: normalized.intent ?? unavailable.intent }),
@@ -178,7 +178,7 @@ function mergeReceipts(results: readonly McpSemanticQueryResult[]): McpSemanticR
   const intents = new Map<string, McpSemanticReceipt["taxonomyIntents"][number]>();
   const warnings = new Set<string>();
   let approximated = false;
-  let drift = false;
+  let indexDrift = false;
   let rerankApplied = false;
   let requestedStrategy: McpSemanticReceipt["requestedStrategy"] = "plain";
   for (const result of results) {
@@ -191,7 +191,7 @@ function mergeReceipts(results: readonly McpSemanticQueryResult[]): McpSemanticR
     }
     for (const warning of result.receipt?.warnings ?? []) warnings.add(warning);
     approximated ||= result.receipt?.approximated ?? false;
-    drift ||= result.receipt?.drift ?? false;
+    indexDrift ||= result.receipt?.indexDrift ?? false;
     rerankApplied ||= result.receipt?.rerankApplied ?? false;
     const strategy = result.receipt?.requestedStrategy ?? "plain";
     if (strategy === "expand" || (strategy === "explicit" && requestedStrategy === "plain")) {
@@ -201,7 +201,7 @@ function mergeReceipts(results: readonly McpSemanticQueryResult[]): McpSemanticR
   return {
     usedChannels: [...used],
     approximated,
-    drift,
+    indexDrift,
     requestedStrategy,
     generatedSearches: [...generated.values()],
     rerankApplied,

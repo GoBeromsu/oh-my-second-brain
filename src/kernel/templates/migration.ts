@@ -5,7 +5,8 @@ import { parseNote } from "../conventions/frontmatter.js";
 import { excludedNoteMatcher } from "../conventions/note-exclude.js";
 import { loadObsidianTypes } from "../contracts/index.js";
 import { approvalDigest, canonicalJson, inputDigest, outputDigest } from "./canonical.js";
-import { parseTemplate } from "./extract.js";
+import { composeTemplateAdd, starterTemplateBytes } from "./compose-add.js";
+import { parseTemplate, TemplateExpressionError } from "./extract.js";
 import { parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { composeResolvedTemplateFields, sourceSignature, taxonomyRouting } from "./resolver.js";
 import { isTemplateSourceInFolder, normalizeTemplateSourcePath, validateTemplateId, verifyTemplateControlPath, normalizeTemplateControlPath, verifyTemplateFolderPath, verifyTemplateSourcePath } from "./paths.js";
@@ -14,10 +15,11 @@ import type { AuthorityEntry, BaseContract, DerivedProjection, Digest, Extension
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-export type MigrationDiagnosticCode = "MIGRATION_UNRESOLVED_MAPPING" | "TEMPLATE_ID_DUPLICATE" | "TEMPLATE_SOURCE_DUPLICATE" | "MIGRATION_TEMPLATE_UNSAFE" | "MIGRATION_TEMPLATE_INVALID" | "MIGRATION_NOTE_INVALID" | "MIGRATION_NOTE_IDENTITY_UNRESOLVED" | "MIGRATION_TAXONOMY_INVALID" | "TEMPLATE_FOLDER_SELECTION_REQUIRED" | "TEMPLATE_PLACEMENT_UNDECLARED" | "TEMPLATE_POLICY_VERSION_UNSUPPORTED";
-export interface MigrationDiagnostic { readonly code: MigrationDiagnosticCode; readonly message: string; readonly path?: string; readonly templateId?: TemplateId; }
+export type MigrationDiagnosticCode = "MIGRATION_UNRESOLVED_MAPPING" | "TEMPLATE_ID_DUPLICATE" | "TEMPLATE_SOURCE_DUPLICATE" | "MIGRATION_TEMPLATE_UNSAFE" | "MIGRATION_TEMPLATE_INVALID" | "MIGRATION_NOTE_INVALID" | "MIGRATION_NOTE_IDENTITY_UNRESOLVED" | "MIGRATION_TAXONOMY_INVALID" | "TEMPLATE_FOLDER_SELECTION_REQUIRED" | "TEMPLATE_PLACEMENT_UNDECLARED" | "TEMPLATE_POLICY_VERSION_UNSUPPORTED" | "TEMPLATE_EXPRESSION_UNSUPPORTED" | "TEMPLATE_SOURCE_INVALID" | "TEMPLATE_CANDIDATE_INCOMPATIBLE";
+/** `blocking` diagnostics stop approval; per-file diagnostics only exclude that file. */
+export interface MigrationDiagnostic { readonly code: MigrationDiagnosticCode; readonly message: string; readonly path?: string; readonly templateId?: TemplateId; readonly field?: string; readonly remediation?: string; readonly blocking: boolean; }
 export interface RegisteredTemplate { readonly templateId: string; readonly sourcePath: string; }
-export interface TemplateCandidate { readonly templateId: TemplateId; readonly sourceFolder: TemplateFolderPath; readonly sourcePath: TemplateSourcePath; readonly bytes: Uint8Array; readonly destinationClass: TemplateBinding["destinationClass"]; }
+export interface TemplateCandidate { readonly templateId: TemplateId; readonly sourceFolder: TemplateFolderPath; readonly sourcePath: TemplateSourcePath; readonly bytes: Uint8Array; readonly destinationClass: TemplateBinding["destinationClass"]; readonly publication: "verify-existing" | "write"; }
 export interface ExistingNoteIdentity { readonly path: string; readonly templateId: string | null; }
 export interface MigrationProposal {
   readonly templateFolders: readonly TemplateFolderRegistration[];
@@ -40,7 +42,19 @@ export interface MigrationOptions {
 }
 export interface MigrationCompositionInput { readonly base: BaseContract; }
 function sha(bytes: Uint8Array): Digest { return `sha256:${createHash("sha256").update(bytes).digest("hex")}`; }
-function issue(code: MigrationDiagnosticCode, message: string, path?: string, templateId?: TemplateId): MigrationDiagnostic { return { code, message, ...(path === undefined ? {} : { path }), ...(templateId === undefined ? {} : { templateId }) }; }
+function issue(code: MigrationDiagnosticCode, message: string, path?: string, templateId?: TemplateId): MigrationDiagnostic { return { code, message, ...(path === undefined ? {} : { path }), ...(templateId === undefined ? {} : { templateId }), blocking: true }; }
+function fileIssue(code: MigrationDiagnosticCode, message: string, path: string, remediation: string, extra: { readonly templateId?: TemplateId; readonly field?: string } = {}): MigrationDiagnostic { return { code, message, path, ...extra, remediation, blocking: false }; }
+/** `Daily Note.template.md` → `daily-note`; `zt-cite.eta.md` → `zt-cite`. */
+export function proposedTemplateId(pathname: string): TemplateId | null {
+  const slug = basename(pathname, ".md").replace(/\.(template|eta)$/i, "").normalize("NFC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  try { return validateTemplateId(slug); } catch { return null; }
+}
+function incompatibility(error: unknown, pathname: string): MigrationDiagnostic {
+  if (error instanceof TemplateExpressionError) return fileIssue("TEMPLATE_EXPRESSION_UNSUPPORTED", error.message, pathname, "Use Obsidian core tags ({{title}}, {{date}}, {{time}}, {{date:FMT}}, {{time:FMT}}) or propose a converted copy through the host agent", { field: error.location });
+  const text = message(error);
+  const code: MigrationDiagnosticCode = text.startsWith("TEMPLATE_SOURCE_INVALID") ? "TEMPLATE_SOURCE_INVALID" : "TEMPLATE_CANDIDATE_INCOMPATIBLE";
+  return fileIssue(code, text, pathname, "Give the file YAML frontmatter that parses as a mapping, or leave it unregistered");
+}
 function isMissing(error: unknown): boolean { return error instanceof Error && "code" in error && error.code === "ENOENT"; }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function bytes(value: string): Uint8Array { return encoder.encode(value); }
@@ -82,9 +96,9 @@ async function readCandidate(root: string, pathname: string, templateId: string,
   const sourceFolder = [...folders].sort((a, b) => b.path.length - a.path.length).find(folder => isTemplateSourceInFolder(sourcePath, folder.path))?.path;
   if (sourceFolder === undefined) throw new Error("Template source is outside the selected registered folders");
   const verified = await verifyTemplateSourcePath(root, sourcePath);
-  return { templateId: validateTemplateId(templateId), sourceFolder, sourcePath, bytes: new Uint8Array(await readFile(verified.absolutePath)), destinationClass };
+  return { templateId: validateTemplateId(templateId), sourceFolder, sourcePath, bytes: new Uint8Array(await readFile(verified.absolutePath)), destinationClass, publication: "verify-existing" };
 }
-async function discover(root: string, folders: readonly TemplateFolderRegistration[], diagnostics: MigrationDiagnostic[]): Promise<TemplateCandidate[]> {
+async function discover(root: string, folders: readonly TemplateFolderRegistration[], diagnostics: MigrationDiagnostic[], scannedMarkdown: Set<string>): Promise<TemplateCandidate[]> {
   const candidates: TemplateCandidate[] = [];
   const visited = new Set<string>();
   const visit = async (directory: string): Promise<void> => {
@@ -97,11 +111,14 @@ async function discover(root: string, folders: readonly TemplateFolderRegistrati
       const absolute = join(directory, entry.name);
       const pathname = relative(root, absolute).replaceAll("\\", "/");
       if (entry.name.startsWith(".")) continue;
-      if (entry.isSymbolicLink()) { diagnostics.push(issue("MIGRATION_TEMPLATE_UNSAFE", "Symlink template candidate is rejected", pathname)); continue; }
+      if (entry.isSymbolicLink()) { diagnostics.push(fileIssue("MIGRATION_TEMPLATE_UNSAFE", "Symlink template candidate is skipped", pathname, "Replace the symlink with a regular file to register it")); continue; }
       if (entry.isDirectory()) { await visit(absolute); continue; }
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      try { candidates.push(await readCandidate(root, pathname, basename(pathname, ".md").normalize("NFC").toLowerCase(), folders)); }
-      catch (error: unknown) { diagnostics.push(issue("MIGRATION_TEMPLATE_INVALID", message(error), pathname)); }
+      scannedMarkdown.add(pathname);
+      const templateId = proposedTemplateId(pathname);
+      if (templateId === null) { diagnostics.push(fileIssue("MIGRATION_UNRESOLVED_MAPPING", "File name yields no stable template ID", pathname, "Register it with an explicit templateId")); continue; }
+      try { candidates.push(await readCandidate(root, pathname, templateId, folders)); }
+      catch (error: unknown) { diagnostics.push(fileIssue("MIGRATION_TEMPLATE_INVALID", message(error), pathname, "Correct the path or leave the file unregistered")); }
     }
   };
   for (const folder of folders) {
@@ -149,7 +166,8 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
   const folders = options.templateFolders === undefined ? currentPolicy?.templateFolders ?? [] : parseTemplatePolicy(JSON.stringify({ version: 3, templateFolders: options.templateFolders, base: { fields: {} }, contracts: {}, templates: {} })).templateFolders;
   const diagnostics: MigrationDiagnostic[] = [];
   if (folders.length === 0) diagnostics.push(issue("TEMPLATE_FOLDER_SELECTION_REQUIRED", "Select template folders explicitly; configuration hints are proposals, not selections"));
-  const candidates = await discover(root, folders, diagnostics);
+  const scannedMarkdown = new Set<string>();
+  const candidates = await discover(root, folders, diagnostics, scannedMarkdown);
   const explicitlyRegistered = new Set<string>();
   const registeredPaths = new Set<string>();
   for (const registration of options.registeredTemplates ?? []) {
@@ -178,19 +196,41 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
     } catch (error: unknown) { diagnostics.push(issue("MIGRATION_UNRESOLVED_MAPPING", message(error), binding.sourcePath, binding.templateId)); }
   }
   candidates.sort((a, b) => a.templateId.localeCompare(b.templateId) || a.sourcePath.localeCompare(b.sourcePath));
-  const ids = new Set<string>();
-  const paths = new Set<string>();
-  for (const candidate of candidates) {
-    if (ids.has(candidate.templateId)) diagnostics.push(issue("TEMPLATE_ID_DUPLICATE", "Stable templateId is duplicated", candidate.sourcePath, candidate.templateId));
-    if (paths.has(candidate.sourcePath)) diagnostics.push(issue("TEMPLATE_SOURCE_DUPLICATE", "Template sourcePath is duplicated", candidate.sourcePath, candidate.templateId));
-    ids.add(candidate.templateId); paths.add(candidate.sourcePath);
+  const pinned = new Set([...explicitlyRegistered, ...Object.keys(currentPolicy?.templates ?? {})]);
+  for (const candidate of [...candidates]) {
+    if (pinned.has(candidate.templateId)) continue;
+    try { parseTemplate(candidate.sourcePath, candidate.bytes); }
+    catch (error: unknown) { diagnostics.push(incompatibility(error, candidate.sourcePath)); candidates.splice(candidates.indexOf(candidate), 1); }
   }
+  const byId = new Map<string, TemplateCandidate[]>();
+  for (const candidate of candidates) byId.set(candidate.templateId, [...(byId.get(candidate.templateId) ?? []), candidate]);
+  for (const [templateId, group] of byId) {
+    if (group.length < 2) continue;
+    for (const candidate of group) {
+      if (pinned.has(templateId) && (currentPolicy?.templates[templateId]?.sourcePath === candidate.sourcePath || (explicitlyRegistered.has(templateId) && registeredPaths.has(candidate.sourcePath)))) continue;
+      diagnostics.push(fileIssue("TEMPLATE_ID_DUPLICATE", `Another file also proposes templateId ${templateId}`, candidate.sourcePath, "Register this file with an explicit distinct templateId", { templateId: templateId as TemplateId }));
+      candidates.splice(candidates.indexOf(candidate), 1);
+    }
+  }
+  const defaultFolder = folders.find(folder => folder.default === true);
+  const defaultFolderEmpty = defaultFolder !== undefined && ![...scannedMarkdown].some(pathname => pathname.startsWith(`${defaultFolder.path}/`));
+  if (defaultFolder !== undefined && defaultFolderEmpty && candidates.length === 0 && currentPolicy === undefined && !diagnostics.some(item => item.blocking)) {
+    try {
+      const starter = composeTemplateAdd(folders, { templateId: "note", sourceFolder: defaultFolder.path, bytes: starterTemplateBytes("note"), contract: "base", naming: "{{date}}-{{slug}}.md" });
+      const collision = await fileState(root, starter.source.path);
+      if (collision.state === "present") diagnostics.push(issue("MIGRATION_TEMPLATE_INVALID", "Starter path exists but is not a compatible template", starter.source.path));
+      else candidates.push({ templateId: starter.binding.templateId, sourceFolder: starter.binding.sourceFolder, sourcePath: starter.source.path, bytes: starter.source.bytes, destinationClass: starter.binding.destinationClass, publication: "write" });
+    } catch (error: unknown) { diagnostics.push(issue("MIGRATION_TEMPLATE_INVALID", message(error), defaultFolder.path)); }
+  }
+  if (candidates.length === 0 && !diagnostics.some(item => item.blocking)) diagnostics.push(issue("TEMPLATE_CANDIDATE_INCOMPATIBLE", "No compatible template remains in the selected folders"));
+  const paths = new Set(candidates.map(candidate => candidate.sourcePath));
   const bindings = candidates.filter(candidate => currentPolicy?.templates[candidate.templateId] !== undefined || explicitlyRegistered.has(candidate.templateId) || folders.find(folder => folder.path === candidate.sourceFolder)?.mode === "auto").map((candidate): TemplateBinding => currentPolicy?.templates[candidate.templateId] ?? ({ templateId: candidate.templateId, sourceFolder: candidate.sourceFolder, sourcePath: candidate.sourcePath, destinationClass: candidate.destinationClass, contract: "base", naming: "{{date}}-{{slug}}.md" }));
   const managedSourcePaths = [...paths].sort() as TemplateSourcePath[];
   const existingNotes = await notes(root, new Set(managedSourcePaths), diagnostics);
   const droppedKeys = droppedPolicyKeys(policyState, currentPolicy);
-  const common = { templateFolders: folders, candidates, bindings, existingNotes, managedSourcePaths, policyState, ...(currentPolicy === undefined ? {} : { currentPolicy }), droppedKeys, diagnostics, unresolved: diagnostics };
-  if (diagnostics.length > 0) return common;
+  const unresolved = diagnostics.filter(item => item.blocking);
+  const common = { templateFolders: folders, candidates, bindings, existingNotes, managedSourcePaths, policyState, ...(currentPolicy === undefined ? {} : { currentPolicy }), droppedKeys, diagnostics, unresolved };
+  if (unresolved.length > 0) return common;
   const [taxonomy, obsidian] = await Promise.all([fileState(root, ".oms/taxonomy.json"), fileState(root, ".obsidian/types.json")]);
   const input = snapshotInput(folders, authorities([{ kind: "policy", logicalId: "template-policy", path: ".oms/template-policy.json", state: policyState }, { kind: "taxonomy", logicalId: "taxonomy", path: ".oms/taxonomy.json", state: taxonomy }, { kind: "obsidian-types", logicalId: "obsidian-types", path: ".obsidian/types.json", state: obsidian }], candidates), bindings);
   return { ...common, input, inputDigest: inputDigest(input) };
@@ -244,6 +284,10 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
   const projectionBytes = bytes(serializeDerivedProjection(derived));
   const sources: TemplateCompositionManifest["sources"] = await Promise.all(bindings.map(async binding => {
     const candidate = candidateById.get(binding.templateId)!;
+    if (candidate.publication === "write") {
+      await verifyTemplateSourcePath(root, binding.sourcePath, { expected: "absent" });
+      return { templateId: binding.templateId, path: binding.sourcePath, expectedCurrent: { state: "absent" as const }, current: { state: "absent" as const }, proposed: { state: "present" as const, bytes: candidate.bytes, signature: sha(candidate.bytes) }, action: "write" as const };
+    }
     const verified = await verifyTemplateSourcePath(root, binding.sourcePath);
     const content = new Uint8Array(await readFile(verified.absolutePath));
     if (!same(content, candidate.bytes)) throw new Error(`MIGRATION_APPROVAL_MISMATCH: ${binding.sourcePath}`);

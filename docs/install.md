@@ -87,6 +87,10 @@ oms setup --vault /path/to/vault --yes --approved-digest <digest>
 
 Obsidian core settings, Templater settings, and a bounded read-only vault walk provide suggestions only. An unselected non-interactive run stops with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and no approval digest; OMS does not fall back to invented `Templates` or `Inbox` directories. Setup never modifies notes and has no bundled defaults. `.obsidian/types.json` remains read-only; `.oms/template-policy.json` v3 holds semantics, naming, and source-folder registrations; `.oms/taxonomy.json` is the JSON placement authority; `.oms/types.json` is derived and must not be hand-edited. Legacy `taxonomy.yaml` and concept YAML files are neither parsed nor converted and remain untouched.
 
+The dry-run output includes `diagnostics` and `starterTemplates`. An incompatible template is excluded individually with its `TEMPLATE_EXPRESSION_UNSUPPORTED`, `TEMPLATE_SOURCE_INVALID`, or `TEMPLATE_ID_DUPLICATE` path, field when applicable, and remediation; compatible siblings remain in the proposal, while an all-incompatible selection stops with `TEMPLATE_CANDIDATE_INCOMPATIBLE`. Proposed IDs strip `.template` and `.eta` before slugging. Obsidian core `{{date:FMT}}` and `{{time:FMT}}` accept `YYYY YY MM M DD D HH H hh h mm m ss s A a` with `-`, `/`, `.`, `:`, space, or `T` separators; bracket literals are unsupported, and supported tags remain valid in `date` or `datetime` properties.
+
+If the selected default folder is empty, `starterTemplates` contains a proposed `note.md`. Dry-run does not create it; only an apply with the reviewed digest writes it through the guarded setup transaction. Doctor reports each changed template or authority as a separate `TEMPLATE_SOURCE_DRIFT` item with its path, expected and actual SHA-256 signatures, remediation, and template ID when registered.
+
 Choose model acquisition during setup with exactly one of these flags:
 
 - `--models-default`: acquire and verify the pinned local model.
