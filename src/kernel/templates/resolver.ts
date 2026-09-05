@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { loadObsidianTypes } from "../contracts/index.js";
 import { parseTemplate } from "./extract.js";
-import { approvalDigest, canonicalJson, inputDigest, outputDigest, templateInput } from "./canonical.js";
+import { approvalDigest, inputDigest, outputDigest, templateInput } from "./canonical.js";
 import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
 import { applyTemplatePolicyChange, parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { classifyTemplateRenderer } from "./renderer.js";
@@ -431,7 +432,7 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
     };
   }
   const expected = managed({ base: policy.base, globalAxes: taxonomy.globalAxes, templates: {} }, templates);
-  if (canonicalJson(expected) !== canonicalJson(projection.managed)) fail("PROJECTION_PAYLOAD_TAMPERED", "managed projection does not equal the canonical resolved template projection");
+  if (!isDeepStrictEqual(expected, projection.managed)) fail("PROJECTION_PAYLOAD_TAMPERED", "managed projection does not equal the canonical resolved template projection");
   return { base: policy.base, templates: Object.fromEntries(Object.entries(templates).sort(([a], [b]) => a.localeCompare(b))), globalAxes: taxonomy.globalAxes, ...(policy.writers === undefined ? {} : { writers: policy.writers }), managedSourcePaths: sourcePaths, inputSignature: actualInput };
 }
 

@@ -26,6 +26,8 @@ Taxonomy controls placement without deciding a template's keys. Its `templateFol
 
 ## Lifecycle
 
+Runtime observations use an external SQLite journal at `~/.oms/runtime/v1/<hostId>/events.sqlite` (`OMS_RUNTIME_ROOT` overrides the base directory). Containment is checked before creation, and WAL/SHM files stay outside the vault. Each actual event has a UUID; only replay of that same event ID is deduplicated. Invocation and attempt indexes are nonunique. History queries are readonly/no-create and filter by current host and canonical vault fingerprint. Journal bytes are never convention authority or approval-digest input.
+
 Renderer classification separates executable Obsidian templates from OMS note scaffolds. Templater frontmatter supplies a contract with Obsidian-filled fields; script-first sources derive proposals from observed notes. The kernel validates bounded host proposals and transaction evidence, never executes scripts or provides a Templater transpiler.
 
 Setup selects folders only from repeated explicit `--template-folder` arguments or saved valid-v3 registrations. Explicit folders use `auto` proposal mode and the first is the template-creation default; saved modes are retained. Obsidian, Templater, and bounded vault-walk evidence is suggestion-only and carries provenance, never automatic selection. Without a selection, non-interactive setup is blocked and produces no approval digest. There are no invented `Templates` or `Inbox` defaults.

@@ -19,6 +19,8 @@ import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js"
 import { backfillDefaults, buildTemplateCompositionManifest, buildTemplateNoteIndex, deriveTemplateRetrievalAxes, diagnoseTemplates, executeTemplateTransaction, loadResolvedTemplates, registerExistingTemplate, normalizeTemplateFolderPath, normalizeTemplateSourcePath, regenerateTypes, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH, verifyTemplateSourcePath } from "../kernel/templates/index.js";
 import type { Digest, JsonValue, SourceProposal, TemplateBinding, TemplateCasExpectation, TemplateCompositionOptions, TemplateSemanticChange } from "../kernel/templates/types.js";
 import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
+import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../kernel/runtime/event-journal.js";
+import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
 import { retrieveMorningContext } from "../kernel/search/morning.js";
 import { repairDoctor } from "../kernel/doctor/service.js";
 import { makeEngineMorningBackend } from "./engine-morning-backend.js";
@@ -112,6 +114,38 @@ function digest(bytes: Uint8Array): Digest {
 
 function isDigest(value: unknown): value is Digest {
   return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
+}
+
+function runtimeHistory(vault: string): { readonly history?: ReturnType<typeof summarizeRuntimeHistory>; readonly runtimeWarnings?: readonly string[] } {
+  try {
+    return { history: summarizeRuntimeHistory({ vaultPath: vault }) };
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message.replace(/^LEDGER_APPEND_FAILED:\s*/, "") : String(error);
+    return { runtimeWarnings: [`LEDGER_APPEND_FAILED: ${detail}. Runtime history is unavailable; verify the external OMS runtime ledger.`] };
+  }
+}
+
+function recordTemplateList(vault: string, templates: readonly { readonly id: string; readonly inputSignature: string; readonly templateSignature: string }[]): readonly string[] {
+  const invocation = createRuntimeInvocation({ surface: "mcp", operation: "template-list", packageVersion: readBundledPackageVersion() });
+  try {
+    appendRuntimeEvent(createRuntimeEvent(invocation, {
+      kind: "template-list",
+      outcome: "success",
+    }), { vaultPath: vault });
+    for (const template of templates) {
+      appendRuntimeEvent(createRuntimeEvent(invocation, {
+        kind: "template-listed",
+        outcome: "success",
+        templateId: template.id,
+        inputSignature: template.inputSignature,
+        templateSignature: template.templateSignature,
+      }), { vaultPath: vault });
+    }
+    return [];
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message.replace(/^LEDGER_APPEND_FAILED:\s*/, "") : String(error);
+    return [`LEDGER_APPEND_FAILED: ${detail}. Template listing succeeded, but runtime history is incomplete.`];
+  }
 }
 
 function guardedTemplateRequest(args: Record<string, unknown> | undefined):
@@ -509,6 +543,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           inputSignature: convention.inputSignature,
           managedSourcePaths: convention.managedSourcePaths,
           derivedState: diagnosis,
+          ...runtimeHistory(vault),
           engineGraph,
           writeTools: source === "cwd" ? "write-disabled-target-unverified" : "write-gated-by-verified-target-and-contract",
           readTools: omsMcpTools.map(tool => tool.name),
@@ -521,6 +556,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           error: error instanceof Error ? error.message : String(error),
           counts: null,
           derivedState: { status: "invalid", remediation: "run doctor validate, then regenerate-types with an approved digest" },
+          ...runtimeHistory(vault),
           engineGraph,
           writeTools: source === "cwd" ? "write-disabled-target-unverified" : "write-disabled-invalid-template-projection",
           readTools: ["status"],
@@ -560,7 +596,16 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
     if (name === "oms_list_templates") {
       const convention = await loadResolvedTemplates(vault);
-      return jsonText({ vault, inputSignature: convention.inputSignature, templates: Object.values(convention.templates).map(template => ({ templateId: template.id, destinationClass: template.destinationClass, sourcePath: template.sourcePath, targetFolder: template.targetFolder, fields: template.fields, views: template.views, inputSignature: template.inputSignature, templateSignature: template.templateSignature })), axes: deriveTemplateRetrievalAxes(convention) });
+      const templates = Object.values(convention.templates);
+      const runtimeWarnings = recordTemplateList(vault, templates);
+      return jsonText({
+        vault,
+        inputSignature: convention.inputSignature,
+        templates: templates.map(template => ({ templateId: template.id, destinationClass: template.destinationClass, sourcePath: template.sourcePath, targetFolder: template.targetFolder, fields: template.fields, views: template.views, inputSignature: template.inputSignature, templateSignature: template.templateSignature })),
+        axes: deriveTemplateRetrievalAxes(convention),
+        ...runtimeHistory(vault),
+        ...(runtimeWarnings.length === 0 ? {} : { runtimeWarnings }),
+      });
     }
 
     if (name === "oms_retrieve_context") {

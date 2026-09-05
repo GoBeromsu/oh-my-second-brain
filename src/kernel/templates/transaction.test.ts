@@ -57,6 +57,7 @@ import { inputDigest } from "./canonical.js";
 import { normalizeTemplateSourcePath } from "./paths.js";
 import { serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest, sourceSignature } from "./resolver.js";
+import { readRuntimeEvents } from "../runtime/event-read.js";
 import { completedTemplateTransaction, executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
 import type {
   Digest,
@@ -217,6 +218,9 @@ function createChange(templateId = "daily"): TemplateSemanticChange {
 function rejectedCode(receipt: Awaited<ReturnType<typeof executeTemplateTransaction>>): string | undefined {
   return receipt.status === "rejected" || receipt.status === "inconsistent" ? receipt.diagnostics[0]?.code : undefined;
 }
+function durableDirectory(vault: string, transactionId: string, marker = "template-migration"): string {
+  return path.join(vault, ".oms", ".template-transactions", transactionId, marker);
+}
 function nextOptions(manifest: TemplateCompositionManifest): TemplateCompositionOptions {
   const [policyControl, taxonomyControl, projectionControl] = manifest.controls;
   return {
@@ -262,6 +266,58 @@ function injectSecondary(operation: "write" | "remove" | "read", suffix: string)
 }
 
 describe("guarded template transactions", () => {
+  it("records each apply invocation and actual template creation without changing the approved digest", async () => {
+    const item = await fixture();
+    try {
+      const manifest = await compose(item, createChange());
+      const approved = manifest.approvalDigest;
+      const planned = await executeTemplateTransaction(item.vault, manifest, { dryRun: true });
+      expect(planned.approvalDigest).toBe(approved);
+      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: approved })).status).toBe("applied");
+      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
+      const invocations = events.filter(event => event.kind === "template-transaction-invocation");
+      expect(invocations).toHaveLength(2);
+      expect(new Set(invocations.map(event => event.invocationId)).size).toBe(2);
+      expect(events.filter(event => event.kind === "template-create" && event.outcome === "success")).toHaveLength(1);
+      expect(events.find(event => event.kind === "template-create")).toMatchObject({
+        templateId: "daily",
+        inputSignature: manifest.proposed.inputDigest,
+        templateSignature: manifest.proposed.resolvedTemplates[0]?.templateSignature,
+        packageVersion: expect.any(String),
+      });
+      expect(manifest.approvalDigest).toBe(approved);
+    } finally { await cleanup(item); }
+  });
+
+  it("records dry-run and rejected calls as invocation events only", async () => {
+    const item = await fixture();
+    try {
+      const manifest = await compose(item, createChange());
+      await executeTemplateTransaction(item.vault, manifest, { dryRun: true });
+      await executeTemplateTransaction(item.vault, manifest, { approvedDigest: digest("wrong") });
+      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
+      expect(events.map(event => [event.kind, event.outcome])).toEqual(expect.arrayContaining([
+        ["template-transaction-invocation", "success"],
+        ["template-transaction-invocation", "rejected"],
+      ]));
+      expect(events.every(event => event.kind === "template-transaction-invocation")).toBe(true);
+    } finally { await cleanup(item); }
+  });
+
+  it("records one row for every same-kind template mutation in a transaction", async () => {
+    const bindings = [binding("alpha", "Templates/OMS/alpha.md"), binding("beta", "Templates/OMS/beta.md")];
+    const item = await fixture(bindings);
+    try {
+      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
+      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+      const moves = readRuntimeEvents({ vaultPath: item.vault }).events.filter(event => event.kind === "template-move");
+      expect(moves).toHaveLength(2);
+      expect(moves.map(event => event.templateId).sort()).toEqual(["alpha", "beta"]);
+      expect(new Set(moves.map(event => event.eventId)).size).toBe(2);
+      expect(new Set(moves.map(event => event.invocationId)).size).toBe(1);
+    } finally { await cleanup(item); }
+  });
+
   it("creates through dry-run, approved apply, and exact read-back", async () => {
     const item = await fixture();
     try {
@@ -462,6 +518,14 @@ describe("guarded template transactions", () => {
       if (receipt.status === "applied") expect(receipt.writtenPaths).not.toContain(current.sourcePath);
       expect(await readFile(path.join(item.vault, current.sourcePath), "utf8")).toBe(TEMPLATE);
       expect(manifest.proposed.resolvedTemplates[0]!.templateSignature).toBe(signature);
+      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: "template-reclassify",
+        outcome: "success",
+        templateId: "note",
+        templateSignature: signature,
+      }));
+      expect(events.some(event => event.kind === "template-create")).toBe(false);
     } finally { await cleanup(item); }
   });
 
@@ -483,6 +547,9 @@ describe("guarded template transactions", () => {
       const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
       expect(manifest.moves).toEqual([]);
       expect((await executeTemplateTransaction(item.vault, manifest, { dryRun: true })).status).toBe("unchanged");
+      expect(readRuntimeEvents({ vaultPath: item.vault }).events).toContainEqual(
+        expect.objectContaining({ kind: "template-transaction-invocation", outcome: "unchanged" }),
+      );
     } finally { await cleanup(item); }
   });
 
@@ -495,8 +562,12 @@ describe("guarded template transactions", () => {
       const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
       expect(receipt.status).toBe("applied");
       expect(await readFile(path.join(item.vault, "Moved/alpha.md"), "utf8")).toBe(TEMPLATE);
+      expect(await readFile(path.join(item.vault, "Moved/alpha.md"), "utf8")).toBe(TEMPLATE);
       expect(await readFile(path.join(item.vault, "Moved/beta.md"), "utf8")).toBe(TEMPLATE);
-      expect(await readFile(path.join(item.vault, "External/external.md"), "utf8")).toBe(TEMPLATE);
+      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
+      expect(events.filter(event => event.kind === "template-move").map(event => event.templateId).sort()).toEqual(["alpha", "beta"]);
+      expect(events.some(event => event.kind === "template-create")).toBe(false);
+      expect(events.some(event => event.templateId === "external" && event.kind !== "template-transaction-invocation")).toBe(false);
     } finally { await cleanup(item); }
   });
 
@@ -553,6 +624,8 @@ describe("guarded template transactions", () => {
       inject("write", ".oms/template-policy.json", 1);
       injectSecondary("remove", "Moved/beta.md");
       expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("inconsistent");
+      const durable = durableDirectory(item.vault, transactionId);
+      expect(await readdir(path.join(durable, "staging"))).not.toHaveLength(0);
       const receipt = await resumeTemplateTransaction(item.vault, transactionId, manifest.approvalDigest);
       expect(receipt.status).toBe("applied");
       if (receipt.status === "applied") {
@@ -560,6 +633,9 @@ describe("guarded template transactions", () => {
         expect(receipt.outputDigest).toBe(manifest.outputDigest);
       }
       expect(await readFile(path.join(item.vault, "Moved/beta.md"), "utf8")).toBe(TEMPLATE);
+      await expect(readdir(path.join(durable, "staging"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(path.join(durable, "plan.json"), "utf8")).toContain(transactionId);
+      expect(await readFile(path.join(durable, "progress.json"), "utf8")).toContain("Moved/beta.md");
     } finally { await cleanup(item); }
   });
 
@@ -647,6 +723,9 @@ describe("guarded template transactions", () => {
       const manifest = await compose(item, createChange());
       const before = await tree(item.vault);
       await expect(executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest }, ".oms/arbitrary.json" as unknown as TemplateTransactionMarkerPath)).rejects.toThrow(/marker path is not approved/);
+      expect(readRuntimeEvents({ vaultPath: item.vault }).events).toContainEqual(
+        expect.objectContaining({ kind: "template-transaction-invocation", outcome: "failure" }),
+      );
       expect(await tree(item.vault)).toEqual(before);
     } finally { await cleanup(item); }
   });
@@ -657,6 +736,11 @@ describe("guarded template transactions", () => {
       const manifest = await compose(item, createChange());
       const first = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
       expect(first.status).toBe("applied");
+      if (first.status !== "applied") throw new Error("expected applied transaction");
+      const durable = durableDirectory(item.vault, first.transactionId);
+      await expect(readdir(path.join(durable, "staging"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(path.join(durable, "plan.json"), "utf8")).toContain(first.transactionId);
+      expect(await readFile(path.join(durable, "progress.json"), "utf8")).toContain("Templates/OMS/daily.md");
       const before = await tree(item.vault);
       const retry = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
       expect(retry.status).toBe("already-complete");
@@ -664,8 +748,57 @@ describe("guarded template transactions", () => {
         expect(retry.transactionId).toBe(first.transactionId);
         expect(retry.outputDigest).toBe(first.outputDigest);
       }
+      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
+      expect(events.filter(event => event.kind === "template-create")).toHaveLength(1);
+      expect(events.filter(event => event.kind === "template-transaction-invocation")).toHaveLength(2);
       expect(await tree(item.vault)).toEqual(before);
     } finally { await cleanup(item); }
+  });
+
+  it("keeps a committed transaction successful when external journal append fails", async () => {
+    const item = await fixture();
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const originalRuntimeRoot = process.env.OMS_RUNTIME_ROOT;
+    try {
+      process.env.OMS_RUNTIME_ROOT = item.vault;
+      const manifest = await compose(item, createChange());
+      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+      expect(receipt.status).toBe("applied");
+      expect(await readFile(path.join(item.vault, "Templates/OMS/daily.md"), "utf8")).toBe(TEMPLATE);
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining("LEDGER_APPEND_FAILED"),
+        { code: "LEDGER_APPEND_FAILED" },
+      );
+    } finally {
+      if (originalRuntimeRoot === undefined) delete process.env.OMS_RUNTIME_ROOT;
+      else process.env.OMS_RUNTIME_ROOT = originalRuntimeRoot;
+      warning.mockRestore();
+      await cleanup(item);
+    }
+  });
+
+  it("surfaces committed staging cleanup failure without turning success into failure and retries cleanup on replay", async () => {
+    const item = await fixture();
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    try {
+      const manifest = await compose(item, createChange());
+      const transactionId = createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32);
+      inject("remove", `${path.sep}staging`);
+      const applied = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+      expect(applied.status).toBe("applied");
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining(`Committed template transaction ${transactionId} could not remove staging payloads`),
+        { code: "TEMPLATE_TRANSACTION_STAGING_CLEANUP_FAILED" },
+      );
+      const durable = durableDirectory(item.vault, transactionId);
+      expect(await readdir(path.join(durable, "staging"))).not.toHaveLength(0);
+      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("already-complete");
+      await expect(readdir(path.join(durable, "staging"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(path.join(durable, "plan.json"), "utf8")).toContain(transactionId);
+    } finally {
+      warning.mockRestore();
+      await cleanup(item);
+    }
   });
 
   it("materializes only a verified completed receipt for its approved digest", async () => {

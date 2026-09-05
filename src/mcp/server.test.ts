@@ -1329,6 +1329,15 @@ Valid frontmatter remains available to retrieve.
 
       const status = textPayload(await client.callTool({ name: "status", arguments: {} }));
       expect(status.writeTools).toBe("write-gated-by-verified-target-and-contract");
+      expect(status.history).toEqual(expect.objectContaining({ verifications: expect.any(Number) }));
+
+      const listed = textPayload(await client.callTool({ name: "search", arguments: { op: "templates" } }));
+      expect(listed.history).toEqual(expect.objectContaining({
+        uses: 0,
+        templates: expect.objectContaining({
+          literature: expect.objectContaining({ status: "observed", uses: 0, lastUsedAt: null }),
+        }),
+      }));
 
       const created = textPayload(
         await client.callTool({

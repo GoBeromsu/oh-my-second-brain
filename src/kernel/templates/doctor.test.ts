@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { backfillDefaults, diagnoseTemplates, regenerateTypes } from "./doctor.js";
+import { summarizeRuntimeHistory } from "../runtime/event-summary.js";
 import { loadResolvedTemplates, sourceSignature } from "./resolver.js";
 import type { Digest } from "./types.js";
 
@@ -88,6 +90,47 @@ describe("template doctor", () => {
     expect((await diagnoseTemplates({ vault: root, source: "cwd" })).status).toBe("healthy");
     expect((await diagnoseTemplates({ vault: root, source: "cwd" })).diagnostics.filter(item => item.code === "TEMPLATE_SOURCE_DRIFT")).toEqual([]);
     expect(await readFile(path.join(root, ".oms", "types.json"), "utf8")).toBe(before);
+  });
+
+  it("records verification history and bounds external drift between observations", async () => {
+    const root = await vault();
+    const first = await diagnoseTemplates({ vault: root, source: "explicit" });
+    expect(first.history?.templates.note).toMatchObject({
+      status: "observed",
+      uses: 0,
+      previousSignature: null,
+      changedBetween: null,
+    });
+
+    await writeFile(path.join(root, "Templates", "note.md"), "---\ntitle: changed\n---\nbody\n");
+    const second = await diagnoseTemplates({ vault: root, source: "explicit" });
+    const noteHistory = second.history?.templates.note;
+    expect(noteHistory?.previousSignature).toBe(sha("---\ntitle: template\n---\nbody\n"));
+    expect(noteHistory?.changedBetween?.[0]).toBe(first.history?.templates.note.lastVerifiedAt);
+    expect(noteHistory?.changedBetween?.[1]).toBe(noteHistory?.lastVerifiedAt);
+    expect(noteHistory?.lastUsedAt).toBeNull();
+
+    await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { dryRun: true } });
+    const repeated = await diagnoseTemplates({ vault: root, source: "explicit" });
+    expect(repeated.history?.templates.note).toMatchObject({
+      currentSignature: noteHistory?.currentSignature,
+      previousSignature: sha("---\ntitle: template\n---\nbody\n"),
+      changedBetween: noteHistory?.changedBetween,
+    });
+  });
+
+  it("summarizes an absent journal without creating runtime state", async () => {
+    const root = await vault();
+    const runtimeRoot = path.join(root, "..", `oms-runtime-absent-${path.basename(root)}`);
+    expect(existsSync(runtimeRoot)).toBe(false);
+    expect(summarizeRuntimeHistory({ vaultPath: root, runtimeRoot })).toEqual({
+      events: 0,
+      uses: 0,
+      verifications: 0,
+      gaps: 0,
+      templates: {},
+    });
+    expect(existsSync(runtimeRoot)).toBe(false);
   });
 
   it("caps vault-level findings with maxPerTemplate", async () => {

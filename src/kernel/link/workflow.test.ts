@@ -2,35 +2,11 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ResolvedConvention } from "../templates/types.js";
+import { applyTemplateMigration, buildMigrationManifest, planTemplateMigration } from "../templates/migration.js";
+import { loadResolvedTemplates } from "../templates/resolver.js";
 import { applyLinksForNote, linkifyVault, suggestLinksForNote } from "./workflow.js";
 
 let roots: string[] = [];
-
-const signature = "sha256:test" as const;
-const convention: ResolvedConvention = {
-  base: { fields: {} },
-  globalAxes: {},
-  inputSignature: signature,
-  managedSourcePaths: ["Templates/OMS/note.md"],
-  templates: {
-    note: {
-      id: "note",
-      destinationClass: "managed-default",
-      sourcePath: "Templates/OMS/note.md",
-      targetFolder: "Inbox",
-      keyOrder: ["template", "title"],
-      fields: { template: { type: "text", required: true }, title: { type: "text" } },
-      frontmatterTemplate: { template: "note" },
-      body: "",
-      naming: "{{slug}}.md",
-      views: [],
-      inputSignature: signature,
-      templateSignature: signature,
-      managedSourcePaths: ["Templates/OMS/note.md"],
-    },
-  },
-};
 
 async function makeVault(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-link-workflow-"));
@@ -39,6 +15,13 @@ async function makeVault(): Promise<string> {
   await writeFile(path.join(vault, "terms", "Ataraxia.md"), "---\ntemplate: note\ntitle: Ataraxia\n---\n\nA term.\n", "utf8");
   await writeFile(path.join(vault, "notes", "Sage.md"), "---\ntemplate: note\ntitle: Sage\n---\n\nAtaraxia is useful.\n", "utf8");
   await writeFile(path.join(vault, "Templates", "OMS", "note.md"), "---\ntemplate: note\n---\nAtaraxia must never become a candidate.\n", "utf8");
+  await mkdir(path.join(vault, ".oms"));
+  await mkdir(path.join(vault, ".obsidian"));
+  await writeFile(path.join(vault, ".oms", "taxonomy.json"), JSON.stringify({ folders: {}, templates: { note: { templateFolder: "notes" } } }));
+  await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text", title: "text" } }));
+  const proposal = await planTemplateMigration(vault, { templateFolders: [{ path: "Templates/OMS", mode: "auto", default: true }] });
+  const manifest = await buildMigrationManifest(vault, proposal, { base: { fields: {} } });
+  await applyTemplateMigration(vault, proposal, manifest, { approvedDigest: manifest.approvalDigest });
   return vault;
 }
 
@@ -50,6 +33,7 @@ afterEach(async () => {
 describe("link workflow", () => {
   it("uses only template-identified ordinary notes, excludes managed sources, and refuses stale applies without writing", async () => {
     const vault = await makeVault();
+    const convention = await loadResolvedTemplates(vault);
     const target = { vault, source: "explicit" as const, convention, notePath: "notes/Sage.md" };
     const suggestion = await suggestLinksForNote(target);
     expect(suggestion.candidateNotes).toBe(2);
@@ -67,6 +51,7 @@ describe("link workflow", () => {
 
   it("never falls back to legacy concept frontmatter", async () => {
     const vault = await makeVault();
+    const convention = await loadResolvedTemplates(vault);
     await writeFile(path.join(vault, "terms", "Ataraxia.md"), "---\nconcept: term\ntitle: Ataraxia\n---\n\nA legacy term.\n", "utf8");
     const suggestion = await suggestLinksForNote({ vault, source: "explicit", convention, notePath: "notes/Sage.md" });
     expect(suggestion.candidateNotes).toBe(1);
@@ -75,6 +60,7 @@ describe("link workflow", () => {
 
   it("orchestrates a batch scan and sequential guarded template writes", async () => {
     const vault = await makeVault();
+    const convention = await loadResolvedTemplates(vault);
     const result = await linkifyVault({ vault, source: "explicit", convention }, { apply: true });
     expect(result.notesInScope).toBe(2);
     expect(result.targetNotes).toBe(2);

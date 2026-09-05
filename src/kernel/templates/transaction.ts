@@ -2,8 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { approvalDigest, inputDigest, outputDigest } from "./canonical.js";
+import { inputDigest, approvalDigest, outputDigest } from "./canonical.js";
 import { normalizeTemplateControlPath, normalizeTemplateSourcePath, verifyTemplateControlPath, verifyTemplateSourcePath } from "./paths.js";
+import { readBundledPackageVersion } from "../runtime/assets.js";
+import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../runtime/event-journal.js";
+import type { RuntimeEvent, RuntimeEventOutcome, RuntimeInvocation } from "../runtime/event-types.js";
 import type { ControlPath, Digest, FileExpectation, GuardedTemplateRequest, TemplateCompositionManifest, TemplateTransactionMarkerPath, TemplateTransactionReceipt, TransactionPath, TransactionVerifiedPath, VerifiedFileState } from "./types.js";
 
 const encoder = new TextEncoder();
@@ -56,6 +59,106 @@ function isMarkerPath(path: unknown): path is TemplateTransactionMarkerPath { re
 function isTransactionPath(path: ManagedPath): path is TransactionPath { return !isMarkerPath(path); }
 function markerDirectory(markerPath: TemplateTransactionMarkerPath): string { return markerPath.slice(".oms/".length, -".json".length); }
 function transactionDirectory(vault: string, id: string, marker: TemplateTransactionMarkerPath): string { return join(vault, ".oms", ".template-transactions", id, markerDirectory(marker)); }
+async function cleanupCommittedStaging(vault: string, id: string, marker: TemplateTransactionMarkerPath): Promise<void> {
+  const staging = join(transactionDirectory(vault, id, marker), "staging");
+  try {
+    await rm(staging, { recursive: true, force: true });
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    try {
+      process.emitWarning(
+        `Committed template transaction ${id} could not remove staging payloads: ${detail}`,
+        { code: "TEMPLATE_TRANSACTION_STAGING_CLEANUP_FAILED" },
+      );
+    } catch {
+      // Cleanup reporting cannot change an already committed vault outcome.
+    }
+  }
+}
+function appendJournalEvent(vault: string, event: RuntimeEvent): void {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      appendRuntimeEvent(event, { vaultPath: vault });
+      return;
+    } catch (error: unknown) {
+      failure = error;
+    }
+  }
+  const detail = failure instanceof Error ? failure.message : String(failure);
+  try {
+    process.emitWarning(`LEDGER_APPEND_FAILED: ${detail}`, { code: "LEDGER_APPEND_FAILED" });
+  } catch {
+    // Runtime history is non-blocking after the vault outcome is known.
+  }
+}
+function journalInvocation(operation: string): RuntimeInvocation {
+  return createRuntimeInvocation({ surface: "kernel", operation, packageVersion: readBundledPackageVersion() });
+}
+function receiptOutcome(receipt: TemplateTransactionReceipt): RuntimeEventOutcome {
+  if (receipt.status === "rejected") return "rejected";
+  if (receipt.status === "unchanged" || receipt.status === "already-complete") return "unchanged";
+  if (receipt.status === "inconsistent") return "failure";
+  return "success";
+}
+function recordTransactionReceipt(vault: string, invocation: RuntimeInvocation, receipt: TemplateTransactionReceipt, manifest: TemplateCompositionManifest): void {
+  const transactionId = receipt.status === "applied" || receipt.status === "already-complete" ? receipt.transactionId : null;
+  appendJournalEvent(vault, createRuntimeEvent(invocation, {
+    kind: "template-transaction-invocation",
+    outcome: receiptOutcome(receipt),
+    transactionId,
+    inputSignature: "inputDigest" in receipt ? receipt.inputDigest : receipt.proposedInputDigest,
+  }));
+  if (receipt.status !== "applied") return;
+  const signatures = new Map(manifest.proposed.resolvedTemplates.map(template => [template.templateId, template.templateSignature]));
+  const currentBindings = new Map(manifest.current.bindings.map(binding => [binding.templateId, binding]));
+  const proposedBindings = new Map(manifest.proposed.bindings.map(binding => [binding.templateId, binding]));
+  const changedSources = new Set(
+    manifest.sources
+      .filter(source => source.action === "write" || source.action === "delete")
+      .map(source => source.templateId),
+  );
+  const projectionChanged = manifest.controls.some(control => control.kind === "projection" && control.action === "write");
+  for (const operation of receipt.operations) {
+    let kind: string | null = null;
+    if (operation.kind === "create") {
+      kind = currentBindings.has(operation.templateId) ? null : "template-create";
+    } else if (operation.kind === "update") {
+      const before = currentBindings.get(operation.templateId);
+      const after = proposedBindings.get(operation.templateId);
+      if (changedSources.has(operation.templateId) || canonical(before) !== canonical(after)) kind = "template-update";
+    } else if (operation.kind === "reclassify") {
+      const before = currentBindings.get(operation.templateId);
+      const after = proposedBindings.get(operation.templateId);
+      if (before?.destinationClass !== after?.destinationClass) kind = "template-reclassify";
+    } else if (operation.kind === "regenerate" && projectionChanged) {
+      kind = "template-regenerate";
+    }
+    if (kind === null) continue;
+    appendJournalEvent(vault, createRuntimeEvent(invocation, {
+      kind,
+      outcome: "success",
+      transactionId,
+      templateId: operation.templateId,
+      inputSignature: receipt.inputDigest,
+      templateSignature: signatures.get(operation.templateId) ?? operation.payloadDigest,
+    }));
+  }
+  for (const move of receipt.moves) {
+    if (move.strategy === "no-op") continue;
+    appendJournalEvent(vault, createRuntimeEvent(invocation, {
+      kind: "template-move",
+      outcome: "success",
+      transactionId,
+      templateId: move.templateId,
+      inputSignature: receipt.inputDigest,
+      templateSignature: move.sourceSignature,
+    }));
+  }
+}
+function recordTransactionFailure(vault: string, invocation: RuntimeInvocation): void {
+  appendJournalEvent(vault, createRuntimeEvent(invocation, { kind: "template-transaction-invocation", outcome: "failure" }));
+}
 function planFor(manifest: TemplateCompositionManifest): DurablePlan {
   const boundaries: Boundary[] = [
     ...manifest.sources.filter(source => source.action === "write").sort((left, right) => left.templateId.localeCompare(right.templateId)).map(source => ({ path: source.path as TransactionPath, expected: source.expectedCurrent, proposed: source.proposed })),
@@ -266,7 +369,7 @@ async function releaseTransactionLock(lock: string, token: string): Promise<void
 }
 
 /** Resumes one persisted in-progress transaction without rebuilding stale filesystem preflight state. */
-export async function resumeTemplateTransaction(
+async function resumeTemplateTransactionInternal(
   vault: string,
   transactionId: string,
   approvedDigest: Digest,
@@ -283,7 +386,27 @@ export async function resumeTemplateTransaction(
   }
   const manifest = active.plan === null ? null : manifestFromPlan(active.plan);
   if (manifest === null) throw new Error("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
-  return executeTemplateTransaction(vault, manifest, { approvedDigest }, markerPath);
+  return executeTemplateTransactionInternal(vault, manifest, { approvedDigest }, markerPath);
+}
+
+export async function resumeTemplateTransaction(
+  vault: string,
+  transactionId: string,
+  approvedDigest: Digest,
+  markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH,
+): Promise<TemplateTransactionReceipt> {
+  const invocation = journalInvocation("resume-template-transaction");
+  try {
+    const receipt = await resumeTemplateTransactionInternal(vault, transactionId, approvedDigest, markerPath);
+    const active = await readMarker(vault, markerPath);
+    const manifest = active.state === "valid" && active.plan !== null ? manifestFromPlan(active.plan) : null;
+    if (manifest === null) recordTransactionFailure(vault, invocation);
+    else recordTransactionReceipt(vault, invocation, receipt, manifest);
+    return receipt;
+  } catch (error: unknown) {
+    recordTransactionFailure(vault, invocation);
+    throw error;
+  }
 }
 
 /** Returns a verified receipt for an already completed durable transaction. */
@@ -332,7 +455,7 @@ export async function completedTemplateTransaction(
 }
 
 /** Publishes a pre-composed manifest; semantic composition is intentionally outside this module. */
-export async function executeTemplateTransaction(vault: string, manifest: TemplateCompositionManifest, request: GuardedTemplateRequest, markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH): Promise<TemplateTransactionReceipt> {
+async function executeTemplateTransactionInternal(vault: string, manifest: TemplateCompositionManifest, request: GuardedTemplateRequest, markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH): Promise<TemplateTransactionReceipt> {
   if (!isMarkerPath(markerPath)) throw new TypeError("TEMPLATE_SOURCE_UNSAFE: marker path is not approved");
   if (!manifestValid(manifest)) return rejected(manifest, "TEMPLATE_TRANSACTION_MANIFEST_INVALID");
   if (request.dryRun && request.approvedDigest !== undefined || !request.dryRun && request.approvedDigest !== manifest.approvalDigest) return rejected(manifest, "MIGRATION_APPROVAL_MISMATCH");
@@ -348,6 +471,7 @@ export async function executeTemplateTransaction(vault: string, manifest: Templa
     } else {
       const final = [...manifest.controls.map(control => ({ path: control.path as TransactionPath, value: control.proposed })), ...manifest.sources.map(source => ({ path: source.path as TransactionPath, value: source.proposed }))];
       if (!(await Promise.all(final.map(async item => matches(await state(vault, item.path), item.value)))).every(Boolean)) return rejected(manifest, "MIGRATION_RETRY_MISMATCH");
+      await cleanupCommittedStaging(vault, plan.transactionId, markerPath);
       return { status: "already-complete", mode: manifest.mode, transactionId: plan.transactionId, currentInputDigest: manifest.current.inputDigest, inputDigest: manifest.proposed.inputDigest, approvedDigest: request.approvedDigest!, outputDigest: manifest.outputDigest, operations: manifest.operations, moves: manifest.moves, writtenPaths: [], deletedPaths: [], verified: await Promise.all(final.map(async item => verified(item.path, await state(vault, item.path)))), markerState: "complete" };
     }
   }
@@ -388,7 +512,7 @@ export async function executeTemplateTransaction(vault: string, manifest: Templa
     const complete = markerFor("complete", manifest, plan);
     await publish(vault, markerPath, { state: "present", bytes: markerBytes(complete), signature: sha(markerBytes(complete)) }, published);
     const verifiedFinal = await Promise.all(final.map(async item => verified(item.path, await state(vault, item.path))));
-    await rm(directory, { recursive: true, force: true });
+    await cleanupCommittedStaging(vault, plan.transactionId, markerPath);
     return { status: "applied", mode: manifest.mode, transactionId: plan.transactionId, currentInputDigest: manifest.current.inputDigest, inputDigest: manifest.proposed.inputDigest, approvedDigest: request.approvedDigest!, outputDigest: manifest.outputDigest, operations: manifest.operations, moves: manifest.moves, writtenPaths: published.map(item => item.path).filter(isTransactionPath), deletedPaths: manifest.sources.filter(source => source.action === "delete").map(source => source.path), verified: verifiedFinal, markerState: "complete" };
   } catch {
     if (active.state === "valid" && active.marker.status === "in-progress") {
@@ -398,4 +522,17 @@ export async function executeTemplateTransaction(vault: string, manifest: Templa
     if (restored) { await rm(directory, { recursive: true, force: true }); return rejected(manifest, "MIGRATION_PUBLISHED_OUTPUT_CONFLICT"); }
     return inconsistent(manifest, published.map(item => item.path).filter(isTransactionPath));
   } finally { await releaseTransactionLock(lock, lockToken); }
+}
+
+/** Executes one guarded transaction and records external runtime history without changing vault semantics. */
+export async function executeTemplateTransaction(vault: string, manifest: TemplateCompositionManifest, request: GuardedTemplateRequest, markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH): Promise<TemplateTransactionReceipt> {
+  const invocation = journalInvocation("execute-template-transaction");
+  try {
+    const receipt = await executeTemplateTransactionInternal(vault, manifest, request, markerPath);
+    recordTransactionReceipt(vault, invocation, receipt, manifest);
+    return receipt;
+  } catch (error: unknown) {
+    recordTransactionFailure(vault, invocation);
+    throw error;
+  }
 }
