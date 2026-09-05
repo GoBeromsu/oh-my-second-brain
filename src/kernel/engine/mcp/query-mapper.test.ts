@@ -339,7 +339,7 @@ describe("retrievalResultsToQueryResult — shape", () => {
       receipt: {
         usedChannels: [],
         approximated: false,
-        drift: false,
+        indexDrift: false,
         requestedStrategy: "plain",
         generatedSearches: [],
         rerankApplied: false,
@@ -361,7 +361,7 @@ describe("retrievalResultsToQueryResult — shape", () => {
       receipt: {
         usedChannels: [],
         approximated: false,
-        drift: false,
+        indexDrift: false,
         requestedStrategy: "plain",
         generatedSearches: [],
         rerankApplied: false,
@@ -599,7 +599,7 @@ describe("queryResultUnavailable", () => {
       totalCount: 0,
       facets: [],
       cursor: null,
-      receipt: { usedChannels: [], approximated: false, drift: false },
+      receipt: { usedChannels: [], approximated: false, indexDrift: false },
     });
   });
 });

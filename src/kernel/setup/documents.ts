@@ -10,19 +10,26 @@ export interface TemplateSetupQuestionnaire {
   readonly discoveredTemplates: readonly {
     readonly templateId: string;
     readonly sourcePath: string;
-    readonly sourceFolder: string | null;
+    readonly sourceFolder: string;
+    readonly publication: "verify-existing" | "write";
   }[];
   readonly noteIdentities: readonly { readonly path: string; readonly templateId: string | null }[];
   readonly droppedKeys: readonly string[];
+  readonly diagnostics: readonly {
+    readonly code: string;
+    readonly message: string;
+    readonly path?: string;
+    readonly templateId?: string;
+    readonly field?: string;
+    readonly remediation?: string;
+    readonly blocking: boolean;
+  }[];
   readonly unresolvedMappings: readonly string[];
 }
 
 export interface TemplateSetupDocument { readonly questionnaire: TemplateSetupQuestionnaire; readonly proposal: MigrationProposal; }
 
 export function describeTemplateSetup(proposal: MigrationProposal): TemplateSetupDocument {
-  const sourceFolders = new Map(
-    proposal.bindings.map(binding => [binding.templateId, binding.sourceFolder]),
-  );
   return {
     questionnaire: {
       templateFolders: proposal.templateFolders.map(folder => ({
@@ -33,10 +40,12 @@ export function describeTemplateSetup(proposal: MigrationProposal): TemplateSetu
       discoveredTemplates: proposal.candidates.map(candidate => ({
         templateId: candidate.templateId,
         sourcePath: candidate.sourcePath,
-        sourceFolder: sourceFolders.get(candidate.templateId) ?? null,
+        sourceFolder: candidate.sourceFolder,
+        publication: candidate.publication,
       })),
       noteIdentities: proposal.existingNotes,
       droppedKeys: proposal.droppedKeys,
+      diagnostics: proposal.diagnostics.map(diagnostic => ({ ...diagnostic })),
       unresolvedMappings: proposal.unresolved.map(item => `${item.code}: ${item.message}`),
     },
     proposal,

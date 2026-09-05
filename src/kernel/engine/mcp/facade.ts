@@ -479,7 +479,7 @@ export class McpEngineAdapter {
     const vault = opts.vault ?? this.vaultPath;
     const convention = await loadResolvedTemplates(vault);
     const baseNodes = await this.loadOrBuildNodes(vault, convention);
-    const drift = false;
+    const indexDrift = false;
     const knownFields = templateFieldKeys(convention);
     validateKnownFieldAxes(opts.axes as QueryAxes | undefined, knownFields);
     const nodes = baseNodes;
@@ -561,7 +561,7 @@ export class McpEngineAdapter {
       // evidence in the receipt.
       usedChannels: query.trim().length > 0 ? ["lex"] : [],
       approximated: hasNonLexSearch,
-      drift,
+      indexDrift,
     });
     return enrichQueryHits(result, vault);
   }
@@ -663,7 +663,7 @@ export class McpEngineAdapter {
           for await (const docPath of walkVaultMarkdown(vault)) paths.push(docPath);
         }
         const ranked = paths.slice().sort((left, right) => left.localeCompare(right)).map(docPath => ({ docPath, score: 0 }));
-        const result = retrievalResultsToQueryResult(ranked, { limit: resultPageLimit(opts), cursor: opts.cursor, intent: opts.intent, facetValues: [], usedChannels: [], approximated: false, drift: false });
+        const result = retrievalResultsToQueryResult(ranked, { limit: resultPageLimit(opts), cursor: opts.cursor, intent: opts.intent, facetValues: [], usedChannels: [], approximated: false, indexDrift: false });
         return enrichQueryHits(result, vault);
       }
     }
@@ -730,7 +730,7 @@ export class McpEngineAdapter {
       });
       let facetValues: McpSemanticFacet[] | undefined;
       const vault = opts.vault ?? this.vaultPath;
-      let drift = false;
+      let indexDrift = false;
       try {
         const convention = await loadResolvedTemplates(vault);
         const nodes = await this.loadOrBuildNodes(vault, convention);
@@ -742,7 +742,7 @@ export class McpEngineAdapter {
         // Lexical/vector retrieval is projection-independent. Typed axis requests
         // are routed through queryNodeAxes and still fail loudly above.
         facetValues = undefined;
-        drift = false;
+        indexDrift = false;
       }
       const requestedChannels = [...new Set(effectiveSubQueries.map((search) => search.type))]
         .filter((type): type is "lex" | "vec" | "hyde" => type === "lex" || type === "vec" || type === "hyde");
@@ -754,7 +754,7 @@ export class McpEngineAdapter {
         approximated:
           modelLessFallback ||
           effectiveSubQueries.some((search) => search.type !== "lex" && search.type !== "vec"),
-        drift,
+        indexDrift,
         requestedStrategy,
         generatedSearches,
         rerankApplied: shouldRerank,
@@ -1094,7 +1094,7 @@ export class McpEngineAdapter {
       const convention = await loadResolvedTemplates(this.vaultPath);
       const baseNodes = await this.loadOrBuildNodes(this.vaultPath, convention);
       const nodes = baseNodes;
-      const drift = false;
+      const indexDrift = false;
       const limit = Math.max(1, filters.limit ?? 10);
       const filtered = filterNodesByAxis(nodes, {
         template: filters.template,
@@ -1135,7 +1135,7 @@ export class McpEngineAdapter {
         receipt: {
           usedChannels: ["lex"],
           approximated: false,
-          drift,
+          indexDrift,
           requestedStrategy: "plain",
           generatedSearches: [],
           rerankApplied: false,

@@ -10,7 +10,7 @@ const roots: string[] = [];
 const digest = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
-async function fixture(options: { readonly placement?: boolean } = {}): Promise<string> {
+async function fixture(options: { readonly placement?: boolean; readonly dateExample?: boolean } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-"));
   roots.push(root);
   await mkdir(join(root, ".oms"), { recursive: true });
@@ -20,7 +20,7 @@ async function fixture(options: { readonly placement?: boolean } = {}): Promise<
     version: 3,
     templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
     base: { fields: {} },
-    contracts: { note: { intent: "A note.", fields: {}, views: [] } },
+    contracts: { note: { intent: "A note.", fields: options.dateExample ? { date: { type: "date" } } : {}, views: [] } },
     templates: {
       note: {
         templateId: "note",
@@ -35,8 +35,8 @@ async function fixture(options: { readonly placement?: boolean } = {}): Promise<
   const taxonomy = JSON.stringify(options.placement === false
     ? { folders: {} }
     : { folders: { "Notes/Published": { templates: ["note"] } } });
-  const types = JSON.stringify({ types: { title: "text" } });
-  const template = "---\ntitle: literal\n---\nBody\n";
+  const types = JSON.stringify({ types: { title: "text", ...(options.dateExample ? { date: "date" } : {}) } });
+  const template = options.dateExample ? "---\ntitle: literal\ndate: \"{{date}}\"\n---\nBody\n" : "---\ntitle: literal\n---\nBody\n";
   const sources: SourceDescriptor[] = [
     { logicalId: "template-policy", signature: digest(policy) },
     { logicalId: "taxonomy", signature: digest(taxonomy) },
@@ -55,8 +55,8 @@ async function fixture(options: { readonly placement?: boolean } = {}): Promise<
           destinationClass: "managed-default",
           sourcePath: "Templates/OMS/note.md",
           targetFolder: "Notes/Published",
-          keyOrder: ["title"],
-          fields: { title: { type: "text" } },
+          keyOrder: options.dateExample ? ["title", "date"] : ["title"],
+          fields: { title: { type: "text" }, ...(options.dateExample ? { date: { type: "date" } } : {}) },
           views: [],
           naming: "{{title}}",
           bodySignature: digest("Body\n"),
@@ -178,6 +178,28 @@ describe("loadResolvedTemplates", () => {
       {},
       { done: "false" },
       { done: "checkbox" },
+    )).toThrow(/OBSIDIAN_TYPE_CONFLICT/);
+  });
+
+  it("accepts the Obsidian help date expression for a date property end to end", async () => {
+    const root = await fixture({ dateExample: true });
+    const resolved = await loadResolvedTemplates(root);
+    expect(resolved.templates.note?.frontmatterTemplate.date).toBe("{{date}}");
+    expect(resolved.templates.note?.fields.date?.type).toBe("date");
+  });
+
+  it("accepts formatted temporal tags without weakening conflicting literal checks", () => {
+    expect(composeResolvedTemplateFields(
+      { fields: {} },
+      { date: { type: "date" }, timestamp: { type: "datetime" } },
+      { date: "{{date:YYYY/MM/DD}}", timestamp: "{{time:HH:mm:ss}}" },
+      { date: "date", timestamp: "datetime" },
+    )).toMatchObject({ date: { type: "date" }, timestamp: { type: "datetime" } });
+    expect(() => composeResolvedTemplateFields(
+      { fields: {} },
+      { date: { type: "date" } },
+      { date: "not-a-date" },
+      { date: "date" },
     )).toThrow(/OBSIDIAN_TYPE_CONFLICT/);
   });
 

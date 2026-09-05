@@ -104,13 +104,18 @@ function literalType(value: JsonValue): FieldPolicy["type"] | undefined {
   if (typeof value === "string") return /^\d{4}-\d{2}-\d{2}$/.test(value) ? "date" : "text";
   return undefined;
 }
+function temporalTemplateExpression(value: JsonValue): "date" | "time" | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = /^{{(date|time)(?::.+)?}}$/.exec(value);
+  return match?.[1] as "date" | "time" | undefined;
+}
 function literalCompatible(value: JsonValue, type: NonNullable<FieldPolicy["type"]>): boolean {
   if (value === null) return true;
   if (type === "number") return typeof value === "number";
   if (type === "boolean" || type === "checkbox") return typeof value === "boolean";
   if (type === "list" || type === "multitext" || type === "multi" || type === "tags" || type === "aliases") return Array.isArray(value);
-  if (type === "date") return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
-  if (type === "datetime") return typeof value === "string" && !Number.isNaN(Date.parse(value));
+  if (type === "date") return temporalTemplateExpression(value) === "date" || typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  if (type === "datetime") return temporalTemplateExpression(value) !== undefined || typeof value === "string" && !Number.isNaN(Date.parse(value));
   return typeof value === "string";
 }
 export function composeResolvedTemplateFields(base: BaseContract, fields: Readonly<Record<string, FieldPolicy>>, values: Readonly<Record<string, JsonValue>>, obsidian: Readonly<Record<string, FieldPolicy["type"]>>): Readonly<Record<string, FieldPolicy>> {
@@ -127,7 +132,7 @@ export function composeResolvedTemplateFields(base: BaseContract, fields: Readon
     const declared = policyField.type ?? baseField.type;
     const explicit = obsidian[key];
     if (explicit !== undefined && declared !== undefined && explicit !== declared) fail("OBSIDIAN_TYPE_CONFLICT", `field ${key} has Obsidian type ${explicit} but policy type ${declared}`);
-    const type = explicit ?? declared ?? literalType(values[key]!);
+    const type = explicit ?? declared ?? (temporalTemplateExpression(values[key]!) === undefined ? literalType(values[key]!) : undefined);
     if (type === undefined) fail("TEMPLATE_TYPE_UNRESOLVED", `field ${key} has no type authority`);
     if (!literalCompatible(values[key]!, type)) fail("OBSIDIAN_TYPE_CONFLICT", `field ${key} template literal is incompatible with type ${type}`);
     result[key] = { ...baseField, ...policyField, type };

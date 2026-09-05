@@ -120,6 +120,8 @@ export async function runSetup(opts: {
       templateFolders: state.selectedTemplateFolders,
       templateFolderSource: state.templateFolderSource,
       droppedKeys: state.proposal.droppedKeys,
+      diagnostics: state.proposal.diagnostics.map(({ code, message, path, field, remediation }) => ({ code, remediation: remediation ?? message, ...(path === undefined ? {} : { path }), ...(field === undefined ? {} : { field }) })),
+      starterTemplates: state.proposal.candidates.filter(candidate => candidate.publication === "write").map(candidate => candidate.sourcePath),
       policyPreimage: manifest.controls[0].expectedCurrent,
       policyProposal: JSON.parse(new TextDecoder().decode(manifest.controls[0].proposed.bytes)) as unknown,
       inputDigest: manifest.proposed.inputDigest,
