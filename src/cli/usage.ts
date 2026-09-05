@@ -52,6 +52,15 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
       "             --apply --yes     Rewrite notes in place; --apply alone refuses and writes nothing.",
     ],
   },
+  {
+    name: "template",
+    line: "  template Manage guarded template folders, sources, defaults, and derived types.",
+    detailLines: [
+      "             list | show | scan | add | update | remove | move | check",
+      "             default | regenerate-types",
+      "             Run `oms template --help` for leaf arguments and approval requirements.",
+    ],
+  },
   { name: "search", line: "  search   Search indexed vault notes." },
   { name: "index", line: "  index    Manage the native vault index." },
   { name: "doc", line: "  doc      Retrieve indexed vault documents." },
@@ -108,6 +117,7 @@ Usage:
   oh-my-second-brain lint [--vault <path>] [--verbose] [--json]
   oh-my-second-brain link --vault <path> --folder <name> [--folder <name> ...] [--no-convention-note]
   oh-my-second-brain linkify [--vault <path>] [--folder <name>] [--apply --yes]
+  oh-my-second-brain template <list|show|scan|add|update|remove|move|check|default|regenerate-types> [options]
   oh-my-second-brain search <text> [--lex <text>] [--vec <text>] [--hyde <text>] [--expand] [--max-queries <n>] [--rerank] [-n <n>]
   oh-my-second-brain index <sync|status|cleanup|collections|contexts> [options]
   oh-my-second-brain doc <get|multi-get> [options]

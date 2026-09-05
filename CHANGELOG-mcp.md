@@ -6,6 +6,7 @@ MCP server tools and resources belong here.
 
 ### Changed
 
+- Template operations include guarded `register-folder`, `remove`, and `default` modes, with current signatures derived by the server. Update move strategies are validated consistently; note creation may omit its ID only when a default binding is declared. No additional MCP tool is introduced. (#124)
 - Status and template listings expose local runtime observation history separately from the vault contract. Missing observations are reported as gaps, not inactivity; reading history never creates a vault store. (#123)
 - Template writes respect renderer and Obsidian-filled field contracts, rejecting external bodies and unresolved values without copying raw Templater tags. The five-tool surface and digest-approved transaction boundary are unchanged. (#122)
 - The search receipt field `drift` was renamed to `indexDrift`; no compatibility alias is retained.

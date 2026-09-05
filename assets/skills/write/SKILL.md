@@ -25,13 +25,15 @@ For create, call `op: "note"` with `mode`, `templateId`, and body/frontmatter; p
 
 ## Templates
 
-Template creation, updates, reclassification, and template-folder relocation use `op: "template"` with `mode: "create" | "update" | "reclassify" | "relocate-folder"`.
+Template changes use `op: "template"` with `mode: "create" | "update" | "reclassify" | "relocate-folder" | "register-folder" | "remove" | "default"`; existing file registration uses `register-existing`.
 
-1. Submit `dryRun: true` with current input and source signatures.
+1. Submit `dryRun: true`; the server derives and verifies current input and source signatures.
 2. Show the resulting proposal and `approvalDigest`.
 3. Apply only with `dryRun: false` and that exact caller-approved digest.
 
 Never self-approve, hand-edit the derived `.oms/types.json`, or directly edit a managed template.
+
+For note creation, omit `templateId` only to request the declared `defaultTemplate`. If none exists, report `TEMPLATE_DEFAULT_UNDECLARED`; never select the first available template. Append/update continue to use the note's persisted identity.
 
 Responses are `ask`, `written`, or `rejected`. Resolve named violations and retry; never invent missing required values.
 

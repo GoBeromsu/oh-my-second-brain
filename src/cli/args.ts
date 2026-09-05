@@ -73,6 +73,10 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     const next = argv[i + 1];
+    if (command === "template") {
+      if (arg === "--help" || arg === "-h") help = true;
+      continue;
+    }
     if (arg === "--help" || arg === "-h") {
       help = true;
     } else if (arg === "--vault" && next) {

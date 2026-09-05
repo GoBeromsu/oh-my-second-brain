@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -16,8 +14,8 @@ import {
 } from "../kernel/capture/safe.js";
 import { lazyLoadNoteBody } from "../kernel/graph/cache.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { backfillDefaults, buildTemplateCompositionManifest, buildTemplateNoteIndex, deriveTemplateRetrievalAxes, diagnoseTemplates, executeTemplateTransaction, loadResolvedTemplates, registerExistingTemplate, normalizeTemplateFolderPath, normalizeTemplateSourcePath, regenerateTypes, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH, verifyTemplateSourcePath } from "../kernel/templates/index.js";
-import type { Digest, JsonValue, SourceProposal, TemplateBinding, TemplateCasExpectation, TemplateCompositionOptions, TemplateSemanticChange } from "../kernel/templates/types.js";
+import { backfillDefaults, buildTemplateNoteIndex, deriveTemplateRetrievalAxes, diagnoseTemplates, loadResolvedTemplates, registerExistingTemplate, normalizeTemplateFolderPath, normalizeTemplateSourcePath, regenerateTypes, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "../kernel/templates/index.js";
+import type { Digest, JsonValue, SourceProposal, TemplateBinding, TemplateSemanticChange } from "../kernel/templates/types.js";
 import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../kernel/runtime/event-journal.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
@@ -46,6 +44,7 @@ import {
   embeddingConfigPresent,
 } from "../kernel/semantic/semantic-engine.js";
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
+import { executeTemplateOperation } from "../kernel/templates/operations.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
@@ -106,10 +105,6 @@ function isJsonRecord(value: unknown): value is Readonly<Record<string, JsonValu
 function stringArg(args: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = args?.[key];
   return typeof value === "string" ? value : undefined;
-}
-
-function digest(bytes: Uint8Array): Digest {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
 function isDigest(value: unknown): value is Digest {
@@ -183,11 +178,11 @@ const contextProperties = { template: string, folder: string, property: string, 
 const renderer = { ...string, enum: ["obsidian-core", "templater", "none"] };
 const templateBinding = { type: "object", additionalProperties: false, properties: { templateId: string, destinationClass: { ...string, enum: ["managed-default", "registered-existing"] }, renderer, sourceFolder: string, sourcePath: string, contract: string, naming: string }, required: ["templateId", "destinationClass", "renderer", "sourceFolder", "sourcePath", "contract", "naming"] };
 const source = { type: "object", additionalProperties: false, properties: { path: string, content: string, publication: { ...string, enum: ["write", "verify-existing"] } }, required: ["path", "content", "publication"] };
-const expected = { expectedInputDigest: digestSchema, expectedPolicySignature: digestSchema, expectedTaxonomySignature: digestSchema, expectedProjectionSignature: digestSchema, expectedSourceSignatures: { type: "array", items: { type: "object", additionalProperties: false, properties: { templateId: string, path: string, signature: digestSchema }, required: ["templateId", "path", "signature"] } } };
+const templateFolder = { type: "object", additionalProperties: false, properties: { path: string, mode: { ...string, enum: ["auto", "manual"] }, default: { const: true } }, required: ["path", "mode"] };
 const operations: Record<string, readonly Operation[]> = {
   write: [
     { op: "note", name: "write-note", properties: { mode: { ...string, enum: ["create", "append", "update"] }, templateId: string, notePath: string, frontmatter, body: string, dryRun: boolean } },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "register-existing"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, ...expected, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode", "expectedInputDigest", "expectedPolicySignature", "expectedTaxonomySignature", "expectedProjectionSignature", "expectedSourceSignatures"] },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "regenerate", "remove", "default", "register-folder", "register-existing"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, folder: templateFolder, deleteSource: boolean, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "lazy-load", name: "oms_lazy_load_note", properties: { notePath: string }, required: ["notePath"] }, { op: "templates", name: "oms_list_templates" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "collections", name: "oms_semantic_collections", properties: { index: string } }, { op: "contexts", name: "oms_semantic_contexts", properties: { index: string } }, { op: "status", name: "oms_semantic_status", properties: { index: string } }, { op: "get-document", name: "oms_get_document", properties: searchProperties, required: ["target"] }, { op: "multi-get-documents", name: "oms_multi_get_documents", properties: searchProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
@@ -220,7 +215,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
       branches.push({
         additionalProperties: false,
         properties: { op: { ...string, const: "note" }, mode: { const: "create" }, templateId: string, frontmatter, body: string, dryRun: boolean },
-        required: ["op", "mode", "templateId", "body"],
+        required: ["op", "mode", "body"],
       });
       branches.push({
         additionalProperties: false,
@@ -236,24 +231,28 @@ function operationSchema(tool: string): Tool["inputSchema"] {
       continue;
     }
     if (op === "template") {
-      const shared = { op: { ...string, const: op }, ...expected };
-      const modes: readonly { readonly mode: string; readonly properties: Record<string, object>; readonly required: readonly string[]; readonly expected?: boolean }[] = [
+      const shared = { op: { ...string, const: op } };
+      const modes: readonly { readonly mode: string; readonly properties: Record<string, object>; readonly required: readonly string[] }[] = [
         { mode: "create", properties: { binding: templateBinding, source }, required: ["binding", "source"] },
-        { mode: "update", properties: { templateId: string, binding: templateBinding, source }, required: ["templateId", "binding", "source"] },
+        { mode: "update", properties: { templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] } }, required: ["templateId", "binding", "source"] },
         { mode: "reclassify", properties: { templateId: string, toClass: { ...string, enum: ["managed-default", "registered-existing"] } }, required: ["templateId", "toClass"] },
         { mode: "relocate-folder", properties: { templateFolder: string }, required: ["templateFolder"] },
-        { mode: "register-existing", properties: { templateId: string, sourceFolder: string, sourcePath: string, renderer, filledBy: stringArray, contract: string, naming: string }, required: ["templateId", "sourceFolder", "sourcePath", "renderer", "filledBy", "contract", "naming"], expected: false },
+        { mode: "regenerate", properties: {}, required: [] },
+        { mode: "remove", properties: { templateId: string, deleteSource: boolean }, required: ["templateId", "deleteSource"] },
+        { mode: "default", properties: { templateId: string }, required: ["templateId"] },
+        { mode: "register-folder", properties: { folder: templateFolder }, required: ["folder"] },
+        { mode: "register-existing", properties: { templateId: string, sourceFolder: string, sourcePath: string, renderer, filledBy: stringArray, contract: string, naming: string }, required: ["templateId", "sourceFolder", "sourcePath", "renderer", "filledBy", "contract", "naming"] },
       ];
       for (const item of modes) {
-        const mutationRequired = ["op", "mode", ...(item.expected === false ? [] : Object.keys(expected)), ...item.required];
+        const mutationRequired = ["op", "mode", ...item.required];
         branches.push({
           additionalProperties: false,
-          properties: { ...(item.expected === false ? { op: { ...string, const: op } } : shared), mode: { const: item.mode }, ...item.properties, dryRun: { const: true } },
+          properties: { ...shared, mode: { const: item.mode }, ...item.properties, dryRun: { const: true } },
           required: [...mutationRequired, "dryRun"],
         });
         branches.push({
           additionalProperties: false,
-          properties: { ...(item.expected === false ? { op: { ...string, const: op } } : shared), mode: { const: item.mode }, ...item.properties, dryRun: { const: false }, approvedDigest: digestSchema },
+          properties: { ...shared, mode: { const: item.mode }, ...item.properties, dryRun: { const: false }, approvedDigest: digestSchema },
           required: [...mutationRequired, "approvedDigest"],
         });
       }
@@ -936,69 +935,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         return jsonText(await registerExistingTemplate(vault, { templateId, sourceFolder, sourcePath, renderer, filledBy, contract, naming }, request));
       }
 
-      const expectedInputDigest = stringArg(args, "expectedInputDigest");
-      const expectedPolicySignature = stringArg(args, "expectedPolicySignature");
-      const expectedTaxonomySignature = stringArg(args, "expectedTaxonomySignature");
-      const expectedProjectionSignature = stringArg(args, "expectedProjectionSignature");
-      const expectedSourceSignatures = args?.["expectedSourceSignatures"];
-      if (
-        !isDigest(expectedInputDigest) ||
-        !isDigest(expectedPolicySignature) ||
-        !isDigest(expectedTaxonomySignature) ||
-        !isDigest(expectedProjectionSignature) ||
-        !Array.isArray(expectedSourceSignatures)
-      ) {
-        return errorText("Template mutation requires exact expected input and signatures.");
-      }
-
-      const readState = async (relativePath: string) => {
-        const bytes = new Uint8Array(await readFile(path.join(vault, relativePath)));
-        return { state: "present" as const, signature: digest(bytes) };
-      };
-      const [policy, taxonomy, projection] = await Promise.all([
-        readState(".oms/template-policy.json"),
-        readState(".oms/taxonomy.json"),
-        readState(".oms/types.json"),
-      ]);
-      if (
-        policy.signature !== expectedPolicySignature ||
-        taxonomy.signature !== expectedTaxonomySignature ||
-        projection.signature !== expectedProjectionSignature
-      ) {
-        return errorText("Template mutation expected control signature is stale.");
-      }
-
-      const sources = await Promise.all(
-        expectedSourceSignatures.map(async (item) => {
-          if (
-            !isRecord(item) ||
-            typeof item["templateId"] !== "string" ||
-            typeof item["path"] !== "string" ||
-            !isDigest(item["signature"])
-          ) {
-            throw new Error("Template mutation expectedSourceSignatures is invalid.");
-          }
-          const sourcePath = normalizeTemplateSourcePath(item["path"]);
-          const verified = await verifyTemplateSourcePath(vault, sourcePath);
-          const signature = digest(new Uint8Array(await readFile(verified.absolutePath)));
-          if (signature !== item["signature"]) {
-            throw new Error("Template mutation expected source signature is stale.");
-          }
-          return {
-            templateId: item["templateId"] as TemplateCasExpectation["sources"][number]["templateId"],
-            path: sourcePath,
-            expected: { state: "present" as const, signature },
-          };
-        }),
-      );
-      const expected: TemplateCompositionOptions["expected"] = {
-        input: expectedInputDigest,
-        controls: { policy, taxonomy, projection },
-        sources,
-      };
-      const currentTaxonomy = new Uint8Array(
-        await readFile(path.join(vault, ".oms/taxonomy.json")),
-      );
       const mode = stringArg(args, "mode");
       let change: TemplateSemanticChange;
       if (mode === "reclassify") {
@@ -1012,6 +948,33 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         const templateFolder = stringArg(args, "templateFolder");
         if (templateFolder === undefined) return errorText("Template relocate-folder requires templateFolder.");
         change = { mode, templateFolder: normalizeTemplateFolderPath(templateFolder) };
+      } else if (mode === "regenerate") {
+        change = { mode };
+      } else if (mode === "remove") {
+        const templateId = stringArg(args, "templateId");
+        const deleteSource = args?.["deleteSource"];
+        if (templateId === undefined || typeof deleteSource !== "boolean") return errorText("Template remove requires templateId and deleteSource.");
+        change = { mode, templateId: templateId as TemplateBinding["templateId"], deleteSource };
+      } else if (mode === "default") {
+        const templateId = stringArg(args, "templateId");
+        if (templateId === undefined) return errorText("Template default requires templateId.");
+        change = { mode, templateId: templateId as TemplateBinding["templateId"] };
+      } else if (mode === "register-folder") {
+        const folder = args?.["folder"];
+        if (
+          !isRecord(folder) ||
+          typeof folder["path"] !== "string" ||
+          (folder["mode"] !== "auto" && folder["mode"] !== "manual") ||
+          (folder["default"] !== undefined && folder["default"] !== true)
+        ) return errorText("Template register-folder requires a valid folder path, mode, and optional default:true.");
+        change = {
+          mode,
+          folder: {
+            path: normalizeTemplateFolderPath(folder["path"]),
+            mode: folder["mode"],
+            ...(folder["default"] === true ? { default: true } : {}),
+          },
+        };
       } else if (mode === "create" || mode === "update") {
         const binding = args?.["binding"];
         const proposal = args?.["source"];
@@ -1071,17 +1034,9 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         return errorText("Template mutation mode is invalid.");
       }
 
-      const manifest = await buildTemplateCompositionManifest(vault, change, {
-        expected,
-        taxonomy: {
-          expectedCurrent: taxonomy,
-          proposedBytes: currentTaxonomy,
-          action: "verify-only",
-        },
-      });
       const request = guardedTemplateRequest(args);
       if (request === undefined) return errorText("Template mutation requires dryRun:true or an approvedDigest.");
-      return jsonText(await executeTemplateTransaction(vault, manifest, request, TEMPLATE_MUTATION_MARKER_PATH));
+      return jsonText(await executeTemplateOperation({ vault, source }, change, request));
     }
 
     return errorText(`Unknown Oh My Second Brain tool: ${publicName}`);

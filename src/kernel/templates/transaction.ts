@@ -131,6 +131,10 @@ function recordTransactionReceipt(vault: string, invocation: RuntimeInvocation, 
       const before = currentBindings.get(operation.templateId);
       const after = proposedBindings.get(operation.templateId);
       if (before?.destinationClass !== after?.destinationClass) kind = "template-reclassify";
+    } else if (operation.kind === "remove") {
+      if (currentBindings.has(operation.templateId) && !proposedBindings.has(operation.templateId)) kind = "template-remove";
+    } else if (operation.kind === "default") {
+      kind = "template-default";
     } else if (operation.kind === "regenerate" && projectionChanged) {
       kind = "template-regenerate";
     }
@@ -142,6 +146,14 @@ function recordTransactionReceipt(vault: string, invocation: RuntimeInvocation, 
       templateId: operation.templateId,
       inputSignature: receipt.inputDigest,
       templateSignature: signatures.get(operation.templateId) ?? operation.payloadDigest,
+    }));
+  }
+  if (receipt.mode === "register-folder" && manifest.controls.some(control => control.kind === "policy" && control.action === "write")) {
+    appendJournalEvent(vault, createRuntimeEvent(invocation, {
+      kind: "template-folder-register",
+      outcome: "success",
+      transactionId,
+      inputSignature: receipt.inputDigest,
     }));
   }
   for (const move of receipt.moves) {

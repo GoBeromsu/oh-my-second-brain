@@ -10,7 +10,7 @@ import { canonicalJson } from "../templates/canonical.js";
 import { loadResolvedTemplates, sourceSignature } from "../templates/resolver.js";
 import { parseTemplate } from "../templates/extract.js";
 import { readRuntimeEvents } from "../runtime/event-read.js";
-import type { Digest, ResolvedConvention } from "../templates/types.js";
+import type { Digest, ResolvedConvention, TemplateId } from "../templates/types.js";
 
 const roots: string[] = [];
 const signature = "sha256:0000000000000000000000000000000000000000000000000000000000000000" as Digest;
@@ -155,6 +155,7 @@ async function writeResolvedTemplateNote(
     const policy = JSON.stringify({
       version: 3,
       templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
+      ...(desired.defaultTemplate === undefined ? {} : { defaultTemplate: desired.defaultTemplate }),
       base: desired.base,
       contracts: { note: { intent: "note", fields: Object.fromEntries(Object.entries(template.fields).filter(([key]) => !Object.hasOwn(desired.base.fields, key))), views: template.views } },
       templates: { note: { templateId: "note", destinationClass: template.destinationClass, renderer: template.renderer, sourceFolder: "Templates/OMS", sourcePath: template.sourcePath, contract: "note", naming: template.naming } },
@@ -384,6 +385,142 @@ describe("template-first verified write modes", () => {
     expect(written.status).toBe("written");
     expect(written.prepared).toEqual(dryRun.prepared);
     expect(written.notePath).toBe("notes/2026-08-30-hello-world.md");
+  });
+
+  it("uses the declared default template when create omits templateId", async () => {
+    const root = await vault();
+    const current = convention();
+    const withDefault: ResolvedConvention = { ...current, defaultTemplate: "note" as TemplateId };
+    const result = await writeResolvedTemplateNote({
+      ...createInput(root),
+      convention: withDefault,
+      templateId: undefined,
+      dryRun: true,
+    });
+    expect(result).toMatchObject({
+      status: "written",
+      templateId: "note",
+      prepared: { templateId: "note" },
+    });
+  });
+
+  it("never falls back to the declared default when an explicit templateId is invalid", async () => {
+    const root = await vault();
+    const current = convention();
+    const withDefault: ResolvedConvention = { ...current, defaultTemplate: "note" as TemplateId };
+    const result = await writeResolvedTemplateNote({
+      ...createInput(root),
+      convention: withDefault,
+      templateId: "missing",
+      dryRun: true,
+    });
+    expect(result).toMatchObject({
+      status: "rejected",
+      templateId: null,
+    });
+    expect(result.reason).toContain("selected template missing");
+  });
+
+  it("refuses create without an explicit or declared default and does not mutate the vault", async () => {
+    const root = await vault();
+    const before = await tree(root);
+    const result = await writeResolvedTemplateNote({
+      ...createInput(root),
+      templateId: undefined,
+      dryRun: false,
+    });
+    expect(result).toMatchObject({
+      status: "ask",
+      reason: "TEMPLATE_DEFAULT_UNDECLARED: create requires an explicit templateId or declared defaultTemplate",
+      rejection: { code: "contract-violation" },
+    });
+    expect(await tree(root)).toEqual(before);
+  });
+
+  it("rejects a stale default changed after resolution before choosing a template", async () => {
+    const root = await vault();
+    const current = convention();
+    const withDefault: ResolvedConvention = { ...current, defaultTemplate: "note" as TemplateId };
+    await writeResolvedTemplateNote({
+      ...createInput(root),
+      convention: withDefault,
+      templateId: undefined,
+      dryRun: true,
+    });
+    const stale = convention();
+    const policyPath = join(root, ".oms", "template-policy.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<string, unknown>;
+    delete policy.defaultTemplate;
+    const policyText = JSON.stringify(policy);
+    await writeFile(policyPath, policyText);
+    const projectionPath = join(root, ".oms", "types.json");
+    const projection = JSON.parse(await readFile(projectionPath, "utf8")) as {
+      generatedFrom: { inputSignature: Digest; sources: Array<{ logicalId?: string; path?: string; signature: Digest }> };
+    };
+    projection.generatedFrom.sources.find(source => source.logicalId === "template-policy")!.signature =
+      `sha256:${createHash("sha256").update(policyText).digest("hex")}` as Digest;
+    projection.generatedFrom.inputSignature = sourceSignature(projection.generatedFrom.sources);
+    await writeFile(projectionPath, JSON.stringify(projection));
+    const before = await tree(root);
+    const result = await writeResolvedTemplateNoteVerified({
+      ...createInput(root),
+      convention: stale,
+      templateId: undefined,
+      dryRun: false,
+    });
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: "TEMPLATE_SOURCE_DRIFT: supplied resolved convention does not match current template authorities",
+    });
+    expect(await tree(root)).toEqual(before);
+  });
+
+  it("rejects an invalid default authority before note mutation", async () => {
+    const root = await vault();
+    const current = convention();
+    const policyPath = join(root, ".oms", "template-policy.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<string, unknown>;
+    policy.defaultTemplate = "missing";
+    await writeFile(policyPath, JSON.stringify(policy));
+    const before = await tree(root);
+    const result = await writeResolvedTemplateNoteVerified({
+      ...createInput(root),
+      convention: current,
+      templateId: undefined,
+      dryRun: false,
+    });
+    expect(result).toMatchObject({
+      status: "rejected",
+      rejection: {
+        code: "contract-violation",
+        remediation: "reload the resolved convention or run regenerate-types, then retry",
+      },
+    });
+    expect(result.reason).toContain("TEMPLATE_SOURCE_DRIFT: current template authorities could not be verified");
+    expect(await tree(root)).toEqual(before);
+  });
+
+  it("keeps append and update bound to persisted identity when defaultTemplate is absent", async () => {
+    const root = await vault();
+    const created = await writeResolvedTemplateNote({ ...createInput(root), dryRun: false });
+    const appended = await writeResolvedTemplateNote({
+      target: { vault: root, source: "explicit" },
+      convention: convention(),
+      mode: "append",
+      dryRun: true,
+      notePath: created.notePath,
+      body: "append",
+    });
+    const updated = await writeResolvedTemplateNote({
+      target: { vault: root, source: "explicit" },
+      convention: convention(),
+      mode: "update",
+      dryRun: true,
+      notePath: created.notePath,
+      frontmatter: { status: "closed" },
+    });
+    expect(appended).toMatchObject({ status: "written", templateId: "note" });
+    expect(updated).toMatchObject({ status: "written", templateId: "note" });
   });
 
   it("accepts a valid fractional field default in the authoritative convention", async () => {
