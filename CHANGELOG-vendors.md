@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-05
+
 - **The shipped GJC skills mirror is now checked file-for-file against authored skills, with drift failures directing contributors to `npm run sync:skills`.**
 
 ### Changed

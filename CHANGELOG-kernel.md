@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-05
+
 - **Replaying an identical completed template registration now returns a verified `already-complete` receipt instead of failing, while conflicting template IDs remain rejected.** Replay recomputes the canonical input and every current physical output, including every registered source, before accepting the completed marker; any drift requires a new dry-run. Template input authority construction is shared by registration, resolution, and repair to prevent digest drift.
 - **Axis-query reranking now applies `minScore` once after reranking, so hit counts and facets are calculated from the same final ranked set.** Graph-neighbour priority is now expressed as reason-count then lexical-score ordering, rather than a unit-dependent weighted scalar.
 - **Install asset health now classifies vendor-neutral host evidence injected by the CLI, including explicit inspection errors rather than mistaking unreadable or corrupt registration evidence for an absent installation.**

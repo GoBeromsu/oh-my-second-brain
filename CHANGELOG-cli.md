@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-05
+
 - **`oms doctor` now verifies Claude hook events plus the managed Codex and Hermes MCP registrations, preserving unreadable or syntactically malformed registration evidence as explicit inspection errors.**
 - **`oms doctor` now reports structured and text install-asset health, naming dangling Claude hook symlinks with the reinstall command instead of allowing a silent command-not-found failure at tool time.**
 
