@@ -84,6 +84,45 @@ describe("excludedNoteMatcher", () => {
     });
     await expect(excludedNoteMatcher(vault)).rejects.toThrow(/NOTE_EXCLUSION_RESOLUTION_FAILED.*taxonomy\.json/);
   });
+
+  it("excludes configured folders recursively but file-valued Templater sources exactly", async () => {
+    const vault = await makeVault({
+      ".obsidian/templates.json": JSON.stringify({ folder: "Core" }),
+      ".obsidian/plugins/templater-obsidian/data.json": JSON.stringify({
+        templates_folder: "Templater",
+        folder_templates: [{ folder: "Journal", template: "Mappings/daily.md" }],
+        file_templates: [{ regexp: ".*", template: "Mappings/file.md" }],
+        startup_templates: ["Startup/boot.md"],
+      }),
+    });
+    const isExcluded = await excludedNoteMatcher(vault, false);
+    expect(isExcluded("Core/note.md")).toBe(true);
+    expect(isExcluded("Templater/note.md")).toBe(true);
+    expect(isExcluded("Mappings/daily.md")).toBe(true);
+    expect(isExcluded("Mappings/file.md")).toBe(true);
+    expect(isExcluded("Startup/boot.md")).toBe(true);
+    expect(isExcluded("Mappings/ordinary.md")).toBe(false);
+    expect(isExcluded("Startup/ordinary.md")).toBe(false);
+  });
+
+  it("does not turn broad vault-walk candidate folders into note exclusions", async () => {
+    const vault = await makeVault({
+      "Prompts/template.md": "<% tp.file.title %>",
+      "Prompts/ordinary.md": "ordinary note",
+    });
+    const isExcluded = await excludedNoteMatcher(vault, false);
+    expect(isExcluded("Prompts/template.md")).toBe(false);
+    expect(isExcluded("Prompts/ordinary.md")).toBe(false);
+  });
+
+  it("fails loudly when an external template config is malformed", async () => {
+    const vault = await makeVault({
+      ".obsidian/templates.json": "{broken",
+    });
+    await expect(excludedNoteMatcher(vault)).rejects.toThrow(
+      /NOTE_EXCLUSION_RESOLUTION_FAILED.*TEMPLATE_HINT_RESOLUTION_FAILED.*templates\.json/,
+    );
+  });
 });
 
 describe("managedSourceExclusionMatcher", () => {

@@ -68,10 +68,13 @@ The current-directory fallback is read-only for mutation purposes. See [verified
 
 ## Template setup
 
-Run setup to discover existing templates recursively and review migration:
+Select one or more template source folders and review the proposal:
 
 ```bash
-oms setup --vault /path/to/vault --dry-run
+oms setup --vault /path/to/vault \
+  --template-folder "Vault Shape/Generated" \
+  --template-folder "Team/Curated Shapes" \
+  --dry-run
 ```
 
 Apply only with the exact digest reported by that dry run:
@@ -80,7 +83,9 @@ Apply only with the exact digest reported by that dry run:
 oms setup --vault /path/to/vault --yes --approved-digest <digest>
 ```
 
-Setup never modifies notes and has no bundled defaults. `.obsidian/types.json` remains read-only; `.oms/template-policy.json` holds semantics, naming, and defaults; `.oms/types.json` is derived and must not be hand-edited.
+`--template-folder` is repeatable. Explicit paths use `auto` proposal mode; the first is the template-creation default. This is distinct from the optional policy `defaultTemplate`, which identifies a note binding. When the flag is omitted, only folders and modes saved in a valid v3 policy are selected.
+
+Obsidian core settings, Templater settings, and a bounded read-only vault walk provide suggestions only. An unselected non-interactive run stops with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and no approval digest; OMS does not fall back to invented `Templates` or `Inbox` directories. Setup never modifies notes and has no bundled defaults. `.obsidian/types.json` remains read-only; `.oms/template-policy.json` v3 holds semantics, naming, and source-folder registrations; `.oms/taxonomy.json` is the JSON placement authority; `.oms/types.json` is derived and must not be hand-edited. Legacy `taxonomy.yaml` and concept YAML files are neither parsed nor converted and remain untouched.
 
 Choose model acquisition during setup with exactly one of these flags:
 

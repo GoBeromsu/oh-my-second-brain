@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { inputDigest, templateInput } from "./canonical.js";
 import { parseTemplate } from "./extract.js";
-import { normalizeTemplateSourcePath, validateTemplateId, verifyTemplateSourcePath } from "./paths.js";
+import { deriveTemplateSourcePath, isTemplateSourceInFolder, normalizeTemplateFolderPath, normalizeTemplateSourcePath, selectTemplateFolder, validateTemplateId, verifyTemplateSourcePath } from "./paths.js";
 import { parseTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest } from "./resolver.js";
 import { completedTemplateTransaction, executeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
@@ -12,6 +12,7 @@ import type { Digest, FileExpectation, GuardedTemplateRequest, TemplateBinding, 
 
 export interface RegisterExistingTemplateRequest {
   readonly templateId: string;
+  readonly sourceFolder: string;
   readonly sourcePath: string;
   readonly contract: string;
   readonly naming: string;
@@ -63,6 +64,7 @@ function registrationInput(
 /** Registers a user-owned template in place; only OMS control files are published. */
 export async function registerExistingTemplate(vault: string, request: RegisterExistingTemplateRequest, guard: GuardedTemplateRequest): Promise<TemplateTransactionReceipt> {
   const templateId = validateTemplateId(request.templateId);
+  const sourceFolder = normalizeTemplateFolderPath(request.sourceFolder);
   const sourcePath = normalizeTemplateSourcePath(request.sourcePath);
   const source = await verifyTemplateSourcePath(vault, sourcePath);
   const sourceState = await state(source.absolutePath);
@@ -77,6 +79,10 @@ export async function registerExistingTemplate(vault: string, request: RegisterE
     throw new Error("TEMPLATE_SOURCE_INVALID: template policy, taxonomy, and Obsidian types must exist");
   }
   const policy = parseTemplatePolicy(new TextDecoder().decode(policyState.bytes));
+  selectTemplateFolder(policy.templateFolders, sourceFolder);
+  if (!isTemplateSourceInFolder(sourcePath, sourceFolder)) {
+    throw new Error(`TEMPLATE_SOURCE_INVALID: registered source ${sourcePath} must be within ${sourceFolder}`);
+  }
   if (policy.contracts[request.contract] === undefined) {
     throw new Error(`TEMPLATE_CONTRACT_UNKNOWN: contract ${request.contract} does not exist; author it in .oms/template-policy.json first`);
   }
@@ -85,15 +91,15 @@ export async function registerExistingTemplate(vault: string, request: RegisterE
     // Registration is one-shot. Separating "already in the requested state" from
     // "bound to something else" is what makes a replayed apply actionable: the
     // first needs no work, the second is a real identity collision.
-    const identical = bound.destinationClass === "registered-existing" && bound.sourcePath === sourcePath && bound.contract === request.contract && bound.naming === request.naming;
+    const identical = bound.destinationClass === "registered-existing" && bound.sourceFolder === sourceFolder && deriveTemplateSourcePath(bound) === sourcePath && bound.contract === request.contract && bound.naming === request.naming;
     if (!identical) throw new Error(`TEMPLATE_ID_DUPLICATE: templateId ${templateId} is already registered`);
     if (guard.approvedDigest === undefined) {
       throw new Error(`TEMPLATE_ALREADY_REGISTERED: ${templateId} is already registered at ${sourcePath} with this contract and naming; no change is required`);
     }
     const sources = await Promise.all(Object.values(policy.templates).map(async (binding) => ({
       templateId: binding.templateId,
-      path: binding.sourcePath,
-      state: await state(join(vault, binding.sourcePath)),
+      path: deriveTemplateSourcePath(binding),
+      state: await state(join(vault, deriveTemplateSourcePath(binding))),
     })));
     const input = registrationInput(policy, policyState, taxonomyState, obsidianState, sources);
     const completed = await completedTemplateTransaction(vault, guard.approvedDigest, {
@@ -124,9 +130,9 @@ export async function registerExistingTemplate(vault: string, request: RegisterE
     }
     throw new Error("TEMPLATE_TRANSACTION_REPLAY_MISMATCH: completed registration does not match current controls and registered sources; request a new dry-run");
   }
-  const sources = await Promise.all(Object.values(policy.templates).map(async binding => ({ templateId: binding.templateId, path: binding.sourcePath, state: await state(join(vault, binding.sourcePath)) })));
+  const sources = await Promise.all(Object.values(policy.templates).map(async binding => ({ templateId: binding.templateId, path: deriveTemplateSourcePath(binding), state: await state(join(vault, deriveTemplateSourcePath(binding))) })));
   const input = registrationInput(policy, policyState, taxonomyState, obsidianState, sources);
-  const binding: TemplateBinding = { templateId, destinationClass: "registered-existing", sourcePath, contract: request.contract, naming: request.naming };
+  const binding: TemplateBinding = { templateId, destinationClass: "registered-existing", sourceFolder, sourcePath, contract: request.contract, naming: request.naming };
   const manifest = await buildTemplateCompositionManifest(vault, { mode: "create", binding, source: { path: sourcePath, bytes: sourceState.bytes, publication: "verify-existing" } }, {
     expected: {
       input: inputDigest(input),

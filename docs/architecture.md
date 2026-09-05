@@ -20,11 +20,15 @@ Vault-resident Obsidian Markdown templates own a managed note's shape and body. 
 
 `.obsidian/types.json` is read-only. The user-owned ontology is the semantic metadata separated from template shape: `.oms/template-policy.json` records note and field `intent` alongside naming/default policy, while `.oms/taxonomy.json` records folder/link `intent` and placement. `.oms/types.json` is generated after validation and is used as a write/search projection; it is never authority or hand-edited configuration.
 
-Taxonomy controls placement without deciding a template's keys. Folder and wikilink relationships are global axes, so retrieval is not constrained to a single placement rule. Authored folder intents are exposed through the derived `folder-ontology` axis. Removing the legacy `concept` note identity and bundled ontology runtime defaults does not remove ontology: meaning remains active, vault-owned data.
+Policy version 3 registers template source folders as `templateFolders`, each with `auto` or `manual` mode. Bindings carry both their registered `sourceFolder` and exact `sourcePath`. A folder-level `default` chooses where a new template is created; the independent optional `defaultTemplate` chooses a note binding.
+
+Taxonomy controls placement without deciding a template's keys. Its `templateFolder` is a note destination and need not be within a registered template source folder. Placement is required; there is no `Inbox` fallback. Folder and wikilink relationships are global axes, so retrieval is not constrained to a single placement rule. Authored folder intents are exposed through the derived `folder-ontology` axis. `.oms/taxonomy.json` is the sole taxonomy authority; setup does not parse or convert legacy `taxonomy.yaml` or concept YAML. Removing the legacy `concept` note identity and bundled ontology runtime defaults does not remove ontology: meaning remains active, vault-owned data.
 
 ## Lifecycle
 
-Setup recursively discovers existing templates, produces a migration proposal, and leaves notes unchanged. It has no bundled default template authority. A dry run exposes proposed state; applying requires the exact `--approved-digest` returned by that dry run.
+Setup selects folders only from repeated explicit `--template-folder` arguments or saved valid-v3 registrations. Explicit folders use `auto` proposal mode and the first is the template-creation default; saved modes are retained. Obsidian, Templater, and bounded vault-walk evidence is suggestion-only and carries provenance, never automatic selection. Without a selection, non-interactive setup is blocked and produces no approval digest. There are no invented `Templates` or `Inbox` defaults.
+
+Setup recursively discovers templates within selected folders, produces a migration proposal, and leaves notes unchanged. Unsupported policy versions fail closed at runtime. Setup exposes replaced legacy fields as `droppedKeys`, preserves writers and unknown extensions in its proposed v3 policy, and includes the old policy bytes in compare-and-swap approval. A resolved dry run exposes proposed state; applying requires the exact `--approved-digest` returned by that dry run.
 
 Template mutations follow the same boundary: dry run, explicit digest approval, compare-and-swap, and a transaction receipt. This prevents applying a review to different template contents.
 

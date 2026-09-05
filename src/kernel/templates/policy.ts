@@ -1,21 +1,22 @@
 import type {
   BaseContract, ContractDefinition, DerivedProjection, DerivedTemplateProjection, DestinationClass,
   Extensions, FieldDefault, FieldPolicy, GlobalAxis, JsonValue, ObsidianContractType,
-  RetrievalView, SourceDescriptor, TemplateBinding, TemplateFolderPath, TemplatePolicy,
+  RetrievalView, SourceDescriptor, TemplateBinding, TemplateFolderPath, TemplateFolderRegistration, TemplatePolicy,
   WriterRegistry,
 } from "./types.js";
 import {
   deriveManagedSourcePath,
+  isTemplateSourceInFolder,
   normalizeTemplateFolderPath,
   normalizeTemplateSourcePath,
+  selectTemplateFolder,
   validateTemplateId,
 } from "./paths.js";
 import { validateBaseSpecialization } from "./defaults.js";
 
 const TYPES = ["text", "string", "select", "number", "boolean", "checkbox", "date", "datetime", "list", "multitext", "multi", "tags", "aliases", "file"] as const;
 const TYPE_SET = new Set<string>(TYPES);
-const RESERVED_POLICY_V1 = new Set(["version", "templateFolder", "base", "contracts", "templates", "extensions"]);
-const RESERVED_POLICY_V2 = new Set([...RESERVED_POLICY_V1, "writers"]);
+const RESERVED_POLICY_V3 = new Set(["version", "templateFolders", "defaultTemplate", "base", "contracts", "templates", "writers", "extensions"]);
 const RESERVED_PROJECTION = new Set(["version", "generatedFrom", "managed", "extensions"]);
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
@@ -23,12 +24,15 @@ export { validateTemplateId } from "./paths.js";
 
 export const TEMPLATE_POLICY_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: true,
-  required: ["version", "templateFolder", "base", "contracts", "templates"],
-  properties: { version: { enum: [1, 2] }, templateFolder: { type: "string", minLength: 1 }, base: { type: "object" }, contracts: { type: "object" }, templates: { type: "object" }, extensions: { type: "object", additionalProperties: true } },
-  allOf: [{
-    if: { properties: { version: { const: 2 } }, required: ["version"] },
-    then: { properties: { writers: { type: "object", required: ["field", "identifiers"], properties: { field: { type: "string", pattern: "\\S" }, identifiers: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", pattern: "\\S" } }, extensions: { type: "object", additionalProperties: true } } } } },
-  }],
+  required: ["version", "templateFolders", "base", "contracts", "templates"],
+  properties: {
+    version: { const: 3 },
+    templateFolders: { type: "array", items: { type: "object", required: ["path", "mode"], additionalProperties: true, properties: { path: { type: "string", minLength: 1 }, mode: { enum: ["auto", "manual"] }, default: { const: true }, extensions: { type: "object", additionalProperties: true } } } },
+    defaultTemplate: { type: "string", pattern: "^[a-z0-9]+(?:-{1,2}[a-z0-9]+)*$" },
+    base: { type: "object" }, contracts: { type: "object" }, templates: { type: "object" },
+    writers: { type: "object", required: ["field", "identifiers"], properties: { field: { type: "string", pattern: "\\S" }, identifiers: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", pattern: "\\S" } }, extensions: { type: "object", additionalProperties: true } } },
+    extensions: { type: "object", additionalProperties: true },
+  },
 } as const;
 export const DERIVED_PROJECTION_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: true,
@@ -100,15 +104,80 @@ function parseViews(value: unknown, where: string, fields: Readonly<Record<strin
 function merge(base: BaseContract, contract: ContractDefinition, _name: string): void {
   validateBaseSpecialization(base, { fields: contract.fields });
 }
-function parseBinding(value: unknown, where: string, folder: TemplateFolderPath, key: string, contracts: Readonly<Record<string, ContractDefinition>>): TemplateBinding { const input = record(value, where); const id = validateTemplateId(string(input.templateId, `${where}.templateId`)); if (id !== key) fail("TEMPLATE_POLICY_INVALID", `${where}.templateId must equal its stable map key`); const destinationClass = input.destinationClass; if (destinationClass !== "managed-default" && destinationClass !== "registered-existing") fail("TEMPLATE_POLICY_INVALID", `${where}.destinationClass is invalid`); const source = normalizeTemplateSourcePath(string(input.sourcePath, `${where}.sourcePath`)); if (destinationClass === "managed-default" && source !== deriveManagedSourcePath(folder, id)) fail("TEMPLATE_RECLASSIFY_PATH_MISMATCH", `${where}.sourcePath must be ${deriveManagedSourcePath(folder, id)}`); const contract = string(input.contract, `${where}.contract`); if (!Object.hasOwn(contracts, contract)) fail("TEMPLATE_POLICY_INVALID", `${where}.contract does not exist`); return { templateId: id, destinationClass: destinationClass as DestinationClass, sourcePath: source, contract, naming: string(input.naming, `${where}.naming`), ...(extensions(input, new Set(["templateId", "destinationClass", "sourcePath", "contract", "naming", "extensions"]), where) === undefined ? {} : { extensions: extensions(input, new Set(["templateId", "destinationClass", "sourcePath", "contract", "naming", "extensions"]), where) }) }; }
+function parseTemplateFolders(value: unknown): readonly TemplateFolderRegistration[] {
+  if (!Array.isArray(value)) fail("TEMPLATE_POLICY_INVALID", "policy.templateFolders must be an array");
+  const paths = new Set<string>();
+  let defaultCount = 0;
+  return value.map((member, index) => {
+    const where = `policy.templateFolders[${index}]`;
+    const input = record(member, where);
+    const path = normalizeTemplateFolderPath(string(input.path, `${where}.path`));
+    if (paths.has(path)) fail("TEMPLATE_SOURCE_DUPLICATE", `${path} is registered more than once`);
+    paths.add(path);
+    if (input.mode !== "auto" && input.mode !== "manual") fail("TEMPLATE_POLICY_INVALID", `${where}.mode is invalid`);
+    if (input.default !== undefined && input.default !== true) fail("TEMPLATE_POLICY_INVALID", `${where}.default must be true when present`);
+    if (input.default === true && ++defaultCount > 1) fail("TEMPLATE_POLICY_INVALID", "policy.templateFolders may contain at most one default");
+    const preserved = extensions(input, new Set(["path", "mode", "default", "extensions"]), where);
+    return { path, mode: input.mode, ...(input.default === true ? { default: true as const } : {}), ...(preserved === undefined ? {} : { extensions: preserved }) };
+  });
+}
+function parseBinding(value: unknown, where: string, folders: readonly TemplateFolderRegistration[], key: string, contracts: Readonly<Record<string, ContractDefinition>>): TemplateBinding {
+  const input = record(value, where);
+  const id = validateTemplateId(string(input.templateId, `${where}.templateId`));
+  if (id !== key) fail("TEMPLATE_POLICY_INVALID", `${where}.templateId must equal its stable map key`);
+  if (input.destinationClass !== "managed-default" && input.destinationClass !== "registered-existing") fail("TEMPLATE_POLICY_INVALID", `${where}.destinationClass is invalid`);
+  const destinationClass = input.destinationClass as DestinationClass;
+  const sourceFolder = normalizeTemplateFolderPath(string(input.sourceFolder, `${where}.sourceFolder`));
+  selectTemplateFolder(folders, sourceFolder);
+  const sourcePath = normalizeTemplateSourcePath(string(input.sourcePath, `${where}.sourcePath`));
+  if (!isTemplateSourceInFolder(sourcePath, sourceFolder)) fail("TEMPLATE_SOURCE_INVALID", `${where}.sourcePath must be within its registered sourceFolder`);
+  if (destinationClass === "managed-default" && sourcePath !== deriveManagedSourcePath(sourceFolder, id)) fail("TEMPLATE_RECLASSIFY_PATH_MISMATCH", `${where}.sourcePath must be ${deriveManagedSourcePath(sourceFolder, id)}`);
+  const contract = string(input.contract, `${where}.contract`);
+  if (!Object.hasOwn(contracts, contract)) fail("TEMPLATE_POLICY_INVALID", `${where}.contract does not exist`);
+  const reserved = new Set(["templateId", "destinationClass", "sourceFolder", "sourcePath", "contract", "naming", "extensions"]);
+  const preserved = extensions(input, reserved, where);
+  return { templateId: id, destinationClass, sourceFolder, sourcePath, contract, naming: string(input.naming, `${where}.naming`), ...(preserved === undefined ? {} : { extensions: preserved }) };
+}
 
-export function parseTemplatePolicy(input: string | unknown): TemplatePolicy { let value: unknown = input; if (typeof input === "string") try { value = JSON.parse(input) as unknown; } catch { fail("TEMPLATE_POLICY_INVALID", "JSON parse failed"); } const root = record(value, "policy"); if (root.version !== 1 && root.version !== 2) fail("TEMPLATE_POLICY_INVALID", "policy.version must be 1 or 2"); const version = root.version; const folder = normalizeTemplateFolderPath(string(root.templateFolder, "policy.templateFolder")); const base = parseBase(root.base, "policy.base"); const rawContracts = record(root.contracts, "policy.contracts"); const contracts: Record<string, ContractDefinition> = {}; for (const [name, raw] of Object.entries(rawContracts)) { const parsed = parseBase(raw, `policy.contracts.${name}`, ["intent", "views"]); const source = record(raw, `policy.contracts.${name}`); const fields = { ...base.fields, ...parsed.fields }; const contract = { ...parsed, intent: string(source.intent, `policy.contracts.${name}.intent`), views: parseViews(source.views, `policy.contracts.${name}.views`, fields) }; merge(base, contract, name); contracts[string(name, "policy.contracts key")] = contract; } const rawTemplates = record(root.templates, "policy.templates"); const templates: Record<string, TemplateBinding> = {}; const sources = new Set<string>(); for (const [key, binding] of Object.entries(rawTemplates)) { const parsed = parseBinding(binding, `policy.templates.${key}`, folder, key, contracts); if (sources.has(parsed.sourcePath)) fail("TEMPLATE_SOURCE_DUPLICATE", `${parsed.sourcePath} is bound more than once`); sources.add(parsed.sourcePath); templates[key] = parsed; } const writers = version === 2 && root.writers !== undefined ? parseWriters(root.writers, "policy.writers") : undefined; const reserved = version === 2 ? RESERVED_POLICY_V2 : RESERVED_POLICY_V1; return { version, templateFolder: folder, base, contracts, templates, ...(writers === undefined ? {} : { writers }), ...(extensions(root, reserved, "policy") === undefined ? {} : { extensions: extensions(root, reserved, "policy") }) }; }
+export function parseTemplatePolicy(input: string | unknown): TemplatePolicy {
+  let value: unknown = input;
+  if (typeof input === "string") try { value = JSON.parse(input) as unknown; } catch { fail("TEMPLATE_POLICY_INVALID", "JSON parse failed"); }
+  const root = record(value, "policy");
+  if (root.version !== 3 || Object.hasOwn(root, "templateFolder")) fail("TEMPLATE_POLICY_VERSION_UNSUPPORTED", "only policy version 3 with templateFolders is supported");
+  const templateFolders = parseTemplateFolders(root.templateFolders);
+  const base = parseBase(root.base, "policy.base");
+  const rawContracts = record(root.contracts, "policy.contracts");
+  const contracts: Record<string, ContractDefinition> = {};
+  for (const [name, raw] of Object.entries(rawContracts)) {
+    const parsed = parseBase(raw, `policy.contracts.${name}`, ["intent", "views"]);
+    const source = record(raw, `policy.contracts.${name}`);
+    const fields = { ...base.fields, ...parsed.fields };
+    const contract = { ...parsed, intent: string(source.intent, `policy.contracts.${name}.intent`), views: parseViews(source.views, `policy.contracts.${name}.views`, fields) };
+    merge(base, contract, name);
+    contracts[string(name, "policy.contracts key")] = contract;
+  }
+  const rawTemplates = record(root.templates, "policy.templates");
+  const templates: Record<string, TemplateBinding> = {};
+  const sources = new Set<string>();
+  for (const [key, binding] of Object.entries(rawTemplates)) {
+    const parsed = parseBinding(binding, `policy.templates.${key}`, templateFolders, key, contracts);
+    if (sources.has(parsed.sourcePath)) fail("TEMPLATE_SOURCE_DUPLICATE", `${parsed.sourcePath} is bound more than once`);
+    sources.add(parsed.sourcePath);
+    templates[key] = parsed;
+  }
+  const defaultTemplate = root.defaultTemplate === undefined ? undefined : validateTemplateId(string(root.defaultTemplate, "policy.defaultTemplate"));
+  if (defaultTemplate !== undefined && !Object.hasOwn(templates, defaultTemplate)) fail("TEMPLATE_POLICY_INVALID", "policy.defaultTemplate must reference a registered template");
+  const writers = root.writers === undefined ? undefined : parseWriters(root.writers, "policy.writers");
+  const preserved = extensions(root, RESERVED_POLICY_V3, "policy");
+  return { version: 3, templateFolders, ...(defaultTemplate === undefined ? {} : { defaultTemplate }), base, contracts, templates, ...(writers === undefined ? {} : { writers }), ...(preserved === undefined ? {} : { extensions: preserved }) };
+}
 function stable(value: JsonValue): JsonValue { if (Array.isArray(value)) return value.map(stable); if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, member]) => [key, stable(member)])); return value; }
 export function serializeTemplatePolicy(policy: TemplatePolicy): string { return `${JSON.stringify(stable(policyToJson(parseTemplatePolicy(policy))), null, 2)}\n`; }
 function policyToJson(policy: TemplatePolicy): JsonValue {
   return json({
     version: policy.version,
-    templateFolder: policy.templateFolder,
+    templateFolders: policy.templateFolders,
+    ...(policy.defaultTemplate === undefined ? {} : { defaultTemplate: policy.defaultTemplate }),
     base: policy.base,
     contracts: Object.fromEntries(
       Object.entries(policy.contracts).sort(([left], [right]) => left.localeCompare(right)),
@@ -116,7 +185,7 @@ function policyToJson(policy: TemplatePolicy): JsonValue {
     templates: Object.fromEntries(
       Object.entries(policy.templates).sort(([left], [right]) => left.localeCompare(right)),
     ),
-    ...(policy.version === 2 && policy.writers !== undefined ? { writers: policy.writers } : {}),
+    ...(policy.writers === undefined ? {} : { writers: policy.writers }),
     ...(policy.extensions === undefined ? {} : { extensions: policy.extensions }),
   }, "policy");
 }
@@ -223,6 +292,7 @@ export function validateDerivedProjection(input: string | unknown, managed: Deri
 
 /** Applies only binding and folder semantics; bytes and publication are resolver concerns. */
 export function applyTemplatePolicyChange(current: TemplatePolicy, change: import("./types.js").TemplateSemanticChange): TemplatePolicy {
+  if (change.mode === "regenerate") return parseTemplatePolicy(current);
   const templates: Record<string, TemplateBinding> = { ...current.templates };
   if (change.mode === "create") {
     if (templates[change.binding.templateId] !== undefined) fail("TEMPLATE_ID_DUPLICATE", `template ${change.binding.templateId} already exists`);
@@ -234,17 +304,18 @@ export function applyTemplatePolicyChange(current: TemplatePolicy, change: impor
   } else if (change.mode === "reclassify") {
     const binding = templates[change.templateId];
     if (binding === undefined) fail("TEMPLATE_SOURCE_INVALID", "template does not exist");
-    if (change.toClass === "managed-default" && binding.sourcePath !== deriveManagedSourcePath(current.templateFolder, binding.templateId)) {
+    if (change.toClass === "managed-default" && binding.sourcePath !== deriveManagedSourcePath(binding.sourceFolder, binding.templateId)) {
       fail("TEMPLATE_RECLASSIFY_PATH_MISMATCH", "move or relocate before reclassifying to managed-default");
     }
     templates[change.templateId] = { ...binding, destinationClass: change.toClass };
-  } else {
+  } else if (change.mode === "relocate-folder") {
     const folder = normalizeTemplateFolderPath(change.templateFolder);
+    selectTemplateFolder(current.templateFolders, folder);
     if (!Object.values(templates).some(binding => binding.destinationClass === "managed-default")) return current;
     for (const [id, binding] of Object.entries(templates)) {
-      if (binding.destinationClass === "managed-default") templates[id] = { ...binding, sourcePath: deriveManagedSourcePath(folder, binding.templateId) };
+      if (binding.destinationClass === "managed-default") templates[id] = { ...binding, sourceFolder: folder, sourcePath: deriveManagedSourcePath(folder, binding.templateId) };
     }
-    return parseTemplatePolicy({ ...current, templateFolder: folder, templates });
+    return parseTemplatePolicy({ ...current, templates });
   }
   return parseTemplatePolicy({ ...current, templates });
 }

@@ -86,12 +86,23 @@ async function makeVault(): Promise<string> {
 
 async function approvedSetup(vault: string): Promise<ReturnType<typeof runCli>> {
   await mkdir(path.join(vault, ".obsidian"), { recursive: true });
+  await mkdir(path.join(vault, ".oms"), { recursive: true });
+  await mkdir(path.join(vault, "Templates"), { recursive: true });
   await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text", title: "text" } }));
-  const dryRun = runCli(["setup", "--vault", vault, "--dry-run"]);
+  await writeFile(path.join(vault, ".oms", "taxonomy.json"), JSON.stringify({
+    folders: {},
+    templates: { note: { templateFolder: "notes" } },
+  }));
+  await writeFile(
+    path.join(vault, "Templates", "note.md"),
+    "---\ntemplate: note\ntitle: Untitled\n---\n<!-- oms:content -->\n",
+  );
+  const dryRun = runCli(["setup", "--vault", vault, "--template-folder", "Templates", "--dry-run"]);
   expect(dryRun.status).toBe(0);
+  expect(existsSync(path.join(vault, ".oms", "template-policy.json"))).toBe(false);
   const match = /"approvalDigest":\s*"(sha256:[0-9a-f]{64})"/u.exec(dryRun.stdout);
   expect(match?.[1]).toBeDefined();
-  return runCli(["setup", "--vault", vault, "--yes", "--approved-digest", match![1]!]);
+  return runCli(["setup", "--vault", vault, "--template-folder", "Templates", "--yes", "--approved-digest", match![1]!]);
 }
 
 function runCli(
@@ -219,7 +230,7 @@ describe("oms CLI dispatch", () => {
     await writeFile(path.join(vault, "Notes", "broken.md"), "---\ntitle: [unterminated\n---\n");
 
     const result = runCli(
-      ["setup", "--vault", vault, "--yes", "--approved-digest", `sha256:${"0".repeat(64)}`],
+      ["setup", "--vault", vault, "--template-folder", "Templates", "--yes", "--approved-digest", `sha256:${"0".repeat(64)}`],
       undefined,
       {
         OMS_UPDATE_NOTICE: "1",
@@ -259,62 +270,67 @@ describe("oms CLI dispatch", () => {
     );
   });
 
-  it("guides a YAML-only vault through one approved setup conversion without doctor parsing YAML", async () => {
+  it("keeps a YAML-only taxonomy untouched and blocks setup without JSON authority", async () => {
     const vault = await makeVault();
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), "this: [is not valid YAML\n");
+    const yaml = "this: [is not valid YAML\n";
+    await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), yaml);
 
     const doctor = runCli(["doctor", "--vault", vault, "--json"]);
     expect(doctor.status).toBe(1);
     expect(doctor.stderr).toBe("");
-    expect(jsonObject(doctor.stdout)).toEqual({
+    expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({
       vault,
       status: "needs-repair",
-      diagnostics: [{
+      diagnostics: [expect.objectContaining({
         code: "LEGACY_TAXONOMY_YAML",
         path: ".oms/taxonomy.yaml",
-        remediation: "legacy .oms/taxonomy.yaml is no longer read — run oms setup to convert to taxonomy.json",
-      }],
-    });
+      })],
+    }));
 
-    await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), "folders: {}\n");
     await mkdir(path.join(vault, ".obsidian"), { recursive: true });
     await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text" } }));
-    const dryRun = runCli(["setup", "--vault", vault, "--dry-run"]);
-    expect(dryRun.status).toBe(0);
-    const approval = /"approvalDigest":\s*"(sha256:[0-9a-f]{64})"/u.exec(dryRun.stdout)?.[1];
-    expect(approval).toBeDefined();
-
-    const applied = runCli(["setup", "--vault", vault, "--yes", "--approved-digest", approval!]);
-    expect(applied.status).toBe(0);
-    expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(true);
-    expect(existsSync(path.join(vault, ".oms", "taxonomy.yaml"))).toBe(false);
+    await mkdir(path.join(vault, "Templates"), { recursive: true });
+    await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\n---\nbody\n");
+    const dryRun = runCli(["setup", "--vault", vault, "--template-folder", "Templates", "--dry-run"]);
+    expect(dryRun.status).toBe(1);
+    expect(dryRun.stdout).toContain("TEMPLATE_PLACEMENT_UNDECLARED");
+    expect(dryRun.stdout).not.toContain("approvalDigest");
+    expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(false);
+    await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf8")).resolves.toBe(yaml);
   });
 
-  it("fails closed when both legacy YAML and authoritative JSON taxonomy files exist", async () => {
+  it("uses JSON-only taxonomy authority, leaves legacy YAML untouched, and blocks missing placement", async () => {
     const vault = await makeVault();
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), "folders: {}\n");
-    await writeFile(path.join(vault, ".oms", "taxonomy.json"), "{\"folders\":{}}\n");
+    const yaml = "folders: {}\n";
+    const json = "{\"folders\":{}}\n";
+    await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), yaml);
+    await writeFile(path.join(vault, ".oms", "taxonomy.json"), json);
 
     const doctor = runCli(["doctor", "--vault", vault, "--json"]);
     expect(doctor.status).toBe(1);
-    expect(jsonObject(doctor.stdout)).toEqual({
+    expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({
       vault,
       status: "needs-repair",
-      diagnostics: [{
+      diagnostics: [expect.objectContaining({
         code: "LEGACY_TAXONOMY_YAML",
         path: ".oms/taxonomy.yaml",
-        remediation: "legacy .oms/taxonomy.yaml remains after conversion — remove it; .oms/taxonomy.json is authoritative",
-      }],
-    });
+      })],
+    }));
 
-    const setup = runCli(["setup", "--vault", vault, "--dry-run"]);
+    await mkdir(path.join(vault, ".obsidian"), { recursive: true });
+    await mkdir(path.join(vault, "Templates"), { recursive: true });
+    await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text" } }));
+    await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\n---\nbody\n");
+    const setup = runCli(["setup", "--vault", vault, "--template-folder", "Templates", "--dry-run"]);
     expect(setup.status).toBe(1);
-    expect(`${setup.stdout}\n${setup.stderr}`).toContain("MIGRATION_TAXONOMY_INVALID");
-    expect(`${setup.stdout}\n${setup.stderr}`).toContain(".oms/taxonomy.json is authoritative; manually remove .oms/taxonomy.yaml before setup");
+    expect(setup.stdout).toContain("TEMPLATE_PLACEMENT_UNDECLARED");
+    expect(setup.stdout).not.toContain("approvalDigest");
     expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(true);
     expect(existsSync(path.join(vault, ".oms", "taxonomy.yaml"))).toBe(true);
+    await expect(readFile(path.join(vault, ".oms", "taxonomy.json"), "utf8")).resolves.toBe(json);
+    await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf8")).resolves.toBe(yaml);
   });
 
   it("emits audit JSON and exits 0 for a clean template fixture folder", async () => {

@@ -79,20 +79,26 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
   mkdirSync(path.join(dir, ".obsidian"), { recursive: true });
   mkdirSync(path.join(dir, "Templates", "OMS"), { recursive: true });
   const policy = JSON.stringify({
-    version: 1,
-    templateFolder: "Templates/OMS",
+    version: 3,
+    templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
     base: { fields: {} },
     contracts: {
       project: { intent: "project note.", fields: { status: { type: "text" }, rating: { type: "number" }, done: { type: "boolean" } }, views: [] },
       reference: { intent: "reference note.", fields: { rating: { type: "number" }, done: { type: "boolean" } }, views: [] },
     },
     templates: {
-      project: { templateId: "project", destinationClass: "managed-default", sourcePath: "Templates/OMS/project.md", contract: "project", naming: "{{title}}" },
-      reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", contract: "reference", naming: "{{title}}" },
+      project: { templateId: "project", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/project.md", contract: "project", naming: "{{title}}" },
+      reference: { templateId: "reference", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/reference.md", contract: "reference", naming: "{{title}}" },
     },
   });
   const intentEntries = Object.entries(intents).sort(([left], [right]) => left.localeCompare(right));
-  const taxonomy = JSON.stringify({ folders: Object.fromEntries(intentEntries.map(([folder, intent]) => [folder, { intent }])) });
+  const taxonomy = JSON.stringify({
+    folders: Object.fromEntries(intentEntries.map(([folder, intent]) => [folder, { intent }])),
+    templates: {
+      project: { templateFolder: "Inbox" },
+      reference: { templateFolder: "Inbox" },
+    },
+  });
   const types = JSON.stringify({ types: { status: "text", rating: "number", done: "boolean" } });
   const projectTemplate = "---\nstatus: active\nrating: 1\ndone: false\n---\nBody\n";
   const referenceTemplate = "---\nrating: 1\ndone: false\n---\nBody\n";

@@ -5,7 +5,7 @@ import { join, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import { loadResolvedTemplates, sourceSignature } from "./resolver.js";
-import { serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
+import { parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { registerExistingTemplate } from "./register.js";
 import type { Digest, TemplatePolicy } from "./types.js";
 
@@ -15,8 +15,8 @@ function sha(value: string): Digest { return `sha256:${createHash("sha256").upda
 async function fixture(): Promise<string> {
   const vault = await mkdtemp(join(tmpdir(), "oms-register-")); vaults.push(vault);
   await Promise.all([mkdir(join(vault, ".oms")), mkdir(join(vault, ".obsidian")), mkdir(join(vault, "Templates/manual"), { recursive: true })]);
-  const policy: TemplatePolicy = { version: 1, templateFolder: "Templates/OMS" as TemplatePolicy["templateFolder"], base: { fields: {} }, contracts: { people: { intent: "people", fields: {}, views: [] } }, templates: {} };
-  const policyBytes = serializeTemplatePolicy(policy); const taxonomy = "{\"folders\":{}}\n"; const obsidian = "{\"types\":{\"name\":\"text\",\"tags\":\"tags\"}}\n";
+  const policy: TemplatePolicy = { version: 3, templateFolders: [{ path: "Templates/manual" as TemplatePolicy["templateFolders"][number]["path"], mode: "manual", default: true }], base: { fields: {} }, contracts: { people: { intent: "people", fields: {}, views: [] } }, templates: {} };
+  const policyBytes = serializeTemplatePolicy(policy); const taxonomy = "{\"folders\":{\"notes\":{\"templates\":[\"people\",\"other\"]}}}\n"; const obsidian = "{\"types\":{\"name\":\"text\",\"tags\":\"tags\"}}\n";
   const projection = serializeDerivedProjection({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature([{ logicalId: "template-policy", signature: sha(policyBytes) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }]), sources: [{ logicalId: "template-policy", signature: sha(policyBytes) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }] }, managed: { base: { fields: {} }, globalAxes: {}, templates: {} } });
   await Promise.all([writeFile(join(vault, ".oms/template-policy.json"), policyBytes), writeFile(join(vault, ".oms/taxonomy.json"), taxonomy), writeFile(join(vault, ".oms/types.json"), projection), writeFile(join(vault, ".obsidian/types.json"), obsidian), writeFile(join(vault, "Templates/manual/people.template.md"), source)]);
   return vault;
@@ -34,7 +34,7 @@ async function tree(root: string, directory = root): Promise<string[]> {
   return found.sort();
 }
 
-const request = { templateId: "people", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}" };
+const request = { templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}" };
 
 async function register(vault: string, overrides: Partial<typeof request> = {}): Promise<void> {
   const input = { ...request, ...overrides };
@@ -46,12 +46,14 @@ async function register(vault: string, overrides: Partial<typeof request> = {}):
 
 it("registers an existing source in place and derives its projection", async () => {
   const vault = await fixture(); const path = join(vault, "Templates/manual/people.template.md"); const before = await readFile(path);
-  const request = { templateId: "people", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}" };
+  const request = { templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", contract: "people", naming: "{{name}}" };
   const planned = await registerExistingTemplate(vault, request, { dryRun: true });
   expect(planned.status).toBe("planned");
   if (planned.status !== "planned") throw new Error("expected plan");
   const applied = await registerExistingTemplate(vault, request, { approvedDigest: planned.approvalDigest });
   expect(applied.status).toBe("applied"); expect(await readFile(path)).toEqual(before);
+  const registeredPolicy = parseTemplatePolicy(await readFile(join(vault, ".oms/template-policy.json"), "utf8"));
+  expect(registeredPolicy.templates.people?.sourceFolder).toBe("Templates/manual");
   const types = await readFile(join(vault, ".oms/types.json"), "utf8"); expect(types).toContain('"people"'); expect(types).toContain('"name"');
 });
 
@@ -94,6 +96,16 @@ it("refuses a contract the policy does not declare and leaves the vault untouche
   await expect(registerExistingTemplate(vault, { ...request, contract: "ghost" }, { dryRun: true }))
     .rejects.toThrow(/^TEMPLATE_CONTRACT_UNKNOWN:/u);
   for (const [path, content] of before) expect(await readFile(join(vault, path), "utf8"), path).toBe(content);
+});
+
+it("refuses an unregistered source folder and a source outside the selected folder", async () => {
+  const vault = await fixture();
+  await expect(registerExistingTemplate(vault, { ...request, sourceFolder: "Templates/unregistered" }, { dryRun: true }))
+    .rejects.toThrow(/TEMPLATE_SOURCE_INVALID/u);
+  await mkdir(join(vault, "Elsewhere"));
+  await writeFile(join(vault, "Elsewhere/people.template.md"), source);
+  await expect(registerExistingTemplate(vault, { ...request, sourcePath: "Elsewhere/people.template.md" }, { dryRun: true }))
+    .rejects.toThrow(/TEMPLATE_SOURCE_INVALID/u);
 });
 
 it("refuses a templateId already bound to a different source", async () => {

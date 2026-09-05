@@ -27,7 +27,7 @@ describe("Obsidian property type authority", () => {
   });
 
   it("re-exports the template policy parser rather than a writable projection contract", () => {
-    const policy = parseTemplatePolicy({ version: 1, templateFolder: "Templates", base: { fields: {} }, contracts: {}, templates: {}, extension: { owner: "vault" } });
-    expect(JSON.parse(serializeTemplatePolicy(policy))).toMatchObject({ version: 1, extensions: { extension: { owner: "vault" } } });
+    const policy = parseTemplatePolicy({ version: 3, templateFolders: [{ path: "Templates", mode: "manual", default: true }], base: { fields: {} }, contracts: {}, templates: {}, extension: { owner: "vault" } });
+    expect(JSON.parse(serializeTemplatePolicy(policy))).toMatchObject({ version: 3, extensions: { extension: { owner: "vault" } } });
   });
 });

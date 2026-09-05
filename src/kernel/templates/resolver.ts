@@ -4,12 +4,10 @@ import { relative, resolve } from "node:path";
 import { loadObsidianTypes } from "../contracts/index.js";
 import { extractTemplate, parseTemplate } from "./extract.js";
 import { approvalDigest, canonicalJson, inputDigest, outputDigest, templateInput } from "./canonical.js";
-import { normalizeTemplateFolderPath, normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
+import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
 import { applyTemplatePolicyChange, parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { templateMigrationAdmission } from "./transaction.js";
 import type { BaseContract, DerivedProjection, Digest, FieldPolicy, GlobalAxes, GlobalAxis, JsonValue, ResolvedConvention, ResolvedTemplate, SourceDescriptor, SourceTransition, TemplateCompositionManifest, TemplateCompositionOptions, TemplateFolderPath, TemplateMove, TemplateSemanticChange, TemplateSemanticSnapshot, TemplateSourcePath, VerifiedFileState } from "./types.js";
-
-const SAFE_INBOX = normalizeTemplateFolderPath("Inbox");
 
 export interface LoadResolvedTemplatesOptions {
   readonly policyPath?: string;
@@ -189,7 +187,12 @@ export function deriveFolderOntologyAxis(rawFolders: unknown, where = "taxonomy.
   };
 }
 
-function taxonomyRouting(path: string, bytes: Uint8Array): { readonly targetFolders: ReadonlyMap<string, TemplateFolderPath>; readonly globalAxes: GlobalAxes } {
+export interface TaxonomyRouting {
+  readonly targetFolders: ReadonlyMap<string, TemplateFolderPath>;
+  readonly globalAxes: GlobalAxes;
+}
+
+export function taxonomyRouting(path: string, bytes: Uint8Array): TaxonomyRouting {
   const root = jsonRecord(bytes, path);
   if (root === null) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be a JSON object`);
   const targetFolders = new Map<string, TemplateFolderPath>();
@@ -231,6 +234,14 @@ function taxonomyRouting(path: string, bytes: Uint8Array): { readonly targetFold
   return { targetFolders, globalAxes: axes };
 }
 
+export function requireTaxonomyPlacement(routing: TaxonomyRouting, templateId: string): TemplateFolderPath {
+  const targetFolder = routing.targetFolders.get(templateId);
+  if (targetFolder === undefined) {
+    fail("TEMPLATE_PLACEMENT_UNDECLARED", `taxonomy placement is undeclared for template ${templateId}`);
+  }
+  return targetFolder;
+}
+
 /**
  * Resolves the signed, user-owned template projection without creating or changing vault files.
  * `sourcePaths` is intentionally additive only: it may name already registered template paths.
@@ -254,7 +265,7 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
   const bindings = Object.values(policy.templates).sort((a, b) => a.templateId.localeCompare(b.templateId));
   const seen = new Set<string>();
   for (const binding of bindings) {
-    const normalized = normalizeTemplateSourcePath(binding.sourcePath);
+    const normalized = deriveTemplateSourcePath(binding);
     if (seen.has(normalized)) fail("TEMPLATE_SOURCE_DUPLICATE", `registered template source ${normalized} is duplicated`);
     seen.add(normalized);
   }
@@ -262,8 +273,8 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
     const normalized = normalizeTemplateSourcePath(extra);
     if (!seen.has(normalized)) fail("TEMPLATE_SOURCE_INVALID", `explicit source ${normalized} is not a registered template`);
   }
-  await Promise.all(bindings.map(binding => verifyTemplateSourcePath(root, binding.sourcePath)));
-  const extracted = await Promise.all(bindings.map(binding => extractTemplate(root, binding.sourcePath)));
+  await Promise.all(bindings.map(binding => verifyTemplateSourcePath(root, deriveTemplateSourcePath(binding))));
+  const extracted = await Promise.all(bindings.map(binding => extractTemplate(root, deriveTemplateSourcePath(binding))));
   const descriptors: SourceDescriptor[] = [
     { logicalId: "template-policy", signature: policyRaw.signature },
     { logicalId: "taxonomy", signature: taxonomyRaw.signature },
@@ -286,7 +297,7 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
       id: binding.templateId,
       destinationClass: binding.destinationClass,
       sourcePath: template.sourcePath,
-      targetFolder: taxonomy.targetFolders.get(binding.templateId) ?? SAFE_INBOX,
+      targetFolder: requireTaxonomyPlacement(taxonomy, binding.templateId),
       bom: template.bom,
       eol: template.eol,
       finalNewline: template.finalNewline,
@@ -373,7 +384,12 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
   const policyFile = requiredControl(policyPath, policyState);
   const taxonomyFile = requiredControl(taxonomyPath, taxonomyState);
   const obsidianFile = requiredControl(obsidianPath, obsidianState);
-  if (!matchExpectation(policyFile, options.expected.controls.policy) || !matchExpectation(taxonomyFile, options.taxonomy.expectedCurrent) || !matchExpectation(projectionState, options.expected.controls.projection)) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "control CAS does not match");
+  if (
+    !matchExpectation(policyFile, options.expected.controls.policy) ||
+    !matchExpectation(taxonomyFile, options.expected.controls.taxonomy) ||
+    !matchExpectation(taxonomyFile, options.taxonomy.expectedCurrent) ||
+    !matchExpectation(projectionState, options.expected.controls.projection)
+  ) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "control CAS does not match");
   if (jsonRecord(options.taxonomy.proposedBytes, taxonomyPath) === null || (options.taxonomy.action === "verify-only" && !sameManifestBytes(taxonomyFile.bytes, options.taxonomy.proposedBytes))) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "taxonomy proposal is invalid");
   const currentPolicy = parseTemplatePolicy(new TextDecoder().decode(policyFile.bytes));
   const proposedPolicy = applyTemplatePolicyChange(currentPolicy, change);
@@ -390,47 +406,51 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
   }
   const obsidian = await loadObsidianTypes(vault);
   if (obsidian === null) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `${obsidianPath} must exist`);
-  const proposedPolicyBytes = manifestBytes(serializeTemplatePolicy(proposedPolicy));
+  const proposedPolicyBytes = change.mode === "regenerate"
+    ? new Uint8Array(policyFile.bytes)
+    : manifestBytes(serializeTemplatePolicy(proposedPolicy));
   const currentBindings = Object.values(currentPolicy.templates).sort((a,b) => a.templateId.localeCompare(b.templateId));
   const proposedBindings = Object.values(proposedPolicy.templates).sort((a,b) => a.templateId.localeCompare(b.templateId));
   const currentSources = new Map<string, VerifiedFileState>();
-  for (const binding of currentBindings) currentSources.set(binding.templateId, await manifestSourceFile(vault, binding.sourcePath));
+  for (const binding of currentBindings) currentSources.set(binding.templateId, await manifestSourceFile(vault, deriveTemplateSourcePath(binding)));
   for (const source of options.expected.sources) {
     const binding = currentPolicy.templates[source.templateId];
     const current = requiredSource(source.templateId, currentSources.get(source.templateId));
-    if (binding === undefined || binding.sourcePath !== source.path || !matchExpectation(current, source.expected)) {
+    if (binding === undefined || deriveTemplateSourcePath(binding) !== source.path || !matchExpectation(current, source.expected)) {
       fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source CAS does not match");
     }
   }
   const transitions: import("./types.js").SourceTransition[] = [];
   for (const binding of proposedBindings) {
     const old = currentPolicy.templates[binding.templateId];
+    const bindingSourcePath = deriveTemplateSourcePath(binding);
     const proposal = (change.mode === "create" || change.mode === "update") && change.binding.templateId === binding.templateId ? change.source : undefined;
-    if (proposal !== undefined && proposal.path !== binding.sourcePath) {
+    if (proposal !== undefined && proposal.path !== bindingSourcePath) {
       fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `source proposal path differs for ${binding.templateId}`);
     }
-    if (old !== undefined && old.sourcePath !== binding.sourcePath) {
+    if (old !== undefined && deriveTemplateSourcePath(old) !== bindingSourcePath) {
+      const oldSourcePath = deriveTemplateSourcePath(old);
       const oldState = requiredSource(binding.templateId, currentSources.get(binding.templateId));
-      const newState = await manifestSourceFile(vault, binding.sourcePath);
+      const newState = await manifestSourceFile(vault, bindingSourcePath);
       if (change.mode === "update" && change.moveStrategy === "register-already-moved") {
         if (oldState.state !== "absent" || newState.state !== "present" || proposal === undefined || proposal.publication !== "verify-existing" || !sameManifestBytes(newState.bytes, proposal.bytes)) {
           fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `registered source does not match for ${binding.templateId}`);
         }
-        transitions.push({ templateId: binding.templateId, path: old.sourcePath, expectedCurrent: { state: "absent" }, current: oldState, proposed: { state: "absent" }, action: "verify-only" });
-        transitions.push({ templateId: binding.templateId, path: binding.sourcePath, expectedCurrent: { state: "present", signature: newState.signature }, current: newState, proposed: newState, action: "verify-only" });
+        transitions.push({ templateId: binding.templateId, path: oldSourcePath, expectedCurrent: { state: "absent" }, current: oldState, proposed: { state: "absent" }, action: "verify-only" });
+        transitions.push({ templateId: binding.templateId, path: bindingSourcePath, expectedCurrent: { state: "present", signature: newState.signature }, current: newState, proposed: newState, action: "verify-only" });
       } else {
         if (oldState.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `old source is absent for ${binding.templateId}`);
         if (newState.state !== "absent") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `new source collides for ${binding.templateId}`);
         const proposed = proposal === undefined
           ? { state: "present" as const, bytes: new Uint8Array(oldState.bytes), signature: oldState.signature }
           : { state: "present" as const, bytes: new Uint8Array(proposal.bytes), signature: manifestDigest(proposal.bytes) };
-        transitions.push({ templateId: binding.templateId, path: binding.sourcePath, expectedCurrent: { state: "absent" }, current: newState, proposed, action: "write" });
-        transitions.push({ templateId: binding.templateId, path: old.sourcePath, expectedCurrent: { state: "present", signature: oldState.signature }, current: oldState, proposed: { state: "absent" }, action: "delete" });
+        transitions.push({ templateId: binding.templateId, path: bindingSourcePath, expectedCurrent: { state: "absent" }, current: newState, proposed, action: "write" });
+        transitions.push({ templateId: binding.templateId, path: oldSourcePath, expectedCurrent: { state: "present", signature: oldState.signature }, current: oldState, proposed: { state: "absent" }, action: "delete" });
       }
       continue;
     }
     const current: VerifiedFileState = old === undefined
-      ? await manifestSourceFile(vault, binding.sourcePath)
+      ? await manifestSourceFile(vault, bindingSourcePath)
       : requiredSource(binding.templateId, currentSources.get(binding.templateId));
     if (old === undefined && proposal?.publication === "write" && current.state !== "absent") {
       fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `new source collides for ${binding.templateId}`);
@@ -442,14 +462,14 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
       fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `registered source does not match for ${binding.templateId}`);
     }
     const proposed = proposal === undefined ? current : { state: "present" as const, bytes: new Uint8Array(proposal.bytes), signature: manifestDigest(proposal.bytes) };
-    transitions.push({ templateId: binding.templateId, path: binding.sourcePath, expectedCurrent: current.state === "present" ? { state: "present", signature: current.signature } : { state: "absent" }, current, proposed, action: proposal === undefined || proposal.publication === "verify-existing" ? "verify-only" : "write" });
+    transitions.push({ templateId: binding.templateId, path: bindingSourcePath, expectedCurrent: current.state === "present" ? { state: "present", signature: current.signature } : { state: "absent" }, current, proposed, action: proposal === undefined || proposal.publication === "verify-existing" ? "verify-only" : "write" });
   }
   const makeSnapshot = (policy: import("./types.js").TemplatePolicy, policyDigest: Digest, taxonomyDigest: Digest, obsidianDigest: Digest, bindings: readonly import("./types.js").TemplateBinding[], sourceState: (binding: import("./types.js").TemplateBinding) => VerifiedFileState, resolvedInputSignature: Digest): TemplateSemanticSnapshot => {
     const input = templateInput(policy, { policy: policyDigest, taxonomy: taxonomyDigest, obsidianTypes: obsidianDigest, obsidianTypesPath: obsidianPath }, bindings, (binding) => {
       const source = sourceState(binding);
       return source.state === "present" ? source.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source absent");
     });
-    return { input, inputDigest: inputDigest(input), bindings, resolvedTemplates: bindings.map(binding => { const source = sourceState(binding); return { templateId: binding.templateId, sourcePath: binding.sourcePath, inputSignature: resolvedInputSignature, templateSignature: source.state === "present" ? source.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source absent") }; }) };
+    return { input, inputDigest: inputDigest(input), bindings, resolvedTemplates: bindings.map(binding => { const source = sourceState(binding); return { templateId: binding.templateId, sourcePath: deriveTemplateSourcePath(binding), inputSignature: resolvedInputSignature, templateSignature: source.state === "present" ? source.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source absent") }; }) };
   };
   const current = makeSnapshot(
     currentPolicy,
@@ -460,14 +480,14 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     binding => {
       const source = requiredSource(binding.templateId, currentSources.get(binding.templateId));
       if (source.state === "absent" && change.mode === "update" && change.moveStrategy === "register-already-moved" && change.templateId === binding.templateId) {
-        return requiredTransition(binding.templateId, change.binding.sourcePath, transitions).proposed;
+        return requiredTransition(binding.templateId, deriveTemplateSourcePath(change.binding), transitions).proposed;
       }
       return source;
     },
     projection?.generatedFrom.inputSignature ?? options.expected.input,
   );
   if (current.inputDigest !== options.expected.input) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "input CAS does not match");
-  const proposedSourceStates = new Map(proposedBindings.map(binding => [binding.templateId, requiredTransition(binding.templateId, binding.sourcePath, transitions).proposed]));
+  const proposedSourceStates = new Map(proposedBindings.map(binding => [binding.templateId, requiredTransition(binding.templateId, deriveTemplateSourcePath(binding), transitions).proposed]));
   const proposedDescriptors: SourceDescriptor[] = [
     { logicalId: "template-policy", signature: manifestDigest(proposedPolicyBytes) },
     { logicalId: "taxonomy", signature: manifestDigest(options.taxonomy.proposedBytes) },
@@ -475,7 +495,7 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     ...proposedBindings.map(binding => {
       const source = requiredSource(binding.templateId, proposedSourceStates.get(binding.templateId));
       if (source.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `proposed source is absent for ${binding.templateId}`);
-      return { path: binding.sourcePath, signature: source.signature };
+      return { path: deriveTemplateSourcePath(binding), signature: source.signature };
     }),
   ];
   const proposedResolvedInput = signature(proposedDescriptors);
@@ -483,14 +503,15 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
   for (const binding of proposedBindings) {
     const source = requiredSource(binding.templateId, proposedSourceStates.get(binding.templateId));
     if (source.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `proposed source is absent for ${binding.templateId}`);
-    const parsed = parseTemplate(binding.sourcePath, source.bytes);
+    const bindingSourcePath = deriveTemplateSourcePath(binding);
+    const parsed = parseTemplate(bindingSourcePath, source.bytes);
     const contract = proposedPolicy.contracts[binding.contract];
     if (contract === undefined) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `contract is missing for ${binding.templateId}`);
     proposedTemplates[binding.templateId] = {
       templateId: binding.templateId,
       destinationClass: binding.destinationClass,
-      sourcePath: binding.sourcePath,
-      targetFolder: proposedTaxonomy.targetFolders.get(binding.templateId) ?? SAFE_INBOX,
+      sourcePath: bindingSourcePath,
+      targetFolder: requireTaxonomyPlacement(proposedTaxonomy, binding.templateId),
       keyOrder: parsed.keyOrder,
       fields: composeResolvedTemplateFields(proposedPolicy.base, contract.fields, parsed.frontmatter, obsidian.types),
       views: contract.views,
@@ -512,7 +533,7 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     manifestDigest(options.taxonomy.proposedBytes),
     obsidianFile.signature,
     proposedBindings,
-    binding => requiredTransition(binding.templateId, binding.sourcePath, transitions).proposed,
+    binding => requiredTransition(binding.templateId, deriveTemplateSourcePath(binding), transitions).proposed,
     proposedResolvedInput,
   );
   const controls: TemplateCompositionManifest["controls"] = [
@@ -546,13 +567,15 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
   else if (change.mode === "update") affectedIds.add(change.templateId);
   else if (change.mode === "reclassify") {
     if (currentPolicy.templates[change.templateId]?.destinationClass !== change.toClass) affectedIds.add(change.templateId);
-  } else {
+  } else if (change.mode === "relocate-folder") {
     for (const binding of proposedBindings) if (binding.destinationClass === "managed-default") affectedIds.add(binding.templateId);
+  } else {
+    for (const binding of proposedBindings) affectedIds.add(binding.templateId);
   }
   const operations = proposedBindings
     .filter(binding => affectedIds.has(binding.templateId))
     .map(binding => {
-      const source = requiredTransition(binding.templateId, binding.sourcePath, transitions);
+      const source = requiredTransition(binding.templateId, deriveTemplateSourcePath(binding), transitions);
       const proposedSource = source.proposed;
       if (proposedSource.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "operation source is absent");
       return {
@@ -567,17 +590,19 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     .filter(binding => {
       if (change.mode === "relocate-folder") return binding.destinationClass === "managed-default";
       const currentBinding = currentPolicy.templates[binding.templateId];
-      return currentBinding !== undefined && currentBinding.sourcePath !== binding.sourcePath;
+      return currentBinding !== undefined && deriveTemplateSourcePath(currentBinding) !== deriveTemplateSourcePath(binding);
     })
     .map(binding => {
       const currentBinding = currentPolicy.templates[binding.templateId];
       if (currentBinding === undefined) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "move binding is absent");
       const source = requiredSource(binding.templateId, currentSources.get(binding.templateId));
       const moveSource = source.state === "absent" && change.mode === "update" && change.moveStrategy === "register-already-moved"
-        ? requiredTransition(binding.templateId, binding.sourcePath, transitions).proposed
+        ? requiredTransition(binding.templateId, deriveTemplateSourcePath(binding), transitions).proposed
         : source;
       if (moveSource.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "move source is absent");
-      const strategy: TemplateMove["strategy"] = currentBinding.sourcePath === binding.sourcePath
+      const currentSourcePath = deriveTemplateSourcePath(currentBinding);
+      const bindingSourcePath = deriveTemplateSourcePath(binding);
+      const strategy: TemplateMove["strategy"] = currentSourcePath === bindingSourcePath
         ? "no-op"
         : change.mode === "update"
           ? change.moveStrategy ?? fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "move strategy missing")
@@ -585,13 +610,13 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
       const move: TemplateMove = {
         templateId: binding.templateId,
         strategy,
-        oldPath: currentBinding.sourcePath,
-        newPath: binding.sourcePath,
+        oldPath: currentSourcePath,
+        newPath: bindingSourcePath,
         sourceSignature: moveSource.signature,
       };
       return move;
     })
     .sort((left, right) => left.templateId.localeCompare(right.templateId));
   const outputs = [...controls.map(control => ({ finalVaultRelativePath: control.path, payloadDigest: control.proposed.signature })), ...transitions.filter(source => source.proposed.state === "present").map(source => ({ finalVaultRelativePath: source.path, payloadDigest: source.proposed.state === "present" ? source.proposed.signature : fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "output missing") }))];
-  return { version: 1, mode: change.mode, current, proposed, controls, sources: transitions.sort((a,b) => a.templateId.localeCompare(b.templateId) || a.path.localeCompare(b.path)), operations, diagnostics: [], moves, outputs, approvalDigest: approvalDigest(proposed.inputDigest, operations, []), outputDigest: outputDigest(outputs) };
+  return { version: 1, mode: change.mode, current, proposed, controls, sources: transitions.sort((a,b) => a.templateId.localeCompare(b.templateId) || a.path.localeCompare(b.path)), operations, diagnostics: [], moves, outputs, approvalDigest: approvalDigest(proposed.inputDigest, operations, [], { current, controls, sources: transitions }), outputDigest: outputDigest(outputs) };
 }

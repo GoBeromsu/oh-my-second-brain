@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- **Breaking: template policy v3 replaces singular `templateFolder` with structured `templateFolders` registrations.** (#120) Each folder records `path`, `auto|manual` mode, and at most one template-creation default; template bindings retain their source folder, while note placement remains explicit JSON taxonomy authority through the separate `defaultTemplate`. The runtime no longer invents an `Inbox` or template directory, and unsupported older policy versions stay protected and fail closed while setup produces an explicit v3 proposal.
+
 ## [0.13.0] - 2026-09-05
 
 - **Replaying an identical completed template registration now returns a verified `already-complete` receipt instead of failing, while conflicting template IDs remain rejected.** Replay recomputes the canonical input and every current physical output, including every registered source, before accepting the completed marker; any drift requires a new dry-run. Template input authority construction is shared by registration, resolution, and repair to prevent digest drift.

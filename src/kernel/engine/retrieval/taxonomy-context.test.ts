@@ -28,14 +28,15 @@ async function vaultWithContract(taxonomy: string): Promise<string> {
     mkdir(path.join(vault, "Templates", "OMS"), { recursive: true }),
   ]);
   const policy = JSON.stringify({
-    version: 1,
-    templateFolder: "Templates/OMS",
+    version: 3,
+    templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
     base: { fields: {} },
     contracts: { note: { intent: "A note.", fields: {}, views: [] } },
     templates: {
       note: {
         templateId: "note",
         destinationClass: "managed-default",
+        sourceFolder: "Templates/OMS",
         sourcePath: "Templates/OMS/note.md",
         contract: "note",
         naming: "{{title}}",
@@ -167,6 +168,7 @@ describe("loadTaxonomyIntentProjection", () => {
         references: { intent: "Processed sources." },
         notes: { intent: "Permanent notes." },
       },
+      templates: { note: { templateFolder: "Inbox" } },
     }));
 
     const projection = await loadTaxonomyIntentProjection(vault, ["references/a.md", "notes/b.md"]);
@@ -212,7 +214,10 @@ describe("loadTaxonomyIntentProjection", () => {
       await writeFile(projectionPath, JSON.stringify(projection));
     }],
   ])("fails closed with repair guidance when the active contract is %s", async (state, change) => {
-    const vault = await vaultWithContract(JSON.stringify({ folders: { notes: { intent: "Permanent notes." } } }));
+    const vault = await vaultWithContract(JSON.stringify({
+      folders: { notes: { intent: "Permanent notes." } },
+      templates: { note: { templateFolder: "Inbox" } },
+    }));
     await change(vault);
 
     await expect(loadTaxonomyIntentProjection(vault, ["notes/a.md"])).rejects.toThrow(state);

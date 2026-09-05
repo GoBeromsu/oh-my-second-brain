@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline/promises";
 import {
   acquireModelSet,
   modelsConfigFromAcquisitionManifest,
@@ -8,6 +9,7 @@ import {
   applySetup,
   composeSetup,
   decideNonInteractiveSetup,
+  decideSetup,
   inspectSetup,
   publishSetupModels,
 } from "../kernel/setup/service.js";
@@ -29,7 +31,7 @@ export async function runSetup(opts: {
   installClaude?: boolean;
   dryRun?: boolean;
   approvedDigest?: Digest;
-  templateFolder?: string;
+  templateFolders?: readonly string[];
   prompt?: SetupPrompt;
   /** Strict setup-only acquisition manifest for one or more model capabilities. */
   modelSetManifest?: ModelSetAcquisitionManifest | unknown;
@@ -46,7 +48,7 @@ export async function runSetup(opts: {
     installClaude = false,
     dryRun = false,
     approvedDigest,
-    templateFolder,
+    templateFolders,
     modelSetManifest,
     modelCacheDir,
     modelsNoDefault = false,
@@ -62,10 +64,33 @@ export async function runSetup(opts: {
   const proposedModelsConfig = modelManifest === undefined
     ? undefined
     : modelsConfigFromAcquisitionManifest(modelManifest);
-  const state = await inspectSetup({ vault, templateFolder });
+  const selected = templateFolders?.map((path, index) => ({ path, mode: "auto" as const, ...(index === 0 ? { default: true as const } : {}) }));
+  let state = await inspectSetup({ vault, templateFolders: selected });
+  if (state.selectedTemplateFolders.length === 0 && (opts.prompt !== undefined || process.stdin.isTTY)) {
+    const prompt = opts.prompt ?? createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const candidates = state.templateFolderCandidates;
+      for (const [index, candidate] of candidates.entries()) console.log(`${index + 1}. ${candidate.path} (${candidate.provenance.join(", ")})`);
+      const answer = await prompt.question(candidates.length === 0
+        ? "Template folder (explicit vault-relative path; blank leaves setup blocked): "
+        : "Select template folder numbers separated by commas (first is creation default; blank leaves setup blocked): ");
+      let paths: string[] = [];
+      if (answer.trim() !== "") {
+        if (candidates.length === 0) paths = [answer.trim()];
+        else {
+          const indexes = answer.split(",").map(value => Number(value.trim()));
+          if (indexes.some(index => !Number.isInteger(index) || index < 1 || index > candidates.length) || new Set(indexes).size !== indexes.length) throw new Error("TEMPLATE_FOLDER_SELECTION_REQUIRED: choose distinct displayed folder numbers");
+          paths = indexes.map(index => candidates[index - 1]!.path);
+        }
+      }
+      if (paths.length > 0) state = await decideSetup(state, { templateFolders: paths.map((path, index) => ({ path, mode: "auto", ...(index === 0 ? { default: true as const } : {}) })) });
+    } finally { prompt.close(); }
+  }
   if (state.proposal.unresolved.length > 0) {
     console.log(JSON.stringify({
       status: "blocked",
+      templateFolderCandidates: state.templateFolderCandidates,
+      templateFolderHintDiagnostics: state.templateFolderHintDiagnostics,
       diagnostics: state.proposal.unresolved.map(({ code, message, path }) => ({
         code,
         remediation: message,
@@ -76,10 +101,27 @@ export async function runSetup(opts: {
     return "blocked";
   }
   const decision = await decideNonInteractiveSetup(state);
-  const manifest = await composeSetup(decision, { base: { fields: {} } });
+  let manifest;
+  try { manifest = await composeSetup(decision, { base: { fields: {} } }); }
+  catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.log(JSON.stringify({ status: "blocked", diagnostics: [{ code: detail.match(/^([A-Z][A-Z0-9_]+)/)?.[1] ?? "SETUP_COMPOSITION_FAILED", remediation: detail }], templateFolders: state.selectedTemplateFolders }, null, 2));
+    process.exitCode = 1;
+    return "blocked";
+  }
   if (dryRun) {
     const receipt = await applySetup(decision, manifest, { dryRun: true });
+    if (receipt.status === "rejected" || receipt.status === "inconsistent") {
+      console.log(JSON.stringify({ status: "blocked", diagnostics: receipt.diagnostics }, null, 2));
+      process.exitCode = 1;
+      return "blocked";
+    }
     console.log(JSON.stringify({
+      templateFolders: state.selectedTemplateFolders,
+      templateFolderSource: state.templateFolderSource,
+      droppedKeys: state.proposal.droppedKeys,
+      policyPreimage: manifest.controls[0].expectedCurrent,
+      policyProposal: JSON.parse(new TextDecoder().decode(manifest.controls[0].proposed.bytes)) as unknown,
       inputDigest: manifest.proposed.inputDigest,
       approvalDigest: manifest.approvalDigest,
       outputDigest: manifest.outputDigest,

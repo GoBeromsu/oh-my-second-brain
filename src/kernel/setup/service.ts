@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseModelsConfig, type ModelsConfigV1 } from "../engine/embed/config.js";
 import { applyTemplateMigration, buildMigrationManifest, planTemplateMigration, type MigrationCompositionInput, type MigrationOptions, type MigrationProposal } from "../templates/migration.js";
+import { proposeTemplateFolders, type TemplateFolderCandidate, type TemplateHintDiagnostic } from "../templates/hints.js";
 import type { GuardedTemplateRequest, TemplateCompositionManifest, TemplateTransactionReceipt } from "../templates/types.js";
 import { describeTemplateSetup, type TemplateSetupDocument } from "./documents.js";
 
@@ -9,6 +10,10 @@ export interface SetupState {
   readonly vault: string;
   readonly proposal: MigrationProposal;
   readonly document: TemplateSetupDocument;
+  readonly templateFolderCandidates: readonly TemplateFolderCandidate[];
+  readonly templateFolderHintDiagnostics: readonly TemplateHintDiagnostic[];
+  readonly selectedTemplateFolders: MigrationProposal["templateFolders"];
+  readonly templateFolderSource?: "explicit" | "stored-v3";
 }
 
 export interface SetupInputs extends MigrationOptions {}
@@ -17,21 +22,53 @@ export interface SetupDecision {
   readonly vault: string;
   readonly proposal: MigrationProposal;
   readonly document: TemplateSetupDocument;
+  readonly templateFolderCandidates: readonly TemplateFolderCandidate[];
+  readonly templateFolderHintDiagnostics: readonly TemplateHintDiagnostic[];
+  readonly selectedTemplateFolders: MigrationProposal["templateFolders"];
+  readonly templateFolderSource?: "explicit" | "stored-v3";
 }
 
 /** Discovery is recursive, side-effect free, and uses only vault-resident authority. */
-export async function inspectSetup({ vault, templateFolder }: { vault: string; templateFolder?: string }): Promise<SetupState> {
-  const proposal = await planTemplateMigration(vault, { templateFolder });
-  return { vault, proposal, document: describeTemplateSetup(proposal) };
+export async function inspectSetup({
+  vault,
+  templateFolders,
+}: {
+  vault: string;
+  templateFolders?: MigrationOptions["templateFolders"];
+}): Promise<SetupState> {
+  return setupState(vault, { templateFolders });
 }
 
 export async function decideSetup(state: SetupState, inputs: SetupInputs = {}): Promise<SetupDecision> {
-  const proposal = await planTemplateMigration(state.vault, inputs);
-  return { vault: state.vault, proposal, document: describeTemplateSetup(proposal) };
+  return setupState(state.vault, inputs);
 }
 
 export async function decideNonInteractiveSetup(state: SetupState): Promise<SetupDecision> {
-  return { vault: state.vault, proposal: state.proposal, document: state.document };
+  return state;
+}
+
+async function setupState(vault: string, inputs: MigrationOptions): Promise<SetupState> {
+  const proposal = await planTemplateMigration(vault, inputs);
+  const source =
+    inputs.templateFolders !== undefined && inputs.templateFolders.length > 0
+      ? "explicit" as const
+      : proposal.currentPolicy !== undefined && proposal.templateFolders.length > 0
+        ? "stored-v3" as const
+        : undefined;
+  const hints = await proposeTemplateFolders(vault, {
+    selected: source === undefined
+      ? []
+      : proposal.templateFolders.map(folder => ({ path: folder.path, provenance: source })),
+  });
+  return {
+    vault,
+    proposal,
+    document: describeTemplateSetup(proposal),
+    templateFolderCandidates: hints.candidates,
+    templateFolderHintDiagnostics: hints.diagnostics,
+    selectedTemplateFolders: proposal.templateFolders,
+    ...(source === undefined ? {} : { templateFolderSource: source }),
+  };
 }
 
 /** Setup apply delegates publication to the migration transaction and cannot write directly. */

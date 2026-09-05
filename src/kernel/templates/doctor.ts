@@ -7,7 +7,7 @@ import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { approvalDigest, inputDigest, outputDigest, templateInput } from "./canonical.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { excludedNoteMatcher } from "../conventions/note-exclude.js";
-import { normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
+import { deriveTemplateSourcePath, normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
 import { parseDerivedProjection, parseTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest, loadResolvedTemplates } from "./resolver.js";
 import { executeTemplateTransaction, templateMigrationAdmission, templateMigrationMarkerState } from "./transaction.js";
@@ -73,13 +73,8 @@ export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<T
       migrationMarker,
     };
   }
-  const [jsonExists, yamlExists] = await Promise.all([exists(root, ".oms/taxonomy.json"), exists(root, ".oms/taxonomy.yaml")]);
-  if (!jsonExists && yamlExists) {
-    return { status: "needs-repair", diagnostics: [{ code: "LEGACY_TAXONOMY_MIGRATION_REQUIRED", path: ".oms/taxonomy.yaml", remediation: "run setup to convert the legacy taxonomy exactly once" }], managedSourceExclusions: [], unresolvedLegacyNotes: [], migrationMarker };
-  }
-  if (jsonExists && yamlExists) {
-    return { status: "needs-repair", diagnostics: [{ code: "LEGACY_TAXONOMY_CONFLICT", path: ".oms/taxonomy.yaml", remediation: ".oms/taxonomy.json is authoritative; manually remove .oms/taxonomy.yaml" }], managedSourceExclusions: [], unresolvedLegacyNotes: [], migrationMarker };
-  }
+  const jsonExists = await exists(root, ".oms/taxonomy.json");
+  if (!jsonExists) return { status: "needs-repair", diagnostics: [{ code: "TEMPLATE_CONTROL_MISSING", path: ".oms/taxonomy.json", remediation: "restore the JSON taxonomy authority before reading or repairing conventions" }], managedSourceExclusions: [], unresolvedLegacyNotes: [], migrationMarker };
   if (jsonExists) {
     try { JSON.parse(await readFile(join(root, ".oms/taxonomy.json"), "utf8")); }
     catch { return { status: "needs-repair", diagnostics: [{ code: "TEMPLATE_SOURCE_INVALID", path: ".oms/taxonomy.json", remediation: "restore valid .oms/taxonomy.json, then rerun doctor" }], managedSourceExclusions: [], unresolvedLegacyNotes: [], migrationMarker }; }
@@ -105,7 +100,7 @@ export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<T
     counts.set(key, count + 1);
     return count < target.maxPerTemplate;
   });
-  return { status: unique.size === 0 ? "healthy" : "needs-repair", diagnostics: bounded, managedSourceExclusions: policy === null ? [] : Object.values(policy.templates).map(binding => binding.sourcePath), unresolvedLegacyNotes: [], migrationMarker };
+  return { status: unique.size === 0 ? "healthy" : "needs-repair", diagnostics: bounded, managedSourceExclusions: policy === null ? [] : Object.values(policy.templates).map(deriveTemplateSourcePath), unresolvedLegacyNotes: [], migrationMarker };
 }
 
 /** Recomputes only the derived projection and delegates all publication to the guarded transaction. */
@@ -115,13 +110,14 @@ export async function regenerateTypes(input: RegenerateTypesRequest): Promise<Te
   const root = resolve(input.target.vault);
   let policy: TemplatePolicy;
   try { policy = parseTemplatePolicy(await readFile(join(root, ".oms/template-policy.json"), "utf8")); }
-  catch { return rejected("TEMPLATE_POLICY_INVALID", "restore .oms/template-policy.json before regenerating types"); }
+  catch (error: unknown) { return rejected(code(error), "restore a supported v3 .oms/template-policy.json before regenerating types"); }
   try {
     const controls = await Promise.all([state(root, ".oms/template-policy.json"), state(root, ".oms/taxonomy.json"), state(root, ".oms/types.json"), state(root, ".obsidian/types.json")]);
     if (controls[0]?.state === "absent" || controls[1]?.state === "absent" || controls[3]?.state === "absent") return rejected("TEMPLATE_CONTROL_MISSING", "restore template policy, taxonomy, and Obsidian types before regenerating types");
     const sources = await Promise.all(Object.values(policy.templates).map(async binding => {
-      const current = await state(root, binding.sourcePath);
-      return { templateId: binding.templateId, path: binding.sourcePath, expected: expectation(current), current };
+      const path = deriveTemplateSourcePath(binding);
+      const current = await state(root, path);
+      return { templateId: binding.templateId, path, expected: expectation(current), current };
     }));
     const sourceDigests = new Map<string, Digest>();
     for (const source of sources) {
@@ -143,7 +139,7 @@ export async function regenerateTypes(input: RegenerateTypesRequest): Promise<Te
         return source;
       },
     );
-    const manifest = await buildTemplateCompositionManifest(root, { mode: "relocate-folder", templateFolder: policy.templateFolder }, {
+    const manifest = await buildTemplateCompositionManifest(root, { mode: "regenerate" }, {
       expected: { input: inputDigest(regenerationInput), controls: { policy: expectation(controls[0]!), taxonomy: expectation(controls[1]!), projection: expectation(controls[2]!) }, sources: sources.map(({ templateId, path, expected }) => ({ templateId, path, expected })) },
       taxonomy: { expectedCurrent: expectation(controls[1]!), proposedBytes: (controls[1] as Extract<VerifiedFileState, { state: "present" }>).bytes, action: "verify-only" },
       allowProjectionRepair: true,
@@ -184,14 +180,15 @@ async function noteManifest(root: string, notePath: TemplateSourcePath, before: 
     const value = values[index]! as Extract<VerifiedFileState, { readonly state: "present" }>;
     return { kind: path === ".oms/template-policy.json" ? "policy" as const : path === ".oms/taxonomy.json" ? "taxonomy" as const : "projection" as const, path, expectedCurrent: expectation(value), current: value, proposed: value, action: "verify-only" as const };
   }) as unknown as TemplateCompositionManifest["controls"];
-  const authority: InputV2 = { version: 2, authority: [{ kind: "template", logicalId: templateId, vaultRelativePath: notePath, contentDigest: digest(after) }], placement: [] };
+  const authority: InputV2 = { version: 2, templateFolders: [], authority: [{ kind: "template", logicalId: templateId, vaultRelativePath: notePath, contentDigest: digest(after) }], placement: [] };
   const transition = { templateId, path: notePath, expectedCurrent: expectation(before), current: before, proposed: { state: "present" as const, bytes: after, signature: digest(after) }, action: "write" as const };
   const outputs = [...controls.map(control => ({ finalVaultRelativePath: control.path, payloadDigest: control.proposed.signature })), { finalVaultRelativePath: notePath, payloadDigest: digest(after) }];
   const operations = [{ kind: "update" as const, templateId, destinationClass: "registered-existing" as const, payloadDigest: digest(after), stableRelativeSuffix: null }];
+  const snapshot = { input: authority, inputDigest: inputDigest(authority), bindings: [], resolvedTemplates: [] };
   return {
-    version: 1, mode: "update", current: { input: authority, inputDigest: inputDigest(authority), bindings: [], resolvedTemplates: [] }, proposed: { input: authority, inputDigest: inputDigest(authority), bindings: [], resolvedTemplates: [] },
+    version: 1, mode: "update", current: snapshot, proposed: snapshot,
     controls, sources: [transition], operations, diagnostics: [], moves: [], outputs,
-    approvalDigest: approvalDigest(inputDigest(authority), operations, []), outputDigest: outputDigest(outputs),
+    approvalDigest: approvalDigest(inputDigest(authority), operations, [], { current: snapshot, controls, sources: [transition] }), outputDigest: outputDigest(outputs),
   };
 }
 

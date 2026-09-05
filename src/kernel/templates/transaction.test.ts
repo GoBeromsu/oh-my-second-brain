@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -55,7 +54,6 @@ vi.mock("node:fs/promises", async importOriginal => {
 });
 
 import { inputDigest } from "./canonical.js";
-import { buildMigrationManifest, planTemplateMigration } from "./migration.js";
 import { normalizeTemplateSourcePath } from "./paths.js";
 import { serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { buildTemplateCompositionManifest, sourceSignature } from "./resolver.js";
@@ -77,7 +75,7 @@ import type {
 const encoder = new TextEncoder();
 const TEMPLATE = "---\ntitle: literal\n---\nBody\n";
 const UPDATED = "---\ntitle: changed\n---\nChanged\n";
-const TAXONOMY = JSON.stringify({ folders: {} });
+const TAXONOMY = JSON.stringify({ folders: { Notes: { templates: ["note", "daily", "alpha", "beta", "external", "second", "escape"] } } });
 const OBSIDIAN = `${JSON.stringify({ types: { title: "text" } }, null, 2)}\n`;
 
 beforeEach(() => {
@@ -97,12 +95,14 @@ function id(value: string): TemplateId { return value as TemplateId; }
 function sourcePath(value: string): TemplateSourcePath { return value as TemplateSourcePath; }
 function folder(value: string): TemplateFolderPath { return value as TemplateFolderPath; }
 function binding(templateId: string, source: string, destinationClass: TemplateBinding["destinationClass"] = "managed-default"): TemplateBinding {
-  return { templateId: id(templateId), destinationClass, sourcePath: sourcePath(source), contract: "note", naming: "{{title}}" };
+  const sourceFolder = folder(source.slice(0, source.lastIndexOf("/")));
+  return { templateId: id(templateId), destinationClass, sourceFolder, sourcePath: sourcePath(source), contract: "note", naming: "{{title}}" };
 }
-function policy(bindings: readonly TemplateBinding[], templateFolder = "Templates/OMS"): TemplatePolicy {
+function policy(bindings: readonly TemplateBinding[], templateFolder = "Templates/OMS", registeredFolders: readonly string[] = []): TemplatePolicy {
+  const paths = new Set([templateFolder, "Moved", ...registeredFolders, ...bindings.map(item => item.sourceFolder)]);
   return {
-    version: 1,
-    templateFolder: folder(templateFolder),
+    version: 3,
+    templateFolders: [...paths].map(path => ({ path: folder(path), mode: "manual" as const, ...(path === templateFolder ? { default: true as const } : {}) })),
     base: { fields: {} },
     contracts: { note: { intent: "A note.", fields: {}, views: [] } },
     templates: Object.fromEntries(bindings.map(item => [item.templateId, item])),
@@ -125,7 +125,7 @@ function projection(bindings: readonly TemplateBinding[], policyBytes: string, s
         templateId: item.templateId,
         destinationClass: item.destinationClass,
         sourcePath: item.sourcePath,
-        targetFolder: folder("Inbox"),
+        targetFolder: folder("Notes"),
         keyOrder: ["title"],
         fields: { title: { type: "text" } },
         views: [],
@@ -144,11 +144,11 @@ interface VaultFixture {
   readonly options: TemplateCompositionOptions;
 }
 
-async function fixture(bindings: readonly TemplateBinding[] = [], sourceBytes: Readonly<Record<string, string>> = {}): Promise<VaultFixture> {
+async function fixture(bindings: readonly TemplateBinding[] = [], sourceBytes: Readonly<Record<string, string>> = {}, registeredFolders: readonly string[] = []): Promise<VaultFixture> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-transaction-"));
   await mkdir(path.join(vault, ".oms"), { recursive: true });
   await mkdir(path.join(vault, ".obsidian"), { recursive: true });
-  const policyBytes = serializeTemplatePolicy(policy(bindings));
+  const policyBytes = serializeTemplatePolicy(policy(bindings, "Templates/OMS", registeredFolders));
   const projectionBytes = projection(bindings, policyBytes, sourceBytes);
   await Promise.all([
     writeFile(path.join(vault, ".oms", "template-policy.json"), policyBytes),
@@ -163,13 +163,14 @@ async function fixture(bindings: readonly TemplateBinding[] = [], sourceBytes: R
   }
   const input: InputV2 = {
     version: 2,
+    templateFolders: policy(bindings, "Templates/OMS", registeredFolders).templateFolders,
     authority: [
       { kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: digest(policyBytes) },
       { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: digest(TAXONOMY) },
       { kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: ".obsidian/types.json", contentDigest: digest(OBSIDIAN) },
       ...bindings.map(item => ({ kind: "template" as const, logicalId: item.templateId, vaultRelativePath: item.sourcePath, contentDigest: digest(sourceBytes[item.templateId] ?? TEMPLATE) })),
     ],
-    placement: bindings.map(item => ({ templateId: item.templateId, destinationClass: item.destinationClass, templateFolder: item.destinationClass === "managed-default" ? folder("Templates/OMS") : null, sourcePath: item.sourcePath })),
+    placement: bindings.map(item => ({ templateId: item.templateId, destinationClass: item.destinationClass, templateFolder: item.destinationClass === "managed-default" ? item.sourceFolder : null, sourceFolder: item.sourceFolder, sourcePath: item.sourcePath })),
   };
   return {
     vault,
@@ -301,6 +302,42 @@ describe("guarded template transactions", () => {
     } finally { await cleanup(item); }
   });
 
+  it("rejects malformed v3 folder input as an invalid manifest without mutation", async () => {
+    const item = await fixture();
+    try {
+      const manifest = await compose(item, createChange());
+      const before = await tree(item.vault);
+      const malformed = {
+        ...manifest,
+        current: {
+          ...manifest.current,
+          input: { ...manifest.current.input, templateFolders: [{ path: "../escape", mode: "manual" }] },
+        },
+      } as unknown as TemplateCompositionManifest;
+      expect(rejectedCode(await executeTemplateTransaction(item.vault, malformed, { dryRun: true }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
+      expect(await tree(item.vault)).toEqual(before);
+    } finally { await cleanup(item); }
+  });
+
+  it("rejects a manifest whose approved current-control preimage was replaced", async () => {
+    const item = await fixture();
+    try {
+      const manifest = await compose(item, createChange());
+      const before = await tree(item.vault);
+      const [policyControl, taxonomyControl, projectionControl] = manifest.controls;
+      const tampered = {
+        ...manifest,
+        controls: [
+          { ...policyControl, expectedCurrent: { state: "present", signature: digest("different old policy") } },
+          taxonomyControl,
+          projectionControl,
+        ],
+      } as TemplateCompositionManifest;
+      expect(rejectedCode(await executeTemplateTransaction(item.vault, tampered, { approvedDigest: manifest.approvalDigest }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
+      expect(await tree(item.vault)).toEqual(before);
+    } finally { await cleanup(item); }
+  });
+
   it("does not steal a live transaction lock", async () => {
     const item = await fixture();
     try {
@@ -368,7 +405,7 @@ describe("guarded template transactions", () => {
   it("moves by oms-managed-rename and removes the old source", async () => {
     const current = binding("note", "Templates/OMS/note.md");
     const proposed = binding("note", "Archive/note.md", "registered-existing");
-    const item = await fixture([current]);
+    const item = await fixture([current], {}, ["Archive"]);
     try {
       const manifest = await compose(item, { mode: "update", templateId: current.templateId, binding: proposed, source: { path: proposed.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" }, moveStrategy: "oms-managed-rename" });
       const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
@@ -381,7 +418,7 @@ describe("guarded template transactions", () => {
   it("registers an already-moved source without rewriting it", async () => {
     const current = binding("note", "Templates/OMS/note.md");
     const proposed = binding("note", "External/note.md", "registered-existing");
-    const item = await fixture([current]);
+    const item = await fixture([current], {}, ["External"]);
     try {
       await rm(path.join(item.vault, current.sourcePath));
       await mkdir(path.dirname(path.join(item.vault, proposed.sourcePath)), { recursive: true });
@@ -403,7 +440,7 @@ describe("guarded template transactions", () => {
   it("rejects a move collision during composition without mutation", async () => {
     const current = binding("note", "Templates/OMS/note.md");
     const proposed = binding("note", "Archive/note.md", "registered-existing");
-    const item = await fixture([current]);
+    const item = await fixture([current], {}, ["Archive"]);
     try {
       await mkdir(path.dirname(path.join(item.vault, proposed.sourcePath)), { recursive: true });
       await writeFile(path.join(item.vault, proposed.sourcePath), "collision\n");
@@ -428,7 +465,7 @@ describe("guarded template transactions", () => {
   });
 
   it("rejects reclassify path mismatch and returns unchanged for same class", async () => {
-    const registered = binding("note", "External/note.md", "registered-existing");
+    const registered = binding("note", "External/custom.md", "registered-existing");
     const item = await fixture([registered]);
     try {
       const before = await tree(item.vault);
@@ -525,32 +562,30 @@ describe("guarded template transactions", () => {
     } finally { await cleanup(item); }
   });
 
-  it("resumes a failed legacy taxonomy YAML cleanup and receipts the converged final state", async () => {
-    const vault = await mkdtemp(path.join(tmpdir(), "oms-transaction-legacy-cleanup-"));
+  it("resumes a failed current JSON control transaction while leaving legacy YAML untouched", async () => {
+    const bindings = [binding("alpha", "Templates/OMS/alpha.md"), binding("beta", "Templates/OMS/beta.md")];
+    const item = await fixture(bindings);
     try {
-      await mkdir(path.join(vault, ".oms"), { recursive: true });
-      await mkdir(path.join(vault, ".obsidian"), { recursive: true });
-      await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), "folders: {}\n");
-      await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text" } }));
-      const proposal = await planTemplateMigration(vault);
-      const manifest = await buildMigrationManifest(vault, proposal, { base: { fields: {} } });
-      expect(manifest.legacyCleanup).toMatchObject({ path: ".oms/taxonomy.yaml", action: "delete" });
+      const yamlPath = path.join(item.vault, ".oms", "taxonomy.yaml");
+      await writeFile(yamlPath, "folders: {}\n");
+      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
       const transactionId = createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32);
 
-      inject("remove", ".oms/taxonomy.yaml");
-      injectSecondary("remove", ".oms/template-migration.json");
-      expect((await executeTemplateTransaction(vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("inconsistent");
-      expect(existsSync(path.join(vault, ".oms", "taxonomy.yaml"))).toBe(true);
+      inject("write", ".oms/template-policy.json", 1);
+      injectSecondary("remove", "Moved/beta.md");
+      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("inconsistent");
+      expect(await readFile(yamlPath, "utf8")).toBe("folders: {}\n");
 
-      const receipt = await resumeTemplateTransaction(vault, transactionId, manifest.approvalDigest);
+      const receipt = await resumeTemplateTransaction(item.vault, transactionId, manifest.approvalDigest);
       expect(receipt.status).toBe("applied");
       if (receipt.status === "applied") {
-        expect(receipt.deletedPaths).toContain(".oms/taxonomy.yaml");
-        expect(receipt.verified).toContainEqual({ path: ".oms/taxonomy.yaml", state: "absent" });
+        expect(receipt.transactionId).toBe(transactionId);
+        expect(receipt.outputDigest).toBe(manifest.outputDigest);
         expect(receipt.markerState).toBe("complete");
       }
-      expect(existsSync(path.join(vault, ".oms", "taxonomy.yaml"))).toBe(false);
-    } finally { await rm(vault, { recursive: true, force: true }); }
+      expect(await readFile(path.join(item.vault, ".oms", "taxonomy.json"), "utf8")).toBe(TAXONOMY);
+      expect(await readFile(yamlPath, "utf8")).toBe("folders: {}\n");
+    } finally { await cleanup(item); }
   });
 
   it("keeps completed migration, routine mutation, and regenerate marker families independent", async () => {
@@ -723,7 +758,7 @@ describe("guarded template transactions", () => {
   });
 
   it("rejects symlink escape and hidden/internal template source paths", async () => {
-    const item = await fixture();
+    const item = await fixture([], {}, ["Templates"]);
     const outside = await mkdtemp(path.join(tmpdir(), "oms-outside-"));
     try {
       await writeFile(path.join(outside, "escape.md"), TEMPLATE);

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath } from "./paths.js";
 import type {
   AuthorityEntry,
   Diagnostic,
@@ -9,6 +10,8 @@ import type {
   PlacementEntry,
   PlannedPhysicalOutput,
   TemplateBinding,
+  TemplateCompositionManifest,
+  TemplateFolderRegistration,
   TemplatePolicy,
 } from "./types.js";
 
@@ -136,11 +139,25 @@ function authorities(entries: readonly AuthorityEntry[]): AuthorityEntry[] {
 }
 
 function placements(entries: readonly PlacementEntry[]): PlacementEntry[] {
-  const result = [...entries].sort((left, right) => compare(left.templateId, right.templateId));
+  const result = entries.map((entry) => ({
+    ...entry,
+    templateFolder: entry.templateFolder === null ? null : normalizeTemplateFolderPath(entry.templateFolder),
+    sourceFolder: normalizeTemplateFolderPath(entry.sourceFolder),
+    sourcePath: normalizeTemplateSourcePath(entry.sourcePath),
+  })).sort((left, right) => compare(left.templateId, right.templateId));
   for (let index = 1; index < result.length; index += 1) {
     if (result[index - 1]!.templateId === result[index]!.templateId) {
       throw new TypeError("TEMPLATE_ID_DUPLICATE");
     }
+  }
+  return result;
+}
+
+function templateFolders(entries: readonly TemplateFolderRegistration[]): TemplateFolderRegistration[] {
+  const result = entries.map((entry) => ({ ...entry, path: normalizeTemplateFolderPath(entry.path) }))
+    .sort((left, right) => compare(left.path, right.path));
+  for (let index = 1; index < result.length; index += 1) {
+    if (result[index - 1]!.path === result[index]!.path) throw new TypeError("TEMPLATE_SOURCE_DUPLICATE");
   }
   return result;
 }
@@ -161,17 +178,19 @@ export function templateInput(
     { kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: controls.policy },
     { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: controls.taxonomy },
     { kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: controls.obsidianTypesPath, contentDigest: controls.obsidianTypes },
-    ...bindings.map((binding) => ({ kind: "template" as const, logicalId: binding.templateId, vaultRelativePath: binding.sourcePath, contentDigest: sourceDigest(binding) })),
+    ...bindings.map((binding) => ({ kind: "template" as const, logicalId: binding.templateId, vaultRelativePath: deriveTemplateSourcePath(binding), contentDigest: sourceDigest(binding) })),
   ];
   authority.sort((left, right) => left.kind.localeCompare(right.kind) || left.logicalId.localeCompare(right.logicalId));
   return {
     version: 2,
+    templateFolders: templateFolders(policy.templateFolders),
     authority,
     placement: bindings.map((binding) => ({
       templateId: binding.templateId,
       destinationClass: binding.destinationClass,
-      templateFolder: binding.destinationClass === "managed-default" ? policy.templateFolder : null,
-      sourcePath: binding.sourcePath,
+      templateFolder: binding.destinationClass === "managed-default" ? binding.sourceFolder : null,
+      sourceFolder: binding.sourceFolder,
+      sourcePath: deriveTemplateSourcePath(binding),
     })),
   };
 }
@@ -180,6 +199,7 @@ export function inputDigest(input: InputV2): Digest {
   if (input.version !== 2) throw new TypeError("InputV2 version must be 2");
   return hashCanonical("oms.template-migration.input.v2", {
     version: 2,
+    templateFolders: templateFolders(input.templateFolders),
     authority: authorities(input.authority),
     placement: placements(input.placement),
   });
@@ -196,8 +216,26 @@ function diagnostic(value: Diagnostic): Record<string, unknown> {
   };
 }
 
-export function approvalDigest(input: Digest, operations: readonly LogicalOperation[], diagnostics: readonly Diagnostic[], cleanup?: { readonly path: string; readonly expectedDigest: Digest }): Digest {
+export function approvalDigest(
+  input: Digest,
+  operations: readonly LogicalOperation[],
+  diagnostics: readonly Diagnostic[],
+  preimage: Pick<TemplateCompositionManifest, "current" | "controls" | "sources">,
+): Digest {
   parseDigest(input);
+  const expectedState = (value: import("./types.js").FileExpectation): Record<string, string> =>
+    value.state === "absent"
+      ? { state: "absent" }
+      : { state: "present", signature: parseDigest(value.signature) };
+  const canonicalPreimage = {
+    currentInputDigest: parseDigest(preimage.current.inputDigest),
+    controls: [...preimage.controls]
+      .sort((left, right) => compare(left.path, right.path))
+      .map((control) => ({ path: control.path, expectedCurrent: expectedState(control.expectedCurrent) })),
+    sources: [...preimage.sources]
+      .sort((left, right) => compare(left.templateId, right.templateId) || compare(left.path, right.path))
+      .map((source) => ({ templateId: source.templateId, path: source.path, expectedCurrent: expectedState(source.expectedCurrent) })),
+  };
   const canonicalOperations = [...operations]
     .sort((left, right) =>
       compare(left.kind, right.kind) ||
@@ -224,9 +262,9 @@ export function approvalDigest(input: Digest, operations: readonly LogicalOperat
     .map(diagnostic);
   return hashCanonical("oms.template-migration.approval.v2", {
     inputDigest: input,
+    preimage: canonicalPreimage,
     operations: canonicalOperations,
     diagnostics: canonicalDiagnostics,
-    cleanup: cleanup === undefined ? null : { path: cleanup.path, expectedDigest: parseDigest(cleanup.expectedDigest) },
   });
 }
 

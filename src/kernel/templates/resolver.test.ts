@@ -3,35 +3,38 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { composeResolvedTemplateFields, deriveFolderOntologyAxis, loadResolvedTemplates, loadResolvedTemplatesIfPresent, sourceSignature } from "./resolver.js";
+import { composeResolvedTemplateFields, deriveFolderOntologyAxis, loadResolvedTemplates, loadResolvedTemplatesIfPresent, requireTaxonomyPlacement, sourceSignature, taxonomyRouting } from "./resolver.js";
 import type { Digest, SourceDescriptor } from "./types.js";
 
 const roots: string[] = [];
 const digest = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
-async function fixture(): Promise<string> {
+async function fixture(options: { readonly placement?: boolean } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-"));
   roots.push(root);
   await mkdir(join(root, ".oms"), { recursive: true });
   await mkdir(join(root, ".obsidian"), { recursive: true });
   await mkdir(join(root, "Templates", "OMS"), { recursive: true });
   const policy = JSON.stringify({
-    version: 1,
-    templateFolder: "Templates/OMS",
+    version: 3,
+    templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
     base: { fields: {} },
     contracts: { note: { intent: "A note.", fields: {}, views: [] } },
     templates: {
       note: {
         templateId: "note",
         destinationClass: "managed-default",
+        sourceFolder: "Templates/OMS",
         sourcePath: "Templates/OMS/note.md",
         contract: "note",
         naming: "{{title}}",
       },
     },
   });
-  const taxonomy = JSON.stringify({ folders: {} });
+  const taxonomy = JSON.stringify(options.placement === false
+    ? { folders: {} }
+    : { folders: { "Notes/Published": { templates: ["note"] } } });
   const types = JSON.stringify({ types: { title: "text" } });
   const template = "---\ntitle: literal\n---\nBody\n";
   const sources: SourceDescriptor[] = [
@@ -51,7 +54,7 @@ async function fixture(): Promise<string> {
           templateId: "note",
           destinationClass: "managed-default",
           sourcePath: "Templates/OMS/note.md",
-          targetFolder: "Inbox",
+          targetFolder: "Notes/Published",
           keyOrder: ["title"],
           fields: { title: { type: "text" } },
           views: [],
@@ -124,6 +127,43 @@ describe("loadResolvedTemplates", () => {
       extensions: { intents: { inbox: "Unprocessed captures.", references: "Processed sources." } },
     });
     expect(() => deriveFolderOntologyAxis({ notes: { intent: " " } })).toThrow(/TEMPLATE_SOURCE_INVALID/);
+  });
+
+  it("routes notes from taxonomy outside every template source folder", async () => {
+    const root = await fixture();
+
+    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
+      templates: {
+        note: {
+          sourcePath: "Templates/OMS/note.md",
+          targetFolder: "Notes/Published",
+        },
+      },
+    });
+  });
+
+  it("rejects missing taxonomy placement and names the template", async () => {
+    const root = await fixture({ placement: false });
+
+    await expect(loadResolvedTemplates(root)).rejects.toThrow(
+      /TEMPLATE_PLACEMENT_UNDECLARED: taxonomy placement is undeclared for template note/,
+    );
+  });
+
+  it("exports the shared taxonomy route and placement validation", () => {
+    const routing = taxonomyRouting(
+      ".oms/taxonomy.json",
+      new TextEncoder().encode(JSON.stringify({
+        templates: { note: { templateFolder: "Notes/Published" } },
+        folders: { references: { intent: "Processed sources." } },
+      })),
+    );
+
+    expect(requireTaxonomyPlacement(routing, "note")).toBe("Notes/Published");
+    expect(routing.globalAxes["folder-ontology"]?.members).toEqual(["references"]);
+    expect(() => requireTaxonomyPlacement(routing, "missing")).toThrow(
+      /TEMPLATE_PLACEMENT_UNDECLARED.*missing/,
+    );
   });
 
   it("infers date and checkbox literals and rejects explicit type mismatches", () => {
