@@ -56,7 +56,7 @@ Codex and Hermes host assets are packaged as host-native skill/rule bundles plus
 ## Operator flow
 
 ```bash
-npm run release -- 0.2.0
+npm run release -- 0.14.0
 ```
 
 That's the whole release. `scripts/release.mjs` runs these stages in order and aborts at the first failure.
@@ -88,7 +88,7 @@ Released sections pass through byte-identical. The immutability guard identifies
 An empty `## [Unreleased]` body is a hard error: *empty [Unreleased] - write release notes before releasing*. Write the notes, or pass the escape hatch when a release genuinely carries nothing user-facing:
 
 ```bash
-npm run release -- 0.2.0 --allow-empty-changelog
+npm run release -- 0.14.0 --allow-empty-changelog
 ```
 
 With that flag the version heading is inserted below an intact empty `## [Unreleased]`, giving the GitHub Release an empty section. Use it sparingly; the flag exists for mechanical releases, not for skipping the write-up.
@@ -107,7 +107,7 @@ With that flag the version heading is inserted below an intact empty `## [Unrele
 8. `npm run release:artifact-smoke`
 9. `npm run release:plugin`
 
-`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and runs setup, host install dry-run, update dry-run, and MCP smoke from the extracted package root.
+`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and exercises approved setup/template mutations, `host install|sync|remove`, `package check|update`, `serve http|mcp`, canonical note/search/index commands, and the five-tool MCP surface from the extracted package root. All child processes use an isolated home. A metadata-only guard (not a byte-content digest) verifies that the operator's real `~/.oms` tree and exact OMS-managed Hermes config/skill/adapter paths did not change; symlinks are recorded but never traversed.
 
 When the release ships the `boost-additive` baseline, `check:measurement`
 passes the `boost-c040` gate with a receipt and does not require
@@ -173,6 +173,50 @@ A `workflow_dispatch` run has no tag ref, so the guard, publish, and GitHub Rele
 
 Run a rehearsal on any branch that changes the release pipeline itself.
 
+### Cross-version updater rehearsal
+
+Do not use retired command aliases to simulate an upgrade. The v0.13 updater
+finishes its own workflow by invoking the retired `reconcile` command, but only
+**after** it has installed the new package. That call is old-client behavior,
+not a public compatibility promise in v0.14.
+
+`release:artifact-smoke` rehearses the supported boundary without invoking the
+old updater. It installs published `0.13.0` globally into a disposable prefix,
+uses that old binary's `install --runtime hermes` to create legitimate prior
+OMS ownership, externally installs the candidate tarball globally into the same
+prefix, then invokes the new binary's canonical `host sync`:
+
+```bash
+export npm_config_prefix="$(mktemp -d)"
+export HOME="$(mktemp -d)"
+export USERPROFILE="$HOME"
+export XDG_CONFIG_HOME="$HOME/xdg-config"
+export XDG_CACHE_HOME="$HOME/xdg-cache"
+export OMS_HERMES_HOME="$HOME/hermes"
+npm install -g oh-my-second-brain@0.13.0
+"$npm_config_prefix/bin/oms" install --runtime hermes --vault "$HOME/vault" --yes
+npm install -g ./oh-my-second-brain-0.14.0.tgz
+"$npm_config_prefix/bin/oms" host sync --runtime hermes --vault "$HOME/vault"
+```
+
+The automated rehearsal additionally isolates npm cache/config, XDG data,
+runtime journal, and Hermes home; preserves an unrelated custom Hermes setting;
+checks the installed manifest version, seven skill files, canonical
+`serve mcp` registration, and five-tool discovery through the actual new global
+binary. It does not scan active Hermes logs, databases, unrelated profiles, or
+profile home links, which may change concurrently. It never accesses a private
+vault or upgrades a real host application.
+
+Until the prescribed release command bumps the repository to `0.14.0`, the
+candidate tarball still reports `0.13.0`. The gate therefore labels this
+`old release 0.13.0 -> candidate artifact`; the exact same procedure becomes a
+true `0.13.0 -> 0.14.0` rehearsal automatically after
+`npm run release -- 0.14.0`. No version carrier is edited by hand.
+
+A successful test proves package-to-package replacement and the new `host sync`
+surface; it does not justify keeping retired reconciliation or top-level update
+aliases.
+
 ## Claude plugin validation
 
 Validation is CI-first. The workflow installs the Claude CLI and `scripts/release-plugin.mjs` runs the real check:
@@ -212,14 +256,13 @@ A dispatch run never publishes for real: the publish and GitHub Release steps ar
 
 ## Version and package-name preflight
 
-Before the first public release:
+Before releasing:
 
 1. Verify that the `oh-my-second-brain` npm package is publishable by the current publisher.
-2. Bump `package.json` to a real semver release.
-3. Keep `.claude-plugin/plugin.json` version in sync with `package.json` unless a future ADR deliberately splits package/plugin versioning.
-4. Confirm release notes list Codex rules/skills and Hermes skill-bundle install paths, plus the MCP registration files that make capture/retrieve tools available.
+2. Confirm release notes list Codex rules/skills and Hermes skill-bundle install paths, plus the MCP registration files that make capture/retrieve tools available.
+3. Run the single operator command shown above. Do not hand-edit a version carrier.
 
-The operator script handles items 2 and 3 automatically on every release by bumping all version carriers in lockstep.
+The operator script bumps and verifies every version carrier in lockstep.
 
 ## Rollback posture
 

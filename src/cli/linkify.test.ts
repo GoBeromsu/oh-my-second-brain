@@ -14,6 +14,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { sourceSignature } from "../kernel/templates/index.js";
 import type { SourceDescriptor } from "../kernel/templates/types.js";
+import { runLinkFamilyCommand } from "./link-command.js";
 import { runLinkify } from "./linkify.js";
 
 let tempRoots: string[] = [];
@@ -189,5 +190,110 @@ describe("runLinkify — folder scope", () => {
     // Then: the command fails with the shared folder-scope message
     expect(result.code).toBe(1);
     expect(result.err).toContain("path separators");
+  });
+});
+
+async function captureFamily(argv: readonly string[]): Promise<{ code: number | undefined; out: string; err: string }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => out.push(args.map(String).join(" "));
+  console.error = (...args: unknown[]) => err.push(args.map(String).join(" "));
+  process.exitCode = undefined;
+  try {
+    await runLinkFamilyCommand(argv);
+    return { code: process.exitCode as number | undefined, out: out.join("\n"), err: err.join("\n") };
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    process.exitCode = undefined;
+  }
+}
+
+describe("link family workflow", () => {
+  it("suggests without writing and applies only the explicitly approved candidate", async () => {
+    const vault = await makeVault();
+    const before = await readNote(vault, "notes/Sage.md");
+    const suggested = await captureFamily(["suggest", "notes/Sage.md", "--vault", vault, "--json"]);
+    const proposal = JSON.parse(suggested.out) as { baseContentHash: string; candidates: { id: string }[] };
+    expect(suggested.code).toBe(0);
+    expect(proposal.candidates).toHaveLength(1);
+    expect(await readNote(vault, "notes/Sage.md")).toBe(before);
+
+    const applied = await captureFamily([
+      "apply",
+      "notes/Sage.md",
+      "--vault",
+      vault,
+      "--base-content-hash",
+      proposal.baseContentHash,
+      "--candidate-id",
+      proposal.candidates[0]!.id,
+      "--yes",
+      "--json",
+    ]);
+    expect(applied.code).toBe(0);
+    expect(JSON.parse(applied.out)).toMatchObject({ result: { applied: true } });
+    expect(await readNote(vault, "notes/Sage.md")).toContain("[[Ataraxia]]");
+  });
+
+  it("rejects stale apply and preserves the changed source bytes", async () => {
+    const vault = await makeVault();
+    const suggested = await captureFamily(["suggest", "notes/Sage.md", "--vault", vault, "--json"]);
+    const proposal = JSON.parse(suggested.out) as { baseContentHash: string; candidates: { id: string }[] };
+    const changed = `${await readNote(vault, "notes/Sage.md")}\nNew edit.\n`;
+    await writeFile(path.join(vault, "notes/Sage.md"), changed, "utf8");
+
+    const applied = await captureFamily([
+      "apply", "notes/Sage.md", "--vault", vault,
+      "--base-content-hash", proposal.baseContentHash,
+      "--candidate-id", proposal.candidates[0]!.id,
+      "--yes", "--json",
+    ]);
+    expect(applied.code).toBe(1);
+    expect(JSON.parse(applied.out)).toMatchObject({ result: { applied: false, reason: "note-changed" } });
+    expect(await readNote(vault, "notes/Sage.md")).toBe(changed);
+  });
+
+  it("requires explicit approval and exact candidate ids before writing", async () => {
+    const vault = await makeVault();
+    const before = await readNote(vault, "notes/Sage.md");
+    const suggested = await captureFamily(["suggest", "notes/Sage.md", "--vault", vault, "--json"]);
+    const proposal = JSON.parse(suggested.out) as { baseContentHash: string };
+    const unapproved = await captureFamily([
+      "apply", "notes/Sage.md", "--vault", vault,
+      "--base-content-hash", proposal.baseContentHash,
+      "--candidate-id", "999-1000",
+    ]);
+    expect(unapproved.code).toBe(1);
+    expect(unapproved.err).toContain("--yes");
+    const unknown = await captureFamily([
+      "apply", "notes/Sage.md", "--vault", vault,
+      "--base-content-hash", proposal.baseContentHash,
+      "--candidate-id", "999-1000",
+      "--yes",
+    ]);
+    expect(unknown.code).toBe(1);
+    expect(unknown.err).toContain("not present");
+    expect(await readNote(vault, "notes/Sage.md")).toBe(before);
+  });
+
+  it("uses folder scope for candidate discovery and rejects nested batch scopes", async () => {
+    const vault = await makeVault();
+    const scoped = await captureFamily(["suggest", "notes/Sage.md", "--vault", vault, "--folder", "notes", "--json"]);
+    expect(JSON.parse(scoped.out)).toMatchObject({ candidates: [] });
+    const invalid = await captureFamily(["suggest", "notes/Sage.md", "--vault", vault, "--folder", "notes/deep"]);
+    expect(invalid.code).toBe(1);
+    expect(invalid.err).toContain("top-level");
+  });
+
+  it("link check reuses lint and does not change note bytes", async () => {
+    const vault = await makeVault();
+    const before = await readNote(vault, "notes/Sage.md");
+    const checked = await captureFamily(["check", "--vault", vault, "--json"]);
+    expect(checked.code).toBe(0);
+    expect(JSON.parse(checked.out)).toHaveProperty("totalNotes");
+    expect(await readNote(vault, "notes/Sage.md")).toBe(before);
   });
 });

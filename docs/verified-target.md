@@ -14,7 +14,7 @@ The runtime resolves the first available source in this order:
 | 4 | `OMS_VAULT` | Verified target |
 | 5 | Current working directory | Read-only fallback; mutations rejected |
 
-The precedence is the same for CLI and MCP runtime behavior. Host installation does not change it: host lifecycle commands keep a signed `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json` maintenance pointer and stamp `oms mcp --vault <path>` into host registrations. Only the stamped argument participates in runtime resolution; `resolveEffectiveVault` never reads the pointer.
+The precedence is the same for CLI and MCP runtime behavior. Host installation does not change it: host lifecycle commands keep a signed `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json` maintenance pointer and stamp `oms serve mcp --vault <path>` into host registrations. Only the stamped argument participates in runtime resolution; `resolveEffectiveVault` never reads the pointer.
 
 ## Admission boundary
 
@@ -36,9 +36,9 @@ Setup follows this approval model: it recursively discovers existing templates a
 
 ## Read-only and repair operations
 
-`oms index status` has no mutation path. `oms doctor` can diagnose from a
+`oms index status` has no mutation path. `oms template check` can diagnose from a
 read-only fallback, while regenerate and backfill operations require
-verified-target admission. `oms search <text>` remains lexical and
+verified-target admission. `oms search query <text>` remains lexical and
 projection-independent; it can be used without generated projection state.
 `--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit channels, and
 `--max-queries` accepts only integers from 1 through 32. Vector search requires

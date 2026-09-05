@@ -47,6 +47,6 @@ export function formatLintReport(result: VaultLintResult, opts: LintFormatOption
     if (result.orphanPaths.length > maxOrphans) lines.push(`  … and ${result.orphanPaths.length - maxOrphans} more`);
   }
   lines.push("", "Lint findings are warnings (non-blocking). Exit 0.");
-  if (!opts.verbose) lines.push("Run `oms lint --verbose` to list every finding.");
+  if (!opts.verbose) lines.push("Run `oms link check --verbose` to list every finding.");
   return lines.join("\n");
 }

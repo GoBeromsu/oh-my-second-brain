@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { rm, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -10,6 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
+const execFileAsync = promisify(execFile);
 
 function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   const block = result.content[0];
@@ -18,6 +21,58 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 }
 
 describe("Oh My Second Brain MCP semantic stdio server", () => {
+  it("reopens the read-only index on every request in one MCP session", async () => {
+    const vault = await writeMorningVaultFixture();
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "serve", "mcp", "--vault", vault],
+      cwd: repoRoot,
+      stderr: "pipe",
+      env: getDefaultEnvironment(),
+    });
+    const client = new Client({ name: "oms-freshness-test", version: "0.0.0" });
+    try {
+      await client.connect(transport);
+      await client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "sync" } });
+      const before = textPayload(await client.callTool({
+        name: "search",
+        arguments: { op: "query", query: "freshness-marker", collection: "obsidian" },
+      }));
+      expect((before.hits as unknown[]).length).toBe(0);
+
+      await writeFile(path.join(vault, "references", "Freshness.md"), "---\ntemplate: reference\ntitle: Freshness\nsource-url: https://example.com/freshness\ntags: []\n---\n\nfreshness-marker\n");
+      await execFileAsync(process.execPath, [distCli, "index", "sync", "--vault", vault], {
+        cwd: repoRoot,
+        env: { ...process.env, OMS_RUNTIME_ROOT: process.env["OMS_RUNTIME_ROOT"] },
+      });
+      const after = textPayload(await client.callTool({
+        name: "search",
+        arguments: { op: "query", query: "freshness-marker", collection: "obsidian" },
+      }));
+      expect((after.hits as Array<{ path?: string }>).some(hit => hit.path === "references/Freshness.md")).toBe(true);
+
+      const rebuilt = textPayload(await client.callTool({
+        name: "doctor",
+        arguments: { op: "sync-embeddings", mode: "repair", repairMode: "rebuild" },
+      }));
+      expect(rebuilt.receipt).toMatchObject({
+        operation: "repair-index",
+        postcondition: { kind: "engine-store", mode: "rebuild", databasePath: path.join(vault, ".oms", "engine-store.sqlite") },
+      });
+      const resynced = textPayload(await client.callTool({
+        name: "doctor",
+        arguments: { op: "sync-embeddings", mode: "sync" },
+      }));
+      expect(resynced.receipt).toMatchObject({
+        operation: "sync-embeddings",
+        postcondition: { kind: "semantic-index", databasePath: path.join(vault, ".oms", "engine-store.sqlite") },
+      });
+    } finally {
+      await client.close();
+      await rm(vault, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it("runs typed semantic search and document rehydration through read-only MCP tools", async () => {
     // The clean swap routes oms_sync_embeddings / oms_semantic_query through the
     // native engine, which REQUIRES an explicitly configured embedding provider
@@ -34,7 +89,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       stderr: "pipe",
       // StdioClientTransport sandboxes the child env to a safe default subset,
@@ -56,7 +111,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       await client.connect(transport);
       await client.callTool({
         name: "doctor",
-        arguments: { op: "sync-embeddings", embed: false },
+        arguments: { op: "sync-embeddings", mode: "sync" },
       });
       const retrieve = textPayload(
         await client.callTool({
@@ -89,11 +144,11 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
 
       const syncRaw = await client.callTool({
         name: "doctor",
-        arguments: { op: "sync-embeddings", collection: "obsidian", ensureCollection: true, force: true, index: "brain" },
+        arguments: { op: "sync-embeddings", mode: "embed", collection: "obsidian", index: "brain" },
       });
       const queryCall = {
         name: "search",
-        arguments: { op: "query", query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
+        arguments: { op: "query", mode: "query", query: "intent: qmd compatible MCP search\nlex: agent retr", collection: "obsidian", limit: 1 },
       };
       if (hasModel) {
         // Real engine path: sync builds the native store, query retrieves from it.
@@ -173,7 +228,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       const batch = textPayload(
         await client.callTool({
           name: "search",
-          arguments: { op: "multi-get-documents", targets: ["references/*.md", docid], lineLimit: 40, maxBytes: 2048 },
+          arguments: { op: "get-document", targets: ["references/*.md", docid], lineLimit: 40, maxBytes: 2048 },
         }),
       );
       expect((single.documents as Array<Record<string, unknown>>)[0]).toEqual(

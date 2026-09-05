@@ -119,7 +119,7 @@ export async function loadTaxonomyIntentProjection(
     convention = await loadResolvedTemplatesIfPresent(vault);
   } catch (error: unknown) {
     const diagnostic = error instanceof Error ? error.message : String(error);
-    throw new Error(`${diagnostic} Run oms doctor --vault <vault> to repair the active template contract.`);
+    throw new Error(`${diagnostic} Run oms template check --vault <vault>; if regeneration is required, use the approved oms template regenerate-types dry-run/apply flow.`);
   }
   if (convention === null) return projectTaxonomyIntents(new Map(), indexedPaths, collectionPath);
   return projectTaxonomyIntents(

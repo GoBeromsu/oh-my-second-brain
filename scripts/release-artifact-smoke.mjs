@@ -1,18 +1,18 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { parse as parseYaml } from "yaml";
 
 const args = new Set(process.argv.slice(2));
 const runSetup = !args.has("--mcp-only");
 const runMcp = !args.has("--setup-only");
 
 function fail(message) {
-  console.error(`[release:artifact-smoke] ${message}`);
-  process.exit(1);
+  throw new Error(`[release:artifact-smoke] ${message}`);
 }
 
 async function readHarnessRegistry() {
@@ -80,32 +80,43 @@ function assertPath(target, label = target) {
 // USERPROFILE is set alongside HOME so the same isolation holds if this ever
 // runs on Windows, where `os.homedir()` reads USERPROFILE instead.
 function smokeEnv(smokeHome, overrides = {}) {
-  return { ...process.env, HOME: smokeHome, USERPROFILE: smokeHome, ...overrides };
+  const environment = { ...process.env };
+  delete environment.OMS_CLAUDE_HOME;
+  delete environment.OMS_CODEX_HOME;
+  delete environment.OMS_HERMES_HOME;
+  return { ...environment, HOME: smokeHome, USERPROFILE: smokeHome, ...overrides };
 }
 
-// A cheap (metadata-only, no file content read) recursive snapshot of a
-// directory tree, used to prove a real home directory was left untouched.
-// Reading full file content would be correct too, but `~/.oms` can hold
-// large downloaded embedding models, and hashing those on every release
-// check would make the smoke test needlessly slow; size + mtime already
-// changes on any write a real CLI invocation could make.
-function snapshotDir(dir) {
-  if (!existsSync(dir)) return null;
+// Metadata-only snapshot. Symlinks are recorded by target and never followed:
+// active host profiles can contain links outside their own roots, including
+// transient application paths. This intentionally avoids hashing large models.
+function snapshotPath(root) {
   const entries = [];
   const walk = (current, rel) => {
-    for (const name of readdirSync(current).sort()) {
-      const absChild = path.join(current, name);
-      const relChild = rel === "" ? name : `${rel}/${name}`;
-      const st = statSync(absChild);
-      if (st.isDirectory()) {
-        entries.push(`${relChild}/`);
-        walk(absChild, relChild);
-      } else {
-        entries.push(`${relChild}:${st.size}:${st.mtimeMs}`);
+    let st;
+    try {
+      st = lstatSync(current);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        entries.push(`${rel}:absent`);
+        return;
       }
+      throw error;
+    }
+    if (st.isSymbolicLink()) {
+      entries.push(`${rel}:link:${readlinkSync(current)}`);
+      return;
+    }
+    if (!st.isDirectory()) {
+      entries.push(`${rel}:file:${st.size}:${st.mtimeMs}`);
+      return;
+    }
+    entries.push(`${rel}/`);
+    for (const name of readdirSync(current).sort()) {
+      walk(path.join(current, name), rel === "" ? name : `${rel}/${name}`);
     }
   };
-  walk(dir, "");
+  walk(root, ".");
   return entries.join("\n");
 }
 
@@ -118,12 +129,18 @@ function installRuntimeDependencies(packageRoot) {
 
 function makeVault(tempRoot) {
   const vault = path.join(tempRoot, "Vault");
-  mkdirSync(path.join(vault, "Inbox"), { recursive: true });
   mkdirSync(path.join(vault, "Literature"), { recursive: true });
-  mkdirSync(path.join(vault, "Templates"), { recursive: true });
+  mkdirSync(path.join(vault, "Template Sources"), { recursive: true });
   mkdirSync(path.join(vault, ".obsidian"), { recursive: true });
+  mkdirSync(path.join(vault, ".oms"), { recursive: true });
   writeFileSync(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text", title: "text", tags: "list" } }), "utf-8");
-  writeFileSync(path.join(vault, "Templates", "literature.md"), "---\ntemplate: literature\ntitle: Untitled\ntags: []\n---\n# Literature\n<!-- oms:content -->\n", "utf-8");
+  writeFileSync(path.join(vault, ".oms", "taxonomy.json"), JSON.stringify({
+    folders: {},
+    templates: {
+      note: { templateFolder: "Notes" },
+      literature: { templateFolder: "Literature" },
+    },
+  }), "utf-8");
   writeFileSync(
     path.join(vault, "Literature", "semantic-retrieval.md"),
     "---\ntemplate: literature\ntitle: Semantic Retrieval\ntags:\n  - smoke-semantic\n---\n# Semantic Retrieval\n\nAgent retrieval uses OMS native semantic search.\n",
@@ -135,15 +152,18 @@ function makeVault(tempRoot) {
 function setupSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
   const env = smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" });
-  const dryRun = run(process.execPath, [cli, "setup", "--vault", vault, "--dry-run", "--install-claude"], { cwd: packageRoot, env });
+  const dryRun = run(process.execPath, [cli, "setup", "--vault", vault, "--template-folder", "Template Sources", "--dry-run", "--install-claude"], { cwd: packageRoot, env });
   const approval = /"approvalDigest":\s*"(sha256:[0-9a-f]{64})"/u.exec(dryRun.stdout)?.[1];
   if (!approval) fail("setup dry-run did not return an approval digest");
-  const result = run(process.execPath, [cli, "setup", "--vault", vault, "--yes", "--approved-digest", approval, "--install-claude"], { cwd: packageRoot, env });
+  if (!dryRun.stdout.includes("Template Sources/note.md")) fail("setup dry-run did not propose the starter in the explicit source folder");
+  if (existsSync(path.join(vault, "Template Sources", "note.md"))) fail("setup dry-run published its starter");
+  const result = run(process.execPath, [cli, "setup", "--vault", vault, "--template-folder", "Template Sources", "--yes", "--approved-digest", approval, "--install-claude"], { cwd: packageRoot, env });
   const output = `${result.stdout}\n${result.stderr}`;
   assertPath(path.join(vault, ".oms/taxonomy.json"), "vault taxonomy");
   if (existsSync(path.join(vault, ".oms/taxonomy.yaml"))) fail("setup retained retired vault taxonomy YAML");
   assertPath(path.join(vault, ".oms/template-policy.json"), "vault template policy");
   assertPath(path.join(vault, ".oms/types.json"), "vault derived projection");
+  assertPath(path.join(vault, "Template Sources", "note.md"), "approved starter template");
   if (existsSync(path.join(vault, ".oms/concepts"))) fail("setup recreated the retired concepts directory");
   if (!output.includes("claude plugin install")) fail("setup output did not include Claude plugin install command");
   if (!output.includes("plugin-owned and plugin-qualified")) {
@@ -180,20 +200,47 @@ function canonicalCliSmoke(packageRoot, vault, smokeHome) {
     }
     return result;
   };
+  const approvedMutation = (mutationArgs) => {
+    const dryRun = expectExit([...mutationArgs, "--dry-run"], 0);
+    const approval = /"approvalDigest":\s*"(sha256:[0-9a-f]{64})"/u.exec(dryRun.stdout)?.[1];
+    if (!approval) fail(`packaged oms ${mutationArgs.join(" ")} did not return an approval digest`);
+    return expectExit([...mutationArgs, "--yes", "--approved-digest", approval], 0);
+  };
 
-  const search = expectExit(["search", "agent retrieval"], 0);
+  writeFileSync(
+    path.join(vault, "Template Sources", "literature.md"),
+    "---\ntemplate: literature\ntitle: Untitled\ntags: []\n---\n# Literature\n<!-- oms:content -->\n",
+    "utf-8",
+  );
+  approvedMutation([
+    "template", "add", "Template Sources/literature.md", "--id", "literature",
+    "--folder", "Template Sources", "--contract", "base",
+  ]);
+  approvedMutation(["template", "default", "literature"]);
+  const listed = expectExit(["template", "list"], 0);
+  if (!listed.stdout.includes('"literature"')) fail("packaged template list omitted the registered template");
+  const shown = expectExit(["template", "show", "literature"], 0);
+  if (!shown.stdout.includes("Template Sources/literature.md") || shown.stdout.includes("Agent retrieval uses")) {
+    fail("packaged template show did not return safe registered-template metadata");
+  }
+
+  const search = expectExit(["search", "query", "agent retrieval"], 0);
   const searchPayload = JSON.parse(search.stdout);
   if (searchPayload.hits?.[0]?.path !== "Literature/semantic-retrieval.md") {
     fail("packaged oms search did not return the smoke note");
   }
   expectExit(["index", "sync"], 0);
   expectExit(["index", "status"], 0);
-  const document = expectExit(["doc", "get", "Literature/semantic-retrieval.md"], 0);
+  const retiredEmbedBoolean = expectExit(["index", "sync", "--embed"], 1);
+  if (!`${retiredEmbedBoolean.stdout}\n${retiredEmbedBoolean.stderr}`.includes("INDEX_ARGS_INVALID: --embed is not valid for index sync")) {
+    fail("packaged oms index sync did not identify the rejected overlapping --embed flag");
+  }
+  const document = expectExit(["note", "get", "Literature/semantic-retrieval.md"], 0);
   if (!document.stdout.includes("Semantic Retrieval")) {
-    fail("packaged oms doc get did not hydrate the smoke note");
+    fail("packaged oms note get did not hydrate the smoke note");
   }
 
-  const embed = expectExit(["embed"], 1);
+  const embed = expectExit(["index", "embed"], 1);
   const embedOutput = `${embed.stdout}\n${embed.stderr}`;
   for (const expected of [
     "OMS_EMBEDDING_PROVIDER",
@@ -201,17 +248,11 @@ function canonicalCliSmoke(packageRoot, vault, smokeHome) {
     ".oms/models.json",
     "oms setup --models-default",
   ]) {
-    if (!embedOutput.includes(expected)) fail(`packaged oms embed guidance omitted ${expected}`);
+    if (!embedOutput.includes(expected)) fail(`packaged oms index embed guidance omitted ${expected}`);
   }
-  const nestedEmbed = expectExit(["index", "embed"], 1);
-  const nestedEmbedOutput = `${nestedEmbed.stdout}\n${nestedEmbed.stderr}`;
-  if (!nestedEmbedOutput.includes("Unknown index subcommand")) {
-    fail("packaged oms index embed did not fail as an unknown index subcommand");
-  }
-  if (nestedEmbedOutput.includes("Embedding capability is unavailable for")) {
-    fail("packaged oms index embed reached the top-level embedding capability guard");
-  }
-  const expansion = expectExit(["search", "agent retrieval", "--expand"], 1);
+  expectExit(["index", "repair", "--mode", "rebuild", "--dry-run"], 0);
+  expectExit(["index", "clean"], 0);
+  const expansion = expectExit(["search", "query", "agent retrieval", "--expand"], 1);
   const expansionOutput = `${expansion.stdout}\n${expansion.stderr}`;
   if (!expansionOutput.includes("OMS_EMBEDDING_PROVIDER") || !expansionOutput.includes("OMS_EMBEDDING_MODEL")) {
     fail("packaged oms search --expand did not enforce embedding admission before expansion");
@@ -220,12 +261,12 @@ function canonicalCliSmoke(packageRoot, vault, smokeHome) {
   if (!`${retiredSemantic.stdout}\n${retiredSemantic.stderr}`.includes("Unknown command: semantic")) {
     fail("packaged oms semantic did not fail through the unknown-command boundary");
   }
-  console.log("[release:artifact-smoke] ok: canonical search/index/doc/embed CLI works from unpacked package.");
+  console.log("[release:artifact-smoke] ok: canonical template/search/index/note CLI works from unpacked package.");
 }
 
 function hostInstallSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
-  const result = run(process.execPath, [cli, "install", "--runtime", "all", "--vault", vault, "--dry-run"], {
+  const result = run(process.execPath, [cli, "host", "install", "--runtime", "all", "--vault", vault, "--dry-run"], {
     cwd: packageRoot,
     env: smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" }),
   });
@@ -233,24 +274,230 @@ function hostInstallSmoke(packageRoot, vault, smokeHome) {
   for (const expected of ["[claude] install", "[codex] install", "[hermes] install", "rules/oms.md", "skills/knowledge-management/oms"]) {
     if (!output.includes(expected)) fail(`host install dry-run did not include ${expected}`);
   }
-  console.log("[release:artifact-smoke] ok: host install dry-run works from unpacked package.");
+  run(process.execPath, [cli, "host", "sync", "--runtime", "all", "--vault", vault, "--dry-run"], {
+    cwd: packageRoot,
+    env: smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" }),
+  });
+  run(process.execPath, [cli, "host", "remove", "--runtime", "all", "--dry-run"], {
+    cwd: packageRoot,
+    env: smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" }),
+  });
+  console.log("[release:artifact-smoke] ok: host install/sync/remove dry-runs work from unpacked package.");
 }
 
 function updateSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
-  const result = run(process.execPath, [cli, "update", "--runtime", "all", "--vault", vault, "--dry-run"], {
+  run(process.execPath, [cli, "package", "check"], {
+    cwd: packageRoot,
+    env: smokeEnv(smokeHome, { OMS_UPDATE_LATEST_VERSION: "999.0.0" }),
+  });
+  const result = run(process.execPath, [cli, "package", "update", "--dry-run"], {
     cwd: packageRoot,
     env: smokeEnv(smokeHome, { OMS_UPDATE_LATEST_VERSION: "999.0.0" }),
   });
   const output = `${result.stdout}\n${result.stderr}`;
   for (const expected of [
     "npm install -g oh-my-second-brain@latest",
-    "reconcile --runtime all",
-    "Run `oms update --yes`",
+    "newly installed `oms host sync`",
+    "Run `oms package update --yes`",
   ]) {
-    if (!output.includes(expected)) fail(`update dry-run did not include ${expected}`);
+    if (!output.includes(expected)) fail(`package update dry-run did not include ${expected}`);
   }
-  console.log("[release:artifact-smoke] ok: update dry-run works from unpacked package.");
+  if (/\breconcile\b/u.test(output)) {
+    fail("package update advertised the retired reconcile command");
+  }
+  console.log("[release:artifact-smoke] ok: package check/update works from unpacked package.");
+}
+
+async function httpServeSmoke(packageRoot, vault, smokeHome) {
+  const cli = path.join(packageRoot, "dist/cli/oms.js");
+  const child = spawn(process.execPath, [cli, "serve", "http", "--vault", vault, "--host", "127.0.0.1", "--port", "0"], {
+    cwd: packageRoot,
+    env: smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" }),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  try {
+    const url = await new Promise((resolveUrl, reject) => {
+      let stdout = "";
+      const timeout = setTimeout(() => reject(new Error(`serve http did not become ready: ${stderr}`)), 10_000);
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+        const line = stdout.split(/\r?\n/u).find((value) => value.trim().startsWith("{"));
+        if (!line) return;
+        try {
+          const payload = JSON.parse(line);
+          if (payload.status === "listening" && typeof payload.url === "string") {
+            clearTimeout(timeout);
+            resolveUrl(payload.url);
+          }
+        } catch {
+          // Wait for a complete JSON line.
+        }
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timeout);
+        reject(new Error(`serve http exited ${code} before listening: ${stderr}`));
+      });
+    });
+    const response = await fetch(`${url}/health`);
+    if (!response.ok) fail(`packaged oms serve http health returned ${response.status}`);
+  } finally {
+    child.kill("SIGTERM");
+  }
+  console.log("[release:artifact-smoke] ok: serve http starts read-only from unpacked package.");
+}
+
+async function crossVersionHostRehearsal(tarball, tempRoot) {
+  const prefix = path.join(tempRoot, "CrossVersionPrefix");
+  const home = path.join(tempRoot, "CrossVersionHome");
+  const xdgConfig = path.join(tempRoot, "CrossVersionXdgConfig");
+  const xdgCache = path.join(tempRoot, "CrossVersionXdgCache");
+  const xdgData = path.join(tempRoot, "CrossVersionXdgData");
+  const npmCache = path.join(tempRoot, "CrossVersionNpmCache");
+  const runtimeRoot = path.join(tempRoot, "CrossVersionRuntime");
+  const hermesHome = path.join(tempRoot, "CrossVersionHermes");
+  const vault = path.join(tempRoot, "CrossVersionVault");
+  for (const directory of [prefix, home, xdgConfig, xdgCache, xdgData, npmCache, runtimeRoot, hermesHome, vault]) {
+    mkdirSync(directory, { recursive: true });
+  }
+  const npmUserConfig = path.join(tempRoot, "CrossVersionNpmrc");
+  writeFileSync(npmUserConfig, "", "utf8");
+  const environment = smokeEnv(home, {
+    PATH: `${path.join(prefix, "bin")}${path.delimiter}${process.env.PATH ?? ""}`,
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: xdgConfig,
+    XDG_CACHE_HOME: xdgCache,
+    XDG_DATA_HOME: xdgData,
+    HERMES_HOME: hermesHome,
+    OMS_HERMES_HOME: hermesHome,
+    OMS_RUNTIME_ROOT: runtimeRoot,
+    OMS_VAULT: "",
+    npm_config_prefix: prefix,
+    npm_config_cache: npmCache,
+    npm_config_userconfig: npmUserConfig,
+    OMS_UPDATE_NOTICE: "0",
+  });
+  const configPath = path.join(hermesHome, "config.yaml");
+  const customConfig = "custom_release_rehearsal: preserve-me\n";
+  writeFileSync(configPath, customConfig, "utf8");
+  const installedPackage = path.join(prefix, "lib", "node_modules", "oh-my-second-brain");
+  const installedCli = path.join(prefix, "bin", "oms");
+
+  run("npm", ["install", "-g", "oh-my-second-brain@0.13.0", "--no-audit", "--no-fund"], {
+    env: environment,
+  });
+  assertPath(installedCli, "old release global oms binary");
+  const oldPackage = JSON.parse(readFileSync(path.join(installedPackage, "package.json"), "utf8"));
+  if (oldPackage.version !== "0.13.0") fail(`old rehearsal install resolved ${oldPackage.version}, expected 0.13.0`);
+  run(installedCli, ["install", "--runtime", "hermes", "--vault", vault, "--yes"], {
+    env: environment,
+  });
+  const oldProvenance = path.join(hermesHome, "adapters", "oms", "oms-provenance.json");
+  assertPath(oldProvenance, "legitimate old Hermes OMS provenance");
+  const oldIdentity = JSON.parse(readFileSync(oldProvenance, "utf8"));
+  if (oldIdentity.source !== "npm" || oldIdentity.version !== "0.13.0" || typeof oldIdentity.skillTreeDigest !== "string") {
+    fail("old release did not create legitimate npm Hermes ownership provenance");
+  }
+  if (!readFileSync(configPath, "utf8").includes("preserve-me")) {
+    fail("old release install did not preserve unrelated Hermes configuration");
+  }
+
+  run("npm", ["install", "-g", tarball, "--no-audit", "--no-fund"], {
+    env: environment,
+  });
+  const candidatePackage = JSON.parse(readFileSync(path.join(installedPackage, "package.json"), "utf8"));
+  const candidateManifest = JSON.parse(readFileSync(path.join(installedPackage, "assets", "hermes-manifest.json"), "utf8"));
+  if (candidateManifest.version !== candidatePackage.version) {
+    fail(`installed candidate manifest version ${candidateManifest.version} does not match package ${candidatePackage.version}`);
+  }
+  run(installedCli, ["host", "sync", "--runtime", "hermes", "--vault", vault], {
+    env: environment,
+  });
+  const installedConfig = readFileSync(configPath, "utf8");
+  if (!installedConfig.includes("preserve-me")) fail("new host sync overwrote unrelated Hermes configuration");
+  if (!installedConfig.includes("- serve\n") || !installedConfig.includes("- mcp\n") || !installedConfig.includes(vault)) {
+    fail("new host sync did not publish canonical serve mcp arguments for the rehearsal vault");
+  }
+  const installedManifest = JSON.parse(readFileSync(path.join(hermesHome, "adapters", "oms", "hermes-manifest.json"), "utf8"));
+  if (installedManifest.version !== candidatePackage.version) {
+    fail(`loaded Hermes manifest version ${installedManifest.version} does not match installed package ${candidatePackage.version}`);
+  }
+  const installedProvenance = JSON.parse(readFileSync(oldProvenance, "utf8"));
+  if (installedProvenance.version !== candidatePackage.version) {
+    fail(`loaded Hermes provenance version ${installedProvenance.version} does not match installed package ${candidatePackage.version}`);
+  }
+  const status = spawnSync(installedCli, ["host", "status", "--vault", vault, "--json"], { env: environment, encoding: "utf8" });
+  if (status.status !== 0 && status.status !== 1) fail("installed host status did not return a health receipt");
+  const statusPayload = JSON.parse(status.stdout);
+  const isHermesAsset = (asset) => asset.id === "registration:hermes" || asset.id?.startsWith("hermes:");
+  const hermesAssets = statusPayload.assets?.filter(isHermesAsset);
+  if (!hermesAssets?.length || hermesAssets.some((asset) => asset.state !== "ok")) {
+    fail("upgraded Hermes has missing or invalid managed assets");
+  }
+  if (status.status === 1 && (statusPayload.status !== "degraded" || !statusPayload.assets.some((asset) => !isHermesAsset(asset) && asset.state !== "ok"))) {
+    fail("host status failed for a reason other than unrelated uninstalled hosts");
+  }
+  const hermesAsset = hermesAssets.find((asset) => asset.kind === "skill-tree");
+  if (hermesAsset?.packageVersion !== candidatePackage.version || hermesAsset?.recordedVersion !== candidatePackage.version || hermesAsset?.digestMatch !== true) {
+    fail("new binary did not load matching installed Hermes manifest/provenance identity");
+  }
+  const skillRoot = path.join(hermesHome, "skills", "knowledge-management", "oms");
+  const expectedSkills = ["distill", "doctor", "link", "search", "status", "template", "write"];
+  for (const skill of expectedSkills) assertPath(path.join(skillRoot, skill, "SKILL.md"), `installed Hermes ${skill} skill`);
+  const installedSkills = readdirSync(skillRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  if (JSON.stringify(installedSkills) !== JSON.stringify(expectedSkills)) {
+    fail(`installed Hermes skills drifted: expected ${expectedSkills.join(", ")}, got ${installedSkills.join(", ")}`);
+  }
+
+  const registration = parseYaml(installedConfig)?.mcp_servers?.oms;
+  if (registration?.command !== "oms" || !Array.isArray(registration.args) ||
+    JSON.stringify(registration.args.slice(0, 3)) !== JSON.stringify(["serve", "mcp", "--vault"]) ||
+    registration.args.length !== 4 || realpathSync(registration.args[3]) !== realpathSync(vault)) {
+    fail("installed Hermes MCP registration does not resolve the candidate vault");
+  }
+  const transport = new StdioClientTransport({
+    command: registration.command,
+    args: registration.args,
+    env: {
+      ...getDefaultEnvironment(),
+      PATH: environment.PATH,
+      HOME: home,
+      USERPROFILE: home,
+      XDG_CONFIG_HOME: xdgConfig,
+      XDG_CACHE_HOME: xdgCache,
+      XDG_DATA_HOME: xdgData,
+      HERMES_HOME: hermesHome,
+      OMS_HERMES_HOME: hermesHome,
+      OMS_RUNTIME_ROOT: runtimeRoot,
+      OMS_VAULT: "",
+      OMS_UPDATE_NOTICE: "0",
+    },
+  });
+  const client = new Client({ name: "oms-cross-version-release-smoke", version: "0.0.0" });
+  try {
+    await client.connect(transport);
+    if (client.getServerVersion()?.version !== candidatePackage.version) fail("native MCP launch loaded the wrong package version");
+    const listedTools = (await client.listTools()).tools;
+    if (!listedTools.find((tool) => tool.name === "search")?.inputSchema.oneOf?.some((branch) => branch.properties?.op?.const === "index-status")) {
+      fail("native MCP launch did not load the candidate operation schema");
+    }
+    const tools = listedTools.map((tool) => tool.name).sort();
+    const expectedTools = ["doctor", "link", "search", "status", "write"];
+    if (JSON.stringify(tools) !== JSON.stringify(expectedTools)) {
+      fail(`cross-version MCP discovery drifted: expected ${expectedTools.join(", ")}, got ${tools.join(", ")}`);
+    }
+  } finally {
+    await client.close();
+  }
+  console.log(`[release:artifact-smoke] ok: external 0.13.0 -> candidate ${candidatePackage.version} host sync preserved legitimate Hermes ownership.`);
 }
 
 async function mcpSmoke(packageRoot, vault, smokeHome) {
@@ -268,7 +515,7 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
   if (process.env.OMS_EMBEDDING_MODEL) childEnv.OMS_EMBEDDING_MODEL = process.env.OMS_EMBEDDING_MODEL;
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [cli, "mcp", "--vault", vault],
+    args: [cli, "serve", "mcp", "--vault", vault],
     cwd: packageRoot,
     env: childEnv,
   });
@@ -415,15 +662,25 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
   }
 }
 
-const tempRoot = mkdtempSync(path.join(tmpdir(), "oms-release-smoke-"));
-// Every packaged-CLI child this script spawns gets HOME pointed here instead
-// of the real user's HOME, so nothing that CLI does can reach the real `~/.oms`.
-const smokeHome = path.join(tempRoot, "Home");
-mkdirSync(smokeHome, { recursive: true });
-const realOmsDir = path.join(homedir(), ".oms");
-const realOmsBefore = snapshotDir(realOmsDir);
+let tempRoot;
 let tarball;
 try {
+  tempRoot = mkdtempSync(path.join(tmpdir(), "oms-release-smoke-"));
+  // Every packaged-CLI child gets an isolated HOME. Guard only OMS-owned state:
+  // active Hermes logs, databases, profiles, and home links are unrelated and
+  // may change concurrently while this smoke runs.
+  const smokeHome = path.join(tempRoot, "Home");
+  mkdirSync(smokeHome, { recursive: true });
+  const protectedHomePaths = [
+    path.join(homedir(), ".oms"),
+    path.join(homedir(), ".hermes", "config.yaml"),
+    path.join(homedir(), ".hermes", "skills", "knowledge-management", "oms"),
+    path.join(homedir(), ".hermes", "adapters", "oms"),
+    path.join(homedir(), ".config", "hermes", "config.yaml"),
+    path.join(homedir(), ".config", "hermes", "skills", "knowledge-management", "oms"),
+    path.join(homedir(), ".config", "hermes", "adapters", "oms"),
+  ];
+  const protectedHomeBefore = new Map(protectedHomePaths.map((pathname) => [pathname, snapshotPath(pathname)]));
   tarball = packTarball();
   const packageRoot = extractPackage(tarball, tempRoot);
   for (const requiredPath of harnessSurfaceRegistry.packageAssets.releaseRequiredPaths) {
@@ -436,17 +693,19 @@ try {
     canonicalCliSmoke(packageRoot, vault, smokeHome);
     hostInstallSmoke(packageRoot, vault, smokeHome);
     updateSmoke(packageRoot, vault, smokeHome);
+    await httpServeSmoke(packageRoot, vault, smokeHome);
+    await crossVersionHostRehearsal(tarball, tempRoot);
   }
   if (runMcp) await mcpSmoke(packageRoot, vault, smokeHome);
-  // The whole point of smokeHome: prove the real HOME's `.oms` directory was
-  // never touched by any of the above, however many CLI/MCP children ran.
-  // No `.oms` before must mean no `.oms` after; an existing one must be
-  // byte-identical (per the snapshotDir metadata comparison above).
-  const realOmsAfter = snapshotDir(realOmsDir);
-  if (realOmsAfter !== realOmsBefore) {
-    fail(`real HOME .oms directory changed during the smoke run: ${realOmsDir}`);
+  // This is metadata evidence, not a byte-content digest. It preserves the
+  // original broad ~/.oms model guard without reading model bytes, while the
+  // Hermes checks are limited to exact OMS-managed config/assets.
+  for (const pathname of protectedHomePaths) {
+    if (snapshotPath(pathname) !== protectedHomeBefore.get(pathname)) {
+      fail(`real HOME OMS-managed metadata changed during the smoke run: ${pathname}`);
+    }
   }
 } finally {
   if (tarball && existsSync(tarball)) rmSync(tarball, { force: true });
-  rmSync(tempRoot, { recursive: true, force: true });
+  if (tempRoot !== undefined) rmSync(tempRoot, { recursive: true, force: true });
 }

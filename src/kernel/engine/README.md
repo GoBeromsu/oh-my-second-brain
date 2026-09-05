@@ -20,7 +20,9 @@ receipt that the resolver reads.
 Plain queries are lexical-only by default and need no model. Expansion
 (`strategy: { kind: "expand", profile: "qmd-v2.8.3" }`) and reranking
 (`rerank: true`) are explicit; omitting either never changes a plain lexical
-query.
+query. The CLI surface is `oms search query`: query mode selects lexical,
+vector, or HyDE retrieval, accepts one query or a query set, and can opt into
+expansion and reranking. `oms search context` is the separate context view.
 
 Unavailable capabilities fail loudly with their own environment pair,
 `.oms/models.json` declaration, and a setup remedy:
@@ -29,7 +31,9 @@ Unavailable capabilities fail loudly with their own environment pair,
   `OMS_EMBEDDING_PROVIDER`/`OMS_EMBEDDING_MODEL` pair, vault configuration, or
   setup default. Install the pinned default with `oms setup --models-default`,
   then build vectors with
-  `oms embed [--collection <name>] [--index <path>] [--force]`.
+  `oms index embed`. Index mutation has three exclusive modes:
+  `oms index sync`, `oms index embed`, and `oms index repair`; callers select
+  one mode rather than combining boolean `embed` or `force` controls.
 - **HyDE** needs *two* — a generate model to write the hypothetical document and
   embed model to embed it: `OMS_GENERATE_PROVIDER` +
   `OMS_GENERATE_MODEL`, and the embed pair. Install a configured generator with
@@ -48,6 +52,12 @@ Kernel assembly owns lazy construction of the production reranker: the native
 candidates by default, is shared by concurrent first requests, and is disposed
 exactly once with its assembly. Constructing an engine or serving lexical queries
 loads no model state at all.
+
+Read-only index reporting uses `oms index status`; cleanup uses
+`oms index clean`. The MCP equivalents keep the same separation:
+`doctor { op: "sync-embeddings", mode: "sync" | "embed" | "repair" }` mutates,
+while `search { op: "index-status", view: "status" | "collections" |
+"contexts" }` only reports state. Start the MCP server with `oms serve mcp`.
 
 In 0.10.0, expansion and reranking receive folder context only from active
 `.oms/taxonomy.json` `intent` values. No legacy root file, bundled default, or

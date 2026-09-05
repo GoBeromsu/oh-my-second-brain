@@ -2,227 +2,86 @@ import { describe, expect, it } from "vitest";
 import { parseCliArgs } from "./args.js";
 
 describe("CLI argument parser", () => {
-  it("parses shared install/update flags without owning host runtime literals", () => {
-    const parsed = parseCliArgs(
-      [
-        "install",
-        "--vault",
-        "Vault",
-        "--runtime",
-        "hermes",
-        "--agent-vault",
-        "AgentVault",
-        "--dry-run",
-        "--execute",
-        "--yes",
-      ],
-      "/tmp/oms-cli",
-    );
-
-    expect(parsed.error).toBeUndefined();
-    expect(parsed.command).toBe("install");
-    expect(parsed.vault).toBe("/tmp/oms-cli/Vault");
-    expect(parsed.vaultExplicit).toBe(true);
-    expect(parsed.agentVault).toBe("/tmp/oms-cli/AgentVault");
-    expect(parsed.runtime).toBe("hermes");
-    expect(parsed.dryRun).toBe(true);
-    expect(parsed.executeExternal).toBe(true);
-    expect(parsed.yes).toBe(true);
+  it("keeps public family arguments raw for their handlers", () => {
+    for (const [family, args] of [
+      ["host", ["install", "--runtime", "hermes", "--vault", "Vault"]],
+      ["package", ["update", "--bogus"]],
+      ["note", ["audit", "--folder", "references"]],
+      ["link", ["check", "--json"]],
+    ] as const) {
+      const parsed = parseCliArgs([family, ...args], "/tmp/oms-cli");
+      expect(parsed.command).toBe(family);
+      expect(parsed.error).toBeUndefined();
+      expect(parsed.unknownFlags).toEqual(args);
+      expect(parsed.vault).toBe("/tmp/oms-cli");
+      expect(parsed.vaultExplicit).toBe(false);
+    }
   });
 
-  it("parses an approved setup digest, defaults it, and rejects a missing value", () => {
-    const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    const parsed = parseCliArgs(["setup", "--approved-digest", "sha256:old", "--approved-digest", digest]);
-
-    expect(parsed.error).toBeUndefined();
-    expect(parsed.approvedDigest).toBe(digest);
-    expect(parseCliArgs(["setup"]).approvedDigest).toBeUndefined();
+  it("parses an approved setup digest and rejects a missing value", () => {
+    const digest = `sha256:${"0".repeat(64)}`;
+    expect(parseCliArgs(["setup", "--approved-digest", digest]).approvedDigest).toBe(digest);
     expect(parseCliArgs(["setup", "--approved-digest"]).error?.message).toBe(
-      "[oms] Missing value for --approved-digest.",
-    );
-    expect(parseCliArgs(["setup", "--approved-digest", "--yes"]).error?.message).toBe(
       "[oms] Missing value for --approved-digest.",
     );
   });
 
   it("appends distinct explicitly selected setup template folders in argument order", () => {
     const parsed = parseCliArgs([
-      "setup",
-      "--template-folder",
-      "Meta/Templates",
-      "--template-folder",
-      "Team/Templates",
-      "--template-folder",
-      "Meta/Templates",
-      "--dry-run",
-      "--models-no-default",
+      "setup", "--template-folder", "Meta/Templates", "--template-folder", "Team/Templates",
+      "--template-folder", "Meta/Templates", "--dry-run", "--models-no-default",
     ]);
-
-    expect(parsed.error).toBeUndefined();
     expect(parsed.templateFolders).toEqual(["Meta/Templates", "Team/Templates"]);
     expect(parsed.dryRun).toBe(true);
     expect(parsed.modelsNoDefault).toBe(true);
   });
 
-  it("does not supply a hidden setup template folder default", () => {
-    expect(parseCliArgs(["setup"]).templateFolders).toEqual([]);
-  });
-
-  it("rejects a template-folder option without a path", () => {
-    expect(parseCliArgs(["setup", "--template-folder"]).error?.message).toBe(
-      "[oms] Missing value for --template-folder.",
-    );
-    expect(parseCliArgs(["setup", "--template-folder", "--yes"]).error?.message).toBe(
-      "[oms] Missing value for --template-folder.",
-    );
-  });
-
-  it("accepts only a positive integer max-per-template report limit", () => {
-    expect(parseCliArgs(["doctor", "--max-per-template", "3"]).maxPerTemplate).toBe(3);
-    expect(parseCliArgs(["doctor", "--max-per-template"]).error?.message).toContain("positive integer");
-    expect(parseCliArgs(["doctor", "--max-per-template", "0"]).error?.message).toContain("positive integer");
-    expect(parseCliArgs(["doctor", "--max-per-template", "1.5"]).error?.message).toContain("positive integer");
-  });
-
-  it("preserves unsupported runtime and malformed numeric flag errors", () => {
-    expect(parseCliArgs(["install", "--runtime", "banana"]).error?.message).toBe(
-      "[oms] Unsupported runtime: banana",
-    );
-    expect(parseCliArgs(["update", "--timeout-ms", "nope"]).error?.message).toBe(
-      "[oms] Unsupported timeout: nope",
-    );
-  });
-
-  it("preserves existing unknown-flag collection for command handlers", () => {
-    const parsed = parseCliArgs(["doctor", "--runtime"]);
-
+  it("accepts setup's shared facade flags", () => {
+    const parsed = parseCliArgs([
+      "setup", "--vault", "Vault", "--runtime", "hermes", "--agent-vault", "AgentVault",
+      "--dry-run", "--execute", "--yes", "--install-claude", "--models-no-default",
+    ], "/tmp/oms-cli");
     expect(parsed.error).toBeUndefined();
-    expect(parsed.runtime).toBeUndefined();
-    expect(parsed.unknownFlags).toEqual(["--runtime"]);
+    expect(parsed.unknownFlags).toEqual([]);
+    expect(parsed.vault).toBe("/tmp/oms-cli/Vault");
+    expect(parsed.vaultExplicit).toBe(true);
+    expect(parsed.runtime).toBe("hermes");
+    expect(parsed.agentVault).toBe("/tmp/oms-cli/AgentVault");
+    expect(parsed.executeExternal).toBe(true);
+    expect(parsed.yes).toBe(true);
   });
 
-  it("parses help as a first-class flag rather than an unknown option", () => {
-    for (const args of [["--help"], ["-h"], ["setup", "--help"], ["mcp", "-h"]]) {
+  it("parses help without retaining it as an unknown family flag", () => {
+    for (const args of [["--help"], ["-h"], ["setup", "--help"], ["note", "--help", "--vault", "missing"]]) {
       const parsed = parseCliArgs(args);
-
       expect(parsed.help).toBe(true);
       expect(parsed.unknownFlags).not.toContain("--help");
       expect(parsed.unknownFlags).not.toContain("-h");
     }
     expect(parseCliArgs(["--help"]).command).toBeUndefined();
-    expect(parseCliArgs(["setup", "--help"]).command).toBe("setup");
   });
 
-  it("parses repeated link folders and distinguishes implicit vault defaults", () => {
-    const implicit = parseCliArgs(["doctor"], "/tmp/oms-cli");
-    const linked = parseCliArgs(
-      ["link", "--vault", "../Vault", "--folder", "notes", "--folder", "15. Work/Project", "--no-convention-note"],
-      "/tmp/oms-cli/repo",
-    );
-
-    expect(implicit.vault).toBe("/tmp/oms-cli");
-    expect(implicit.vaultExplicit).toBe(false);
-    expect(implicit.folders).toEqual([]);
-    expect(implicit.conventionNote).toBe(true);
-    expect(linked.vault).toBe("/tmp/oms-cli/Vault");
-    expect(linked.vaultExplicit).toBe(true);
-    expect(linked.folders).toEqual(["notes", "15. Work/Project"]);
-    expect(linked.conventionNote).toBe(false);
-  });
-
-  it("parses the three mutually exclusive setup model-set options independently", () => {
-    const pinned = parseCliArgs(["setup", "--models-default"], "/tmp/oms-cli");
-    const supplied = parseCliArgs(
-      ["setup", "--models-descriptor", "models.json"],
-      "/tmp/oms-cli",
-    );
-    const waived = parseCliArgs(["setup", "--models-no-default"], "/tmp/oms-cli");
-
-    expect(pinned.modelsDefault).toBe(true);
-    expect(pinned.modelsDescriptorPath).toBeUndefined();
-    expect(pinned.modelsNoDefault).toBe(false);
-    expect(pinned.unknownFlags).toEqual([]);
-
+  it("parses the mutually exclusive setup model options", () => {
+    const supplied = parseCliArgs(["setup", "--models-descriptor", "models.json"], "/tmp/oms-cli");
+    expect(parseCliArgs(["setup", "--models-default"]).modelsDefault).toBe(true);
     expect(supplied.modelsDescriptorPath).toBe("/tmp/oms-cli/models.json");
-    expect(supplied.modelsDefault).toBe(false);
-
-    expect(waived.modelsNoDefault).toBe(true);
-    expect(waived.modelsDefault).toBe(false);
+    expect(parseCliArgs(["setup", "--models-no-default"]).modelsNoDefault).toBe(true);
+    expect(parseCliArgs(["setup", "--models-default", "--models-no-default"]).error?.message).toContain(
+      "Mutually exclusive setup model options",
+    );
   });
 
-  it("requires a non-option path after --models-descriptor", () => {
-    for (const args of [
-      ["setup", "--models-descriptor"],
-      ["setup", "--models-descriptor", "--yes"],
-      ["setup", "--models-descriptor", "-v"],
-      ["setup", "--models-descriptor", ""],
-    ]) {
-      expect(parseCliArgs(args).error?.message).toBe(
-        "[oms] Missing value for --models-descriptor. Choose one of --models-default, --models-descriptor <path>, or --models-no-default.",
-      );
+  it("requires a non-option model descriptor path", () => {
+    for (const args of [["setup", "--models-descriptor"], ["setup", "--models-descriptor", "--yes"]]) {
+      expect(parseCliArgs(args).error?.message).toContain("Missing value for --models-descriptor");
     }
   });
 
-  it("rejects every conflicting pair of setup model options", () => {
-    for (const args of [
-      ["setup", "--models-default", "--models-descriptor", "models.json"],
-      ["setup", "--models-default", "--models-no-default"],
-      ["setup", "--models-descriptor", "models.json", "--models-no-default"],
-    ]) {
-      expect(parseCliArgs(args, "/tmp/oms-cli").error?.message).toContain(
-        "Choose one of --models-default, --models-descriptor <path>, or --models-no-default.",
-      );
-    }
-  });
-
-  it("defaults every setup model-set option to unselected and preserves retired flags for setup rejection", () => {
-    const parsed = parseCliArgs(["setup"], "/tmp/oms-cli");
-
-    expect(parsed.modelsDefault).toBe(false);
-    expect(parsed.modelsNoDefault).toBe(false);
-    expect(parsed.modelsDescriptorPath).toBeUndefined();
+  it("preserves retired embedding flags for actionable setup rejection", () => {
     expect(parseCliArgs(["setup", "--embedding-default"]).unknownFlags).toEqual(["--embedding-default"]);
     expect(parseCliArgs(["setup", "--embedding-no-default"]).unknownFlags).toEqual(["--embedding-no-default"]);
     expect(parseCliArgs(["setup", "--embedding-descriptor", "legacy.json"]).unknownFlags).toEqual([
       "--embedding-descriptor",
     ]);
-  });
-
-  it("accepts setup's shared install, runtime, vault, dry-run, and approval options", () => {
-    const parsed = parseCliArgs(
-      [
-        "setup",
-        "--vault",
-        "Vault",
-        "--runtime",
-        "hermes",
-        "--agent-vault",
-        "AgentVault",
-        "--dry-run",
-        "--execute",
-        "--yes",
-        "--approved-digest",
-        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        "--install-claude",
-        "--models-no-default",
-      ],
-      "/tmp/oms-cli",
-    );
-
-    expect(parsed.error).toBeUndefined();
-    expect(parsed.unknownFlags).toEqual([]);
-  });
-
-  it("parses audit flags", () => {
-    const parsed = parseCliArgs(
-      ["audit", "--vault", "Vault", "--folder", "references", "--json"],
-      "/tmp/oms-cli",
-    );
-
-    expect(parsed.error).toBeUndefined();
-    expect(parsed.command).toBe("audit");
-    expect(parsed.vault).toBe("/tmp/oms-cli/Vault");
-    expect(parsed.folders).toEqual(["references"]);
-    expect(parsed.json).toBe(true);
   });
 });

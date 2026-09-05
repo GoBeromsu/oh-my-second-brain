@@ -113,7 +113,7 @@ The runtime admits the target and operation before disk mutation. The resolved t
 
 ## Search and maintenance
 
-`oms search <text>` is plain lexical search and independent of `.oms/types.json`.
+`oms search query <text>` is plain lexical search and independent of `.oms/types.json`.
 `--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit opt-in channels;
 `--max-queries` accepts only integers from 1 through 32. It can narrow by managed
 template, declared field, folder, and wikilink. Managed sources do not appear as
@@ -127,7 +127,14 @@ pairs fail loudly rather than returning simulated matches. G004 expansion is
 available only when explicitly selected and makes no replacement, parity, or
 outperformance claim.
 
-Use `oms doctor` to diagnose state, regenerate derived projections, or backfill
-supported data. Repair is gated by the verified-target rule. Use `oms index
-status` for read-only index state reporting; the `status` skill and `oms_status`
-MCP tool remain read-only status surfaces.
+Use `oms template check` for template authority validation and `oms note audit`
+for note-contract reporting. Guarded repair is exposed by the relevant family:
+`oms template regenerate-types`, `oms note backfill`, `oms index sync|embed|repair|clean`,
+and `oms graph build`. Use `oms index status` for read-only index state; the
+`status` skill, `oms status`, and `oms_status` MCP tool remain read-only.
+
+`.oms/template-policy.json`, `.oms/taxonomy.json`, and the derived
+`.oms/types.json` are vault convention artifacts and may be committed with the
+notes they govern. `.oms/engine-store.sqlite` is runtime index state and must
+not be committed. Runtime event journals also must not be committed or placed
+inside the vault; they are external, host-and-vault-scoped observation history.

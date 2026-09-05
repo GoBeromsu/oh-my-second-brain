@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- HTTP routes reject malformed bodies and fields instead of coercing them into empty queries. Status retains unaffected component evidence when convention, history, engine, or graph health is unavailable. (#125)
+- **CLI operations now have explicit, non-overlapping families.** (#125) `note`, `template`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status` retain real capabilities without retired aliases. Package updates no longer force host synchronization; read-only health and server startup do not create a vault store.
 - **The template command family exposes guarded convention management.** (#124) Inspect, scan, register, create, update, move, remove, check, and select default bindings through shared kernel operations. Mutations require a reviewed dry-run digest rather than direct vault edits.
 
 - **Breaking: `oms setup --template-folder <path>` is repeatable and template folders are always selected explicitly.** (#120) Repeated paths are registered in `auto` scan/proposal mode, with the first explicit path becoming the template-creation default (separate from the note `defaultTemplate`). Without flags, setup reuses saved v3 folder registrations only; Obsidian and Templater settings are displayed as numbered dry-run candidates but are never selected automatically. An unresolved selection is blocked with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and no approval digest.

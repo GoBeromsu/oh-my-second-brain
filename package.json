@@ -25,6 +25,7 @@
     "docs/install.md",
     "docs/architecture.md",
     "docs/conventions.md",
+    "docs/cli-map.md",
     "docs/verified-target.md",
     "scripts/install.sh",
     "scripts/uninstall.sh",

@@ -3,7 +3,7 @@
  * oms-guard — thin PreToolUse wrapper for Claude Code settings.json.
  *
  * Filters vault-relevant Write/Edit tool calls and delegates to
- * `oms hook pre-tool-use --vault <vault>` only when the target path is
+ * `oms hook pre --vault <vault>` only when the target path is
  * inside a configured vault. Vault 무관 호출은 spawn 없이 즉시 통과.
  *
  * Configuration (env vars set by the settings.json hook definition):
@@ -103,12 +103,12 @@ async function main() {
   );
   if (!targetVault) { allow(); return; }
 
-  // Spawn `oms hook pre-tool-use --vault <vault>` with the raw stdin payload.
+  // Spawn `oms hook pre --vault <vault>` with the raw stdin payload.
   try {
     const { cmd, prefix } = resolveOmsCommand();
     const result = spawnSync(
       cmd,
-      [...prefix, "hook", "pre-tool-use", "--vault", targetVault],
+      [...prefix, "hook", "pre", "--vault", targetVault],
       { input: rawInput, encoding: "utf-8", timeout: 10000 },
     );
     if (result.status === 0 && result.stdout && result.stdout.trim()) {

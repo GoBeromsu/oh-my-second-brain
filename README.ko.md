@@ -27,34 +27,46 @@ oms setup --vault /path/to/vault --yes --approved-digest <표시된-digest>
 ## CLI
 
 ```text
-oms setup      기존 볼트 템플릿 탐색 및 채택
-oms install    호스트 어댑터와 관리형 MCP 등록 설치
-oms uninstall  호스트 어댑터와 관리형 MCP 등록 제거
-oms update     패키지 업데이트 확인/적용 후 어댑터 재조정
-oms reconcile  엄격한 전역 볼트 포인터로 호스트 재기록
-oms doctor     템플릿 권위와 파생 상태 진단
-oms lint       깨진 [[wikilink]]와 고아 노트 점검
-oms search <text>  일반 lexical 검색; --vec, --hyde, --expand, --max-queries 1..32, --rerank은 명시적 선택
-oms embed      색인된 노트의 임베딩 생성
-oms index sync|status|repair|cleanup|collections|contexts
-oms doc get|multi-get
-oms serve      로컬 검색 HTTP 서버 시작
-oms mcp        stdio MCP 서버 시작
-oms hook       Claude pre/post tool-use 볼트 가드 실행
+oms setup                                      기존 볼트 템플릿 탐색 및 채택
+oms template scan|list|show|add|update|move|remove|default|check|regenerate-types
+oms note create|append|update|audit|backfill|get
+oms link check|suggest|apply                   노트 wikilink 점검·제안·적용
+oms bridge add|remove|status                   저장소-볼트 target bridge 관리
+oms search query|context                       명시적 query 실행 또는 구조화 context 조회
+oms index sync|embed|repair|status|clean       파생 검색 상태 관리
+oms graph build|status                         노트 그래프 생성 또는 조회
+oms host install|remove|sync|status            호스트 asset과 MCP 등록 관리
+oms package check|update                       OMS 패키지 확인 또는 업데이트
+oms model install|select|waive|status          로컬 모델 선택 관리
+oms serve mcp|http                             stdio MCP 또는 로컬 HTTP 서버 시작
+oms hook pre|post                              pre/post-tool-use 볼트 가드 실행
+oms status                                     읽기 전용 종합 상태 표시
 ```
 
 `oh-my-second-brain`은 전체 명령이고 `oms`는 짧은 별칭이다.
+
+`oms template add`에는 세 형태가 있다. 폴더를 넘기면 그 안의 템플릿을
+등록하고, 파일과 `--id`를 넘기면 기존 템플릿을 등록하며, `--id`와
+`--from`을 함께 쓰면 새 템플릿을 만든다. `--from` 형태는 등록된
+`templateFolders[].default` 위치에 쓰며, 이 템플릿 폴더는 노트 배치
+위치를 제한하지 않는다. `oms template default <id>`가 기본 바인딩을
+선언한다. 명시적 템플릿 없이 노트를 만들 때는 이 바인딩만 사용하며,
+없으면 첫 템플릿을 임의 선택하지 않고 `TEMPLATE_DEFAULT_UNDECLARED`로
+실패한다.
 
 ### 도움말 계약
 
 인식된 모든 명령은 `--help`와 `-h`를 받아들이며, exit 0으로 종료하고
 부작용을 수행하지 않는다. 알 수 없는 명령에 `--help`를 함께 주면 exit 1로 종료한다.
 
-`oms search <text>`는 lexical-only다. `--vec`, `--hyde`는 각각의 typed
-channel을 선택하고, `--expand`는 G004 expansion을 명시적으로 켜며,
-`--max-queries`는 1부터 32까지의 정수만 받는다. `--rerank`도 opt-in이다.
-`oms embed`가 유일한 embedding 명령이며 `oms index`에는 embedding
-subcommand가 없다.
+`oms search query <text>`는 lexical-only다. `--vec`, `--hyde`는 각각의
+typed channel을 선택하고, `--expand`는 G004 expansion을 명시적으로
+켜며, `--max-queries`는 1부터 32까지의 정수만 받는다. `--rerank`도
+opt-in이다. `oms search context`는 별도의 구조화 context 표면이다.
+Embedding은 명시적으로 `oms index embed`를 사용하며 sync와 repair는
+서로 다른 index mode다. `oms index status --view status|collections|contexts`는
+세 읽기 전용 view를 모두 보존하고, `oms index clean`은 제거 가능한 파생
+상태를 정리한다.
 
 Vector 검색에는 검증된 로컬 embedding capability가 필요하다. 선택 경로는
 완전한 `OMS_EMBEDDING_PROVIDER`/`OMS_EMBEDDING_MODEL` 쌍, vault의
@@ -71,7 +83,7 @@ Setup에서는 로컬 검증 acquisition 정책 하나를 선택한다:
 
 ## MCP 도구
 
-`oms mcp`는 정확히 다섯 개의 공개 도구를 노출한다:
+`oms serve mcp`는 정확히 다섯 개의 공개 도구를 노출한다:
 
 `write` · `search` · `link` · `status` · `doctor`
 
@@ -87,12 +99,23 @@ Node.js 20 이상이 필요하다.
 
 ```bash
 npm install -g oh-my-second-brain
-oms install --runtime all --vault /path/to/vault --yes
+oms host install --runtime all --vault /path/to/vault --yes
 ```
 
 Gajae-Code에서는 npm 패키지를 marketplace plugin으로 설치한다: `gjc plugin install oms@oms`. GJC는 패키지 루트의 `skills/` convention path에서 일곱 OMS skill을 발견한다.
 
-호스트 설치는 canonical 볼트를 `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`에 기록하고 각 관리형 등록에 `oms mcp --vault /path/to/vault`를 넣는다. `install`, `update`, `reconcile`, `uninstall`만 이 서명된 포인터를 호스트 stamp 관리에 사용한다. 런타임 쓰기·검색 target 해석은 포인터를 읽지 않으며 명시적 target, 로컬 볼트 control, bridge, `OMS_VAULT`, 읽기 전용 cwd fallback 순서를 유지한다.
+호스트 설치는 canonical 볼트를
+`${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`에 기록하고 각 관리형
+등록에 `oms serve mcp --vault /path/to/vault`를 넣는다.
+`oms host install|remove|sync|status`만 이 서명된 포인터로 호스트 통합을
+관리한다.
+`oms package update`는 패키지만 업데이트하고 호스트를 암묵적으로
+동기화하지 않는다. `oms host sync`는 별도로 실행한다.
+
+런타임 쓰기·검색 target 해석은 호스트 관리 포인터를 읽지 않는다.
+우선순위는 명시적 target, 로컬 볼트 control, bridge, `OMS_VAULT`, 그리고
+안전한 읽기 전용 fallback으로서의 cwd 순서다. 변경 작업은 cwd fallback을
+사용할 수 없다.
 
 `OMS_VAULT`는 명시적·로컬·bridge target이 없을 때 사용하는 지원 환경변수 fallback이다.
 

@@ -20,12 +20,11 @@ function failCall(stderr: string): UpdateRunnerCall {
 const runningPrefix = "/opt/oms";
 const entrypoint = "/launch/oms.js";
 const realpath = () => `${runningPrefix}/lib/node_modules/oh-my-second-brain/dist/cli/oms.js`;
+
 function updateOptions(overrides: Partial<RunUpdateOptions> = {}): RunUpdateOptions {
   return {
     currentVersion: "0.1.7",
     latestVersion: "0.1.8",
-    runtime: "codex",
-    vault: "/tmp/Vault",
     yes: true,
     entrypoint,
     realpath,
@@ -34,16 +33,15 @@ function updateOptions(overrides: Partial<RunUpdateOptions> = {}): RunUpdateOpti
   };
 }
 
-function matchingRunner(calls: string[], reconcileResult = okCall('{"results":[{"changed":false}]}')): (command: string, args: readonly string[]) => UpdateRunnerCall {
+function matchingRunner(calls: string[]): (command: string, args: readonly string[]) => UpdateRunnerCall {
   return (command, args) => {
     calls.push([command, ...args].join(" "));
     if (command === "npm" && args.join(" ") === "prefix -g") return okCall(`${runningPrefix}\n`);
-    if (command === "npm") return okCall();
-    return reconcileResult;
+    return okCall();
   };
 }
 
-describe("oms update", () => {
+describe("package updater", () => {
   it("refuses a non-TTY update without mutating", async () => {
     const calls: string[] = [];
     const result = await runUpdate(updateOptions({ yes: false, interactive: false, runner: matchingRunner(calls) }));
@@ -51,48 +49,83 @@ describe("oms update", () => {
     expect(result.success).toBe(false);
     expect(result.mutated).toBe(false);
     expect(calls).toEqual([]);
-    expect(formatUpdateResult(result)).toContain("oms update --yes");
+    expect(formatUpdateResult(result)).toContain("oms package update --yes");
   });
 
-  it("keeps dry-run non-mutating without resolving topology", async () => {
+  it("keeps check mode read-only", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({ check: true, runner: matchingRunner(calls) }));
+
+    expect(result).toMatchObject({ success: true, updateAvailable: true, packageMutated: false, mutated: false });
+    expect(result.commands).toEqual(["npm install -g oh-my-second-brain@latest"]);
+    expect(calls).toEqual([]);
+  });
+
+  it("keeps dry-run non-mutating without resolving package topology", async () => {
     const calls: string[] = [];
     const result = await runUpdate(updateOptions({ dryRun: true, runner: matchingRunner(calls) }));
 
     expect(result.success).toBe(true);
-    expect(result.commands).toEqual([
-      "npm install -g oh-my-second-brain@latest",
-      "oms reconcile --runtime codex --vault /tmp/Vault --json",
-    ]);
+    expect(result.commands).toEqual(["npm install -g oh-my-second-brain@latest"]);
     expect(calls).toEqual([]);
   });
 
-  it("plans but does not execute reconciliation in check mode when already current", async () => {
+  it("installs only the package and directs the caller to explicit host sync", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({ runner: matchingRunner(calls) }));
+
+    expect(result).toMatchObject({ success: true, packageMutated: true, mutated: true });
+    expect(calls).toEqual([
+      "npm prefix -g",
+      "npm install -g oh-my-second-brain@latest",
+    ]);
+    expect(result.message).toContain("newly installed `oms host sync`");
+  });
+
+  it("does nothing when the installed package is already latest", async () => {
     const calls: string[] = [];
     const result = await runUpdate(updateOptions({
       currentVersion: "0.1.8",
       latestVersion: "0.1.8",
-      check: true,
       runner: matchingRunner(calls),
     }));
 
-    expect(result.success).toBe(true);
-    expect(result.commands).toEqual(["oms reconcile --runtime codex --vault /tmp/Vault --json"]);
+    expect(result).toMatchObject({ success: true, updateAvailable: false, packageMutated: false, mutated: false });
+    expect(result.commands).toEqual([]);
     expect(calls).toEqual([]);
   });
 
-  it("uses npm prefix matching the real running binary before installing", async () => {
+  it("checks the registry with the expected read-only npm command", async () => {
     const calls: string[] = [];
-    const result = await runUpdate(updateOptions({ runner: matchingRunner(calls), executeExternal: true }));
+    const result = await runUpdate(updateOptions({
+      latestVersion: undefined,
+      check: true,
+      runner: (command, args) => {
+        calls.push([command, ...args].join(" "));
+        return okCall('"0.1.8"\n');
+      },
+    }));
 
     expect(result.success).toBe(true);
-    expect(calls).toEqual([
-      "npm prefix -g",
-      "npm install -g oh-my-second-brain@latest",
-      "/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault --json --execute",
-    ]);
+    expect(calls).toEqual(["npm view oh-my-second-brain@latest version --json"]);
   });
 
-  it("rejects an npm prefix mismatch without attempting installation", async () => {
+  it("reports registry errors without attempting installation", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({
+      latestVersion: undefined,
+      runner: (command, args) => {
+        calls.push([command, ...args].join(" "));
+        return failCall("registry unavailable");
+      },
+    }));
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("registry unavailable");
+    expect(calls).toEqual(["npm view oh-my-second-brain@latest version --json"]);
+  });
+
+  it("rejects an npm prefix mismatch with cross-version-safe recovery guidance", async () => {
     const calls: string[] = [];
     const result = await runUpdate(updateOptions({
       runner: (command, args) => {
@@ -104,9 +137,8 @@ describe("oms update", () => {
     expect(result.success).toBe(false);
     expect(result.mutated).toBe(false);
     expect(calls).toEqual(["npm prefix -g"]);
-    expect(result.message).toContain("/opt/oms");
-    expect(result.message).toContain("/other/prefix");
     expect(result.message).toContain("npm --prefix /opt/oms install -g oh-my-second-brain@latest");
+    expect(result.message).toContain("newly installed `oms host sync`");
   });
 
   it("rejects an unresolvable running binary without attempting installation", async () => {
@@ -119,48 +151,23 @@ describe("oms update", () => {
     expect(result.success).toBe(false);
     expect(result.mutated).toBe(false);
     expect(calls).toEqual([]);
-    expect(result.message).toContain("ENOENT");
+    expect(result.message).toContain("npm install -g oh-my-second-brain@latest");
+    expect(result.message).toContain("oms host sync");
   });
 
-  it("reconciles even when the installed package is already latest", async () => {
-    const calls: string[] = [];
-    const result = await runUpdate(updateOptions({
-      currentVersion: "0.1.8",
-      latestVersion: "0.1.8",
-      runner: matchingRunner(calls),
-    }));
-
-    expect(result.success).toBe(true);
-    expect(result.updateAvailable).toBe(false);
-    expect(result.mutated).toBe(false);
-    expect(result.message).toContain("already up to date");
-    expect(result.message).toContain("reconciliation completed");
-    expect(calls).toEqual([
-      "npm prefix -g",
-      "/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault --json",
-    ]);
-  });
-
-  it("does not reconcile when installation fails", async () => {
+  it("does not invoke a host command when installation fails", async () => {
     const calls: string[] = [];
     const result = await runUpdate(updateOptions({
       runner: (command, args) => {
         calls.push([command, ...args].join(" "));
-        return command === "npm" && args[0] === "prefix" ? okCall(`${runningPrefix}\n`) : failCall("registry unavailable");
+        return args[0] === "prefix" ? okCall(`${runningPrefix}\n`) : failCall("install refused");
       },
     }));
 
     expect(result.success).toBe(false);
+    expect(result.packageMutated).toBe(false);
+    expect(result.message).toContain("npm update failed: install refused");
     expect(calls).toEqual(["npm prefix -g", "npm install -g oh-my-second-brain@latest"]);
-  });
-
-  it("reports the exact installed-bin resume command when reconciliation fails", async () => {
-    const calls: string[] = [];
-    const result = await runUpdate(updateOptions({ runner: matchingRunner(calls, failCall("host config refused")) }));
-
-    expect(result.success).toBe(false);
-    expect(result.mutated).toBe(true);
-    expect(result.message).toContain("Resume with `/opt/oms/bin/oms reconcile --runtime codex --vault /tmp/Vault --json`");
   });
 
   it("refuses an unwritable resolved prefix before npm install", async () => {
@@ -172,41 +179,28 @@ describe("oms update", () => {
 
     expect(result.success).toBe(false);
     expect(result.packageMutated).toBe(false);
-    expect(result.hostReconciled).toBe(false);
     expect(calls).toEqual(["npm prefix -g"]);
     expect(result.message).toContain("npm --prefix /opt/oms install -g oh-my-second-brain@latest");
+    expect(result.message).toContain("newly installed `oms host sync`");
   });
 
-  it("recognizes a Windows prefix/node_modules global layout", async () => {
+  it("recognizes a Windows global package layout without invoking its host binary", async () => {
     const calls: string[] = [];
     const prefix = "C:\\Users\\oms\\AppData\\Roaming\\npm";
     const result = await runUpdate(updateOptions({
-      currentVersion: "0.1.8",
-      latestVersion: "0.1.8",
       entrypoint: "C:\\launch\\oms.js",
       realpath: () => `${prefix}\\node_modules\\oh-my-second-brain\\dist\\cli\\oms.js`,
       runner: (command, args) => {
         calls.push([command, ...args].join(" "));
-        return command === "npm" ? okCall(`${prefix}\n`) : okCall('{"results":[{"changed":true}]}');
+        return args[0] === "prefix" ? okCall(`${prefix}\n`) : okCall();
       },
     }));
 
     expect(result.success).toBe(true);
-    expect(result.hostReconciled).toBe(true);
     expect(calls).toEqual([
       "npm prefix -g",
-      "C:\\Users\\oms\\AppData\\Roaming\\npm\\oms.cmd reconcile --runtime codex --vault /tmp/Vault --json",
+      "npm install -g oh-my-second-brain@latest",
     ]);
-  });
-
-  it("reports package and host mutations independently", async () => {
-    const result = await runUpdate(updateOptions({
-      currentVersion: "0.1.8",
-      latestVersion: "0.1.8",
-      runner: matchingRunner([], okCall('{"results":[{"changed":true}]}')),
-    }));
-
-    expect(result).toMatchObject({ packageMutated: false, hostReconciled: true, mutated: true });
   });
 
   it("compares SemVer prerelease identifiers before stable releases", () => {
@@ -214,9 +208,11 @@ describe("oms update", () => {
     expect(compareVersions("v1.0.0+build.1", "1.0.0+build.2")).toBe(0);
   });
 
-  it("reports an update notice without mutating", async () => {
+  it("reports an update notice with the separated package and host commands", async () => {
     const notice = await checkUpdateNotice({ currentVersion: "0.1.7", latestVersion: "0.1.8" });
-    expect(notice).toMatchObject({ currentVersion: "0.1.7", latestVersion: "0.1.8" });
-    expect(formatUpdateNotice(notice)).toContain("oms update --yes");
+    const formatted = formatUpdateNotice(notice);
+
+    expect(formatted).toContain("oms package update --yes");
+    expect(formatted).toContain("newly installed `oms host sync`");
   });
 });

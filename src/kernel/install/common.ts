@@ -34,7 +34,7 @@ export function hostHome(homeDir: string | undefined, dirname: string, envName: 
 }
 
 export function mcpArgs(options: HostOperationOptions): string[] {
-  return ["mcp", "--vault", options.vault];
+  return ["serve", "mcp", "--vault", options.vault];
 }
 
 export function jsonString(value: string): string {

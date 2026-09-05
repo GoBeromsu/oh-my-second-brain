@@ -140,7 +140,10 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const operationNames = schema.oneOf
       ?.map((operation) => operation.properties?.["op"]?.const)
       .filter((operation): operation is string => typeof operation === "string");
-    expect(operationNames).toEqual(expect.arrayContaining(["query", "collections", "contexts", "status"]));
+    expect(operationNames).toEqual(expect.arrayContaining(["context", "template-scan", "templates", "query", "index-status", "get-document"]));
+    for (const removed of ["lazy-load", "multi-get-documents", "collections", "contexts", "status"]) {
+      expect(operationNames).not.toContain(removed);
+    }
     for (const retired of ["axis", "semantic-query", "semantic-collections", "semantic-contexts", "semantic-status"]) {
       expect(operationNames).not.toContain(retired);
     }
@@ -151,22 +154,28 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const search = omsMcpTools.find((tool) => tool.name === "search");
     const validate = validator.getValidator(search!.inputSchema);
 
-    expect(validate({ op: "query", query: "architecture", limit: 0, candidateLimit: 1 }).valid).toBe(true);
-    expect(validate({ op: "query", query: "architecture", limit: 1.5 }).valid).toBe(false);
-    expect(validate({ op: "query", query: "architecture", candidateLimit: 0 }).valid).toBe(false);
-    expect(validate({ op: "query", query: "architecture", candidateLimit: 1.5 }).valid).toBe(false);
+    expect(validate({ op: "query", mode: "query", query: "architecture", limit: 0, candidateLimit: 1 }).valid).toBe(true);
+    expect(validate({ op: "query", query: "architecture" }).valid).toBe(true);
+    expect(validate({ op: "query", query: "", lex: "architecture" }).valid).toBe(true);
+    expect(validate({ op: "query", mode: "query", query: "", lex: "architecture" }).valid).toBe(false);
+    expect(validate({ op: "query", mode: "query", query: "architecture", limit: 1.5 }).valid).toBe(false);
+    expect(validate({ op: "query", mode: "query", query: "architecture", candidateLimit: 0 }).valid).toBe(false);
+    expect(validate({ op: "query", mode: "query", query: "architecture", candidateLimit: 1.5 }).valid).toBe(false);
     expect(validate({
       op: "query",
+      mode: "query",
       query: "architecture",
       strategy: { kind: "expand", profile: "qmd-v2.8.3", maxQueries: 32 },
     }).valid).toBe(true);
     expect(validate({
       op: "query",
+      mode: "query",
       query: "architecture",
       strategy: { kind: "expand", profile: "qmd-v2.8.3", maxQueries: 0 },
     }).valid).toBe(false);
     expect(validate({
       op: "query",
+      mode: "query",
       query: "architecture",
       strategy: { kind: "expand", profile: "qmd-v2.8.3", maxQueries: 1.5 },
     }).valid).toBe(false);
@@ -185,7 +194,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
   it("fails loudly for retired semantic-query and axis operation names", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", fixtureVault],
+      args: [distCli, "serve", "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -207,7 +216,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
   it("guides unavailable semantic indexes to the canonical index sync command", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", fixtureVault],
+      args: [distCli, "serve", "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
       env: stdioEnv({ OMS_EMBEDDING_PROVIDER: undefined, OMS_EMBEDDING_MODEL: undefined }),
       stderr: "pipe",
@@ -215,7 +224,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const client = new Client({ name: "oms-index-guidance-test", version: "0.0.0" });
     try {
       await client.connect(transport);
-      const result = await client.callTool({ name: "search", arguments: { op: "collections" } });
+      const result = await client.callTool({ name: "search", arguments: { op: "index-status", view: "collections" } });
       const payload = textPayload(result);
       expect(payload.available).toBe(false);
       const message = typeof payload.reason === "string" ? payload.reason : "";
@@ -254,7 +263,10 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const declaredOperations = (schema.oneOf ?? [])
         .map((branch) => branch.properties?.["op"]?.const)
         .filter((value): value is string => typeof value === "string");
-      if (schema.oneOf === undefined) {
+      const acceptsZeroArguments = (schema.oneOf ?? []).some(branch =>
+        Object.keys(branch.properties ?? {}).length === 0
+      );
+      if (schema.oneOf === undefined || (acceptsZeroArguments && operation === undefined)) {
         expect(operation, `${skill} must not declare an op for a direct tool`).toBeUndefined();
       } else {
         expect(typeof operation, `${skill}.mcp_args.op must be a string`).toBe("string");
@@ -271,6 +283,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
 
     expect(validate({
       op: "query",
+      mode: "query",
       query: "typed axes",
       axes: {
         field: {
@@ -281,16 +294,19 @@ describe("Oh My Second Brain MCP stdio server", () => {
     }).valid).toBe(true);
     expect(validate({
       op: "query",
+      mode: "query",
       query: "typed axes",
       axes: { field: { tags: { containsAll: "one" } } },
     }).valid).toBe(false);
     expect(validate({
       op: "query",
+      mode: "query",
       query: "typed axes",
       axes: { field: { score: { between: [1] } } },
     }).valid).toBe(false);
     expect(validate({
       op: "query",
+      mode: "query",
       query: "typed axes",
       axes: { field: { score: { between: [1, 10, 20] } } },
     }).valid).toBe(false);
@@ -300,6 +316,8 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const validator = new AjvJsonSchemaValidator();
     const toolByName = new Map(omsMcpTools.map((tool) => [tool.name, tool]));
     const write = validator.getValidator(toolByName.get("write")!.inputSchema);
+    const search = validator.getValidator(toolByName.get("search")!.inputSchema);
+    const doctor = validator.getValidator(toolByName.get("doctor")!.inputSchema);
     const status = validator.getValidator(toolByName.get("status")!.inputSchema);
 
     expect(write({
@@ -311,7 +329,28 @@ describe("Oh My Second Brain MCP stdio server", () => {
     }).valid).toBe(true);
     expect(write({ op: "note", mode: "create", body: "Uses the declared default template." }).valid).toBe(true);
     expect(status({}).valid).toBe(true);
+    expect(status({ op: "graph" }).valid).toBe(true);
     expect(status({ op: "status" }).valid).toBe(false);
+    expect(search({ op: "templates" }).valid).toBe(true);
+    expect(search({ op: "templates", templateId: "literature" }).valid).toBe(true);
+    expect(search({ op: "template-scan" }).valid).toBe(true);
+    expect(search({ op: "get-document", target: "notes/a.md" }).valid).toBe(true);
+    expect(search({ op: "get-document", targets: ["notes/a.md"] }).valid).toBe(true);
+    expect(search({ op: "get-document", notePath: "notes/a.md", fromLine: 1, lineCount: 20 }).valid).toBe(true);
+    expect(search({ op: "get-document", target: "notes/a.md", targets: ["notes/a.md"] }).valid).toBe(false);
+    expect(search({ op: "lazy-load", notePath: "notes/a.md" }).valid).toBe(false);
+    expect(search({ op: "multi-get-documents", targets: ["notes/a.md"] }).valid).toBe(false);
+    expect(search({ op: "index-status", view: "status" }).valid).toBe(true);
+    expect(search({ op: "collections" }).valid).toBe(false);
+    expect(doctor({ op: "sync-embeddings", mode: "sync" }).valid).toBe(true);
+    expect(doctor({ op: "sync-embeddings", mode: "embed" }).valid).toBe(true);
+    expect(doctor({ op: "sync-embeddings", mode: "repair" }).valid).toBe(false);
+    expect(doctor({ op: "sync-embeddings", mode: "repair", repairMode: "rebuild" }).valid).toBe(true);
+    expect(doctor({ op: "sync-embeddings", mode: "repair", repairMode: "drop", dryRun: true }).valid).toBe(true);
+    expect(doctor({ op: "sync-embeddings", mode: "repair", repairMode: "vacuum" }).valid).toBe(false);
+    expect(doctor({ op: "sync-embeddings", mode: "sync", repairMode: "drop" }).valid).toBe(false);
+    expect(doctor({ op: "sync-embeddings", mode: "embed", dryRun: true }).valid).toBe(false);
+    expect(doctor({ op: "sync-embeddings", mode: "sync", embed: false }).valid).toBe(false);
     expect(write({
       op: "template",
       transactionId: "tx-resume",
@@ -334,7 +373,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false, dryRun: true }).valid).toBe(true);
     expect(write({ op: "template", mode: "default", templateId: "people", dryRun: true }).valid).toBe(true);
     expect(write({ op: "template", mode: "register-folder", folder: { path: "Templates/manual", mode: "manual", default: true }, dryRun: true }).valid).toBe(true);
-    expect(write({ op: "template", mode: "regenerate", dryRun: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "regenerate", dryRun: true }).valid).toBe(false);
     expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false, source: templateSource, dryRun: true }).valid).toBe(false);
     expect(write({ op: "template", mode: "default", templateId: "people", deleteSource: false, dryRun: true }).valid).toBe(false);
     expect(write({ op: "template", mode: "register-folder", folder: { path: "Templates/manual", mode: "manual", default: false }, dryRun: true }).valid).toBe(false);
@@ -368,10 +407,13 @@ describe("Oh My Second Brain MCP stdio server", () => {
 
     for (const [tool, op] of normalOperations) {
       if (tool === "status") {
-        expect(schemas.get(tool)?.required).not.toContain("op");
+        expect(schemas.get(tool)?.oneOf).toEqual([
+          expect.objectContaining({ additionalProperties: false, properties: {} }),
+          expect.objectContaining({ required: ["op"] }),
+        ]);
       } else {
         expect(op).toBeDefined();
-        expect(schemas.get(tool)?.oneOf?.every((branch) => branch.required.includes("op")), tool).toBe(true);
+        expect(schemas.get(tool)?.oneOf?.every((branch) => (branch.required ?? []).includes("op")), tool).toBe(true);
       }
     }
   });
@@ -402,11 +444,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
     ["vec field", { op: "query", vec: "telescope" }],
     ["hyde field", { op: "query", hyde: "hypothetical telescope answer" }],
     ["vsearch mode", { op: "query", query: "telescope", mode: "vsearch" }],
-    ["expand strategy", { op: "query", query: "telescope", strategy: { kind: "expand", profile: "qmd-v2.8.3" } }],
+    ["expand strategy", { op: "query", mode: "query", query: "telescope", strategy: { kind: "expand", profile: "qmd-v2.8.3" } }],
   ])("fails loudly for explicit vector retrieval via %s without embedding configuration", async (_strategy, arguments_) => {
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", fixtureVault],
+      args: [distCli, "serve", "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
       env: stdioEnv({ OMS_EMBEDDING_PROVIDER: undefined, OMS_EMBEDDING_MODEL: undefined }),
       stderr: "pipe",
@@ -427,7 +469,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
   it("does not discard vec shorthand when typed searches are also supplied", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", fixtureVault],
+      args: [distCli, "serve", "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
       env: stdioEnv({ OMS_EMBEDDING_PROVIDER: undefined, OMS_EMBEDDING_MODEL: undefined }),
       stderr: "pipe",
@@ -465,7 +507,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", fixtureVault],
+      args: [distCli, "serve", "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -489,7 +531,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
   it("exposes read/status tools and validates a fixture note", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", fixtureVault],
+      args: [distCli, "serve", "mcp", "--vault", fixtureVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -608,7 +650,7 @@ Valid frontmatter remains available to retrieve.
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -652,7 +694,7 @@ Valid frontmatter remains available to retrieve.
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -694,7 +736,7 @@ Valid frontmatter remains available to retrieve.
     const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-cache-only-"));
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -720,7 +762,7 @@ Valid frontmatter remains available to retrieve.
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -759,7 +801,7 @@ Valid frontmatter remains available to retrieve.
     const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-write-ambig-"));
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -800,7 +842,7 @@ Valid frontmatter remains available to retrieve.
     await createMcpTemplateAuthority(tmpVault);
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -901,7 +943,7 @@ Valid frontmatter remains available to retrieve.
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -1000,7 +1042,7 @@ Valid frontmatter remains available to retrieve.
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp", "--vault", tmpVault],
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
       cwd: repoRoot,
       env: stdioEnv(),
       stderr: "pipe",
@@ -1048,7 +1090,7 @@ Valid frontmatter remains available to retrieve.
     const tmpCwd = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-cwd-")));
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp"],
+      args: [distCli, "serve", "mcp"],
       cwd: tmpCwd,
       env: { HOME: tmpHome, PATH: process.env["PATH"] ?? "" },
       stderr: "pipe",
@@ -1103,7 +1145,7 @@ Valid frontmatter remains available to retrieve.
     await writeFile(path.join(tmpCwd, "notes", "unbound.md"), "# Unbound\n", "utf-8");
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp"],
+      args: [distCli, "serve", "mcp"],
       cwd: tmpCwd,
       env: { HOME: tmpHome, PATH: process.env["PATH"] ?? "" },
       stderr: "pipe",
@@ -1113,8 +1155,13 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
 
-      for (const op of ["build-graph", "cleanup", "sync-embeddings"]) {
-        const repair = textPayload(await client.callTool({ name: "doctor", arguments: { op } }));
+      for (const [op, arguments_] of [
+        ["build-graph", { op: "build-graph" }],
+        ["cleanup", { op: "cleanup" }],
+        ["sync-embeddings", { op: "sync-embeddings", mode: "sync" }],
+        ["repair-index", { op: "sync-embeddings", mode: "repair", repairMode: "drop" }],
+      ] as const) {
+        const repair = textPayload(await client.callTool({ name: "doctor", arguments: arguments_ }));
         expect(repair).toMatchObject({
           status: "rejected",
           rejection: {
@@ -1149,7 +1196,7 @@ Valid frontmatter remains available to retrieve.
     await writeFile(path.join(tmpVault, "notes", "graph-note.md"), "---\ntemplate: literature\ntitle: Graph Note\nsource-url: https://example.com/graph-note\n---\nGraph note.\n", "utf-8");
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp"],
+      args: [distCli, "serve", "mcp"],
       cwd: tmpVault,
       env: stdioEnv(),
       stderr: "pipe",
@@ -1192,7 +1239,7 @@ Valid frontmatter remains available to retrieve.
     ));
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp"],
+      args: [distCli, "serve", "mcp"],
       cwd: tmpVault,
       env: stdioEnv(),
       stderr: "pipe",
@@ -1219,7 +1266,7 @@ Valid frontmatter remains available to retrieve.
     await writeFile(path.join(tmpVault, "note.md"), "# Indexed note\n", "utf-8");
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp"],
+      args: [distCli, "serve", "mcp"],
       cwd: tmpVault,
       env: stdioEnv(),
       stderr: "pipe",
@@ -1229,7 +1276,7 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
       const repair = textPayload(
-        await client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", embed: false } }),
+        await client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "sync" } }),
       );
       const receipt = repair.receipt as Record<string, unknown>;
       const postcondition = receipt.postcondition as Record<string, unknown>;
@@ -1266,7 +1313,7 @@ Valid frontmatter remains available to retrieve.
     await writeFile(path.join(tmpVault, "removed.md"), "# Removed note\n", "utf-8");
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp"],
+      args: [distCli, "serve", "mcp"],
       cwd: tmpVault,
       env: stdioEnv(),
       stderr: "pipe",
@@ -1276,7 +1323,7 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
       textPayload(
-        await client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", embed: false } }),
+        await client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "sync" } }),
       );
       await rm(path.join(tmpVault, "removed.md"));
       const repair = textPayload(
@@ -1318,7 +1365,7 @@ Valid frontmatter remains available to retrieve.
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [distCli, "mcp"],
+      args: [distCli, "serve", "mcp"],
       cwd: tmpVault,
       env: { HOME: tmpHome, PATH: process.env["PATH"] ?? "" },
       stderr: "pipe",
@@ -1331,6 +1378,10 @@ Valid frontmatter remains available to retrieve.
       const status = textPayload(await client.callTool({ name: "status", arguments: {} }));
       expect(status.writeTools).toBe("write-gated-by-verified-target-and-contract");
       expect(status.history).toEqual(expect.objectContaining({ verifications: expect.any(Number) }));
+      const graph = textPayload(await client.callTool({ name: "status", arguments: { op: "graph" } }));
+      expect(graph).toEqual(expect.objectContaining({ available: expect.any(Boolean) }));
+      expect(graph).not.toHaveProperty("writeTools");
+      expect(graph).not.toHaveProperty("derivedState");
 
       const listed = textPayload(await client.callTool({ name: "search", arguments: { op: "templates" } }));
       expect(listed.history).toEqual(expect.objectContaining({

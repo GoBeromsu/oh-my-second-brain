@@ -1,10 +1,10 @@
 # Oh My Second Brain Hermes Adapter
 
-Installed by `oms install --runtime hermes` into:
+Installed by `oms host install --runtime hermes` into:
 
 - `~/.hermes/skills/knowledge-management/oms/`
 - `~/.hermes/config.yaml` as `mcp_servers.oms`
 
-The skill bundle contains Oh My Second Brain's `write`, `search`, `link`, `distill`, `status`, and `doctor` skills and uses the Oh My Second Brain MCP server for runtime operations.
+The shared skill bundle contains `write`, `search`, `link`, `distill`, `status`, `doctor`, and tool-less `template`; runtime operations use the five MCP tools through `oms serve mcp`.
 
-Unlike Claude Code (`claude plugin install`), Hermes exposes no native marketplace or plugin-update command, so this adapter stays OMS-managed: `oms update` reconciles it by re-running the same install path. `mcp_servers.oms` is edited surgically, leaving the rest of `~/.hermes/config.yaml` — including comments and key ordering — untouched.
+Unlike Claude Code (`claude plugin install`), Hermes exposes no native marketplace or plugin-update command, so this adapter stays OMS-managed. `oms package update` updates OMS; `oms host sync --runtime hermes` separately refreshes registrations. Neither upgrades Hermes. `mcp_servers.oms` is edited surgically, leaving the rest of `~/.hermes/config.yaml` — including comments and key ordering — untouched. Existing profiles retain their own configuration and registration scope.

@@ -23,35 +23,6 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
       "             --models-no-default       Waive model installation; vector search stays unavailable.",
     ],
   },
-  { name: "install", line: "  install  Install Oh My Second Brain host adapters and MCP registration." },
-  { name: "uninstall", line: "  uninstall Remove Oh My Second Brain host adapters and managed pointer last." },
-  { name: "update", line: "  update   Check for or apply an explicit package update, then refresh host adapters." },
-  { name: "reconcile", line: "  reconcile Re-stamp selected hosts from the strict global vault pointer." },
-  {
-    name: "doctor",
-    line: "  doctor   Diagnose template authority, projection signatures, and migration state.",
-    detailLines: [
-      "             --max-per-template <n>  Cap reported findings for each stable template ID.",
-    ],
-  },
-  {
-    name: "audit",
-    line: "  audit    Fail-closed validation of resolved templates and the derived note index.",
-    detailLines: [
-      "             --folder <name>   Restrict the scan to one top-level vault folder.",
-      "             --json             Emit structured JSON instead of console text.",
-    ],
-  },
-  { name: "lint", line: "  lint     Check vault link health: broken [[wikilinks]] and orphan notes." },
-  { name: "link", line: "  link     Bridge an external repo to scoped vault folders via gitignored symlinks." },
-  {
-    name: "linkify",
-    line: "  linkify  Propose [[wikilinks]] to template-bound notes across existing notes; report-only by default.",
-    detailLines: [
-      "             --folder <name>   Restrict the scan and writes to one top-level vault folder.",
-      "             --apply --yes     Rewrite notes in place; --apply alone refuses and writes nothing.",
-    ],
-  },
   {
     name: "template",
     line: "  template Manage guarded template folders, sources, defaults, and derived types.",
@@ -61,20 +32,25 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
       "             Run `oms template --help` for leaf arguments and approval requirements.",
     ],
   },
-  { name: "search", line: "  search   Search indexed vault notes." },
-  { name: "index", line: "  index    Manage the native vault index." },
-  { name: "doc", line: "  doc      Retrieve indexed vault documents." },
-  { name: "embed", line: "  embed    Generate vector embeddings for indexed notes." },
-  { name: "serve", line: "  serve    Start the local search HTTP server." },
-  { name: "mcp", line: "  mcp      Start the read/status MCP stdio server." },
+  { name: "note", line: "  note     Create, append, update, audit, backfill, or get notes." },
+  { name: "link", line: "  link     Check, suggest, or apply vault wikilinks." },
+  { name: "bridge", line: "  bridge   Add, remove, or inspect external-repository vault bridges." },
+  { name: "search", line: "  search   Query notes or inspect search context." },
+  { name: "index", line: "  index    Sync, embed, repair, inspect, or clean the vault index." },
+  { name: "graph", line: "  graph    Build or inspect the vault graph." },
+  { name: "host", line: "  host     Install, remove, sync, or inspect host integrations." },
+  { name: "package", line: "  package  Check for or apply package updates." },
+  { name: "model", line: "  model    Install, select, waive, or inspect embedding models." },
+  { name: "serve", line: "  serve    Start the MCP stdio server or local HTTP runtime." },
   {
     name: "hook",
-    line: "  hook     Vault guard hooks for Claude Code PreToolUse / PostToolUse events.",
+    line: "  hook     Run Claude Code pre/post vault guard hooks.",
     detailLines: [
-      "             pre-tool-use  Read PreToolUse JSON from stdin; block unregistered folder creation.",
-      "             post-tool-use Read PostToolUse JSON from stdin; audit frontmatter + trigger graph build.",
+      "             pre  Read PreToolUse JSON from stdin; block unregistered folder creation.",
+      "             post Read PostToolUse JSON from stdin; audit affected frontmatter.",
     ],
   },
+  { name: "status", line: "  status   Show read-only vault health and statistics." },
 ];
 
 export function mainUsageCommandNames(
@@ -95,12 +71,7 @@ function commandLines(registry: HarnessSurfaceRegistry): string {
   return lines.join("\n");
 }
 
-function runtimeChoices(registry: HarnessSurfaceRegistry): string {
-  return ["auto", "all", ...registry.hosts.map((host) => host.runtime)].join("|");
-}
-
 export function cliUsageText(registry: HarnessSurfaceRegistry = harnessSurfaceRegistry): string {
-  const runtime = runtimeChoices(registry);
   return `
 oh-my-second-brain — Oh My Second Brain convention layer for Obsidian vaults
 
@@ -108,24 +79,19 @@ Usage:
   oh-my-second-brain setup [--vault <path>] [--template-folder <path> ...]
                            [--dry-run | --yes --approved-digest <sha256:...>] [--install-claude]
                            [--models-default | --models-descriptor <path> | --models-no-default]
-  oh-my-second-brain install [--vault <path>] [--runtime <${runtime}>] [--dry-run] [--execute] [--yes] [--json]
-  oh-my-second-brain uninstall [--runtime <all|${registry.hosts.map((host) => host.runtime).join("|")}>] [--dry-run] [--execute] [--yes] [--json]
-  oh-my-second-brain update [--check] [--dry-run] [--yes] [--runtime <${runtime}>] [--vault <path>]
-  oh-my-second-brain reconcile [--runtime <${runtime}>] [--dry-run] [--execute] [--yes] [--json]
-  oh-my-second-brain doctor [--vault <path>] [--verbose] [--json] [--max <n>]
-  oh-my-second-brain audit [--vault <path>] [--folder <name>] [--json]
-  oh-my-second-brain lint [--vault <path>] [--verbose] [--json]
-  oh-my-second-brain link --vault <path> --folder <name> [--folder <name> ...] [--no-convention-note]
-  oh-my-second-brain linkify [--vault <path>] [--folder <name>] [--apply --yes]
   oh-my-second-brain template <list|show|scan|add|update|remove|move|check|default|regenerate-types> [options]
-  oh-my-second-brain search <text> [--lex <text>] [--vec <text>] [--hyde <text>] [--expand] [--max-queries <n>] [--rerank] [-n <n>]
-  oh-my-second-brain index <sync|status|cleanup|collections|contexts> [options]
-  oh-my-second-brain doc <get|multi-get> [options]
-  oh-my-second-brain embed [options]
-  oh-my-second-brain serve [options]
-  oh-my-second-brain mcp [--vault <path>]
-  oh-my-second-brain hook pre-tool-use [--vault <path>]
-  oh-my-second-brain hook post-tool-use [--vault <path>]
+  oh-my-second-brain note <create|append|update|audit|backfill|get> [options]
+  oh-my-second-brain link <check|suggest|apply> [options]
+  oh-my-second-brain bridge <add|remove|status> [options]
+  oh-my-second-brain search <query|context> [options]
+  oh-my-second-brain index <sync|embed|repair|status|clean> [options]
+  oh-my-second-brain graph <build|status> [options]
+  oh-my-second-brain host <install|remove|sync|status> [options]
+  oh-my-second-brain package <check|update> [options]
+  oh-my-second-brain model <install|select|waive|status> [options]
+  oh-my-second-brain serve <mcp|http> [options]
+  oh-my-second-brain hook <pre|post> [--vault <path>]
+  oh-my-second-brain status [options]
 
 Compatibility alias: oms <command>
 
@@ -134,7 +100,7 @@ ${commandLines(registry)}
 
 Options:
   --vault <path>   Path to the vault root (default: current directory).
-  --yes            setup: apply only with --approved-digest from an earlier dry-run; confirms uninstall or update execution.
+  --yes            setup: apply only with --approved-digest from an earlier dry-run.
   --approved-digest <sha256:...>
                   setup: exact digest shown by \`setup --dry-run\`; required with --yes and never generated by --yes.
   --template-folder <path>
@@ -144,18 +110,10 @@ Options:
                   are reused. Dry-run shows saved selections and configured-folder candidates but
                   never auto-selects a configured folder.
   --install-claude Print Claude Code plugin install and MCP registration commands (dry-run).
-  --runtime <name> Select host runtime (default: auto for install, all for uninstall).
-  --dry-run        setup: print the proposal and approval digest without writing; other commands preview host config changes.
-  --execute        Allow external host CLIs such as \`claude\` to run when available.
-  --verbose        doctor/lint: list every affected note instead of a summary.
-  --json           doctor/lint/audit: emit machine-readable output as JSON.
-  --folder <name>  audit/linkify: restrict scan; link: vault folder/subpath to expose (repeatable for link).
-  --apply          linkify: rewrite notes in place; must be combined with --yes.
-  --no-convention-note
-                  link: skip writing the managed OMS usage block to AGENTS.md.
+  --dry-run        setup: print the proposal and approval digest without writing.
   --models-default
                   setup: download and verify the pinned EmbeddingGemma-300M model into the
-                  user-level cache, then select it for \`oms embed\` and vector search without
+                  user-level cache, then select it for \`oms index embed\` and vector search without
                   requiring OMS_EMBEDDING_PROVIDER / OMS_EMBEDDING_MODEL.
   --models-descriptor <path>
                   setup: install an operator-supplied model descriptor (SHA-256 verified).

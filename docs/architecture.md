@@ -28,6 +28,10 @@ Taxonomy controls placement without deciding a template's keys. Its `templateFol
 
 Runtime observations use an external SQLite journal at `~/.oms/runtime/v1/<hostId>/events.sqlite` (`OMS_RUNTIME_ROOT` overrides the base directory). Containment is checked before creation, and WAL/SHM files stay outside the vault. Each actual event has a UUID; only replay of that same event ID is deduplicated. Invocation and attempt indexes are nonunique. History queries are readonly/no-create and filter by current host and canonical vault fingerprint. Journal bytes are never convention authority or approval-digest input.
 
+Read-only engine consumers share a stable, temporary snapshot of the existing database and committed WAL outside the source vault. They never open a SQLite connection to the original, so even transient source WAL/SHM creation is forbidden. The snapshot is removed when the reader closes; it is not another authoritative store. Missing indexes use the existing ephemeral core path, while corrupt or unstable existing input fails visibly.
+
+MCP and HTTP SQLite engines are request-scoped so later requests see external index replacements. Within each MCP server, index sync, embedding, cleanup, and repair share a FIFO mutation queue held until the request's engines close. Read-only requests do not wait on this queue. A failed engine close returns `ENGINE_LIFECYCLE_FAILED` and prevents subsequent index mutations until the server restarts.
+
 Renderer classification separates executable Obsidian templates from OMS note scaffolds. Templater frontmatter supplies a contract with Obsidian-filled fields; script-first sources derive proposals from observed notes. The kernel validates bounded host proposals and transaction evidence, never executes scripts or provides a Templater transpiler.
 
 Setup selects folders only from repeated explicit `--template-folder` arguments or saved valid-v3 registrations. Explicit folders use `auto` proposal mode and the first is the template-creation default; saved modes are retained. Obsidian, Templater, and bounded vault-walk evidence is suggestion-only and carries provenance, never automatic selection. Without a selection, non-interactive setup is blocked and produces no approval digest. There are no invented `Templates` or `Inbox` defaults.
@@ -48,7 +52,9 @@ Search is lexical and works without `.oms/types.json`. It supports narrowing by 
 
 The CLI works independently of host integrations. Installable assets are under [`assets/`](../assets/): seven public skills (`write`, `search`, `link`, `distill`, `status`, `doctor`, and tool-less `template`) and host guidance. `assets/claude/`, `assets/codex/`, and `assets/hermes/` contain host-specific files.
 
-MCP is a separate API surface. `oms mcp` serves exactly five public capabilities: write, search, link, status, and doctor. Skills are host-facing workflows; MCP tools are callable operations. Neither replaces the independent CLI.
+MCP is a separate API surface. `oms serve mcp` serves exactly five public capabilities: write, search, link, status, and doctor. Skills are host-facing workflows; MCP tools are callable operations. Neither replaces the independent CLI.
+
+The [command map](./cli-map.md) assigns each capability one CLI leaf and, where exposed, one exclusive MCP operation or mode. `bridge` owns repository-to-vault links; `link` owns note wikilinks. `package update` installs OMS, while `host sync` refreshes host registrations separately. `serve mcp` and `serve http` must not create a vault engine store on startup. Retired top-level commands are not aliases.
 
 ### MCP namespace boundary
 

@@ -18,4 +18,4 @@ The vault is governed by user-owned template conventions in `.oms/`.
 
 **Maintain:** `$oms-status` is read-only. `$oms-doctor` diagnoses and performs explicit repairs.
 
-`oms install --runtime codex` installs seven skills: `$oms-write`, `$oms-search`, `$oms-link`, `$oms-distill`, `$oms-status`, `$oms-doctor`, and tool-less `$oms-template`, plus managed MCP configuration.
+`oms host install --runtime codex` installs seven skills: `$oms-write`, `$oms-search`, `$oms-link`, `$oms-distill`, `$oms-status`, `$oms-doctor`, and tool-less `$oms-template`, plus managed MCP configuration using `oms serve mcp`.

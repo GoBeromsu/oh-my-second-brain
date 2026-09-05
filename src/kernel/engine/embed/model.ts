@@ -1,12 +1,14 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
   canonicalModelIdentityKey,
   MODEL_CAPABILITY_ENV_PAIRS,
   parseModelsConfig,
+  readModelsConfig,
+  resolveModelCapabilities,
   resolveModelCapability,
   type InstalledModelArtifact,
   type ModelCapability,
@@ -118,6 +120,20 @@ export interface AcquiredModelSet {
   readonly config: ModelsConfigV1;
   readonly receipt: InstalledModelsReceipt;
   readonly artifacts: readonly InstalledModelArtifact[];
+}
+
+export interface ModelSelectionProposal {
+  readonly vault: string;
+  readonly current: ModelsConfigV1 | null;
+  readonly proposed: ModelsConfigV1;
+  readonly approvalDigest: `sha256:${string}`;
+  readonly changed: boolean;
+}
+
+export interface ModelSelectionReceipt extends ModelSelectionProposal {
+  readonly status: "written" | "unchanged";
+  readonly path: string;
+  readonly verified: true;
 }
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -691,4 +707,128 @@ export async function acquireEmbeddingModel(options: AcquireEmbeddingModelOption
   });
   const artifact = acquired.artifacts[0]!;
   return { descriptor: descriptorFromArtifact(artifact), cachePath: artifact.path };
+}
+
+function selectionBytes(config: ModelsConfigV1): string {
+  return `${JSON.stringify(parseModelsConfig(config), null, 2)}\n`;
+}
+
+function approvalDigest(current: string | null, proposed: string): `sha256:${string}` {
+  return `sha256:${createHash("sha256")
+    .update("oms-model-selection-v1\n")
+    .update(current === null ? "absent\n" : current)
+    .update("\nproposed\n")
+    .update(proposed)
+    .digest("hex")}`;
+}
+
+/** Stable approval digest for a strict acquisition manifest; acquiring still verifies every artifact checksum. */
+export function modelAcquisitionApprovalDigest(input: ModelSetAcquisitionManifest | unknown): `sha256:${string}` {
+  const manifest = parseModelSetAcquisitionManifest(input);
+  return `sha256:${createHash("sha256")
+    .update("oms-model-acquisition-v1\n")
+    .update(JSON.stringify(manifest))
+    .digest("hex")}`;
+}
+
+async function currentSelection(vault: string): Promise<{ readonly raw: string | null; readonly config: ModelsConfigV1 | null }> {
+  const filename = path.join(vault, ".oms", "models.json");
+  try {
+    const raw = await readFile(filename, "utf8");
+    return { raw, config: parseModelsConfig(raw) };
+  } catch (error: unknown) {
+    if (isRecord(error) && error.code === "ENOENT") return { raw: null, config: null };
+    throw error;
+  }
+}
+
+async function verifiedSelectionVault(vault: string): Promise<string> {
+  const root = await realpath(vault);
+  if (!(await stat(root)).isDirectory()) throw new Error(`Model selection target is not a directory: ${root}.`);
+  const oms = path.join(root, ".oms");
+  const omsEntry = await lstat(oms);
+  if (!omsEntry.isDirectory() || omsEntry.isSymbolicLink()) {
+    throw new Error(`Model selection target is not a verified OMS vault: ${root}.`);
+  }
+  try {
+    if ((await lstat(path.join(oms, "models.json"))).isSymbolicLink()) {
+      throw new Error("Model selection target .oms/models.json must not be a symbolic link.");
+    }
+  } catch (error: unknown) {
+    if (!isRecord(error) || error.code !== "ENOENT") throw error;
+  }
+  return root;
+}
+
+/** Build a side-effect-free, verified selection proposal from installed artifacts. */
+export async function proposeModelSelection(options: {
+  readonly vault: string;
+  readonly config: ModelsConfigV1 | unknown;
+  readonly cacheDir?: string;
+}): Promise<ModelSelectionProposal> {
+  const vault = await verifiedSelectionVault(options.vault);
+  const proposed = parseModelsConfig(options.config);
+  const installed = await readInstalledModelsReceipt({ cacheDir: options.cacheDir });
+  const resolutions = resolveModelCapabilities({
+    env: {},
+    vaultConfig: proposed,
+    installedArtifacts: installed.artifacts,
+    setupDefaults: installed.defaults,
+  });
+  for (const capability of ["embed", "rerank", "generate"] as const) {
+    if (proposed[capability] !== undefined && (!resolutions[capability].available || resolutions[capability].source !== "vault")) {
+      throw new Error(`Model selection for ${capability} is not backed by a verified installed artifact.`);
+    }
+  }
+  const current = await currentSelection(vault);
+  const proposedRaw = selectionBytes(proposed);
+  return {
+    vault,
+    current: current.config,
+    proposed,
+    approvalDigest: approvalDigest(current.raw, proposedRaw),
+    changed: current.raw !== proposedRaw,
+  };
+}
+
+/** CAS-publish an approved model selection and verify the persisted readback. */
+export async function applyModelSelection(options: {
+  readonly vault: string;
+  readonly config: ModelsConfigV1 | unknown;
+  readonly approvedDigest: string;
+  readonly cacheDir?: string;
+}): Promise<ModelSelectionReceipt> {
+  const vault = await verifiedSelectionVault(options.vault);
+  const lock = path.join(vault, ".oms", "models.json.lock");
+  try {
+    await mkdir(lock, { mode: 0o700 });
+  } catch (error: unknown) {
+    if (isRecord(error) && error.code === "EEXIST") {
+      throw new Error("MODEL_SELECTION_CONCURRENT_CHANGE: another model selection is in progress.");
+    }
+    throw error;
+  }
+  try {
+    const proposal = await proposeModelSelection({ ...options, vault });
+    if (options.approvedDigest !== proposal.approvalDigest) {
+      throw new Error(`MODEL_SELECTION_APPROVAL_MISMATCH: expected ${proposal.approvalDigest}.`);
+    }
+    const filename = path.join(proposal.vault, ".oms", "models.json");
+    if (proposal.changed) {
+      const temporary = path.join(path.dirname(filename), `.models.json.oms-${process.pid}-${randomUUID()}`);
+      try {
+        await writeFile(temporary, selectionBytes(proposal.proposed), { encoding: "utf8", mode: 0o600, flag: "wx" });
+        await rename(temporary, filename);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    }
+    const readback = await readModelsConfig(proposal.vault);
+    if (JSON.stringify(readback) !== JSON.stringify(proposal.proposed)) {
+      throw new Error("MODEL_SELECTION_READBACK_FAILED: persisted selection does not match the approved proposal.");
+    }
+    return { ...proposal, status: proposal.changed ? "written" : "unchanged", path: filename, verified: true };
+  } finally {
+    await rm(lock, { recursive: true, force: true });
+  }
 }

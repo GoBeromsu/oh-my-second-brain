@@ -58,6 +58,11 @@ export interface ParityViolation {
   readonly detail: string;
 }
 
+const TARGET_CLI_COMMANDS = [
+  "setup", "template", "note", "link", "bridge", "search", "index",
+  "graph", "host", "package", "model", "serve", "hook", "status",
+] as const;
+
 /** Pure rule evaluation so every rule can be proven against fixtures. */
 export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; tools: number }): ParityViolation[] {
   const violations: ParityViolation[] = [];
@@ -142,6 +147,15 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
   if (sets.cliCommands.length === 0) {
     violations.push({ rule: "cli-allowlist-populated", detail: "CLI command allowlist is empty" });
   }
+  if (
+    [...sets.cliCommands].sort().join("\0")
+    !== [...TARGET_CLI_COMMANDS].sort().join("\0")
+  ) {
+    violations.push({
+      rule: "cli-allowlist-exact",
+      detail: `CLI allowlist must be exactly ${TARGET_CLI_COMMANDS.join(", ")}`,
+    });
+  }
 
   const dispatcherCommands = new Set(sets.dispatcherCliCommands);
   for (const command of sets.cliCommands) {
@@ -175,28 +189,24 @@ const CLEAN: SurfaceSets = {
   mcpTools: ["write", "search", "link", "status", "doctor"],
   registryMcpTools: [
     { name: "write", posture: "write", destructive: false, idempotent: false, openWorld: false },
-    { name: "search", posture: "write", destructive: false, idempotent: false, openWorld: false },
+    { name: "search", posture: "read", destructive: false, idempotent: false, openWorld: false },
     { name: "link", posture: "write", destructive: true, idempotent: false, openWorld: false },
     { name: "status", posture: "read", destructive: false, idempotent: true, openWorld: false },
     { name: "doctor", posture: "write", destructive: false, idempotent: false, openWorld: false },
   ],
   registeredMcpTools: [
     { name: "write", posture: "write", destructive: false, idempotent: false, openWorld: false },
-    { name: "search", posture: "write", destructive: false, idempotent: false, openWorld: false },
+    { name: "search", posture: "read", destructive: false, idempotent: false, openWorld: false },
     { name: "link", posture: "write", destructive: true, idempotent: false, openWorld: false },
     { name: "status", posture: "read", destructive: false, idempotent: true, openWorld: false },
     { name: "doctor", posture: "write", destructive: false, idempotent: false, openWorld: false },
   ],
   cliCommands: [
-    "setup", "doctor", "audit", "lint", "link", "linkify", "template",
-    "install", "uninstall", "update", "reconcile", "mcp", "hook",
-    "search", "index", "doc", "embed", "serve",
+    ...TARGET_CLI_COMMANDS,
   ],
   declaredMcpTools: ["write", "search", "link", "status", "doctor"],
   dispatcherCliCommands: [
-    "setup", "doctor", "audit", "lint", "link", "linkify", "template",
-    "install", "uninstall", "update", "reconcile", "mcp", "hook",
-    "search", "index", "doc", "embed", "serve",
+    ...TARGET_CLI_COMMANDS,
   ],
 };
 
@@ -292,6 +302,19 @@ describe("surface-set parity gate (rules)", () => {
       TARGET,
     );
     expect(violations.map((v) => v.rule)).toContain("cli-allowlist-populated");
+    expect(violations.map((v) => v.rule)).toContain("cli-allowlist-exact");
+  });
+
+  it("fails when the registry and dispatcher add the same unapproved CLI command", () => {
+    const violations = checkSurfaceSets(
+      {
+        ...CLEAN,
+        cliCommands: [...CLEAN.cliCommands, "extra"],
+        dispatcherCliCommands: [...CLEAN.dispatcherCliCommands, "extra"],
+      },
+      TARGET,
+    );
+    expect(violations.map((v) => v.rule)).toContain("cli-allowlist-exact");
   });
 });
 
@@ -300,13 +323,9 @@ const allowedSkillFrontmatterKeys = new Set(["name", "description", "aliases", "
 
 function realDispatcherCommands(): string[] {
   const omsSource = readFileSync(path.join(repoRoot, "src/cli/oms.ts"), "utf-8");
-  const searchSource = readFileSync(path.join(repoRoot, "src/cli/search.ts"), "utf-8");
   const directCommands = [...omsSource.matchAll(/\bcommand === "([^"]+)"/g)]
     .map((match) => match[1]!);
-  const searchCommands = searchSource.match(/const TOP_LEVEL_COMMANDS = new Set\(\[([\s\S]*?)\]\);/);
-  expect(searchCommands, "search dispatcher command set must be statically declared").not.toBeNull();
-  const search = [...searchCommands![1].matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
-  return [...new Set([...directCommands, ...search])].sort();
+  return [...new Set(directCommands)].sort();
 }
 
 function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): SurfaceSets {
@@ -354,14 +373,16 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     .map((branch) => branch.properties?.["op"]?.const)
     .filter((op): op is string => typeof op === "string");
   expect(searchOperations.sort()).toEqual([
-    "collections",
     "context",
-    "contexts",
     "get-document",
-    "lazy-load",
-    "multi-get-documents",
+    "get-document",
+    "get-document",
+    "index-status",
     "query",
-    "status",
+    "query",
+    "query",
+    "template-scan",
+    "templates",
     "templates",
   ]);
   const queryBranch = (
@@ -465,8 +486,15 @@ const RETIRED_GUIDANCE_SPELLINGS: readonly {
 }[] = [
   { retiredSpelling: "oms semantic", pattern: /\boms\s+semantic\b/g },
   { retiredSpelling: "top-level collection/context/cleanup/http", pattern: /\boms\s+(?:collection|context|cleanup|http)\b/g },
-  { retiredSpelling: "top-level query/vsearch/get/multi-get/status", pattern: /\boms\s+(?:query|vsearch|get|multi-get|status)\b/g },
-  { retiredSpelling: "oms index embed", pattern: /\boms\s+index\s+embed\b/g },
+  { retiredSpelling: "top-level query/vsearch/get/multi-get", pattern: /\boms\s+(?:query|vsearch|get|multi-get)\b/g },
+  { retiredSpelling: "old implicit search syntax", pattern: /\boms\s+search\s+(?!(?:query|context)\b)/g },
+  { retiredSpelling: "old index leaf", pattern: /\boms\s+index\s+(?:cleanup|collections|contexts)\b/g },
+  {
+    retiredSpelling: "retired top-level command",
+    pattern: /\boms\s+(?:doctor|audit|reconcile|linkify|embed|doc|mcp|lint|install|uninstall|update)\b/g,
+  },
+  { retiredSpelling: "old repository-link syntax", pattern: /\boms\s+link\s+(?:--vault|--folder)\b/g },
+  { retiredSpelling: "old hook leaf", pattern: /\boms\s+hook\s+(?:pre-tool-use|post-tool-use)\b/g },
   { retiredSpelling: "--embedding-*", pattern: /--embedding-[A-Za-z0-9_-]+\b/g },
 ];
 
@@ -523,11 +551,12 @@ function currentGuidanceFiles(): CurrentGuidanceFile[] {
 describe("current guidance CLI spellings", () => {
   it("accepts canonical command fixtures", () => {
     const fixtures: CurrentGuidanceFile[] = [
-      { category: "shared-skills", path: "accepted-search", content: "`oms search topic`" },
-      { category: "shared-skills", path: "accepted-doc", content: "`oms doc get note-id`" },
-      { category: "shared-skills", path: "accepted-embed", content: "`oms embed`" },
+      { category: "shared-skills", path: "accepted-search", content: "`oms search query topic`" },
+      { category: "shared-skills", path: "accepted-note-get", content: "`oms note get note-id`" },
+      { category: "shared-skills", path: "accepted-status", content: "`oms status`" },
+      { category: "shared-skills", path: "accepted-embed", content: "`oms index embed`" },
       { category: "shared-skills", path: "accepted-index-status", content: "`oms index status`" },
-      { category: "shared-skills", path: "accepted-index-cleanup", content: "`oms index cleanup`" },
+      { category: "shared-skills", path: "accepted-index-clean", content: "`oms index clean`" },
     ];
 
     expect(currentGuidanceViolations(fixtures)).toEqual([]);
@@ -544,8 +573,23 @@ describe("current guidance CLI spellings", () => {
       { category: "shared-skills", path: "vsearch", content: "`oms vsearch topic`" },
       { category: "shared-skills", path: "get", content: "`oms get note.md`" },
       { category: "shared-skills", path: "multi-get", content: "`oms multi-get a.md b.md`" },
-      { category: "shared-skills", path: "status", content: "`oms status`" },
-      { category: "shared-skills", path: "index-embed", content: "`oms index embed`" },
+      { category: "shared-skills", path: "implicit-search", content: "`oms search topic`" },
+      { category: "shared-skills", path: "index-cleanup", content: "`oms index cleanup`" },
+      { category: "shared-skills", path: "index-collections", content: "`oms index collections`" },
+      { category: "shared-skills", path: "index-contexts", content: "`oms index contexts`" },
+      { category: "shared-skills", path: "doctor", content: "`oms doctor`" },
+      { category: "shared-skills", path: "audit", content: "`oms audit`" },
+      { category: "shared-skills", path: "reconcile", content: "`oms reconcile`" },
+      { category: "shared-skills", path: "linkify", content: "`oms linkify`" },
+      { category: "shared-skills", path: "embed", content: "`oms embed`" },
+      { category: "shared-skills", path: "doc", content: "`oms doc get note.md`" },
+      { category: "shared-skills", path: "mcp", content: "`oms mcp`" },
+      { category: "shared-skills", path: "lint", content: "`oms lint`" },
+      { category: "shared-skills", path: "install", content: "`oms install`" },
+      { category: "shared-skills", path: "uninstall", content: "`oms uninstall`" },
+      { category: "shared-skills", path: "update", content: "`oms update`" },
+      { category: "shared-skills", path: "old-link", content: "`oms link --vault ~/notes --folder project`" },
+      { category: "shared-skills", path: "old-hook", content: "`oms hook pre-tool-use`" },
       { category: "shared-skills", path: "embedding-default", content: "`oms setup --embedding-default`" },
       { category: "shared-skills", path: "embedding-descriptor", content: "`oms setup --embedding-descriptor model.json`" },
       { category: "shared-skills", path: "embedding-no-default", content: "`oms setup --embedding-no-default`" },
@@ -561,8 +605,23 @@ describe("current guidance CLI spellings", () => {
       "vsearch",
       "get",
       "multi-get",
-      "status",
-      "index-embed",
+      "implicit-search",
+      "index-cleanup",
+      "index-collections",
+      "index-contexts",
+      "doctor",
+      "audit",
+      "reconcile",
+      "linkify",
+      "embed",
+      "doc",
+      "mcp",
+      "lint",
+      "install",
+      "uninstall",
+      "update",
+      "old-link",
+      "old-hook",
       "embedding-default",
       "embedding-descriptor",
       "embedding-no-default",

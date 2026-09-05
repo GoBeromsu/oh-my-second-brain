@@ -42,8 +42,8 @@ export function isHermesOmsRegistration(raw: string): boolean {
   return actual["command"] === "oms"
     && actual["enabled"] === true
     && Array.isArray(args)
-    && typeof args[2] === "string"
-    && args.join("\0") === ["mcp", "--vault", args[2]].join("\0");
+    && typeof args[3] === "string"
+    && args.join("\0") === ["serve", "mcp", "--vault", args[3]].join("\0");
 }
 
 function refuseSymlink(target: string): void {
@@ -79,7 +79,7 @@ async function verifyHermesInstall(configPath: string, skillTarget: string, opti
   const parsed = document.toJS() as Record<string, unknown>;
   const servers = parsed.mcp_servers as Record<string, unknown>;
   const actual = servers.oms as { readonly args: readonly string[] };
-  if (actual.args[2] !== options.vault) {
+  if (actual.args[3] !== options.vault) {
     throw new Error("Hermes config verification failed: mcp_servers.oms does not match the expected entry");
   }
   const installed = new Set(await readdir(skillTarget));
@@ -323,7 +323,10 @@ export async function uninstallHermes(options: HostOperationOptions): Promise<Ho
   const configRaw = preImage?.toString("utf8") ?? "";
   if (preImage && !preImage.equals(Buffer.from(configRaw, "utf8"))) throw new Error("Hermes config.yaml is not valid UTF-8");
   for (const target of [adapterTarget, skillTarget, legacyPluginTarget, legacyMcpPath, configPath, provenanceTarget]) refuseSymlink(target);
-  const config = renderYamlEntryPreservingComments(configRaw, HERMES_MCP_ENTRY_PATH, { kind: "delete" });
+  const ownsRegistration = isHermesOmsRegistration(configRaw);
+  const config = ownsRegistration
+    ? renderYamlEntryPreservingComments(configRaw, HERMES_MCP_ENTRY_PATH, { kind: "delete" })
+    : { text: configRaw, changed: false };
   let changed = false;
   changed = ownsInstall && config.changed;
   for (const target of ownsInstall ? [adapterTarget, skillTarget, legacyPluginTarget, legacyMcpPath] : []) {

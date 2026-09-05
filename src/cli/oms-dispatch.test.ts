@@ -147,7 +147,7 @@ describe("oms CLI dispatch", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("Compatibility alias: oms <command>");
-    for (const command of ["setup", "install", "uninstall", "update", "doctor", "audit", "lint", "link", "linkify", "search", "index", "doc", "embed", "serve", "mcp", "hook"]) {
+    for (const command of ["setup", "template", "note", "link", "bridge", "search", "index", "graph", "host", "package", "model", "serve", "hook", "status"]) {
       expect(result.stdout).toContain(command);
     }
     expect(result.stdout).not.toMatch(/semantic/u);
@@ -188,38 +188,69 @@ describe("oms CLI dispatch", () => {
     expect(result.stderr).toContain("[oms] Unknown command: setpu");
   });
 
+  it.each([
+    ["doctor", "oms template check"],
+    ["audit", "oms note audit"],
+    ["reconcile", "oms host sync"],
+    ["linkify", "oms link suggest"],
+    ["embed", "oms index embed"],
+    ["doc", "oms note get"],
+    ["mcp", "oms serve mcp"],
+    ["lint", "oms link check"],
+    ["install", "oms host install"],
+    ["uninstall", "oms host remove"],
+    ["update", "oms package update"],
+  ])("rejects retired %s with actionable guidance", (command, guidance) => {
+    const result = runCli([command]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`Command \`${command}\` is retired`);
+    expect(result.stderr).toContain(guidance);
+  });
+
   it("reports unknown hook subcommand with exit code 1", () => {
     const result = runCli(["hook"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("[oms] Unknown hook subcommand: (none)");
-    expect(result.stderr).toContain("Usage: oms hook <pre-tool-use|post-tool-use> [--vault <path>]");
+    expect(result.stderr).toContain("[oms] Usage: oms hook <pre|post> [--vault <path>]");
   });
 
-  it("routes pre-tool-use hook and preserves bypass output", async () => {
+  it("routes the pre hook and preserves bypass output", async () => {
     const vault = await makeVault();
-    const result = runCli(["hook", "pre-tool-use", "--vault", vault], "{}\n", { OMS_GUARD: "off" });
+    const result = runCli(["hook", "pre", "--vault", vault], "{}\n", { OMS_GUARD: "off" });
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe("{\"continue\":true,\"suppressOutput\":true}\n");
   });
 
-  it("rejects unsupported runtime before host operations", () => {
-    const result = runCli(["install", "--runtime", "banana", "--dry-run"]);
+  it("routes the post hook and rejects retired hook leaf names", async () => {
+    const vault = await makeVault();
+    const post = runCli(["hook", "post", "--vault", vault], "{}\n", { OMS_GUARD: "off" });
+    const retired = runCli(["hook", "post-tool-use", "--vault", vault], "{}\n");
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("[oms] Unsupported runtime: banana");
+    expect(post.status).toBe(0);
+    expect(post.stderr).toBe("");
+    expect(post.stdout).toBe("");
+    expect(retired.status).toBe(1);
+    expect(retired.stderr).toContain("Use `oms hook post`");
   });
 
-  it("rejects unsupported update option before update runner", () => {
-    const result = runCli(["update", "--bogus", "--dry-run"]);
+  it("rejects unsupported runtime before host operations", () => {
+    const result = runCli(["host", "install", "--runtime", "banana", "--dry-run"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("unsupported runtime banana");
+  });
+
+  it("rejects unsupported package options in the package handler", () => {
+    const result = runCli(["package", "update", "--bogus", "--dry-run"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("[oms] Unsupported update option: --bogus");
+    expect(result.stderr).toContain("Unsupported package option: --bogus");
   });
 
   it("does not print an update notice after blocked setup", async () => {
@@ -244,15 +275,16 @@ describe("oms CLI dispatch", () => {
     expect(result.stderr).not.toContain("Update available");
   });
 
-  it("emits doctor and lint JSON for an empty temp vault", async () => {
+  it("routes template and link diagnostics for an empty temp vault", async () => {
     const vault = await makeVault();
-    const doctor = runCli(["doctor", "--vault", vault, "--json"]);
-    const lint = runCli(["lint", "--vault", vault, "--json"]);
+    const doctor = runCli(["template", "check", "--vault", vault]);
+    const lint = runCli(["link", "check", "--vault", vault, "--json"]);
 
     expect(doctor.status).toBe(0);
     expect(doctor.stderr).toBe("");
     expect(jsonObject(doctor.stdout)).toEqual(
       expect.objectContaining({
+        vault,
         status: "needs-repair",
         migrationMarker: "absent",
         unresolvedLegacyNotes: [],
@@ -276,17 +308,20 @@ describe("oms CLI dispatch", () => {
     const yaml = "this: [is not valid YAML\n";
     await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), yaml);
 
-    const doctor = runCli(["doctor", "--vault", vault, "--json"]);
-    expect(doctor.status).toBe(1);
+    const doctor = runCli(["template", "check", "--vault", vault]);
+    expect(doctor.status).toBe(0);
     expect(doctor.stderr).toBe("");
     expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({
       vault,
       status: "needs-repair",
       diagnostics: [expect.objectContaining({
-        code: "LEGACY_TAXONOMY_YAML",
-        path: ".oms/taxonomy.yaml",
+        code: "TEMPLATE_CONTROL_MISSING",
+        path: ".oms/taxonomy.json",
       })],
     }));
+    expect(doctor.stdout).not.toContain("LEGACY_TAXONOMY_YAML");
+    expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(false);
+    await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf8")).resolves.toBe(yaml);
 
     await mkdir(path.join(vault, ".obsidian"), { recursive: true });
     await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text" } }));
@@ -308,16 +343,23 @@ describe("oms CLI dispatch", () => {
     await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), yaml);
     await writeFile(path.join(vault, ".oms", "taxonomy.json"), json);
 
-    const doctor = runCli(["doctor", "--vault", vault, "--json"]);
-    expect(doctor.status).toBe(1);
+    const doctor = runCli(["template", "check", "--vault", vault]);
+    expect(doctor.status).toBe(0);
     expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({
       vault,
       status: "needs-repair",
-      diagnostics: [expect.objectContaining({
-        code: "LEGACY_TAXONOMY_YAML",
-        path: ".oms/taxonomy.yaml",
-      })],
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          code: "ENOENT",
+          path: ".oms/template-policy.json",
+        }),
+        expect.objectContaining({
+          code: "ENOENT",
+          path: ".oms/types.json",
+        }),
+      ]),
     }));
+    expect(doctor.stdout).not.toContain("LEGACY_TAXONOMY_YAML");
 
     await mkdir(path.join(vault, ".obsidian"), { recursive: true });
     await mkdir(path.join(vault, "Templates"), { recursive: true });
@@ -340,7 +382,7 @@ describe("oms CLI dispatch", () => {
     expect((await approvedSetup(vault)).status).toBe(0);
     await mkdir(path.join(vault, "notes"), { recursive: true });
     await writeFile(path.join(vault, "notes", "Alpha.md"), "---\ntemplate: note\ntitle: Alpha\n---\nAlpha.\n");
-    const audit = runCli(["audit", "--vault", vault, "--folder", "notes", "--json"]);
+    const audit = runCli(["note", "audit", "--vault", vault, "--folder", "notes", "--json"]);
     expect(audit.status).toBe(0);
     expect(audit.stderr).toBe("");
     expect(jsonObject(audit.stdout)).toEqual(expect.objectContaining({ folder: "notes", scannedNotes: 1, clean: true, templateCounts: { note: 1 } }));
@@ -348,7 +390,7 @@ describe("oms CLI dispatch", () => {
 
   it("G002-CLI-001 rejects audit folder scopes that are not top-level folders", async () => {
     const fixtureVault = await makeVault();
-    const audit = runCli(["audit", "--vault", fixtureVault, "--folder", "references/missing", "--json"]);
+    const audit = runCli(["note", "audit", "--vault", fixtureVault, "--folder", "references/missing", "--json"]);
 
     expect(audit.status).toBe(1);
     expect(audit.stdout).toBe("");
@@ -359,7 +401,7 @@ describe("oms CLI dispatch", () => {
     const vault = await makeVault();
     await mkdir(path.join(vault, ".oms"), { recursive: true });
 
-    const audit = runCli(["audit", "--vault", vault, "--json"]);
+    const audit = runCli(["note", "audit", "--vault", vault, "--json"]);
 
     expect(audit.status).toBe(1);
     expect(audit.stdout).toBe("");
@@ -385,7 +427,7 @@ describe("oms CLI dispatch", () => {
     expect(alias.stderr).toContain("[oms] Unknown command: semantic");
   });
 
-  it.each(["query", "status", "get", "multi-get", "vsearch", "collection", "context", "cleanup", "http"])(
+  it.each(["query", "get", "multi-get", "vsearch", "collection", "context", "cleanup", "http"])(
     "rejects the retired top-level %s alias",
     async (command) => {
       const vault = await makeVault();
@@ -396,13 +438,22 @@ describe("oms CLI dispatch", () => {
     },
   );
 
-  it("rejects the retired index embed route", async () => {
+  it("permits the top-level status command", async () => {
+    const vault = await makeVault();
+    const result = runCli(["status", "--vault", vault]);
+
+    expect(result.stderr).not.toContain("[oms] Unknown command: status");
+    expect(jsonObject(result.stdout)).toEqual(expect.objectContaining({ vault }));
+  });
+
+  it("permits index embed as a family leaf", async () => {
     const result = runCli(["index", "embed"]);
 
     expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("unknown index command");
   });
 
-  it("creates a vault bridge and resolves doctor through it", async () => {
+  it("creates a vault bridge and resolves diagnostics through it", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "oms-cli-link-"));
     tempRoots.push(root);
     const vault = path.join(root, "vault");
@@ -418,7 +469,7 @@ describe("oms CLI dispatch", () => {
     const setup = await approvedSetup(vault);
     expect(setup.status).toBe(0);
 
-    const link = runCli(["link", "--vault", vault, "--folder", "notes"], undefined, undefined, repo);
+    const link = runCli(["bridge", "add", "--vault", vault, "--folder", "notes"], undefined, undefined, repo);
     expect(link.status).toBe(0);
     expect(link.stderr).toBe("");
     expect(link.stdout).toContain("Oh My Second Brain vault bridge ready.");
@@ -432,13 +483,13 @@ describe("oms CLI dispatch", () => {
     expect(agents).toContain("<!-- oms:begin -->");
     expect(agents).toContain(`- Connected vault: ${path.basename(vault)}`);
     expect(agents).not.toContain(vault);
-    expect(agents).toContain("`oms search \"what context should I know for this change?\"`");
-    expect(agents).toContain("`oms mcp`");
+    expect(agents).toContain("`oms search query \"what context should I know for this change?\"`");
+    expect(agents).toContain("`oms serve mcp`");
 
-    const doctor = runCli(["doctor"], undefined, undefined, repo);
+    const doctor = runCli(["template", "check"], undefined, undefined, repo);
     expect(doctor.status).toBe(0);
-    expect(doctor.stdout).toContain("Oh My Second Brain doctor:");
-    const search = runCli(["search", "--lex", "Alpha"], undefined, undefined, repo);
+    expect(doctor.stdout).toContain('"status":');
+    const search = runCli(["search", "query", "--lex", "Alpha"], undefined, undefined, repo);
     expect(search.status).toBe(0);
     expect(search.stderr).toBe("");
     const searchJson = jsonObject(search.stdout);
@@ -448,7 +499,7 @@ describe("oms CLI dispatch", () => {
     ]);
   });
 
-  it("routes linkify report mode without touching the vault and applies after confirmation", async () => {
+  it("routes link suggestion without touching the vault and applies approved candidates", async () => {
     const vault = await makeVault();
     await mkdir(path.join(vault, "Templates"), { recursive: true });
     await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\ntitle: Untitled\n---\n<!-- oms:content -->\n");
@@ -460,22 +511,31 @@ describe("oms CLI dispatch", () => {
     await writeFile(notePath, "---\ntemplate: note\ntitle: Sage\n---\n\nThe sage pursues Ataraxia daily.\n", "utf-8");
     const before = await readFile(notePath, "utf-8");
 
-    const report = runCli(["linkify", "--vault", vault]);
+    const report = runCli(["link", "suggest", "notes/Sage.md", "--vault", vault, "--json"]);
     expect(report.status).toBe(0);
     expect(report.stdout).toContain("notes/Sage.md");
-    expect(report.stdout).toContain("[[Ataraxia]]");
+    const proposal = jsonObject(report.stdout) as {
+      baseContentHash: string;
+      candidates: Array<{ id: string; renderedReplacement: string }>;
+    };
+    expect(proposal.candidates[0]?.renderedReplacement).toBe("[[Ataraxia]]");
     expect(await readFile(notePath, "utf-8")).toBe(before);
 
-    const applied = runCli(["linkify", "--vault", vault, "--apply", "--yes"]);
+    const applied = runCli([
+      "link", "apply", "notes/Sage.md", "--vault", vault,
+      "--base-content-hash", proposal.baseContentHash,
+      "--candidate-id", proposal.candidates[0]!.id,
+      "--yes",
+    ]);
     expect(applied.status).toBe(0);
     const after = await readFile(notePath, "utf-8");
     expect(after).toContain("[[Ataraxia]]");
     expect(after).not.toBe(before);
   });
 
-  it("routes reconcile dry-run through the scoped Claude cleanup plan", async () => {
+  it("routes host sync dry-run through the scoped Claude cleanup plan", async () => {
     const vault = await makeVault();
-    const result = runCli(["reconcile", "--runtime", "claude", "--vault", vault, "--dry-run"]);
+    const result = runCli(["host", "sync", "--runtime", "claude", "--vault", vault, "--dry-run"]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("claude mcp remove oms --scope local");
@@ -483,13 +543,21 @@ describe("oms CLI dispatch", () => {
     expect(result.stdout).toContain("claude mcp remove oms --scope user");
   });
 
+  it("routes host remove through the host family", async () => {
+    const result = runCli(["host", "remove", "--runtime", "claude", "--dry-run", "--json"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(jsonObject(result.stdout)).toEqual(expect.objectContaining({ dryRun: true }));
+  });
+
   it("given installed vault A moved away, when all hosts install B, then the signed pointer and stamps contain only B", async () => {
     const first = await makeVault();
     const second = await makeVault();
-    expect(runCli(["install", "--runtime", "all", "--vault", first, "--yes", "--json"]).status).toBe(0);
+    expect(runCli(["host", "install", "--runtime", "all", "--vault", first, "--yes", "--json"]).status).toBe(0);
     const canonicalFirst = await realpath(first);
     await rm(first, { recursive: true });
-    expect(runCli(["install", "--runtime", "all", "--vault", second, "--yes", "--json"]).status).toBe(0);
+    expect(runCli(["host", "install", "--runtime", "all", "--vault", second, "--yes", "--json"]).status).toBe(0);
     const canonicalSecond = await realpath(second);
     const pointer = JSON.parse(
       await readFile(path.join(smokeHome, ".config", "oms", "vault.json"), "utf-8"),
@@ -506,13 +574,13 @@ describe("oms CLI dispatch", () => {
     const hermes = parse(
       await readFile(path.join(smokeHome, ".hermes", "config.yaml"), "utf-8"),
     ) as { readonly mcp_servers: { readonly oms: { readonly args: readonly string[] } } };
-    expect(hermes.mcp_servers.oms.args).toEqual(["mcp", "--vault", canonicalSecond]);
+    expect(hermes.mcp_servers.oms.args).toEqual(["serve", "mcp", "--vault", canonicalSecond]);
     expect(existsSync(path.join(smokeHome, ".oms"))).toBe(false);
   });
 
   it("returns stable cleanup fields for host JSON output", async () => {
     const vault = await makeVault();
-    const result = runCli(["install", "--runtime", "claude", "--vault", vault, "--dry-run", "--json"]);
+    const result = runCli(["host", "install", "--runtime", "claude", "--vault", vault, "--dry-run", "--json"]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");

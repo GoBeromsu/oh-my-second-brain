@@ -25,27 +25,23 @@ describe("CLI usage text", () => {
   it("derives public runtime choices and main commands from harness registry", () => {
     const usage = cliUsageText();
 
-    expect(usage).toContain("oh-my-second-brain install [--vault <path>] [--runtime <auto|all|claude|codex|hermes>]");
-    expect(usage).toContain("oh-my-second-brain uninstall [--runtime <all|claude|codex|hermes>]");
+    expect(usage).toContain("oh-my-second-brain host <install|remove|sync|status> [options]");
+    expect(usage).toContain("oh-my-second-brain package <check|update> [options]");
     expect(mainUsageCommandNames()).toEqual([
       "setup",
-      "install",
-      "uninstall",
-      "update",
-      "reconcile",
-      "doctor",
-      "audit",
-      "lint",
-      "link",
-      "linkify",
       "template",
+      "note",
+      "link",
+      "bridge",
       "search",
       "index",
-      "doc",
-      "embed",
+      "graph",
+      "host",
+      "package",
+      "model",
       "serve",
-      "mcp",
       "hook",
+      "status",
     ]);
     for (const name of mainUsageCommandNames()) {
       expect(harnessSurfaceRegistry.cliCommands.some((command) => command.name === name)).toBe(true);

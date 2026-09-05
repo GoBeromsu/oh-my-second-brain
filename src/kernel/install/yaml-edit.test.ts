@@ -4,7 +4,7 @@ import {
   renderYamlEntryPreservingComments,
 } from "./common.js";
 
-const entry = { command: "oms", args: ["mcp", "--vault", "/vault"], enabled: true };
+const entry = { command: "oms", args: ["serve", "mcp", "--vault", "/vault"], enabled: true };
 const path = ["mcp_servers", "oms"] as const;
 
 describe("renderYamlEntryPreservingComments", () => {
@@ -37,7 +37,7 @@ describe("renderYamlEntryPreservingComments", () => {
   it("adds a leading EOL when appending to a file without a final newline", () => {
     const raw = "mcp_servers:\n  other: keep";
     const result = renderYamlEntryPreservingComments(raw, path, { kind: "set", value: entry });
-    expect(result.text).toBe("mcp_servers:\n  other: keep\n  oms:\n    command: oms\n    args:\n      - mcp\n      - --vault\n      - /vault\n    enabled: true");
+    expect(result.text).toBe("mcp_servers:\n  other: keep\n  oms:\n    command: oms\n    args:\n      - serve\n      - mcp\n      - --vault\n      - /vault\n    enabled: true");
   });
 
   it("restores the original bytes when a newly-created section is deleted", () => {
@@ -61,7 +61,7 @@ describe("renderYamlEntryPreservingComments", () => {
   it("creates a full section from an empty file and treats empty-file deletion as a no-op", () => {
     const created = renderYamlEntryPreservingComments("", path, { kind: "set", value: entry });
     expect(created.changed).toBe(true);
-    expect(created.text).toBe("mcp_servers:\n  oms:\n    command: oms\n    args:\n      - mcp\n      - --vault\n      - /vault\n    enabled: true\n");
+    expect(created.text).toBe("mcp_servers:\n  oms:\n    command: oms\n    args:\n      - serve\n      - mcp\n      - --vault\n      - /vault\n    enabled: true\n");
     const removedFromEmpty = renderYamlEntryPreservingComments("", path, { kind: "delete" });
     expect(removedFromEmpty.changed).toBe(false);
     expect(removedFromEmpty.text).toBe("");

@@ -97,7 +97,7 @@ async function boundedFile(filename: string): Promise<Uint8Array> {
 function print(value: unknown): void {
   if (value !== null && typeof value === "object" && "status" in value) {
     const status = (value as { readonly status?: unknown }).status;
-    if (status === "rejected" || status === "inconsistent" || status === "needs-repair") process.exitCode = 1;
+    if (status === "rejected" || status === "inconsistent") process.exitCode = 1;
   }
   console.log(JSON.stringify(value, null, 2));
 }
@@ -138,7 +138,8 @@ async function run(parsed: Parsed): Promise<void> {
   }
   if (parsed.verb === "check") {
     only(parsed, ["vault"], 0);
-    print(await diagnoseTemplates(await target(parsed.options))); return;
+    const resolved = await target(parsed.options);
+    print({ ...await diagnoseTemplates(resolved), vault: resolved.vault }); return;
   }
   if (parsed.verb === "regenerate-types") {
     only(parsed, ["vault", "dry-run", "yes", "approved-digest"], 0);

@@ -57,11 +57,13 @@ describe("writeConventionUsageSection", () => {
     expect(content).toContain(CONVENTION_NOTE_END);
     expect(content).toContain(`- Connected vault: ${path.basename(vault)}`);
     expect(content).not.toContain(vault);
-    expect(content).toContain("`oms search \"what context should I know for this change?\"`");
-    expect(content).toContain("`oms search \"keyword or topic\"`");
-    expect(content).toContain("`oms doc get \"note-id-or-path\"`");
+    expect(content).toContain("`oms search query \"what context should I know for this change?\"`");
+    expect(content).toContain("`oms search query \"keyword or topic\"`");
+    expect(content).toContain("`oms note get \"note-id-or-path\"`");
     expect(content).not.toContain("oms semantic");
-    expect(content).toContain("`oms mcp`");
+    expect(content).toContain("`oms serve mcp`");
+    expect(content).not.toContain("`oms doc get");
+    expect(content).not.toContain("`oms mcp`");
   });
 
   it("replaces the managed block idempotently on rerun", async () => {

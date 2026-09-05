@@ -65,11 +65,11 @@ function advertisedSearchOperations(): { op: string; args: Record<string, unknow
   // Arguments that satisfy each operation's required fields. Anything not
   // listed here takes the bare `{ op }` form.
   const argsByOp: Record<string, Record<string, unknown>> = {
-    "lazy-load": { notePath: "notes/alpha.md" },
+    "template-scan": {},
     templates: {},
-    query: { query: "alpha" },
+    query: { mode: "query", query: "alpha" },
+    "index-status": { view: "status" },
     "get-document": { target: "notes/alpha.md" },
-    "multi-get-documents": { targets: ["notes/alpha.md"] },
     context: { query: "alpha" },
   };
 
@@ -172,7 +172,7 @@ async function withClient<T>(vault: string, run: (client: Client) => Promise<T>)
   homes.push(emptyHome);
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [distCli, "mcp"],
+    args: [distCli, "serve", "mcp"],
     cwd: vault,
     env: { HOME: emptyHome, OMS_VAULT: vault, PATH: process.env["PATH"] ?? "" },
     stderr: "pipe",
@@ -303,7 +303,7 @@ describe("search read-only guarantee", () => {
       textPayload(
         await client.callTool({
           name: "search",
-          arguments: { op: "query", query: "retrieval", limit: 1 },
+          arguments: { op: "query", mode: "query", query: "retrieval", limit: 1 },
         }),
       ),
     );
@@ -347,12 +347,12 @@ describe("search read-only guarantee", () => {
     // and memoised its engine, not what it returned: the defect being guarded
     // is a read-only engine landing in a slot the repair then reuses.
     const served = await withClient(vault, (client) =>
-      client.callTool({ name: "search", arguments: { op: "query", query: "alpha" } }),
+      client.callTool({ name: "search", arguments: { op: "query", mode: "query", query: "alpha" } }),
     );
     expect(textPayload(served)["available"]).toBe(true);
 
     const repaired = await withClient(vault, (client) =>
-      client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", embed: false } }),
+      client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "sync" } }),
     );
     // Surface the server's own message on failure. Parsing first would throw on
     // the error path, which reports a JSON syntax error instead of the reason
@@ -364,7 +364,7 @@ describe("search read-only guarantee", () => {
     expect([...tree.keys()].some((rel) => rel.includes("engine-store.sqlite"))).toBe(true);
 
     const hits = await withClient(vault, (client) =>
-      client.callTool({ name: "search", arguments: { op: "query", query: "alpha" } }),
+      client.callTool({ name: "search", arguments: { op: "query", mode: "query", query: "alpha" } }),
     );
     const hitPayload = textPayload(hits);
     expect(hitPayload["available"]).toBe(true);
@@ -379,7 +379,7 @@ describe("search read-only guarantee", () => {
     await withClient(vault, async (client) => {
       await client.callTool({
         name: "doctor",
-        arguments: { op: "sync-embeddings", embed: false },
+        arguments: { op: "sync-embeddings", mode: "sync" },
       });
     });
 
@@ -395,7 +395,7 @@ describe("search read-only guarantee", () => {
       return textPayload(
         await client.callTool({
           name: "search",
-          arguments: { op: "query", query: "alpha" },
+          arguments: { op: "query", mode: "query", query: "alpha" },
         }),
       );
     });
