@@ -6,6 +6,7 @@ MCP server tools and resources belong here.
 
 ### Changed
 
+- Conflicting index mutations are serialized within each MCP server through engine disposal, so repair cannot move a store still owned by another request. A failed close returns `ENGINE_LIFECYCLE_FAILED` and blocks further index mutations until server restart; read-only requests remain independent. (#125)
 - `status { op: "graph" }` returns graph-only health, while omitted `op` retains aggregate health. Doctor `sync-embeddings` repair mode requires `repairMode: "rebuild"` or `"drop"`, matching CLI store repair rather than silently forcing embeddings. (#125)
 - **MCP detail capabilities have exclusive operation and mode boundaries.** (#125) Document lookup, index views, template inspection and embedding synchronization no longer overlap through duplicate operations or booleans. All capabilities remain under the same five tools, with schema and dispatch validated together.
 - Template operations include guarded `register-folder`, `remove`, and `default` modes, with current signatures derived by the server. Update move strategies are validated consistently; note creation may omit its ID only when a default binding is declared. No additional MCP tool is introduced. (#124)

@@ -1,55 +1,94 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { inspectInstalledAssets } from "../kernel/install/asset-health.js";
+import * as linkDetection from "../kernel/conventions/lint.js";
+import { runLinkCheck } from "./link-check.js";
 
-vi.mock("../kernel/install/asset-health.js", () => ({ inspectInstalledAssets: vi.fn(async () => ({ status: "ok", hosts: [], assets: [] })) }));
-vi.mock("../kernel/templates/index.js", () => ({ diagnoseTemplates: vi.fn(async () => ({ status: "healthy", migrationMarker: "none", managedSourceExclusions: [], unresolvedLegacyNotes: [], diagnostics: [] })) }));
-vi.mock("./host-probe.js", () => ({ discoverHostInstallAssets: vi.fn(async () => ({ hosts: [{ host: "claude", state: "not-installed" }, { host: "codex", state: "not-installed" }, { host: "hermes", state: "not-installed" }], assets: [] })) }));
+const roots: string[] = [];
 
-import { runDoctor } from "./link-check.js";
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
-afterEach(() => { vi.restoreAllMocks(); });
+async function vaultWithFindings(): Promise<string> {
+  const vault = await mkdtemp(path.join(tmpdir(), "oms-link-check-"));
+  roots.push(vault);
+  await mkdir(path.join(vault, "notes"), { recursive: true });
+  await writeFile(path.join(vault, "notes", "source.md"), "A [[Missing]] link.\n", "utf8");
+  await writeFile(path.join(vault, "notes", "orphan.md"), "No incoming links.\n", "utf8");
+  return vault;
+}
 
-describe("doctor install assets", () => {
-  it.each([
-    ["not-installed", { hosts: [{ host: "hermes", state: "not-installed" }], assets: [] }, { packageVersion: "0.12.3", recordedVersion: null, digestMatch: null }],
-    ["match", { hosts: [{ host: "hermes", state: "ok" }], assets: [{ id: "hermes:0", kind: "skill-tree", declaredPath: "/skills", realPath: "/skills", state: "ok", cause: null, remediation: "", packageVersion: "0.12.3", recordedVersion: "0.12.3", digestMatch: true }] }, { packageVersion: "0.12.3", recordedVersion: "0.12.3", digestMatch: true }],
-    ["drift", { hosts: [{ host: "hermes", state: "degraded" }], assets: [{ id: "hermes:0", kind: "skill-tree", declaredPath: "/skills", realPath: "/skills", state: "provenance-mismatch", cause: null, remediation: "oms install", packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }] }, { packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }],
-  ] as const)("reports %s Hermes provenance in JSON and text", async (state, health, evidence) => {
-    const version = (JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { version: string }).version;
-    const adjustedEvidence = { ...evidence, packageVersion: version, recordedVersion: state === "match" ? version : evidence.recordedVersion };
-    const adjustedHealth = {
-      ...health,
-      assets: health.assets.map(asset => ({ ...asset, packageVersion: version, recordedVersion: state === "match" ? version : asset.recordedVersion })),
-    };
-    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({ status: state === "drift" ? "degraded" : "ok", ...adjustedHealth });
+async function vaultBytes(vault: string, relative = ""): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  for (const entry of await readdir(path.join(vault, relative), { withFileTypes: true })) {
+    const child = path.join(relative, entry.name);
+    if (entry.isDirectory()) {
+      result[`${child}/`] = "directory";
+      Object.assign(result, await vaultBytes(vault, child));
+    } else {
+      result[child] = (await readFile(path.join(vault, child))).toString("base64");
+    }
+  }
+  return result;
+}
+
+describe("runLinkCheck", () => {
+  it("reports link diagnostics as warnings and leaves the whole vault unchanged", async () => {
+    const vault = await vaultWithFindings();
+    const before = await vaultBytes(vault);
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    expect(await runDoctor({ vault: "/vault", json: true })).toBe(0);
-    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ hermesProvenance: { state, ...adjustedEvidence } });
+    expect(await runLinkCheck({ vault })).toBe(0);
+    const output = String(log.mock.calls[0]?.[0]);
+    expect(output).toContain("[[Missing]]");
+    expect(output).toContain("orphan note(s)");
+    expect(output).toContain("warnings (non-blocking). Exit 0.");
+    expect(await vaultBytes(vault)).toEqual(before);
+  });
 
-    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({ status: state === "drift" ? "degraded" : "ok", ...adjustedHealth });
+  it("honors verbosity while keeping findings warning-only", async () => {
+    const vault = await vaultWithFindings();
+    for (let index = 0; index < 21; index += 1) {
+      await writeFile(path.join(vault, "notes", `extra-${String(index).padStart(2, "0")}.md`), "Unlinked.\n", "utf8");
+    }
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    expect(await runLinkCheck({ vault })).toBe(0);
+    const concise = String(log.mock.calls[0]?.[0]);
+    expect(concise).toContain("… and 3 more");
+    expect(concise).toContain("Run `oms link check --verbose`");
+
     log.mockClear();
-    expect(await runDoctor({ vault: "/vault" })).toBe(0);
-    expect(log.mock.calls.map(call => call[0])).toContain(
-      `Hermes provenance: ${state} (packageVersion=${version}, recordedVersion=${adjustedEvidence.recordedVersion ?? "none"}, digestMatch=${adjustedEvidence.digestMatch ?? "unknown"}).`,
-    );
+    expect(await runLinkCheck({ vault, verbose: true })).toBe(0);
+    const verbose = String(log.mock.calls[0]?.[0]);
+    expect(verbose).toContain("extra-20.md");
+    expect(verbose).not.toContain("Run `oms link check --verbose`");
   });
 
-  it("includes the resolved symlink target and inspection cause in text diagnostics", async () => {
-    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({ status: "degraded", hosts: [{ host: "claude", state: "degraded" }], assets: [{ id: "hermes:0", kind: "skill-tree", declaredPath: "/skills", realPath: "/skills", state: "provenance-mismatch", cause: null, remediation: "oms install --vault \"/vault\" --runtime hermes", packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }] });
+  it("emits the exact read-only JSON receipt", async () => {
+    const vault = await vaultWithFindings();
+    const before = await vaultBytes(vault);
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    expect(await runDoctor({ vault: "/vault" })).toBe(0);
-    expect(log.mock.calls.map(call => call[0])).toContain("Install assets: degraded (1 of 1 unusable).");
-    expect(log.mock.calls.map(call => call[0])).toContain("  [PROVENANCE_MISMATCH] /skills packageVersion=0.12.3 recordedVersion=0.12.2 digestMatch=false — oms install --vault \"/vault\" --runtime hermes");
-    expect(inspectInstalledAssets).toHaveBeenCalledWith(expect.objectContaining({ vault: "/vault", hosts: expect.any(Array), assets: expect.any(Array) }));
+
+    expect(await runLinkCheck({ vault, json: true })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      totalNotes: 2,
+      brokenLinks: [{ notePath: "notes/source.md", target: "Missing" }],
+      orphanPaths: ["notes/orphan.md", "notes/source.md"],
+    });
+    expect(await vaultBytes(vault)).toEqual(before);
   });
 
-  it("preserves provenance evidence in doctor JSON", async () => {
-    vi.mocked(inspectInstalledAssets).mockResolvedValueOnce({ status: "degraded", hosts: [{ host: "hermes", state: "degraded" }], assets: [{ id: "hermes:0", kind: "skill-tree", declaredPath: "/skills", realPath: "/skills", state: "provenance-mismatch", cause: null, remediation: "oms install --vault \"/vault\" --runtime hermes", packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }] });
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    expect(await runDoctor({ vault: "/vault", json: true })).toBe(0);
-    expect(JSON.parse(log.mock.calls[0]?.[0] as string)).toMatchObject({ installAssets: { assets: [{ id: "hermes:0", packageVersion: "0.12.3", recordedVersion: "0.12.2", digestMatch: false }] } });
+  it("reports a detection failure through the canonical link check name", async () => {
+    const vault = await vaultWithFindings();
+    const before = await vaultBytes(vault);
+    vi.spyOn(linkDetection, "detectLinkIssues").mockRejectedValueOnce(new Error("unreadable vault"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(await runLinkCheck({ vault })).toBe(1);
+    expect(error).toHaveBeenCalledWith("[oms] link check could not complete: unreadable vault");
+    expect(await vaultBytes(vault)).toEqual(before);
   });
 });

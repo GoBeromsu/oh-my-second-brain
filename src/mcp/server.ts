@@ -437,6 +437,25 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     own(assembleCoreSemanticEngineReadOnly({ vault, reranker: opts.reranker }));
   const getEphemeralCoreSemanticEngine = async (): Promise<AssembledEngine> =>
     own(assembleEphemeralCoreSemanticEngine({ vault, reranker: opts.reranker }));
+  let engineMutationTail = Promise.resolve();
+  let engineMutationLifecycleFailure: Error | null = null;
+  const engineMutation = (request: { readonly params: { readonly name: string; readonly arguments?: unknown } }): boolean => {
+    if (request.params.name !== "doctor" || !isRecord(request.params.arguments)) return false;
+    const operation = stringArg(request.params.arguments, "op");
+    return operation === "sync-embeddings" || operation === "cleanup";
+  };
+  const acquireEngineMutation = async (): Promise<() => void> => {
+    let release!: () => void;
+    const current = new Promise<void>(resolve => { release = resolve; });
+    const previous = engineMutationTail;
+    engineMutationTail = previous.then(() => current);
+    await previous;
+    if (engineMutationLifecycleFailure !== null) {
+      release();
+      throw engineMutationLifecycleFailure;
+    }
+    return release;
+  };
 
   // A real embedding provider is configured iff the canonical pair is set
   // (ADR-007). The engine's model-OPTIONAL surface (document reads,
@@ -524,9 +543,20 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const owned: AssembledEngine[] = [];
-    return requestEngines.run(owned, async () => {
+    const mutation = engineMutation(request);
+    let releaseMutation: (() => void) | undefined;
+    if (mutation) {
       try {
-        return await (async () => {
+        releaseMutation = await acquireEngineMutation();
+      } catch (error: unknown) {
+        return errorText(`ENGINE_LIFECYCLE_FAILED: ${error instanceof Error ? error.message : String(error)} Restart the MCP server before another index mutation.`);
+      }
+    }
+    return requestEngines.run(owned, async () => {
+      let result!: CallToolResult;
+      let disposalFailure: PromiseRejectedResult | undefined;
+      try {
+        result = await (async () => {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
     const op = stringArg(args, "op");
@@ -1117,8 +1147,17 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
         })();
       } finally {
-        await Promise.allSettled(owned.map(assembled => assembled.dispose()));
+        const disposal = await Promise.allSettled(owned.map(async assembled => assembled.dispose()));
+        disposalFailure = disposal.find((item): item is PromiseRejectedResult => item.status === "rejected");
+        if (disposalFailure !== undefined) {
+          engineMutationLifecycleFailure = new Error(`An engine did not close: ${disposalFailure.reason instanceof Error ? disposalFailure.reason.message : String(disposalFailure.reason)}`);
+        }
+        releaseMutation?.();
       }
+      if (engineMutationLifecycleFailure !== null && disposalFailure !== undefined) {
+        return errorText(`ENGINE_LIFECYCLE_FAILED: ${engineMutationLifecycleFailure.message} Restart the MCP server before another index mutation.`);
+      }
+      return result;
     });
   });
 

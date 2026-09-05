@@ -30,6 +30,8 @@ Runtime observations use an external SQLite journal at `~/.oms/runtime/v1/<hostI
 
 Read-only engine consumers share a stable, temporary snapshot of the existing database and committed WAL outside the source vault. They never open a SQLite connection to the original, so even transient source WAL/SHM creation is forbidden. The snapshot is removed when the reader closes; it is not another authoritative store. Missing indexes use the existing ephemeral core path, while corrupt or unstable existing input fails visibly.
 
+MCP and HTTP SQLite engines are request-scoped so later requests see external index replacements. Within each MCP server, index sync, embedding, cleanup, and repair share a FIFO mutation queue held until the request's engines close. Read-only requests do not wait on this queue. A failed engine close returns `ENGINE_LIFECYCLE_FAILED` and prevents subsequent index mutations until the server restarts.
+
 Renderer classification separates executable Obsidian templates from OMS note scaffolds. Templater frontmatter supplies a contract with Obsidian-filled fields; script-first sources derive proposals from observed notes. The kernel validates bounded host proposals and transaction evidence, never executes scripts or provides a Templater transpiler.
 
 Setup selects folders only from repeated explicit `--template-folder` arguments or saved valid-v3 registrations. Explicit folders use `auto` proposal mode and the first is the template-creation default; saved modes are retained. Obsidian, Templater, and bounded vault-walk evidence is suggestion-only and carries provenance, never automatic selection. Without a selection, non-interactive setup is blocked and produces no approval digest. There are no invented `Templates` or `Inbox` defaults.
