@@ -1,6 +1,6 @@
 {
   "name": "oms",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Oh My Second Brain convention layer for Obsidian vaults — seven shared skills and five MCP tools under a declared semantic convention.",
   "author": {
     "name": "gobeumsu"

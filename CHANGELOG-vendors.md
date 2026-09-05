@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-05
+
 - Native host launch manifests use `oms serve mcp`; registrations retain seven shared skills and exactly five MCP tools. Host synchronization updates OMS assets independently of package installation and never upgrades the host application. (#125)
 ## [0.13.0] - 2026-09-05
 

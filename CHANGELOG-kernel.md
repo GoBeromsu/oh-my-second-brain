@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-05
+
 - Read-only engine connections use stable vault-external SQLite snapshots, including committed WAL content, so source sidecars remain untouched even while the reader is open. Store rebuild/drop repairs share verified-target admission and server-checked postconditions across entrypoints. (#125)
 - Package installation is independent of host registration synchronization, preserving a clear upgrade boundary instead of invoking a retired reconciliation command. Read-only entrypoints continue to resolve existing stores or ephemeral cores without creating vault state. (#125)
 - **Folder registration, binding removal, and default selection share template transaction safeguards.** (#124) Server-derived current signatures, exact approval and readback protect every mode. Existing source files survive binding removal; only explicit deletion of managed sources is permitted. Note creation uses an explicitly declared default binding when no ID is supplied, never the first available template.

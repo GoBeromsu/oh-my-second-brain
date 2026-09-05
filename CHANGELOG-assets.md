@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-05
+
 - Shared skills and runtime guidance use the final command families and exclusive MCP operations, with no obsolete command aliases. Authored assets and the shipped root skill mirror remain byte-identical. (#125)
 - Template and write guidance share the guarded CLI/MCP verbs and distinguish default note bindings from source-folder creation defaults. (#124)
 - Status guidance distinguishes permanent external observation history from vault-owned convention files and avoids claiming inactivity from missing events. (#123)

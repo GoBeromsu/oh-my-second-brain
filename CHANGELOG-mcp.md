@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-05
+
 ### Changed
 
 - Conflicting index mutations are serialized within each MCP server through engine disposal, so repair cannot move a store still owned by another request. A failed close returns `ENGINE_LIFECYCLE_FAILED` and blocks further index mutations until server restart; read-only requests remain independent. (#125)

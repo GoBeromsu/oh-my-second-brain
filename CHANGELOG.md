@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-05
+
 - **Breaking: commands have one noun-and-verb home across CLI, MCP, skills, and host launchers.** (#125) Note, template, wikilink, bridge, index, graph, host, package, and model operations no longer overlap through legacy top-level aliases. The five MCP tools remain; exclusive operations retain the underlying capabilities. See `docs/cli-map.md` for the full map. Native MCP launch is `oms serve mcp`.
 ## [0.13.0] - 2026-09-05
 
