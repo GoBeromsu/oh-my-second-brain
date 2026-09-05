@@ -146,7 +146,7 @@ const queryAxes = { type: "object", additionalProperties: false, properties: { t
 const expandStrategy = { type: "object", additionalProperties: false, properties: { kind: { ...string, enum: ["expand"] }, profile: { ...string, enum: ["qmd-v2.8.3"] }, maxQueries: { type: "integer", minimum: 1, maximum: 32 } }, required: ["kind", "profile"] } as const;
 const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, strategy: expandStrategy, collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { type: "integer", minimum: 0, default: 10 }, candidateLimit: { type: "integer", minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, intent: string, lex: string, vec: string, hyde: string, index: string, target: string, targets: stringArray, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean } as const;
 const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: { type: "integer", minimum: 0 }, maxNeighbors: number, useCache: boolean, ...retrieveContextSemanticInputProperties } as const;
-const templateBinding = { type: "object", additionalProperties: false, properties: { templateId: string, destinationClass: { ...string, enum: ["managed-default", "registered-existing"] }, sourcePath: string, contract: string, naming: string }, required: ["templateId", "destinationClass", "sourcePath", "contract", "naming"] };
+const templateBinding = { type: "object", additionalProperties: false, properties: { templateId: string, destinationClass: { ...string, enum: ["managed-default", "registered-existing"] }, sourceFolder: string, sourcePath: string, contract: string, naming: string }, required: ["templateId", "destinationClass", "sourceFolder", "sourcePath", "contract", "naming"] };
 const source = { type: "object", additionalProperties: false, properties: { path: string, content: string, publication: { ...string, enum: ["write", "verify-existing"] } }, required: ["path", "content", "publication"] };
 const expected = { expectedInputDigest: digestSchema, expectedPolicySignature: digestSchema, expectedTaxonomySignature: digestSchema, expectedProjectionSignature: digestSchema, expectedSourceSignatures: { type: "array", items: { type: "object", additionalProperties: false, properties: { templateId: string, path: string, signature: digestSchema }, required: ["templateId", "path", "signature"] } } };
 const operations: Record<string, readonly Operation[]> = {
@@ -207,7 +207,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
         { mode: "update", properties: { templateId: string, binding: templateBinding, source }, required: ["templateId", "binding", "source"] },
         { mode: "reclassify", properties: { templateId: string, toClass: { ...string, enum: ["managed-default", "registered-existing"] } }, required: ["templateId", "toClass"] },
         { mode: "relocate-folder", properties: { templateFolder: string }, required: ["templateFolder"] },
-        { mode: "register-existing", properties: { templateId: string, sourcePath: string, contract: string, naming: string }, required: ["templateId", "sourcePath", "contract", "naming"], expected: false },
+        { mode: "register-existing", properties: { templateId: string, sourceFolder: string, sourcePath: string, contract: string, naming: string }, required: ["templateId", "sourceFolder", "sourcePath", "contract", "naming"], expected: false },
       ];
       for (const item of modes) {
         const mutationRequired = ["op", "mode", ...(item.expected === false ? [] : Object.keys(expected)), ...item.required];
@@ -869,12 +869,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
       if (stringArg(args, "mode") === "register-existing") {
         const templateId = stringArg(args, "templateId");
+        const sourceFolder = stringArg(args, "sourceFolder");
         const sourcePath = stringArg(args, "sourcePath");
         const contract = stringArg(args, "contract");
         const naming = stringArg(args, "naming");
         const request = guardedTemplateRequest(args);
-        if (templateId === undefined || sourcePath === undefined || contract === undefined || naming === undefined || request === undefined) return errorText("Template registration requires templateId, sourcePath, contract, naming, and dryRun:true or an approvedDigest.");
-        return jsonText(await registerExistingTemplate(vault, { templateId, sourcePath, contract, naming }, request));
+        if (templateId === undefined || sourceFolder === undefined || sourcePath === undefined || contract === undefined || naming === undefined || request === undefined) return errorText("Template registration requires templateId, sourceFolder, sourcePath, contract, naming, and dryRun:true or an approvedDigest.");
+        return jsonText(await registerExistingTemplate(vault, { templateId, sourceFolder, sourcePath, contract, naming }, request));
       }
 
       const expectedInputDigest = stringArg(args, "expectedInputDigest");
@@ -960,6 +961,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           !isRecord(binding) ||
           typeof binding["templateId"] !== "string" ||
           (binding["destinationClass"] !== "managed-default" && binding["destinationClass"] !== "registered-existing") ||
+          typeof binding["sourceFolder"] !== "string" ||
           typeof binding["sourcePath"] !== "string" ||
           typeof binding["contract"] !== "string" ||
           typeof binding["naming"] !== "string" ||
@@ -974,6 +976,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         const proposedBinding: TemplateBinding = {
           templateId: binding["templateId"] as TemplateBinding["templateId"],
           destinationClass: binding["destinationClass"],
+          sourceFolder: normalizeTemplateFolderPath(binding["sourceFolder"]),
           sourcePath: normalizeTemplateSourcePath(binding["sourcePath"]),
           contract: binding["contract"],
           naming: binding["naming"],

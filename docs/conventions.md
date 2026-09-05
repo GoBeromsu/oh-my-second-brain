@@ -16,14 +16,50 @@ Each managed template has a stable `templateId`, independent of its file locatio
 
 These authorities coexist: templates decide what a note contains, ontology explains what those fields, folders, and relationships mean, taxonomy places notes, and Obsidian decides property types. The removed legacy surface is `concept` as note identity and bundled runtime defaults—not ontology itself.
 
-Taxonomy decides template placement. Folders and wikilinks are global axes available to retrieval regardless of placement; authored folder intents appear on the derived `folder-ontology` axis. A template without an explicit taxonomy placement writes to the safe `Inbox/` fallback, never into the configured template-source folder.
+Taxonomy decides note placement. Folders and wikilinks are global axes available to retrieval regardless of placement; authored folder intents appear on the derived `folder-ontology` axis. Every template requires an explicit `.oms/taxonomy.json` placement; OMS has no `Inbox/` fallback. A taxonomy `templateFolder` is the note destination and may be outside every template source folder.
+
+Template policy uses version 3. `templateFolders` registers template source folders and their scan mode; the folder marked `default` is the creation destination for new template files, not the default template for notes. The optional `defaultTemplate` separately names a note binding. Every binding declares both `sourceFolder` and `sourcePath`:
+
+```json
+{
+  "version": 3,
+  "templateFolders": [
+    { "path": "Vault Shape/Generated", "mode": "auto", "default": true },
+    { "path": "Team/Curated Shapes", "mode": "manual" }
+  ],
+  "defaultTemplate": "note",
+  "base": { "fields": {} },
+  "contracts": {
+    "note": { "intent": "General note.", "fields": {}, "views": [] }
+  },
+  "templates": {
+    "note": {
+      "templateId": "note",
+      "destinationClass": "registered-existing",
+      "sourceFolder": "Team/Curated Shapes",
+      "sourcePath": "Team/Curated Shapes/note.md",
+      "contract": "note",
+      "naming": "{{date}}-{{slug}}.md"
+    }
+  }
+}
+```
+
+For example, `.oms/taxonomy.json` can place that note type elsewhere:
+
+```json
+{ "templates": { "note": { "templateFolder": "Notes" } } }
+```
 
 ## Setup and migration
 
 Run setup to discover templates recursively and inspect the proposed migration:
 
 ```bash
-oms setup --vault /path/to/vault --dry-run
+oms setup --vault /path/to/vault \
+  --template-folder "Vault Shape/Generated" \
+  --template-folder "Team/Curated Shapes" \
+  --dry-run
 ```
 
 The dry run changes neither templates nor notes. Apply the reviewed proposal only with its reported digest:
@@ -32,7 +68,9 @@ The dry run changes neither templates nor notes. Apply the reviewed proposal onl
 oms setup --vault /path/to/vault --yes --approved-digest <digest>
 ```
 
-Setup has no bundled note shapes and never modifies vault notes. When one legacy concept routes to multiple folders, migration materializes deterministic template IDs such as `literature--books`, copies the source bytes into separately managed templates, and keeps the clones on the same migrated contract.
+Repeat `--template-folder` to select source folders explicitly. Explicit selections use `auto` proposal mode, and the first path is the template-creation default. With no flags, setup reuses modes from a valid saved v3 policy. Obsidian core settings, Templater settings, and the read-only vault walk provide candidates only; provenance is reported as `explicit`, `stored-v3`, `obsidian-core`, `templater-folder`, `templater-file-templates`, `templater-startup`, or `vault-walk`. Candidates never select or persist a folder. Consequently, an unselected non-interactive run is blocked with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and has no approval digest. OMS does not invent `Templates` or `Inbox` defaults.
+
+Setup has no bundled note shapes and never modifies vault notes. `.oms/taxonomy.json` is the only taxonomy authority. Setup does not parse or convert legacy `taxonomy.yaml` or concept YAML files and leaves them untouched. An unsupported template-policy version fails closed at runtime; setup retains the old bytes as a compare-and-swap input, preserves writers and unknown extensions in its proposed v3 document, and names replaced legacy fields in `droppedKeys` for dry-run review.
 
 ## Managed template mutation
 
@@ -47,7 +85,7 @@ The apply step uses compare-and-swap, so a template changed after review cannot 
 
 ## Register an existing template
 
-For an existing vault template, call `write { op: "template", mode: "register-existing", templateId, sourcePath, contract, naming, dryRun: true }`, then repeat it with the returned `approvedDigest`. Registration reads and verifies the existing Markdown in place: it never copies, renames, moves, or rewrites the source. Markdown supplies structural shape only; author the named semantic contract in `.oms/template-policy.json` first. A later source edit is reconciled by `doctor { op: "regenerate-types" }`, which rebuilds generated `.oms/types.json` from current verified authorities.
+For an existing vault template, call `write { op: "template", mode: "register-existing", templateId, sourceFolder, sourcePath, contract, naming, dryRun: true }`, then repeat it with the returned `approvedDigest`. `sourceFolder` must be a registered template folder containing `sourcePath`. Registration reads and verifies the existing Markdown in place: it never copies, renames, moves, or rewrites the source. Markdown supplies structural shape only; author the named semantic contract in `.oms/template-policy.json` first. A later source edit is reconciled by `doctor { op: "regenerate-types" }`, which rebuilds generated `.oms/types.json` from current verified authorities.
 
 ## Writing notes
 

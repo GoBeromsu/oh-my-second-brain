@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **Breaking: `oms setup --template-folder <path>` is repeatable and template folders are always selected explicitly.** (#120) Repeated paths are registered in `auto` scan/proposal mode, with the first explicit path becoming the template-creation default (separate from the note `defaultTemplate`). Without flags, setup reuses saved v3 folder registrations only; Obsidian and Templater settings are displayed as numbered dry-run candidates but are never selected automatically. An unresolved selection is blocked with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and no approval digest.
+
 ## [0.13.0] - 2026-09-05
 
 - **`oms doctor` now verifies Claude hook events plus the managed Codex and Hermes MCP registrations, preserving unreadable or syntactically malformed registration evidence as explicit inspection errors.**

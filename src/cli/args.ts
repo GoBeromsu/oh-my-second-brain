@@ -16,7 +16,7 @@ export interface ParsedCliArgs {
   readonly vaultExplicit: boolean;
   readonly yes: boolean;
   readonly approvedDigest?: string;
-  readonly templateFolder?: string;
+  readonly templateFolders: readonly string[];
   readonly maxPerTemplate?: number;
   /** linkify: opt into rewriting notes in place (still requires `--yes`). */
   readonly apply: boolean;
@@ -51,7 +51,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   let vaultExplicit = false;
   let yes = false;
   let approvedDigest: string | undefined;
-  let templateFolder: string | undefined;
+  const templateFolders: string[] = [];
   let maxPerTemplate: number | undefined;
   let apply = false;
   let installClaude = false;
@@ -91,7 +91,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       if (next === undefined || next.startsWith("--")) {
         return parsedArgsWithError("[oms] Missing value for --template-folder.");
       }
-      templateFolder = next;
+      if (!templateFolders.includes(next)) templateFolders.push(next);
       i++;
     } else if (arg === "--max-per-template") {
       const parsed = Number.parseInt(next ?? "", 10);
@@ -178,7 +178,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     vaultExplicit,
     yes,
     approvedDigest,
-    templateFolder,
+    templateFolders,
     maxPerTemplate,
     apply,
     installClaude,
@@ -207,7 +207,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       vaultExplicit,
       yes,
       approvedDigest,
-      templateFolder,
+      templateFolders,
       maxPerTemplate,
       apply,
       installClaude,

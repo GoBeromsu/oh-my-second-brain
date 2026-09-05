@@ -15,4 +15,24 @@ Claude's manifest retains its explicit skill array; Codex's manifest retains its
 
 The MCP server is started with `oms mcp`. Claude uses `.mcp.json`, Codex uses `.mcp.codex.json`, and Hermes receives its registration in `~/.hermes/config.yaml`.
 
+All hosts expose the same five MCP tools. Registering an existing template remains
+an operation of `write`, not a sixth tool:
+
+```json
+{
+  "op": "template",
+  "mode": "register-existing",
+  "templateId": "note",
+  "sourceFolder": "Team/Curated Shapes",
+  "sourcePath": "Team/Curated Shapes/note.md",
+  "contract": "note",
+  "naming": "{{date}}-{{slug}}.md",
+  "dryRun": true
+}
+```
+
+`sourceFolder` is required and must be a registered template folder containing
+`sourcePath`. Apply only by repeating the operation with the returned
+`approvedDigest`.
+
 To add a host, add a clearly named `assets/<host>/` directory for host-only files, preserve shared skills in `assets/skills/`, declare every shipped path in the harness registry, and keep installer destinations explicit.

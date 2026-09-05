@@ -32,7 +32,7 @@ function convention(): ResolvedConvention {
         id: "note",
         destinationClass: "managed-default",
         sourcePath: "Templates/OMS/note.md",
-        targetFolder: "Inbox",
+        targetFolder: "notes",
         keyOrder: ["template", "status"],
         fields: {
           template: { type: "string" },
@@ -70,7 +70,23 @@ async function fixture(): Promise<string> {
   await mkdir(join(root, ".oms"), { recursive: true });
   await Promise.all([
     writeFile(join(root, ".oms", "template-policy.json"), JSON.stringify({
-      templates: { note: { sourcePath: "Templates/OMS/note.md" } },
+      version: 3,
+      templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
+      base: { fields: {} },
+      contracts: { note: { intent: "A note.", fields: {}, views: [] } },
+      templates: {
+        note: {
+          templateId: "note",
+          destinationClass: "managed-default",
+          sourceFolder: "Templates/OMS",
+          sourcePath: "Templates/OMS/note.md",
+          contract: "note",
+          naming: "{{slug}}.md",
+        },
+      },
+    })),
+    writeFile(join(root, ".oms", "taxonomy.json"), JSON.stringify({
+      templates: { note: { templateFolder: "notes" } },
     })),
     writeFile(join(root, "Templates", "OMS", "note.md"), "---\ntemplate: note\n---\nmanaged needle\n"),
     writeFile(join(root, "notes", "one.md"), "---\ntemplate: note\nstatus: open\n---\nneedle\n"),

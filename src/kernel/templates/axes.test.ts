@@ -18,7 +18,7 @@ function convention(): ResolvedConvention {
         id: "beta",
         destinationClass: "managed-default",
         sourcePath: "Templates/OMS/beta.md",
-        targetFolder: "Inbox",
+        targetFolder: "notes/beta",
         keyOrder: ["zeta"],
         fields: {
           alpha: { type: "text", normalize: "trim" },
@@ -36,7 +36,7 @@ function convention(): ResolvedConvention {
         id: "alpha",
         destinationClass: "managed-default",
         sourcePath: "Templates/OMS/alpha.md",
-        targetFolder: "Inbox",
+        targetFolder: "notes/alpha",
         keyOrder: ["title"],
         fields: { title: { type: "text" } },
         frontmatterTemplate: {},

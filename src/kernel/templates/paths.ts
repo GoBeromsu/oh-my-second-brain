@@ -1,9 +1,9 @@
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { DestinationClass, TemplateFolderPath, TemplateId, TemplateSourcePath } from "./types.js";
+import type { DestinationClass, TemplateFolderPath, TemplateFolderRegistration, TemplateId, TemplateSourcePath } from "./types.js";
 const ID = /^[a-z0-9]+(?:-{1,2}[a-z0-9]+)*$/;
 const INTERNAL = new Set([".oms", ".gjc", ".git", ".obsidian", ".template-transactions"]);
-const CONTROLS = new Set([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.json", ".oms/taxonomy.yaml", ".oms/template-migration.json", ".oms/template-transaction.json"]);
+const CONTROLS = new Set([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.json", ".oms/template-migration.json", ".oms/template-transaction.json"]);
 export type TemplateControlPath = string & { readonly __kind: "TemplateControlPath" };
 export interface VerifiedVaultPath<T extends TemplateFolderPath | TemplateSourcePath | TemplateControlPath> { readonly vaultRoot: string; readonly vaultRelativePath: T; readonly absolutePath: string; readonly targetRealPath: string | null; }
 export interface VaultPathVerificationOptions { readonly expected: "existing-file" | "absent" | "either"; }
@@ -22,7 +22,20 @@ export function normalizeTemplateControlPath(value: string): TemplateControlPath
 }
 export function canonicalPathKey(path: TemplateFolderPath | TemplateSourcePath): string { return path.normalize("NFC"); }
 export function deriveManagedSourcePath(folder: TemplateFolderPath, id: TemplateId): TemplateSourcePath { return normalizeTemplateSourcePath(`${folder}/${id}.md`); }
-export function deriveTemplateSourcePath(binding: { readonly destinationClass: DestinationClass; readonly templateId: TemplateId; readonly sourcePath: TemplateSourcePath }, folder: TemplateFolderPath): TemplateSourcePath { return binding.destinationClass === "managed-default" ? deriveManagedSourcePath(folder, binding.templateId) : binding.sourcePath; }
+export function isTemplateSourceInFolder(sourcePath: TemplateSourcePath, folder: TemplateFolderPath): boolean { return sourcePath.startsWith(`${folder}/`); }
+export function selectTemplateFolder(folders: readonly TemplateFolderRegistration[], selected?: TemplateFolderPath): TemplateFolderRegistration {
+  if (selected !== undefined) {
+    const match = folders.find(folder => folder.path === selected);
+    if (match === undefined) invalid(`${selected} is not a registered template folder`);
+    return match;
+  }
+  const fallback = folders.find(folder => folder.default === true);
+  if (fallback === undefined) throw new TypeError("TEMPLATE_FOLDER_DEFAULT_UNDECLARED: no default template folder is registered");
+  return fallback;
+}
+export function deriveTemplateSourcePath(binding: { readonly destinationClass: DestinationClass; readonly templateId: TemplateId; readonly sourceFolder: TemplateFolderPath; readonly sourcePath: TemplateSourcePath }): TemplateSourcePath {
+  return binding.destinationClass === "managed-default" ? deriveManagedSourcePath(binding.sourceFolder, binding.templateId) : binding.sourcePath;
+}
 function contained(root: string, path: string): boolean { const r = relative(root, path); return r === "" || (!r.startsWith(`..${sep}`) && r !== ".." && !isAbsolute(r)); }
 async function ancestor(path: string): Promise<string> { let current = path; while (true) { try { if ((await lstat(current)).isSymbolicLink()) unsafe("symlink ancestor is not allowed for a new target"); return current; } catch (error: unknown) { if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error; const parent = resolve(current, ".."); if (parent === current) unsafe("path has no existing vault ancestor"); current = parent; } } }
 async function caseCollision(path: string): Promise<boolean> { const parent = resolve(path, ".."); const leaf = path.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)); try { return (await readdir(parent)).some(entry => entry !== leaf && entry.normalize("NFC").toLocaleLowerCase("en-US") === leaf.normalize("NFC").toLocaleLowerCase("en-US")); } catch (error: unknown) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return false; throw error; } }

@@ -45,11 +45,34 @@ describe("CLI argument parser", () => {
     );
   });
 
-  it("given a setup template folder, when parsing, then the exact folder is retained", () => {
-    expect(parseCliArgs(["setup", "--template-folder", "Meta/Templates"]).templateFolder).toBe(
+  it("appends distinct explicitly selected setup template folders in argument order", () => {
+    const parsed = parseCliArgs([
+      "setup",
+      "--template-folder",
       "Meta/Templates",
-    );
+      "--template-folder",
+      "Team/Templates",
+      "--template-folder",
+      "Meta/Templates",
+      "--dry-run",
+      "--models-no-default",
+    ]);
+
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.templateFolders).toEqual(["Meta/Templates", "Team/Templates"]);
+    expect(parsed.dryRun).toBe(true);
+    expect(parsed.modelsNoDefault).toBe(true);
+  });
+
+  it("does not supply a hidden setup template folder default", () => {
+    expect(parseCliArgs(["setup"]).templateFolders).toEqual([]);
+  });
+
+  it("rejects a template-folder option without a path", () => {
     expect(parseCliArgs(["setup", "--template-folder"]).error?.message).toBe(
+      "[oms] Missing value for --template-folder.",
+    );
+    expect(parseCliArgs(["setup", "--template-folder", "--yes"]).error?.message).toBe(
       "[oms] Missing value for --template-folder.",
     );
   });

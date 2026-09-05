@@ -41,8 +41,8 @@ async function fixture(): Promise<string> {
   ]);
 
   const policy = JSON.stringify({
-    version: 1,
-    templateFolder: "Templates/OMS",
+    version: 3,
+    templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
     base: { fields: {} },
     contracts: {
       note: {
@@ -59,6 +59,7 @@ async function fixture(): Promise<string> {
       note: {
         templateId: "note",
         destinationClass: "managed-default",
+        sourceFolder: "Templates/OMS",
         sourcePath: "Templates/OMS/note.md",
         contract: "note",
         naming: "{{slug}}.md",

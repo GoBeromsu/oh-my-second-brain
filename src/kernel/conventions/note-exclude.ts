@@ -13,6 +13,7 @@
  */
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
+import { loadConfiguredTemplatePaths } from "../templates/hints.js";
 
 /**
  * Default audit exemptions - build artifacts, self-documenting templates, and
@@ -105,73 +106,28 @@ async function loadExcludeMatchers(vaultRoot: string): Promise<RegExp[]> {
           failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `.oms/taxonomy.json: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
-      const externalTemplatePaths = await loadExternalTemplatePaths(key);
+      let externalTemplatePaths: Awaited<ReturnType<typeof loadConfiguredTemplatePaths>>;
+      try {
+        externalTemplatePaths = await loadConfiguredTemplatePaths(key);
+      } catch (error) {
+        failure(
+          "NOTE_EXCLUSION_RESOLUTION_FAILED",
+          `external template settings: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       return [
         ...DEFAULT_EXCLUDE_GLOBS,
         ...declared,
-        ...externalTemplatePaths.flatMap((templatePath) => [templatePath, `${templatePath}/**`]),
+        ...externalTemplatePaths.flatMap((templatePath) =>
+          templatePath.kind === "folder"
+            ? [templatePath.path, `${templatePath.path}/**`]
+            : [templatePath.path]
+        ),
       ].map(globToRegExp);
     })();
     matcherCache.set(key, pending);
   }
   return pending;
-}
-
-function configuredPath(value: unknown, source: string): string {
-  if (typeof value !== "string" || value.trim() === "") {
-    return failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `${source} must be a non-empty string`);
-  }
-  return normalizedPath(value.trim().replace(/\/+$/g, ""));
-}
-
-async function configuredJson(pathname: string): Promise<unknown | undefined> {
-  try {
-    return JSON.parse(await readFile(pathname, "utf-8")) as unknown;
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-    return failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `${pathname}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-async function loadExternalTemplatePaths(vaultRoot: string): Promise<readonly string[]> {
-  const paths: string[] = [];
-  const obsidianTemplatesPath = path.join(vaultRoot, ".obsidian", "templates.json");
-  const obsidianTemplates = await configuredJson(obsidianTemplatesPath);
-  if (obsidianTemplates !== undefined) {
-    if (obsidianTemplates === null || typeof obsidianTemplates !== "object" || Array.isArray(obsidianTemplates)) {
-      failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `${obsidianTemplatesPath} must be an object`);
-    }
-    const folder = (obsidianTemplates as Record<string, unknown>)["folder"];
-    if (folder !== undefined) paths.push(configuredPath(folder, `${obsidianTemplatesPath}: folder`));
-  }
-
-  const templaterPath = path.join(vaultRoot, ".obsidian", "plugins", "templater-obsidian", "data.json");
-  const templater = await configuredJson(templaterPath);
-  if (templater !== undefined) {
-    if (templater === null || typeof templater !== "object" || Array.isArray(templater)) {
-      failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `${templaterPath} must be an object`);
-    }
-    const settings = templater as Record<string, unknown>;
-    if (settings["templates_folder"] !== undefined) {
-      paths.push(configuredPath(settings["templates_folder"], `${templaterPath}: templates_folder`));
-    }
-    const folderTemplates = settings["folder_templates"];
-    if (folderTemplates !== undefined) {
-      if (!Array.isArray(folderTemplates)) {
-        failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `${templaterPath}: folder_templates must be a list`);
-      }
-      for (const [index, entry] of folderTemplates.entries()) {
-        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-          failure("NOTE_EXCLUSION_RESOLUTION_FAILED", `${templaterPath}: folder_templates[${index}] must be an object`);
-        }
-        const template = (entry as Record<string, unknown>)["template"];
-        if (template !== undefined) {
-          paths.push(configuredPath(template, `${templaterPath}: folder_templates[${index}].template`));
-        }
-      }
-    }
-  }
-  return [...new Set(paths)].sort();
 }
 
 async function managedSourcePaths(vaultRoot: string): Promise<readonly string[]> {

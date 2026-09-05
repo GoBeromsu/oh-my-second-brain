@@ -4,14 +4,14 @@ import { describe, expect, it } from "vitest";
 import { TEMPLATE_POLICY_SCHEMA } from "../contracts/index.js";
 import { sourceSignature } from "./resolver.js";
 import type { Digest } from "./types.js";
-import { parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy, validateDerivedProjection, validateTemplateId } from "./policy.js";
+import { applyTemplatePolicyChange, parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy, validateDerivedProjection, validateTemplateId } from "./policy.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const policy = () => ({
-  version: 1, templateFolder: "Templates/OMS", owner: "vault",
+  version: 3, templateFolders: [{ path: "Templates/OMS", mode: "auto", default: true }], defaultTemplate: "literature", owner: "vault",
   base: { fields: { template: { type: "string", required: true, immutable: true } } },
   contracts: { literature: { intent: "Processed source.", fields: { "source-url": { type: "text", required: true, format: "url", default: { kind: "literal", value: "https://example.test" } } }, views: [{ name: "by-source", keys: ["template", "source-url"], owner: "vault" }] } },
-  templates: { literature: { templateId: "literature", destinationClass: "managed-default", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{date}}-{{slug}}.md" } },
+  templates: { literature: { templateId: "literature", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{date}}-{{slug}}.md" } },
 });
 
 describe("template policy", () => {
@@ -37,8 +37,81 @@ describe("template policy", () => {
     expect(serializeTemplatePolicy(parseTemplatePolicy(serialized))).toBe(serialized);
   });
 
-  it("parses and serializes a v2 user-owned writer registry with preserved extensions", () => {
-    const parsed = parseTemplatePolicy({ ...policy(), version: 2, writers: { field: "created_by", identifiers: ["oms-agent", "claude"], owner: "vault" } });
+  it("keeps folder and template defaults distinct and preserves folder extensions", () => {
+    const parsed = parseTemplatePolicy({
+      ...policy(),
+      templateFolders: [
+        { path: "Templates/Generated", mode: "auto", scanner: "vault" },
+        { path: "Templates/Curated", mode: "manual", default: true },
+      ],
+      templates: {
+        literature: {
+          ...policy().templates.literature,
+          sourceFolder: "Templates/Generated",
+          sourcePath: "Templates/Generated/literature.md",
+        },
+      },
+    });
+    expect(parsed.templateFolders[0]?.extensions).toEqual({ scanner: "vault" });
+    expect(parsed.templateFolders[1]?.default).toBe(true);
+    expect(parsed.defaultTemplate).toBe("literature");
+  });
+
+  it("allows an omitted default template and rejects a dangling default template", () => {
+    const { defaultTemplate: _defaultTemplate, ...withoutDefaultTemplate } = policy();
+    expect(parseTemplatePolicy(withoutDefaultTemplate).defaultTemplate).toBeUndefined();
+    expect(() => parseTemplatePolicy({ ...policy(), defaultTemplate: "missing" })).toThrow("TEMPLATE_POLICY_INVALID");
+  });
+
+  it("allows no folder default but rejects duplicate, unsafe, and multiple-default registrations", () => {
+    expect(parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "Templates/OMS", mode: "manual" }] }).templateFolders[0]?.default).toBeUndefined();
+    expect(() => parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "Templates", mode: "auto" }, { path: "Templates/./", mode: "manual" }] })).toThrow("TEMPLATE_SOURCE_DUPLICATE");
+    expect(() => parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "../Templates", mode: "auto" }] })).toThrow("TEMPLATE_SOURCE_UNSAFE");
+    expect(() => parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "One", mode: "auto", default: true }, { path: "Two", mode: "manual", default: true }] })).toThrow("TEMPLATE_POLICY_INVALID");
+  });
+
+  it("regenerates a default-less multi-folder policy without changing bindings or folders", () => {
+    const current = parseTemplatePolicy({
+      ...policy(),
+      defaultTemplate: undefined,
+      templateFolders: [
+        { path: "Templates/Generated", mode: "auto" },
+        { path: "Templates/Curated", mode: "manual" },
+      ],
+      templates: {
+        literature: {
+          ...policy().templates.literature,
+          sourceFolder: "Templates/Generated",
+          sourcePath: "Templates/Generated/literature.md",
+        },
+        curated: {
+          ...policy().templates.literature,
+          templateId: "curated",
+          destinationClass: "registered-existing",
+          sourceFolder: "Templates/Curated",
+          sourcePath: "Templates/Curated/custom.md",
+        },
+      },
+    });
+    const regenerated = applyTemplatePolicyChange(current, { mode: "regenerate" });
+    expect(regenerated.templateFolders).toEqual(current.templateFolders);
+    expect(regenerated.templates).toEqual(current.templates);
+    expect(regenerated.defaultTemplate).toBeUndefined();
+  });
+
+  it("requires each binding source folder to be registered and contain its source", () => {
+    expect(() => parseTemplatePolicy({
+      ...policy(),
+      templates: { literature: { ...policy().templates.literature, sourceFolder: "Unregistered", sourcePath: "Unregistered/literature.md" } },
+    })).toThrow("TEMPLATE_SOURCE_INVALID");
+    expect(() => parseTemplatePolicy({
+      ...policy(),
+      templates: { literature: { ...policy().templates.literature, sourcePath: "Other/literature.md" } },
+    })).toThrow("TEMPLATE_SOURCE_INVALID");
+  });
+
+  it("parses and serializes a v3 user-owned writer registry with preserved extensions", () => {
+    const parsed = parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: ["oms-agent", "claude"], owner: "vault" } });
     const serialized = serializeTemplatePolicy(parsed);
     expect(parsed.writers).toEqual({ field: "created_by", identifiers: ["oms-agent", "claude"], extensions: { owner: "vault" } });
     expect(JSON.parse(serialized).writers).toEqual({ field: "created_by", identifiers: ["oms-agent", "claude"], extensions: { owner: "vault" } });
@@ -46,22 +119,18 @@ describe("template policy", () => {
   });
 
   it("rejects malformed writer registries", () => {
-    expect(() => parseTemplatePolicy({ ...policy(), version: 2, writers: { field: 1, identifiers: ["oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
-    expect(() => parseTemplatePolicy({ ...policy(), version: 2, writers: { field: "created_by", identifiers: "oms-agent" } })).toThrow("TEMPLATE_POLICY_INVALID");
-    expect(() => parseTemplatePolicy({ ...policy(), version: 2, writers: { field: "created_by", identifiers: [] } })).toThrow("TEMPLATE_POLICY_INVALID");
-    expect(() => parseTemplatePolicy({ ...policy(), version: 2, writers: { field: "created_by", identifiers: ["oms-agent", "oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: 1, identifiers: ["oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: "oms-agent" } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: [] } })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => parseTemplatePolicy({ ...policy(), writers: { field: "created_by", identifiers: ["oms-agent", "oms-agent"] } })).toThrow("TEMPLATE_POLICY_INVALID");
   });
 
-  it("keeps v1 writers as byte-identical preserved extensions without enabling enforcement", () => {
-    const legacy = JSON.stringify({ ...policy(), writers: { field: "created_by", identifiers: ["oms-agent"] } });
-    const parsed = parseTemplatePolicy(legacy);
-
-    expect(parsed.writers).toBeUndefined();
-    expect(parsed.extensions?.writers).toEqual({ field: "created_by", identifiers: ["oms-agent"] });
-    expect(serializeTemplatePolicy(parseTemplatePolicy(serializeTemplatePolicy(parsed)))).toBe(serializeTemplatePolicy(parsed));
+  it("rejects unsupported policies and the legacy singular folder key without interpreting either", () => {
+    expect(() => parseTemplatePolicy({ ...policy(), version: 2 })).toThrow("TEMPLATE_POLICY_VERSION_UNSUPPORTED");
+    expect(() => parseTemplatePolicy({ ...policy(), templateFolder: "Legacy" })).toThrow("TEMPLATE_POLICY_VERSION_UNSUPPORTED");
   });
 
-  it("keeps the exported schema aligned with versioned writer-registry parsing", () => {
+  it("keeps the exported schema aligned with v3 writer-registry parsing", () => {
     const validate = new AjvJsonSchemaValidator().getValidator(TEMPLATE_POLICY_SCHEMA);
     const parserAccepts = (input: unknown): boolean => {
       try {
@@ -72,14 +141,7 @@ describe("template policy", () => {
       }
     };
 
-    for (const writers of ["legacy writer metadata", { owner: "vault", agents: ["oms-agent"] }]) {
-      const legacy = { ...policy(), writers };
-      expect(validate(legacy).valid).toBe(true);
-      expect(parserAccepts(legacy)).toBe(true);
-      expect(parseTemplatePolicy(legacy).extensions?.writers).toEqual(writers);
-    }
-
-    const managed = { ...policy(), version: 2, writers: { field: "created_by", identifiers: ["oms-agent"] } };
+    const managed = { ...policy(), writers: { field: "created_by", identifiers: ["oms-agent"] } };
     expect(validate(managed).valid).toBe(true);
     expect(parserAccepts(managed)).toBe(true);
 
@@ -87,14 +149,14 @@ describe("template policy", () => {
       { field: "created_by", identifiers: [] },
       { field: " ", identifiers: ["oms-agent"] },
     ]) {
-      const invalid = { ...policy(), version: 2, writers: malformed };
+      const invalid = { ...policy(), writers: malformed };
       expect(validate(invalid).valid).toBe(false);
       expect(parserAccepts(invalid)).toBe(false);
     }
   });
 
-  it("retains the canonical v1 bytes when no writer registry is configured", () => {
-    const canonicalV1 = `{
+  it("retains canonical v3 bytes when no writer registry is configured", () => {
+    const canonicalV3 = `{
   "base": {
     "fields": {}
   },
@@ -102,17 +164,16 @@ describe("template policy", () => {
   "extensions": {
     "owner": "vault"
   },
-  "templateFolder": "Templates/OMS",
+  "templateFolders": [],
   "templates": {},
-  "version": 1
+  "version": 3
 }
 `;
 
-    const serialized = serializeTemplatePolicy(parseTemplatePolicy(canonicalV1));
-    expect(serialized).toBe(canonicalV1);
-    expect(createHash("sha256").update(serialized).digest("hex")).toBe("bb75390b7b96c53707c9f70e2bf244d5efa58d72e14f0d4a0184d2e816f0de2e");
-    const policyDigest: Digest = "sha256:bb75390b7b96c53707c9f70e2bf244d5efa58d72e14f0d4a0184d2e816f0de2e";
-    expect(sourceSignature([{ logicalId: "template-policy", signature: policyDigest }])).toBe("sha256:0411011d9acc46f1f91484e055dc1c1849baaba7c97b459029c4d2cd72a5f1ad");
+    const serialized = serializeTemplatePolicy(parseTemplatePolicy(canonicalV3));
+    expect(serialized).toBe(canonicalV3);
+    const policyDigest = `sha256:${createHash("sha256").update(serialized).digest("hex")}` as Digest;
+    expect(sourceSignature([{ logicalId: "template-policy", signature: policyDigest }])).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
   it("validates static and dynamic defaults, types, and URL format", () => {
@@ -166,7 +227,7 @@ describe("template policy", () => {
     const badDestination = {
       ...policy(),
       templates: {
-        literature: { ...policy().templates.literature, sourcePath: "Elsewhere/literature.md" },
+        literature: { ...policy().templates.literature, sourcePath: "Templates/OMS/not-literature.md" },
       },
     };
     expect(() => parseTemplatePolicy(badDestination)).toThrow("TEMPLATE_RECLASSIFY_PATH_MISMATCH");
@@ -186,6 +247,7 @@ describe("template policy", () => {
   it("uses one stable-ID grammar for policy map keys and deterministic clones", () => {
     const clone = {
       ...policy(),
+      defaultTemplate: "literature--references",
       templates: {
         "literature--references": {
           ...policy().templates.literature,

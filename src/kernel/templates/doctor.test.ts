@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { backfillDefaults, diagnoseTemplates, regenerateTypes } from "./doctor.js";
-import { sourceSignature } from "./resolver.js";
+import { loadResolvedTemplates, sourceSignature } from "./resolver.js";
 import type { Digest } from "./types.js";
 
 const roots: string[] = [];
@@ -13,12 +13,12 @@ async function vault(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "oms-template-doctor-"));
   roots.push(root);
   await Promise.all([".oms", ".obsidian", "Templates", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
-  const policy = `${JSON.stringify({ version: 1, templateFolder: "Templates", base: { fields: {} }, contracts: { note: { intent: "note", fields: {}, views: [] } }, templates: { note: { templateId: "note", destinationClass: "registered-existing", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
-  const taxonomy = JSON.stringify({ folders: { notes: { concept: "note" } } });
+  const policy = `${JSON.stringify({ version: 3, templateFolders: [{ path: "Templates", mode: "manual", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: {}, views: [] } }, templates: { note: { templateId: "note", destinationClass: "registered-existing", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
+  const taxonomy = JSON.stringify({ folders: { notes: { concept: "note", template: "note" } } });
   const obsidian = "{\"title\":\"text\"}\n";
   const template = "---\ntitle: template\n---\nbody\n";
   const descriptors = [{ logicalId: "template-policy", signature: sha(policy) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }, { path: "Templates/note.md", signature: sha(template) }];
-  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "registered-existing", sourcePath: "Templates/note.md", targetFolder: "Inbox", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") } } } }, null, 2)}\n`;
+  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "registered-existing", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") } } } }, null, 2)}\n`;
   await Promise.all([
     writeFile(path.join(root, ".oms", "template-policy.json"), policy, "utf8"),
     writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy, "utf8"),
@@ -52,6 +52,25 @@ describe("template doctor", () => {
     expect(diagnosis.status).toBe("needs-repair");
     expect(diagnosis.diagnostics).toHaveLength(1);
   });
+  it("fails closed on an existing unsupported policy for diagnosis and repair", async () => {
+    const root = await vault();
+    const legacy = `${JSON.stringify({ version: 2, templateFolder: "Templates", base: { fields: {} }, contracts: {}, templates: {} })}\n`;
+    await writeFile(path.join(root, ".oms", "template-policy.json"), legacy);
+    const before = await readFile(path.join(root, ".oms", "types.json"));
+    const diagnosis = await diagnoseTemplates({ vault: root, source: "explicit" });
+    expect(diagnosis.diagnostics.some(item => item.code === "TEMPLATE_POLICY_VERSION_UNSUPPORTED")).toBe(true);
+    expect(await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { dryRun: true } }))
+      .toMatchObject({ status: "rejected", code: "TEMPLATE_POLICY_VERSION_UNSUPPORTED" });
+    expect(await readFile(path.join(root, ".oms", "types.json"))).toEqual(before);
+  });
+  it("requires JSON taxonomy and never converts a legacy YAML file", async () => {
+    const root = await vault();
+    await rm(path.join(root, ".oms", "taxonomy.json"));
+    await writeFile(path.join(root, ".oms", "taxonomy.yaml"), "folders: {}\n");
+    const diagnosis = await diagnoseTemplates({ vault: root, source: "explicit" });
+    expect(diagnosis.diagnostics).toContainEqual(expect.objectContaining({ code: "TEMPLATE_CONTROL_MISSING", path: ".oms/taxonomy.json" }));
+    expect(await readFile(path.join(root, ".oms", "taxonomy.yaml"), "utf8")).toBe("folders: {}\n");
+  });
   it("reports projection drift", async () => {
     const root = await vault();
     await writeFile(path.join(root, "Templates", "note.md"), "---\ntitle: changed\n---\nbody\n", "utf8");
@@ -66,6 +85,92 @@ describe("template doctor", () => {
     const applied = await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { approvedDigest: dry.approvalDigest } });
     expect(applied.status).toBe("applied");
     expect((await diagnoseTemplates({ vault: root, source: "explicit" })).status).toBe("healthy");
+  });
+  it("repairs projection drift without relocating sources across default-less registered folders", async () => {
+    const root = await vault();
+    await mkdir(path.join(root, "Imported"), { recursive: true });
+    const policy = `${JSON.stringify({
+      version: 3,
+      templateFolders: [
+        { path: "Templates", mode: "manual" },
+        { path: "Imported", mode: "manual" },
+      ],
+      base: { fields: {} },
+      contracts: {
+        note: { intent: "note", fields: {}, views: [] },
+        reference: { intent: "reference", fields: {}, views: [] },
+      },
+      templates: {
+        note: {
+          templateId: "note",
+          destinationClass: "managed-default",
+          sourceFolder: "Templates",
+          sourcePath: "Templates/note.md",
+          contract: "note",
+          naming: "{{slug}}.md",
+        },
+        reference: {
+          templateId: "reference",
+          destinationClass: "registered-existing",
+          sourceFolder: "Imported",
+          sourcePath: "Imported/reference.md",
+          contract: "reference",
+          naming: "{{slug}}.md",
+        },
+      },
+    })}\n`;
+    const taxonomy = JSON.stringify({
+      templates: {
+        note: { templateFolder: "notes" },
+        reference: { templateFolder: "references" },
+      },
+    });
+    const noteSource = "---\ntitle: template\n---\nbody\n";
+    const referenceSource = "---\ntitle: reference\n---\nreference body\n";
+    await Promise.all([
+      writeFile(path.join(root, ".oms", "template-policy.json"), policy),
+      writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy),
+      writeFile(path.join(root, "Templates", "note.md"), noteSource),
+      writeFile(path.join(root, "Imported", "reference.md"), referenceSource),
+      writeFile(path.join(root, ".oms", "types.json"), "{}\n"),
+    ]);
+    const beforePolicy = await readFile(path.join(root, ".oms", "template-policy.json"));
+    const beforeNote = await readFile(path.join(root, "Templates", "note.md"));
+    const beforeReference = await readFile(path.join(root, "Imported", "reference.md"));
+
+    const dry = await regenerateTypes({
+      target: { vault: root, source: "explicit" },
+      request: { dryRun: true },
+    });
+    expect(dry.status).toBe("planned");
+    expect(await readFile(path.join(root, ".oms", "types.json"), "utf8")).toBe("{}\n");
+    expect(await readFile(path.join(root, ".oms", "template-policy.json"))).toEqual(beforePolicy);
+    expect(await readFile(path.join(root, "Templates", "note.md"))).toEqual(beforeNote);
+    expect(await readFile(path.join(root, "Imported", "reference.md"))).toEqual(beforeReference);
+    if (dry.status !== "planned") return;
+
+    const applied = await regenerateTypes({
+      target: { vault: root, source: "explicit" },
+      request: { approvedDigest: dry.approvalDigest },
+    });
+    expect(applied.status).toBe("applied");
+    expect(await readFile(path.join(root, ".oms", "template-policy.json"))).toEqual(beforePolicy);
+    expect(await readFile(path.join(root, "Templates", "note.md"))).toEqual(beforeNote);
+    expect(await readFile(path.join(root, "Imported", "reference.md"))).toEqual(beforeReference);
+    const savedPolicy = JSON.parse(await readFile(path.join(root, ".oms", "template-policy.json"), "utf8")) as {
+      templates: Record<string, { sourceFolder: string; sourcePath: string }>;
+    };
+    expect(savedPolicy.templates).toMatchObject({
+      note: { sourceFolder: "Templates", sourcePath: "Templates/note.md" },
+      reference: { sourceFolder: "Imported", sourcePath: "Imported/reference.md" },
+    });
+    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
+      templates: {
+        note: { sourcePath: "Templates/note.md", targetFolder: "notes" },
+        reference: { sourcePath: "Imported/reference.md", targetFolder: "references" },
+      },
+      managedSourcePaths: ["Imported/reference.md", "Templates/note.md"],
+    });
   });
   it.each(["missing", "malformed"] as const)("regenerates a %s projection from authority", async state => {
     const root = await vault();
