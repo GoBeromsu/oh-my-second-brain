@@ -547,11 +547,6 @@ function isInside(child: string, parent: string): boolean {
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
-function filenameFor(descriptor: EmbeddingModelDescriptor): string {
-  const name = descriptor.filename ?? descriptor.model;
-  return path.basename(name) || "model.gguf";
-}
-
 async function writeAtomic(filename: string, contents: Uint8Array | string): Promise<void> {
   const temporary = `${filename}.${process.pid}.${Date.now()}.tmp`;
   try { await writeFile(temporary, contents, { flag: "wx" }); await rename(temporary, filename); } finally { await rm(temporary, { force: true }); }

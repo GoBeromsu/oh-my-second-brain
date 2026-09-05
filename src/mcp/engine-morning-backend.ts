@@ -14,7 +14,7 @@
  */
 
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
-import type { MorningRetrieveOptions, MorningSemanticBackend } from "../kernel/search/morning.js";
+import type { MorningSemanticBackend } from "../kernel/search/morning.js";
 
 /**
  * Build a MorningSemanticBackend that routes the five semantic leaf operations

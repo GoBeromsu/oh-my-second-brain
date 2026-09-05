@@ -14,7 +14,6 @@
  */
 
 import type { VaultSource } from "../link/link.js";
-import type { WriteMode } from "../capture/safe.js";
 
 export type WriteStage = "admission" | "acceptance";
 

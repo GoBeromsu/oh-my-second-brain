@@ -183,7 +183,7 @@ export async function buildGraphWithWarnings(opts: { readonly vaultPath: string;
     }
   }
   const pairs = new Map<string, number>();
-  for (const [common, neighbors] of adjacency) {
+  for (const neighbors of adjacency.values()) {
     const score = adamicAdarContribution(neighbors.size);
     if (score === 0) continue;
     const sorted = [...neighbors].sort((left, right) => left.localeCompare(right));
