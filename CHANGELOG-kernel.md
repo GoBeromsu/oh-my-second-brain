@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Template location is optional at registration/resolution, independently of the field contract. Note creation resolves an explicit destination or taxonomy default and asks only when both are absent. New registrations can propose their missing default in the existing guarded transaction without overwriting unrelated ontology, routes, or property types.
+
 ## [0.14.0] - 2026-09-05
 
 - Read-only engine connections use stable vault-external SQLite snapshots, including committed WAL content, so source sidecars remain untouched even while the reader is open. Store rebuild/drop repairs share verified-target admission and server-checked postconditions across entrypoints. (#125)

@@ -447,7 +447,6 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
     ...(extensions === undefined ? {} : { extensions }),
     managed: { base: policy.base, globalAxes: taxonomy.globalAxes, templates: Object.fromEntries(bindings.map((binding, index) => {
       const targetFolder = taxonomy.targetFolders.get(binding.templateId);
-      if (targetFolder === undefined) throw new Error(`TEMPLATE_PLACEMENT_UNDECLARED: ${binding.templateId}`);
       const template = extracted[index]!;
       const contract = policy.contracts[binding.contract];
       if (contract === undefined) throw new Error(`MIGRATION_UNRESOLVED_MAPPING: ${binding.contract}`);
@@ -456,7 +455,7 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
         destinationClass: binding.destinationClass,
         renderer: binding.renderer,
         sourcePath: binding.sourcePath,
-        targetFolder,
+        ...(targetFolder === undefined ? {} : { targetFolder }),
         keyOrder: template.keyOrder,
         fields: projectionFields(policy.base, contract.fields, template.frontmatter, obsidian.types, template.filledBy, binding.renderer),
         views: contract.views,

@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- `template add` accepts optional `--target-folder` for new/existing sources, signing placement with registration. `note create --folder` supplies a one-off destination without inventing a fallback or changing the default.
+
 ## [0.14.0] - 2026-09-05
 
 - HTTP routes reject malformed bodies and fields instead of coercing them into empty queries. Status retains unaffected component evidence when convention, history, engine, or graph health is unavailable. (#125)

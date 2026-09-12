@@ -6,7 +6,7 @@ import { inputDigest, templateInput } from "./canonical.js";
 import { deriveTemplateSourcePath, isTemplateSourceInFolder, normalizeTemplateFolderPath, normalizeTemplateSourcePath, selectTemplateFolder, validateTemplateId, verifyTemplateSourcePath } from "./paths.js";
 import { parseTemplatePolicy } from "./policy.js";
 import { classifyTemplateRenderer } from "./renderer.js";
-import { buildTemplateCompositionManifest } from "./resolver.js";
+import { buildTemplateCompositionManifest, proposeTaxonomyPlacement } from "./resolver.js";
 import { completedTemplateTransaction, executeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
 import type { Digest, FileExpectation, GuardedTemplateRequest, TemplateBinding, TemplatePolicy, TemplateRenderer, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
 
@@ -18,6 +18,7 @@ export interface RegisterExistingTemplateRequest {
   readonly filledBy: readonly string[];
   readonly contract: string;
   readonly naming: string;
+  readonly targetFolder?: string;
 }
 
 function digest(bytes: Uint8Array): Digest {
@@ -105,12 +106,13 @@ export async function registerExistingTemplate(vault: string, request: RegisterE
   if (policy.contracts[request.contract] === undefined) {
     throw new Error(`TEMPLATE_CONTRACT_UNKNOWN: contract ${request.contract} does not exist; author it in .oms/template-policy.json first`);
   }
+  const taxonomyBytes = proposeTaxonomyPlacement(taxonomyState.bytes, templateId, request.targetFolder);
   const bound = policy.templates[templateId];
   if (bound !== undefined) {
     // Registration is one-shot. Separating "already in the requested state" from
     // "bound to something else" is what makes a replayed apply actionable: the
     // first needs no work, the second is a real identity collision.
-    const identical = bound.destinationClass === "registered-existing" && bound.renderer === request.renderer && bound.sourceFolder === sourceFolder && deriveTemplateSourcePath(bound) === sourcePath && bound.contract === request.contract && bound.naming === request.naming;
+    const identical = taxonomyBytes === taxonomyState.bytes && bound.destinationClass === "registered-existing" && bound.renderer === request.renderer && bound.sourceFolder === sourceFolder && deriveTemplateSourcePath(bound) === sourcePath && bound.contract === request.contract && bound.naming === request.naming;
     if (!identical) throw new Error(`TEMPLATE_ID_DUPLICATE: templateId ${templateId} is already registered`);
     if (guard.approvedDigest === undefined) {
       throw new Error(`TEMPLATE_ALREADY_REGISTERED: ${templateId} is already registered at ${sourcePath} with this contract and naming; no change is required`);
@@ -158,7 +160,7 @@ export async function registerExistingTemplate(vault: string, request: RegisterE
       controls: { policy: expectation(policyState), taxonomy: expectation(taxonomyState), projection: expectation(projectionState) },
       sources: sources.map(source => ({ templateId: source.templateId as TemplateBinding["templateId"], path: source.path, expected: expectation(source.state) })),
     },
-    taxonomy: { expectedCurrent: expectation(taxonomyState), proposedBytes: taxonomyState.bytes, action: "verify-only" },
+    taxonomy: { expectedCurrent: expectation(taxonomyState), proposedBytes: taxonomyBytes, action: taxonomyBytes === taxonomyState.bytes ? "verify-only" : "write" },
   });
   return executeTemplateTransaction(vault, manifest, guard, TEMPLATE_MUTATION_MARKER_PATH);
 }
