@@ -7,7 +7,7 @@ import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { inputDigest, templateInput } from "./canonical.js";
 import { deriveTemplateSourcePath, normalizeTemplateControlPath, verifyTemplateControlPath, verifyTemplateSourcePath, verifyVaultPath } from "./paths.js";
 import { parseTemplatePolicy } from "./policy.js";
-import { buildTemplateCompositionManifest } from "./resolver.js";
+import { buildTemplateCompositionManifest, proposeTaxonomyPlacement } from "./resolver.js";
 import { executeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH, templateMigrationAdmission } from "./transaction.js";
 import type { Digest, FileExpectation, GuardedTemplateRequest, TemplateSemanticChange, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
 
@@ -118,13 +118,14 @@ export async function executeTemplateOperation(
       return signature;
     },
   );
+  const taxonomyBytes = change.mode === "create" ? proposeTaxonomyPlacement(taxonomyState.bytes, change.binding.templateId, change.targetFolder) : taxonomyState.bytes;
   const manifest = await buildTemplateCompositionManifest(vault, change, {
     expected: {
       input: inputDigest(currentInput),
       controls: { policy: expectation(policyState), taxonomy: expectation(taxonomyState), projection: expectation(projectionState) },
       sources: sources.map(source => ({ templateId: source.templateId, path: source.path, expected: expectation(source.state) })),
     },
-    taxonomy: { expectedCurrent: expectation(taxonomyState), proposedBytes: taxonomyState.bytes, action: "verify-only" },
+    taxonomy: { expectedCurrent: expectation(taxonomyState), proposedBytes: taxonomyBytes, action: taxonomyBytes === taxonomyState.bytes ? "verify-only" : "write" },
   });
   return executeTemplateTransaction(vault, manifest, request, TEMPLATE_MUTATION_MARKER_PATH);
 }

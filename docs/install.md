@@ -113,8 +113,8 @@ Use `oms template list`, `show <id>`, and `scan` for proposals and inspection; `
 
 ```text
 oms template add <folder> --mode manual --dry-run
-oms template add <file> --id <id> --contract <contract> --dry-run
-oms template add --id <id> --from <content.md> --dry-run
+oms template add <file> --id <id> --contract <contract> [--target-folder <note-folder>] --dry-run
+oms template add --id <id> --from <content.md> [--target-folder <note-folder>] --dry-run
 oms template update <id> --naming <pattern> --dry-run
 oms template move --folder <registered-folder> --dry-run
 oms template remove <id> --dry-run
@@ -128,6 +128,7 @@ Pass `--vault <path>` for an explicit target. New source files use a registered 
 
 ```text
 oms note create|append|update|audit|backfill|get
+oms note create [template-id] --folder <note-folder> --body <text> --dry-run
 oms search query <text> [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank]
 oms search context
 oms index sync|embed|repair|status|clean

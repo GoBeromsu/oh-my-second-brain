@@ -183,8 +183,8 @@ const source = { type: "object", additionalProperties: false, properties: { path
 const templateFolder = { type: "object", additionalProperties: false, properties: { path: string, mode: { ...string, enum: ["auto", "manual"] }, default: { const: true } }, required: ["path", "mode"] };
 const operations: Record<string, readonly Operation[]> = {
   write: [
-    { op: "note", name: "write-note", properties: { mode: { ...string, enum: ["create", "append", "update"] }, templateId: string, notePath: string, frontmatter, body: string, dryRun: boolean } },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "register-existing"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, folder: templateFolder, deleteSource: boolean, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode"] },
+    { op: "note", name: "write-note", properties: { mode: { ...string, enum: ["create", "append", "update"] }, templateId: string, notePath: string, targetFolder: string, frontmatter, body: string, dryRun: boolean } },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "register-existing"] }, templateId: string, binding: templateBinding, source, targetFolder: string, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, folder: templateFolder, deleteSource: boolean, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
@@ -225,12 +225,12 @@ function operationSchema(tool: string): Tool["inputSchema"] {
     if (op === "note") {
       branches.push({
         additionalProperties: false,
-        properties: { op: { ...string, const: "note" }, mode: { const: "create" }, templateId: string, frontmatter, body: string, dryRun: boolean },
+        properties: { op: { ...string, const: "note" }, mode: { const: "create" }, templateId: string, targetFolder: string, frontmatter, body: string, dryRun: boolean },
         required: ["op", "mode", "templateId", "body"],
       });
       branches.push({
         additionalProperties: false,
-        properties: { op: { ...string, const: "note" }, mode: { const: "create" }, frontmatter, body: string, dryRun: boolean },
+        properties: { op: { ...string, const: "note" }, mode: { const: "create" }, targetFolder: string, frontmatter, body: string, dryRun: boolean },
         required: ["op", "mode", "body"],
       });
       branches.push({
@@ -249,14 +249,14 @@ function operationSchema(tool: string): Tool["inputSchema"] {
     if (op === "template") {
       const shared = { op: { ...string, const: op } };
       const modes: readonly { readonly mode: string; readonly properties: Record<string, object>; readonly required: readonly string[] }[] = [
-        { mode: "create", properties: { binding: templateBinding, source }, required: ["binding", "source"] },
+        { mode: "create", properties: { binding: templateBinding, source, targetFolder: string }, required: ["binding", "source"] },
         { mode: "update", properties: { templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] } }, required: ["templateId", "binding", "source"] },
         { mode: "reclassify", properties: { templateId: string, toClass: { ...string, enum: ["managed-default", "registered-existing"] } }, required: ["templateId", "toClass"] },
         { mode: "relocate-folder", properties: { templateFolder: string }, required: ["templateFolder"] },
         { mode: "remove", properties: { templateId: string, deleteSource: boolean }, required: ["templateId", "deleteSource"] },
         { mode: "default", properties: { templateId: string }, required: ["templateId"] },
         { mode: "register-folder", properties: { folder: templateFolder }, required: ["folder"] },
-        { mode: "register-existing", properties: { templateId: string, sourceFolder: string, sourcePath: string, renderer, filledBy: stringArray, contract: string, naming: string }, required: ["templateId", "sourceFolder", "sourcePath", "renderer", "filledBy", "contract", "naming"] },
+        { mode: "register-existing", properties: { templateId: string, sourceFolder: string, sourcePath: string, renderer, filledBy: stringArray, contract: string, naming: string, targetFolder: string }, required: ["templateId", "sourceFolder", "sourcePath", "renderer", "filledBy", "contract", "naming"] },
       ];
       for (const item of modes) {
         const mutationRequired = ["op", "mode", ...item.required];
@@ -941,6 +941,9 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (name === "write-note") {
+      if (args?.["targetFolder"] !== undefined && (typeof args["targetFolder"] !== "string" || args["mode"] !== "create")) {
+        return errorText("targetFolder must be a string and is only supported for note create.");
+      }
       const mode = stringArg(args, "mode");
       if (!isWriteMode(mode)) {
         return errorText('Argument "mode" must be create, append, or update.');
@@ -960,6 +963,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         mode,
         templateId: mode === "create" ? stringArg(args, "templateId") : undefined,
         notePath: stringArg(args, "notePath"),
+        targetFolder: stringArg(args, "targetFolder"),
         frontmatter: frontmatter === undefined
           ? undefined
           : isJsonRecord(frontmatter)
@@ -995,6 +999,9 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (name === "write-template") {
+      if (args?.["targetFolder"] !== undefined && (typeof args["targetFolder"] !== "string" || (args["mode"] !== "create" && args["mode"] !== "register-existing"))) {
+        return errorText("targetFolder must be a string and is only supported for template create/register-existing.");
+      }
       const admission = await admitWriteTarget({ vault, source });
       if (admission !== undefined) {
         return jsonText({ vault, status: "rejected", rejection: admission });
@@ -1028,7 +1035,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           naming === undefined ||
           request === undefined
         ) return errorText("Template registration requires templateId, sourceFolder, sourcePath, renderer, filledBy, contract, naming, and dryRun:true or an approvedDigest.");
-        return jsonText(await registerExistingTemplate(vault, { templateId, sourceFolder, sourcePath, renderer, filledBy, contract, naming }, request));
+        return jsonText(await registerExistingTemplate(vault, { templateId, sourceFolder, sourcePath, renderer, filledBy, contract, naming, targetFolder: stringArg(args, "targetFolder") }, request));
       }
 
       const mode = stringArg(args, "mode");
@@ -1106,7 +1113,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           publication: proposal["publication"],
         };
         if (mode === "create") {
-          change = { mode, binding: proposedBinding, source: proposedSource };
+          change = { mode, binding: proposedBinding, source: proposedSource, targetFolder: stringArg(args, "targetFolder") };
         } else {
           const templateId = stringArg(args, "templateId");
           if (templateId === undefined) return errorText("Template update requires templateId.");

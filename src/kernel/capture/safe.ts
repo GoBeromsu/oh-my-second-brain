@@ -8,7 +8,7 @@ import { rejection, type WriteRejection, type WriteTargetSource } from "../conve
 import { resolveDefaults } from "../templates/defaults.js";
 import { renderNoteName } from "../templates/naming.js";
 import { formatObsidianTime } from "../templates/obsidian-core-time.js";
-import { normalizeTemplateSourcePath, verifyVaultPath } from "../templates/paths.js";
+import { normalizeTemplateFolderPath, normalizeTemplateSourcePath, verifyVaultPath } from "../templates/paths.js";
 import { loadResolvedTemplates } from "../templates/resolver.js";
 import { readBundledPackageVersion } from "../runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../runtime/event-journal.js";
@@ -112,6 +112,7 @@ export interface TemplateWriteNoteInput {
   readonly mode: WriteMode;
   readonly dryRun: boolean;
   readonly notePath?: string;
+  readonly targetFolder?: string;
   readonly frontmatter?: Readonly<Record<string, JsonValue>>;
   readonly body?: string;
   readonly resolvedAt?: string;
@@ -351,6 +352,10 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     return templateResult("rejected", input, undefined, input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
   }
 
+  if (input.targetFolder !== undefined && input.mode !== "create") {
+    const payload = templateRejection("args-invalid", "targetFolder is only valid for create", "append and update use the existing notePath");
+    return templateResult("rejected", input, template, input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
+  }
   if (input.mode === "append") {
     if (input.notePath === undefined || input.body === undefined || input.frontmatter !== undefined || input.templateId !== undefined) {
       const payload = templateRejection("args-invalid", "append requires an existing notePath and body only", "pass notePath and body; do not pass frontmatter for append");
@@ -499,8 +504,17 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     return templateResult("ask", input, template, input.notePath ?? "", caller, input.body, [{ field: message.split(":")[1]?.trim().split(" ")[0] ?? "", rule: "required", message }], message, rejection("admission", "contract-violation", message, "provide the required field and retry"));
   }
   const fields = orderedTemplateFrontmatter(template, defaults.fields);
+  const folder = input.targetFolder ?? template.targetFolder;
+  if (folder === undefined) {
+    const message = "TEMPLATE_PLACEMENT_UNDECLARED: this create needs targetFolder or a declared taxonomy default";
+    const payload = templateRejection("args-invalid", message, "provide targetFolder for this note; the template remains valid");
+    return templateResult("ask", input, template, "", fields, input.body, [], message, payload);
+  }
   let notePath: string;
-  try { notePath = `${template.targetFolder}/${renderNoteName({ pattern: template.naming, fields, resolvedAt: defaults.resolvedAt })}`; }
+  try {
+    if (typeof folder !== "string") throw new TypeError("targetFolder must be a string");
+    notePath = `${normalizeTemplateFolderPath(folder)}/${renderNoteName({ pattern: template.naming, fields, resolvedAt: defaults.resolvedAt })}`;
+  }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const payload = templateRejection("args-invalid", message, "provide fields that produce a valid template filename");

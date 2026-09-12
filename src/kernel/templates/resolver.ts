@@ -255,7 +255,7 @@ function managed(projection: DerivedProjection["managed"], templates: Readonly<R
       destinationClass: template.destinationClass,
       renderer: template.renderer,
       sourcePath: template.sourcePath,
-      targetFolder: template.targetFolder,
+      ...(template.targetFolder === undefined ? {} : { targetFolder: template.targetFolder }),
       keyOrder: template.keyOrder,
       fields: template.fields,
       views: template.views,
@@ -309,13 +309,16 @@ export function taxonomyRouting(path: string, bytes: Uint8Array): TaxonomyRoutin
   if (root === null) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be a JSON object`);
   const targetFolders = new Map<string, TemplateFolderPath>();
   const templates = jsonRecordValue(root.templates);
+  if (root.templates !== undefined && templates === null) fail("TEMPLATE_SOURCE_INVALID", "taxonomy.templates must be a mapping");
   for (const [templateId, raw] of Object.entries(templates ?? {})) {
     const definition = jsonRecordValue(raw);
+    if (definition === null || (definition.templateFolder !== undefined && typeof definition.templateFolder !== "string")) fail("TEMPLATE_SOURCE_INVALID", `taxonomy.templates.${templateId} has invalid placement`);
     if (typeof definition?.templateFolder === "string") targetFolders.set(templateId, normalizeTemplateFolderPath(definition.templateFolder));
   }
   const folders = jsonRecordValue(root.folders);
   for (const [folder, raw] of Object.entries(folders ?? {})) {
     const definition = jsonRecordValue(raw);
+    if (definition?.templateFolder !== undefined && typeof definition.templateFolder !== "string") fail("TEMPLATE_SOURCE_INVALID", `taxonomy.folders.${folder}.templateFolder must be a string`);
     const templateId = typeof definition?.templateId === "string" ? definition.templateId : typeof definition?.template === "string" ? definition.template : undefined;
     const targetFolder = typeof definition?.templateFolder === "string" ? definition.templateFolder : folder;
     if (templateId !== undefined) targetFolders.set(templateId, normalizeTemplateFolderPath(targetFolder));
@@ -346,12 +349,31 @@ export function taxonomyRouting(path: string, bytes: Uint8Array): TaxonomyRoutin
   return { targetFolders, globalAxes: axes };
 }
 
+/** Strict lookup for callers that need a final destination, not template admission. */
 export function requireTaxonomyPlacement(routing: TaxonomyRouting, templateId: string): TemplateFolderPath {
   const targetFolder = routing.targetFolders.get(templateId);
-  if (targetFolder === undefined) {
-    fail("TEMPLATE_PLACEMENT_UNDECLARED", `taxonomy placement is undeclared for template ${templateId}`);
-  }
+  if (targetFolder === undefined) fail("TEMPLATE_PLACEMENT_UNDECLARED", `taxonomy placement is undeclared for template ${templateId}`);
   return targetFolder;
+}
+
+/** Add only a missing default; never rewrite an already-declared route or ontology. */
+export function proposeTaxonomyPlacement(bytes: Uint8Array, templateId: string, targetFolder?: string): Uint8Array {
+  if (targetFolder === undefined) return bytes;
+  if (typeof targetFolder !== "string") fail("TEMPLATE_SOURCE_INVALID", "targetFolder must be a string");
+  const folder = normalizeTemplateFolderPath(targetFolder);
+  const path = ".oms/taxonomy.json";
+  const current = taxonomyRouting(path, bytes).targetFolders.get(templateId);
+  if (current !== undefined) {
+    if (current !== folder) fail("TEMPLATE_PLACEMENT_CONFLICT", `template ${templateId} already routes to ${current}`);
+    return bytes;
+  }
+  const root = jsonRecord(bytes, path);
+  if (root === null) fail("TEMPLATE_SOURCE_INVALID", "taxonomy must be a mapping");
+  const templates = jsonRecordValue(root.templates);
+  const existing = templates?.[templateId];
+  const definition = jsonRecordValue(existing);
+  if (existing !== undefined && definition === null) fail("TEMPLATE_SOURCE_INVALID", `taxonomy.templates.${templateId} must be a mapping`);
+  return new TextEncoder().encode(`${JSON.stringify({ ...root, templates: { ...templates, [templateId]: { ...definition, templateFolder: folder } } }, null, 2)}\n`);
 }
 
 /**
@@ -416,7 +438,7 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
       destinationClass: binding.destinationClass,
       renderer: binding.renderer,
       sourcePath: template.sourcePath,
-      targetFolder: requireTaxonomyPlacement(taxonomy, binding.templateId),
+      ...(taxonomy.targetFolders.has(binding.templateId) ? { targetFolder: taxonomy.targetFolders.get(binding.templateId) } : {}),
       bom: template.bom,
       eol: template.eol,
       finalNewline: template.finalNewline,
@@ -646,7 +668,7 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
       destinationClass: binding.destinationClass,
       renderer: binding.renderer,
       sourcePath: bindingSourcePath,
-      targetFolder: requireTaxonomyPlacement(proposedTaxonomy, binding.templateId),
+      ...(proposedTaxonomy.targetFolders.has(binding.templateId) ? { targetFolder: proposedTaxonomy.targetFolders.get(binding.templateId) } : {}),
       keyOrder: parsed.keyOrder,
       fields: binding.renderer === "none"
         ? policyContractFields(proposedPolicy.base, contract.fields, obsidian.types)

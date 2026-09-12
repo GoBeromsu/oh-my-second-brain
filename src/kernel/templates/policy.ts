@@ -1,7 +1,7 @@
 import type {
   BaseContract, ContractDefinition, DerivedProjection, DerivedTemplateProjection, DestinationClass,
   Extensions, FieldDefault, FieldPolicy, GlobalAxis, JsonValue, ObsidianContractType,
-  RetrievalView, SourceDescriptor, TemplateBinding, TemplateFolderPath, TemplateFolderRegistration, TemplatePolicy,
+  RetrievalView, SourceDescriptor, TemplateBinding, TemplateFolderRegistration, TemplatePolicy,
   WriterRegistry,
 } from "./types.js";
 import {
@@ -240,7 +240,7 @@ export function parseDerivedProjection(input: string | unknown): DerivedProjecti
   const paths = new Set<string>();
   for (const [id, raw] of Object.entries(rawTemplates)) {
     const item = record(raw, `managed.templates.${id}`);
-    const folder = normalizeTemplateFolderPath(string(item.targetFolder, `managed.templates.${id}.targetFolder`));
+    const folder = item.targetFolder === undefined ? undefined : normalizeTemplateFolderPath(string(item.targetFolder, `managed.templates.${id}.targetFolder`));
     const templateId = validateTemplateId(string(item.templateId, `managed.templates.${id}.templateId`));
     if (templateId !== id) fail("PROJECTION_INVALID", `managed.templates.${id}.templateId must equal its stable map key`);
     if (item.destinationClass !== "managed-default" && item.destinationClass !== "registered-existing") fail("PROJECTION_INVALID", `managed.templates.${id}.destinationClass is invalid`);
@@ -258,7 +258,7 @@ export function parseDerivedProjection(input: string | unknown): DerivedProjecti
     if (!DIGEST.test(bodySignature)) fail("PROJECTION_INVALID", `managed.templates.${id}.bodySignature is invalid`);
     if (paths.has(template.sourcePath)) fail("TEMPLATE_SOURCE_DUPLICATE", `${template.sourcePath} is repeated`);
     paths.add(template.sourcePath);
-    templates[id] = { ...template, targetFolder: folder as TemplateFolderPath, keyOrder: [...item.keyOrder], fields, views, bodySignature: bodySignature as `sha256:${string}` };
+    templates[id] = { ...template, ...(folder === undefined ? {} : { targetFolder: folder }), keyOrder: [...item.keyOrder], fields, views, bodySignature: bodySignature as `sha256:${string}` };
   }
   const rawAxes = managed.globalAxes as Record<string, unknown>;
   const globalAxes: Record<string, GlobalAxis> = {};

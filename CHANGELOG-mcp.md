@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- `write` accepts optional `targetFolder` for template create/register-existing and note create. Schema and dispatch keep content contracts separate from location, preserve exact-digest template approval, and reject the field for unrelated modes.
+
 ## [0.14.0] - 2026-09-05
 
 ### Changed

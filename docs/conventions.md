@@ -16,7 +16,9 @@ Each managed template has a stable `templateId`, independent of its file locatio
 
 These authorities coexist: templates decide what a note contains, ontology explains what those fields, folders, and relationships mean, taxonomy places notes, and Obsidian decides property types. The removed legacy surface is `concept` as note identity and bundled runtime defaults—not ontology itself.
 
-Taxonomy decides note placement. Folders and wikilinks are global axes available to retrieval regardless of placement; authored folder intents appear on the derived `folder-ontology` axis. Every template requires an explicit `.oms/taxonomy.json` placement; OMS has no `Inbox/` fallback. A taxonomy `templateFolder` is the note destination and may be outside every template source folder.
+Taxonomy declares optional default note placement, separately from the content/field contract. Registration and resolution do not require a destination. A note create uses caller `targetFolder` first, then its taxonomy default, and asks for a destination only when neither exists; OMS has no `Inbox/` fallback. Naming and safe-path validation still apply. Folders and wikilinks remain global retrieval axes; authored folder intents appear on `folder-ontology`. A taxonomy `templateFolder` may be outside every template source folder.
+
+Creating or registering a new template may propose `targetFolder` in the same exact-digest transaction as its source, policy binding, and derived projection. This adds only the named template's missing default, preserves ontology and unrelated routes, and rejects conflicts with an existing default. Omitting it leaves taxonomy bytes untouched; one-off note destinations do not change taxonomy.
 
 Template policy uses version 3. `templateFolders` registers template source folders and their scan mode; the folder marked `default` is the creation destination for new template files, not the default template for notes. The optional `defaultTemplate` separately names a note binding. Every binding declares both `sourceFolder` and `sourcePath`:
 

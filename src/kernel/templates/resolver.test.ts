@@ -64,7 +64,7 @@ async function fixture(options: { readonly placement?: boolean; readonly dateExa
           destinationClass: "managed-default",
           renderer,
           sourcePath: "Templates/OMS/note.md",
-          targetFolder: "Notes/Published",
+          ...(options.placement === false ? {} : { targetFolder: "Notes/Published" }),
           keyOrder,
           fields: projectedFields,
           views: [],
@@ -217,12 +217,11 @@ describe("loadResolvedTemplates", () => {
     });
   });
 
-  it("rejects missing taxonomy placement and names the template", async () => {
+  it("resolves templates without a default placement", async () => {
     const root = await fixture({ placement: false });
-
-    await expect(loadResolvedTemplates(root)).rejects.toThrow(
-      /TEMPLATE_PLACEMENT_UNDECLARED: taxonomy placement is undeclared for template note/,
-    );
+    const convention = await loadResolvedTemplates(root);
+    expect(convention.templates.note?.targetFolder).toBeUndefined();
+    expect(convention.templates.note?.body).toBe("Body\n");
   });
 
   it("exports the shared taxonomy route and placement validation", () => {

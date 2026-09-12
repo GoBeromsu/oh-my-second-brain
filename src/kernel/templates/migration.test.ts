@@ -240,10 +240,14 @@ describe("explicit multi-folder setup", () => {
     expect(proposal.unresolved).toContainEqual(expect.objectContaining({ code: "MIGRATION_NOTE_INVALID", path: "Notes/broken.md" }));
     expect(proposal.inputDigest).toBeUndefined();
   });
-  it("requires an explicit taxonomy note destination", async () => {
+  it("registers a valid template without inventing a default note destination", async () => {
     const root = await fixture();
     await put(root, ".oms/taxonomy.json", '{"folders":{}}');
-    await expect(compose(root)).rejects.toThrow("TEMPLATE_PLACEMENT_UNDECLARED: note");
+    const { proposal, manifest } = await compose(root);
+    expect(manifest.controls[1].action).toBe("verify-only");
+    expect((await applyTemplateMigration(root, proposal, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+    expect((await loadResolvedTemplates(root)).templates.note?.targetFolder).toBeUndefined();
+    expect(await readFile(path.join(root, ".oms/taxonomy.json"), "utf8")).toBe('{"folders":{}}');
   });
   it("retains JSON taxonomy bytes and ignores legacy YAML and concepts", async () => {
     const root = await fixture();

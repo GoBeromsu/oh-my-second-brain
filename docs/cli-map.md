@@ -23,7 +23,7 @@ The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doct
 | `oms template regenerate-types` | `oms_doctor` | `regenerate-types` | `dryRun` XOR `approvedDigest` |
 | `oms template update --resume` | `oms_write` | `template` | `transactionId` and `approvedDigest` |
 
-`template add` is one leaf with folder, existing-file, and `--from` forms. The `--from` form uses the registered `templateFolders[].default` creation destination. That folder is unrelated to note placement.
+`template add` is one leaf with folder, existing-file, and `--from` forms. The `--from` form uses the registered `templateFolders[].default` creation destination. That folder is unrelated to note placement. Existing-file and `--from` accept optional `--target-folder`, passed as MCP `targetFolder` on `register-existing` and `create`. It proposes a missing default in the same guarded transaction; omission does not block registration. `note create --folder` maps to per-create MCP `targetFolder` and does not mutate the template or taxonomy.
 
 ## Note
 
