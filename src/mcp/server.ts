@@ -14,7 +14,7 @@ import {
   type WriteMode,
 } from "../kernel/capture/safe.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { backfillDefaults, buildTemplateNoteIndex, deriveTemplateRetrievalAxes, diagnoseTemplates, loadResolvedTemplates, registerExistingTemplate, normalizeTemplateFolderPath, normalizeTemplateSourcePath, regenerateTypes, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "../kernel/templates/index.js";
+import { backfillDefaults, buildTemplateNoteIndex, deriveTemplateRetrievalAxes, diagnoseTemplates, loadResolvedTemplates, normalizeTemplateFolderPath, normalizeTemplateSourcePath, regenerateTypes, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "../kernel/templates/index.js";
 import type { Digest, JsonValue, SourceProposal, TemplateBinding, TemplateSemanticChange } from "../kernel/templates/types.js";
 import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../kernel/runtime/event-journal.js";
@@ -45,7 +45,12 @@ import {
 } from "../kernel/semantic/semantic-engine.js";
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
 import { executeTemplateOperation } from "../kernel/templates/operations.js";
-import { planTemplateMigration } from "../kernel/templates/migration.js";
+import {
+  answerTemplateInterview,
+  commitTemplateContracts,
+  nextTemplateInterview,
+} from "../kernel/templates/interview-service.js";
+import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
@@ -54,6 +59,12 @@ import {
   cachedUpdateNotice,
   scheduleUpdateNoticeRefresh,
 } from "./update-notice.js";
+import {
+  attachTemplateNotice,
+  readTemplateChangeNotice,
+  templateNoticeInstruction,
+  type TemplateChangeNotice,
+} from "./template-notice.js";
 
 const SERVER_VERSION = readBundledPackageVersion();
 
@@ -94,7 +105,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
   if (Array.isArray(value)) return value.every(isJsonValue);
   return isRecord(value) && Object.values(value).every(isJsonValue);
 }
@@ -167,6 +179,7 @@ const number = { type: "number" };
 const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
 const digestSchema = { type: "string", pattern: "^sha256:[0-9a-f]{64}$" };
+const nullableDigestSchema = { anyOf: [digestSchema, { type: "null" }] };
 const jsonValue = { };
 const frontmatter = { type: "object", additionalProperties: jsonValue };
 const axisScalar = { anyOf: [string, number, boolean] };
@@ -180,11 +193,12 @@ const contextProperties = { template: string, folder: string, property: string, 
 const renderer = { ...string, enum: ["obsidian-core", "templater", "none"] };
 const templateBinding = { type: "object", additionalProperties: false, properties: { templateId: string, destinationClass: { ...string, enum: ["managed-default", "registered-existing"] }, renderer, sourceFolder: string, sourcePath: string, contract: string, naming: string }, required: ["templateId", "destinationClass", "renderer", "sourceFolder", "sourcePath", "contract", "naming"] };
 const source = { type: "object", additionalProperties: false, properties: { path: string, content: string, publication: { ...string, enum: ["write", "verify-existing"] } }, required: ["path", "content", "publication"] };
-const templateFolder = { type: "object", additionalProperties: false, properties: { path: string, mode: { ...string, enum: ["auto", "manual"] }, default: { const: true } }, required: ["path", "mode"] };
+const createSource = { ...source, properties: { ...source.properties, publication: { ...string, const: "write" } } };
+const templateFolder = { type: "object", additionalProperties: false, properties: { path: string, default: { const: true } }, required: ["path"] };
 const operations: Record<string, readonly Operation[]> = {
   write: [
-    { op: "note", name: "write-note", properties: { mode: { ...string, enum: ["create", "append", "update"] }, templateId: string, notePath: string, frontmatter, body: string, dryRun: boolean } },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "register-existing"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, folder: templateFolder, deleteSource: boolean, dryRun: boolean, approvedDigest: digestSchema }, required: ["mode"] },
+    { op: "note", name: "write-note", properties: { mode: { ...string, enum: ["create", "append", "update"] }, templateId: string, notePath: string, targetFolder: string, frontmatter, body: string, dryRun: boolean } },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "interview-next", "interview-answer", "commit-contracts"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, folder: templateFolder, deleteSource: boolean, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
@@ -225,12 +239,12 @@ function operationSchema(tool: string): Tool["inputSchema"] {
     if (op === "note") {
       branches.push({
         additionalProperties: false,
-        properties: { op: { ...string, const: "note" }, mode: { const: "create" }, templateId: string, frontmatter, body: string, dryRun: boolean },
+        properties: { op: { ...string, const: "note" }, mode: { const: "create" }, templateId: string, targetFolder: string, frontmatter, body: string, dryRun: boolean },
         required: ["op", "mode", "templateId", "body"],
       });
       branches.push({
         additionalProperties: false,
-        properties: { op: { ...string, const: "note" }, mode: { const: "create" }, frontmatter, body: string, dryRun: boolean },
+        properties: { op: { ...string, const: "note" }, mode: { const: "create" }, targetFolder: string, frontmatter, body: string, dryRun: boolean },
         required: ["op", "mode", "body"],
       });
       branches.push({
@@ -249,14 +263,13 @@ function operationSchema(tool: string): Tool["inputSchema"] {
     if (op === "template") {
       const shared = { op: { ...string, const: op } };
       const modes: readonly { readonly mode: string; readonly properties: Record<string, object>; readonly required: readonly string[] }[] = [
-        { mode: "create", properties: { binding: templateBinding, source }, required: ["binding", "source"] },
+        { mode: "create", properties: { binding: templateBinding, source: createSource }, required: ["binding", "source"] },
         { mode: "update", properties: { templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] } }, required: ["templateId", "binding", "source"] },
         { mode: "reclassify", properties: { templateId: string, toClass: { ...string, enum: ["managed-default", "registered-existing"] } }, required: ["templateId", "toClass"] },
         { mode: "relocate-folder", properties: { templateFolder: string }, required: ["templateFolder"] },
         { mode: "remove", properties: { templateId: string, deleteSource: boolean }, required: ["templateId", "deleteSource"] },
         { mode: "default", properties: { templateId: string }, required: ["templateId"] },
         { mode: "register-folder", properties: { folder: templateFolder }, required: ["folder"] },
-        { mode: "register-existing", properties: { templateId: string, sourceFolder: string, sourcePath: string, renderer, filledBy: stringArray, contract: string, naming: string }, required: ["templateId", "sourceFolder", "sourcePath", "renderer", "filledBy", "contract", "naming"] },
       ];
       for (const item of modes) {
         const mutationRequired = ["op", "mode", ...item.required];
@@ -279,6 +292,49 @@ function operationSchema(tool: string): Tool["inputSchema"] {
           approvedDigest: digestSchema,
         },
         required: ["op", "transactionId", "approvedDigest"],
+      });
+      branches.push({
+        additionalProperties: false,
+        properties: {
+          op: { ...string, const: "template" },
+          mode: { const: "interview-next" },
+        },
+        required: ["op", "mode"],
+      });
+      branches.push({
+        additionalProperties: false,
+        properties: {
+          op: { ...string, const: "template" },
+          mode: { const: "interview-answer" },
+          questionId: digestSchema,
+          answer: jsonValue,
+          censusDigest: digestSchema,
+          expectedLedgerDigest: nullableDigestSchema,
+        },
+        required: ["op", "mode", "questionId", "answer", "censusDigest", "expectedLedgerDigest"],
+      });
+      branches.push({
+        additionalProperties: false,
+        properties: {
+          op: { ...string, const: "template" },
+          mode: { const: "commit-contracts" },
+          censusDigest: digestSchema,
+          expectedLedgerDigest: nullableDigestSchema,
+          dryRun: { const: true },
+        },
+        required: ["op", "mode", "censusDigest", "expectedLedgerDigest", "dryRun"],
+      });
+      branches.push({
+        additionalProperties: false,
+        properties: {
+          op: { ...string, const: "template" },
+          mode: { const: "commit-contracts" },
+          censusDigest: digestSchema,
+          expectedLedgerDigest: nullableDigestSchema,
+          dryRun: { const: false },
+          approvedDigest: digestSchema,
+        },
+        required: ["op", "mode", "censusDigest", "expectedLedgerDigest", "approvedDigest"],
       });
       continue;
     }
@@ -397,6 +453,12 @@ export interface OMSMcpServerOptions {
    * `cwd` (the server may have booted in an arbitrary directory - issue #58).
    */
   source: WriteTargetSource;
+  /**
+   * Read-only template census captured before boot. The synchronous factory
+   * receives this optional value so runMcpServer can include a boot line
+   * without making construction itself asynchronous.
+   */
+  templateNotice?: TemplateChangeNotice | null;
 }
 
 export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
@@ -529,6 +591,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       instructions: buildServerInstructions(
         BASE_SERVER_INSTRUCTIONS,
         cachedUpdateNotice({ installedVersion: SERVER_VERSION }),
+        templateNoticeInstruction(opts.templateNotice),
       ),
     },
   );
@@ -692,23 +755,32 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (name === "oms_template_scan") {
-      const proposal = await planTemplateMigration(vault);
+      const context = await readTemplateReviewContext(vault);
+      const pending = context.census.diffs.map(diff => ({
+        kind: diff.kind,
+        sourcePath: diff.sourcePath,
+        ...(diff.oldSourcePath === undefined ? {} : { oldSourcePath: diff.oldSourcePath }),
+        ...(diff.newSourcePath === undefined ? {} : { newSourcePath: diff.newSourcePath }),
+        ...(diff.templateId === undefined ? {} : { templateId: diff.templateId }),
+        automatic: diff.automatic,
+        confirmationRequired: diff.confirmationRequired,
+        ...(diff.strategy === undefined ? {} : { strategy: diff.strategy }),
+      }));
       return jsonText({
-        templateFolders: proposal.templateFolders,
-        candidates: proposal.candidates.map(candidate => ({
-          templateId: candidate.templateId,
-          sourcePath: candidate.sourcePath,
-          renderer: candidate.renderer,
-          filledBy: candidate.filledBy,
-          bodyExternal: candidate.bodyExternal,
-          selected: proposal.bindings.some(binding => binding.templateId === candidate.templateId && binding.sourcePath === candidate.sourcePath),
-          samples: candidate.contractFromNotes?.samples ?? 0,
-          coverage: candidate.contractFromNotes?.coverage ?? {},
-          diagnostics: [...candidate.rendererDiagnostics, ...(candidate.contractFromNotes?.diagnostics ?? [])],
+        vault: context.vault,
+        templateFolders: context.policy.templateFolders,
+        censusDigest: context.censusDigest,
+        projectionUsable: context.projectionUsable,
+        freshTemplateIds: context.freshTemplateIds,
+        entries: context.census.entries.map(entry => ({
+          sourcePath: entry.sourcePath,
+          signature: entry.signature,
+          ...(entry.templateId === undefined ? {} : { templateId: entry.templateId }),
+          diagnostics: entry.diagnostics,
         })),
-        diagnostics: proposal.diagnostics,
-        unresolved: proposal.unresolved,
-        inputDigest: proposal.inputDigest,
+        diffs: pending,
+        pending,
+        diagnostics: context.census.diagnostics,
       });
     }
 
@@ -945,6 +1017,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       if (!isWriteMode(mode)) {
         return errorText('Argument "mode" must be create, append, or update.');
       }
+      const targetFolder = args?.["targetFolder"];
+      if (targetFolder !== undefined && typeof targetFolder !== "string") {
+        return errorText('Argument "targetFolder" must be a string folder path.');
+      }
+      if (targetFolder !== undefined && mode !== "create") {
+        return errorText('Argument "targetFolder" is only valid for create.');
+      }
       const admission = await admitWriteTarget({ vault, source });
       if (admission !== undefined) {
         return jsonText({ vault, resolvedVault: vault, resolutionSource: source, status: "rejected", rejection: admission });
@@ -960,6 +1039,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         mode,
         templateId: mode === "create" ? stringArg(args, "templateId") : undefined,
         notePath: stringArg(args, "notePath"),
+        targetFolder: typeof targetFolder === "string" ? targetFolder : undefined,
         frontmatter: frontmatter === undefined
           ? undefined
           : isJsonRecord(frontmatter)
@@ -999,6 +1079,59 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       if (admission !== undefined) {
         return jsonText({ vault, status: "rejected", rejection: admission });
       }
+      const mode = stringArg(args, "mode");
+      if (mode === "interview-next") {
+        if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
+          return errorText("Template interview-next does not accept a guarded request.");
+        }
+        return jsonText(await nextTemplateInterview({ vault, source }));
+      }
+      if (mode === "interview-answer") {
+        if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
+          return errorText("Template interview-answer saves a draft and does not accept a guarded request.");
+        }
+        const questionId = args?.["questionId"];
+        const answer = args?.["answer"];
+        const censusDigest = args?.["censusDigest"];
+        const expectedLedgerDigest = args?.["expectedLedgerDigest"];
+        if (
+          !isDigest(questionId) ||
+          !isJsonValue(answer) ||
+          !isDigest(censusDigest) ||
+          !(expectedLedgerDigest === null || isDigest(expectedLedgerDigest))
+        ) {
+          return errorText("Template interview-answer requires questionId, JSON answer, censusDigest, and expectedLedgerDigest.");
+        }
+        return jsonText(await answerTemplateInterview({
+          vault,
+          source,
+        }, {
+          questionId,
+          answer,
+          censusDigest,
+          expectedLedgerDigest,
+        }));
+      }
+      if (mode === "commit-contracts") {
+        const censusDigest = args?.["censusDigest"];
+        const expectedLedgerDigest = args?.["expectedLedgerDigest"];
+        const request = guardedTemplateRequest(args);
+        if (
+          !isDigest(censusDigest) ||
+          !(expectedLedgerDigest === null || isDigest(expectedLedgerDigest)) ||
+          request === undefined
+        ) {
+          return errorText("Template commit-contracts requires censusDigest, expectedLedgerDigest, and dryRun:true or an approvedDigest.");
+        }
+        return jsonText(await commitTemplateContracts({
+          vault,
+          source,
+        }, {
+          censusDigest,
+          expectedLedgerDigest,
+          ...request,
+        }));
+      }
       const resumeId = stringArg(args, "transactionId");
       const resumeApproval = args?.["approvedDigest"];
       if (resumeId !== undefined) {
@@ -1008,30 +1141,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         return jsonText(await resumeTemplateTransaction(vault, resumeId, resumeApproval, TEMPLATE_MUTATION_MARKER_PATH));
       }
 
-      if (stringArg(args, "mode") === "register-existing") {
-        const templateId = stringArg(args, "templateId");
-        const sourceFolder = stringArg(args, "sourceFolder");
-        const sourcePath = stringArg(args, "sourcePath");
-        const renderer = stringArg(args, "renderer");
-        const filledBy = args?.["filledBy"];
-        const contract = stringArg(args, "contract");
-        const naming = stringArg(args, "naming");
-        const request = guardedTemplateRequest(args);
-        if (
-          templateId === undefined ||
-          sourceFolder === undefined ||
-          sourcePath === undefined ||
-          (renderer !== "obsidian-core" && renderer !== "templater" && renderer !== "none") ||
-          !Array.isArray(filledBy) ||
-          filledBy.some(field => typeof field !== "string") ||
-          contract === undefined ||
-          naming === undefined ||
-          request === undefined
-        ) return errorText("Template registration requires templateId, sourceFolder, sourcePath, renderer, filledBy, contract, naming, and dryRun:true or an approvedDigest.");
-        return jsonText(await registerExistingTemplate(vault, { templateId, sourceFolder, sourcePath, renderer, filledBy, contract, naming }, request));
-      }
-
-      const mode = stringArg(args, "mode");
       let change: TemplateSemanticChange;
       if (mode === "reclassify") {
         const templateId = stringArg(args, "templateId");
@@ -1044,8 +1153,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         const templateFolder = stringArg(args, "templateFolder");
         if (templateFolder === undefined) return errorText("Template relocate-folder requires templateFolder.");
         change = { mode, templateFolder: normalizeTemplateFolderPath(templateFolder) };
-      } else if (mode === "regenerate") {
-        change = { mode };
       } else if (mode === "remove") {
         const templateId = stringArg(args, "templateId");
         const deleteSource = args?.["deleteSource"];
@@ -1060,14 +1167,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         if (
           !isRecord(folder) ||
           typeof folder["path"] !== "string" ||
-          (folder["mode"] !== "auto" && folder["mode"] !== "manual") ||
+          Object.keys(folder).some(key => key !== "path" && key !== "default") ||
           (folder["default"] !== undefined && folder["default"] !== true)
-        ) return errorText("Template register-folder requires a valid folder path, mode, and optional default:true.");
+        ) return errorText("Template register-folder requires a valid folder path and optional default:true.");
         change = {
           mode,
           folder: {
             path: normalizeTemplateFolderPath(folder["path"]),
-            mode: folder["mode"],
             ...(folder["default"] === true ? { default: true } : {}),
           },
         };
@@ -1086,9 +1192,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           !isRecord(proposal) ||
           typeof proposal["path"] !== "string" ||
           typeof proposal["content"] !== "string" ||
-          (proposal["publication"] !== "write" && proposal["publication"] !== "verify-existing")
+          (proposal["publication"] !== "write" && proposal["publication"] !== "verify-existing") ||
+          (mode === "create" && proposal["publication"] !== "write")
         ) {
-          return errorText("Template create/update requires a safe binding and source proposal.");
+          return errorText("Template create requires source.publication \"write\"; update accepts \"write\" or \"verify-existing\".");
         }
         const sourcePath = normalizeTemplateSourcePath(proposal["path"]);
         const proposedBinding: TemplateBinding = {
@@ -1146,6 +1253,17 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       return errorText(`Oh My Second Brain MCP error: ${error instanceof Error ? error.message : String(error)}`);
     }
         })();
+        if (
+          request.params.name === "write" ||
+          request.params.name === "search" ||
+          request.params.name === "status"
+        ) {
+          result = await attachTemplateNotice(
+            result,
+            vault,
+            request.params.name === "status" ? "poll" : "dedupe",
+          );
+        }
       } finally {
         const disposal = await Promise.allSettled(owned.map(async assembled => assembled.dispose()));
         disposalFailure = disposal.find((item): item is PromiseRejectedResult => item.status === "rejected");
@@ -1165,7 +1283,12 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 }
 
 export async function runMcpServer(opts: OMSMcpServerOptions): Promise<void> {
-  const server = createOMSMcpServer(opts);
+  // The review census is read before synchronous server construction so the
+  // initial notice can be included in instructions without making the factory
+  // itself asynchronous. Tool-result delivery re-reads it for long-lived
+  // sessions and therefore also observes edits after this boot.
+  const templateNotice = await readTemplateChangeNotice(opts.vault);
+  const server = createOMSMcpServer({ ...opts, templateNotice });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Detached and unawaited: a slow or offline registry must not delay serving.

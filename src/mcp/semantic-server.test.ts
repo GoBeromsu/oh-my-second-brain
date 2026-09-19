@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,12 +23,17 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 describe("Oh My Second Brain MCP semantic stdio server", () => {
   it("reopens the read-only index on every request in one MCP session", async () => {
     const vault = await writeMorningVaultFixture();
+    const testCache = path.join(vault, ".test-cache");
+    await mkdir(testCache, { recursive: true });
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [distCli, "serve", "mcp", "--vault", vault],
       cwd: repoRoot,
       stderr: "pipe",
-      env: getDefaultEnvironment(),
+      env: {
+        ...getDefaultEnvironment(),
+        XDG_CACHE_HOME: testCache,
+      },
     });
     const client = new Client({ name: "oms-freshness-test", version: "0.0.0" });
     try {
@@ -43,7 +48,13 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       await writeFile(path.join(vault, "references", "Freshness.md"), "---\ntemplate: reference\ntitle: Freshness\nsource-url: https://example.com/freshness\ntags: []\n---\n\nfreshness-marker\n");
       await execFileAsync(process.execPath, [distCli, "index", "sync", "--vault", vault], {
         cwd: repoRoot,
-        env: { ...process.env, OMS_RUNTIME_ROOT: process.env["OMS_RUNTIME_ROOT"] },
+        env: {
+          ...process.env,
+          XDG_CACHE_HOME: testCache,
+          OMS_RUNTIME_ROOT: process.env["OMS_RUNTIME_ROOT"],
+          OMS_EMBEDDING_PROVIDER: undefined,
+          OMS_EMBEDDING_MODEL: undefined,
+        },
       });
       const after = textPayload(await client.callTool({
         name: "search",

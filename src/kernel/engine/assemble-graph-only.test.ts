@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { sourceSignature } from "../templates/index.js";
+import { deriveContentFormatContract } from "../templates/content-contract.js";
+import { sharedAuthoritySignature, sourceSignature } from "../templates/resolver.js";
 import type { SourceDescriptor } from "../templates/types.js";
 import { assembleGraphOnlyEngine } from "./assemble.js";
 
@@ -15,12 +16,13 @@ function freshVault(): string {
   const vault = mkdtempSync(path.join(tmpdir(), "oms-graph-only-"));
   tempDirs.push(vault);
   for (const directory of [".oms", ".obsidian", "Templates/OMS", "notes"]) mkdirSync(path.join(vault, directory), { recursive: true });
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: { template: { type: "text", required: true }, status: { type: "text" } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/note.md", renderer: "obsidian-core", contract: "note", naming: "{{slug}}.md" } } });
+  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: { template: { type: "text", required: true }, status: { type: "text" } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/note.md", renderer: "obsidian-core", contract: "note", naming: "{{slug}}.md" } } });
   const taxonomy = JSON.stringify({ folders: {}, templates: { note: { templateFolder: "Inbox" } } });
   const obsidianTypes = JSON.stringify({ types: { template: "text", status: "text" } });
   const template = "---\ntemplate: note\nstatus: active\n---\n<!-- oms:content -->\n";
   const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: digest(policy) }, { logicalId: "taxonomy", signature: digest(taxonomy) }, { logicalId: "obsidian-types", signature: digest(obsidianTypes) }, { path: "Templates/OMS/note.md", signature: digest(template) }];
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["template", "status"], fields: { template: { type: "text", required: true }, status: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: digest("<!-- oms:content -->\n") } } } });
+  const content = deriveContentFormatContract("<!-- oms:content -->\n", { templateId: "note" }).contract;
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["template", "status"], fields: { template: { type: "text", required: true }, status: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
   writeFileSync(path.join(vault, ".oms/template-policy.json"), policy);
   writeFileSync(path.join(vault, ".oms/taxonomy.json"), taxonomy);
   writeFileSync(path.join(vault, ".oms/types.json"), projection);

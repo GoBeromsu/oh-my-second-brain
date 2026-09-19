@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { deriveContentFormatContract } from "./content-contract.js";
 import {
   buildTemplateNoteIndex,
   queryTemplateAxis,
@@ -13,6 +14,7 @@ import type { Digest, ResolvedConvention } from "./types.js";
 const roots: string[] = [];
 const signature = "sha256:0000000000000000000000000000000000000000000000000000000000000000" as Digest;
 const staleSignature = "sha256:1111111111111111111111111111111111111111111111111111111111111111" as Digest;
+const content = deriveContentFormatContract("").contract;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
@@ -22,6 +24,8 @@ function convention(): ResolvedConvention {
   return {
     base: { fields: {} },
     inputSignature: signature,
+    sharedAuthoritySignature: signature,
+    pending: {},
     managedSourcePaths: ["Templates/OMS/note.md"],
     globalAxes: {
       folders: { kind: "folder", key: "folder", type: "select", members: ["notes"] },
@@ -31,8 +35,12 @@ function convention(): ResolvedConvention {
       note: {
         id: "note",
         destinationClass: "managed-default",
+        renderer: "obsidian-core",
         sourcePath: "Templates/OMS/note.md",
         targetFolder: "notes",
+        bom: false,
+        eol: "lf",
+        finalNewline: false,
         keyOrder: ["template", "status"],
         fields: {
           template: { type: "string" },
@@ -40,6 +48,7 @@ function convention(): ResolvedConvention {
         },
         frontmatterTemplate: {},
         body: "",
+        content,
         naming: "{{slug}}.md",
         views: [{ name: "status", keys: ["status"] }],
         inputSignature: signature,
@@ -71,7 +80,7 @@ async function fixture(): Promise<string> {
   await Promise.all([
     writeFile(join(root, ".oms", "template-policy.json"), JSON.stringify({
       version: 3,
-      templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
+      templateFolders: [{ path: "Templates/OMS", default: true }],
       base: { fields: {} },
       contracts: { note: { intent: "A note.", fields: {}, views: [] } },
       templates: {

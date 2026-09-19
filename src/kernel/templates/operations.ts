@@ -6,8 +6,10 @@ import { admitWriteTarget } from "../capture/safe.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { inputDigest, templateInput } from "./canonical.js";
 import { deriveTemplateSourcePath, normalizeTemplateControlPath, verifyTemplateControlPath, verifyTemplateSourcePath, verifyVaultPath } from "./paths.js";
-import { parseTemplatePolicy } from "./policy.js";
-import { buildTemplateCompositionManifest } from "./resolver.js";
+import { normalizeTemplateSemanticChange, parseTemplatePolicy } from "./policy.js";
+import { buildReconcileCompositionManifest } from "./reconcile.js";
+import { MAX_TEMPLATE_SOURCE_BYTES } from "./renderer.js";
+import { assertNoUnexpectedTemplatePending, buildTemplateCompositionManifest, loadResolvedTemplates } from "./resolver.js";
 import { executeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH, templateMigrationAdmission } from "./transaction.js";
 import type { Digest, FileExpectation, GuardedTemplateRequest, TemplateSemanticChange, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
 
@@ -15,8 +17,6 @@ export interface TemplateOperationTarget {
   readonly vault: string;
   readonly source: WriteTargetSource;
 }
-
-const MAX_TEMPLATE_BYTES = 262_144;
 
 function digest(bytes: Uint8Array): Digest {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}` as Digest;
@@ -48,7 +48,7 @@ async function obsidianTypesState(vault: string): Promise<VerifiedFileState> {
 
 async function sourceState(vault: string, path: TemplateSourcePath): Promise<VerifiedFileState> {
   const verified = await verifyTemplateSourcePath(vault, path, { expected: "either" });
-  return verified.targetRealPath === null ? { state: "absent" } : state(verified.absolutePath, MAX_TEMPLATE_BYTES);
+  return verified.targetRealPath === null ? { state: "absent" } : state(verified.absolutePath, MAX_TEMPLATE_SOURCE_BYTES);
 }
 
 function expectation(value: VerifiedFileState): FileExpectation {
@@ -58,7 +58,7 @@ function expectation(value: VerifiedFileState): FileExpectation {
 /** Composes and executes one guarded template operation from current server-observed CAS state. */
 export async function executeTemplateOperation(
   target: TemplateOperationTarget,
-  change: TemplateSemanticChange,
+  requestedChange: TemplateSemanticChange,
   request: GuardedTemplateRequest,
 ): Promise<TemplateTransactionReceipt> {
   if (
@@ -70,11 +70,20 @@ export async function executeTemplateOperation(
   ) {
     throw new TypeError("Template operation requires dryRun:true or an exact approvedDigest");
   }
+  const change = normalizeTemplateSemanticChange(requestedChange);
   const admission = await admitWriteTarget(target);
   if (admission !== undefined) throw new Error(`${admission.code}: ${admission.remediation}`);
   const vault = resolve(target.vault);
   if (await templateMigrationAdmission(vault) !== "clear") {
     throw new Error("migration-incomplete: resume or repair the validated template migration transaction");
+  }
+
+  if (change.mode === "reconcile") {
+    const manifest = await buildReconcileCompositionManifest(vault, change);
+    return executeTemplateTransaction(vault, manifest, request, TEMPLATE_MUTATION_MARKER_PATH);
+  }
+  if (change.mode === "create" && change.source.publication === "verify-existing") {
+    throw new Error("TEMPLATE_TRANSACTION_MANIFEST_INVALID: create source publication must be write");
   }
 
   const [policyState, taxonomyState, projectionState, obsidianState] = await Promise.all([
@@ -91,9 +100,10 @@ export async function executeTemplateOperation(
     const path = deriveTemplateSourcePath(binding);
     return { templateId: binding.templateId, path, state: await sourceState(vault, path) };
   }));
-  if ((change.mode === "create" || change.mode === "update") && change.source.bytes.byteLength > MAX_TEMPLATE_BYTES) {
-    throw new Error(`TEMPLATE_PROPOSAL_OVERSIZE: ${change.source.path} exceeds ${MAX_TEMPLATE_BYTES} bytes`);
+  if ((change.mode === "create" || change.mode === "update") && change.source.bytes.byteLength > MAX_TEMPLATE_SOURCE_BYTES) {
+    throw new Error(`TEMPLATE_PROPOSAL_OVERSIZE: ${change.source.path} exceeds ${MAX_TEMPLATE_SOURCE_BYTES} bytes`);
   }
+  assertNoUnexpectedTemplatePending(await loadResolvedTemplates(vault), change, policy);
   const proposedPathState = change.mode === "create" || change.mode === "update"
     ? await sourceState(vault, change.source.path)
     : undefined;

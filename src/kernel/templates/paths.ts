@@ -1,16 +1,16 @@
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { DestinationClass, TemplateFolderPath, TemplateFolderRegistration, TemplateId, TemplateSourcePath } from "./types.js";
-const ID = /^[a-z0-9]+(?:-{1,2}[a-z0-9]+)*$/;
+const ID = /^[\p{L}\p{N}]+(?:-{1,2}[\p{L}\p{N}]+)*$/u;
 const INTERNAL = new Set([".oms", ".gjc", ".git", ".obsidian", ".template-transactions"]);
-const CONTROLS = new Set([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.json", ".oms/template-migration.json", ".oms/template-transaction.json"]);
+const CONTROLS = new Set([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.json", ".oms/template-migration.json", ".oms/template-transaction.json", ".oms/template-interview.json"]);
 export type TemplateControlPath = string & { readonly __kind: "TemplateControlPath" };
 export interface VerifiedVaultPath<T extends TemplateFolderPath | TemplateSourcePath | TemplateControlPath> { readonly vaultRoot: string; readonly vaultRelativePath: T; readonly absolutePath: string; readonly targetRealPath: string | null; }
 export interface VaultPathVerificationOptions { readonly expected: "existing-file" | "absent" | "either"; }
 function unsafe(message: string): never { throw new TypeError(`TEMPLATE_SOURCE_UNSAFE: ${message}`); }
 function invalid(message: string): never { throw new TypeError(`TEMPLATE_SOURCE_INVALID: ${message}`); }
 function segments(value: string): string[] { if (value.includes("\0")) unsafe("NUL is not allowed"); const path = value.normalize("NFC").replaceAll("\\", "/"); if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) unsafe("absolute, UNC, and drive paths are not allowed"); const result: string[] = []; for (const raw of path.split("/")) { if (raw === "" || raw === ".") continue; if (raw === "..") unsafe("parent segments are not allowed"); const segment = raw.normalize("NFC"); if (segment.startsWith(".") || INTERNAL.has(segment.toLowerCase())) unsafe("hidden or internal segments are not allowed"); result.push(segment); } if (!result.length) unsafe("path must not be empty"); return result; }
-export function validateTemplateId(value: string): TemplateId { if (!ID.test(value)) invalid("templateId must be lowercase ASCII alnum with internal hyphens"); return value as TemplateId; }
+export function validateTemplateId(value: string): TemplateId { const canonical = value.normalize("NFC"); if (!ID.test(canonical)) invalid("templateId must contain Unicode letters or digits with internal hyphens"); return canonical as TemplateId; }
 export function normalizeTemplateFolderPath(value: string): TemplateFolderPath { return segments(value).join("/") as TemplateFolderPath; }
 export function normalizeTemplateSourcePath(value: string): TemplateSourcePath { const parts = segments(value); const leaf = parts[parts.length - 1]!; if (!leaf.endsWith(".md") || leaf.length === 3) invalid("source path must end in a non-empty lowercase .md leaf"); return parts.join("/") as TemplateSourcePath; }
 /** Only convention controls and per-transaction hidden staging are internal paths. */

@@ -134,7 +134,7 @@ const CLI_SURFACES = [
   "oms serve mcp|http",
   "oms setup",
   "oms status",
-  "oms template scan|list|show|add|update|move|remove|default|check|regenerate-types",
+  "oms template scan|list|show|add|update|move|remove|default|check|regenerate-types|review|answer|commit",
 ] as const;
 
 const CURRENT_CLI_SURFACES = [

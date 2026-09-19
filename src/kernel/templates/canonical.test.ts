@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { approvalDigest, frameHash, inputDigest, templateInput } from "./canonical.js";
+import { parseTemplatePolicy } from "./policy.js";
 import type { Digest, InputV2, TemplateCompositionManifest, TemplatePolicy } from "./types.js";
 
 const minimal: InputV2 = { authority: [], placement: [], templateFolders: [], version: 2 };
@@ -16,8 +17,8 @@ describe("InputV2 canonical identity", () => {
     const policy: TemplatePolicy = {
       version: 3,
       templateFolders: [
-        { path: "Templates/zebra" as TemplatePolicy["templateFolders"][number]["path"], mode: "manual" },
-        { path: "Templates/OMS" as TemplatePolicy["templateFolders"][number]["path"], mode: "auto", default: true },
+        { path: "Templates/zebra" as TemplatePolicy["templateFolders"][number]["path"] },
+        { path: "Templates/OMS" as TemplatePolicy["templateFolders"][number]["path"], default: true },
       ],
       base: { fields: {} },
       contracts: {},
@@ -60,8 +61,8 @@ describe("InputV2 canonical identity", () => {
   });
 
   it("canonicalizes registration order while binding folder semantics into the digest", () => {
-    const folderA = { path: "Templates/A" as TemplatePolicy["templateFolders"][number]["path"], mode: "auto" as const, default: true as const };
-    const folderB = { path: "Templates/B" as TemplatePolicy["templateFolders"][number]["path"], mode: "manual" as const };
+    const folderA = { path: "Templates/A" as TemplatePolicy["templateFolders"][number]["path"], default: true as const };
+    const folderB = { path: "Templates/B" as TemplatePolicy["templateFolders"][number]["path"] };
     const placement = {
       templateId: "alpha" as InputV2["placement"][number]["templateId"],
       destinationClass: "registered-existing" as const,
@@ -72,12 +73,34 @@ describe("InputV2 canonical identity", () => {
     const input = (templateFolders: InputV2["templateFolders"], currentPlacement = placement): InputV2 => ({
       version: 2, authority: [], templateFolders, placement: [currentPlacement],
     });
-    const folderAWithoutDefault = { path: folderA.path, mode: folderA.mode };
+    const folderAWithoutDefault = { path: folderA.path };
     expect(inputDigest(input([folderA, folderB]))).toBe(inputDigest(input([folderB, folderA])));
     expect(inputDigest(input([folderA, folderB]))).toBe(inputDigest(input([{ ...folderA, path: "Templates//A/." as typeof folderA.path }, folderB])));
-    expect(inputDigest(input([folderA, folderB]))).not.toBe(inputDigest(input([{ ...folderA, mode: "manual" }, folderB])));
     expect(inputDigest(input([folderA, folderB]))).not.toBe(inputDigest(input([folderAWithoutDefault, { ...folderB, default: true }])));
     expect(inputDigest(input([folderA, folderB]))).not.toBe(inputDigest(input([folderA, folderB], { ...placement, sourceFolder: folderB.path })));
+  });
+
+  it("retains old folder mode as an unknown extension without restoring mode semantics", () => {
+    const raw = {
+      version: 3 as const,
+      templateFolders: [{ path: "Templates/OMS", mode: "auto", default: true }],
+      base: { fields: {} },
+      contracts: {},
+      templates: {},
+    };
+    const oldPolicy = parseTemplatePolicy(raw);
+    const currentPolicy = parseTemplatePolicy({ ...raw, templateFolders: [{ path: "Templates/OMS", default: true }] });
+    const controls = {
+      policy: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" as Digest,
+      taxonomy: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" as Digest,
+      obsidianTypes: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" as Digest,
+      obsidianTypesPath: ".obsidian/types.json",
+    };
+    const oldInput = templateInput(oldPolicy, controls, [], () => "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const currentInput = templateInput(currentPolicy, controls, [], () => "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(oldInput.templateFolders).toEqual([{ path: "Templates/OMS", default: true, extensions: { mode: "auto" } }]);
+    expect(currentInput.templateFolders).toEqual([{ path: "Templates/OMS", default: true }]);
+    expect(inputDigest(oldInput)).not.toBe(inputDigest(currentInput));
   });
 
   it("binds the current control and source CAS preimage even when the proposal is identical", () => {

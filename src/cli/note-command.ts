@@ -137,7 +137,7 @@ async function runWrite(parsed: Parsed): Promise<void> {
   const mode = parsed.verb;
   const common = ["vault", "dry-run", "body", "body-file", "resolved-at"];
   if (mode === "create") {
-    only(parsed, [...common, "frontmatter", "frontmatter-file"], [0, 1]);
+    only(parsed, [...common, "frontmatter", "frontmatter-file", "folder"], [0, 1]);
   } else if (mode === "append") {
     only(parsed, common, 1);
   } else {
@@ -155,7 +155,7 @@ async function runWrite(parsed: Parsed): Promise<void> {
     mode,
     dryRun: flag(parsed.options, "dry-run"),
     ...(mode === "create"
-      ? { ...(parsed.positional[0] === undefined ? {} : { templateId: parsed.positional[0] }) }
+      ? { ...(parsed.positional[0] === undefined ? {} : { templateId: parsed.positional[0] }), ...(text(parsed.options, "folder") === undefined ? {} : { targetFolder: text(parsed.options, "folder") }) }
       : { notePath: parsed.positional[0] }),
     ...(body === undefined ? {} : { body }),
     ...(frontmatter === undefined ? {} : { frontmatter }),
@@ -245,7 +245,7 @@ async function run(parsed: Parsed): Promise<void> {
 export function noteUsage(): string {
   return `Usage: oms note <verb> [options]
 
-  create [template-id] --body <text>|--body-file <file> [--frontmatter <json>|--frontmatter-file <file>]
+  create [template-id] --body <text>|--body-file <file> [--frontmatter <json>|--frontmatter-file <file>] [--folder <note-folder>]
   append <note-path> --body <text>|--body-file <file>
   update <note-path> [--body <text>|--body-file <file>] [--frontmatter <json>|--frontmatter-file <file>]
   audit [--folder <folder>] [--max-per-template <count>]

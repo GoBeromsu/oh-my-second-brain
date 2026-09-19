@@ -20,9 +20,33 @@ Vault-resident Obsidian Markdown templates own a managed note's shape and body. 
 
 `.obsidian/types.json` is read-only. The user-owned ontology is the semantic metadata separated from template shape: `.oms/template-policy.json` records note and field `intent` alongside naming/default policy, while `.oms/taxonomy.json` records folder/link `intent` and placement. `.oms/types.json` is generated after validation and is used as a write/search projection; it is never authority or hand-edited configuration.
 
-Policy version 3 registers template source folders as `templateFolders`, each with `auto` or `manual` mode. Bindings carry both their registered `sourceFolder` and exact `sourcePath`. A folder-level `default` chooses where a new template is created; the independent optional `defaultTemplate` chooses a note binding.
+Policy version 3 stores explicitly selected template folders as source scopes.
+Every `.md` beneath a selected folder is a census candidate; no per-file
+registration or auto/manual folder mode is required. Bindings carry their
+`sourceFolder` and exact `sourcePath`. The independent optional
+`defaultTemplate` chooses a note binding.
 
-Taxonomy controls placement without deciding a template's keys. Its `templateFolder` is a note destination and need not be within a registered template source folder. Placement is required; there is no `Inbox` fallback. Folder and wikilink relationships are global axes, so retrieval is not constrained to a single placement rule. Authored folder intents are exposed through the derived `folder-ontology` axis. `.oms/taxonomy.json` is the sole taxonomy authority; setup does not parse or convert legacy `taxonomy.yaml` or concept YAML. Removing the legacy `concept` note identity and bundled ontology runtime defaults does not remove ontology: meaning remains active, vault-owned data.
+Approved review and source-authoring transactions record
+`approvedSourceSignature` and `approvedBodySignature` in the user-owned binding.
+These record actual source and raw-body evidence, not inferred body requirements.
+Automatic identical-byte
+renames require this independent evidence; a derived projection's self-reported
+digest cannot authorize identity transfer. Approved body signatures can suggest
+renames after restart even without a body contract, but those suggestions still
+require confirmation. Mutation IDs and taxonomy references use the same NFC
+identity before routing; canonical definition collisions are invalid authority.
+
+Taxonomy controls placement without deciding a template's keys. Its
+`templateFolder` is a note destination and need not be within a template source
+folder. Placement is optional during contract review; at note creation the
+precedence is explicit caller folder, then taxonomy default, then `ask`, with no
+invented Inbox fallback. Folder and wikilink relationships are global axes, so
+retrieval is not constrained to a single placement rule. Authored folder intents
+are exposed through the derived `folder-ontology` axis. `.oms/taxonomy.json` is
+the sole taxonomy authority; setup does not parse or convert legacy
+`taxonomy.yaml` or concept YAML. Removing the legacy `concept` note identity and
+bundled ontology runtime defaults does not remove ontology: meaning remains
+active, vault-owned data.
 
 ## Lifecycle
 
@@ -34,13 +58,53 @@ MCP and HTTP SQLite engines are request-scoped so later requests see external in
 
 Renderer classification separates executable Obsidian templates from OMS note scaffolds. Templater frontmatter supplies a contract with Obsidian-filled fields; script-first sources derive proposals from observed notes. The kernel validates bounded host proposals and transaction evidence, never executes scripts or provides a Templater transpiler.
 
-Setup selects folders only from repeated explicit `--template-folder` arguments or saved valid-v3 registrations. Explicit folders use `auto` proposal mode and the first is the template-creation default; saved modes are retained. Obsidian, Templater, and bounded vault-walk evidence is suggestion-only and carries provenance, never automatic selection. Without a selection, non-interactive setup is blocked and produces no approval digest. There are no invented `Templates` or `Inbox` defaults.
+Setup selects folders through repeated explicit `--template-folder` arguments.
+Each selected folder is a census scope for every `.md` beneath it; there is no
+per-file registration or folder mode. Obsidian, Templater, and bounded
+vault-walk evidence is suggestion-only and carries provenance, never automatic
+selection. Without a selection, non-interactive setup is blocked and produces
+no approval digest. There are no invented `Templates` or `Inbox` defaults.
 
-Setup recursively discovers templates within selected folders, produces a migration proposal, and leaves notes unchanged. Unsupported policy versions fail closed at runtime. Setup exposes replaced legacy fields as `droppedKeys`, preserves writers and unknown extensions in its proposed v3 policy, and includes the old policy bytes in compare-and-swap approval. A resolved dry run exposes proposed state; applying requires the exact `--approved-digest` returned by that dry run.
+Setup recursively discovers templates within selected folders, produces a
+migration proposal, and leaves notes unchanged. Unsupported policy versions
+fail closed at runtime. Setup exposes replaced legacy fields as `droppedKeys`,
+preserves writers and unknown extensions in its proposed v3 policy, and includes
+the old policy bytes in compare-and-swap approval. A resolved dry run exposes
+proposed state; applying requires the exact `--approved-digest` returned by that
+dry run.
 
 Template mutations follow the same boundary: dry run, explicit digest approval, compare-and-swap, and a transaction receipt. This prevents applying a review to different template contents.
 
-For note operations, the runtime resolves a `ResolvedTemplate` before writing. `create`, `append`, and `update` have separate existence preconditions. Admission completes before disk mutation. A successful mutation returns a receipt with target and operation information.
+The source census derives both a metadata contract (frontmatter keys, types,
+requiredness, and `filledBy`) and a bounded body contract for ATX headings,
+fenced code blocks, ordered or unordered list runs outside fences, and the
+`<!-- oms:content -->` placeholder, with document order/EOL/BOM/final-newline
+details. It does not claim to enforce paragraphs, setext headings, or all
+Markdown. The two-tier freshness gate checks shared authority first, then
+makes only a changed source's dependent template pending; unrelated templates
+remain usable. Shared-authority changes fail closed vault-wide.
+
+Contract review is a linear, resumable interview. The initial notice is exactly
+`템플릿에 변경이 있습니다` with exactly `확인하기` and `나중에`; it displays no
+template name, hash, or change class. `나중에` is host-only and does not call
+the server or mutate the interview ledger. `확인하기` enters
+`write { op: "template", mode: "interview-next" }`; answers use
+`interview-answer` and the server-returned next/request/CAS fields. After all
+necessary questions, only the exact user-approved final digest may invoke
+`commit-contracts`, which publishes controls only. The CLI counterparts are
+`oms template review`, `oms template answer`, and `oms template commit`.
+Long-lived hosts surface `templateNotice` on tool results even when boot
+instructions are stale. Pending body contracts and incomplete fresh projection
+coverage also trigger the notice, even when the raw census has no new diff.
+Approval rechecks the complete selected census as well as captured control and
+known-source bytes, so a newly appearing unbound source invalidates the review.
+
+For note operations, the runtime resolves a `ResolvedTemplate` before writing.
+`create`, `append`, and `update` have separate existence preconditions. At
+create, an explicit caller folder takes precedence over a taxonomy default,
+then `ask`; placement is not a contract-review prerequisite. Admission
+completes before disk mutation. A successful mutation returns a receipt with
+target and operation information.
 
 ## Retrieval and operations
 

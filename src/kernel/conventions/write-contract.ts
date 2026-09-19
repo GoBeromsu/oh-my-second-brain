@@ -1,3 +1,4 @@
+import { evaluateTemplateBodyContract, type TemplateBodyContractMode } from "../templates/content-contract.js";
 import type { BaseContract, FieldPolicy, JsonValue, ResolvedTemplate, WriterRegistry } from "../templates/types.js";
 
 export type TemplateContractRule = "required" | "type" | "allowed-values" | "format" | "writer-identity";
@@ -45,6 +46,8 @@ export function evaluateResolvedTemplateContract(
   template: ResolvedTemplate,
   base: BaseContract,
   writers?: WriterRegistry,
+  body?: string,
+  mode: TemplateBodyContractMode = "update",
 ): TemplateContractResult {
   const violations: TemplateContractViolation[] = [];
   const fields: Record<string, FieldPolicy> = { ...base.fields, ...template.fields };
@@ -72,6 +75,17 @@ export function evaluateResolvedTemplateContract(
     const value = frontmatter[writers.field];
     if (empty(value)) violations.push({ field: writers.field, rule: "writer-identity", message: `Writer field "${writers.field}" is required.` });
     else if (typeof value !== "string" || !writers.identifiers.includes(value)) violations.push({ field: writers.field, rule: "writer-identity", message: `Value "${String(value)}" for writer field "${writers.field}" is not a registered writer identifier.` });
+  }
+
+  if (body !== undefined) {
+    const bodyResult = evaluateTemplateBodyContract(body, template.content, { mode });
+    for (const violation of bodyResult.violations) {
+      violations.push({
+        field: violation.subject === undefined ? "body" : `body:${violation.subject}`,
+        rule: violation.rule === "required" ? "required" : "format",
+        message: `Body contract violation: ${violation.message}`,
+      });
+    }
   }
 
   return { valid: violations.length === 0, violations };

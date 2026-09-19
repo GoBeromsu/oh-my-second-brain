@@ -302,7 +302,7 @@ describe("oms CLI dispatch", () => {
     );
   });
 
-  it("keeps a YAML-only taxonomy untouched and blocks setup without JSON authority", async () => {
+  it("keeps legacy YAML untouched and plans setup without inventing placement", async () => {
     const vault = await makeVault();
     await mkdir(path.join(vault, ".oms"), { recursive: true });
     const yaml = "this: [is not valid YAML\n";
@@ -328,14 +328,15 @@ describe("oms CLI dispatch", () => {
     await mkdir(path.join(vault, "Templates"), { recursive: true });
     await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\n---\nbody\n");
     const dryRun = runCli(["setup", "--vault", vault, "--template-folder", "Templates", "--dry-run"]);
-    expect(dryRun.status).toBe(1);
-    expect(dryRun.stdout).toContain("TEMPLATE_PLACEMENT_UNDECLARED");
-    expect(dryRun.stdout).not.toContain("approvalDigest");
+    expect(dryRun.status).toBe(0);
+    expect(dryRun.stdout).not.toContain("TEMPLATE_PLACEMENT_UNDECLARED");
+    expect(dryRun.stdout).toContain("approvalDigest");
+    expect(dryRun.stdout).not.toContain("Inbox");
     expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(false);
     await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf8")).resolves.toBe(yaml);
   });
 
-  it("uses JSON-only taxonomy authority, leaves legacy YAML untouched, and blocks missing placement", async () => {
+  it("uses JSON-only taxonomy authority and accepts omitted placement without changing either file", async () => {
     const vault = await makeVault();
     await mkdir(path.join(vault, ".oms"), { recursive: true });
     const yaml = "folders: {}\n";
@@ -366,9 +367,10 @@ describe("oms CLI dispatch", () => {
     await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text" } }));
     await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\n---\nbody\n");
     const setup = runCli(["setup", "--vault", vault, "--template-folder", "Templates", "--dry-run"]);
-    expect(setup.status).toBe(1);
-    expect(setup.stdout).toContain("TEMPLATE_PLACEMENT_UNDECLARED");
-    expect(setup.stdout).not.toContain("approvalDigest");
+    expect(setup.status).toBe(0);
+    expect(setup.stdout).not.toContain("TEMPLATE_PLACEMENT_UNDECLARED");
+    expect(setup.stdout).toContain("approvalDigest");
+    expect(setup.stdout).not.toContain("Inbox");
     expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(true);
     expect(existsSync(path.join(vault, ".oms", "taxonomy.yaml"))).toBe(true);
     await expect(readFile(path.join(vault, ".oms", "taxonomy.json"), "utf8")).resolves.toBe(json);

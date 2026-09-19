@@ -24,6 +24,125 @@ describe("template-native MCP surface", () => {
     expect(validate("write", { op: "note", mode: "create", templateId: "note", body: "body" })).toBe(true);
     expect(validate("write", { op: "note", mode: "create", body: "body" })).toBe(true);
     expect(validate("write", { op: "note", mode: "create", templateId: "note", notePath: "notes/a.md", body: "body" })).toBe(false);
+    expect(validate("write", { op: "note", mode: "create", templateId: "note", targetFolder: "Inbox", body: "body" })).toBe(true);
+  });
+
+  it("exposes the linear review protocol with canonical CAS and approval guards", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    expect(validate("write", { op: "template", mode: "interview-next" })).toBe(true);
+    expect(validate("write", { op: "template", mode: "interview-next", dryRun: true })).toBe(false);
+    expect(validate("write", {
+      op: "template",
+      mode: "interview-answer",
+      questionId: digest,
+      answer: { required: true },
+      censusDigest: digest,
+      expectedLedgerDigest: null,
+    })).toBe(true);
+    expect(validate("write", {
+      op: "template",
+      mode: "interview-answer",
+      questionId: digest,
+      answer: { required: true },
+      censusDigest: digest,
+      expectedLedgerDigest: "sha256:BAD",
+    })).toBe(false);
+    expect(validate("write", {
+      op: "template",
+      mode: "commit-contracts",
+      censusDigest: digest,
+      expectedLedgerDigest: null,
+      dryRun: true,
+    })).toBe(true);
+    expect(validate("write", {
+      op: "template",
+      mode: "commit-contracts",
+      censusDigest: digest,
+      expectedLedgerDigest: digest,
+      dryRun: false,
+      approvedDigest: digest,
+    })).toBe(true);
+    expect(validate("write", {
+      op: "template",
+      mode: "commit-contracts",
+      censusDigest: digest,
+      expectedLedgerDigest: null,
+      dryRun: false,
+    })).toBe(false);
+    expect(validate("write", {
+      op: "template",
+      mode: "interview-answer",
+      questionId: digest,
+      answer: true,
+      censusDigest: digest,
+      expectedLedgerDigest: null,
+      question: [],
+    })).toBe(false);
+  });
+
+  it("keeps folder registration while retiring per-file and guessed review modes", () => {
+    expect(validate("write", {
+      op: "template",
+      mode: "register-folder",
+      folder: { path: "Templates/Review" },
+      dryRun: true,
+    })).toBe(true);
+    expect(validate("write", {
+      op: "template",
+      mode: "register-folder",
+      folder: { path: "Templates/Review", mode: "auto" },
+      dryRun: true,
+    })).toBe(false);
+    for (const mode of ["register", "add-file", "later", "review"]) {
+      expect(validate("write", { op: "template", mode, dryRun: true })).toBe(false);
+    }
+  });
+
+  it("requires write publication for create while retaining verified moved updates", () => {
+    const binding = {
+      templateId: "note",
+      destinationClass: "managed-default",
+      renderer: "obsidian-core",
+      sourceFolder: "Templates/Review",
+      sourcePath: "Templates/Review/note.md",
+      contract: "note",
+      naming: "{{title}}.md",
+    };
+    const source = {
+      path: "Templates/Review/note.md",
+      content: "# Note\n",
+    };
+    expect(validate("write", {
+      op: "template",
+      mode: "create",
+      binding,
+      source: { ...source, publication: "write" },
+      dryRun: true,
+    })).toBe(true);
+    expect(validate("write", {
+      op: "template",
+      mode: "create",
+      binding,
+      source: { ...source, publication: "verify-existing" },
+      dryRun: true,
+    })).toBe(false);
+    expect(validate("write", {
+      op: "template",
+      mode: "update",
+      templateId: "note",
+      binding,
+      source: { ...source, publication: "verify-existing" },
+      moveStrategy: "register-already-moved",
+      dryRun: true,
+    })).toBe(true);
+    expect(validate("write", {
+      op: "template",
+      mode: "update",
+      templateId: "note",
+      binding: { ...binding, content: { version: 1 } },
+      source: { ...source, publication: "write" },
+      dryRun: true,
+    })).toBe(false);
   });
 
   it("uses query and index discriminators without retired aliases", () => {

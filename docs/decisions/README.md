@@ -16,6 +16,7 @@ oh-my-secondbrain 프로젝트의 주요 설계 결정을 기록한다.
 | [ADR-010](./ADR-010-search-backend-seam-qmd-optional.md) | SearchBackend seam — in-repo engine default, qmd optional backend | Accepted |
 | [ADR-011](./ADR-011-search-reranking-opt-in.md) | Search reranking — explicit opt-in until a production reranker exists | Accepted |
 | [ADR-012](./ADR-012-portable-model-contract-and-lifecycle.md) | Portable strict model contract and kernel lifecycle — verified local identity and immutable embedding lineage (0.10.0) | Accepted |
+| [ADR-013](./ADR-013-folder-sourced-template-contracts.md) | 선택 폴더 원본 템플릿 계약 — 인터뷰로 확인하는 파생 controls | Proposed |
 
 ## 작성 규칙
 

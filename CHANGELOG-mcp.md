@@ -4,6 +4,11 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- The bundled MCP SDK now resolves `hono` 4.13.8, clearing the moderate advisory group that affected its HTTP transport's body and query parsing. Only the lockfile moves; no declared dependency is added or changed.
+- Pending body contracts and incomplete fresh projection coverage also surface the generic template notice when no new raw source diff exists, so successful source authoring cannot hide the remaining contract confirmation.
+
+- **Template review now uses exactly `interview-next`, `interview-answer`, and `commit-contracts` under `write { op: "template" }`, with a minimal notice and long-lived carrier.** Selected-folder census changes preserve source bytes and publish only user-confirmed controls through the guarded flow; an affected template is pending without blocking unrelated templates, while shared-authority drift still fails closed vault-wide. The initial display is exactly `템플릿에 변경이 있습니다` with exactly `확인하기` and `나중에`; `나중에` is host-only with no server call or ledger mutation, and `templateNotice` is surfaced on tool results even when boot instructions are stale. The five-tool surface is unchanged.
+
 ## [0.14.0] - 2026-09-05
 
 ### Changed

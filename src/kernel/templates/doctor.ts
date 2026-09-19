@@ -8,14 +8,15 @@ import { readBundledPackageVersion } from "../runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../runtime/event-journal.js";
 import { readRuntimeEvents } from "../runtime/event-read.js";
 import { summarizeRuntimeHistory, type RuntimeHistorySummary } from "../runtime/event-summary.js";
-import { approvalDigest, inputDigest, outputDigest, templateInput } from "./canonical.js";
+import { approvalDigest, inputDigest, outputDigest } from "./canonical.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { excludedNoteMatcher } from "../conventions/note-exclude.js";
 import { deriveTemplateSourcePath, normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
 import { parseDerivedProjection, parseTemplatePolicy } from "./policy.js";
-import { buildTemplateCompositionManifest, loadResolvedTemplates } from "./resolver.js";
+import { loadResolvedTemplates } from "./resolver.js";
+import { commitTemplateContracts, nextTemplateInterview } from "./interview-service.js";
 import { executeTemplateTransaction, templateMigrationAdmission, templateMigrationMarkerState } from "./transaction.js";
-import type { DerivedProjection, Digest, FileExpectation, GuardedTemplateRequest, InputV2, TemplateCompositionManifest, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
+import type { DerivedProjection, Digest, FileExpectation, GuardedTemplateRequest, InputV2, PendingTemplate, TemplateCompositionManifest, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
 
 export interface TemplateDoctorTarget { readonly vault: string; readonly source: WriteTargetSource; readonly maxPerTemplate?: number; }
 export interface TemplateDoctorDiagnostic { readonly code: string; readonly path?: string; readonly templateId?: TemplateId; readonly expected?: Digest; readonly actual?: Digest; readonly remediation: string; }
@@ -25,8 +26,8 @@ export interface BackfillDefaultsRequest { readonly target: TemplateDoctorTarget
 export type TemplateDoctorRepair = TemplateTransactionReceipt | { readonly status: "rejected"; readonly code: string; readonly remediation: string; };
 
 const encoder = new TextEncoder();
-const REGENERATE_MARKER = ".oms/template-regenerate.json";
 const BACKFILL_MARKER = ".oms/template-backfill.json";
+const REVIEW_REMEDIATION = "run oms template review, answer its questions, then commit the reviewed contract";
 function digest(value: Uint8Array): Digest { return `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest; }
 function expectation(value: VerifiedFileState): FileExpectation { return value.state === "absent" ? value : { state: "present", signature: value.signature }; }
 function bytes(value: string): Uint8Array { return encoder.encode(value); }
@@ -43,6 +44,12 @@ async function admitted(target: TemplateDoctorTarget): Promise<TemplateDoctorRep
     : rejected("migration-incomplete", "resume or repair the validated template migration transaction before reading or repairing conventions");
 }
 function code(error: unknown): string { return error instanceof Error ? error.message.split(":", 1)[0] ?? "TEMPLATE_DOCTOR_INVALID" : "TEMPLATE_DOCTOR_INVALID"; }
+function validGuardedRequest(request: GuardedTemplateRequest): boolean {
+  if (request === null || typeof request !== "object") return false;
+  const candidate = request as { readonly dryRun?: unknown; readonly approvedDigest?: unknown };
+  if (candidate.dryRun === true) return candidate.approvedDigest === undefined;
+  return typeof candidate.approvedDigest === "string" && /^sha256:[0-9a-f]{64}$/u.test(candidate.approvedDigest);
+}
 async function exists(vault: string, path: string): Promise<boolean> {
   try { return (await lstat(join(vault, path))).isFile(); }
   catch (error: unknown) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return false; throw error; }
@@ -91,10 +98,21 @@ async function projectionDriftDiagnostics(
       ...(templateId === undefined ? {} : { templateId }),
       expected: source.signature,
       actual: current.signature,
-      remediation: "run regenerate-types with the returned approval digest",
+      remediation: REVIEW_REMEDIATION,
     });
   }
   return diagnostics;
+}
+
+function pendingDiagnostics(
+  pending: Readonly<Record<string, PendingTemplate>>,
+): readonly TemplateDoctorDiagnostic[] {
+  return Object.values(pending).map(item => ({
+    code: "TEMPLATE_CONTRACT_PENDING",
+    path: item.path,
+    ...(item.id === undefined ? {} : { templateId: item.id }),
+    remediation: REVIEW_REMEDIATION,
+  }));
 }
 
 /** Read-only health report for template authorities, projection, legacy notes, and transaction state. */
@@ -117,22 +135,28 @@ async function diagnoseTemplatesInternal(target: TemplateDoctorTarget): Promise<
     catch { return { status: "needs-repair", diagnostics: [{ code: "TEMPLATE_SOURCE_INVALID", path: ".oms/taxonomy.json", remediation: "restore valid .oms/taxonomy.json, then rerun doctor" }], managedSourceExclusions: [], unresolvedLegacyNotes: [], migrationMarker }; }
   }
   const diagnostics: TemplateDoctorDiagnostic[] = [];
+  let pendingSourcePaths: readonly string[] = [];
   let policy: TemplatePolicy | null = null;
   let projection: DerivedProjection | null = null;
   try { policy = parseTemplatePolicy(await readFile(join(root, ".oms/template-policy.json"), "utf8")); }
   catch (error: unknown) { diagnostics.push({ code: code(error), path: ".oms/template-policy.json", remediation: "restore a valid template policy before repairing the projection" }); }
   try { projection = parseDerivedProjection(await readFile(join(root, ".oms/types.json"), "utf8")); }
-  catch (error: unknown) { diagnostics.push({ code: code(error), path: ".oms/types.json", remediation: "run regenerate-types with the returned approval digest" }); }
+  catch (error: unknown) { diagnostics.push({ code: code(error), path: ".oms/types.json", remediation: REVIEW_REMEDIATION }); }
   if (policy !== null) {
-    const drift = projection === null ? [] : await projectionDriftDiagnostics(root, projection, policy);
-    diagnostics.push(...drift);
-    try { await loadResolvedTemplates(root); }
+    let resolved: Awaited<ReturnType<typeof loadResolvedTemplates>> | null = null;
+    try { resolved = await loadResolvedTemplates(root); }
     catch (error: unknown) {
       const errorCode = code(error);
       if (errorCode !== "TEMPLATE_SOURCE_DRIFT") {
-        diagnostics.push({ code: errorCode, remediation: "run regenerate-types after correcting the named authority or template source" });
+        diagnostics.push({ code: errorCode, remediation: REVIEW_REMEDIATION });
       }
     }
+    if (resolved !== null) {
+      diagnostics.push(...pendingDiagnostics(resolved.pending));
+      pendingSourcePaths = Object.values(resolved.pending).map(item => item.path);
+    }
+    const drift = projection === null ? [] : await projectionDriftDiagnostics(root, projection, policy);
+    diagnostics.push(...drift);
   }
   for (const path of await invalidNotes(root)) diagnostics.push({ code: "MIGRATION_NOTE_INVALID", path, remediation: "repair the note frontmatter before migration" });
   const unique = new Map<string, TemplateDoctorDiagnostic>();
@@ -145,7 +169,13 @@ async function diagnoseTemplatesInternal(target: TemplateDoctorTarget): Promise<
     counts.set(key, count + 1);
     return count < target.maxPerTemplate;
   });
-  return { status: unique.size === 0 ? "healthy" : "needs-repair", diagnostics: bounded, managedSourceExclusions: policy === null ? [] : Object.values(policy.templates).map(deriveTemplateSourcePath), unresolvedLegacyNotes: [], migrationMarker };
+  const managedSourceExclusions = policy === null
+    ? []
+    : [...new Set([
+      ...Object.values(policy.templates).map(deriveTemplateSourcePath),
+      ...pendingSourcePaths,
+    ])];
+  return { status: unique.size === 0 ? "healthy" : "needs-repair", diagnostics: bounded, managedSourceExclusions, unresolvedLegacyNotes: [], migrationMarker };
 }
 
 function ledgerWarning(error: unknown): string {
@@ -225,49 +255,50 @@ export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<T
   }
 }
 
-/** Recomputes only the derived projection and delegates all publication to the guarded transaction. */
+function reviewRequired(remediation = "run oms template review, answer its questions, then commit the reviewed contract"): TemplateDoctorRepair {
+  return rejected("TEMPLATE_REVIEW_REQUIRED", remediation);
+}
+
+/**
+ * Regeneration is a compatibility entrypoint for the old doctor surface, but
+ * publication is now always the reviewed interview/reconcile transaction.
+ * This function never adopts changed source bytes or metadata on its own.
+ */
 export async function regenerateTypes(input: RegenerateTypesRequest): Promise<TemplateDoctorRepair> {
   const admission = await admitted(input.target);
   if (admission !== null) return admission;
+  if (!validGuardedRequest(input.request)) {
+    return rejected("TEMPLATE_REQUEST_INVALID", "pass dryRun:true for a proposal or the exact approvalDigest returned by the reviewed dry-run");
+  }
   const root = resolve(input.target.vault);
-  let policy: TemplatePolicy;
-  try { policy = parseTemplatePolicy(await readFile(join(root, ".oms/template-policy.json"), "utf8")); }
-  catch (error: unknown) { return rejected(code(error), "restore a supported v3 .oms/template-policy.json before regenerating types"); }
   try {
-    const controls = await Promise.all([state(root, ".oms/template-policy.json"), state(root, ".oms/taxonomy.json"), state(root, ".oms/types.json"), state(root, ".obsidian/types.json")]);
-    if (controls[0]?.state === "absent" || controls[1]?.state === "absent" || controls[3]?.state === "absent") return rejected("TEMPLATE_CONTROL_MISSING", "restore template policy, taxonomy, and Obsidian types before regenerating types");
-    const sources = await Promise.all(Object.values(policy.templates).map(async binding => {
-      const path = deriveTemplateSourcePath(binding);
-      const current = await state(root, path);
-      return { templateId: binding.templateId, path, expected: expectation(current), current };
-    }));
-    const sourceDigests = new Map<string, Digest>();
-    for (const source of sources) {
-      if (source.current.state === "absent") throw new Error("TEMPLATE_SOURCE_INVALID");
-      sourceDigests.set(source.templateId, source.current.signature);
+    const target = { vault: root, source: input.target.source };
+    const review = await nextTemplateInterview(target);
+    if (review.state === "question") {
+      return reviewRequired("run oms template review, then answer the returned question before regenerating types");
     }
-    const regenerationInput = templateInput(
-      policy,
-      {
-        policy: (controls[0] as Extract<VerifiedFileState, { state: "present" }>).signature,
-        taxonomy: (controls[1] as Extract<VerifiedFileState, { state: "present" }>).signature,
-        obsidianTypes: (controls[3] as Extract<VerifiedFileState, { state: "present" }>).signature,
-        obsidianTypesPath: ".obsidian/types.json",
-      },
-      Object.values(policy.templates),
-      (binding) => {
-        const source = sourceDigests.get(binding.templateId);
-        if (source === undefined) throw new Error("TEMPLATE_SOURCE_INVALID");
-        return source;
-      },
-    );
-    const manifest = await buildTemplateCompositionManifest(root, { mode: "regenerate" }, {
-      expected: { input: inputDigest(regenerationInput), controls: { policy: expectation(controls[0]!), taxonomy: expectation(controls[1]!), projection: expectation(controls[2]!) }, sources: sources.map(({ templateId, path, expected }) => ({ templateId, path, expected })) },
-      taxonomy: { expectedCurrent: expectation(controls[1]!), proposedBytes: (controls[1] as Extract<VerifiedFileState, { state: "present" }>).bytes, action: "verify-only" },
-      allowProjectionRepair: true,
-    });
-    return executeTemplateTransaction(root, manifest, input.request, REGENERATE_MARKER);
-  } catch (error: unknown) { return rejected(code(error), "correct the named template authority or source, then request a new dry-run digest"); }
+    if (review.state === "blocked") {
+      const detail = review.diagnostics[0]?.message;
+      return reviewRequired(
+        detail === undefined
+          ? "run oms template review, correct its diagnostics, then retry regeneration"
+          : `run oms template review and correct its diagnostic: ${detail}`,
+      );
+    }
+    return await commitTemplateContracts(target, input.request.dryRun === true
+      ? {
+        censusDigest: review.censusDigest,
+        expectedLedgerDigest: review.expectedLedgerDigest,
+        dryRun: true,
+      }
+      : {
+        censusDigest: review.censusDigest,
+        expectedLedgerDigest: review.expectedLedgerDigest,
+        approvedDigest: input.request.approvedDigest,
+      });
+  } catch (error: unknown) {
+    return rejected(code(error), "correct the named template authority or source, then request a new reviewed dry-run digest");
+  }
 }
 
 function legacyTemplateId(policy: TemplatePolicy, raw: string, taxonomyRaw: string, notePath: TemplateSourcePath): TemplateId | null {

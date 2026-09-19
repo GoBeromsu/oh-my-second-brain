@@ -3,23 +3,26 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { composeResolvedTemplateFields, deriveFolderOntologyAxis, loadResolvedTemplates, loadResolvedTemplatesIfPresent, requireTaxonomyPlacement, resolveClassifiedTemplateSource, sourceSignature, taxonomyRouting } from "./resolver.js";
-import type { Digest, SourceDescriptor } from "./types.js";
+import { deriveContentFormatContract } from "./content-contract.js";
+import { serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
+import { composeResolvedTemplateFields, deriveFolderOntologyAxis, loadResolvedTemplates, loadResolvedTemplatesIfPresent, requireTaxonomyPlacement, resolveClassifiedTemplateSource, sharedAuthoritySignature, sourceSignature, taxonomyRouting } from "./resolver.js";
+import type { DerivedProjection, Digest, SourceDescriptor, TemplatePolicy } from "./types.js";
 
 const roots: string[] = [];
 const digest = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
-async function fixture(options: { readonly placement?: boolean; readonly dateExample?: boolean; readonly renderer?: "obsidian-core" | "templater" | "none" } = {}): Promise<string> {
+async function fixture(options: { readonly placement?: boolean; readonly dateExample?: boolean; readonly renderer?: "obsidian-core" | "templater" | "none"; readonly second?: boolean } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-"));
   roots.push(root);
   await mkdir(join(root, ".oms"), { recursive: true });
   await mkdir(join(root, ".obsidian"), { recursive: true });
   await mkdir(join(root, "Templates", "OMS"), { recursive: true });
   const renderer = options.renderer ?? "obsidian-core";
-  const policy = JSON.stringify({
+  const secondTemplate = "---\ntitle: reference\n---\nReference body\n";
+  const policyValue = {
     version: 3,
-    templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
+    templateFolders: [{ path: "Templates/OMS", default: true }],
     base: { fields: {} },
     contracts: { note: { intent: "A note.", fields: options.dateExample ? { date: { type: "date" } } : {}, views: [] } },
     templates: {
@@ -32,16 +35,31 @@ async function fixture(options: { readonly placement?: boolean; readonly dateExa
         contract: "note",
         naming: "{{title}}",
       },
+      ...(options.second === true ? {
+        reference: {
+          templateId: "reference",
+          destinationClass: "managed-default",
+          renderer: "obsidian-core",
+          sourceFolder: "Templates/OMS",
+          sourcePath: "Templates/OMS/reference.md",
+          contract: "note",
+          naming: "{{title}}",
+        },
+      } : {}),
     },
-  });
+  } as unknown as TemplatePolicy;
+  const policy = serializeTemplatePolicy(policyValue);
   const taxonomy = JSON.stringify(options.placement === false
     ? { folders: {} }
-    : { folders: { "Notes/Published": { templates: ["note"] } } });
+    : { folders: { "Notes/Published": { templates: options.second === true ? ["note", "reference"] : ["note"] } } });
   const types = JSON.stringify({ types: { title: "text", ...(options.dateExample || renderer === "templater" ? { date: "date" } : {}) } });
   const template = renderer === "templater"
     ? "---\ntitle: literal\ndate: '<% tp.date.now(\"YYYY-MM-DD\") %>'\n---\nBody\n"
     : renderer === "none" ? "<%* tR += 'Synthetic external template'; %>\n"
     : options.dateExample ? "---\ntitle: literal\ndate: \"{{date}}\"\n---\nBody\n" : "---\ntitle: literal\n---\nBody\n";
+  const noteBody = renderer === "none" ? "" : "Body\n";
+  const noteContent = deriveContentFormatContract(noteBody, { templateId: "note", finalNewline: true }).contract;
+  const referenceContent = deriveContentFormatContract("Reference body\n", { templateId: "reference", finalNewline: true }).contract;
   const keyOrder = renderer === "none" ? [] : renderer === "templater" || options.dateExample ? ["title", "date"] : ["title"];
   const projectedFields = renderer === "none"
     ? options.dateExample ? { date: { type: "date" } } : {}
@@ -51,10 +69,11 @@ async function fixture(options: { readonly placement?: boolean; readonly dateExa
     { logicalId: "taxonomy", signature: digest(taxonomy) },
     { logicalId: "obsidian-types", signature: digest(types) },
     { path: "Templates/OMS/note.md", signature: digest(template) },
+    ...(options.second === true ? [{ path: "Templates/OMS/reference.md", signature: digest(secondTemplate) }] : []),
   ];
-  const projection = JSON.stringify({
+  const projectionValue = {
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources },
+    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources },
     managed: {
       base: { fields: {} },
       globalAxes: {},
@@ -64,27 +83,61 @@ async function fixture(options: { readonly placement?: boolean; readonly dateExa
           destinationClass: "managed-default",
           renderer,
           sourcePath: "Templates/OMS/note.md",
-          targetFolder: "Notes/Published",
+          ...(options.placement === false ? {} : { targetFolder: "Notes/Published" }),
           keyOrder,
           fields: projectedFields,
           views: [],
           naming: "{{title}}",
-          bodySignature: digest(renderer === "none" ? "" : "Body\n"),
+          bodySignature: digest(noteBody),
+          content: noteContent,
         },
+        ...(options.second === true ? {
+          reference: {
+            templateId: "reference",
+            destinationClass: "managed-default",
+            renderer: "obsidian-core",
+            sourcePath: "Templates/OMS/reference.md",
+            ...(options.placement === false ? {} : { targetFolder: "Notes/Published" }),
+            keyOrder: ["title"],
+            fields: { title: { type: "text" } },
+            views: [],
+            naming: "{{title}}",
+            bodySignature: digest("Reference body\n"),
+            content: referenceContent,
+          },
+        } : {}),
       },
     },
-  });
+  } as unknown as DerivedProjection;
+  const projection = serializeDerivedProjection(projectionValue);
   await Promise.all([
     writeFile(join(root, ".oms", "template-policy.json"), policy),
     writeFile(join(root, ".oms", "taxonomy.json"), taxonomy),
     writeFile(join(root, ".obsidian", "types.json"), types),
     writeFile(join(root, "Templates", "OMS", "note.md"), template),
+    ...(options.second === true ? [writeFile(join(root, "Templates", "OMS", "reference.md"), secondTemplate)] : []),
     writeFile(join(root, ".oms", "types.json"), projection),
   ]);
   return root;
 }
 
 describe("loadResolvedTemplates", () => {
+  it("separates the whole logical authority signature from per-template source signatures", () => {
+    const controls: SourceDescriptor[] = [
+      { logicalId: "template-policy", signature: digest("policy") },
+      { logicalId: "taxonomy", signature: digest("taxonomy") },
+      { logicalId: "obsidian-types", signature: digest("types") },
+    ];
+    const withTemplate = [...controls, { path: "Templates/note.md", signature: digest("source") }];
+    expect(sharedAuthoritySignature(withTemplate)).toBe(sharedAuthoritySignature(controls));
+    expect(sharedAuthoritySignature([
+      { ...controls[0]!, signature: digest("changed") },
+      controls[1]!,
+      controls[2]!,
+    ])).not.toBe(sharedAuthoritySignature(controls));
+    expect(sourceSignature(withTemplate)).not.toBe(sourceSignature(controls));
+  });
+
   it.each(["create", "update"])("rejects an oversize %s source proposal before composition", mode => {
     const source = new TextEncoder().encode(`---\ntitle: note\n---\n${"x".repeat(262_145)}`);
     expect(() => resolveClassifiedTemplateSource(`Templates/OMS/${mode}.md`, source, "obsidian-core"))
@@ -217,12 +270,11 @@ describe("loadResolvedTemplates", () => {
     });
   });
 
-  it("rejects missing taxonomy placement and names the template", async () => {
+  it("resolves templates without a default placement", async () => {
     const root = await fixture({ placement: false });
-
-    await expect(loadResolvedTemplates(root)).rejects.toThrow(
-      /TEMPLATE_PLACEMENT_UNDECLARED: taxonomy placement is undeclared for template note/,
-    );
+    const convention = await loadResolvedTemplates(root);
+    expect(convention.templates.note?.targetFolder).toBeUndefined();
+    expect(convention.templates.note?.body).toBe("Body\n");
   });
 
   it("exports the shared taxonomy route and placement validation", () => {
@@ -239,6 +291,21 @@ describe("loadResolvedTemplates", () => {
     expect(() => requireTaxonomyPlacement(routing, "missing")).toThrow(
       /TEMPLATE_PLACEMENT_UNDECLARED.*missing/,
     );
+  });
+
+  it("rejects malformed taxonomy placement mappings", () => {
+    expect(() => taxonomyRouting(
+      ".oms/taxonomy.json",
+      new TextEncoder().encode(JSON.stringify({ templates: [] })),
+    )).toThrow(/taxonomy\.templates must be a mapping/);
+    expect(() => taxonomyRouting(
+      ".oms/taxonomy.json",
+      new TextEncoder().encode(JSON.stringify({ templates: { note: { templateFolder: 42 } } })),
+    )).toThrow(/taxonomy\.templates\.note has invalid placement/);
+    expect(() => taxonomyRouting(
+      ".oms/taxonomy.json",
+      new TextEncoder().encode(JSON.stringify({ folders: { notes: { templateFolder: 42 } } })),
+    )).toThrow(/taxonomy\.folders\.notes\.templateFolder must be a string/);
   });
 
   it("infers date and checkbox literals and rejects explicit type mismatches", () => {
@@ -284,20 +351,70 @@ describe("loadResolvedTemplates", () => {
     const resolved = await loadResolvedTemplates(root);
     expect(Object.keys(resolved.templates)).toEqual(["note"]);
     expect(resolved.templates.note?.body).toBe("Body\n");
+    expect(resolved.templates.note?.content.bodySignature).toBe(digest("Body\n"));
     expect(resolved.managedSourcePaths).toEqual(["Templates/OMS/note.md"]);
     const after = await Promise.all(before.map(async ([file]) => [file, await readFile(join(root, file), "utf8")] as const));
     expect(after).toEqual(before);
   });
 
-  it("fails loudly for source drift and projection payload tampering", async () => {
+  it("isolates an edited template as pending while resolving an unchanged sibling", async () => {
+    const root = await fixture({ second: true });
+    await writeFile(join(root, "Templates", "OMS", "note.md"), "---\ntitle: changed\n---\nBody\n");
+    const resolved = await loadResolvedTemplates(root);
+    expect(Object.keys(resolved.templates)).toEqual(["reference"]);
+    expect(resolved.pending.note).toMatchObject({ id: "note", path: "Templates/OMS/note.md", kind: "edited" });
+    expect(resolved.managedSourcePaths).toEqual(["Templates/OMS/note.md", "Templates/OMS/reference.md"]);
+  });
+
+  it("isolates a deleted template as pending while retaining a sibling", async () => {
+    const root = await fixture({ second: true });
+    await rm(join(root, "Templates", "OMS", "note.md"));
+    const resolved = await loadResolvedTemplates(root);
+    expect(Object.keys(resolved.templates)).toEqual(["reference"]);
+    expect(resolved.pending.note).toMatchObject({ id: "note", path: "Templates/OMS/note.md", kind: "deleted" });
+  });
+
+  it("surfaces a newly dropped source as pending without assigning it to a resolved contract", async () => {
+    const root = await fixture();
+    await writeFile(join(root, "Templates", "OMS", "new-template.md"), "---\ntitle: New\n---\nNew body\n");
+    const resolved = await loadResolvedTemplates(root);
+    expect(resolved.templates.note).toBeDefined();
+    expect(resolved.pending["new-template"]).toMatchObject({ id: "new-template", path: "Templates/OMS/new-template.md", kind: "added" });
+    expect(resolved.managedSourcePaths).toContain("Templates/OMS/new-template.md");
+  });
+
+  it("fails closed for a shared policy, taxonomy, or Obsidian authority change", async () => {
+    for (const control of [".oms/template-policy.json", ".oms/taxonomy.json", ".obsidian/types.json"] as const) {
+      const root = await fixture();
+      const path = join(root, control);
+      const before = await readFile(path, "utf8");
+      await writeFile(path, `${before}\n`);
+      await expect(loadResolvedTemplates(root)).rejects.toThrow(/TEMPLATE_SOURCE_DRIFT/);
+    }
+  });
+
+  it("isolates source drift and still rejects projection payload tampering", async () => {
     const root = await fixture();
     await writeFile(join(root, "Templates", "OMS", "note.md"), "---\ntitle: changed\n---\nBody\n");
-    await expect(loadResolvedTemplates(root)).rejects.toThrow(/TEMPLATE_SOURCE_DRIFT/);
+    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
+      templates: {},
+      pending: { note: { id: "note", path: "Templates/OMS/note.md", kind: "edited" } },
+    });
     const clean = await fixture();
     const projection = JSON.parse(await readFile(join(clean, ".oms", "types.json"), "utf8")) as { managed: { templates: Record<string, { naming: string }> } };
     projection.managed.templates.note!.naming = "tampered";
     await writeFile(join(clean, ".oms", "types.json"), JSON.stringify(projection));
     await expect(loadResolvedTemplates(clean)).rejects.toThrow(/PROJECTION_PAYLOAD_TAMPERED/);
+  });
+
+  it("rejects projection identity mappings that disagree with current policy paths", async () => {
+    const root = await fixture();
+    const projection = JSON.parse(await readFile(join(root, ".oms", "types.json"), "utf8")) as {
+      managed: { templates: Record<string, { sourcePath: string }> };
+    };
+    projection.managed.templates.note!.sourcePath = "Templates/renamed.md";
+    await writeFile(join(root, ".oms", "types.json"), JSON.stringify(projection));
+    await expect(loadResolvedTemplates(root)).rejects.toThrow(/PROJECTION_INVALID/);
   });
 
   it("rejects an authored axis that collides with the derived folder ontology", async () => {

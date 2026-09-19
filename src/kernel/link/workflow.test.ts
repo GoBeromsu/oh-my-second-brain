@@ -19,7 +19,7 @@ async function makeVault(): Promise<string> {
   await mkdir(path.join(vault, ".obsidian"));
   await writeFile(path.join(vault, ".oms", "taxonomy.json"), JSON.stringify({ folders: {}, templates: { note: { templateFolder: "notes" } } }));
   await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text", title: "text" } }));
-  const proposal = await planTemplateMigration(vault, { templateFolders: [{ path: "Templates/OMS", mode: "auto", default: true }] });
+  const proposal = await planTemplateMigration(vault, { templateFolders: [{ path: "Templates/OMS", default: true }] });
   const manifest = await buildMigrationManifest(vault, proposal, { base: { fields: {} } });
   await applyTemplateMigration(vault, proposal, manifest, { approvedDigest: manifest.approvalDigest });
   return vault;

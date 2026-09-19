@@ -11,8 +11,7 @@ The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doct
 | `oms template scan` | `oms_search` | `template-scan` | none |
 | `oms template list` | `oms_search` | `templates` | `templateId` absent |
 | `oms template show <id>` | `oms_search` | `templates` | `templateId` required |
-| `oms template add <folder>` | `oms_write` | `template` | `mode=register-folder` |
-| `oms template add <file> --id <id>` | `oms_write` | `template` | `mode=register-existing` |
+| `oms template add <folder>` | `oms_write` | `template` | `mode=register-folder`; explicit `folder.path` scope |
 | `oms template add --id <id> --from <file>` | `oms_write` | `template` | `mode=create` |
 | `oms template update <id>` | `oms_write` | `template` | `mode=update` |
 | `oms template update <id> --class <class>` | `oms_write` | `template` | `mode=reclassify` |
@@ -21,22 +20,51 @@ The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doct
 | `oms template default <id>` | `oms_write` | `template` | `mode=default` |
 | `oms template check` | `oms_doctor` | `validate` | none |
 | `oms template regenerate-types` | `oms_doctor` | `regenerate-types` | `dryRun` XOR `approvedDigest` |
+| `oms template review` | `oms_write` | `template` | `mode=interview-next` |
+| `oms template answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null>` | `oms_write` | `template` | `mode=interview-answer`; exact question and CAS fields |
+| `oms template commit --census-digest <digest> --ledger-digest <digest|null>` | `oms_write` | `template` | `mode=commit-contracts`; plus `--dry-run` or `--yes --approved-digest <digest>` |
 | `oms template update --resume` | `oms_write` | `template` | `transactionId` and `approvedDigest` |
 
-`template add` is one leaf with folder, existing-file, and `--from` forms. The `--from` form uses the registered `templateFolders[].default` creation destination. That folder is unrelated to note placement.
+`template add <folder>` selects an explicit source scope: every `.md` beneath
+the folder is a candidate, with no per-file registration or auto/manual mode.
+`add --id <id> --from <file>` is explicit source authoring. Review verifies
+source bytes in place and does not write them. A changed source makes only its
+dependent template pending; unrelated template writes remain available, while
+shared-authority failures fail closed for the whole vault.
+
+Review derives a metadata contract from frontmatter keys, types, requiredness,
+and `filledBy`, plus a bounded body structure of ATX headings, fenced code
+blocks, ordered/unordered list runs outside fences, `<!-- oms:content -->`, and
+document order/EOL/BOM/final-newline details. It does not claim to enforce
+paragraphs, setext headings, or all Markdown.
+
+The initial source-change notice is exactly `템플릿에 변경이 있습니다` with
+exactly `확인하기` and `나중에`; it displays no template name, hash, or change
+class. `나중에` is host-only and makes no server call or ledger mutation.
+`확인하기` enters the linear, resumable interview through
+`mode=interview-next`; continue with the server-returned next question and
+preserve unaffected confirmed answers. After all necessary questions, show the
+exact final digest and use `mode=commit-contracts` only after user approval;
+the commit publishes controls only. `templateNotice` must still be surfaced by
+long-lived hosts when boot instructions are stale.
+
+`oms template review` has no approval guard. `answer` is draft-only and uses
+the server-returned question, `--answer <JSON>`, `--census-digest <digest>`, and
+`--ledger-digest <digest|null>`. `commit` uses those same CAS flags plus the
+existing `--dry-run` or `--yes --approved-digest <digest>` guard.
 
 ## Note
 
 | CLI | MCP tool | `op` | Required discriminator |
 |---|---|---|---|
-| `oms note create` | `oms_write` | `note` | `mode=create`; explicit `templateId`, or declared `defaultTemplate` |
+| `oms note create` | `oms_write` | `note` | `mode=create`; optional `templateId`, `--folder <note-folder>`, or declared `defaultTemplate` |
 | `oms note append` | `oms_write` | `note` | `mode=append` |
 | `oms note update` | `oms_write` | `note` | `mode=update` |
 | `oms note audit` | `oms_doctor` | `audit` | optional `folder` |
 | `oms note backfill` | `oms_doctor` | `backfill-defaults` | `notePath`, then `dryRun` XOR `approvedDigest` |
 | `oms note get` | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window) |
 
-Omitting `templateId` during create never selects the first template; it uses only `defaultTemplate` or returns `TEMPLATE_DEFAULT_UNDECLARED`. Append and update use the persisted note identity. `note get` replaces the retired document aliases without changing single-target, multi-target, or windowed retrieval capability.
+Exact note-create usage is `oms note create [template-id] --body <text>|--body-file <file> [--frontmatter <json>|--frontmatter-file <file>] [--folder <note-folder>]`. The folder is a note destination, with precedence explicit caller folder, taxonomy default, then `ask`; template registration is not a placement prerequisite. Omitting `templateId` during create never selects the first template; it uses only `defaultTemplate` or returns `TEMPLATE_DEFAULT_UNDECLARED`. Append and update use the persisted note identity. `note get` replaces the retired document aliases without changing single-target, multi-target, or windowed retrieval capability.
 
 ## Link and bridge
 

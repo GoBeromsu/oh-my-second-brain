@@ -64,7 +64,7 @@ export async function runSetup(opts: {
   const proposedModelsConfig = modelManifest === undefined
     ? undefined
     : modelsConfigFromAcquisitionManifest(modelManifest);
-  const selected = templateFolders?.map((path, index) => ({ path, mode: "auto" as const, ...(index === 0 ? { default: true as const } : {}) }));
+  const selected = templateFolders?.map((path, index) => ({ path, ...(index === 0 ? { default: true as const } : {}) }));
   let state = await inspectSetup({ vault, templateFolders: selected });
   if (state.selectedTemplateFolders.length === 0 && (opts.prompt !== undefined || process.stdin.isTTY)) {
     const prompt = opts.prompt ?? createInterface({ input: process.stdin, output: process.stdout });
@@ -83,7 +83,7 @@ export async function runSetup(opts: {
           paths = indexes.map(index => candidates[index - 1]!.path);
         }
       }
-      if (paths.length > 0) state = await decideSetup(state, { templateFolders: paths.map((path, index) => ({ path, mode: "auto", ...(index === 0 ? { default: true as const } : {}) })) });
+      if (paths.length > 0) state = await decideSetup(state, { templateFolders: paths.map((path, index) => ({ path, ...(index === 0 ? { default: true as const } : {}) })) });
     } finally { prompt.close(); }
   }
   if (state.proposal.unresolved.length > 0) {

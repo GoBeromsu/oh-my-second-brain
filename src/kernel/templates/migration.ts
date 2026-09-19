@@ -1,16 +1,18 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { basename, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { parseNote } from "../conventions/frontmatter.js";
 import { excludedNoteMatcher } from "../conventions/note-exclude.js";
 import { loadObsidianTypes } from "../contracts/index.js";
 import { approvalDigest, canonicalJson, inputDigest, outputDigest } from "./canonical.js";
 import { composeTemplateAdd, starterTemplateBytes } from "./compose-add.js";
 import { deriveContractFromNotes, type DerivedContractFromNotes } from "./contract-from-notes.js";
+import { proposedTemplateId } from "./census.js";
+import { deriveContentFormatContract } from "./content-contract.js";
 import { parseTemplate } from "./extract.js";
 import { classifyTemplateRenderer } from "./renderer.js";
 import { parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
-import { composeResolvedTemplateFields, sourceSignature, taxonomyRouting } from "./resolver.js";
+import { composeResolvedTemplateFields, resolveClassifiedTemplateSource, sharedAuthoritySignature, sourceSignature, taxonomyRouting } from "./resolver.js";
 import { isTemplateSourceInFolder, normalizeTemplateSourcePath, validateTemplateId, verifyTemplateControlPath, normalizeTemplateControlPath, verifyTemplateFolderPath, verifyTemplateSourcePath } from "./paths.js";
 import { executeTemplateTransaction } from "./transaction.js";
 import type { AuthorityEntry, BaseContract, ContractDefinition, DerivedProjection, Diagnostic, Digest, Extensions, FieldPolicy, FileExpectation, GuardedTemplateRequest, InputV2, JsonValue, TemplateBinding, TemplateCompositionManifest, TemplateFolderPath, TemplateFolderRegistration, TemplateId, TemplatePolicy, TemplateRenderer, TemplateSourcePath, TemplateTransactionReceipt, VerifiedFileState } from "./types.js";
@@ -20,7 +22,6 @@ const decoder = new TextDecoder();
 export type MigrationDiagnosticCode = "MIGRATION_UNRESOLVED_MAPPING" | "TEMPLATE_ID_DUPLICATE" | "TEMPLATE_SOURCE_DUPLICATE" | "MIGRATION_TEMPLATE_UNSAFE" | "MIGRATION_TEMPLATE_INVALID" | "MIGRATION_NOTE_INVALID" | "MIGRATION_NOTE_IDENTITY_UNRESOLVED" | "MIGRATION_TAXONOMY_INVALID" | "TEMPLATE_FOLDER_SELECTION_REQUIRED" | "TEMPLATE_PLACEMENT_UNDECLARED" | "TEMPLATE_POLICY_VERSION_UNSUPPORTED" | "TEMPLATE_EXPRESSION_UNSUPPORTED" | "TEMPLATE_SOURCE_INVALID" | "TEMPLATE_CANDIDATE_INCOMPATIBLE" | "FIELD_FILLED_BY_OBSIDIAN" | "TEMPLATE_RENDERER_EXTERNAL" | "TEMPLATE_CONTRACT_UNOBSERVED" | "TEMPLATE_PROPOSAL_OVERSIZE" | "TEMPLATE_PROPOSAL_TYPE_CONFLICT" | "TEMPLATE_CONTRACT_NOTE_INVALID" | "TEMPLATE_CONTRACT_READ_FAILED";
 /** `blocking` diagnostics stop approval; per-file diagnostics only exclude that file. */
 export interface MigrationDiagnostic { readonly code: MigrationDiagnosticCode; readonly message: string; readonly path?: string; readonly templateId?: TemplateId; readonly field?: string; readonly remediation?: string; readonly blocking: boolean; }
-export interface RegisteredTemplate { readonly templateId: string; readonly sourcePath: string; }
 export interface TemplateCandidate {
   readonly templateId: TemplateId;
   readonly sourceFolder: TemplateFolderPath;
@@ -53,18 +54,12 @@ export interface MigrationProposal {
   readonly droppedKeys: readonly string[];
 }
 export interface MigrationOptions {
-  readonly templateFolders?: readonly { readonly path: string; readonly mode: "auto" | "manual"; readonly default?: true }[];
-  readonly registeredTemplates?: readonly RegisteredTemplate[];
+  readonly templateFolders?: readonly { readonly path: string; readonly default?: true }[];
 }
 export interface MigrationCompositionInput { readonly base: BaseContract; }
 function sha(bytes: Uint8Array): Digest { return `sha256:${createHash("sha256").update(bytes).digest("hex")}`; }
 function issue(code: MigrationDiagnosticCode, message: string, path?: string, templateId?: TemplateId): MigrationDiagnostic { return { code, message, ...(path === undefined ? {} : { path }), ...(templateId === undefined ? {} : { templateId }), blocking: true }; }
 function fileIssue(code: MigrationDiagnosticCode, message: string, path: string, remediation: string, extra: { readonly templateId?: TemplateId; readonly field?: string } = {}): MigrationDiagnostic { return { code, message, path, ...extra, remediation, blocking: false }; }
-/** `Daily Note.template.md` → `daily-note`; `zt-cite.eta.md` → `zt-cite`. */
-export function proposedTemplateId(pathname: string): TemplateId | null {
-  const slug = basename(pathname, ".md").replace(/\.(template|eta)$/i, "").normalize("NFC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  try { return validateTemplateId(slug); } catch { return null; }
-}
 function isMissing(error: unknown): boolean { return error instanceof Error && "code" in error && error.code === "ENOENT"; }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function bytes(value: string): Uint8Array { return encoder.encode(value); }
@@ -104,7 +99,7 @@ function projectionExtensions(state: VerifiedFileState): Extensions | undefined 
 async function readCandidate(root: string, pathname: string, templateId: string, folders: readonly TemplateFolderRegistration[], destinationClass: TemplateBinding["destinationClass"] = "registered-existing"): Promise<TemplateCandidate> {
   const sourcePath = normalizeTemplateSourcePath(pathname);
   const sourceFolder = [...folders].sort((a, b) => b.path.length - a.path.length).find(folder => isTemplateSourceInFolder(sourcePath, folder.path))?.path;
-  if (sourceFolder === undefined) throw new Error("Template source is outside the selected registered folders");
+  if (sourceFolder === undefined) throw new Error("Template source is outside the selected template folders");
   const verified = await verifyTemplateSourcePath(root, sourcePath);
   const bytes = new Uint8Array(await readFile(verified.absolutePath));
   const classified = classifyTemplateRenderer(sourcePath, bytes);
@@ -131,9 +126,9 @@ async function discover(root: string, folders: readonly TemplateFolderRegistrati
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
       scannedMarkdown.add(pathname);
       const templateId = proposedTemplateId(pathname);
-      if (templateId === null) { diagnostics.push(fileIssue("MIGRATION_UNRESOLVED_MAPPING", "File name yields no stable template ID", pathname, "Register it with an explicit templateId")); continue; }
+      if (templateId === null) { diagnostics.push(fileIssue("MIGRATION_UNRESOLVED_MAPPING", "File name yields no stable template ID", pathname, "Rename it to a stable Unicode letter/digit filename")); continue; }
       try { candidates.push(await readCandidate(root, pathname, templateId, folders)); }
-      catch (error: unknown) { diagnostics.push(fileIssue("MIGRATION_TEMPLATE_INVALID", message(error), pathname, "Correct the path or leave the file unregistered")); }
+      catch (error: unknown) { diagnostics.push(fileIssue("MIGRATION_TEMPLATE_INVALID", message(error), pathname, "Correct the path or remove it from the selected template folder")); }
     }
   };
   for (const folder of folders) {
@@ -302,7 +297,7 @@ async function assertSampleEvidenceCurrent(root: string, proposal: MigrationProp
     }
   }
 }
-/** Read-only scan. Only explicit selections or an existing v3 registration select folders. */
+/** Read-only scan. Only explicit selections or an existing v3 policy select folders. */
 export async function planTemplateMigration(vault: string, options: MigrationOptions = {}): Promise<MigrationProposal> {
   const root = resolve(vault);
   const policyState = await fileState(root, ".oms/template-policy.json");
@@ -316,25 +311,6 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
   if (folders.length === 0) diagnostics.push(issue("TEMPLATE_FOLDER_SELECTION_REQUIRED", "Select template folders explicitly; configuration hints are proposals, not selections"));
   const scannedMarkdown = new Set<string>();
   const candidates = await discover(root, folders, diagnostics, scannedMarkdown);
-  const explicitlyRegistered = new Set<string>();
-  const registeredPaths = new Set<string>();
-  for (const registration of options.registeredTemplates ?? []) {
-    try {
-      const candidate = await readCandidate(root, registration.sourcePath, registration.templateId, folders);
-      if (registeredPaths.has(candidate.sourcePath)) {
-        diagnostics.push(issue("TEMPLATE_SOURCE_DUPLICATE", "Source is explicitly registered more than once", candidate.sourcePath, candidate.templateId));
-        continue;
-      }
-      registeredPaths.add(candidate.sourcePath);
-      for (let index = diagnostics.length - 1; index >= 0; index -= 1) {
-        if (diagnostics[index]!.code === "MIGRATION_TEMPLATE_INVALID" && diagnostics[index]!.path === candidate.sourcePath) diagnostics.splice(index, 1);
-      }
-      const at = candidates.findIndex(item => item.sourcePath === candidate.sourcePath);
-      if (at >= 0) candidates.splice(at, 1);
-      candidates.push(candidate);
-      explicitlyRegistered.add(candidate.templateId);
-    } catch (error: unknown) { diagnostics.push(issue("MIGRATION_TEMPLATE_INVALID", message(error), registration.sourcePath)); }
-  }
   for (const binding of Object.values(currentPolicy?.templates ?? {})) {
     try {
       const candidate = await readCandidate(root, binding.sourcePath, binding.templateId, folders, binding.destinationClass);
@@ -344,14 +320,14 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
     } catch (error: unknown) { diagnostics.push(issue("MIGRATION_UNRESOLVED_MAPPING", message(error), binding.sourcePath, binding.templateId)); }
   }
   candidates.sort((a, b) => a.templateId.localeCompare(b.templateId) || a.sourcePath.localeCompare(b.sourcePath));
-  const pinned = new Set([...explicitlyRegistered, ...Object.keys(currentPolicy?.templates ?? {})]);
+  const pinned = new Set(Object.keys(currentPolicy?.templates ?? {}));
   const byId = new Map<string, TemplateCandidate[]>();
   for (const candidate of candidates) byId.set(candidate.templateId, [...(byId.get(candidate.templateId) ?? []), candidate]);
   for (const [templateId, group] of byId) {
     if (group.length < 2) continue;
     for (const candidate of group) {
-      if (pinned.has(templateId) && (currentPolicy?.templates[templateId]?.sourcePath === candidate.sourcePath || (explicitlyRegistered.has(templateId) && registeredPaths.has(candidate.sourcePath)))) continue;
-      diagnostics.push(fileIssue("TEMPLATE_ID_DUPLICATE", `Another file also proposes templateId ${templateId}`, candidate.sourcePath, "Register this file with an explicit distinct templateId", { templateId: templateId as TemplateId }));
+      if (pinned.has(templateId) && currentPolicy?.templates[templateId]?.sourcePath === candidate.sourcePath) continue;
+      diagnostics.push(fileIssue("TEMPLATE_ID_DUPLICATE", `Another file also proposes templateId ${templateId}`, candidate.sourcePath, "Rename this file to a distinct stable template ID", { templateId: templateId as TemplateId }));
       candidates.splice(candidates.indexOf(candidate), 1);
     }
   }
@@ -374,7 +350,7 @@ export async function planTemplateMigration(vault: string, options: MigrationOpt
   const paths = new Set(candidates.map(candidate => candidate.sourcePath));
   const bindings = candidates.filter(candidate => {
     if (currentPolicy?.templates[candidate.templateId] !== undefined) return true;
-    return canProposeBinding(candidate) && (explicitlyRegistered.has(candidate.templateId) || folders.find(folder => folder.path === candidate.sourceFolder)?.mode === "auto");
+    return canProposeBinding(candidate);
   }).map((candidate): TemplateBinding => currentPolicy?.templates[candidate.templateId] ?? ({
     templateId: candidate.templateId,
     sourceFolder: candidate.sourceFolder,
@@ -434,34 +410,43 @@ export async function buildMigrationManifest(vault: string, proposal: MigrationP
   const extracted = bindings.map(binding => {
     const candidate = candidateById.get(binding.templateId);
     if (candidate === undefined || candidate.sourcePath !== binding.sourcePath) throw new Error(`MIGRATION_UNRESOLVED_MAPPING: ${binding.templateId}`);
-    if (binding.renderer === "none") {
-      return { sourcePath: binding.sourcePath, sourceDigest: sha(candidate.bytes), keyOrder: [] as readonly string[], frontmatter: {} as Readonly<Record<string, JsonValue>>, body: "", filledBy: [] as readonly string[] };
-    }
-    return { ...sourceParse({ ...candidate, renderer: binding.renderer }), filledBy: binding.renderer === "templater" ? candidate.filledBy : [] };
+    return resolveClassifiedTemplateSource(binding.sourcePath, candidate.bytes, binding.renderer);
   });
   const descriptors = [{ logicalId: "template-policy", signature: sha(policyBytes) }, { logicalId: "taxonomy", signature: sha(taxonomyBytes) }, { logicalId: "obsidian-types", signature: obsidianState.signature }, ...extracted.map(template => ({ path: template.sourcePath, signature: template.sourceDigest }))];
   const resolvedSignature = sourceSignature(descriptors);
   const extensions = projectionExtensions(projectionState);
   const derived: DerivedProjection = {
-    version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: resolvedSignature, sources: descriptors },
+    version: "oms.types.v1",
+    generatedFrom: {
+      algorithm: "sha256-lp-v1",
+      inputSignature: resolvedSignature,
+      sharedAuthoritySignature: sharedAuthoritySignature(descriptors),
+      sources: descriptors,
+    },
     ...(extensions === undefined ? {} : { extensions }),
     managed: { base: policy.base, globalAxes: taxonomy.globalAxes, templates: Object.fromEntries(bindings.map((binding, index) => {
       const targetFolder = taxonomy.targetFolders.get(binding.templateId);
-      if (targetFolder === undefined) throw new Error(`TEMPLATE_PLACEMENT_UNDECLARED: ${binding.templateId}`);
       const template = extracted[index]!;
       const contract = policy.contracts[binding.contract];
       if (contract === undefined) throw new Error(`MIGRATION_UNRESOLVED_MAPPING: ${binding.contract}`);
+      const content = binding.content ?? deriveContentFormatContract(template.body, {
+        templateId: binding.templateId,
+        bom: template.bom,
+        eol: template.eol,
+        finalNewline: template.finalNewline,
+      }).contract;
       return [binding.templateId, {
         templateId: binding.templateId,
         destinationClass: binding.destinationClass,
         renderer: binding.renderer,
         sourcePath: binding.sourcePath,
-        targetFolder,
+        ...(targetFolder === undefined ? {} : { targetFolder }),
         keyOrder: template.keyOrder,
         fields: projectionFields(policy.base, contract.fields, template.frontmatter, obsidian.types, template.filledBy, binding.renderer),
         views: contract.views,
         naming: binding.naming,
         bodySignature: sha(bytes(template.body)),
+        content,
         ...(binding.extensions === undefined ? {} : { extensions: binding.extensions }),
       }];
     })) },

@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeResolvedTemplateNote } from "../src/kernel/capture/safe.js";
+import { deriveContentFormatContract } from "../src/kernel/templates/content-contract.js";
 import {
   buildTemplateNoteIndex,
   loadResolvedTemplates,
   queryTemplateAxis,
   queryTemplateLexically,
-  sourceSignature,
 } from "../src/kernel/templates/index.js";
+import { sharedAuthoritySignature, sourceSignature } from "../src/kernel/templates/resolver.js";
 import type { Digest, SourceDescriptor } from "../src/kernel/templates/index.js";
 
 const roots: string[] = [];
@@ -42,7 +43,7 @@ async function fixture(): Promise<string> {
 
   const policy = JSON.stringify({
     version: 3,
-    templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
+    templateFolders: [{ path: "Templates/OMS", default: true }],
     base: { fields: {} },
     contracts: {
       note: {
@@ -76,9 +77,10 @@ async function fixture(): Promise<string> {
     { logicalId: "obsidian-types", signature: digest(obsidianTypes) },
     { path: "Templates/OMS/note.md", signature: digest(template) },
   ];
+  const content = deriveContentFormatContract("# Note\n<!-- oms:content -->\n", { templateId: "note" }).contract;
   const projection = JSON.stringify({
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources },
+    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources },
     managed: {
       base: { fields: {} },
       globalAxes: {},
@@ -97,7 +99,8 @@ async function fixture(): Promise<string> {
           },
           views: [{ name: "by-status", keys: ["status"] }],
           naming: "{{slug}}.md",
-          bodySignature: digest("# Note\n<!-- oms:content -->\n"),
+          bodySignature: content.bodySignature,
+          content,
         },
       },
     },

@@ -3,13 +3,15 @@ import { readFile, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { loadObsidianTypes } from "../contracts/index.js";
+import { templateCensus, type CensusDiagnostic, type CensusPriorEntry } from "./census.js";
+import { deriveContentFormatContract } from "./content-contract.js";
 import { parseTemplate } from "./extract.js";
 import { approvalDigest, inputDigest, outputDigest, templateInput } from "./canonical.js";
-import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
-import { applyTemplatePolicyChange, parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
+import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, validateTemplateId, verifyTemplateSourcePath } from "./paths.js";
+import { applyTemplatePolicyChange, normalizeTemplateSemanticChange, parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { classifyTemplateRenderer } from "./renderer.js";
 import { templateMigrationAdmission } from "./transaction.js";
-import type { BaseContract, DerivedProjection, Digest, FieldPolicy, GlobalAxes, GlobalAxis, JsonValue, ResolvedConvention, ResolvedTemplate, SourceDescriptor, SourceTransition, TemplateCompositionManifest, TemplateCompositionOptions, TemplateFolderPath, TemplateMove, TemplateRenderer, TemplateSemanticChange, TemplateSemanticSnapshot, TemplateSourcePath, VerifiedFileState } from "./types.js";
+import type { BaseContract, DerivedProjection, Diagnostic, Digest, FieldPolicy, GlobalAxes, GlobalAxis, JsonValue, PendingTemplate, PendingTemplateKind, ResolvedConvention, ResolvedTemplate, SourceDescriptor, SourceTransition, TemplateBinding, TemplateCompositionManifest, TemplateCompositionOptions, TemplateFolderPath, TemplateMove, TemplatePolicy, TemplateRenderer, TemplateSemanticChange, TemplateSemanticSnapshot, TemplateSourcePath, VerifiedFileState } from "./types.js";
 
 export interface LoadResolvedTemplatesOptions {
   readonly policyPath?: string;
@@ -106,6 +108,26 @@ function sourcePath(vault: string, absolute: string): string {
   if (path === "" || path.startsWith("../") || path === "..") fail("TEMPLATE_SOURCE_UNSAFE", `${absolute} is outside the vault`);
   return path;
 }
+function selectedFolderScanFailure(
+  policy: TemplatePolicy,
+  diagnostics: readonly CensusDiagnostic[],
+): CensusDiagnostic | undefined {
+  const selected = new Set<string>(policy.templateFolders.map(folder => folder.path));
+  return diagnostics.find(item => {
+    if (item.path === undefined || selected.has(item.path)) return true;
+    if (
+      item.code !== "TEMPLATE_FOLDER_INVALID"
+      && item.code !== "TEMPLATE_SOURCE_UNSAFE"
+      && item.code !== "TEMPLATE_SOURCE_READ_FAILED"
+    ) return false;
+    try {
+      normalizeTemplateSourcePath(item.path);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+}
 async function required(vault: string, path: string, label: string): Promise<{ readonly path: string; readonly bytes: Uint8Array; readonly signature: Digest }> {
   try {
     const absolute = resolve(vault, path);
@@ -131,17 +153,6 @@ function sourceOrder(left: SourceDescriptor, right: SourceDescriptor): number {
   const b = locator(right);
   return compare(a.kind, b.kind) || compare(a.value, b.value) || compare(left.signature, right.signature);
 }
-function sameSources(left: readonly SourceDescriptor[], right: readonly SourceDescriptor[]): boolean {
-  if (left.length !== right.length) return false;
-  const expected = [...left].sort(sourceOrder);
-  const actual = [...right].sort(sourceOrder);
-  return expected.every((source, index) => {
-    const other = actual[index]!;
-    const a = locator(source);
-    const b = locator(other);
-    return a.kind === b.kind && a.value === b.value && source.signature === other.signature;
-  });
-}
 function signature(sources: readonly SourceDescriptor[]): Digest {
   const hash = createHash("sha256");
   for (const source of [...sources].sort(sourceOrder)) {
@@ -159,6 +170,85 @@ function signature(sources: readonly SourceDescriptor[]): Digest {
 
 /** Stable, length-prefixed signature used by generatedFrom.inputSignature. */
 export function sourceSignature(sources: readonly SourceDescriptor[]): Digest { return signature(sources); }
+
+/** Signature of the complete logical control authorities, excluding per-source template bytes. */
+export function sharedAuthoritySignature(sources: readonly SourceDescriptor[]): Digest {
+  return signature(sources.filter(source => source.logicalId !== undefined));
+}
+
+/** Validates the complete logical-control header before per-source freshness. */
+export function projectionHeaderMatches(
+  projection: DerivedProjection,
+  controls: readonly SourceDescriptor[],
+): boolean {
+  const projectedControls = projection.generatedFrom.sources.filter(source => source.logicalId !== undefined);
+  const currentById = new Map(controls.map(source => [source.logicalId!, source.signature]));
+  const projectedById = new Map(projectedControls.map(source => [source.logicalId!, source.signature]));
+  return projection.generatedFrom.sharedAuthoritySignature === sharedAuthoritySignature(controls)
+    && sourceSignature(projection.generatedFrom.sources) === projection.generatedFrom.inputSignature
+    && projectedControls.length === controls.length
+    && projectedById.size === currentById.size
+    && [...currentById].every(([logicalId, signature]) => projectedById.get(logicalId) === signature);
+}
+
+/**
+ * Validates the projection's source identity shape against current policy
+ * bindings. Managed projection entries never supply IDs: policy sourcePath
+ * bindings are the only identity authority, while generated path descriptors
+ * supply prior signatures with verification status for freshness and rename
+ * confirmation.
+ */
+export function validatedProjectionPriorEntries(
+  policy: import("./types.js").TemplatePolicy,
+  projection: DerivedProjection,
+): readonly CensusPriorEntry[] {
+  const bindingsByPath = new Map<string, TemplateBinding>();
+  const bindingsById = new Map<string, TemplateBinding>();
+  for (const binding of Object.values(policy.templates)) {
+    const path = deriveTemplateSourcePath(binding);
+    if (bindingsByPath.has(path) || bindingsById.has(binding.templateId)) {
+      fail("TEMPLATE_SOURCE_DUPLICATE", `policy template identity is duplicated for ${binding.templateId}`);
+    }
+    bindingsByPath.set(path, binding);
+    bindingsById.set(binding.templateId, binding);
+  }
+  const pathDescriptors = projection.generatedFrom.sources.filter(source => source.path !== undefined);
+  const prior: CensusPriorEntry[] = [];
+  const seenPaths = new Set<string>();
+  for (const source of pathDescriptors) {
+    const path = normalizeTemplateSourcePath(source.path!);
+    const binding = bindingsByPath.get(path);
+    if (binding === undefined || seenPaths.has(path)) {
+      fail("PROJECTION_INVALID", `generated projection source path ${path} is not a current policy binding`);
+    }
+    seenPaths.add(path);
+    prior.push({
+      sourcePath: path,
+      templateId: binding.templateId,
+      signature: binding.approvedSourceSignature ?? source.signature,
+      signatureVerified: binding.approvedSourceSignature !== undefined
+        && source.signature === binding.approvedSourceSignature,
+      ...((binding.approvedBodySignature ?? binding.content?.bodySignature) === undefined
+        ? {}
+        : { bodySignature: binding.approvedBodySignature ?? binding.content?.bodySignature }),
+    });
+  }
+  const managedIds = new Set<string>();
+  for (const [id, template] of Object.entries(projection.managed.templates)) {
+    const binding = bindingsById.get(id);
+    if (
+      binding === undefined
+      || managedIds.has(id)
+      || template.templateId !== id
+      || template.sourcePath !== deriveTemplateSourcePath(binding)
+      || !seenPaths.has(template.sourcePath)
+    ) {
+      fail("PROJECTION_INVALID", `managed projection identity does not match policy binding ${id}`);
+    }
+    managedIds.add(id);
+  }
+  return prior.sort((left, right) => compare(left.sourcePath, right.sourcePath));
+}
 
 function literalType(value: JsonValue): FieldPolicy["type"] | undefined {
   if (typeof value === "number") return "number";
@@ -246,6 +336,46 @@ function policyContractFields(
   }));
 }
 function bodySignature(body: string): Digest { return sha256(body); }
+function contentContract(binding: TemplateBinding, source: ResolvedClassifiedTemplateSource) {
+  return binding.content ?? deriveContentFormatContract(source.body, {
+    templateId: binding.templateId,
+    bom: source.bom,
+    eol: source.eol,
+    finalNewline: source.finalNewline,
+  }).contract;
+}
+/**
+ * Builds one derived managed projection entry from the current policy binding
+ * and verified source bytes. This is the canonical field/body derivation used
+ * by both the normal resolver and read-only review context.
+ */
+export function deriveManagedTemplateProjection(
+  policy: import("./types.js").TemplatePolicy,
+  binding: TemplateBinding,
+  source: ResolvedClassifiedTemplateSource,
+  obsidian: Readonly<Record<string, FieldPolicy["type"]>>,
+  targetFolder?: TemplateFolderPath,
+): DerivedProjection["managed"]["templates"][string] {
+  const contract = policy.contracts[binding.contract];
+  if (contract === undefined) fail("TEMPLATE_POLICY_DANGLING_FIELD", `template ${binding.templateId} references unknown contract ${binding.contract}`);
+  const fields = binding.renderer === "none"
+    ? policyContractFields(policy.base, contract.fields, obsidian)
+    : rendererFields(policy.base, contract.fields, source.frontmatter, obsidian, source.filledBy);
+  const content = contentContract(binding, source);
+  return {
+    templateId: binding.templateId,
+    destinationClass: binding.destinationClass,
+    renderer: binding.renderer,
+    sourcePath: source.sourcePath,
+    ...(targetFolder === undefined ? {} : { targetFolder }),
+    keyOrder: source.keyOrder,
+    fields,
+    views: contract.views,
+    naming: binding.naming,
+    bodySignature: bodySignature(source.body),
+    content,
+  };
+}
 function managed(projection: DerivedProjection["managed"], templates: Readonly<Record<string, ResolvedTemplate>>): DerivedProjection["managed"] {
   return {
     base: projection.base,
@@ -255,12 +385,13 @@ function managed(projection: DerivedProjection["managed"], templates: Readonly<R
       destinationClass: template.destinationClass,
       renderer: template.renderer,
       sourcePath: template.sourcePath,
-      targetFolder: template.targetFolder,
+      ...(template.targetFolder === undefined ? {} : { targetFolder: template.targetFolder }),
       keyOrder: template.keyOrder,
       fields: template.fields,
       views: template.views,
       naming: template.naming,
       bodySignature: bodySignature(template.body),
+      content: template.content,
     }])),
   };
 }
@@ -309,19 +440,46 @@ export function taxonomyRouting(path: string, bytes: Uint8Array): TaxonomyRoutin
   if (root === null) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) must be a JSON object`);
   const targetFolders = new Map<string, TemplateFolderPath>();
   const templates = jsonRecordValue(root.templates);
-  for (const [templateId, raw] of Object.entries(templates ?? {})) {
+  if (root.templates !== undefined && templates === null) fail("TEMPLATE_SOURCE_INVALID", "taxonomy.templates must be a mapping");
+  const definitionIds = new Set<string>();
+  for (const [rawTemplateId, raw] of Object.entries(templates ?? {})) {
+    let templateId: string;
+    try {
+      templateId = validateTemplateId(rawTemplateId);
+    } catch {
+      fail("TEMPLATE_SOURCE_INVALID", `taxonomy.templates.${rawTemplateId} must use a stable template ID`);
+    }
+    if (definitionIds.has(templateId)) fail("TEMPLATE_ID_DUPLICATE", `taxonomy.templates contains canonically equivalent template keys for ${templateId}`);
+    definitionIds.add(templateId);
     const definition = jsonRecordValue(raw);
+    if (definition === null || (definition.templateFolder !== undefined && typeof definition.templateFolder !== "string")) fail("TEMPLATE_SOURCE_INVALID", `taxonomy.templates.${rawTemplateId} has invalid placement`);
     if (typeof definition?.templateFolder === "string") targetFolders.set(templateId, normalizeTemplateFolderPath(definition.templateFolder));
   }
   const folders = jsonRecordValue(root.folders);
   for (const [folder, raw] of Object.entries(folders ?? {})) {
     const definition = jsonRecordValue(raw);
-    const templateId = typeof definition?.templateId === "string" ? definition.templateId : typeof definition?.template === "string" ? definition.template : undefined;
+    if (definition?.templateFolder !== undefined && typeof definition.templateFolder !== "string") fail("TEMPLATE_SOURCE_INVALID", `taxonomy.folders.${folder}.templateFolder must be a string`);
+    const rawTemplateId = typeof definition?.templateId === "string" ? definition.templateId : typeof definition?.template === "string" ? definition.template : undefined;
+    const templateId = rawTemplateId === undefined ? undefined : (() => {
+      try {
+        return validateTemplateId(rawTemplateId);
+      } catch {
+        fail("TEMPLATE_SOURCE_INVALID", `taxonomy.folders.${folder} template reference must use a stable template ID`);
+      }
+    })();
     const targetFolder = typeof definition?.templateFolder === "string" ? definition.templateFolder : folder;
     if (templateId !== undefined) targetFolders.set(templateId, normalizeTemplateFolderPath(targetFolder));
     if (definition?.templates !== undefined) {
       if (!Array.isArray(definition.templates) || definition.templates.some(item => typeof item !== "string")) fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) folders.${folder}.templates must contain template IDs`);
-      for (const id of definition.templates as readonly string[]) targetFolders.set(id, normalizeTemplateFolderPath(targetFolder));
+      for (const rawId of definition.templates as readonly string[]) {
+        let id: string;
+        try {
+          id = validateTemplateId(rawId);
+        } catch {
+          fail("TEMPLATE_SOURCE_INVALID", `taxonomy (${path}) folders.${folder}.templates must contain stable template IDs`);
+        }
+        targetFolders.set(id, normalizeTemplateFolderPath(targetFolder));
+      }
     }
   }
   const axes: Record<string, GlobalAxis> = {};
@@ -375,65 +533,218 @@ export async function loadResolvedTemplates(vault: string, options: LoadResolved
   if (obsidian === null) fail("TEMPLATE_SOURCE_INVALID", "Obsidian type authority (.obsidian/types.json) is missing");
   const obsidianRaw = await required(root, sourcePath(root, obsidian.source), "Obsidian type authority");
   const bindings = Object.values(policy.templates).sort((a, b) => a.templateId.localeCompare(b.templateId));
-  const seen = new Set<string>();
-  for (const binding of bindings) {
-    const normalized = deriveTemplateSourcePath(binding);
-    if (seen.has(normalized)) fail("TEMPLATE_SOURCE_DUPLICATE", `registered template source ${normalized} is duplicated`);
-    seen.add(normalized);
-  }
-  for (const extra of options.sourcePaths ?? []) {
-    const normalized = normalizeTemplateSourcePath(extra);
-    if (!seen.has(normalized)) fail("TEMPLATE_SOURCE_INVALID", `explicit source ${normalized} is not a registered template`);
-  }
-  const verified = await Promise.all(bindings.map(binding => verifyTemplateSourcePath(root, deriveTemplateSourcePath(binding))));
-  const extracted = await Promise.all(bindings.map(async (binding, index) => {
-    const path = deriveTemplateSourcePath(binding);
-    const bytes = new Uint8Array(await readFile(verified[index]!.absolutePath));
-    return resolveClassifiedTemplateSource(path, bytes, binding.renderer);
-  }));
   const descriptors: SourceDescriptor[] = [
     { logicalId: "template-policy", signature: policyRaw.signature },
     { logicalId: "taxonomy", signature: taxonomyRaw.signature },
     { logicalId: "obsidian-types", signature: obsidianRaw.signature },
-    ...extracted.map(template => ({ path: template.sourcePath, signature: template.sourceDigest })),
   ];
-  const actualInput = signature(descriptors);
-  if (actualInput !== projection.generatedFrom.inputSignature || !sameSources(projection.generatedFrom.sources, descriptors)) {
-    fail("TEMPLATE_SOURCE_DRIFT", "generated projection sources (logical authority content digests or verified template paths) do not match current vault sources");
+  if (sharedAuthoritySignature(descriptors) !== projection.generatedFrom.sharedAuthoritySignature) {
+    fail("TEMPLATE_SOURCE_DRIFT", "shared template authorities changed; the projection is stale for the whole vault");
   }
-  const sourcePaths = extracted.map(template => template.sourcePath).sort((a, b) => a.localeCompare(b)) as TemplateSourcePath[];
+  if (!projectionHeaderMatches(projection, descriptors)) {
+    fail("TEMPLATE_SOURCE_DRIFT", "generated projection control authorities do not match current vault sources");
+  }
+
+  const prior = validatedProjectionPriorEntries(policy, projection);
+  const census = await templateCensus(root, policy, prior);
+  const scopeFailure = selectedFolderScanFailure(policy, census.diagnostics);
+  if (scopeFailure !== undefined) {
+    fail("TEMPLATE_REVIEW_REQUIRED", "template review is required before publishing while a selected template scope cannot be scanned");
+  }
+  const censusEntries = new Map(census.entries.map(entry => [entry.sourcePath, entry]));
+  const bindingByPath = new Map(bindings.map(binding => [deriveTemplateSourcePath(binding), binding]));
+  const pending: Record<string, PendingTemplate> = {};
+  const addPending = (
+    id: import("./types.js").TemplateId | undefined,
+    path: TemplateSourcePath,
+    kind: PendingTemplateKind,
+    diagnostics: readonly Diagnostic[],
+    oldPath?: TemplateSourcePath,
+    newPath?: TemplateSourcePath,
+  ): void => {
+    const key = id !== undefined && pending[id] === undefined ? id : path;
+    const previous = pending[key];
+    pending[key] = {
+      ...(id === undefined ? {} : { id }),
+      path,
+      kind: previous?.kind ?? kind,
+      diagnostics: [...(previous?.diagnostics ?? []), ...diagnostics],
+      ...(oldPath === undefined ? {} : { oldPath }),
+      ...(newPath === undefined ? {} : { newPath }),
+    };
+  };
+  const censusDiagnostic = (item: CensusDiagnostic): Diagnostic => ({
+    code: "TEMPLATE_SOURCE_INVALID",
+    ...(item.path === undefined ? {} : { path: item.path }),
+    ...(item.templateId === undefined ? {} : { templateId: item.templateId }),
+    message: `${item.code}: ${item.message}`,
+  });
+  for (const item of census.diagnostics) {
+    if (item.path === undefined) continue;
+    let path: TemplateSourcePath;
+    try { path = normalizeTemplateSourcePath(item.path); } catch { continue; }
+    const entry = censusEntries.get(path);
+    const binding = bindingByPath.get(path);
+    addPending(binding?.templateId ?? entry?.templateId, path, "invalid", [censusDiagnostic(item)]);
+  }
+  const diffPending = new Set<string>();
+  for (const diff of census.diffs) {
+    if (diff.kind === "edited" || diff.kind === "added" || diff.kind === "deleted") {
+      const path = diff.sourcePath;
+      const binding = bindingByPath.get(path);
+      const id = binding?.templateId ?? diff.templateId;
+      addPending(id, path, diff.kind, []);
+      diffPending.add(path);
+      continue;
+    }
+    if (diff.kind === "renamed") {
+      const currentPath = diff.newSourcePath ?? diff.sourcePath;
+      const oldPath = diff.oldSourcePath;
+      if (!bindingByPath.has(currentPath) || diff.confirmationRequired) {
+        addPending(diff.templateId, currentPath, "renamed", [], oldPath, currentPath);
+        if (diff.confirmationRequired) diffPending.add(currentPath);
+      }
+    }
+  }
+  for (const entry of census.entries) {
+    if (bindingByPath.has(entry.sourcePath)) continue;
+    addPending(entry.templateId, entry.sourcePath, "added", entry.diagnostics.map(censusDiagnostic));
+  }
+  const sourcePaths = [...new Set([
+    ...bindings.map(binding => deriveTemplateSourcePath(binding)),
+    ...census.entries.map(entry => entry.sourcePath),
+  ])].sort((a, b) => a.localeCompare(b)) as TemplateSourcePath[];
+  for (const extra of options.sourcePaths ?? []) {
+    const normalized = normalizeTemplateSourcePath(extra);
+    if (!sourcePaths.includes(normalized)) fail("TEMPLATE_SOURCE_INVALID", `explicit source ${normalized} is outside the selected template scope`);
+  }
+
+  const freshBindings: TemplateBinding[] = [];
+  const extracted = new Map<string, ResolvedClassifiedTemplateSource>();
+  const resolvedContent = new Map<string, ReturnType<typeof contentContract>>();
+  const projectionSources = new Map(projection.generatedFrom.sources.flatMap(source => source.path === undefined ? [] : [[source.path, source.signature] as const]));
+  for (const binding of bindings) {
+    const path = deriveTemplateSourcePath(binding);
+    const entry = censusEntries.get(path);
+    const projectedSignature = projectionSources.get(path);
+    if (entry === undefined) {
+      if (!pending[binding.templateId]) addPending(binding.templateId, path, "deleted", []);
+      continue;
+    }
+    const approvedSignatureMismatch = binding.approvedSourceSignature !== undefined
+      && binding.approvedSourceSignature !== entry.signature;
+    if (
+      entry.diagnostics.length > 0
+      || diffPending.has(path)
+      || projectedSignature === undefined
+      || projectedSignature !== entry.signature
+      || approvedSignatureMismatch
+    ) {
+      if (!pending[binding.templateId]) {
+        addPending(
+          binding.templateId,
+          path,
+          projectedSignature === undefined ? "invalid" : "edited",
+          [
+            ...entry.diagnostics.map(censusDiagnostic),
+            ...(approvedSignatureMismatch ? [{
+              code: "TEMPLATE_SOURCE_DRIFT" as const,
+              path,
+              templateId: binding.templateId,
+              message: "approved source signature does not match the current source",
+            }] : []),
+          ],
+        );
+      }
+      continue;
+    }
+    try {
+      const resolved = resolveClassifiedTemplateSource(path, entry.bytes, binding.renderer);
+      const content = contentContract(binding, resolved);
+      if (content.bodySignature !== bodySignature(resolved.body)) {
+        addPending(binding.templateId, path, "invalid", [{
+          code: "TEMPLATE_SOURCE_INVALID",
+          path,
+          templateId: binding.templateId,
+          message: "approved content contract bodySignature does not match the current source body",
+        }]);
+        continue;
+      }
+      extracted.set(binding.templateId, resolved);
+      resolvedContent.set(binding.templateId, content);
+      freshBindings.push(binding);
+    } catch (error: unknown) {
+      addPending(binding.templateId, path, "invalid", [{
+        code: "TEMPLATE_SOURCE_INVALID",
+        path,
+        templateId: binding.templateId,
+        message: error instanceof Error ? error.message : String(error),
+      }]);
+    }
+  }
+  const freshDescriptors: SourceDescriptor[] = [
+    ...descriptors,
+    ...freshBindings.map(binding => {
+      const template = extracted.get(binding.templateId);
+      if (template === undefined) fail("TEMPLATE_SOURCE_INVALID", `fresh source is missing for ${binding.templateId}`);
+      return { path: template.sourcePath, signature: template.sourceDigest };
+    }),
+  ];
+  const actualInput = sourceSignature(freshDescriptors);
   const templates: Record<string, ResolvedTemplate> = {};
-  for (let index = 0; index < bindings.length; index += 1) {
-    const binding = bindings[index]!;
-    const template = extracted[index]!;
-    const contract = policy.contracts[binding.contract];
-    if (contract === undefined) fail("TEMPLATE_POLICY_DANGLING_FIELD", `template ${binding.templateId} references unknown contract ${binding.contract}`);
-    const fields = binding.renderer === "none"
-      ? policyContractFields(policy.base, contract.fields, obsidian.types)
-      : rendererFields(policy.base, contract.fields, template.frontmatter, obsidian.types, template.filledBy);
+  for (const binding of freshBindings) {
+    const template = extracted.get(binding.templateId);
+    const content = resolvedContent.get(binding.templateId);
+    if (template === undefined || content === undefined) continue;
+    const projected = deriveManagedTemplateProjection(
+      policy,
+      binding,
+      template,
+      obsidian.types,
+      taxonomy.targetFolders.get(binding.templateId),
+    );
     templates[binding.templateId] = {
       id: binding.templateId,
       destinationClass: binding.destinationClass,
       renderer: binding.renderer,
       sourcePath: template.sourcePath,
-      targetFolder: requireTaxonomyPlacement(taxonomy, binding.templateId),
+      ...(projected.targetFolder === undefined ? {} : { targetFolder: projected.targetFolder }),
       bom: template.bom,
       eol: template.eol,
       finalNewline: template.finalNewline,
       keyOrder: template.keyOrder,
-      fields,
+      fields: projected.fields,
       frontmatterTemplate: template.frontmatter,
       body: template.body,
+      content,
       naming: binding.naming,
-      views: contract.views,
+      views: projected.views,
       inputSignature: actualInput,
       templateSignature: template.sourceDigest,
       managedSourcePaths: sourcePaths,
     };
   }
   const expected = managed({ base: policy.base, globalAxes: taxonomy.globalAxes, templates: {} }, templates);
-  if (!isDeepStrictEqual(expected, projection.managed)) fail("PROJECTION_PAYLOAD_TAMPERED", "managed projection does not equal the canonical resolved template projection");
-  return { base: policy.base, templates: Object.fromEntries(Object.entries(templates).sort(([a], [b]) => a.localeCompare(b))), ...(policy.defaultTemplate === undefined ? {} : { defaultTemplate: policy.defaultTemplate }), globalAxes: taxonomy.globalAxes, ...(policy.writers === undefined ? {} : { writers: policy.writers }), managedSourcePaths: sourcePaths, inputSignature: actualInput };
+  const storedFresh = {
+    base: projection.managed.base,
+    globalAxes: projection.managed.globalAxes,
+    templates: Object.fromEntries(Object.keys(templates).flatMap(id => {
+      const stored = projection.managed.templates[id];
+      return stored === undefined ? [] : [[id, stored] as const];
+    })),
+  };
+  if (!isDeepStrictEqual(expected, storedFresh)) fail("PROJECTION_PAYLOAD_TAMPERED", "managed projection does not equal the canonical resolved template projection");
+  return {
+    base: policy.base,
+    templates: Object.fromEntries(Object.entries(templates).sort(([a], [b]) => a.localeCompare(b))),
+    pending: Object.fromEntries(Object.entries(pending).sort(([a], [b]) => a.localeCompare(b))),
+    ...(policy.defaultTemplate === undefined ? {} : { defaultTemplate: policy.defaultTemplate }),
+    globalAxes: taxonomy.globalAxes,
+    ...(policy.writers === undefined ? {} : { writers: policy.writers }),
+    managedSourcePaths: sourcePaths,
+    inputSignature: actualInput,
+    sharedAuthoritySignature: sharedAuthoritySignature(descriptors),
+  };
 }
 
 /**
@@ -483,12 +794,78 @@ function requiredTransition(templateId: string, path: TemplateSourcePath, transi
   return transition;
 }
 
+type GuardedTemplateChange = Exclude<TemplateSemanticChange, { readonly mode: "reconcile" }>;
+
+function pendingBelongsToChange(
+  pending: PendingTemplate,
+  change: GuardedTemplateChange,
+  currentPolicy: TemplatePolicy,
+): boolean {
+  if (change.mode !== "create" && change.mode !== "update") return false;
+  const templateId = change.mode === "create" ? change.binding.templateId : change.templateId;
+  const paths = new Set<string>([
+    change.source.path,
+    deriveTemplateSourcePath(change.binding),
+  ]);
+  const currentBinding = currentPolicy.templates[templateId];
+  if (currentBinding !== undefined) paths.add(deriveTemplateSourcePath(currentBinding));
+  return [pending.path, pending.oldPath, pending.newPath]
+    .some(path => path !== undefined && paths.has(path));
+}
+
+/** Rejects unrelated source drift before a guarded operation can rederive controls. */
+export function assertNoUnexpectedTemplatePending(
+  resolved: ResolvedConvention,
+  change: GuardedTemplateChange,
+  currentPolicy: TemplatePolicy,
+): void {
+  const unexpected = Object.values(resolved.pending).find(item => !pendingBelongsToChange(item, change, currentPolicy));
+  if (unexpected !== undefined) {
+    fail(
+      "TEMPLATE_REVIEW_REQUIRED",
+      `template review is required before ${change.mode}; pending source ${unexpected.path} must be confirmed`,
+    );
+  }
+}
+
+async function authorSourceSignature(
+  vault: string,
+  change: GuardedTemplateChange,
+): Promise<GuardedTemplateChange> {
+  if (change.mode !== "create" && change.mode !== "update") return change;
+  if (change.mode === "create" && change.source.publication === "verify-existing") return change;
+  const capturedBytes = new Uint8Array(change.source.bytes);
+  if (change.source.publication === "verify-existing") {
+    const existing = await manifestSourceFile(vault, change.source.path);
+    if (existing.state !== "present") {
+      fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `registered source is absent for ${change.binding.templateId}`);
+    }
+    if (!sameManifestBytes(existing.bytes, capturedBytes)) {
+      fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `registered source does not match for ${change.binding.templateId}`);
+    }
+  }
+  const classified = resolveClassifiedTemplateSource(change.source.path, capturedBytes, change.binding.renderer);
+  return {
+    ...change,
+    source: { ...change.source, bytes: capturedBytes },
+    binding: {
+      ...change.binding,
+      approvedSourceSignature: manifestDigest(capturedBytes),
+      approvedBodySignature: bodySignature(classified.body),
+    },
+  };
+}
+
 /** Builds semantic publication data. It does not publish or reinterpret its manifest. */
-export async function buildTemplateCompositionManifest(vault: string, change: TemplateSemanticChange, options: TemplateCompositionOptions): Promise<TemplateCompositionManifest> {
-  const repairsAlreadyMovedSource =
-    change.mode === "update" && change.moveStrategy === "register-already-moved";
-  if (options.allowProjectionRepair !== true && !repairsAlreadyMovedSource) {
-    await loadResolvedTemplates(vault);
+export async function buildTemplateCompositionManifest(
+  vault: string,
+  requestedChange: GuardedTemplateChange,
+  options: TemplateCompositionOptions,
+): Promise<TemplateCompositionManifest> {
+  const normalizedChange = normalizeTemplateSemanticChange(requestedChange) as GuardedTemplateChange;
+  const change = await authorSourceSignature(vault, normalizedChange);
+  if (change.mode === "create" && change.source.publication === "verify-existing") {
+    fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "create source publication must be write");
   }
   const policyPath = ".oms/template-policy.json";
   const taxonomyPath = ".oms/taxonomy.json";
@@ -511,30 +888,26 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
   ) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "control CAS does not match");
   if (jsonRecord(options.taxonomy.proposedBytes, taxonomyPath) === null || (options.taxonomy.action === "verify-only" && !sameManifestBytes(taxonomyFile.bytes, options.taxonomy.proposedBytes))) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "taxonomy proposal is invalid");
   const currentPolicy = parseTemplatePolicy(new TextDecoder().decode(policyFile.bytes));
+  assertNoUnexpectedTemplatePending(await loadResolvedTemplates(vault), change, currentPolicy);
   const proposedPolicy = applyTemplatePolicyChange(currentPolicy, change);
   const proposedTaxonomy = taxonomyRouting(taxonomyPath, options.taxonomy.proposedBytes);
   let projection: DerivedProjection | undefined;
   if (projectionState.state === "present") {
-    try {
-      projection = parseDerivedProjection(new TextDecoder().decode(projectionState.bytes));
-    } catch (error: unknown) {
-      if (options.allowProjectionRepair !== true) throw error;
-    }
-  } else if (options.allowProjectionRepair !== true) {
+    projection = parseDerivedProjection(new TextDecoder().decode(projectionState.bytes));
+  } else {
     fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `${projectionPath} must exist`);
   }
   const obsidian = await loadObsidianTypes(vault);
   if (obsidian === null) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `${obsidianPath} must exist`);
-  const proposedPolicyBytes = change.mode === "regenerate"
-    ? new Uint8Array(policyFile.bytes)
-    : manifestBytes(serializeTemplatePolicy(proposedPolicy));
+  const proposedPolicyBytes = manifestBytes(serializeTemplatePolicy(proposedPolicy));
   const currentBindings = Object.values(currentPolicy.templates).sort((a,b) => a.templateId.localeCompare(b.templateId));
   const proposedBindings = Object.values(proposedPolicy.templates).sort((a,b) => a.templateId.localeCompare(b.templateId));
   const currentSources = new Map<string, VerifiedFileState>();
   for (const binding of currentBindings) currentSources.set(binding.templateId, await manifestSourceFile(vault, deriveTemplateSourcePath(binding)));
   for (const source of options.expected.sources) {
-    const binding = currentPolicy.templates[source.templateId];
-    const current = requiredSource(source.templateId, currentSources.get(source.templateId));
+    const templateId = validateTemplateId(source.templateId);
+    const binding = currentPolicy.templates[templateId];
+    const current = requiredSource(templateId, currentSources.get(templateId));
     if (binding === undefined || deriveTemplateSourcePath(binding) !== source.path || !matchExpectation(current, source.expected)) {
       fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", "source CAS does not match");
     }
@@ -639,27 +1012,25 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     if (source.state !== "present") fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `proposed source is absent for ${binding.templateId}`);
     const bindingSourcePath = deriveTemplateSourcePath(binding);
     const parsed = resolveClassifiedTemplateSource(bindingSourcePath, source.bytes, binding.renderer);
-    const contract = proposedPolicy.contracts[binding.contract];
-    if (contract === undefined) fail("TEMPLATE_TRANSACTION_MANIFEST_INVALID", `contract is missing for ${binding.templateId}`);
     proposedTemplates[binding.templateId] = {
-      templateId: binding.templateId,
-      destinationClass: binding.destinationClass,
-      renderer: binding.renderer,
-      sourcePath: bindingSourcePath,
-      targetFolder: requireTaxonomyPlacement(proposedTaxonomy, binding.templateId),
-      keyOrder: parsed.keyOrder,
-      fields: binding.renderer === "none"
-        ? policyContractFields(proposedPolicy.base, contract.fields, obsidian.types)
-        : rendererFields(proposedPolicy.base, contract.fields, parsed.frontmatter, obsidian.types, parsed.filledBy),
-      views: contract.views,
-      naming: binding.naming,
-      bodySignature: bodySignature(parsed.body),
+      ...deriveManagedTemplateProjection(
+        proposedPolicy,
+        binding,
+        parsed,
+        obsidian.types,
+        proposedTaxonomy.targetFolders.get(binding.templateId),
+      ),
       ...(binding.extensions === undefined ? {} : { extensions: binding.extensions }),
     };
   }
   const proposedProjection: DerivedProjection = {
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: proposedResolvedInput, sources: proposedDescriptors },
+    generatedFrom: {
+      algorithm: "sha256-lp-v1",
+      inputSignature: proposedResolvedInput,
+      sharedAuthoritySignature: sharedAuthoritySignature(proposedDescriptors),
+      sources: proposedDescriptors,
+    },
     managed: { base: proposedPolicy.base, templates: proposedTemplates, globalAxes: proposedTaxonomy.globalAxes },
     ...(projection?.extensions === undefined ? {} : { extensions: projection.extensions }),
   };
@@ -707,8 +1078,6 @@ export async function buildTemplateCompositionManifest(vault: string, change: Te
     if (currentPolicy.templates[change.templateId]?.destinationClass !== change.toClass) affectedIds.add(change.templateId);
   } else if (change.mode === "relocate-folder") {
     for (const binding of proposedBindings) if (binding.destinationClass === "managed-default") affectedIds.add(binding.templateId);
-  } else if (change.mode === "regenerate") {
-    for (const binding of proposedBindings) affectedIds.add(binding.templateId);
   }
   const operationBindings = change.mode === "remove"
     ? [currentPolicy.templates[change.templateId]!]

@@ -3,22 +3,41 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { execute, register, resume, diagnose, regenerate, load, scan } = vi.hoisted(() => ({
+const { execute, resume, diagnose, regenerate, load, reviewContext, next, answer, commit } = vi.hoisted(() => ({
   execute: vi.fn(async (_target: any, change: any, request: any) => ({ status: request.dryRun ? "planned" : "applied", mode: change.mode, approvalDigest: `sha256:${"a".repeat(64)}` })),
-  register: vi.fn(async (_vault: any, request: any, guard: any) => ({ status: guard.dryRun ? "planned" : "applied", mode: "create", templateId: request.templateId })),
   resume: vi.fn(async () => ({ status: "applied", mode: "update" })),
   diagnose: vi.fn(async () => ({ status: "healthy", diagnostics: [] })),
-  regenerate: vi.fn(async ({ request }: any) => ({ status: request.dryRun ? "planned" : "applied", mode: "regenerate" })),
+  regenerate: vi.fn(async ({ request }: { request: { dryRun?: boolean } }) => ({ status: request.dryRun ? "planned" : "applied", mode: "reconcile" })),
   load: vi.fn(async () => ({ inputSignature: `sha256:${"b".repeat(64)}`, templates: { note: { id: "note", renderer: "obsidian-core", sourcePath: "Templates/note.md" } } })),
-  scan: vi.fn(async () => ({ templateFolders: [], candidates: [], bindings: [], diagnostics: [], unresolved: [] })),
+  reviewContext: vi.fn(async () => ({
+    vault: "/vault",
+    censusDigest: `sha256:${"c".repeat(64)}`,
+    projectionUsable: false,
+    freshTemplateIds: [],
+    policy: {},
+    obsidianTypes: {},
+    census: {
+      digest: `sha256:${"d".repeat(64)}`,
+      entries: [{ sourcePath: "Templates/note.md", signature: `sha256:${"e".repeat(64)}`, templateId: "note", diagnostics: [], bytes: new Uint8Array() }],
+      diffs: [],
+      diagnostics: [],
+    },
+  })),
+  next: vi.fn(async () => ({ state: "question", next: { questionId: `sha256:${"f".repeat(64)}` }, censusDigest: `sha256:${"c".repeat(64)}`, expectedLedgerDigest: null })),
+  answer: vi.fn(async (_target: any, request: any) => ({ state: "confirm", ...request, expectedLedgerDigest: `sha256:${"e".repeat(64)}` })),
+  commit: vi.fn(async (_target: any, request: any) => ({ status: request.dryRun ? "planned" : "applied", mode: "reconcile", approvalDigest: `sha256:${"a".repeat(64)}` })),
 }));
 
 vi.mock("../kernel/templates/operations.js", () => ({ executeTemplateOperation: execute }));
-vi.mock("../kernel/templates/register.js", () => ({ registerExistingTemplate: register }));
 vi.mock("../kernel/templates/transaction.js", () => ({ resumeTemplateTransaction: resume, TEMPLATE_MUTATION_MARKER_PATH: ".oms/template-mutation.json" }));
 vi.mock("../kernel/templates/doctor.js", () => ({ diagnoseTemplates: diagnose, regenerateTypes: regenerate }));
 vi.mock("../kernel/templates/resolver.js", () => ({ loadResolvedTemplates: load }));
-vi.mock("../kernel/templates/migration.js", () => ({ planTemplateMigration: scan }));
+vi.mock("../kernel/templates/review-context.js", () => ({ readTemplateReviewContext: reviewContext }));
+vi.mock("../kernel/templates/interview-service.js", () => ({
+  nextTemplateInterview: next,
+  answerTemplateInterview: answer,
+  commitTemplateContracts: commit,
+}));
 vi.mock("../kernel/link/link.js", () => ({ resolveEffectiveVault: vi.fn(async () => ({ vault: process.cwd(), source: "cwd", scope: null })) }));
 
 import { runTemplateCommand, templateUsage } from "./template-command.js";
@@ -32,7 +51,7 @@ async function vault(): Promise<string> {
   await mkdir(path.join(root, "Templates"), { recursive: true });
   await writeFile(path.join(root, ".oms", "template-policy.json"), JSON.stringify({
     version: 3,
-    templateFolders: [{ path: "Templates", mode: "manual", default: true }],
+    templateFolders: [{ path: "Templates", default: true }],
     base: { fields: {} },
     contracts: { base: { fields: {}, intent: "Base", views: [] }, article: { fields: {}, intent: "Article", views: [] } },
     templates: { note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "base", naming: "{{date}}-{{slug}}.md" } },
@@ -55,7 +74,9 @@ function output(): any { return JSON.parse(String(log.mock.calls.at(-1)?.[0])); 
 describe("template command", () => {
   it("documents every public verb and approval protocol", () => {
     const usage = templateUsage();
-    for (const verb of ["list", "show", "scan", "check", "add", "update", "move", "remove", "default", "regenerate-types"]) expect(usage).toContain(verb);
+    for (const verb of ["scan", "list", "show", "add", "update", "move", "remove", "default", "check", "regenerate-types", "review", "answer", "commit"]) expect(usage).toContain(verb);
+    expect(usage).not.toContain("--mode");
+    expect(usage).not.toContain("add <existing-file>");
     expect(usage).toContain("--yes --approved-digest");
   });
 
@@ -63,11 +84,51 @@ describe("template command", () => {
     const root = await vault();
     await runTemplateCommand(["list", "--vault", root]); expect(output().templates[0].id).toBe("note");
     await runTemplateCommand(["show", "note", "--vault", root]); expect(output().template.id).toBe("note");
-    await runTemplateCommand(["scan", "--vault", root]); expect(scan).toHaveBeenCalledWith(root);
+    await runTemplateCommand(["scan", "--vault", root]); expect(reviewContext).toHaveBeenCalledWith(root);
+    expect(output()).toMatchObject({ projectionUsable: false, entries: [{ sourcePath: "Templates/note.md" }] });
     await runTemplateCommand(["check", "--vault", root]); expect(diagnose).toHaveBeenCalledWith({ vault: root, source: "explicit" });
     expect(output()).toMatchObject({ vault: root, status: "healthy", diagnostics: [] });
     expect(process.exitCode).toBe(0);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("forwards review, answer, and commit leaves without collapsing their guards", async () => {
+    const root = await vault();
+    const questionId = `sha256:${"f".repeat(64)}`;
+    const censusDigest = `sha256:${"c".repeat(64)}`;
+    const ledgerDigest = `sha256:${"e".repeat(64)}`;
+
+    await runTemplateCommand(["review", "--vault", root]);
+    expect(next).toHaveBeenCalledWith({ vault: root, source: "explicit" });
+    await runTemplateCommand(["review", "--vault", root, "--dry-run"]);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+    expect(next).toHaveBeenCalledOnce();
+
+    await runTemplateCommand([
+      "answer", questionId, "--answer", '{"required":true}', "--census-digest", censusDigest,
+      "--ledger-digest", "null", "--vault", root,
+    ]);
+    expect(answer).toHaveBeenCalledWith(
+      { vault: root, source: "explicit" },
+      { questionId, answer: { required: true }, censusDigest, expectedLedgerDigest: null },
+    );
+    await runTemplateCommand(["answer", questionId, "--answer", "not-json", "--census-digest", censusDigest, "--ledger-digest", "null", "--vault", root]);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+    expect(answer).toHaveBeenCalledOnce();
+    await runTemplateCommand(["answer", questionId, "--answer", "true", "--census-digest", "sha256:BAD", "--ledger-digest", ledgerDigest, "--vault", root, "--yes"]);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+    expect(answer).toHaveBeenCalledOnce();
+
+    await runTemplateCommand(["commit", "--census-digest", censusDigest, "--ledger-digest", "null", "--vault", root, "--dry-run"]);
+    expect(commit).toHaveBeenCalledWith(
+      { vault: root, source: "explicit" },
+      { censusDigest, expectedLedgerDigest: null, dryRun: true },
+    );
+    await runTemplateCommand(["commit", "--census-digest", censusDigest, "--ledger-digest", ledgerDigest, "--vault", root, "--yes", "--approved-digest", digest]);
+    expect(commit).toHaveBeenLastCalledWith(
+      { vault: root, source: "explicit" },
+      { censusDigest, expectedLedgerDigest: ledgerDigest, approvedDigest: digest },
+    );
   });
 
   it("reports needs-repair as warning-only while preserving rejected and inconsistent failures", async () => {
@@ -86,18 +147,21 @@ describe("template command", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("registers folders as manual by default and never invents a creation default", async () => {
+  it("selects folders without registration modes and preserves explicit defaults", async () => {
     const root = await vault();
     await runTemplateCommand(["add", "External", "--vault", root, "--dry-run"]);
-    expect(execute).toHaveBeenCalledWith({ vault: root, source: "explicit" }, { mode: "register-folder", folder: { path: "External", mode: "manual" } }, { dryRun: true });
-    await runTemplateCommand(["add", "Other", "--mode", "auto", "--creation-default", "--vault", root, "--dry-run"]);
-    expect(execute).toHaveBeenLastCalledWith({ vault: root, source: "explicit" }, { mode: "register-folder", folder: { path: "Other", mode: "auto", default: true } }, { dryRun: true });
+    expect(execute).toHaveBeenCalledWith({ vault: root, source: "explicit" }, { mode: "register-folder", folder: { path: "External" } }, { dryRun: true });
+    await runTemplateCommand(["add", "Other", "--creation-default", "--vault", root, "--dry-run"]);
+    expect(execute).toHaveBeenLastCalledWith({ vault: root, source: "explicit" }, { mode: "register-folder", folder: { path: "Other", default: true } }, { dryRun: true });
   });
 
-  it("registers an existing classified source in place", async () => {
+  it("rejects per-file registration and retired folder modes", async () => {
     const root = await vault();
     await runTemplateCommand(["add", "Templates/note.md", "--id", "article", "--contract", "article", "--vault", root, "--dry-run"]);
-    expect(register).toHaveBeenCalledWith(root, expect.objectContaining({ templateId: "article", sourceFolder: "Templates", sourcePath: "Templates/note.md", renderer: "obsidian-core", filledBy: [], contract: "article" }), { dryRun: true });
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+    await runTemplateCommand(["add", "Templates", "--mode", "auto", "--vault", root, "--dry-run"]);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("creates from bounded content in the registered creation folder", async () => {
@@ -159,6 +223,12 @@ describe("template command", () => {
   it("rejects cwd-inferred mutation, unsafe paths, missing defaults/contracts, and oversized --from", async () => {
     await runTemplateCommand(["default", "note", "--dry-run"]);
     expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+    await runTemplateCommand(["answer", digest, "--answer", "true", "--census-digest", digest, "--ledger-digest", "null"]);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+    await runTemplateCommand(["commit", "--census-digest", digest, "--ledger-digest", "null", "--dry-run"]);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+    expect(answer).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
     const root = await vault();
     await runTemplateCommand(["add", "../escape", "--vault", root, "--dry-run"]);
     expect(output().status).toBe("rejected");
@@ -169,7 +239,7 @@ describe("template command", () => {
     await runTemplateCommand(["add", "--id", "script", "--from", script, "--vault", root, "--dry-run"]);
     expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_EXPRESSION_UNSUPPORTED" }] });
     await writeFile(path.join(root, ".oms", "template-policy.json"), JSON.stringify({
-      version: 3, templateFolders: [{ path: "Templates", mode: "manual" }], base: { fields: {} },
+      version: 3, templateFolders: [{ path: "Templates" }], base: { fields: {} },
       contracts: { base: { fields: {}, intent: "Base", views: [] } }, templates: {},
     }));
     const content = path.join(root, "content.md"); await writeFile(content, "---\ntemplate: other\n---\nbody\n");

@@ -1,8 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { inputDigest, approvalDigest, outputDigest } from "./canonical.js";
+import { acquireTransactionLock, atomicWrite, releaseTransactionLock } from "./file-lock.js";
 import { normalizeTemplateControlPath, normalizeTemplateSourcePath, verifyTemplateControlPath, verifyTemplateSourcePath } from "./paths.js";
 import { readBundledPackageVersion } from "../runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../runtime/event-journal.js";
@@ -35,8 +36,16 @@ async function state(vault: string, path: ManagedPath): Promise<VerifiedFileStat
 function matches(actual: VerifiedFileState, expected: FileExpectation): boolean { return actual.state === "absent" || expected.state === "absent" ? actual.state === expected.state : actual.signature === expected.signature; }
 async function verifyPath(vault: string, path: TransactionPath, expectation: FileExpectation): Promise<boolean> { if (path.startsWith(".oms/")) await verifyTemplateControlPath(vault, normalizeTemplateControlPath(path), { expected: "either" }); else await verifyTemplateSourcePath(vault, normalizeTemplateSourcePath(path), { expected: "either" }); return matches(await state(vault, path), expectation); }
 function manifestValid(manifest: TemplateCompositionManifest): boolean {
-  if (manifest.version !== 1 || manifest.controls.length !== 3 || Object.hasOwn(manifest, "legacyCleanup")) return false;
+  const modes = ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "reconcile"] as const;
+  if (manifest.version !== 1 || !modes.includes(manifest.mode) || manifest.controls.length !== 3 || Object.hasOwn(manifest, "legacyCleanup")) return false;
   const paths: readonly ControlPath[] = [".oms/template-policy.json", ".oms/taxonomy.json", ".oms/types.json"];
+  if (manifest.mode === "reconcile" && (
+    manifest.sources.some(source => source.action !== "verify-only"
+      || !matches(source.current, source.expectedCurrent)
+      || !matches(source.current, source.proposed))
+    || manifest.outputs.some(output => !paths.some(path => path === output.finalVaultRelativePath))
+    || manifest.moves.some(move => move.strategy === "oms-managed-rename")
+  )) return false;
   if (!manifest.controls.every((control, index) => control.path === paths[index] && control.proposed.signature === sha(control.proposed.bytes))) return false;
   try {
     if (manifest.current.inputDigest !== inputDigest(manifest.current.input) || manifest.proposed.inputDigest !== inputDigest(manifest.proposed.input)) return false;
@@ -55,7 +64,7 @@ function manifestValid(manifest: TemplateCompositionManifest): boolean {
 }
 function unchanged(manifest: TemplateCompositionManifest): boolean { return manifest.sources.every(source => source.action === "verify-only") && manifest.controls.every(control => control.action === "verify-only"); }
 function transactionId(manifest: TemplateCompositionManifest): string { return createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32); }
-function isMarkerPath(path: unknown): path is TemplateTransactionMarkerPath { return path === ".oms/template-migration.json" || path === ".oms/template-transaction.json" || path === ".oms/template-backfill.json" || path === ".oms/template-regenerate.json"; }
+function isMarkerPath(path: unknown): path is TemplateTransactionMarkerPath { return path === ".oms/template-migration.json" || path === ".oms/template-transaction.json" || path === ".oms/template-backfill.json"; }
 function isTransactionPath(path: ManagedPath): path is TransactionPath { return !isMarkerPath(path); }
 function markerDirectory(markerPath: TemplateTransactionMarkerPath): string { return markerPath.slice(".oms/".length, -".json".length); }
 function transactionDirectory(vault: string, id: string, marker: TemplateTransactionMarkerPath): string { return join(vault, ".oms", ".template-transactions", id, markerDirectory(marker)); }
@@ -118,7 +127,6 @@ function recordTransactionReceipt(vault: string, invocation: RuntimeInvocation, 
       .filter(source => source.action === "write" || source.action === "delete")
       .map(source => source.templateId),
   );
-  const projectionChanged = manifest.controls.some(control => control.kind === "projection" && control.action === "write");
   for (const operation of receipt.operations) {
     let kind: string | null = null;
     if (operation.kind === "create") {
@@ -135,8 +143,6 @@ function recordTransactionReceipt(vault: string, invocation: RuntimeInvocation, 
       if (currentBindings.has(operation.templateId) && !proposedBindings.has(operation.templateId)) kind = "template-remove";
     } else if (operation.kind === "default") {
       kind = "template-default";
-    } else if (operation.kind === "regenerate" && projectionChanged) {
-      kind = "template-regenerate";
     }
     if (kind === null) continue;
     appendJournalEvent(vault, createRuntimeEvent(invocation, {
@@ -250,16 +256,6 @@ async function readMarker(vault: string, marker: TemplateTransactionMarkerPath):
 export async function templateMigrationAdmission(vault: string): Promise<"clear" | "migration-incomplete"> { const value = await readMarker(vault, DEFAULT_MARKER_PATH); return value.state === "valid" && value.marker.status === "complete" || value.state === "absent" ? "clear" : "migration-incomplete"; }
 export async function templateMigrationMarkerState(vault: string): Promise<"absent" | "in-progress" | "complete" | "invalid"> { const value = await readMarker(vault, DEFAULT_MARKER_PATH); return value.state === "valid" ? value.marker.status : value.state; }
 type Published = { readonly path: ManagedPath; readonly old: VerifiedFileState; readonly newState: VerifiedFileState };
-async function atomicWrite(target: string, content: Uint8Array | string): Promise<void> {
-  await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    await writeFile(temporary, content, { mode: 0o600 });
-    await rename(temporary, target);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-}
 async function publish(vault: string, path: ManagedPath, proposed: VerifiedFileState, published: Published[]): Promise<void> {
   const old = await state(vault, path);
   if (proposed.state === "absent") await rm(join(vault, path), { force: true });
@@ -318,65 +314,6 @@ function manifestFromPlan(plan: DurablePlan): TemplateCompositionManifest | null
     return manifestValid(manifest) ? manifest : null;
   } catch {
     return null;
-  }
-}
-
-interface TransactionLockOwner { readonly pid: number; readonly token: string; }
-async function acquireTransactionLock(directory: string, lock: string): Promise<string | null> {
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const token = randomUUID();
-  try {
-    await mkdir(lock, { mode: 0o700 });
-    await writeFile(join(lock, "owner.json"), `${JSON.stringify({ pid: process.pid, token })}\n`, { flag: "wx", mode: 0o600 });
-    return token;
-  } catch (error: unknown) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
-  }
-  let owner: TransactionLockOwner;
-  try {
-    const parsed = JSON.parse(await readFile(join(lock, "owner.json"), "utf8")) as TransactionLockOwner;
-    if (!Number.isSafeInteger(parsed.pid) || parsed.pid <= 0 || typeof parsed.token !== "string") return null;
-    owner = parsed;
-  } catch {
-    return null;
-  }
-  try {
-    process.kill(owner.pid, 0);
-    return null;
-  } catch (error: unknown) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") return null;
-  }
-  try {
-    await writeFile(join(lock, "takeover"), `${process.pid}\n${token}\n`, { flag: "wx", mode: 0o600 });
-  } catch (error: unknown) {
-    if (error instanceof Error && "code" in error && (error.code === "EEXIST" || error.code === "ENOENT")) return null;
-    throw error;
-  }
-  try {
-    const claimed = JSON.parse(await readFile(join(lock, "owner.json"), "utf8")) as TransactionLockOwner;
-    if (claimed.pid !== owner.pid || claimed.token !== owner.token) return null;
-  } catch {
-    return null;
-  }
-  const stale = `${lock}.stale.${token}`;
-  try {
-    await rename(lock, stale);
-  } catch (error: unknown) {
-    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "EEXIST")) return null;
-    throw error;
-  }
-  await rm(stale, { recursive: true, force: true });
-  return acquireTransactionLock(directory, lock);
-}
-async function releaseTransactionLock(lock: string, token: string): Promise<void> {
-  try {
-    const owner = JSON.parse(await readFile(join(lock, "owner.json"), "utf8")) as TransactionLockOwner;
-    if (owner.token !== token || owner.pid !== process.pid) return;
-    const released = `${lock}.released.${token}`;
-    await rename(lock, released);
-    await rm(released, { recursive: true, force: true });
-  } catch {
-    // A missing or replaced lock is never removed by a non-owner.
   }
 }
 
@@ -476,7 +413,11 @@ async function executeTemplateTransactionInternal(vault: string, manifest: Templ
   if (active.state === "invalid") return rejected(manifest, "migration-incomplete");
   if (active.state === "valid" && active.marker.status === "in-progress" && request.dryRun) return rejected(manifest, "migration-incomplete");
   if (markerPath !== DEFAULT_MARKER_PATH && await templateMigrationAdmission(vault) === "migration-incomplete") return rejected(manifest, "migration-incomplete");
-  if (unchanged(manifest)) { for (const control of manifest.controls) if (!(await verifyPath(vault, control.path, control.expectedCurrent))) return rejected(manifest, "MIGRATION_APPROVAL_MISMATCH"); return { status: "unchanged", mode: manifest.mode, currentInputDigest: manifest.current.inputDigest, proposedInputDigest: manifest.proposed.inputDigest, approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, operations: manifest.operations, moves: manifest.moves, outputs: manifest.outputs, writtenPaths: [], deletedPaths: [] }; }
+  if (unchanged(manifest)) {
+    for (const control of manifest.controls) if (!(await verifyPath(vault, control.path, control.expectedCurrent))) return rejected(manifest, "MIGRATION_APPROVAL_MISMATCH");
+    for (const source of manifest.sources) if (!(await verifyPath(vault, source.path, source.expectedCurrent))) return rejected(manifest, "MIGRATION_APPROVAL_MISMATCH");
+    return { status: "unchanged", mode: manifest.mode, currentInputDigest: manifest.current.inputDigest, proposedInputDigest: manifest.proposed.inputDigest, approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, operations: manifest.operations, moves: manifest.moves, outputs: manifest.outputs, writtenPaths: [], deletedPaths: [] };
+  }
   if (active.state === "valid" && active.marker.status === "complete") {
     if (active.marker.approvalDigest !== manifest.approvalDigest || active.marker.outputDigest !== manifest.outputDigest) {
       // A completed record is history: a distinct approved transaction may replace it.

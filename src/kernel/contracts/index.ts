@@ -31,6 +31,7 @@ const VALUE_TYPES: readonly ContractValueType[] = [
   "text", "string", "select", "number", "boolean", "checkbox", "date", "datetime",
   "list", "multitext", "multi", "tags", "aliases", "file",
 ];
+const decoder = new TextDecoder();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -69,15 +70,9 @@ function obsidianTypesPath(input: string): string {
   return path.join(input, ".obsidian", "types.json");
 }
 
-/** Read `.obsidian/types.json` through one read-only authority adapter. */
-export async function loadObsidianTypes(input: string): Promise<ObsidianTypeAuthority | null> {
-  const source = obsidianTypesPath(input);
-  let raw: string;
-  try { raw = await readFile(source, "utf-8"); }
-  catch (error) {
-    if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
+/** Parse captured `.obsidian/types.json` bytes through the authority adapter. */
+export function parseObsidianTypes(input: string | Uint8Array, source = "<captured>"): ObsidianTypeAuthority {
+  const raw = typeof input === "string" ? input : decoder.decode(input);
   let parsed: unknown;
   try { parsed = JSON.parse(raw) as unknown; }
   catch (error) { fail(`JSON parse failed (${error instanceof Error ? error.message : "invalid JSON"}).`); }
@@ -92,4 +87,16 @@ export async function loadObsidianTypes(input: string): Promise<ObsidianTypeAuth
     });
   } else Object.assign(types, parseTypeMap(candidate, "types"));
   return { types, source };
+}
+
+/** Read `.obsidian/types.json` through one read-only authority adapter. */
+export async function loadObsidianTypes(input: string): Promise<ObsidianTypeAuthority | null> {
+  const source = obsidianTypesPath(input);
+  let raw: string;
+  try { raw = await readFile(source, "utf-8"); }
+  catch (error) {
+    if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  return parseObsidianTypes(raw, source);
 }

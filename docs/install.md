@@ -85,13 +85,36 @@ Apply only with the exact digest reported by that dry run:
 oms setup --vault /path/to/vault --yes --approved-digest <digest>
 ```
 
-`--template-folder` is repeatable. Explicit paths use `auto` proposal mode; the first is the template-creation default. This is distinct from the optional policy `defaultTemplate`, which identifies a note binding. When the flag is omitted, only folders and modes saved in a valid v3 policy are selected.
+`--template-folder` is repeatable. Each explicitly selected path is a source
+census scope: every `.md` beneath it is a candidate, with no per-file
+registration or auto/manual folder mode. This is distinct from the optional
+policy `defaultTemplate`, which identifies a note binding.
 
-Obsidian core settings, Templater settings, and a bounded read-only vault walk provide suggestions only. An unselected non-interactive run stops with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and no approval digest; OMS does not fall back to invented `Templates` or `Inbox` directories. Setup never modifies notes and has no bundled defaults. `.obsidian/types.json` remains read-only; `.oms/template-policy.json` v3 holds semantics, naming, and source-folder registrations; `.oms/taxonomy.json` is the JSON placement authority; `.oms/types.json` is derived and must not be hand-edited. Legacy `taxonomy.yaml` and concept YAML files are neither parsed nor converted and remain untouched.
+Obsidian core settings, Templater, and a bounded read-only vault walk provide suggestions only. An unselected non-interactive run stops with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and no approval digest; OMS does not fall back to invented `Templates` or `Inbox` directories. Setup never modifies notes and has no bundled defaults. `.obsidian/types.json` remains read-only; `.oms/template-policy.json` v3 holds semantics and naming; `.oms/taxonomy.json` is the JSON placement authority; `.oms/types.json` is derived and must not be hand-edited. Legacy `taxonomy.yaml` and concept YAML files are neither parsed nor converted and remain untouched.
 
 The dry-run output includes `diagnostics` and `starterTemplates`. An incompatible template is excluded individually with its `TEMPLATE_EXPRESSION_UNSUPPORTED`, `TEMPLATE_SOURCE_INVALID`, or `TEMPLATE_ID_DUPLICATE` path, field when applicable, and remediation; compatible siblings remain in the proposal, while an all-incompatible selection stops with `TEMPLATE_CANDIDATE_INCOMPATIBLE`. Proposed IDs strip `.template` and `.eta` before slugging. Obsidian core `{{date:FMT}}` and `{{time:FMT}}` accept `YYYY YY MM M DD D HH H hh h mm m ss s A a` with `-`, `/`, `.`, `:`, space, or `T` separators; bracket literals are unsupported, and supported tags remain valid in `date` or `datetime` properties.
 
-If the selected default folder is empty, `starterTemplates` contains a proposed `note.md`. Dry-run does not create it; only an apply with the reviewed digest writes it through the guarded setup transaction. Doctor reports each changed template or authority as a separate `TEMPLATE_SOURCE_DRIFT` item with its path, expected and actual SHA-256 signatures, remediation, and template ID when registered.
+The census derives metadata (frontmatter keys, types, requiredness, and
+`filledBy`) and a bounded body structure of ATX headings, fenced code blocks,
+ordered/unordered list runs outside fences, and `<!-- oms:content -->`, plus
+document order/EOL/BOM/final-newline details. It does not claim to enforce
+paragraphs, setext headings, or all Markdown. The two-tier freshness gate checks
+shared authority first, then makes only a changed source's dependent template
+pending; unrelated writes remain available, while shared-authority changes fail
+closed for the whole vault.
+
+The initial host notice is exactly `템플릿에 변경이 있습니다` with exactly
+`확인하기` and `나중에`; it displays no template name, hash, or change class.
+`나중에` is host-only and makes no server call or ledger mutation.
+`확인하기` starts `write { op: "template", mode: "interview-next" }`.
+Answers use `interview-answer` and server-returned next/request/CAS fields.
+After all necessary questions, `commit-contracts` publishes only `.oms`
+controls after the user approves the exact final digest. Long-lived hosts
+surface returned `templateNotice` data even when boot instructions are stale.
+
+Doctor reports each changed template or authority as a separate
+`TEMPLATE_SOURCE_DRIFT` item with its path, expected and actual SHA-256
+signatures, remediation, and the template ID when available.
 
 Choose model lifecycle explicitly after setup:
 
@@ -112,17 +135,41 @@ pair fails loudly.
 Use `oms template list`, `show <id>`, and `scan` for proposals and inspection; `check` verifies current authority and reports runtime observations. Mutations use `--dry-run` followed by the same request with `--yes --approved-digest <digest>`:
 
 ```text
-oms template add <folder> --mode manual --dry-run
-oms template add <file> --id <id> --contract <contract> --dry-run
+oms template add <folder> --dry-run
 oms template add --id <id> --from <content.md> --dry-run
 oms template update <id> --naming <pattern> --dry-run
-oms template move --folder <registered-folder> --dry-run
+oms template move --folder <folder> --dry-run
 oms template remove <id> --dry-run
 oms template default <id> --dry-run
 oms template regenerate-types --dry-run
 ```
 
-Pass `--vault <path>` for an explicit target. New source files use a registered creation folder, never an invented directory. Removal keeps the source unless `--delete-source` is explicitly requested for an OMS-managed source; registered-existing sources cannot be deleted through this operation. Change the default binding before removing it. `default <id>` chooses the note binding, not the template creation folder. Note creation without a template ID uses only that declared binding, or fails with `TEMPLATE_DEFAULT_UNDECLARED`.
+Review uses the exact linear interview leaves:
+
+```text
+oms template review
+oms template answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null>
+oms template commit --census-digest <digest> --ledger-digest <digest|null> --dry-run
+oms template commit --census-digest <digest> --ledger-digest <digest|null> --yes --approved-digest <digest>
+```
+
+`review` is read-only and starts from the selected-folder census. `answer` is
+draft-only and forwards the server-returned question and CAS fields.
+`commit` uses the same CAS values plus the existing dry-run or
+yes/approved-digest guard. Source review preserves source bytes and publishes
+only user-confirmed controls; source authoring, update, move, remove, and
+default operations remain separate guarded mutations. Removal keeps the source
+unless `--delete-source` is explicitly requested for an OMS-managed source.
+`default <id>` chooses the note binding, not a source scope.
+
+Exact note creation usage is:
+
+```text
+oms note create [template-id] --body <text>|--body-file <file> [--frontmatter <json>|--frontmatter-file <file>] [--folder <note-folder>]
+```
+
+At note creation, placement is explicit caller folder, then taxonomy default,
+then `ask`; it is not a contract-review prerequisite and has no Inbox fallback.
 
 ## Notes, search, index, and serving
 
