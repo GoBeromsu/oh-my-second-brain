@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-19
+
 - The bundled MCP SDK now resolves `hono` 4.13.8, clearing the moderate advisory group that affected its HTTP transport's body and query parsing. Only the lockfile moves; no declared dependency is added or changed.
 - Pending body contracts and incomplete fresh projection coverage also surface the generic template notice when no new raw source diff exists, so successful source authoring cannot hide the remaining contract confirmation.
 
