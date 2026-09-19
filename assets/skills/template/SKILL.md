@@ -7,15 +7,24 @@ description: Design, migrate, and safely apply vault-resident Obsidian templates
 
 Turn the user's natural-language note design into an actual Obsidian Markdown template and the smallest matching policy change. People and agents follow the same template contract; never introduce personas.
 
-## Authority
+## Authority and source scope
 
 - The actual `.md` template owns frontmatter order/default scaffolding and body shape.
 - `.obsidian/types.json` is read-only property-type authority.
 - The user-owned ontology remains active: `.oms/template-policy.json` owns note/field `intent` plus BaseContract inheritance, requiredness, formats, allowed values, naming, stable identity, and bindings.
 - `.oms/taxonomy.json` owns folder/link `intent`, note placement, and global axes.
 - `.oms/types.json` is derived state. Never edit it directly.
+- Every `.md` beneath an explicitly selected template folder is a template candidate. The source bytes stay at their existing vault-relative path; contract review reads and verifies them but does not rewrite them.
+- Selecting a folder is the only scope-widening act. A candidate does not need a per-file registration step or a folder mode.
 
-Use an existing stable `templateId` when updating or moving a template. A path or digest change never creates a new identity. New OMS-managed templates default to `<sourceFolder>/<templateId>.md` inside a registered template folder (the folder marked `default: true` unless you name another registered folder); registered existing templates keep their explicitly verified `sourcePath`.
+Use an existing stable `templateId` when updating or moving a template. A path or digest change never creates a new identity; the server derives an ID for a newly discovered source. For note creation, choose a destination in this order: an explicit caller folder, the taxonomy default for that template, then `ask`. Placement is not a contract-review prerequisite and there is no implicit Inbox fallback.
+
+## Derived contracts
+
+OMS derives both parts of the contract from the selected source:
+
+- The metadata contract records frontmatter keys, types, requiredness, and `filledBy`. Unknown frontmatter and policy extensions remain preserved.
+- The body-format contract records supported nodes: ATX headings, fenced code blocks, contiguous ordered or unordered list runs outside fences, and the `<!-- oms:content -->` placeholder. It also records document order, EOL, BOM, and final-newline details. This bounded scanner does not claim to enforce paragraphs, setext headings, or all Markdown; an ambiguous source fact becomes an interview question rather than an inferred rule.
 
 ## Renderers
 
@@ -27,16 +36,35 @@ Every binding carries `renderer`. Obsidian renders; OMS validates.
 
 You may **propose** an `obsidian-core` copy of a Templater template when the mapping is exact: `tp.date.now("FMT")` -> `{{date:FMT}}` / `{{time:FMT}}`, `tp.file.title` -> `{{title}}`. Anything else has no faithful mapping; do not invent one. Submit the converted bytes as a new template through the guarded flow; the kernel validates syntax, contract, path, signatures, and CAS, and the user approves the digest.
 
+## Source-change notice and interview
+
+A selected-folder source census detects pending adds, edits, deletes, and renames. The first displayed notice is exactly:
+
+```text
+템플릿에 변경이 있습니다
+```
+
+It has exactly `확인하기` and `나중에` actions. Do not render a template name, hash, or change taxonomy in that initial notice. A machine `templateNotice` may carry richer state for the host, but the host must keep the first display generic.
+
+- `나중에` is host-only: dismiss or defer locally. Do not call the server or mutate the interview ledger.
+- `확인하기` starts the one linear interview with `write { op: "template", mode: "interview-next" }`.
+- Submit each answer with `mode: "interview-answer"` using the question, request, and CAS values returned by the server. Do not invent parameter names, questions, or digests.
+- Resume from the next question returned by each answer. Opening a new review reopens deferred deletion decisions without editing the draft or erasing other confirmed answers. This is distinct from host-only `나중에`; a zero-question response still requires final confirmation.
+- After every required question is answered, show the server's final proposal and exact final approval digest. Call `mode: "commit-contracts"` only after the user approves that exact digest; never self-approve.
+
+Long-lived hosts must surface `templateNotice` on `write`, `search`, and `status` results even when boot instructions are stale. Emit it once per process and pending digest (and again when that digest changes); `status` remains the polling view and writes nothing.
+
 ## Workflow
 
-1. Read `search { op: "templates" }` to list bindings, or `search { op: "templates", templateId }` to show one, then read the user's requested shape. Use `search { op: "template-scan" }` for candidates. Do not guess existing IDs or fields, and never auto-register a scan result.
+1. Read `search { op: "templates" }` to list bindings, or `search { op: "templates", templateId }` to show one. Use `search { op: "template-scan" }` for the read-only census and pending view; never treat that view as a write.
 2. Draft the exact Markdown and policy/taxonomy intent. Preserve unknown frontmatter, policy extensions, body bytes, and Obsidian property types.
-3. Call `write { op: "template", ..., dryRun: true }` for create, update, reclassify, relocate-folder, register-folder, remove, or default. Regeneration is not a write-template mode: use `doctor { op: "regenerate-types", dryRun: true }`. Current signatures are derived and verified by the server, not hand-assembled by the host.
-4. To adopt a template that already exists in the vault, call `write { op: "template", mode: "register-existing", templateId, sourceFolder, sourcePath, renderer, filledBy, contract, naming, dryRun: true }` instead. `filledBy` lists Obsidian-filled field names (an empty array for a Core template). The server verifies the proposed metadata against the source and derives every signature itself; you supply no `expected*` digests and no template bytes.
-5. Show the proposal, paths, diagnostics, and `approvalDigest` to the user.
-6. Apply only after the caller explicitly approves that exact digest. Submit the same request with `dryRun: false` and `approvedDigest`.
-7. Report the server-verified receipt and postconditions.
+3. Use guarded template operations with a dry run for source authoring and for separate update, move, remove, reclassify, relocate, folder-scope, or default changes. Explicit source authoring is `oms template add --id <id> --from <source>`; it is not contract review. Contract review never writes source bytes. Current signatures are derived and verified by the server, not hand-assembled by the host.
+4. Show the proposal, paths, diagnostics, and `approvalDigest` to the user. Apply a guarded operation only after the caller explicitly approves that exact digest, then report the server-verified receipt and postconditions.
 
-CLI uses the noun leaves `oms template scan|list|show|add|update|move|remove|default|check|regenerate-types`. Mutations require `--dry-run`, then the same request with `--yes --approved-digest`; resume uses `oms template update --resume` with the exact `transactionId` and `approvedDigest`. `add <folder>` registers a source folder; `add <file> --id` registers existing bytes; `add --id --from` proposes a new source inside an explicitly registered creation folder. `default <id>` chooses the default note binding, not the source creation folder. Removal keeps registered-existing files; `--delete-source` applies only to managed sources. Never remove the current default without selecting another binding first.
+CLI uses the noun leaves `oms template scan|list|show|add|update|move|remove|default|check|regenerate-types|review|answer|commit`.
 
-Reject unsupported expressions, unsafe paths, unresolved legacy mappings, stale signatures, and identity changes. Preserve non-observed proposal gaps explicitly. Never self-approve, silently fall back to a legacy Concept reader, or directly mutate managed template/control files.
+- `oms template add <folder>` adds an explicit source scope; `oms template add --id <id> --from <source>` authorizes new source authoring.
+- `oms template review`, `answer`, and `commit` are the exact CLI counterparts of MCP `interview-next`, `interview-answer`, and `commit-contracts`.
+- `scan` is read-only. Update, move, remove, and other template mutations remain separate guarded operations; none is a substitute for contract review.
+
+Reject unsupported expressions, unsafe paths, stale signatures, and identity changes. Preserve non-observed proposal gaps explicitly. Never self-approve, use a stale-contract fallback or compatibility reader, or directly mutate managed template/control files.

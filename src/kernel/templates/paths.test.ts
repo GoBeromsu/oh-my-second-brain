@@ -34,6 +34,15 @@ describe("template path contract", () => {
     expect(deriveManagedSourcePath(normalizeTemplateFolderPath("My Templates"), validateTemplateId("daily-note"))).toBe("My Templates/daily-note.md");
   });
 
+  it("accepts NFC Unicode letters and digits while retaining the hyphen grammar", () => {
+    expect(validateTemplateId("한글-노트")).toBe("한글-노트");
+    expect(validateTemplateId("café-2024")).toBe("café-2024");
+    expect(validateTemplateId("cafe\u0301-2024")).toBe("café-2024");
+    expect(validateTemplateId("part--2")).toBe("part--2");
+    expect(() => validateTemplateId("part---2")).toThrow(/TEMPLATE_SOURCE_INVALID/);
+    expect(() => validateTemplateId("한글/노트")).toThrow(/TEMPLATE_SOURCE_INVALID/);
+  });
+
   it("keeps a registered-existing source in its explicit registered folder", () => {
     const sourceFolder = normalizeTemplateFolderPath("External");
     const sourcePath = normalizeTemplateSourcePath("External/existing.md");
@@ -43,15 +52,15 @@ describe("template path contract", () => {
   });
 
   it("selects an explicit registered folder without requiring a default", () => {
-    const manual = { path: normalizeTemplateFolderPath("Templates/Manual"), mode: "manual" as const };
-    expect(selectTemplateFolder([manual], manual.path)).toBe(manual);
-    expect(() => selectTemplateFolder([manual])).toThrow("TEMPLATE_FOLDER_DEFAULT_UNDECLARED");
-    expect(() => selectTemplateFolder([manual], normalizeTemplateFolderPath("Templates/Missing"))).toThrow("TEMPLATE_SOURCE_INVALID");
+    const registered = { path: normalizeTemplateFolderPath("Templates/Manual") };
+    expect(selectTemplateFolder([registered], registered.path)).toBe(registered);
+    expect(() => selectTemplateFolder([registered])).toThrow("TEMPLATE_FOLDER_DEFAULT_UNDECLARED");
+    expect(() => selectTemplateFolder([registered], normalizeTemplateFolderPath("Templates/Missing"))).toThrow("TEMPLATE_SOURCE_INVALID");
   });
 
   it("resolves an omitted selection only to the declared default", () => {
-    const generated = { path: normalizeTemplateFolderPath("Templates/Generated"), mode: "auto" as const };
-    const curated = { path: normalizeTemplateFolderPath("Templates/Curated"), mode: "manual" as const, default: true as const };
+    const generated = { path: normalizeTemplateFolderPath("Templates/Generated") };
+    const curated = { path: normalizeTemplateFolderPath("Templates/Curated"), default: true as const };
     expect(selectTemplateFolder([generated, curated])).toBe(curated);
   });
 
@@ -64,6 +73,7 @@ describe("template path contract", () => {
   it("allows exactly the approved internal controls, not arbitrary hidden paths", () => {
     expect(normalizeTemplateControlPath(".oms/template-policy.json")).toBe(".oms/template-policy.json");
     expect(normalizeTemplateControlPath(".oms/types.json")).toBe(".oms/types.json");
+    expect(normalizeTemplateControlPath(".oms/template-interview.json")).toBe(".oms/template-interview.json");
     expect(() => normalizeTemplateControlPath(".oms/taxonomy.yaml")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
     expect(() => normalizeTemplateControlPath(".oms/other.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
   });

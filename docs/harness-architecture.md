@@ -13,9 +13,35 @@ A vault composes four authorities:
 
 Every managed template inherits one vault-wide `BaseContract`. A stable `templateId` does not depend on source path or content digest. `.oms/types.json` is a derived, validated write/search projection and is never user-authored authority.
 
-## Existing-template registration
+## Selected-folder census and contract review
 
-`write { op: "template", mode: "register-existing" }` accepts only stable `templateId`, vault-relative `sourcePath`, existing policy `contract`, and `naming`. It extracts Markdown structure, composes it with the four authorities above, and publishes only `.oms` controls after dry-run approval. The source is a verify-only transaction boundary; source or control drift rejects apply. `doctor { op: "regenerate-types" }` derives a fresh projection from an edited registered source rather than accepting hand-authored `.oms/types.json`.
+An explicitly selected template folder is the source scope: every `.md` beneath
+it is a census candidate. No per-file registration or auto/manual folder mode
+is required. `search { op: "template-scan" }` remains a read-only census and
+pending view. Source review verifies bytes in place and publishes only
+user-confirmed `.oms` controls; explicit source authoring
+(`oms template add --id <id> --from <file>`) and update/move/remove operations
+remain separate guarded mutations.
+
+The review derives metadata (frontmatter keys, types, requiredness, and
+`filledBy`) and a bounded body structure: ATX headings, fenced code blocks,
+ordered/unordered list runs outside fences, and `<!-- oms:content -->`, plus
+document order/EOL/BOM/final-newline details. It does not claim to enforce
+paragraphs, setext headings, or all Markdown. The two-tier freshness gate
+checks shared authority first, then marks only a changed source's dependent
+template pending; unrelated writes remain available. Shared-authority changes
+fail closed for the whole vault.
+
+The initial host notice is exactly `템플릿에 변경이 있습니다` with exactly
+`확인하기` and `나중에`; it shows no template name, hash, or change class.
+`나중에` is host-only and makes no server call or ledger mutation.
+`확인하기` starts `write { op: "template", mode: "interview-next" }`;
+answers use `interview-answer` with server-returned next/request/CAS fields.
+After every necessary question, `commit-contracts` publishes only controls
+after the user approves the exact final digest. CLI counterparts are
+`oms template review`, `oms template answer`, and `oms template commit`.
+Long-lived hosts surface `templateNotice` on tool results even when boot
+instructions are stale.
 
 ## Prepare → Admission Check → Write → Evaluate
 
@@ -28,9 +54,17 @@ All note and control mutations follow one pipeline:
 
 Create applies defaults and template body scaffolding. Append changes body only. Update preserves omitted fields and does not revive deleted defaults. Unknown frontmatter and template extensions are preserved.
 
+Note placement is a write-time concern, not a review prerequisite: at create,
+an explicit caller folder takes precedence over the taxonomy default, then
+`ask`.
+
 ## Setup and migration
 
-Setup recursively discovers actual templates, explicit registered sources, Obsidian types, taxonomy, and legacy vault controls needed for one-shot migration. It reports duplicate, unsafe, and unresolved mappings before activation. One source may produce deterministic clones when taxonomy placement is one-to-many.
+Setup recursively discovers actual templates within explicitly selected source
+folders, Obsidian types, taxonomy, and current user-owned authorities needed for
+one-shot migration. It reports duplicate, unsafe, and unresolved mappings
+before activation. One source may produce deterministic clones when taxonomy
+placement is one-to-many.
 
 Setup is proposal-driven: run `setup --dry-run`, review the manifest and digest, then apply with `--yes --approved-digest <digest>`. Publication is atomic and resumable; setup never self-approves or modifies notes.
 

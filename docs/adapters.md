@@ -15,29 +15,35 @@ Claude's manifest retains its explicit skill array; Codex's manifest retains its
 
 The MCP server is started with `oms serve mcp`; `oms serve http` starts the HTTP surface. Neither server creates a vault engine store merely by starting. Claude uses `.mcp.json`, Codex uses `.mcp.codex.json`, and Hermes receives its registration in `~/.hermes/config.yaml`.
 
-All hosts expose the same five MCP tools. Registering an existing template remains
-an operation of `write`, not a sixth tool:
+All hosts expose the same five MCP tools. An explicitly selected template folder
+is the source scope: every `.md` beneath it is a census candidate. No per-file
+registration or auto/manual folder mode is required. The folder-scope operation
+remains under `write`; explicit source authoring uses
+`oms template add --id <id> --from <file>`, while update, move, remove, and
+other source mutations remain separate guarded operations.
 
 Status and template listings report runtime history for the current host and vault only. This history is stored outside the vault, not in the engine store or convention controls. Report logging failures and observation gaps explicitly; do not merge another host's history or treat absent events as inactivity.
 
-```json
-{
-  "op": "template",
-  "mode": "register-existing",
-  "templateId": "note",
-  "sourceFolder": "Team/Curated Shapes",
-  "sourcePath": "Team/Curated Shapes/note.md",
-  "renderer": "obsidian-core",
-  "filledBy": [],
-  "contract": "note",
-  "naming": "{{date}}-{{slug}}.md",
-  "dryRun": true
-}
-```
+Review is a verify-only source census and contract flow: the source stays at
+its current path and only user-confirmed `.oms` controls are published. The
+initial host notice is exactly `템플릿에 변경이 있습니다` with exactly
+`확인하기` and `나중에`; do not display a template name, hash, or change class.
+`나중에` is host-only and makes no server call or ledger mutation.
+`확인하기` starts `write { op: "template", mode: "interview-next" }`.
+Submit answers with `interview-answer`, resume from the server-returned next
+question, and use `commit-contracts` only after all necessary questions and
+the user's approval of the exact final digest. Forward server-returned
+question/request/CAS fields without inventing names. Long-lived hosts surface a
+returned `templateNotice` even when boot guidance is stale.
 
-`sourceFolder` is required and must be a registered template folder containing
-`sourcePath`. Apply only by repeating the operation with the returned
-`approvedDigest`.
+The two-tier freshness gate checks shared authority first, then marks only a
+changed source's dependent template pending; unrelated template writes remain
+available. Shared-authority failures remain fail-closed for the whole vault.
+The derived contract includes metadata and supported body nodes,
+including ATX headings, fenced code blocks, ordered/unordered list runs outside
+fences, and `<!-- oms:content -->`, not an assertion that arbitrary Markdown is
+enforced. Placement is not required for review; at note creation, an explicit
+caller folder takes precedence over the taxonomy default, then `ask`.
 
 Host agents may propose Core-template copies of external templates, but the kernel never transpiles or executes Templater. Inspect `renderer` and `filledBy` contract metadata before note creation. Ask for missing Obsidian-filled values; an external body or `none` renderer requires another Core template rather than raw script copying. Existing-note contract proposals show sample coverage and remain subject to exact approval and verified postconditions.
 

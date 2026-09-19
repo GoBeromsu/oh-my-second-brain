@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { proposedTemplateId } from "./census.js";
+import { deriveContentFormatContract } from "./content-contract.js";
 import { applyTemplateMigration, buildMigrationManifest, planTemplateMigration } from "./migration.js";
 import { loadResolvedTemplates } from "./resolver.js";
 import type { Digest, TemplateCompositionManifest } from "./types.js";
@@ -11,7 +13,7 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 async function fresh(): Promise<string> { const root = await mkdtemp(path.join(tmpdir(), "oms-folder-setup-")); roots.push(root); return root; }
 async function put(root: string, pathname: string, content: string): Promise<void> { await mkdir(path.dirname(path.join(root, pathname)), { recursive: true }); await writeFile(path.join(root, pathname), content); }
-const folders = [{ path: "Custom", mode: "auto" as const, default: true as const }];
+const folders = [{ path: "Custom", default: true as const }];
 const body = "---\ntemplate: note\n---\nbody\n";
 async function fixture(): Promise<string> {
   const root = await fresh();
@@ -49,23 +51,22 @@ describe("explicit multi-folder setup", () => {
     const root = await fresh();
     await put(root, "Custom/nested/reading.md", body);
     await put(root, "Other/daily.md", body);
-    const proposal = await planTemplateMigration(root, { templateFolders: [...folders, { path: "Other", mode: "auto" }] });
+    const proposal = await planTemplateMigration(root, { templateFolders: [...folders, { path: "Other" }] });
     expect(proposal.bindings.map(item => [item.templateId, item.sourceFolder])).toEqual([["daily", "Other"], ["reading", "Custom"]]);
     expect(proposal.input?.templateFolders).toHaveLength(2);
   });
-  it("manual folders do not automatically propose bindings", async () => {
+  it("selected folders consider compatible sources without folder modes or per-file registration", async () => {
     const root = await fixture();
-    const proposal = await planTemplateMigration(root, { templateFolders: [{ path: "Custom", mode: "manual" }] });
+    const proposal = await planTemplateMigration(root, { templateFolders: [{ path: "Custom" }] });
     expect(proposal.candidates).toHaveLength(1);
-    expect(proposal.bindings).toEqual([]);
-    await expect(buildMigrationManifest(root, proposal, { base: { fields: {} } })).rejects.toThrow("select templates");
+    expect(proposal.bindings.map(item => item.templateId)).toEqual(["note"]);
   });
-  it("allows an explicit stable identity in a manual registered folder", async () => {
+  it("derives stable identities from every selected source", async () => {
     const root = await fresh();
     await put(root, "Custom/Unusual Name.md", body);
-    const proposal = await planTemplateMigration(root, { templateFolders: [{ path: "Custom", mode: "manual" }], registeredTemplates: [{ templateId: "chosen-id", sourcePath: "Custom/Unusual Name.md" }] });
+    const proposal = await planTemplateMigration(root, { templateFolders: [{ path: "Custom" }] });
     expect(proposal.unresolved).toEqual([]);
-    expect(proposal.bindings[0]).toMatchObject({ templateId: "chosen-id", sourceFolder: "Custom", destinationClass: "registered-existing" });
+    expect(proposal.bindings.map(item => item.templateId)).toEqual(["unusual-name"]);
     expect(await readFile(path.join(root, "Custom/Unusual Name.md"), "utf8")).toBe(body);
   });
   it("excludes only colliding files and keeps compatible siblings", async () => {
@@ -75,7 +76,7 @@ describe("explicit multi-folder setup", () => {
     const proposal = await planTemplateMigration(root, { templateFolders: folders });
     const duplicates = proposal.diagnostics.filter(item => item.code === "TEMPLATE_ID_DUPLICATE");
     expect(duplicates.map(item => item.path).sort()).toEqual(["Custom/agent/meeting.md", "Custom/manual/meeting.md"]);
-    expect(duplicates.every(item => item.blocking === false && item.remediation?.includes("explicit"))).toBe(true);
+    expect(duplicates.every(item => item.blocking === false && item.remediation?.includes("Rename"))).toBe(true);
     expect(proposal.bindings.map(item => item.templateId)).toEqual(["note"]);
     expect(proposal.unresolved).toEqual([]);
     expect(proposal.inputDigest).toBeDefined();
@@ -84,7 +85,7 @@ describe("explicit multi-folder setup", () => {
     const root = await fresh();
     await put(root, "Custom/note.md", body);
     await put(root, "Other/note.md", body);
-    const proposal = await planTemplateMigration(root, { templateFolders: [...folders, { path: "Other", mode: "auto" }] });
+    const proposal = await planTemplateMigration(root, { templateFolders: [...folders, { path: "Other" }] });
     expect(proposal.diagnostics.filter(item => item.code === "TEMPLATE_ID_DUPLICATE")).toHaveLength(2);
     expect(proposal.unresolved.map(item => item.code)).toEqual(["TEMPLATE_CANDIDATE_INCOMPATIBLE"]);
     expect(proposal.inputDigest).toBeUndefined();
@@ -95,6 +96,11 @@ describe("explicit multi-folder setup", () => {
     await put(root, "Custom/zt-cite.eta.md", body);
     const proposal = await planTemplateMigration(root, { templateFolders: folders });
     expect(proposal.candidates.map(item => item.templateId)).toEqual(["daily-note", "note", "zt-cite"]);
+  });
+
+  it("uses the shared NFC Unicode letter/digit slug convention", () => {
+    expect(proposedTemplateId("Custom/Ängström Note.template.md")).toBe("ängström-note");
+    expect(proposedTemplateId("Custom/---.md")).toBeNull();
   });
   it("keeps mixed renderer candidates visible and selects only approvable conventions", async () => {
     const root = await fixture();
@@ -121,7 +127,7 @@ describe("explicit multi-folder setup", () => {
   });
   it("extracts Templater YAML fields without executing or copying expressions", async () => {
     const root = await fixture();
-    await put(root, "Custom/mail.md", "---\ntemplate: mail\nsubject: <% tp.file.title %>\npriority: 1\n---\nbody\n");
+    await put(root, "Custom/mail.md", "---\ntemplate: mail\nsubject: <% tp.file.title %>\npriority: 1\n---\n# Body\nbody\n");
     await put(root, ".oms/taxonomy.json", JSON.stringify({ folders: {}, templates: { note: { templateFolder: "Notes" }, mail: { templateFolder: "Mail" } } }));
     const proposal = await planTemplateMigration(root, { templateFolders: folders });
     const candidate = proposal.candidates.find(item => item.templateId === "mail");
@@ -131,7 +137,26 @@ describe("explicit multi-folder setup", () => {
     const policy = JSON.parse(new TextDecoder().decode(manifest.controls[0].proposed.bytes));
     const projection = JSON.parse(new TextDecoder().decode(manifest.controls[2].proposed.bytes));
     expect(policy.contracts.mail.fields.subject).toEqual({ filledBy: "obsidian" });
-    expect(projection.managed.templates.mail).toMatchObject({ renderer: "templater", fields: { subject: { filledBy: "obsidian" } } });
+    expect(projection).toMatchObject({
+      generatedFrom: { sharedAuthoritySignature: expect.stringMatching(/^sha256:/u) },
+      managed: {
+        templates: {
+          mail: {
+            renderer: "templater",
+            fields: { subject: { filledBy: "obsidian" } },
+            content: {
+              version: 1,
+              eol: "lf",
+              bom: false,
+              finalNewline: true,
+              order: "unordered",
+              bodySignature: expect.stringMatching(/^sha256:/u),
+            },
+          },
+        },
+      },
+    });
+    expect(projection.managed.templates.mail.content.nodes).toContainEqual(expect.objectContaining({ kind: "heading", text: "Body", required: false }));
     expect(new TextDecoder().decode(manifest.controls[2].proposed.bytes)).not.toContain("<%");
   });
   it("binds an observed script-first source to inferred fields and leaves an unobserved sibling unbound", async () => {
@@ -209,26 +234,21 @@ describe("explicit multi-folder setup", () => {
     expect(proposal.candidates.some(item => item.publication === "write")).toBe(false);
     expect(proposal.bindings).toEqual([]);
     expect(proposal.unresolved.map(item => item.code)).toEqual(["TEMPLATE_CANDIDATE_INCOMPATIBLE"]);
-    const noDefault = await planTemplateMigration(root, { templateFolders: [{ path: "Empty", mode: "auto" }] });
+    const noDefault = await planTemplateMigration(root, { templateFolders: [{ path: "Empty" }] });
     expect(noDefault.candidates).toEqual([]);
   });
-  it("rejects repeated explicit source registration", async () => {
-    const root = await fixture();
-    const registration = { templateId: "note", sourcePath: "Custom/note.md" };
-    const proposal = await planTemplateMigration(root, { templateFolders: folders, registeredTemplates: [registration, registration] });
-    expect(proposal.unresolved.map(item => item.code)).toContain("TEMPLATE_SOURCE_DUPLICATE");
-  });
-  it("rejects source paths outside registered folders", async () => {
+  it("considers only sources inside selected folders", async () => {
     const root = await fresh();
+    await put(root, "Custom/note.md", body);
     await put(root, "Other/note.md", body);
-    const proposal = await planTemplateMigration(root, { templateFolders: folders, registeredTemplates: [{ templateId: "note", sourcePath: "Other/note.md" }] });
-    expect(proposal.unresolved).toContainEqual(expect.objectContaining({ code: "MIGRATION_TEMPLATE_INVALID", path: "Other/note.md" }));
+    const proposal = await planTemplateMigration(root, { templateFolders: folders });
+    expect(proposal.candidates.map(item => item.sourcePath)).toEqual(["Custom/note.md"]);
   });
   it("rejects symlink folders and sources without following them", async () => {
     const root = await fixture();
     await symlink(path.join(root, "Custom"), path.join(root, "Linked"));
     await symlink(path.join(root, "Custom/note.md"), path.join(root, "Custom/link.md"));
-    const proposal = await planTemplateMigration(root, { templateFolders: [...folders, { path: "Linked", mode: "auto" }] });
+    const proposal = await planTemplateMigration(root, { templateFolders: [...folders, { path: "Linked" }] });
     expect(proposal.diagnostics.filter(item => item.code === "MIGRATION_TEMPLATE_UNSAFE")).toHaveLength(2);
     expect(proposal.unresolved.map(item => item.path)).toEqual(["Linked"]);
     expect(proposal.bindings.map(item => item.sourcePath)).toEqual(["Custom/note.md"]);
@@ -240,11 +260,68 @@ describe("explicit multi-folder setup", () => {
     expect(proposal.unresolved).toContainEqual(expect.objectContaining({ code: "MIGRATION_NOTE_INVALID", path: "Notes/broken.md" }));
     expect(proposal.inputDigest).toBeUndefined();
   });
-  it("requires an explicit taxonomy note destination", async () => {
+  it("registers a valid template without inventing a default note destination", async () => {
     const root = await fixture();
     await put(root, ".oms/taxonomy.json", '{"folders":{}}');
-    await expect(compose(root)).rejects.toThrow("TEMPLATE_PLACEMENT_UNDECLARED: note");
+    const { proposal, manifest } = await compose(root);
+    expect(manifest.controls[1].action).toBe("verify-only");
+    const projection = JSON.parse(new TextDecoder().decode(manifest.controls[2].proposed.bytes));
+    expect(projection).toMatchObject({
+      generatedFrom: { sharedAuthoritySignature: expect.stringMatching(/^sha256:/u) },
+      managed: {
+        templates: {
+          note: {
+            content: {
+              version: 1,
+              eol: "lf",
+              bom: false,
+              finalNewline: true,
+              order: "unordered",
+              bodySignature: expect.stringMatching(/^sha256:/u),
+            },
+          },
+        },
+      },
+    });
+    expect(projection.managed.templates.note).not.toHaveProperty("targetFolder");
+    expect((await applyTemplateMigration(root, proposal, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+    expect((await loadResolvedTemplates(root)).templates.note?.targetFolder).toBeUndefined();
   });
+
+  it("preserves a committed binding content contract in policy and projection", async () => {
+    const root = await fixture();
+    const committed = deriveContentFormatContract("body\n", {
+      templateId: "note",
+      bom: false,
+      eol: "lf",
+      finalNewline: true,
+    }).contract;
+    await put(root, ".oms/template-policy.json", JSON.stringify({
+      version: 3,
+      templateFolders: folders,
+      base: { fields: {} },
+      contracts: { base: { intent: "Base note", fields: {}, views: [] } },
+      templates: {
+        note: {
+          templateId: "note",
+          destinationClass: "registered-existing",
+          renderer: "obsidian-core",
+          sourceFolder: "Custom",
+          sourcePath: "Custom/note.md",
+          contract: "base",
+          naming: "{{date}}-{{slug}}.md",
+          content: committed,
+        },
+      },
+    }));
+    const proposal = await planTemplateMigration(root, { templateFolders: folders });
+    const manifest = await buildMigrationManifest(root, proposal, { base: { fields: {} } });
+    const policy = JSON.parse(new TextDecoder().decode(manifest.controls[0].proposed.bytes));
+    const projection = JSON.parse(new TextDecoder().decode(manifest.controls[2].proposed.bytes));
+    expect(policy.templates.note.content).toEqual(committed);
+    expect(projection.managed.templates.note.content).toEqual(committed);
+  });
+
   it("retains JSON taxonomy bytes and ignores legacy YAML and concepts", async () => {
     const root = await fixture();
     const yaml = "malformed: [untouched\n";

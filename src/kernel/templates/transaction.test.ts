@@ -53,10 +53,11 @@ vi.mock("node:fs/promises", async importOriginal => {
   };
 });
 
-import { inputDigest } from "./canonical.js";
+import { approvalDigest, inputDigest } from "./canonical.js";
+import { deriveContentFormatContract } from "./content-contract.js";
 import { normalizeTemplateSourcePath } from "./paths.js";
 import { parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
-import { buildTemplateCompositionManifest, sourceSignature } from "./resolver.js";
+import { buildTemplateCompositionManifest, sharedAuthoritySignature, sourceSignature } from "./resolver.js";
 import { readRuntimeEvents } from "../runtime/event-read.js";
 import { completedTemplateTransaction, executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
 import type {
@@ -103,7 +104,7 @@ function policy(bindings: readonly TemplateBinding[], templateFolder = "Template
   const paths = new Set([templateFolder, "Moved", ...registeredFolders, ...bindings.map(item => item.sourceFolder)]);
   return {
     version: 3,
-    templateFolders: [...paths].map(path => ({ path: folder(path), mode: "manual" as const, ...(path === templateFolder ? { default: true as const } : {}) })),
+    templateFolders: [...paths].map(path => ({ path: folder(path), ...(path === templateFolder ? { default: true as const } : {}) })),
     base: { fields: {} },
     contracts: { note: { intent: "A note.", fields: {}, views: [] } },
     templates: Object.fromEntries(bindings.map(item => [item.templateId, item])),
@@ -116,9 +117,10 @@ function projection(bindings: readonly TemplateBinding[], policyBytes: string, s
     { logicalId: "obsidian-types", signature: digest(OBSIDIAN) },
     ...bindings.map(item => ({ path: item.sourcePath, signature: digest(sourceBytes[item.templateId] ?? TEMPLATE) })),
   ];
+  const content = deriveContentFormatContract("Body\n").contract;
   return serializeDerivedProjection({
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources },
+    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources },
     managed: {
       base: { fields: {} },
       globalAxes: {},
@@ -132,7 +134,8 @@ function projection(bindings: readonly TemplateBinding[], policyBytes: string, s
         fields: { title: { type: "text" } },
         views: [],
         naming: item.naming,
-        bodySignature: digest("Body\n"),
+        bodySignature: content.bodySignature,
+        content,
       }])),
     },
   });
@@ -270,10 +273,10 @@ describe("guarded template transactions", () => {
     const current = binding("note", "Templates/OMS/note.md");
     const item = await fixture([current]);
     try {
-      const registered = await compose(item, { mode: "register-folder", folder: { path: folder("Imported"), mode: "manual" } });
+      const registered = await compose(item, { mode: "register-folder", folder: { path: folder("Imported") } });
       expect((await executeTemplateTransaction(item.vault, registered, { approvedDigest: registered.approvalDigest })).status).toBe("applied");
       const afterRegistration = parseTemplatePolicy(await readFile(path.join(item.vault, ".oms/template-policy.json"), "utf8"));
-      expect(afterRegistration.templateFolders).toContainEqual({ path: "Imported", mode: "manual" });
+      expect(afterRegistration.templateFolders).toContainEqual({ path: "Imported" });
       const selected = await buildTemplateCompositionManifest(item.vault, { mode: "default", templateId: current.templateId }, nextOptions(registered));
       expect((await executeTemplateTransaction(item.vault, selected, { approvedDigest: selected.approvalDigest })).status).toBe("applied");
       expect(parseTemplatePolicy(await readFile(path.join(item.vault, ".oms/template-policy.json"), "utf8")).defaultTemplate).toBe("note");
@@ -442,10 +445,29 @@ describe("guarded template transactions", () => {
         ...manifest,
         current: {
           ...manifest.current,
-          input: { ...manifest.current.input, templateFolders: [{ path: "../escape", mode: "manual" }] },
+          input: { ...manifest.current.input, templateFolders: [{ path: "../escape" }] },
         },
       } as unknown as TemplateCompositionManifest;
       expect(rejectedCode(await executeTemplateTransaction(item.vault, malformed, { dryRun: true }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
+      expect(await tree(item.vault)).toEqual(before);
+    } finally { await cleanup(item); }
+  });
+
+  it.each(["regenerate", "unknown"])("rejects unsupported manifest mode %s despite a valid approval digest", async mode => {
+    const item = await fixture();
+    try {
+      const manifest = await compose(item, createChange());
+      const before = await tree(item.vault);
+      const unsupported = { ...manifest, mode } as unknown as TemplateCompositionManifest;
+      expect(approvalDigest(
+        unsupported.proposed.inputDigest,
+        unsupported.operations,
+        unsupported.diagnostics,
+        unsupported,
+      )).toBe(manifest.approvalDigest);
+      expect(rejectedCode(await executeTemplateTransaction(item.vault, unsupported, {
+        approvedDigest: unsupported.approvalDigest,
+      }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
       expect(await tree(item.vault)).toEqual(before);
     } finally { await cleanup(item); }
   });
@@ -739,7 +761,7 @@ describe("guarded template transactions", () => {
     } finally { await cleanup(item); }
   });
 
-  it("keeps completed migration, routine mutation, and regenerate marker families independent", async () => {
+  it("keeps completed migration, routine mutation, and backfill marker families independent", async () => {
     const item = await fixture();
     try {
       const created = await compose(item, createChange());
@@ -747,28 +769,28 @@ describe("guarded template transactions", () => {
       const migrationHistory = await readFile(path.join(item.vault, ".oms/template-migration.json"), "utf8");
 
       const current = created.proposed.bindings[0]!;
-      const backfill = await buildTemplateCompositionManifest(item.vault, {
+      const updated = await buildTemplateCompositionManifest(item.vault, {
         mode: "update",
         templateId: current.templateId,
         binding: current,
         source: { path: current.sourcePath, bytes: encoder.encode(UPDATED), publication: "write" },
       }, nextOptions(created));
-      const backfillMarker: TemplateTransactionMarkerPath = TEMPLATE_MUTATION_MARKER_PATH;
-      const backfillApplied = await executeTemplateTransaction(item.vault, backfill, { approvedDigest: backfill.approvalDigest }, backfillMarker);
-      expect(backfillApplied.status).toBe("applied");
+      const mutationMarker: TemplateTransactionMarkerPath = TEMPLATE_MUTATION_MARKER_PATH;
+      const mutationApplied = await executeTemplateTransaction(item.vault, updated, { approvedDigest: updated.approvalDigest }, mutationMarker);
+      expect(mutationApplied.status).toBe("applied");
       expect(await readFile(path.join(item.vault, ".oms/template-migration.json"), "utf8")).toBe(migrationHistory);
-      expect(await readFile(path.join(item.vault, backfillMarker), "utf8")).toContain('"status":"complete"');
-      if (backfillApplied.status === "applied") expect(backfillApplied.writtenPaths).not.toContain(backfillMarker);
+      expect(await readFile(path.join(item.vault, mutationMarker), "utf8")).toContain('"status":"complete"');
+      if (mutationApplied.status === "applied") expect(mutationApplied.writtenPaths).not.toContain(mutationMarker);
 
-      const regenerated = await buildTemplateCompositionManifest(item.vault, {
+      const backfilled = await buildTemplateCompositionManifest(item.vault, {
         mode: "update",
         templateId: current.templateId,
         binding: current,
         source: { path: current.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" },
-      }, nextOptions(backfill));
-      const regenerateMarker: TemplateTransactionMarkerPath = ".oms/template-regenerate.json";
-      expect((await executeTemplateTransaction(item.vault, regenerated, { approvedDigest: regenerated.approvalDigest }, regenerateMarker)).status).toBe("applied");
-      expect(await readFile(path.join(item.vault, regenerateMarker), "utf8")).toContain('"status":"complete"');
+      }, nextOptions(updated));
+      const backfillMarker: TemplateTransactionMarkerPath = ".oms/template-backfill.json";
+      expect((await executeTemplateTransaction(item.vault, backfilled, { approvedDigest: backfilled.approvalDigest }, backfillMarker)).status).toBe("applied");
+      expect(await readFile(path.join(item.vault, backfillMarker), "utf8")).toContain('"status":"complete"');
     } finally { await cleanup(item); }
   });
 
@@ -776,7 +798,7 @@ describe("guarded template transactions", () => {
     for (const marker of [
       ".oms/template-migration.json",
       ".oms/template-backfill.json",
-      ".oms/template-regenerate.json",
+      ".oms/template-transaction.json",
     ] as const) {
       const item = await fixture();
       try {
@@ -791,12 +813,12 @@ describe("guarded template transactions", () => {
     }
   });
 
-  it("rejects untyped arbitrary marker paths at runtime", async () => {
+  it.each([".oms/arbitrary.json", ".oms/template-regenerate.json"])("rejects unapproved marker path %s at runtime", async marker => {
     const item = await fixture();
     try {
       const manifest = await compose(item, createChange());
       const before = await tree(item.vault);
-      await expect(executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest }, ".oms/arbitrary.json" as unknown as TemplateTransactionMarkerPath)).rejects.toThrow(/marker path is not approved/);
+      await expect(executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest }, marker as unknown as TemplateTransactionMarkerPath)).rejects.toThrow(/marker path is not approved/);
       expect(readRuntimeEvents({ vaultPath: item.vault }).events).toContainEqual(
         expect.objectContaining({ kind: "template-transaction-invocation", outcome: "failure" }),
       );
@@ -974,7 +996,7 @@ describe("guarded template transactions", () => {
       await symlink(path.join(outside, "escape.md"), path.join(item.vault, "Templates", "escape.md"));
       const escaped = binding("escape", "Templates/escape.md", "registered-existing");
       const before = await tree(item.vault);
-      await expect(compose(item, { mode: "create", binding: escaped, source: { path: escaped.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "verify-existing" } })).rejects.toThrow(/TEMPLATE_SOURCE_UNSAFE/);
+      await expect(compose(item, { mode: "create", binding: escaped, source: { path: escaped.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" } })).rejects.toThrow(/TEMPLATE_SOURCE_UNSAFE/);
       expect(() => normalizeTemplateSourcePath(".oms/template-policy.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
       expect(() => normalizeTemplateSourcePath(".template-transactions/stage.md")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
       expect(await tree(item.vault)).toEqual(before);

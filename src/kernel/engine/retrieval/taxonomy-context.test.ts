@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parse } from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
-import { deriveFolderOntologyAxis, sourceSignature } from "../../templates/resolver.js";
+import { deriveContentFormatContract } from "../../templates/content-contract.js";
+import { deriveFolderOntologyAxis, sharedAuthoritySignature, sourceSignature } from "../../templates/resolver.js";
 import type { Digest, SourceDescriptor } from "../../templates/types.js";
 import {
   loadTaxonomyIntentProjection,
@@ -29,7 +30,7 @@ async function vaultWithContract(taxonomy: string): Promise<string> {
   ]);
   const policy = JSON.stringify({
     version: 3,
-    templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
+    templateFolders: [{ path: "Templates/OMS", default: true }],
     base: { fields: {} },
     contracts: { note: { intent: "A note.", fields: {}, views: [] } },
     templates: {
@@ -62,9 +63,15 @@ async function vaultWithContract(taxonomy: string): Promise<string> {
     typeof value === "object"
     && value !== null
     && (value as Record<string, unknown>).template === "note")?.[0] ?? "Inbox";
+  const content = deriveContentFormatContract("Body\n", { templateId: "note" }).contract;
   const projection = JSON.stringify({
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources },
+    generatedFrom: {
+      algorithm: "sha256-lp-v1",
+      inputSignature: sourceSignature(sources),
+      sharedAuthoritySignature: sharedAuthoritySignature(sources),
+      sources,
+    },
     managed: {
       base: { fields: {} },
       globalAxes: folderOntology === null ? {} : { "folder-ontology": folderOntology },
@@ -79,7 +86,8 @@ async function vaultWithContract(taxonomy: string): Promise<string> {
           fields: { title: { type: "text" } },
           views: [],
           naming: "{{title}}",
-          bodySignature: digest("Body\n"),
+          bodySignature: content.bodySignature,
+          content,
         },
       },
     },
@@ -200,12 +208,32 @@ describe("loadTaxonomyIntentProjection", () => {
     });
   });
 
+  it("keeps shared taxonomy context available for a scoped source while a dependent template is pending", async () => {
+    const vault = await vaultWithContract(JSON.stringify({
+      folders: { notes: { intent: "Permanent notes." } },
+      templates: { note: { templateFolder: "Inbox" } },
+    }));
+    await writeFile(
+      path.join(vault, "Templates", "OMS", "note.md"),
+      "---\ntitle: changed\n---\nBody\n",
+    );
+
+    await expect(loadTaxonomyIntentProjection(
+      vault,
+      ["notes/a.md", "Templates/OMS/note.md"],
+      "notes",
+    )).resolves.toEqual({
+      matched: [{ folder: "notes", intent: "Permanent notes.", source: ".oms/taxonomy.json" }],
+      indexedWithoutIntent: [],
+      taxonomyWithoutIndexed: [],
+      warnings: [],
+      promptContext: "- notes: Permanent notes.",
+    });
+  });
+
   it.each([
     ["MIGRATION_INCOMPLETE", async (vault: string) => {
       await writeFile(path.join(vault, ".oms", "template-migration.json"), "{}\n");
-    }],
-    ["TEMPLATE_SOURCE_DRIFT", async (vault: string) => {
-      await writeFile(path.join(vault, "Templates", "OMS", "note.md"), "---\ntitle: changed\n---\nBody\n");
     }],
     ["PROJECTION_PAYLOAD_TAMPERED", async (vault: string) => {
       const projectionPath = path.join(vault, ".oms", "types.json");

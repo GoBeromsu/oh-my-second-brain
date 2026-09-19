@@ -6,8 +6,9 @@ import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseNote } from "../conventions/frontmatter.js";
 import { writeResolvedTemplateNote as writeResolvedTemplateNoteVerified } from "./safe.js";
+import { deriveContentFormatContract } from "../templates/content-contract.js";
 import { canonicalJson } from "../templates/canonical.js";
-import { loadResolvedTemplates, sourceSignature } from "../templates/resolver.js";
+import { loadResolvedTemplates, sharedAuthoritySignature, sourceSignature } from "../templates/resolver.js";
 import { parseTemplate } from "../templates/extract.js";
 import { readRuntimeEvents } from "../runtime/event-read.js";
 import type { Digest, ResolvedConvention, TemplateId } from "../templates/types.js";
@@ -27,16 +28,16 @@ async function emptyVault(): Promise<string> {
   return root;
 }
 
-async function signedVault(): Promise<{ readonly root: string; readonly convention: ResolvedConvention }> {
+async function signedVault(includeSibling = false): Promise<{ readonly root: string; readonly convention: ResolvedConvention }> {
   const root = await emptyVault();
   await Promise.all([
     mkdir(join(root, ".oms"), { recursive: true }),
     mkdir(join(root, ".obsidian"), { recursive: true }),
     mkdir(join(root, "Templates", "OMS"), { recursive: true }),
   ]);
-  const policy = JSON.stringify({
+  let policy = JSON.stringify({
     version: 3,
-    templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
+    templateFolders: [{ path: "Templates/OMS", default: true }],
     base: { fields: { template: { type: "text", required: true, immutable: true } } },
     contracts: {
       note: {
@@ -62,19 +63,38 @@ async function signedVault(): Promise<{ readonly root: string; readonly conventi
       },
     },
   });
-  const taxonomy = JSON.stringify({ templates: { note: { templateFolder: "notes" } } });
+  if (includeSibling) {
+    const parsedPolicy = JSON.parse(policy) as {
+      templates: Record<string, Record<string, unknown>>;
+    };
+    parsedPolicy.templates.other = {
+      templateId: "other",
+      destinationClass: "registered-existing",
+      renderer: "obsidian-core",
+      sourceFolder: "Templates/OMS",
+      sourcePath: "Templates/OMS/other.md",
+      contract: "note",
+      naming: "{{date}}-{{slug}}.md",
+    };
+    policy = JSON.stringify(parsedPolicy);
+  }
+  const taxonomy = JSON.stringify({ templates: { note: { templateFolder: "notes" }, ...(includeSibling ? { other: { templateFolder: "notes" } } : {}) } });
   const types = JSON.stringify({ types: { template: "text", title: "text", created: "date", status: "select", source: "text" } });
   const template = "---\ntemplate: note\ntitle: \"{{title}}\"\ncreated: \"{{date}}\"\nstatus: OPEN\nsource: https://template.invalid\n---\n# Note\n<!-- oms:content -->\n";
+  const siblingTemplate = "---\ntemplate: other\ntitle: \"{{title}}\"\ncreated: \"{{date}}\"\nstatus: OPEN\nsource: https://template.invalid\n---\n# Other\n<!-- oms:content -->\n";
+  const content = deriveContentFormatContract("# Note\n<!-- oms:content -->\n", { templateId: "note" }).contract;
+  const siblingContent = deriveContentFormatContract("# Other\n<!-- oms:content -->\n", { templateId: "other" }).contract;
   const hash = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
   const sources = [
     { logicalId: "template-policy", signature: hash(policy) },
     { logicalId: "taxonomy", signature: hash(taxonomy) },
     { logicalId: "obsidian-types", signature: hash(types) },
     { path: "Templates/OMS/note.md", signature: hash(template) },
+    ...(includeSibling ? [{ path: "Templates/OMS/other.md", signature: hash(siblingTemplate) }] : []),
   ];
   const projection = JSON.stringify({
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources },
+    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources },
     managed: {
       base: { fields: { template: { type: "text", required: true, immutable: true } } },
       globalAxes: {},
@@ -95,8 +115,30 @@ async function signedVault(): Promise<{ readonly root: string; readonly conventi
           },
           views: [{ name: "status", keys: ["status"] }],
           naming: "{{date}}-{{slug}}.md",
-          bodySignature: hash("# Note\n<!-- oms:content -->\n"),
+          content,
+          bodySignature: content.bodySignature,
         },
+        ...(includeSibling ? {
+          other: {
+            templateId: "other",
+            destinationClass: "registered-existing",
+            renderer: "obsidian-core",
+            sourcePath: "Templates/OMS/other.md",
+            targetFolder: "notes",
+            keyOrder: ["template", "title", "created", "status", "source"],
+            fields: {
+              template: { type: "text", required: true, immutable: true },
+              title: { type: "text", required: true, normalize: "trim" },
+              created: { type: "date", default: { kind: "token", token: "today" } },
+              status: { type: "select", required: true, normalize: "lower", allowedValues: ["open", "closed"] },
+              source: { type: "text", format: "url" },
+            },
+            views: [{ name: "status", keys: ["status"] }],
+            naming: "{{date}}-{{slug}}.md",
+            content: siblingContent,
+            bodySignature: siblingContent.bodySignature,
+          },
+        } : {}),
       },
     },
   });
@@ -106,6 +148,7 @@ async function signedVault(): Promise<{ readonly root: string; readonly conventi
     writeFile(join(root, ".oms", "types.json"), projection),
     writeFile(join(root, ".obsidian", "types.json"), types),
     writeFile(join(root, "Templates", "OMS", "note.md"), template),
+    ...(includeSibling ? [writeFile(join(root, "Templates", "OMS", "other.md"), siblingTemplate)] : []),
   ]);
   return { root, convention: await loadResolvedTemplates(root) };
 }
@@ -152,13 +195,25 @@ async function writeResolvedTemplateNote(
     const observed = template.renderer === "none"
       ? { keyOrder: [] as readonly string[], body: "" }
       : parseTemplate(template.sourcePath, Buffer.from(source), { renderer: template.renderer === "templater" ? "templater" : "obsidian-core" });
+    const observedContent = deriveContentFormatContract(observed.body, {
+      templateId: template.id,
+      bom: template.bom,
+      eol: template.eol,
+      finalNewline: template.finalNewline,
+      decisions: {
+        order: template.content.order,
+        nodes: template.content.nodes
+          .filter(node => node.kind !== "placeholder")
+          .map(node => ({ anchorDigest: node.anchorDigest, required: node.required })),
+      },
+    }).contract;
     const policy = JSON.stringify({
       version: 3,
-      templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
+      templateFolders: [{ path: "Templates/OMS", default: true }],
       ...(desired.defaultTemplate === undefined ? {} : { defaultTemplate: desired.defaultTemplate }),
       base: desired.base,
       contracts: { note: { intent: "note", fields: Object.fromEntries(Object.entries(template.fields).filter(([key]) => !Object.hasOwn(desired.base.fields, key))), views: template.views } },
-      templates: { note: { templateId: "note", destinationClass: template.destinationClass, renderer: template.renderer, sourceFolder: "Templates/OMS", sourcePath: template.sourcePath, contract: "note", naming: template.naming } },
+      templates: { note: { templateId: "note", destinationClass: template.destinationClass, renderer: template.renderer, sourceFolder: "Templates/OMS", sourcePath: template.sourcePath, contract: "note", naming: template.naming, content: observedContent } },
     });
     const taxonomy = JSON.stringify({ templates: { note: { templateFolder: template.targetFolder } } });
     const types = JSON.stringify({ types: Object.fromEntries(Object.entries({ ...desired.base.fields, ...template.fields }).map(([key, field]) => [key, field.type])) });
@@ -171,7 +226,7 @@ async function writeResolvedTemplateNote(
     ];
     const projection = JSON.stringify({
       version: "oms.types.v1",
-      generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources },
+      generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources },
       managed: {
         base: desired.base,
         globalAxes: desired.globalAxes,
@@ -180,7 +235,8 @@ async function writeResolvedTemplateNote(
           sourcePath: template.sourcePath, targetFolder: template.targetFolder,
           keyOrder: observed.keyOrder, fields: template.fields,
           views: template.views, naming: template.naming,
-          bodySignature: hash(observed.body),
+          content: observedContent,
+          bodySignature: observedContent.bodySignature,
         } },
       },
     });
@@ -206,6 +262,8 @@ function convention(naming = "{{date}}-{{slug}}.md"): ResolvedConvention {
   }
   return {
     base: { fields: { template: { type: "text", required: true, immutable: true } } },
+    pending: {},
+    sharedAuthoritySignature: signature,
     inputSignature: signature,
     managedSourcePaths: ["Templates/OMS/note.md"],
     globalAxes: {},
@@ -229,6 +287,7 @@ function convention(naming = "{{date}}-{{slug}}.md"): ResolvedConvention {
         },
         frontmatterTemplate: { template: "note", status: "OPEN" },
         body: "# Note\n<!-- oms:content -->\n",
+        content: deriveContentFormatContract("# Note\n<!-- oms:content -->\n", { templateId: "note" }).contract,
         naming,
         views: [{ name: "status", keys: ["status"] }],
         inputSignature: signature,
@@ -329,14 +388,22 @@ describe("template-first verified write modes", () => {
         frontmatter: { title: "Fresh" },
         body: "body",
       });
-      expect(result).toMatchObject({
-        status: "rejected",
-        rejection: {
-          code: "contract-violation",
-          remediation: "reload the resolved convention or run regenerate-types, then retry",
-        },
-      });
-      expect(result.reason).toContain("TEMPLATE_SOURCE_DRIFT");
+      if (changed === "source") {
+        expect(result).toMatchObject({
+          status: "ask",
+          rejection: { code: "contract-violation", remediation: "확인하기" },
+        });
+        expect(result.reason).toContain("TEMPLATE_CONTRACT_PENDING:");
+      } else {
+        expect(result).toMatchObject({
+          status: "rejected",
+          rejection: {
+            code: "contract-violation",
+            remediation: "reload the resolved convention or run regenerate-types, then retry",
+          },
+        });
+        expect(result.reason).toContain("TEMPLATE_SOURCE_DRIFT");
+      }
       expect(await tree(root)).toEqual(before);
     }
   });
@@ -346,12 +413,13 @@ describe("template-first verified write modes", () => {
     await writeFile(join(root, ".oms", "taxonomy.json"), taxonomy);
     const projectionPath = join(root, ".oms", "types.json");
     const projection = JSON.parse(await readFile(projectionPath, "utf8")) as {
-      generatedFrom: { inputSignature: Digest; sources: Array<{ logicalId?: string; path?: string; signature: Digest }> };
+      generatedFrom: { inputSignature: Digest; sharedAuthoritySignature: Digest; sources: Array<{ logicalId?: string; path?: string; signature: Digest }> };
       managed: { templates: { note: { targetFolder: string } } };
     };
     const taxonomySource = projection.generatedFrom.sources.find(source => source.logicalId === "taxonomy")!;
     taxonomySource.signature = `sha256:${createHash("sha256").update(taxonomy).digest("hex")}` as Digest;
     projection.generatedFrom.inputSignature = sourceSignature(projection.generatedFrom.sources);
+    projection.generatedFrom.sharedAuthoritySignature = sharedAuthoritySignature(projection.generatedFrom.sources);
     projection.managed.templates.note.targetFolder = "daily-notes";
     await writeFile(projectionPath, JSON.stringify(projection));
     await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
@@ -378,6 +446,40 @@ describe("template-first verified write modes", () => {
     expect(result.reason).toBe("TEMPLATE_SOURCE_DRIFT: supplied resolved convention does not match current template authorities");
     expect(await tree(root)).toEqual(before);
   });
+  it("rejects a pending template while allowing a sibling write from the same loaded convention", async () => {
+    const { root, convention: loaded } = await signedVault(true);
+    await writeFile(join(root, "Templates", "OMS", "note.md"), "---\ntemplate: note\ntitle: changed\ncreated: \"{{date}}\"\nstatus: OPEN\nsource: https://template.invalid\n---\n# Note\n<!-- oms:content -->\n");
+    const beforeSibling = await readFile(join(root, "Templates", "OMS", "other.md"), "utf8");
+    const sibling = await writeResolvedTemplateNoteVerified({
+      target: { vault: root, source: "explicit" },
+      convention: loaded,
+      templateId: "other",
+      mode: "create",
+      dryRun: false,
+      frontmatter: { title: "Sibling", source: "https://example.test" },
+      body: "body",
+      resolvedAt: "2026-08-30T10:11:12.000Z",
+    });
+    expect(sibling.status).toBe("written");
+    expect(await readFile(join(root, "Templates", "OMS", "other.md"), "utf8")).toBe(beforeSibling);
+
+    const pending = await writeResolvedTemplateNoteVerified({
+      target: { vault: root, source: "explicit" },
+      convention: loaded,
+      templateId: "note",
+      mode: "create",
+      dryRun: true,
+      frontmatter: { title: "Pending", source: "https://example.test" },
+      body: "body",
+      resolvedAt: "2026-08-30T10:11:12.000Z",
+    });
+    expect(pending).toMatchObject({
+      status: "ask",
+      rejection: { code: "contract-violation", remediation: "확인하기" },
+    });
+    expect(pending.reason).toContain("TEMPLATE_CONTRACT_PENDING:");
+  });
+
   it("keeps dry-run and persisted create preparation byte-for-byte equal", async () => {
     const root = await vault();
     const dryRun = await writeResolvedTemplateNote({ ...createInput(root), dryRun: true });
@@ -455,11 +557,12 @@ describe("template-first verified write modes", () => {
     await writeFile(policyPath, policyText);
     const projectionPath = join(root, ".oms", "types.json");
     const projection = JSON.parse(await readFile(projectionPath, "utf8")) as {
-      generatedFrom: { inputSignature: Digest; sources: Array<{ logicalId?: string; path?: string; signature: Digest }> };
+      generatedFrom: { inputSignature: Digest; sharedAuthoritySignature: Digest; sources: Array<{ logicalId?: string; path?: string; signature: Digest }> };
     };
     projection.generatedFrom.sources.find(source => source.logicalId === "template-policy")!.signature =
       `sha256:${createHash("sha256").update(policyText).digest("hex")}` as Digest;
     projection.generatedFrom.inputSignature = sourceSignature(projection.generatedFrom.sources);
+    projection.generatedFrom.sharedAuthoritySignature = sharedAuthoritySignature(projection.generatedFrom.sources);
     await writeFile(projectionPath, JSON.stringify(projection));
     const before = await tree(root);
     const result = await writeResolvedTemplateNoteVerified({
@@ -899,6 +1002,57 @@ describe("template-first verified write modes", () => {
     expect(result.body).toBe("prefix <!-- oms:content --> suffix\n\nbody text");
   });
 
+  it("rejects an update that removes a confirmed required heading", async () => {
+    const root = await vault();
+    const created = await writeResolvedTemplateNote({ ...createInput(root), dryRun: false });
+    const current = convention();
+    const currentTemplate = current.templates.note!;
+    const heading = currentTemplate.content.nodes.find(node => node.kind === "heading");
+    if (heading === undefined) throw new Error("test fixture did not produce Note heading");
+    const content = deriveContentFormatContract(currentTemplate.body, {
+      templateId: currentTemplate.id,
+      bom: currentTemplate.bom,
+      eol: currentTemplate.eol,
+      finalNewline: currentTemplate.finalNewline,
+      decisions: {
+        order: currentTemplate.content.order,
+        nodes: [{ anchorDigest: heading.anchorDigest, required: true }],
+      },
+    }).contract;
+    const result = await writeResolvedTemplateNote({
+      target: { vault: root, source: "explicit" },
+      convention: { ...current, templates: { note: { ...currentTemplate, content } } },
+      mode: "update",
+      dryRun: false,
+      notePath: created.notePath,
+      frontmatter: { status: "closed" },
+      body: "# Replacement\nbody",
+    });
+    expect(result.status).toBe("rejected");
+    expect(result.rejection?.code).toBe("contract-violation");
+    expect(result.violations).toEqual([
+      expect.objectContaining({ field: "body:heading:1:Note", rule: "required" }),
+    ]);
+    expect(await readFile(join(root, created.notePath), "utf8")).toContain("# Note");
+  });
+
+  it("rejects an append that would leave the resulting body in an unterminated fence", async () => {
+    const root = await vault();
+    const created = await writeResolvedTemplateNote({ ...createInput(root), dryRun: false });
+    const invalid = await writeResolvedTemplateNoteVerified({
+      target: { vault: root, source: "explicit" },
+      convention: convention(),
+      mode: "append",
+      dryRun: false,
+      notePath: created.notePath,
+      body: "```typescript\nnot closed",
+    });
+    expect(invalid.status).toBe("rejected");
+    expect(invalid.rejection?.code).toBe("contract-violation");
+    expect(invalid.reason).toContain("Resulting note violates");
+    expect(await readFile(join(root, created.notePath), "utf8")).not.toContain("not closed");
+  });
+
   it("rejects an update that would violate allowed values without writing", async () => {
     const root = await vault();
     await mkdir(join(root, "notes"), { recursive: true });
@@ -931,5 +1085,35 @@ describe("template-first verified write modes", () => {
     expect(canonicalJson({ ...result.receipt, resolvedVault: "<vault>" })).toBe(
       `{"inputSignature":"${current.inputSignature}","mode":"create","notePath":"notes/2026-08-30-hello-world.md","postconditionVerified":true,"resolutionSource":"explicit","resolvedAt":"2026-08-30T10:11:12.000Z","resolvedVault":"<vault>","templateId":"note","templateSignature":"${current.templateSignature}","writtenPaths":["notes/2026-08-30-hello-world.md"]}`,
     );
+  });
+
+  it("keeps a verified note when its template races during read-back and records the audit event", async () => {
+    const root = await vault();
+    const sourcePath = join(root, "Templates", "OMS", "note.md");
+    const original = await readFile(sourcePath, "utf8");
+    let raced = false;
+    const result = await writeResolvedTemplateNoteVerified({
+      ...createInput(root),
+      dryRun: false,
+      readBack: async file => {
+        const persisted = await readFile(file, "utf8");
+        if (!raced) {
+          raced = true;
+          await writeFile(sourcePath, `${original}<!-- changed after note write -->\n`);
+        }
+        return persisted;
+      },
+    });
+    expect(result.status).toBe("written");
+    expect(result.receipt?.postconditionVerified).toBe(true);
+    expect(await readFile(join(root, result.notePath), "utf8")).toContain("body text");
+    const race = readRuntimeEvents({ vaultPath: root }).events.find(event => event.kind === "template-source-raced");
+    expect(race).toMatchObject({
+      outcome: "observation-gap",
+      templateId: "note",
+      notePath: result.notePath,
+      inputSignature: result.receipt?.inputSignature,
+      templateSignature: result.receipt?.templateSignature,
+    });
   });
 });

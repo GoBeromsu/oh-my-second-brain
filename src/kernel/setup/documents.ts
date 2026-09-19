@@ -4,7 +4,6 @@ import type { MigrationProposal } from "../templates/migration.js";
 export interface TemplateSetupQuestionnaire {
   readonly templateFolders: readonly {
     readonly path: string;
-    readonly mode: "auto" | "manual";
     readonly default: boolean;
   }[];
   readonly discoveredTemplates: readonly {
@@ -34,7 +33,6 @@ export function describeTemplateSetup(proposal: MigrationProposal): TemplateSetu
     questionnaire: {
       templateFolders: proposal.templateFolders.map(folder => ({
         path: folder.path,
-        mode: folder.mode,
         default: folder.default === true,
       })),
       discoveredTemplates: proposal.candidates.map(candidate => ({

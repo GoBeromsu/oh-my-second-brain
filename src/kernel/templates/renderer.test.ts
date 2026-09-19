@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
-import { classifyTemplateRenderer } from "./renderer.js";
+import { deriveContentFormatContract } from "./content-contract.js";
+import { sharedAuthoritySignature } from "./resolver.js";
+import { classifyTemplateRenderer, MAX_TEMPLATE_SOURCE_BYTES } from "./renderer.js";
 
 const bytes = (value: string): Uint8Array => Buffer.from(value);
+const content = deriveContentFormatContract("").contract;
 
 describe("template renderer classification", () => {
   it("classifies Core Templates-only input and returns its extracted contract", () => {
@@ -76,14 +79,17 @@ describe("template renderer classification", () => {
   });
 
   it("rejects oversize proposals without truncating or parsing", () => {
-    const result = classifyTemplateRenderer("Templates/large.md", new Uint8Array(262_145));
+    const exact = classifyTemplateRenderer("Templates/exact.md", new Uint8Array(MAX_TEMPLATE_SOURCE_BYTES));
+    expect(exact.diagnostics).not.toContainEqual(expect.objectContaining({ code: "TEMPLATE_PROPOSAL_OVERSIZE" }));
+
+    const result = classifyTemplateRenderer("Templates/large.md", new Uint8Array(MAX_TEMPLATE_SOURCE_BYTES + 1));
     expect(result).toEqual({ renderer: "none", filledBy: [], bodyExternal: false, diagnostics: [{ code: "TEMPLATE_PROPOSAL_OVERSIZE", path: "Templates/large.md" }] });
   });
 
   it("normalizes an absent policy renderer to the documented baseline and always serializes it", () => {
     const parsed = parseTemplatePolicy({
       version: 3,
-      templateFolders: [{ path: "Templates", mode: "manual", default: true }],
+      templateFolders: [{ path: "Templates", default: true }],
       base: { fields: { created: { type: "date", filledBy: "obsidian", owner: "vault" } } },
       contracts: { note: { intent: "note", fields: {}, views: [] } },
       templates: { note: { templateId: "note", destinationClass: "managed-default", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "note", naming: "{{title}}" } },
@@ -96,7 +102,7 @@ describe("template renderer classification", () => {
   it.each(["obsidian-core", "templater", "none"] as const)("round-trips %s as managed projection data", renderer => {
     const projection = {
       version: "oms.types.v1" as const,
-      generatedFrom: { algorithm: "sha256-lp-v1" as const, inputSignature: `sha256:${"a".repeat(64)}`, sources: [] },
+      generatedFrom: { algorithm: "sha256-lp-v1" as const, inputSignature: `sha256:${"a".repeat(64)}`, sharedAuthoritySignature: sharedAuthoritySignature([]), sources: [] },
       managed: {
         base: { fields: {} },
         globalAxes: {},
@@ -111,7 +117,8 @@ describe("template renderer classification", () => {
             fields: {},
             views: [],
             naming: "{{title}}",
-            bodySignature: `sha256:${"b".repeat(64)}`,
+            bodySignature: content.bodySignature,
+            content,
           },
         },
       },
@@ -125,7 +132,7 @@ describe("template renderer classification", () => {
   it("rejects an invalid managed projection renderer", () => {
     expect(() => parseDerivedProjection({
       version: "oms.types.v1",
-      generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: `sha256:${"a".repeat(64)}`, sources: [] },
+      generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: `sha256:${"a".repeat(64)}`, sharedAuthoritySignature: sharedAuthoritySignature([]), sources: [] },
       managed: {
         base: { fields: {} },
         globalAxes: {},
@@ -133,7 +140,7 @@ describe("template renderer classification", () => {
           note: {
             templateId: "note", destinationClass: "registered-existing", renderer: "host-script",
             sourcePath: "Templates/note.md", targetFolder: "Notes", keyOrder: [], fields: {}, views: [],
-            naming: "{{title}}", bodySignature: `sha256:${"b".repeat(64)}`,
+            naming: "{{title}}", bodySignature: content.bodySignature, content,
           },
         },
       },

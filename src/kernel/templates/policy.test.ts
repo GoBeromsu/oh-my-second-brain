@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { describe, expect, it } from "vitest";
 import { TEMPLATE_POLICY_SCHEMA } from "../contracts/index.js";
+import { deriveContentFormatContract } from "./content-contract.js";
 import { sourceSignature } from "./resolver.js";
 import type { Digest } from "./types.js";
-import { applyTemplatePolicyChange, parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy, validateDerivedProjection, validateTemplateId } from "./policy.js";
+import { applyTemplatePolicyChange, normalizeTemplateSemanticChange, parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy, validateDerivedProjection, validateTemplateId } from "./policy.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const policy = () => ({
-  version: 3, templateFolders: [{ path: "Templates/OMS", mode: "auto", default: true }], defaultTemplate: "literature", owner: "vault",
+  version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], defaultTemplate: "literature", owner: "vault",
   base: { fields: { template: { type: "string", required: true, immutable: true } } },
   contracts: { literature: { intent: "Processed source.", fields: { "source-url": { type: "text", required: true, format: "url", default: { kind: "literal", value: "https://example.test" } } }, views: [{ name: "by-source", keys: ["template", "source-url"], owner: "vault" }] } },
   templates: { literature: { templateId: "literature", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{date}}-{{slug}}.md" } },
@@ -41,8 +42,8 @@ describe("template policy", () => {
     const parsed = parseTemplatePolicy({
       ...policy(),
       templateFolders: [
-        { path: "Templates/Generated", mode: "auto", scanner: "vault" },
-        { path: "Templates/Curated", mode: "manual", default: true },
+        { path: "Templates/Generated", scanner: "vault" },
+        { path: "Templates/Curated", default: true },
       ],
       templates: {
         literature: {
@@ -57,6 +58,50 @@ describe("template policy", () => {
     expect(parsed.defaultTemplate).toBe("literature");
   });
 
+  it("preserves an authored old mode as an inert unknown folder extension", () => {
+    const parsed = parseTemplatePolicy({
+      ...policy(),
+      templateFolders: [{ path: "Templates/OMS", mode: "auto", default: true }],
+    });
+    expect(parsed.templateFolders[0]).toEqual({
+      path: "Templates/OMS",
+      default: true,
+      extensions: { mode: "auto" },
+    });
+    const serialized = JSON.parse(serializeTemplatePolicy(parsed)) as { templateFolders: Array<Record<string, unknown>> };
+    expect(serialized.templateFolders[0]).toEqual({
+      path: "Templates/OMS",
+      default: true,
+      extensions: { mode: "auto" },
+    });
+    expect(serializeTemplatePolicy(parseTemplatePolicy(serialized))).toBe(serializeTemplatePolicy(parsed));
+  });
+
+  it("accepts a new folder registration without mode", () => {
+    const parsed = parseTemplatePolicy({
+      ...policy(),
+      templateFolders: [{ path: "Templates/New", default: true }],
+      templates: {
+        literature: {
+          ...policy().templates.literature,
+          sourceFolder: "Templates/New",
+          sourcePath: "Templates/New/literature.md",
+        },
+      },
+    });
+    expect(parsed.templateFolders).toEqual([{ path: "Templates/New", default: true }]);
+  });
+
+  it("parses and preserves an approved binding content contract", () => {
+    const content = deriveContentFormatContract("# Literature\n<!-- oms:content -->").contract;
+    const parsed = parseTemplatePolicy({
+      ...policy(),
+      templates: { literature: { ...policy().templates.literature, content } },
+    });
+    expect(parsed.templates.literature?.content).toEqual(content);
+    expect(JSON.parse(serializeTemplatePolicy(parsed)).templates.literature.content).toEqual(content);
+  });
+
   it("allows an omitted default template and rejects a dangling default template", () => {
     const { defaultTemplate: _defaultTemplate, ...withoutDefaultTemplate } = policy();
     expect(parseTemplatePolicy(withoutDefaultTemplate).defaultTemplate).toBeUndefined();
@@ -64,39 +109,10 @@ describe("template policy", () => {
   });
 
   it("allows no folder default but rejects duplicate, unsafe, and multiple-default registrations", () => {
-    expect(parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "Templates/OMS", mode: "manual" }] }).templateFolders[0]?.default).toBeUndefined();
-    expect(() => parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "Templates", mode: "auto" }, { path: "Templates/./", mode: "manual" }] })).toThrow("TEMPLATE_SOURCE_DUPLICATE");
-    expect(() => parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "../Templates", mode: "auto" }] })).toThrow("TEMPLATE_SOURCE_UNSAFE");
-    expect(() => parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "One", mode: "auto", default: true }, { path: "Two", mode: "manual", default: true }] })).toThrow("TEMPLATE_POLICY_INVALID");
-  });
-
-  it("regenerates a default-less multi-folder policy without changing bindings or folders", () => {
-    const current = parseTemplatePolicy({
-      ...policy(),
-      defaultTemplate: undefined,
-      templateFolders: [
-        { path: "Templates/Generated", mode: "auto" },
-        { path: "Templates/Curated", mode: "manual" },
-      ],
-      templates: {
-        literature: {
-          ...policy().templates.literature,
-          sourceFolder: "Templates/Generated",
-          sourcePath: "Templates/Generated/literature.md",
-        },
-        curated: {
-          ...policy().templates.literature,
-          templateId: "curated",
-          destinationClass: "registered-existing",
-          sourceFolder: "Templates/Curated",
-          sourcePath: "Templates/Curated/custom.md",
-        },
-      },
-    });
-    const regenerated = applyTemplatePolicyChange(current, { mode: "regenerate" });
-    expect(regenerated.templateFolders).toEqual(current.templateFolders);
-    expect(regenerated.templates).toEqual(current.templates);
-    expect(regenerated.defaultTemplate).toBeUndefined();
+    expect(parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "Templates/OMS" }] }).templateFolders[0]?.default).toBeUndefined();
+    expect(() => parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "Templates" }, { path: "Templates/./" }] })).toThrow("TEMPLATE_SOURCE_DUPLICATE");
+    expect(() => parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "../Templates" }] })).toThrow("TEMPLATE_SOURCE_UNSAFE");
+    expect(() => parseTemplatePolicy({ ...policy(), templateFolders: [{ path: "One", default: true }, { path: "Two", default: true }] })).toThrow("TEMPLATE_POLICY_INVALID");
   });
 
   it("requires each binding source folder to be registered and contain its source", () => {
@@ -144,6 +160,21 @@ describe("template policy", () => {
     const managed = { ...policy(), writers: { field: "created_by", identifiers: ["oms-agent"] } };
     expect(validate(managed).valid).toBe(true);
     expect(parserAccepts(managed)).toBe(true);
+
+    const unicode = {
+      ...policy(),
+      defaultTemplate: "한글-노트",
+      templates: {
+        "한글-노트": {
+          ...policy().templates.literature,
+          templateId: "한글-노트",
+          sourcePath: "Templates/OMS/한글-노트.md",
+        },
+      },
+    };
+    expect(validate(unicode).valid).toBe(true);
+    expect(parserAccepts(unicode)).toBe(true);
+    expect(validate({ ...policy(), templateFolders: [{ path: "Templates/New" }] }).valid).toBe(true);
 
     for (const malformed of [
       { field: "created_by", identifiers: [] },
@@ -258,14 +289,169 @@ describe("template policy", () => {
     };
     expect(parseTemplatePolicy(clone).templates["literature--references"]?.templateId).toBe("literature--references");
     expect(validateTemplateId("literature--references")).toBe("literature--references");
+    expect(parseTemplatePolicy({
+      ...policy(),
+      defaultTemplate: "한글-노트",
+      templates: {
+        "한글-노트": {
+          ...policy().templates.literature,
+          templateId: "한글-노트",
+          sourcePath: "Templates/OMS/한글-노트.md",
+        },
+      },
+    }).defaultTemplate).toBe("한글-노트");
     for (const invalid of ["-literature", "literature-", "literature/reference", "literature.reference"]) {
       expect(() => validateTemplateId(invalid)).toThrow("TEMPLATE_SOURCE_INVALID");
     }
   });
 
+  it("canonicalizes equivalent template keys, binding IDs, and default references", () => {
+    const nfd = "cafe\u0301-note";
+    const nfc = nfd.normalize("NFC");
+    const parsed = parseTemplatePolicy({
+      ...policy(),
+      defaultTemplate: nfd,
+      templates: {
+        [nfd]: {
+          ...policy().templates.literature,
+          templateId: nfd,
+          sourcePath: `Templates/OMS/${nfc}.md`,
+        },
+      },
+    });
+    expect(Object.keys(parsed.templates)).toEqual([nfc]);
+    expect(parsed.templates[nfc]?.templateId).toBe(nfc);
+    expect(parsed.defaultTemplate).toBe(nfc);
+  });
+
+  it("rejects canonically equivalent template map keys", () => {
+    const nfd = "cafe\u0301-note";
+    const nfc = nfd.normalize("NFC");
+    expect(() => parseTemplatePolicy({
+      ...policy(),
+      templates: {
+        [nfd]: {
+          ...policy().templates.literature,
+          templateId: nfd,
+          sourcePath: `Templates/OMS/${nfd}.md`,
+        },
+        [nfc]: {
+          ...policy().templates.literature,
+          templateId: nfc,
+          sourcePath: `Templates/OMS/${nfc}-other.md`,
+        },
+      },
+    })).toThrow("TEMPLATE_ID_DUPLICATE");
+  });
+
+  it("preserves omitted update metadata and strictly validates supplied content and source stamps", () => {
+    const content = deriveContentFormatContract("# First\n# Second\n").contract;
+    const current = parseTemplatePolicy({
+      ...policy(),
+      templates: {
+        literature: {
+          ...policy().templates.literature,
+          content,
+          approvedSourceSignature: digest,
+          approvedBodySignature: digest,
+          extensions: { owner: "vault", retained: true },
+        },
+      },
+    });
+    const existing = current.templates.literature!;
+    const updated = applyTemplatePolicyChange(current, {
+      mode: "update",
+      templateId: existing.templateId,
+      binding: {
+        ...existing,
+        naming: "{{title}}",
+        content: undefined,
+        extensions: undefined,
+        approvedSourceSignature: undefined,
+        approvedBodySignature: undefined,
+      },
+      source: { path: existing.sourcePath, bytes: new TextEncoder().encode("# First\n# Second\n"), publication: "verify-existing" },
+    });
+    expect(updated.templates.literature).toMatchObject({
+      templateId: existing.templateId,
+      destinationClass: existing.destinationClass,
+      renderer: existing.renderer,
+      sourceFolder: existing.sourceFolder,
+      sourcePath: existing.sourcePath,
+      contract: existing.contract,
+      content,
+      approvedSourceSignature: digest,
+      approvedBodySignature: digest,
+      extensions: { owner: "vault", retained: true },
+      naming: "{{title}}",
+    });
+    expect(JSON.parse(serializeTemplatePolicy(updated)).templates.literature).toMatchObject({
+      approvedSourceSignature: digest,
+      approvedBodySignature: digest,
+      extensions: { owner: "vault", retained: true },
+    });
+    expect(() => applyTemplatePolicyChange(current, {
+      mode: "update",
+      templateId: existing.templateId,
+      binding: { ...existing, content: {} as never },
+      source: { path: existing.sourcePath, bytes: new Uint8Array(), publication: "verify-existing" },
+    })).toThrow("CONTENT_CONTRACT_INVALID");
+    expect(() => applyTemplatePolicyChange(current, {
+      mode: "update",
+      templateId: existing.templateId,
+      binding: { ...existing, approvedSourceSignature: "sha256:not-a-digest" as Digest },
+      source: { path: existing.sourcePath, bytes: new Uint8Array(), publication: "verify-existing" },
+    })).toThrow("TEMPLATE_POLICY_INVALID");
+    expect(() => applyTemplatePolicyChange(current, {
+      mode: "update",
+      templateId: existing.templateId,
+      binding: { ...existing, approvedBodySignature: "sha256:not-a-digest" as Digest },
+      source: { path: existing.sourcePath, bytes: new Uint8Array(), publication: "verify-existing" },
+    })).toThrow("TEMPLATE_POLICY_INVALID");
+  });
+
+  it("normalizes every identity-bearing mutation mode without rewriting nonidentity values", () => {
+    const id = "메모";
+    const nfd = id.normalize("NFD") as typeof id;
+    const sourceBytes = new Uint8Array([0, 1, 2]);
+    const binding = {
+      ...policy().templates.literature,
+      templateId: nfd,
+      naming: "  authored naming  ",
+    };
+    const create = normalizeTemplateSemanticChange({
+      mode: "create",
+      binding,
+      source: { path: "Templates/OMS/메모.md", bytes: sourceBytes, publication: "write" },
+    });
+    expect(create.mode).toBe("create");
+    if (create.mode !== "create") throw new Error("expected create");
+    expect(create.binding.templateId).toBe(id);
+    expect(create.binding.naming).toBe(binding.naming);
+    expect(create.source.bytes).toBe(sourceBytes);
+    const update = normalizeTemplateSemanticChange({
+      mode: "update",
+      templateId: nfd,
+      binding,
+      source: { path: "Templates/OMS/메모.md", bytes: sourceBytes, publication: "write" },
+    });
+    expect(update.mode).toBe("update");
+    if (update.mode !== "update") throw new Error("expected update");
+    expect(update.templateId).toBe(id);
+    expect(update.binding.templateId).toBe(id);
+    for (const mode of ["reclassify", "remove", "default"] as const) {
+      const normalized = normalizeTemplateSemanticChange(mode === "reclassify"
+        ? { mode, templateId: nfd, toClass: "registered-existing" as const }
+        : mode === "remove"
+          ? { mode, templateId: nfd, deleteSource: false }
+          : { mode, templateId: nfd });
+      expect(normalized.templateId).toBe(id);
+    }
+  });
+
   it("preserves folder and link axes in a deterministic projection", () => {
     const projection = {
-      version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: digest, sources: [{ logicalId: "template-policy", signature: digest }] },
+      version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: digest, sharedAuthoritySignature: digest, sources: [{ logicalId: "template-policy", signature: digest }] },
       managed: { base: { fields: {} }, templates: {}, globalAxes: {
         folders: { kind: "folder", key: "area", type: "select", members: [{ path: "Areas", owner: "vault" }] },
         links: { kind: "link", key: "parent", type: "file", members: ["Projects"] },
@@ -282,6 +468,7 @@ describe("template policy", () => {
       generatedFrom: {
         algorithm: "sha256-lp-v1",
         inputSignature: digest,
+        sharedAuthoritySignature: digest,
         sources: [
           { logicalId: "template-policy", signature: digest },
           { path: "Templates/OMS/literature.md", signature: digest },
@@ -298,14 +485,49 @@ describe("template policy", () => {
 
   it("rejects projection managed payload shape tampering and duplicate source paths", () => {
     expect(() => parseDerivedProjection({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: digest, sources: [] }, managed: { base: { fields: {} }, templates: {}, globalAxes: [] } })).toThrow("PROJECTION_INVALID");
-    const projection = parseDerivedProjection({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: digest, sources: [] }, managed: { base: { fields: {} }, templates: {}, globalAxes: {} } });
+    const projection = parseDerivedProjection({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: digest, sharedAuthoritySignature: digest, sources: [] }, managed: { base: { fields: {} }, templates: {}, globalAxes: {} } });
     expect(() => validateDerivedProjection(projection, { ...projection.managed, globalAxes: { changed: { kind: "folder", key: "area", type: "select", members: [] } } })).toThrow("PROJECTION_PAYLOAD_TAMPERED");
+  });
+
+  it("rejects a projection that omits the required shared authority signature", () => {
+    expect(() => parseDerivedProjection({
+      version: "oms.types.v1",
+      generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: digest, sources: [] },
+      managed: { base: { fields: {} }, templates: {}, globalAxes: {} },
+    })).toThrow("PROJECTION_INVALID");
+  });
+
+  it("requires content on every derived template while allowing unapproved policy bindings", () => {
+    const content = deriveContentFormatContract("Body\n", { templateId: "note" }).contract;
+    const template = {
+      templateId: "note",
+      destinationClass: "registered-existing",
+      renderer: "obsidian-core",
+      sourcePath: "Templates/note.md",
+      keyOrder: ["title"],
+      fields: { title: { type: "text" } },
+      views: [],
+      naming: "{{title}}",
+      bodySignature: content.bodySignature,
+      content,
+    };
+    const projection = {
+      version: "oms.types.v1",
+      generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: digest, sharedAuthoritySignature: digest, sources: [] },
+      managed: { base: { fields: {} }, templates: { note: template }, globalAxes: {} },
+    };
+    expect(parseDerivedProjection(projection).managed.templates.note?.content).toEqual(content);
+    const { content: _content, ...withoutContent } = template;
+    expect(() => parseDerivedProjection({
+      ...projection,
+      managed: { ...projection.managed, templates: { note: withoutContent } },
+    })).toThrow("CONTENT_CONTRACT_INVALID");
   });
 
   it("detects canonical managed payload tampering independently of source signatures", () => {
     const projection = {
       version: "oms.types.v1",
-      generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: digest, sources: [] },
+      generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: digest, sharedAuthoritySignature: digest, sources: [] },
       managed: { base: { fields: {} }, templates: {}, globalAxes: {} },
     };
     const expected = parseDerivedProjection(projection).managed;

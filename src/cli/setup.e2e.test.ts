@@ -77,7 +77,6 @@ async function approval(
     vault: root,
     templateFolders: templateFolders.map((folder, index) => ({
       path: folder,
-      mode: "auto",
       ...(index === 0 ? { default: true as const } : {}),
     })),
   });
@@ -176,8 +175,15 @@ describe("template-first setup", () => {
       expect(await readFile(path.join(root, "Templates", "mail.md"), "utf8")).toBe(source);
       const projectionText = await readFile(path.join(root, ".oms", "types.json"), "utf8");
       const projection = JSON.parse(projectionText);
-      expect(projection.generatedFrom.sources).toContainEqual(expect.objectContaining({ path: "Templates/mail.md", signature: expect.stringMatching(/^sha256:/) }));
-      expect(projection.managed.templates.mail).toMatchObject({ renderer: "templater", fields: { subject: { filledBy: "obsidian" } } });
+      expect(projection.generatedFrom).toMatchObject({
+        sharedAuthoritySignature: expect.stringMatching(/^sha256:/),
+        sources: expect.arrayContaining([expect.objectContaining({ path: "Templates/mail.md", signature: expect.stringMatching(/^sha256:/) })]),
+      });
+      expect(projection.managed.templates.mail).toMatchObject({
+        renderer: "templater",
+        fields: { subject: { filledBy: "obsidian" } },
+        content: { version: 1, bodySignature: expect.stringMatching(/^sha256:/) },
+      });
       expect(projectionText).not.toContain("<%");
     } finally { log.mockRestore(); }
   });
@@ -465,16 +471,16 @@ describe("template-first setup", () => {
       folders: {},
       templates: { custom: { templateFolder: "Notes" } },
     }));
-    const selected = [{ path: "Meta/Templates", mode: "auto" as const, default: true as const }];
+    const selected = [{ path: "Meta/Templates", default: true as const }];
     const state = await inspectSetup({ vault: root, templateFolders: selected });
     const manifest = await composeSetup(await decideNonInteractiveSetup(state), { base: { fields: {} } });
 
     await runSetup({ vault: root, yes: true, templateFolders: ["Meta/Templates"], approvedDigest: manifest.approvalDigest });
     const policy = JSON.parse(await readFile(path.join(root, ".oms", "template-policy.json"), "utf8")) as {
-      templateFolders: readonly { path: string; mode: string; default?: boolean }[];
+      templateFolders: readonly { path: string; default?: boolean }[];
       templates: Record<string, { sourceFolder: string }>;
     };
-    expect(policy.templateFolders).toEqual([{ path: "Meta/Templates", mode: "auto", default: true }]);
+    expect(policy.templateFolders).toEqual([{ path: "Meta/Templates", default: true }]);
     expect(policy.templates.custom?.sourceFolder).toBe("Meta/Templates");
   });
 });

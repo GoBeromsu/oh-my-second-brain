@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { composeTemplateAdd, starterTemplateBytes } from "./compose-add.js";
 import type { TemplateFolderRegistration } from "./types.js";
 
-const folders = [{ path: "Custom", mode: "auto", default: true }, { path: "Other", mode: "manual" }] as unknown as readonly TemplateFolderRegistration[];
+const folders = [{ path: "Custom", default: true }, { path: "Other" }] as unknown as readonly TemplateFolderRegistration[];
 const encoder = new TextEncoder();
 const request = { templateId: "note", bytes: starterTemplateBytes("note"), contract: "base", naming: "{{date}}-{{slug}}.md" };
 

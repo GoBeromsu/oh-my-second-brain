@@ -1,7 +1,7 @@
 import { parseTemplate, type ExtractedTemplate } from "./extract.js";
 import type { Diagnostic, TemplateRenderer } from "./types.js";
 
-const MAX_PROPOSAL_BYTES = 262_144;
+export const MAX_TEMPLATE_SOURCE_BYTES = 262_144;
 const MAX_PROPOSAL_FIELDS = 64;
 
 export interface TemplateRendererClassification {
@@ -37,7 +37,7 @@ function parseDiagnostic(sourcePath: string, error: unknown): Diagnostic {
 
 /** Classifies template syntax for a host-authored proposal; it never converts or executes template code. */
 export function classifyTemplateRenderer(sourcePath: string, bytes: Uint8Array): TemplateRendererClassification {
-  if (bytes.byteLength > MAX_PROPOSAL_BYTES) {
+  if (bytes.byteLength > MAX_TEMPLATE_SOURCE_BYTES) {
     return { renderer: "none", filledBy: [], bodyExternal: false, diagnostics: [{ code: "TEMPLATE_PROPOSAL_OVERSIZE", path: sourcePath }] };
   }
   const raw = Buffer.from(bytes).toString("utf8");

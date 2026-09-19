@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { sourceSignature } from "../kernel/templates/resolver.js";
+import {
+  deriveManagedTemplateProjection,
+  resolveClassifiedTemplateSource,
+  sharedAuthoritySignature,
+  sourceSignature,
+  taxonomyRouting,
+} from "../kernel/templates/resolver.js";
+import { parseTemplatePolicy, serializeDerivedProjection } from "../kernel/templates/policy.js";
 import type { Digest } from "../kernel/templates/types.js";
 import { runNoteCommand } from "./note-command.js";
 
@@ -20,7 +27,7 @@ async function vault(): Promise<string> {
   await Promise.all([".oms", ".obsidian", "Templates", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
   const policy = `${JSON.stringify({
     version: 3,
-    templateFolders: [{ path: "Templates", mode: "manual", default: true }],
+    templateFolders: [{ path: "Templates", default: true }],
     defaultTemplate: "note",
     base: { fields: {} },
     contracts: { note: { intent: "note", fields: {}, views: [] } },
@@ -45,28 +52,36 @@ async function vault(): Promise<string> {
     { logicalId: "obsidian-types", signature: sha(obsidian) },
     { path: "Templates/note.md", signature: sha(template) },
   ];
-  const projection = `${JSON.stringify({
+  const parsedPolicy = parseTemplatePolicy(policy);
+  const binding = parsedPolicy.templates.note;
+  if (binding === undefined) throw new Error("note fixture policy did not contain note binding");
+  const source = resolveClassifiedTemplateSource(
+    binding.sourcePath,
+    new TextEncoder().encode(template),
+    binding.renderer,
+  );
+  const managedTemplate = deriveManagedTemplateProjection(
+    parsedPolicy,
+    binding,
+    source,
+    { title: "text" },
+    taxonomyRouting(".oms/taxonomy.json", new TextEncoder().encode(taxonomy)).targetFolders.get("note"),
+  );
+  const controls = descriptors.slice(0, 3);
+  const projection = serializeDerivedProjection({
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors },
-    managed: {
-      base: { fields: {} },
-      globalAxes: {},
-      templates: {
-        note: {
-          templateId: "note",
-          destinationClass: "registered-existing",
-          renderer: "obsidian-core",
-          sourcePath: "Templates/note.md",
-          targetFolder: "notes",
-          keyOrder: ["title"],
-          fields: { title: { type: "text" } },
-          views: [],
-          naming: "{{slug}}.md",
-          bodySignature: sha("Template body\n"),
-        },
-      },
+    generatedFrom: {
+      algorithm: "sha256-lp-v1",
+      inputSignature: sourceSignature(descriptors),
+      sharedAuthoritySignature: sharedAuthoritySignature(controls),
+      sources: descriptors,
     },
-  }, null, 2)}\n`;
+    managed: {
+      base: parsedPolicy.base,
+      globalAxes: taxonomyRouting(".oms/taxonomy.json", new TextEncoder().encode(taxonomy)).globalAxes,
+      templates: { note: managedTemplate },
+    },
+  });
   await Promise.all([
     writeFile(path.join(root, ".oms", "template-policy.json"), policy),
     writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy),
@@ -107,6 +122,13 @@ describe("note command", () => {
     expect(output()).toMatchObject({ status: "written", receipt: { mode: "update", postconditionVerified: true } });
     expect(await readFile(path.join(root, "notes", "hello.md"), "utf8")).toContain("Replacement");
     expect(process.exitCode).toBe(0);
+  });
+
+  it("accepts an explicit create folder destination", async () => {
+    const root = await vault();
+    await runNoteCommand(["create", "--vault", root, "--folder", "chosen", "--frontmatter", "{\"title\":\"Explicit\"}", "--body", "Body"]);
+    expect(output()).toMatchObject({ status: "written", notePath: "chosen/explicit.md", receipt: { mode: "create", postconditionVerified: true } });
+    expect(await readFile(path.join(root, "chosen", "explicit.md"), "utf8")).toContain("Body");
   });
 
   it("reads single, multi, and window documents without creating the engine store", async () => {

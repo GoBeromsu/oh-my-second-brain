@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeResolvedTemplateNote } from "../kernel/capture/safe.js";
-import { loadResolvedTemplates, sourceSignature } from "../kernel/templates/index.js";
+import { deriveContentFormatContract } from "../kernel/templates/content-contract.js";
+import { loadResolvedTemplates, sharedAuthoritySignature, sourceSignature } from "../kernel/templates/resolver.js";
 import type { SourceDescriptor } from "../kernel/templates/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,7 +21,7 @@ function digest(value: string): `sha256:${string}` {
 }
 
 async function createTemplateAuthority(vault: string): Promise<void> {
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }], base: { fields: {} }, contracts: { literature: { intent: "A source.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [] } }, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{slug}}.md" } } });
+  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], base: { fields: {} }, contracts: { literature: { intent: "A source.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [] } }, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{slug}}.md" } } });
   const taxonomy = JSON.stringify({ folders: {}, templates: { literature: { templateFolder: "Inbox" } } });
   const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", "source-url": "text" } });
   const template = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n# Literature\n<!-- oms:content -->\n";
@@ -30,7 +31,8 @@ async function createTemplateAuthority(vault: string): Promise<void> {
     { logicalId: "obsidian-types", signature: digest(obsidianTypes) },
     { path: "Templates/OMS/literature.md", signature: digest(template) },
   ];
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/literature.md", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: digest("# Literature\n<!-- oms:content -->\n") } } } });
+  const content = deriveContentFormatContract("# Literature\n<!-- oms:content -->\n", { templateId: "literature" }).contract;
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/literature.md", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
   await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
   await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "literature.md"), template)]);
 }

@@ -1,9 +1,10 @@
 import type {
   BaseContract, ContractDefinition, DerivedProjection, DerivedTemplateProjection, DestinationClass,
   Extensions, FieldDefault, FieldPolicy, GlobalAxis, JsonValue, ObsidianContractType,
-  RetrievalView, SourceDescriptor, TemplateBinding, TemplateFolderPath, TemplateFolderRegistration, TemplatePolicy,
+  Digest, RetrievalView, SourceDescriptor, TemplateBinding, TemplateFolderRegistration, TemplatePolicy,
   WriterRegistry,
 } from "./types.js";
+import { parseContentFormatContract } from "./content-contract.js";
 import {
   deriveManagedSourcePath,
   isTemplateSourceInFolder,
@@ -27,9 +28,9 @@ export const TEMPLATE_POLICY_SCHEMA = {
   required: ["version", "templateFolders", "base", "contracts", "templates"],
   properties: {
     version: { const: 3 },
-    templateFolders: { type: "array", items: { type: "object", required: ["path", "mode"], additionalProperties: true, properties: { path: { type: "string", minLength: 1 }, mode: { enum: ["auto", "manual"] }, default: { const: true }, extensions: { type: "object", additionalProperties: true } } } },
-    defaultTemplate: { type: "string", pattern: "^[a-z0-9]+(?:-{1,2}[a-z0-9]+)*$" },
-    base: { type: "object" }, contracts: { type: "object" }, templates: { type: "object", additionalProperties: { type: "object", properties: { renderer: { enum: ["obsidian-core", "templater", "none"] } } } },
+    templateFolders: { type: "array", items: { type: "object", required: ["path"], additionalProperties: true, properties: { path: { type: "string", minLength: 1 }, default: { const: true }, extensions: { type: "object", additionalProperties: true } } } },
+    defaultTemplate: { type: "string", pattern: "^[\\p{L}\\p{N}]+(?:-{1,2}[\\p{L}\\p{N}]+)*$" },
+    base: { type: "object" }, contracts: { type: "object" }, templates: { type: "object", additionalProperties: { type: "object", properties: { renderer: { enum: ["obsidian-core", "templater", "none"] }, content: { type: "object" }, approvedSourceSignature: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }, approvedBodySignature: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } } } },
     writers: { type: "object", required: ["field", "identifiers"], properties: { field: { type: "string", pattern: "\\S" }, identifiers: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", pattern: "\\S" } }, extensions: { type: "object", additionalProperties: true } } },
     extensions: { type: "object", additionalProperties: true },
   },
@@ -37,12 +38,27 @@ export const TEMPLATE_POLICY_SCHEMA = {
 export const DERIVED_PROJECTION_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: true,
   required: ["version", "generatedFrom", "managed"],
-  properties: { version: { const: "oms.types.v1" }, generatedFrom: { type: "object" }, managed: { type: "object", required: ["base", "templates", "globalAxes"] }, extensions: { type: "object", additionalProperties: true } },
+  properties: {
+    version: { const: "oms.types.v1" },
+    generatedFrom: {
+      type: "object",
+      required: ["algorithm", "inputSignature", "sharedAuthoritySignature", "sources"],
+      properties: {
+        algorithm: { const: "sha256-lp-v1" },
+        inputSignature: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        sharedAuthoritySignature: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        sources: { type: "array" },
+      },
+    },
+    managed: { type: "object", required: ["base", "templates", "globalAxes"] },
+    extensions: { type: "object", additionalProperties: true },
+  },
 } as const;
 
 function fail(code: string, message: string): never { throw new Error(`${code}: ${message}`); }
 function record(value: unknown, where: string): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) fail("TEMPLATE_POLICY_INVALID", `${where} must be an object`); return value as Record<string, unknown>; }
 function string(value: unknown, where: string): string { if (typeof value !== "string" || value.trim() === "") fail("TEMPLATE_POLICY_INVALID", `${where} must be a non-empty string`); return value.trim(); }
+function digest(value: unknown, where: string): Digest { if (typeof value !== "string" || !DIGEST.test(value)) fail("TEMPLATE_POLICY_INVALID", `${where} must be a sha256 digest`); return value as Digest; }
 function json(value: unknown, where: string): JsonValue { if (value === null || typeof value === "string" || typeof value === "boolean") return value; if (typeof value === "number" && Number.isFinite(value)) return value; if (Array.isArray(value)) return value.map((item, index) => json(item, `${where}[${index}]`)); const input = record(value, where); return Object.fromEntries(Object.entries(input).map(([key, item]) => [key, json(item, `${where}.${key}`)])); }
 function extensions(input: Record<string, unknown>, reserved: ReadonlySet<string>, where: string): Extensions | undefined {
   const declared = input.extensions === undefined ? {} : record(input.extensions, `${where}.extensions`);
@@ -116,17 +132,17 @@ function parseTemplateFolders(value: unknown): readonly TemplateFolderRegistrati
     const path = normalizeTemplateFolderPath(string(input.path, `${where}.path`));
     if (paths.has(path)) fail("TEMPLATE_SOURCE_DUPLICATE", `${path} is registered more than once`);
     paths.add(path);
-    if (input.mode !== "auto" && input.mode !== "manual") fail("TEMPLATE_POLICY_INVALID", `${where}.mode is invalid`);
     if (input.default !== undefined && input.default !== true) fail("TEMPLATE_POLICY_INVALID", `${where}.default must be true when present`);
     if (input.default === true && ++defaultCount > 1) fail("TEMPLATE_POLICY_INVALID", "policy.templateFolders may contain at most one default");
-    const preserved = extensions(input, new Set(["path", "mode", "default", "extensions"]), where);
-    return { path, mode: input.mode, ...(input.default === true ? { default: true as const } : {}), ...(preserved === undefined ? {} : { extensions: preserved }) };
+    const preserved = extensions(input, new Set(["path", "default", "extensions"]), where);
+    return { path, ...(input.default === true ? { default: true as const } : {}), ...(preserved === undefined ? {} : { extensions: preserved }) };
   });
 }
 function parseBinding(value: unknown, where: string, folders: readonly TemplateFolderRegistration[], key: string, contracts: Readonly<Record<string, ContractDefinition>>): TemplateBinding {
   const input = record(value, where);
   const id = validateTemplateId(string(input.templateId, `${where}.templateId`));
-  if (id !== key) fail("TEMPLATE_POLICY_INVALID", `${where}.templateId must equal its stable map key`);
+  const stableKey = validateTemplateId(key);
+  if (id !== stableKey) fail("TEMPLATE_POLICY_INVALID", `${where}.templateId must equal its stable map key`);
   if (input.destinationClass !== "managed-default" && input.destinationClass !== "registered-existing") fail("TEMPLATE_POLICY_INVALID", `${where}.destinationClass is invalid`);
   const destinationClass = input.destinationClass as DestinationClass;
   const renderer = input.renderer === undefined ? "obsidian-core" : input.renderer;
@@ -138,9 +154,24 @@ function parseBinding(value: unknown, where: string, folders: readonly TemplateF
   if (destinationClass === "managed-default" && sourcePath !== deriveManagedSourcePath(sourceFolder, id)) fail("TEMPLATE_RECLASSIFY_PATH_MISMATCH", `${where}.sourcePath must be ${deriveManagedSourcePath(sourceFolder, id)}`);
   const contract = string(input.contract, `${where}.contract`);
   if (!Object.hasOwn(contracts, contract)) fail("TEMPLATE_POLICY_INVALID", `${where}.contract does not exist`);
-  const reserved = new Set(["templateId", "destinationClass", "renderer", "sourceFolder", "sourcePath", "contract", "naming", "extensions"]);
+  const content = input.content === undefined ? undefined : parseContentFormatContract(input.content);
+  const approvedSourceSignature = input.approvedSourceSignature === undefined ? undefined : digest(input.approvedSourceSignature, `${where}.approvedSourceSignature`);
+  const approvedBodySignature = input.approvedBodySignature === undefined ? undefined : digest(input.approvedBodySignature, `${where}.approvedBodySignature`);
+  const reserved = new Set(["templateId", "destinationClass", "renderer", "sourceFolder", "sourcePath", "contract", "naming", "content", "approvedSourceSignature", "approvedBodySignature", "extensions"]);
   const preserved = extensions(input, reserved, where);
-  return { templateId: id, destinationClass, renderer, sourceFolder, sourcePath, contract, naming: string(input.naming, `${where}.naming`), ...(preserved === undefined ? {} : { extensions: preserved }) };
+  return {
+    templateId: id,
+    destinationClass,
+    renderer,
+    sourceFolder,
+    sourcePath,
+    contract,
+    naming: string(input.naming, `${where}.naming`),
+    ...(content === undefined ? {} : { content }),
+    ...(approvedSourceSignature === undefined ? {} : { approvedSourceSignature }),
+    ...(approvedBodySignature === undefined ? {} : { approvedBodySignature }),
+    ...(preserved === undefined ? {} : { extensions: preserved }),
+  };
 }
 
 export function parseTemplatePolicy(input: string | unknown): TemplatePolicy {
@@ -163,8 +194,10 @@ export function parseTemplatePolicy(input: string | unknown): TemplatePolicy {
   const rawTemplates = record(root.templates, "policy.templates");
   const templates: Record<string, TemplateBinding> = {};
   const sources = new Set<string>();
-  for (const [key, binding] of Object.entries(rawTemplates)) {
-    const parsed = parseBinding(binding, `policy.templates.${key}`, templateFolders, key, contracts);
+  for (const [rawKey, binding] of Object.entries(rawTemplates)) {
+    const key = validateTemplateId(rawKey);
+    if (Object.hasOwn(templates, key)) fail("TEMPLATE_ID_DUPLICATE", `policy.templates contains canonically equivalent template keys for ${key}`);
+    const parsed = parseBinding(binding, `policy.templates.${rawKey}`, templateFolders, key, contracts);
     if (sources.has(parsed.sourcePath)) fail("TEMPLATE_SOURCE_DUPLICATE", `${parsed.sourcePath} is bound more than once`);
     sources.add(parsed.sourcePath);
     templates[key] = parsed;
@@ -231,7 +264,13 @@ export function parseDerivedProjection(input: string | unknown): DerivedProjecti
   const root = record(value, "projection");
   if (root.version !== "oms.types.v1") fail("PROJECTION_INVALID", "version must be oms.types.v1");
   const generated = record(root.generatedFrom, "generatedFrom");
-  if (generated.algorithm !== "sha256-lp-v1" || typeof generated.inputSignature !== "string" || !DIGEST.test(generated.inputSignature)) fail("PROJECTION_INVALID", "generatedFrom is invalid");
+  if (
+    generated.algorithm !== "sha256-lp-v1"
+    || typeof generated.inputSignature !== "string"
+    || !DIGEST.test(generated.inputSignature)
+    || typeof generated.sharedAuthoritySignature !== "string"
+    || !DIGEST.test(generated.sharedAuthoritySignature)
+  ) fail("PROJECTION_INVALID", "generatedFrom is invalid");
   const managed = record(root.managed, "managed");
   if (typeof managed.globalAxes !== "object" || managed.globalAxes === null || Array.isArray(managed.globalAxes)) fail("PROJECTION_INVALID", "managed.globalAxes must be an object");
   const base = parseBase(managed.base, "managed.base");
@@ -240,7 +279,7 @@ export function parseDerivedProjection(input: string | unknown): DerivedProjecti
   const paths = new Set<string>();
   for (const [id, raw] of Object.entries(rawTemplates)) {
     const item = record(raw, `managed.templates.${id}`);
-    const folder = normalizeTemplateFolderPath(string(item.targetFolder, `managed.templates.${id}.targetFolder`));
+    const folder = item.targetFolder === undefined ? undefined : normalizeTemplateFolderPath(string(item.targetFolder, `managed.templates.${id}.targetFolder`));
     const templateId = validateTemplateId(string(item.templateId, `managed.templates.${id}.templateId`));
     if (templateId !== id) fail("PROJECTION_INVALID", `managed.templates.${id}.templateId must equal its stable map key`);
     if (item.destinationClass !== "managed-default" && item.destinationClass !== "registered-existing") fail("PROJECTION_INVALID", `managed.templates.${id}.destinationClass is invalid`);
@@ -249,7 +288,8 @@ export function parseDerivedProjection(input: string | unknown): DerivedProjecti
     const renderer: DerivedTemplateProjection["renderer"] = item.renderer;
     const sourcePath = normalizeTemplateSourcePath(string(item.sourcePath, `managed.templates.${id}.sourcePath`));
     const naming = string(item.naming, `managed.templates.${id}.naming`);
-    const preserved = extensions(item, new Set(["templateId", "destinationClass", "renderer", "sourcePath", "targetFolder", "keyOrder", "fields", "views", "naming", "bodySignature", "extensions"]), `managed.templates.${id}`);
+    const content = parseContentFormatContract(item.content);
+    const preserved = extensions(item, new Set(["templateId", "destinationClass", "renderer", "sourcePath", "targetFolder", "keyOrder", "fields", "views", "naming", "bodySignature", "content", "extensions"]), `managed.templates.${id}`);
     const template = { templateId, destinationClass, renderer, sourcePath, naming, ...(preserved === undefined ? {} : { extensions: preserved }) };
     if (!Array.isArray(item.keyOrder) || item.keyOrder.some(key => typeof key !== "string")) fail("PROJECTION_INVALID", `managed.templates.${id}.keyOrder is invalid`);
     const fields = parseBase({ fields: item.fields }, `managed.templates.${id}`).fields;
@@ -258,7 +298,7 @@ export function parseDerivedProjection(input: string | unknown): DerivedProjecti
     if (!DIGEST.test(bodySignature)) fail("PROJECTION_INVALID", `managed.templates.${id}.bodySignature is invalid`);
     if (paths.has(template.sourcePath)) fail("TEMPLATE_SOURCE_DUPLICATE", `${template.sourcePath} is repeated`);
     paths.add(template.sourcePath);
-    templates[id] = { ...template, targetFolder: folder as TemplateFolderPath, keyOrder: [...item.keyOrder], fields, views, bodySignature: bodySignature as `sha256:${string}` };
+    templates[id] = { ...template, ...(folder === undefined ? {} : { targetFolder: folder }), keyOrder: [...item.keyOrder], fields, views, bodySignature: bodySignature as `sha256:${string}`, content };
   }
   const rawAxes = managed.globalAxes as Record<string, unknown>;
   const globalAxes: Record<string, GlobalAxis> = {};
@@ -276,7 +316,12 @@ export function parseDerivedProjection(input: string | unknown): DerivedProjecti
   }
   return {
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: generated.inputSignature as `sha256:${string}`, sources: parseSources(generated.sources) },
+    generatedFrom: {
+      algorithm: "sha256-lp-v1",
+      inputSignature: generated.inputSignature as `sha256:${string}`,
+      sharedAuthoritySignature: generated.sharedAuthoritySignature as `sha256:${string}`,
+      sources: parseSources(generated.sources),
+    },
     managed: { base, templates, globalAxes },
     ...(extensions(root, RESERVED_PROJECTION, "projection") === undefined ? {} : { extensions: extensions(root, RESERVED_PROJECTION, "projection") }),
   };
@@ -296,24 +341,76 @@ export function validateDerivedProjection(input: string | unknown, managed: Deri
   return projection;
 }
 
+/**
+ * Canonicalizes only template identities carried by a semantic mutation.
+ * Physical paths, source bytes, and all other caller-owned values remain
+ * unchanged until the normal policy/path codecs inspect them.
+ */
+export function normalizeTemplateSemanticChange(
+  change: import("./types.js").TemplateSemanticChange,
+): import("./types.js").TemplateSemanticChange {
+  switch (change.mode) {
+    case "create":
+      return {
+        ...change,
+        binding: {
+          ...change.binding,
+          templateId: validateTemplateId(change.binding.templateId),
+        },
+      };
+    case "update":
+      return {
+        ...change,
+        templateId: validateTemplateId(change.templateId),
+        binding: {
+          ...change.binding,
+          templateId: validateTemplateId(change.binding.templateId),
+        },
+      };
+    case "reclassify":
+    case "remove":
+    case "default":
+      return {
+        ...change,
+        templateId: validateTemplateId(change.templateId),
+      };
+    default:
+      return change;
+  }
+}
+
 /** Applies only binding and folder semantics; bytes and publication are resolver concerns. */
 export function applyTemplatePolicyChange(current: TemplatePolicy, change: import("./types.js").TemplateSemanticChange): TemplatePolicy {
-  if (change.mode === "regenerate") return parseTemplatePolicy(current);
+  change = normalizeTemplateSemanticChange(change);
+  if (change.mode === "reconcile") return parseTemplatePolicy(change.proposedPolicy);
   const templates: Record<string, TemplateBinding> = { ...current.templates };
   if (change.mode === "create") {
-    if (templates[change.binding.templateId] !== undefined) fail("TEMPLATE_ID_DUPLICATE", `template ${change.binding.templateId} already exists`);
-    templates[change.binding.templateId] = change.binding;
+    const templateId = validateTemplateId(change.binding.templateId);
+    if (templates[templateId] !== undefined) fail("TEMPLATE_ID_DUPLICATE", `template ${templateId} already exists`);
+    templates[templateId] = { ...change.binding, templateId };
   } else if (change.mode === "update") {
-    if (change.templateId !== change.binding.templateId) fail("TEMPLATE_IDENTITY_IMMUTABLE", "templateId cannot change");
-    if (templates[change.templateId] === undefined) fail("TEMPLATE_SOURCE_INVALID", "template does not exist");
-    templates[change.templateId] = change.binding;
+    const templateId = validateTemplateId(change.templateId);
+    const bindingId = validateTemplateId(change.binding.templateId);
+    if (templateId !== bindingId) fail("TEMPLATE_IDENTITY_IMMUTABLE", "templateId cannot change");
+    const previous = templates[templateId];
+    if (previous === undefined) fail("TEMPLATE_SOURCE_INVALID", "template does not exist");
+    templates[templateId] = {
+      ...previous,
+      ...change.binding,
+      templateId,
+      ...(change.binding.content === undefined && previous.content !== undefined ? { content: previous.content } : {}),
+      ...(change.binding.extensions === undefined && previous.extensions !== undefined ? { extensions: previous.extensions } : {}),
+      ...(change.binding.approvedSourceSignature === undefined && previous.approvedSourceSignature !== undefined ? { approvedSourceSignature: previous.approvedSourceSignature } : {}),
+      ...(change.binding.approvedBodySignature === undefined && previous.approvedBodySignature !== undefined ? { approvedBodySignature: previous.approvedBodySignature } : {}),
+    };
   } else if (change.mode === "reclassify") {
-    const binding = templates[change.templateId];
+    const templateId = validateTemplateId(change.templateId);
+    const binding = templates[templateId];
     if (binding === undefined) fail("TEMPLATE_SOURCE_INVALID", "template does not exist");
     if (change.toClass === "managed-default" && binding.sourcePath !== deriveManagedSourcePath(binding.sourceFolder, binding.templateId)) {
       fail("TEMPLATE_RECLASSIFY_PATH_MISMATCH", "move or relocate before reclassifying to managed-default");
     }
-    templates[change.templateId] = { ...binding, destinationClass: change.toClass };
+    templates[templateId] = { ...binding, destinationClass: change.toClass };
   } else if (change.mode === "relocate-folder") {
     const folder = normalizeTemplateFolderPath(change.templateFolder);
     selectTemplateFolder(current.templateFolders, folder);
@@ -323,16 +420,20 @@ export function applyTemplatePolicyChange(current: TemplatePolicy, change: impor
     }
     return parseTemplatePolicy({ ...current, templates });
   } else if (change.mode === "remove") {
-    const binding = templates[change.templateId];
+    const templateId = validateTemplateId(change.templateId);
+    const binding = templates[templateId];
     if (binding === undefined) fail("TEMPLATE_SOURCE_INVALID", "template does not exist");
-    if (current.defaultTemplate === change.templateId) fail("TEMPLATE_POLICY_INVALID", "choose a new default template before removing the current default");
+    if (current.defaultTemplate === templateId) fail("TEMPLATE_POLICY_INVALID", "choose a new default template before removing the current default");
     if (change.deleteSource && binding.destinationClass === "registered-existing") fail("TEMPLATE_SOURCE_INVALID", "registered-existing template sources cannot be deleted");
-    delete templates[change.templateId];
+    delete templates[templateId];
   } else if (change.mode === "default") {
-    if (templates[change.templateId] === undefined) fail("TEMPLATE_SOURCE_INVALID", "template does not exist");
-    return parseTemplatePolicy({ ...current, defaultTemplate: change.templateId });
+    const templateId = validateTemplateId(change.templateId);
+    if (templates[templateId] === undefined) fail("TEMPLATE_SOURCE_INVALID", "template does not exist");
+    return parseTemplatePolicy({ ...current, defaultTemplate: templateId });
   } else if (change.mode === "register-folder") {
     return parseTemplatePolicy({ ...current, templateFolders: [...current.templateFolders, change.folder] });
+  } else {
+    fail("TEMPLATE_POLICY_INVALID", "unsupported template mutation mode");
   }
   return parseTemplatePolicy({ ...current, templates });
 }

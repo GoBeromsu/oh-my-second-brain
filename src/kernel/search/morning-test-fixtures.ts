@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { sourceSignature } from "../templates/index.js";
+import { deriveContentFormatContract } from "../templates/content-contract.js";
+import { sharedAuthoritySignature, sourceSignature } from "../templates/resolver.js";
 import type { SourceDescriptor } from "../templates/types.js";
 
 const digest = (value: string): `sha256:${string}` => `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -10,12 +11,13 @@ const digest = (value: string): `sha256:${string}` => `sha256:${createHash("sha2
 export async function writeMorningVaultFixture(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-morning-"));
   for (const directory of [".oms", ".obsidian", "Templates/OMS", "references"]) await mkdir(path.join(vault, directory), { recursive: true });
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }], base: { fields: {} }, contracts: { reference: { intent: "reference", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text" }, tags: { type: "list" } }, views: [] } }, templates: { reference: { templateId: "reference", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", contract: "reference", naming: "{{slug}}.md" } } });
+  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], base: { fields: {} }, contracts: { reference: { intent: "reference", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text" }, tags: { type: "list" } }, views: [] } }, templates: { reference: { templateId: "reference", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", contract: "reference", naming: "{{slug}}.md" } } });
   const taxonomy = JSON.stringify({ folders: {}, templates: { reference: { templateFolder: "Inbox" } } });
   const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", "source-url": "text", tags: "list" } });
   const template = "---\ntemplate: reference\ntitle: Untitled\nsource-url:\ntags: []\n---\n<!-- oms:content -->\n";
   const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: digest(policy) }, { logicalId: "taxonomy", signature: digest(taxonomy) }, { logicalId: "obsidian-types", signature: digest(obsidianTypes) }, { path: "Templates/OMS/reference.md", signature: digest(template) }];
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url", "tags"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text" }, tags: { type: "list" } }, views: [], naming: "{{slug}}.md", bodySignature: digest("<!-- oms:content -->\n") } } } });
+  const content = deriveContentFormatContract("<!-- oms:content -->\n", { templateId: "reference" }).contract;
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url", "tags"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text" }, tags: { type: "list" } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
   await Promise.all([
     writeFile(path.join(vault, ".oms/template-policy.json"), policy),
     writeFile(path.join(vault, ".oms/taxonomy.json"), taxonomy),

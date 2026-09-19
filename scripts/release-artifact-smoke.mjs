@@ -207,15 +207,36 @@ function canonicalCliSmoke(packageRoot, vault, smokeHome) {
     return expectExit([...mutationArgs, "--yes", "--approved-digest", approval], 0);
   };
 
+  // Source authoring stages content outside the vault: `template add --from`
+  // writes the new source itself, and a file already sitting at the destination
+  // is a collision, not a registration. Per-file registration no longer exists.
+  const literatureSource = path.join(smokeHome, "literature-source.md");
   writeFileSync(
-    path.join(vault, "Template Sources", "literature.md"),
+    literatureSource,
     "---\ntemplate: literature\ntitle: Untitled\ntags: []\n---\n# Literature\n<!-- oms:content -->\n",
     "utf-8",
   );
   approvedMutation([
-    "template", "add", "Template Sources/literature.md", "--id", "literature",
+    "template", "add", "--id", "literature", "--from", literatureSource,
     "--folder", "Template Sources", "--contract", "base",
   ]);
+  if (!existsSync(path.join(vault, "Template Sources", "literature.md"))) {
+    fail("packaged oms template add --from did not author the source inside the selected folder");
+  }
+  const retiredPerFileAdd = expectExit([
+    "template", "add", "Template Sources/literature.md", "--id", "other", "--dry-run",
+  ], 1);
+  if (!`${retiredPerFileAdd.stdout}\n${retiredPerFileAdd.stderr}`.includes("per-file registration is not supported")) {
+    fail("packaged oms template add did not reject retired per-file registration");
+  }
+  const scan = expectExit(["template", "scan"], 0);
+  const scanPayload = JSON.parse(scan.stdout);
+  if (!Array.isArray(scanPayload.entries) || !scanPayload.entries.some(entry => entry.sourcePath === "Template Sources/literature.md")) {
+    fail("packaged oms template scan did not report the selected-folder census");
+  }
+  if (scanPayload.entries.some(entry => "bytes" in entry)) {
+    fail("packaged oms template scan exposed source bytes");
+  }
   approvedMutation(["template", "default", "literature"]);
   const listed = expectExit(["template", "list"], 0);
   if (!listed.stdout.includes('"literature"')) fail("packaged template list omitted the registered template");

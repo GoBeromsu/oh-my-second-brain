@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -8,12 +9,12 @@ import { rejection, type WriteRejection, type WriteTargetSource } from "../conve
 import { resolveDefaults } from "../templates/defaults.js";
 import { renderNoteName } from "../templates/naming.js";
 import { formatObsidianTime } from "../templates/obsidian-core-time.js";
-import { normalizeTemplateSourcePath, verifyVaultPath } from "../templates/paths.js";
+import { normalizeTemplateFolderPath, normalizeTemplateSourcePath, verifyVaultPath } from "../templates/paths.js";
 import { loadResolvedTemplates } from "../templates/resolver.js";
 import { readBundledPackageVersion } from "../runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../runtime/event-journal.js";
-import { RuntimeLedgerError, type RuntimeEventOutcome } from "../runtime/event-types.js";
-import type { JsonValue, PreparedWrite, ResolvedConvention, ResolvedTemplate } from "../templates/types.js";
+import { RuntimeLedgerError, type RuntimeEventOutcome, type RuntimeInvocation } from "../runtime/event-types.js";
+import type { JsonValue, PendingTemplate, PreparedWrite, ResolvedConvention, ResolvedTemplate } from "../templates/types.js";
 
 export type WriteMode = "create" | "append" | "update";
 export type TemplateWriteStatus = "ask" | "written" | "rejected";
@@ -112,6 +113,7 @@ export interface TemplateWriteNoteInput {
   readonly mode: WriteMode;
   readonly dryRun: boolean;
   readonly notePath?: string;
+  readonly targetFolder?: string;
   readonly frontmatter?: Readonly<Record<string, JsonValue>>;
   readonly body?: string;
   readonly resolvedAt?: string;
@@ -229,13 +231,55 @@ function templateRejection(code: WriteRejection["code"], message: string, remedi
   return rejection("admission", code, message, remediation);
 }
 
-function selectedTemplateId(input: TemplateWriteNoteInput): string | undefined {
-  return input.templateId ?? (input.mode === "create" ? input.convention.defaultTemplate : undefined);
+function selectedTemplateId(input: TemplateWriteNoteInput, convention: ResolvedConvention = input.convention): string | undefined {
+  return (input.templateId ?? (input.mode === "create" ? convention.defaultTemplate : undefined))?.normalize("NFC");
 }
 
-function templateFor(input: TemplateWriteNoteInput): ResolvedTemplate | undefined {
-  const templateId = selectedTemplateId(input);
-  return templateId === undefined ? undefined : input.convention.templates[templateId];
+function templateFor(input: TemplateWriteNoteInput, convention: ResolvedConvention = input.convention): ResolvedTemplate | undefined {
+  const templateId = selectedTemplateId(input, convention);
+  return templateId === undefined ? undefined : convention.templates[templateId];
+}
+
+function conventionSemantics(convention: ResolvedConvention): Readonly<Record<string, unknown>> {
+  return {
+    sharedAuthoritySignature: convention.sharedAuthoritySignature,
+    base: convention.base,
+    globalAxes: convention.globalAxes,
+    ...(convention.writers === undefined ? {} : { writers: convention.writers }),
+    ...(convention.defaultTemplate === undefined ? {} : { defaultTemplate: convention.defaultTemplate }),
+  };
+}
+
+function templateSemantics(template: ResolvedTemplate): Readonly<Record<string, unknown>> {
+  const result: Record<string, unknown> = { ...template };
+  delete result.inputSignature;
+  delete result.managedSourcePaths;
+  return result;
+}
+
+function pendingTemplate(convention: ResolvedConvention, templateId: string): PendingTemplate | undefined {
+  return convention.pending[templateId]
+    ?? Object.values(convention.pending).find(candidate => candidate.id === templateId);
+}
+
+function pendingRejection(
+  input: TemplateWriteNoteInput,
+  templateId: string,
+  template: ResolvedTemplate | undefined,
+  notePath: string,
+  frontmatter: Readonly<Record<string, JsonValue>>,
+  body: string,
+  pending: PendingTemplate,
+): TemplateWriteResult {
+  const detail = pending.diagnostics[0]?.message;
+  const message = `TEMPLATE_CONTRACT_PENDING: template ${templateId} requires confirmation${detail === undefined ? "" : ` (${detail})`}`;
+  const payload = templateRejection("contract-violation", message, "확인하기");
+  return templateResult("ask", input, template, notePath, frontmatter, body, [], message, payload);
+}
+
+function contractFailureMessage(context: string, violations: readonly TemplateContractViolation[]): string {
+  const details = violations.map(violation => violation.message).join("; ");
+  return details.length === 0 ? context : `${context}: ${details}`;
 }
 
 function identityRejection(template: ResolvedTemplate): WriteRejection {
@@ -300,9 +344,58 @@ function preparedTemplateWrite(
   };
 }
 
+function sourceDigest(bytes: Uint8Array): string {
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+async function auditTemplateSource(
+  input: TemplateWriteNoteInput,
+  template: ResolvedTemplate,
+  notePath: string,
+  invocation: RuntimeInvocation,
+): Promise<readonly string[]> {
+  let bytes: Uint8Array;
+  try {
+    const source = await verifyVaultPath(input.target.vault, template.sourcePath, { expected: "existing-file" });
+    bytes = await readFile(source.absolutePath);
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return [`TEMPLATE_SOURCE_AUDIT_FAILED: could not re-read ${template.sourcePath} after writing (${detail})`];
+  }
+  if (sourceDigest(bytes) === template.templateSignature) return [];
+  const event = createRuntimeEvent(invocation, {
+    kind: "template-source-raced",
+    outcome: "observation-gap",
+    templateId: template.id,
+    notePath,
+    inputSignature: template.inputSignature,
+    templateSignature: template.templateSignature,
+  });
+  try {
+    appendRuntimeEvent(event, { vaultPath: input.target.vault });
+    return [];
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return [`TEMPLATE_SOURCE_AUDIT_EVENT_FAILED: could not record template-source-raced (${detail})`];
+  }
+}
+
+function withRuntimeWarnings(
+  result: TemplateWriteResult,
+  warnings: readonly string[],
+): TemplateWriteResult {
+  if (warnings.length === 0) return result;
+  const runtimeWarnings = [...(result.runtimeWarnings ?? []), ...warnings];
+  return {
+    ...result,
+    runtimeWarnings,
+    ...(result.receipt === undefined ? {} : { receipt: { ...result.receipt, runtimeWarnings } }),
+  };
+}
+
 /**
  */
-async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput): Promise<TemplateWriteResult> {
+async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput, invocation: RuntimeInvocation): Promise<TemplateWriteResult> {
   const caller = input.frontmatter ?? {};
   const targetRejection = await admitWriteTarget(input.target);
   if (targetRejection) return templateResult("rejected", input, undefined, input.notePath ?? "", caller, input.body ?? "", [], targetRejection.message, targetRejection);
@@ -318,7 +411,22 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     );
     return templateResult("rejected", input, templateFor(input), input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
   }
-  if (!isDeepStrictEqual(authoritative, input.convention)) {
+  const requestedCreateId = input.mode === "create" ? selectedTemplateId(input, authoritative) : undefined;
+  if (requestedCreateId !== undefined) {
+    const pending = pendingTemplate(authoritative, requestedCreateId);
+    if (pending !== undefined) {
+      return pendingRejection(
+        input,
+        requestedCreateId,
+        input.convention.templates[requestedCreateId],
+        input.notePath ?? "",
+        caller,
+        input.body ?? "",
+        pending,
+      );
+    }
+  }
+  if (!isDeepStrictEqual(conventionSemantics(authoritative), conventionSemantics(input.convention))) {
     const payload = templateRejection(
       "contract-violation",
       "TEMPLATE_SOURCE_DRIFT: supplied resolved convention does not match current template authorities",
@@ -335,14 +443,14 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     return templateResult("rejected", input, templateFor(input), input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
   }
 
-  if (input.mode === "create" && input.templateId === undefined && input.convention.defaultTemplate === undefined) {
+  if (input.mode === "create" && input.templateId === undefined && authoritative.defaultTemplate === undefined) {
     const message = "TEMPLATE_DEFAULT_UNDECLARED: create requires an explicit templateId or declared defaultTemplate";
     const payload = templateRejection("contract-violation", message, "declare policy.defaultTemplate or pass an explicit templateId");
     return templateResult("ask", input, undefined, input.notePath ?? "", caller, input.body ?? "", [], message, payload);
   }
-  let template = input.mode === "create" ? templateFor(input) : undefined;
+  let template = input.mode === "create" ? templateFor(input, authoritative) : undefined;
   if (input.mode === "create" && template === undefined) {
-    const selected = selectedTemplateId(input);
+    const selected = selectedTemplateId(input, authoritative);
     const payload = templateRejection(
       "args-invalid",
       `TEMPLATE_DEFAULT_UNDECLARED: selected template ${selected ?? "<missing>"} does not identify a resolved template`,
@@ -350,7 +458,22 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     );
     return templateResult("rejected", input, undefined, input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
   }
+  if (template !== undefined) {
+    const suppliedTemplate = input.convention.templates[template.id];
+    if (suppliedTemplate === undefined || !isDeepStrictEqual(templateSemantics(suppliedTemplate), templateSemantics(template))) {
+      const payload = templateRejection(
+        "contract-violation",
+        "TEMPLATE_SOURCE_DRIFT: supplied resolved convention does not match current template authorities",
+        "reload the resolved convention and retry",
+      );
+      return templateResult("rejected", input, template, input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
+    }
+  }
 
+  if (input.targetFolder !== undefined && input.mode !== "create") {
+    const payload = templateRejection("args-invalid", "targetFolder is only valid for create", "append and update use the existing notePath");
+    return templateResult("rejected", input, template, input.notePath ?? "", caller, input.body ?? "", [], payload.message, payload);
+  }
   if (input.mode === "append") {
     if (input.notePath === undefined || input.body === undefined || input.frontmatter !== undefined || input.templateId !== undefined) {
       const payload = templateRejection("args-invalid", "append requires an existing notePath and body only", "pass notePath and body; do not pass frontmatter for append");
@@ -367,10 +490,25 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     const raw = await readFile(target.absolutePath, "utf-8");
     const parsed = parsePersistedNote(raw);
     const persistedTemplateId = parsed.frontmatter["template"];
-    template = typeof persistedTemplateId === "string" ? input.convention.templates[persistedTemplateId] : undefined;
+    if (typeof persistedTemplateId === "string") {
+      const pending = pendingTemplate(authoritative, persistedTemplateId);
+      if (pending !== undefined) {
+        return pendingRejection(input, persistedTemplateId, input.convention.templates[persistedTemplateId], target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, pending);
+      }
+    }
+    template = typeof persistedTemplateId === "string" ? authoritative.templates[persistedTemplateId] : undefined;
     if (template === undefined) {
       const payload = templateRejection("TEMPLATE_IDENTITY_IMMUTABLE", "persisted frontmatter.template does not identify a resolved template", "repair the note identity before appending");
       return templateResult("rejected", input, undefined, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], payload.message, payload);
+    }
+    const suppliedTemplate = input.convention.templates[template.id];
+    if (suppliedTemplate === undefined || !isDeepStrictEqual(templateSemantics(suppliedTemplate), templateSemantics(template))) {
+      const payload = templateRejection(
+        "contract-violation",
+        "TEMPLATE_SOURCE_DRIFT: supplied resolved convention does not match current template authorities",
+        "reload the resolved convention and retry",
+      );
+      return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], payload.message, payload);
     }
     if (!hasTemplateIdentity(parsed.frontmatter as Record<string, JsonValue>, template)) {
       const payload = identityRejection(template);
@@ -380,12 +518,33 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     if (externalRenderer !== undefined) {
       return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], externalRenderer.message, externalRenderer);
     }
-    const contract = evaluateResolvedTemplateContract(parsed.frontmatter as Record<string, JsonValue>, template, input.convention.base, input.convention.writers);
-    if (!contract.valid) return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, contract.violations, "Existing note violates the resolved template contract");
     const eol = raw.includes("\r\n") ? "\r\n" : "\n";
     const appendedBody = normalizeBody(input.body).replace(/\r\n|\r|\n/g, eol);
     const appended = `${raw.endsWith(eol) ? eol : `${eol}${eol}`}${appendedBody}${eol}`;
-    if (input.dryRun) return templateResult("written", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, `${parsed.body}${appended}`);
+    const resultingBody = `${parsed.body}${appended}`;
+    const contract = evaluateResolvedTemplateContract(
+      parsed.frontmatter as Record<string, JsonValue>,
+      template,
+      authoritative.base,
+      authoritative.writers,
+      resultingBody,
+      "append",
+    );
+    if (!contract.valid) {
+      const message = contractFailureMessage("Resulting note violates the resolved template contract", contract.violations);
+      return templateResult(
+        "rejected",
+        input,
+        template,
+        target.vaultRelativePath,
+        parsed.frontmatter as Record<string, JsonValue>,
+        resultingBody,
+        contract.violations,
+        message,
+        rejection("admission", "contract-violation", message, "correct the body and retry"),
+      );
+    }
+    if (input.dryRun) return templateResult("written", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, resultingBody);
     await appendFile(target.absolutePath, appended, "utf-8");
     const persisted = await (input.readBack ?? ((file: string) => readFile(file, "utf-8")))(target.absolutePath);
     const persistedNote = parsePersistedNote(persisted);
@@ -393,7 +552,8 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
       const payload = rejection("acceptance", "postcondition-failed", "Postcondition failed after append", "inspect the persisted note before retrying");
       return templateResult("rejected", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], payload.message, payload);
     }
-    return { ...templateResult("written", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, `${parsed.body}${appended}`), receipt: { resolvedVault: input.target.vault, resolutionSource: input.target.source, templateId: template.id, notePath: target.vaultRelativePath, mode: "append", writtenPaths: [target.vaultRelativePath], inputSignature: template.inputSignature, templateSignature: template.templateSignature, postconditionVerified: true } };
+    const result: TemplateWriteResult = { ...templateResult("written", input, template, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, resultingBody), receipt: { resolvedVault: input.target.vault, resolutionSource: input.target.source, templateId: template.id, notePath: target.vaultRelativePath, mode: "append", writtenPaths: [target.vaultRelativePath], inputSignature: template.inputSignature, templateSignature: template.templateSignature, postconditionVerified: true } };
+    return withRuntimeWarnings(result, await auditTemplateSource(input, template, target.vaultRelativePath, invocation));
   }
 
   if (input.mode === "update") {
@@ -411,7 +571,13 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     const raw = await readFile(target.absolutePath, "utf-8");
     const parsed = parsePersistedNote(raw);
     const persistedTemplateId = parsed.frontmatter["template"];
-    template = typeof persistedTemplateId === "string" ? input.convention.templates[persistedTemplateId] : undefined;
+    if (typeof persistedTemplateId === "string") {
+      const pending = pendingTemplate(authoritative, persistedTemplateId);
+      if (pending !== undefined) {
+        return pendingRejection(input, persistedTemplateId, input.convention.templates[persistedTemplateId], target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, pending);
+      }
+    }
+    template = typeof persistedTemplateId === "string" ? authoritative.templates[persistedTemplateId] : undefined;
     if (template === undefined) {
       const payload = templateRejection("TEMPLATE_IDENTITY_IMMUTABLE", "persisted frontmatter.template does not identify a resolved template", "repair the note identity before updating");
       return templateResult("rejected", input, undefined, target.vaultRelativePath, parsed.frontmatter as Record<string, JsonValue>, parsed.body, [], payload.message, payload);
@@ -426,18 +592,32 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     }
     const merged = orderedTemplateFrontmatter(template, { ...(parsed.frontmatter as Record<string, JsonValue>), ...caller });
     const body = input.body ?? parsed.body;
-    const contract = evaluateResolvedTemplateContract(merged, template, input.convention.base, input.convention.writers);
-    if (!contract.valid) return templateResult("rejected", input, template, target.vaultRelativePath, merged, body, contract.violations, "Resulting note violates the resolved template contract");
+    const contract = evaluateResolvedTemplateContract(merged, template, authoritative.base, authoritative.writers, body, "update");
+    if (!contract.valid) {
+      const message = contractFailureMessage("Resulting note violates the resolved template contract", contract.violations);
+      return templateResult(
+        "rejected",
+        input,
+        template,
+        target.vaultRelativePath,
+        merged,
+        body,
+        contract.violations,
+        message,
+        rejection("admission", "contract-violation", message, "correct the fields or body and retry"),
+      );
+    }
     const staged = formatExistingNote(raw, parseNote(raw), merged, input.body);
     if (input.dryRun) return templateResult("written", input, template, target.vaultRelativePath, merged, body);
     await writeFile(target.absolutePath, staged, "utf-8");
     const persisted = parsePersistedNote(await (input.readBack ?? ((file: string) => readFile(file, "utf-8")))(target.absolutePath));
-    const persistedContract = evaluateResolvedTemplateContract(persisted.frontmatter as Record<string, JsonValue>, template, input.convention.base, input.convention.writers);
+    const persistedContract = evaluateResolvedTemplateContract(persisted.frontmatter as Record<string, JsonValue>, template, authoritative.base, authoritative.writers);
     if (!hasTemplateIdentity(persisted.frontmatter as Record<string, JsonValue>, template) || !persistedContract.valid || normalizeBody(persisted.body) !== normalizeBody(body)) {
       const payload = rejection("acceptance", "postcondition-failed", "Postcondition failed after update", "inspect the persisted note before retrying");
       return templateResult("rejected", input, template, target.vaultRelativePath, merged, body, persistedContract.violations, payload.message, payload);
     }
-    return { ...templateResult("written", input, template, target.vaultRelativePath, merged, body), receipt: { resolvedVault: input.target.vault, resolutionSource: input.target.source, templateId: template.id, notePath: target.vaultRelativePath, mode: "update", writtenPaths: [target.vaultRelativePath], inputSignature: template.inputSignature, templateSignature: template.templateSignature, postconditionVerified: true } };
+    const result: TemplateWriteResult = { ...templateResult("written", input, template, target.vaultRelativePath, merged, body), receipt: { resolvedVault: input.target.vault, resolutionSource: input.target.source, templateId: template.id, notePath: target.vaultRelativePath, mode: "update", writtenPaths: [target.vaultRelativePath], inputSignature: template.inputSignature, templateSignature: template.templateSignature, postconditionVerified: true } };
+    return withRuntimeWarnings(result, await auditTemplateSource(input, template, target.vaultRelativePath, invocation));
   }
 
   if (template === undefined) throw new Error("TEMPLATE_IDENTITY_INVALID: create template is unresolved");
@@ -488,7 +668,7 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
       .map(([key, value]) => [key, renderExpressions(value, template, key, title, resolvedAt)]));
     defaults = resolveDefaults({
       mode: "create",
-      fields: { ...input.convention.base.fields, ...template.fields },
+      fields: { ...authoritative.base.fields, ...template.fields },
       template: { ...renderedTemplate, template: template.id },
       caller: { ...caller, ...(title === "" ? {} : { title }), template: template.id },
       resolvedAt,
@@ -499,8 +679,17 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     return templateResult("ask", input, template, input.notePath ?? "", caller, input.body, [{ field: message.split(":")[1]?.trim().split(" ")[0] ?? "", rule: "required", message }], message, rejection("admission", "contract-violation", message, "provide the required field and retry"));
   }
   const fields = orderedTemplateFrontmatter(template, defaults.fields);
+  const folder = input.targetFolder ?? template.targetFolder;
+  if (folder === undefined) {
+    const message = "TEMPLATE_PLACEMENT_UNDECLARED: this create needs targetFolder or a declared taxonomy default";
+    const payload = templateRejection("args-invalid", message, "provide targetFolder for this note; the template remains valid");
+    return templateResult("ask", input, template, "", fields, input.body, [], message, payload);
+  }
   let notePath: string;
-  try { notePath = `${template.targetFolder}/${renderNoteName({ pattern: template.naming, fields, resolvedAt: defaults.resolvedAt })}`; }
+  try {
+    if (typeof folder !== "string") throw new TypeError("targetFolder must be a string");
+    notePath = `${normalizeTemplateFolderPath(folder)}/${renderNoteName({ pattern: template.naming, fields, resolvedAt: defaults.resolvedAt })}`;
+  }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const payload = templateRejection("args-invalid", message, "provide fields that produce a valid template filename");
@@ -514,23 +703,30 @@ async function writeResolvedTemplateNoteInternal(input: TemplateWriteNoteInput):
     return templateResult("rejected", input, template, notePath, fields, input.body, [], payload.message, payload);
   }
   const body = renderTemplateBody(template, input.body, title, defaults.resolvedAt);
-  const contract = evaluateResolvedTemplateContract(fields, template, input.convention.base, input.convention.writers);
-  if (!contract.valid) return templateResult("ask", input, template, target.vaultRelativePath, fields, body, contract.violations, "Resolved template values violate the contract", rejection("admission", "contract-violation", "Resolved template values violate the contract", "correct the supplied fields and retry"));
+  const contract = evaluateResolvedTemplateContract(fields, template, authoritative.base, authoritative.writers, body, "create");
+  if (!contract.valid) {
+    const message = contractFailureMessage("Resolved template values violate the contract", contract.violations);
+    return templateResult("ask", input, template, target.vaultRelativePath, fields, body, contract.violations, message, rejection("admission", "contract-violation", message, "correct the supplied fields or body and retry"));
+  }
   const prepared = preparedTemplateWrite(input, template, "create", target.vaultRelativePath, fields, body, defaults.resolvedAt);
   const staged = formatTemplateNote(template, prepared.frontmatter, prepared.body);
   const stagedParsed = parsePersistedNote(staged);
-  const stagedContract = evaluateResolvedTemplateContract(stagedParsed.frontmatter as Record<string, JsonValue>, template, input.convention.base, input.convention.writers);
-  if (!stagedContract.valid) return templateResult("rejected", input, template, prepared.notePath, fields, body, stagedContract.violations, "Rendered template note violates the contract", rejection("acceptance", "contract-violation", "Rendered template note violates the contract", "correct the supplied fields and retry"));
+  const stagedContract = evaluateResolvedTemplateContract(stagedParsed.frontmatter as Record<string, JsonValue>, template, authoritative.base, authoritative.writers);
+  if (!stagedContract.valid) {
+    const message = contractFailureMessage("Rendered template note violates the contract", stagedContract.violations);
+    return templateResult("rejected", input, template, prepared.notePath, fields, body, stagedContract.violations, message, rejection("acceptance", "contract-violation", message, "correct the fields and retry"));
+  }
   if (input.dryRun) return { ...templateResult("written", input, template, prepared.notePath, fields, body), prepared };
   await mkdir(path.dirname(target.absolutePath), { recursive: true });
   await writeFile(target.absolutePath, staged, { encoding: "utf-8", flag: "wx" });
   const persisted = parsePersistedNote(await (input.readBack ?? ((file: string) => readFile(file, "utf-8")))(target.absolutePath));
-  const persistedContract = evaluateResolvedTemplateContract(persisted.frontmatter as Record<string, JsonValue>, template, input.convention.base, input.convention.writers);
+  const persistedContract = evaluateResolvedTemplateContract(persisted.frontmatter as Record<string, JsonValue>, template, authoritative.base, authoritative.writers);
   if (!hasTemplateIdentity(persisted.frontmatter as Record<string, JsonValue>, template) || !persistedContract.valid || normalizeBody(persisted.body) !== normalizeBody(prepared.body)) {
     const payload = rejection("acceptance", "postcondition-failed", "Postcondition failed after create", "inspect the persisted note before retrying");
     return templateResult("rejected", input, template, prepared.notePath, fields, body, persistedContract.violations, payload.message, payload);
   }
-  return { ...templateResult("written", input, template, prepared.notePath, fields, body), prepared, receipt: { resolvedVault: input.target.vault, resolutionSource: input.target.source, templateId: template.id, notePath: prepared.notePath, mode: "create", resolvedAt: prepared.resolvedAt, writtenPaths: [prepared.notePath], inputSignature: template.inputSignature, templateSignature: template.templateSignature, postconditionVerified: true } };
+  const result: TemplateWriteResult = { ...templateResult("written", input, template, prepared.notePath, fields, body), prepared, receipt: { resolvedVault: input.target.vault, resolutionSource: input.target.source, templateId: template.id, notePath: prepared.notePath, mode: "create", resolvedAt: prepared.resolvedAt, writtenPaths: [prepared.notePath], inputSignature: template.inputSignature, templateSignature: template.templateSignature, postconditionVerified: true } };
+  return withRuntimeWarnings(result, await auditTemplateSource(input, template, prepared.notePath, invocation));
 }
 
 function eventOutcome(result: TemplateWriteResult, dryRun: boolean): RuntimeEventOutcome {
@@ -561,21 +757,21 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
   });
   let result: TemplateWriteResult;
   try {
-    result = await writeResolvedTemplateNoteInternal(input);
+    result = await writeResolvedTemplateNoteInternal(input, invocation);
   } catch (error: unknown) {
     const event = createRuntimeEvent(invocation, {
       kind: "note-write",
       outcome: "failure",
       templateId: input.templateId,
       notePath: input.notePath,
-      inputSignature: presentSignature(input.convention.inputSignature),
-      templateSignature: presentSignature(input.templateId === undefined ? undefined : input.convention.templates[input.templateId]?.templateSignature),
+      inputSignature: undefined,
+      templateSignature: undefined,
     });
     try { appendRuntimeEvent(event, { vaultPath: input.target.vault }); }
     catch { /* The original write failure remains authoritative. */ }
     throw error;
   }
-  const template = result.templateId === null ? undefined : input.convention.templates[result.templateId];
+  const signatureSource = result.receipt ?? result.prepared;
   const successfulMutation = result.status === "written" && !input.dryRun;
   const event = createRuntimeEvent(invocation, {
     kind: "note-write",
@@ -583,8 +779,8 @@ export async function writeResolvedTemplateNote(input: TemplateWriteNoteInput): 
     ...(successfulMutation ? { eventTime: new Date().toISOString() } : {}),
     templateId: result.templateId,
     notePath: result.notePath === "" ? undefined : result.notePath,
-    inputSignature: presentSignature(template?.inputSignature ?? input.convention.inputSignature),
-    templateSignature: presentSignature(template?.templateSignature),
+    inputSignature: presentSignature(signatureSource?.inputSignature),
+    templateSignature: presentSignature(signatureSource?.templateSignature),
   });
   try {
     appendRuntimeEvent(event, { vaultPath: input.target.vault });

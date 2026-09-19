@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { deriveContentFormatContract } from "../templates/content-contract.js";
 import type { BaseContract, ResolvedTemplate } from "../templates/types.js";
 import { evaluateResolvedTemplateContract } from "./write-contract.js";
 
 const base: BaseContract = { fields: { created: { type: "date", required: true } } };
+const content = deriveContentFormatContract("").contract;
 const template: ResolvedTemplate = {
   id: "note" as ResolvedTemplate["id"],
   destinationClass: "managed-default",
+  renderer: "obsidian-core",
   sourcePath: "Templates/note.md" as ResolvedTemplate["sourcePath"],
   targetFolder: "notes" as ResolvedTemplate["targetFolder"],
   bom: false,
@@ -19,6 +22,7 @@ const template: ResolvedTemplate = {
   },
   frontmatterTemplate: {},
   body: "",
+  content,
   naming: "{{slug}}.md",
   views: [],
   inputSignature: "sha256:test" as ResolvedTemplate["inputSignature"],
@@ -103,5 +107,64 @@ describe("evaluateResolvedTemplateContract", () => {
 
   it("does not enforce writer identity without a registry", () => {
     expect(evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30", created_by: "unknown-agent" }, template, base)).toEqual({ valid: true, violations: [] });
+  });
+
+  it("threads confirmed body requirements through the field contract", () => {
+    const observed = deriveContentFormatContract("# Required\n<!-- oms:content -->");
+    const heading = observed.contract.nodes.find(node => node.kind === "heading");
+    if (heading === undefined) throw new Error("test fixture did not produce Required heading");
+    const bodyTemplate: ResolvedTemplate = {
+      ...template,
+      body: "# Required\n<!-- oms:content -->",
+      content: deriveContentFormatContract("# Required\n<!-- oms:content -->", {
+        decisions: { nodes: [{ anchorDigest: heading.anchorDigest, required: true }] },
+      }).contract,
+    };
+    const missing = evaluateResolvedTemplateContract(
+      { title: "note", created: "2026-08-30" },
+      bodyTemplate,
+      base,
+      undefined,
+      "# Other\nbody",
+      "update",
+    );
+    expect(missing.valid).toBe(false);
+    expect(missing.violations).toEqual([
+      expect.objectContaining({ field: "body:heading:1:Required", rule: "required" }),
+    ]);
+    expect(evaluateResolvedTemplateContract(
+      { title: "note", created: "2026-08-30", extra: true },
+      bodyTemplate,
+      base,
+      undefined,
+      "ordinary prose with an unknown field-like word",
+      "append",
+    )).toEqual({ valid: true, violations: [] });
+  });
+
+  it("asks when rendered create body omits a confirmed required heading", () => {
+    const observed = deriveContentFormatContract("# Required");
+    const heading = observed.contract.nodes.find(node => node.kind === "heading");
+    if (heading === undefined) throw new Error("test fixture did not produce Required heading");
+    const bodyTemplate: ResolvedTemplate = {
+      ...template,
+      body: "# Required",
+      content: deriveContentFormatContract("# Required", {
+        decisions: { nodes: [{ anchorDigest: heading.anchorDigest, required: true }] },
+      }).contract,
+    };
+    const result = evaluateResolvedTemplateContract(
+      { title: "note", created: "2026-08-30" },
+      bodyTemplate,
+      base,
+      undefined,
+      "# Rendered without section",
+      "create",
+    );
+    expect(result.valid).toBe(false);
+    expect(result.violations[0]).toMatchObject({
+      field: "body:heading:1:Required",
+      rule: "required",
+    });
   });
 });

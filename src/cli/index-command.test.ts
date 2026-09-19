@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -27,7 +27,12 @@ function createCorruptStore(vault: string): void {
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  const cache = await mkdtemp(path.join(tmpdir(), "oms-index-model-cache-"));
+  roots.push(cache);
+  vi.stubEnv("XDG_CACHE_HOME", cache);
+  vi.stubEnv("OMS_EMBEDDING_PROVIDER", undefined);
+  vi.stubEnv("OMS_EMBEDDING_MODEL", undefined);
   process.exitCode = 0;
   vi.spyOn(console, "log").mockImplementation(() => undefined);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -35,6 +40,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  process.exitCode = 0;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 

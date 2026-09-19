@@ -8,14 +8,16 @@ Oh My Second Brain(`oms`)은 기존 Obsidian/Markdown 볼트를 노트 소유권
 - 각 템플릿은 경로·digest와 독립적인 안정적 `templateId`를 가지며, 볼트 전체의 `BaseContract` 하나를 상속한다.
 - `.obsidian/types.json`은 읽기 전용 타입 권위다.
 - 사용자 소유 온톨로지는 계속 활성 상태다. `.oms/template-policy.json`은 노트·필드 의미와 필수값, 형식, 허용값, 기본값, 이름 규칙, 정체성, 바인딩을 기록한다.
-- `.oms/taxonomy.json`은 폴더·링크 의미와 배치를 소유하며, 작성된 폴더 의미는 `folder-ontology` 검색 축으로 노출된다. runtime의 유일한 권위이며, setup이 레거시 YAML을 한 번 변환한다.
+- `.oms/taxonomy.json`은 폴더·링크 의미와 배치를 소유하며, 작성된 폴더 의미는 `folder-ontology` 검색 축으로 노출된다. runtime의 유일한 권위다.
 - `.oms/types.json`은 쓰기·검색용 검증된 파생 projection이다. 직접 편집하지 않는다.
 
 제거된 것은 노트 정체성으로서의 `concept`와 번들 runtime 기본값이지, 의미 계층으로서의 온톨로지가 아니다.
 
 ## 설정
 
-Setup은 기존 템플릿을 재귀 탐색하고 migration을 제안한다. 노트 타입 기본값을 번들로 강요하지 않으며 노트를 수정하지 않는다.
+Setup은 명시적으로 선택한 템플릿 폴더 안의 기존 템플릿을 재귀 탐색하고
+migration을 제안한다. 노트 타입 기본값을 번들로 강요하지 않으며 노트를
+수정하지 않는다.
 
 ```bash
 oms setup --vault /path/to/vault --dry-run
@@ -24,11 +26,57 @@ oms setup --vault /path/to/vault --yes --approved-digest <표시된-digest>
 
 관리 템플릿 변경도 dry-run, 호출자가 검토한 정확한 digest, CAS, transaction, 사후조건 receipt를 거친다.
 
+## 템플릿 흐름
+
+명시적으로 선택한 템플릿 폴더 아래의 모든 `.md`는 템플릿 원본
+후보가 된다. review는 원본을 검증하고 같은 위치의 바이트를 보존하며,
+파일별 등록 절차나 auto/manual 폴더 mode는 필요하지 않다. OMS는
+메타데이터 계약(frontmatter key·type·requiredness·`filledBy`)과 제한된
+본문 구조(ATX heading, fence code block, fence 밖의 ordered/unordered list
+run, `<!-- oms:content -->`, 문서 순서/EOL/BOM/final-newline)를 함께
+도출한다. paragraph, setext heading, 모든 Markdown을 강제한다고 주장하지
+않는다. 원본이 바뀌면 의존하는 템플릿만 pending이 되므로 다른 템플릿
+쓰기는 계속 가능하며, shared authority 변경이나 불일치는 볼트 전체를
+fail-closed 한다.
+
+선택한 폴더의 원본이 바뀌면 호스트에 처음 표시할 알림은 정확히
+`템플릿에 변경이 있습니다`이며, 동작은 정확히 `확인하기`와 `나중에`다.
+처음 알림에는 템플릿 이름·hash·change class를 표시하지 않는다.
+`나중에`는 host-only로 server를 호출하지 않고 interview ledger도 바꾸지
+않는다. `확인하기`는 MCP `write { op: "template", mode: "interview-next" }`로
+선형 resumable interview를 시작한다. 서버가 반환한 다음 질문을 따라
+진행하고 영향 없는 confirmed answer는 보존한다. 모든 필요한 질문 뒤에는
+정확한 최종 digest를 보여주고 사용자가 승인한 경우에만
+`mode: "commit-contracts"`로 `.oms` control만 publish한다. self-approve하지
+않는다. `status`와 search는 계속 읽기 전용이며 boot instruction이 stale한
+long-lived host도 반환된 `templateNotice`를 표시해야 한다.
+
+정확한 CLI review 흐름은 다음과 같다.
+
+```text
+oms template review
+oms template answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null>
+oms template commit --census-digest <digest> --ledger-digest <digest|null> --dry-run
+oms template commit --census-digest <digest> --ledger-digest <digest|null> --yes --approved-digest <digest>
+```
+
+answer는 서버가 반환한 question과 CAS 값을 사용한다. commit은 같은 CAS
+값과 기존 dry-run 또는 yes/approved-digest guard를 함께 사용한다.
+
+정확한 note 생성 사용법은 다음과 같다.
+
+```text
+oms note create [template-id] --body <text>|--body-file <file> [--frontmatter <json>|--frontmatter-file <file>] [--folder <note-folder>]
+```
+
+노트 생성 시 배치 우선순위는 명시적 caller folder, taxonomy default, `ask`
+순서이며, 배치가 없다고 contract review를 막지 않는다.
+
 ## CLI
 
 ```text
 oms setup                                      기존 볼트 템플릿 탐색 및 채택
-oms template scan|list|show|add|update|move|remove|default|check|regenerate-types
+oms template scan|list|show|add|update|move|remove|default|check|regenerate-types|review|answer|commit
 oms note create|append|update|audit|backfill|get
 oms link check|suggest|apply                   노트 wikilink 점검·제안·적용
 oms bridge add|remove|status                   저장소-볼트 target bridge 관리
@@ -44,15 +92,6 @@ oms status                                     읽기 전용 종합 상태 표�
 ```
 
 `oh-my-second-brain`은 전체 명령이고 `oms`는 짧은 별칭이다.
-
-`oms template add`에는 세 형태가 있다. 폴더를 넘기면 그 안의 템플릿을
-등록하고, 파일과 `--id`를 넘기면 기존 템플릿을 등록하며, `--id`와
-`--from`을 함께 쓰면 새 템플릿을 만든다. `--from` 형태는 등록된
-`templateFolders[].default` 위치에 쓰며, 이 템플릿 폴더는 노트 배치
-위치를 제한하지 않는다. `oms template default <id>`가 기본 바인딩을
-선언한다. 명시적 템플릿 없이 노트를 만들 때는 이 바인딩만 사용하며,
-없으면 첫 템플릿을 임의 선택하지 않고 `TEMPLATE_DEFAULT_UNDECLARED`로
-실패한다.
 
 ### 도움말 계약
 
@@ -90,6 +129,13 @@ Setup에서는 로컬 검증 acquisition 정책 하나를 선택한다:
 일곱 스킬(`write`, `search`, `link`, `distill`, `status`, `doctor`, `template`)은 워크플로 안내이며 MCP 도구와 같은 집합이 아니다. 세부 기능은 다섯 도구의 `op` 값으로 제공한다.
 
 쓰기는 하나의 `ResolvedTemplate`을 해석해 create, append, update를 수행한다. 템플릿 변경, projection 재생성, 한 노트 정체성 backfill은 검증된 target과 명시적 승인 digest가 필요하다. `status`와 모든 검색 동작은 읽기 전용이다.
+
+템플릿 contract review는 `oms_write`의 `op: "template"`에서 정확히
+`interview-next`, `interview-answer`, `commit-contracts` mode를 사용한다.
+정확한 CLI 대응은 `oms template review`, `oms template answer`,
+`oms template commit`이다. answer는 서버가 반환한 question, request, CAS
+field를 그대로 사용하며 parameter 이름을 만들지 않는다. 질문이 0개면
+곧바로 최종 확인으로 간다.
 
 일반 lexical 검색은 projection과 독립적이다. 템플릿·선언 필드·폴더·링크 축은 쓰기와 같은 projection을 사용하며 누락·stale 상태를 크게 실패시킨다. 관리 템플릿 원본은 검색 대상에서 제외한다. Vector/HyDE는 provider와 model이 모두 설정되지 않으면 가짜 대체 없이 실패한다.
 

@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { sourceSignature } from "../../../kernel/templates/resolver.js";
+import { deriveContentFormatContract } from "../../../kernel/templates/content-contract.js";
+import { sharedAuthoritySignature, sourceSignature } from "../../../kernel/templates/resolver.js";
 import type { Digest } from "../../../kernel/templates/types.js";
 import { auditNote } from "./post-tool-use.js";
 
@@ -14,12 +15,13 @@ async function vault(notes: Record<string, string> = {}): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "oms-claude-hook-"));
   roots.push(root);
   await Promise.all([".oms", ".obsidian", "Templates", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
-  const policy = `${JSON.stringify({ version: 3, templateFolders: [{ path: "Templates", mode: "manual", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: { title: { required: true, type: "text" } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
+  const policy = `${JSON.stringify({ version: 3, templateFolders: [{ path: "Templates", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: { title: { required: true, type: "text" } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
   const taxonomy = JSON.stringify({ folders: { notes: { template: "note" } } });
   const obsidian = "{\"title\":\"text\"}\n";
   const template = "---\ntitle: template\n---\nbody\n";
   const descriptors = [{ logicalId: "template-policy", signature: sha(policy) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }, { path: "Templates/note.md", signature: sha(template) }];
-  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { required: true, type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") } } } }, null, 2)}\n`;
+  const content = deriveContentFormatContract("body\n", { templateId: "note" }).contract;
+  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sharedAuthoritySignature: sharedAuthoritySignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { required: true, type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } }, null, 2)}\n`;
   await Promise.all([
     writeFile(path.join(root, ".oms", "template-policy.json"), policy, "utf8"),
     writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy, "utf8"),

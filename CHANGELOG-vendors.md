@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- **Claude, Codex, and Hermes guidance now aligns with folder-sourced template contracts.** Each native host surface explains selected-folder census without per-file registration or folder modes, the exact minimal notice and host-only `나중에`, and the resumable `interview-next` → `interview-answer` → `commit-contracts` flow. Review preserves source bytes and publishes only user-confirmed controls; affected-template pending remains scoped while shared-authority failures stay fail-closed globally. Note creation uses explicit folder, taxonomy default, then `ask`, without changing the host-specific skill/tool asymmetry.
+
 ## [0.14.0] - 2026-09-05
 
 - Native host launch manifests use `oms serve mcp`; registrations retain seven shared skills and exactly five MCP tools. Host synchronization updates OMS assets independently of package installation and never upgrades the host application. (#125)

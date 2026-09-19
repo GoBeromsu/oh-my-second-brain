@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { sourceSignature } from "../kernel/templates/index.js";
+import { deriveContentFormatContract } from "../kernel/templates/content-contract.js";
+import { sharedAuthoritySignature, sourceSignature } from "../kernel/templates/resolver.js";
 import type { SourceDescriptor } from "../kernel/templates/types.js";
 import { createHash } from "node:crypto";
 import { demotedOperationNames } from "./server.js";
@@ -21,7 +22,7 @@ function digest(value: string): `sha256:${string}` {
 }
 
 async function createTemplateAuthority(vault: string): Promise<void> {
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }], base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
+  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
   const taxonomy = JSON.stringify({ folders: {}, templates: { note: { templateFolder: "Inbox" } } });
   const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", status: "select" } });
   const template = "---\ntemplate: note\ntitle: Untitled\nstatus: open\n---\n# Note\n<!-- oms:content -->\n";
@@ -31,7 +32,8 @@ async function createTemplateAuthority(vault: string): Promise<void> {
     { logicalId: "obsidian-types", signature: digest(obsidianTypes) },
     { path: "Templates/OMS/note.md", signature: digest(template) },
   ];
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title", "status"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [], naming: "{{slug}}.md", bodySignature: digest("# Note\n<!-- oms:content -->\n") } } } });
+  const content = deriveContentFormatContract("# Note\n<!-- oms:content -->\n", { templateId: "note" }).contract;
+  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title", "status"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
   await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
   await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
   const targetPath = path.join(vault, "references", "clean-architecture.md");
@@ -89,9 +91,27 @@ describe("MCP detail-tool demotion", () => {
       expect(payload(await call("doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
       expect(payload(await call("doctor", { op: "validate" })).status).toBeTypeOf("string");
       expect(payload(await call("doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
-      expect(payload(await call("search", { op: "template-scan" })).candidates).toBeInstanceOf(Array);
+      const scan = payload(await call("search", { op: "template-scan" }));
+      expect(scan).toMatchObject({
+        projectionUsable: true,
+        entries: [
+          expect.objectContaining({
+            sourcePath: "Templates/OMS/note.md",
+            signature: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+            templateId: "note",
+            diagnostics: [],
+          }),
+        ],
+        diffs: [],
+        pending: [],
+        diagnostics: [],
+      });
+      expect(scan).not.toHaveProperty("candidates");
+      expect(JSON.stringify(scan)).not.toContain('"bytes"');
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
-      expect(payload(await call("doctor", { op: "regenerate-types", dryRun: true })).status).toMatch(/planned|unchanged/);
+      const regeneration = payload(await call("doctor", { op: "regenerate-types", dryRun: true }));
+      expect(regeneration.status).toMatch(/planned|unchanged/);
+      expect(regeneration).not.toHaveProperty("rejection");
       const beforeBackfill = await readFile(path.join(vault, "references/clean-architecture.md"));
       const backfill = payload(await call("doctor", { op: "backfill-defaults", notePath: "references/clean-architecture.md", dryRun: true }));
       expect(backfill).toMatchObject({ status: "rejected", code: "MIGRATION_NOTE_IDENTITY_UNRESOLVED" });

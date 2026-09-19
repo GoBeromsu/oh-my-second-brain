@@ -8,7 +8,8 @@ import { backfillDefaults, diagnoseTemplates, regenerateTypes } from "./doctor.j
 import * as eventJournal from "../runtime/event-journal.js";
 import * as eventRead from "../runtime/event-read.js";
 import { summarizeRuntimeHistory } from "../runtime/event-summary.js";
-import { loadResolvedTemplates, sourceSignature } from "./resolver.js";
+import { deriveContentFormatContract } from "./content-contract.js";
+import { sharedAuthoritySignature, sourceSignature } from "./resolver.js";
 import type { Digest } from "./types.js";
 
 const roots: string[] = [];
@@ -26,12 +27,13 @@ async function vault(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "oms-template-doctor-"));
   roots.push(root);
   await Promise.all([".oms", ".obsidian", "Templates", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
-  const policy = `${JSON.stringify({ version: 3, templateFolders: [{ path: "Templates", mode: "manual", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: {}, views: [] } }, templates: { note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
+  const policy = `${JSON.stringify({ version: 3, templateFolders: [{ path: "Templates", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: {}, views: [] } }, templates: { note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
   const taxonomy = JSON.stringify({ folders: { notes: { concept: "note", template: "note" } } });
   const obsidian = "{\"title\":\"text\"}\n";
   const template = "---\ntitle: template\n---\nbody\n";
   const descriptors = [{ logicalId: "template-policy", signature: sha(policy) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }, { path: "Templates/note.md", signature: sha(template) }];
-  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") } } } }, null, 2)}\n`;
+  const content = deriveContentFormatContract("body\n", { templateId: "note" }).contract;
+  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sharedAuthoritySignature: sharedAuthoritySignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } }, null, 2)}\n`;
   await Promise.all([
     writeFile(path.join(root, ".oms", "template-policy.json"), policy, "utf8"),
     writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy, "utf8"),
@@ -78,15 +80,17 @@ async function addSecondTemplate(root: string): Promise<void> {
     { path: "Templates/note.md", signature: sha(noteSource) },
     { path: "Templates/reference.md", signature: sha(reference) },
   ];
+  const noteContent = deriveContentFormatContract("body\n", { templateId: "note" }).contract;
+  const referenceContent = deriveContentFormatContract("reference body\n", { templateId: "reference" }).contract;
   const projection = {
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sources: descriptors },
+    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sharedAuthoritySignature: sharedAuthoritySignature(descriptors), sources: descriptors },
     managed: {
       base: { fields: {} },
       globalAxes: {},
       templates: {
-        note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("body\n") },
-        reference: { templateId: "reference", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/reference.md", targetFolder: "references", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: sha("reference body\n") },
+        note: { templateId: "note", destinationClass: "registered-existing", renderer: "obsidian-core", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: noteContent.bodySignature, content: noteContent },
+        reference: { templateId: "reference", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/reference.md", targetFolder: "references", keyOrder: ["title"], fields: { title: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: referenceContent.bodySignature, content: referenceContent },
       },
     },
   };
@@ -101,6 +105,18 @@ describe("template doctor", () => {
     expect((await diagnoseTemplates({ vault: root, source: "cwd" })).status).toBe("healthy");
     expect((await diagnoseTemplates({ vault: root, source: "cwd" })).diagnostics.filter(item => item.code === "TEMPLATE_SOURCE_DRIFT")).toEqual([]);
     expect(await readFile(path.join(root, ".oms", "types.json"), "utf8")).toBe(before);
+  });
+
+  it("keeps fresh regeneration reachable as a guarded no-op", async () => {
+    const root = await vault();
+    const before = await vaultSnapshot(root);
+    const result = await regenerateTypes({
+      target: { vault: root, source: "explicit" },
+      request: { dryRun: true },
+    });
+    expect(result.status, JSON.stringify(result)).toMatch(/planned|unchanged/);
+    expect(result.status).not.toBe("rejected");
+    expect(await vaultSnapshot(root)).toEqual(before);
   });
 
   it("records verification history and bounds external drift between observations", async () => {
@@ -246,7 +262,7 @@ describe("template doctor", () => {
       path: "Templates/note.md",
       expected: sha("---\ntitle: template\n---\nbody\n"),
       actual: sha("---\ntitle: changed\n---\nbody\n"),
-      remediation: "run regenerate-types with the returned approval digest",
+      remediation: "run oms template review, answer its questions, then commit the reviewed contract",
     });
   });
   it("reports each changed registered source with its projection and actual signatures", async () => {
@@ -268,7 +284,7 @@ describe("template doctor", () => {
         path: "Templates/note.md",
         expected: sha("---\ntitle: template\n---\nbody\n"),
         actual: sha(changedNote),
-        remediation: "run regenerate-types with the returned approval digest",
+        remediation: "run oms template review, answer its questions, then commit the reviewed contract",
       },
       {
         code: "TEMPLATE_SOURCE_DRIFT",
@@ -276,10 +292,42 @@ describe("template doctor", () => {
         path: "Templates/reference.md",
         expected: sha("---\ntitle: reference\n---\nreference body\n"),
         actual: sha(changedReference),
-        remediation: "run regenerate-types with the returned approval digest",
+        remediation: "run oms template review, answer its questions, then commit the reviewed contract",
       },
     ]);
   });
+
+  it("reports source pending before note-level findings and leaves an unchanged sibling unblocked", async () => {
+    const root = await vault();
+    await addSecondTemplate(root);
+    await writeFile(path.join(root, "Templates", "note.md"), "---\ntitle: changed note\n---\nbody\n", "utf8");
+
+    const diagnosis = await diagnoseTemplates({ vault: root, source: "explicit" });
+    expect(diagnosis.status).toBe("needs-repair");
+    expect(diagnosis.diagnostics[0]).toMatchObject({
+      code: "TEMPLATE_CONTRACT_PENDING",
+      templateId: "note",
+      path: "Templates/note.md",
+    });
+    expect(diagnosis.diagnostics.find(item => item.templateId === "reference" && item.code === "TEMPLATE_CONTRACT_PENDING")).toBeUndefined();
+    expect(diagnosis.managedSourceExclusions).toContain("Templates/note.md");
+  });
+
+  it("keeps shared-authority failures global instead of reporting per-source pending", async () => {
+    const root = await vault();
+    const policyPath = path.join(root, ".oms", "template-policy.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<string, unknown>;
+    policy.extensions = { changed: true };
+    await writeFile(policyPath, `${JSON.stringify(policy)}\n`, "utf8");
+
+    const diagnosis = await diagnoseTemplates({ vault: root, source: "explicit" });
+    expect(diagnosis.diagnostics).toContainEqual(expect.objectContaining({
+      code: "TEMPLATE_SOURCE_DRIFT",
+      path: ".oms/template-policy.json",
+    }));
+    expect(diagnosis.diagnostics.some(item => item.code === "TEMPLATE_CONTRACT_PENDING")).toBe(false);
+  });
+
   it("reports changed policy authority at its vault-relative control path", async () => {
     const root = await vault();
     const policyPath = path.join(root, ".oms", "template-policy.json");
@@ -296,27 +344,57 @@ describe("template doctor", () => {
       path: ".oms/template-policy.json",
       expected: sha(original),
       actual: sha(changed),
-      remediation: "run regenerate-types with the returned approval digest",
+      remediation: "run oms template review, answer its questions, then commit the reviewed contract",
     }]);
   });
-  it("regenerates a drifted projection from dry-run to approved apply", async () => {
+  it("does not regenerate a changed source before its interview decisions are answered", async () => {
     const root = await vault();
     await writeFile(path.join(root, "Templates", "note.md"), "---\ntitle: changed\n---\nbody\n", "utf8");
+    const before = await readFile(path.join(root, ".oms", "types.json"), "utf8");
+    const beforePolicy = await readFile(path.join(root, ".oms", "template-policy.json"), "utf8");
+    const beforeTaxonomy = await readFile(path.join(root, ".oms", "taxonomy.json"), "utf8");
+    const beforeSource = await readFile(path.join(root, "Templates", "note.md"), "utf8");
     const dry = await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { dryRun: true } });
-    expect(dry.status).toBe("planned");
-    if (dry.status !== "planned") return;
-    const applied = await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { approvedDigest: dry.approvalDigest } });
-    expect(applied.status).toBe("applied");
-    expect((await diagnoseTemplates({ vault: root, source: "explicit" })).status).toBe("healthy");
+    expect(dry).toMatchObject({
+      status: "rejected",
+      code: "TEMPLATE_REVIEW_REQUIRED",
+    });
+    expect(dry.status === "rejected" ? dry.remediation : "").toContain("template review");
+    expect(await readFile(path.join(root, ".oms", "types.json"), "utf8")).toBe(before);
+    expect(await readFile(path.join(root, ".oms", "template-policy.json"), "utf8")).toBe(beforePolicy);
+    expect(await readFile(path.join(root, ".oms", "taxonomy.json"), "utf8")).toBe(beforeTaxonomy);
+    expect(await readFile(path.join(root, "Templates", "note.md"), "utf8")).toBe(beforeSource);
   });
-  it("repairs projection drift without relocating sources across default-less registered folders", async () => {
+
+  it("does not invent placement while routing regeneration through review", async () => {
+    const root = await vault();
+    const result = await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { dryRun: true } });
+    expect(result.status === "rejected" ? result.remediation : "").not.toContain("Inbox");
+    expect(result.status === "rejected" ? result.code : "").not.toBe("TEMPLATE_PLACEMENT_UNDECLARED");
+  });
+
+  it("preserves verified-target and guarded-request checks on the review path", async () => {
+    const root = await vault();
+    expect(await regenerateTypes({
+      target: { vault: root, source: "cwd" },
+      request: { dryRun: true },
+    })).toMatchObject({ status: "rejected", code: "target-unverified" });
+    expect(await regenerateTypes({
+      target: { vault: root, source: "explicit" },
+      request: { approvedDigest: sha("not-a-review-approval") },
+    })).toMatchObject({
+      status: "rejected",
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: "MIGRATION_APPROVAL_MISMATCH" })]),
+    });
+  });
+  it("requires review before regenerating a projection with newly observed source semantics", async () => {
     const root = await vault();
     await mkdir(path.join(root, "Imported"), { recursive: true });
     const policy = `${JSON.stringify({
       version: 3,
       templateFolders: [
-        { path: "Templates", mode: "manual" },
-        { path: "Imported", mode: "manual" },
+        { path: "Templates" },
+        { path: "Imported" },
       ],
       base: { fields: {} },
       contracts: {
@@ -367,35 +445,11 @@ describe("template doctor", () => {
       target: { vault: root, source: "explicit" },
       request: { dryRun: true },
     });
-    expect(dry.status).toBe("planned");
+    expect(dry).toMatchObject({ status: "rejected", code: "TEMPLATE_REVIEW_REQUIRED" });
     expect(await readFile(path.join(root, ".oms", "types.json"), "utf8")).toBe("{}\n");
     expect(await readFile(path.join(root, ".oms", "template-policy.json"))).toEqual(beforePolicy);
     expect(await readFile(path.join(root, "Templates", "note.md"))).toEqual(beforeNote);
     expect(await readFile(path.join(root, "Imported", "reference.md"))).toEqual(beforeReference);
-    if (dry.status !== "planned") return;
-
-    const applied = await regenerateTypes({
-      target: { vault: root, source: "explicit" },
-      request: { approvedDigest: dry.approvalDigest },
-    });
-    expect(applied.status).toBe("applied");
-    expect(await readFile(path.join(root, ".oms", "template-policy.json"))).toEqual(beforePolicy);
-    expect(await readFile(path.join(root, "Templates", "note.md"))).toEqual(beforeNote);
-    expect(await readFile(path.join(root, "Imported", "reference.md"))).toEqual(beforeReference);
-    const savedPolicy = JSON.parse(await readFile(path.join(root, ".oms", "template-policy.json"), "utf8")) as {
-      templates: Record<string, { sourceFolder: string; sourcePath: string }>;
-    };
-    expect(savedPolicy.templates).toMatchObject({
-      note: { sourceFolder: "Templates", sourcePath: "Templates/note.md" },
-      reference: { sourceFolder: "Imported", sourcePath: "Imported/reference.md" },
-    });
-    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
-      templates: {
-        note: { sourcePath: "Templates/note.md", targetFolder: "notes" },
-        reference: { sourcePath: "Imported/reference.md", targetFolder: "references" },
-      },
-      managedSourcePaths: ["Imported/reference.md", "Templates/note.md"],
-    });
   });
   it.each(["missing", "malformed"] as const)("regenerates a %s projection from authority", async state => {
     const root = await vault();
@@ -403,23 +457,20 @@ describe("template doctor", () => {
     if (state === "missing") await rm(projectionPath);
     else await writeFile(projectionPath, "{}\n");
     const dry = await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { dryRun: true } });
-    expect(dry.status).toBe("planned");
-    if (dry.status !== "planned") return;
-    const applied = await regenerateTypes({
-      target: { vault: root, source: "explicit" },
-      request: { approvedDigest: dry.approvalDigest },
-    });
-    expect(applied.status).toBe("applied");
-    expect((await diagnoseTemplates({ vault: root, source: "explicit" })).status).toBe("healthy");
+    expect(dry).toMatchObject({ status: "rejected", code: "TEMPLATE_REVIEW_REQUIRED" });
+    expect(dry.status === "rejected" ? dry.remediation : "").toContain("template review");
   });
-  it("rejects stale regeneration approval without changing the vault", async () => {
+  it("rejects regeneration approval while source review is still unanswered", async () => {
     const root = await vault();
     await writeFile(path.join(root, "Templates", "note.md"), "---\ntitle: changed\n---\nbody\n", "utf8");
-    const dry = await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { dryRun: true } });
-    if (dry.status !== "planned") return;
-    await writeFile(path.join(root, "Templates", "note.md"), "---\ntitle: newer\n---\nbody\n", "utf8");
     const before = await readFile(path.join(root, ".oms", "types.json"), "utf8");
-    expect((await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { approvedDigest: dry.approvalDigest } })).status).toBe("rejected");
+    const dry = await regenerateTypes({ target: { vault: root, source: "explicit" }, request: { dryRun: true } });
+    expect(dry).toMatchObject({ status: "rejected", code: "TEMPLATE_REVIEW_REQUIRED" });
+    const applied = await regenerateTypes({
+      target: { vault: root, source: "explicit" },
+      request: { approvedDigest: sha("forged-approval") },
+    });
+    expect(applied).toMatchObject({ status: "rejected", code: "TEMPLATE_REVIEW_REQUIRED" });
     expect(await readFile(path.join(root, ".oms", "types.json"), "utf8")).toBe(before);
   });
   it("backfills exactly one note with a server-verifiable receipt", async () => {

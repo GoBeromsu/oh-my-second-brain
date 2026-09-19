@@ -37,7 +37,7 @@ const obsidianTypes = JSON.stringify({ types: { template: "string" } });
 function savedPolicy(folder = "Saved Templates"): string {
   return `${JSON.stringify({
     version: 3,
-    templateFolders: [{ path: folder, mode: "auto", default: true }],
+    templateFolders: [{ path: folder, default: true }],
     defaultTemplate: "note",
     base: { fields: {} },
     contracts: { base: { intent: "Base note", fields: {}, views: [] } },
@@ -61,10 +61,10 @@ describe("template-first setup service", () => {
 
     const state = await inspectSetup({
       vault: root,
-      templateFolders: [{ path: "My Templates", mode: "auto", default: true }],
+      templateFolders: [{ path: "My Templates", default: true }],
     });
 
-    expect(state.selectedTemplateFolders).toEqual([{ path: "My Templates", mode: "auto", default: true }]);
+    expect(state.selectedTemplateFolders).toEqual([{ path: "My Templates", default: true }]);
     expect(state.templateFolderSource).toBe("explicit");
     expect(state.templateFolderCandidates).toContainEqual({
       path: "My Templates",
@@ -128,15 +128,14 @@ describe("template-first setup service", () => {
     });
     const state = await inspectSetup({
       vault: root,
-      templateFolders: [{ path: "First", mode: "auto" }],
+      templateFolders: [{ path: "First" }],
     });
     const decision = await decideSetup(state, {
-      templateFolders: [{ path: "Second", mode: "manual", default: true }],
-      registeredTemplates: [{ templateId: "two", sourcePath: "Second/two.md" }],
+      templateFolders: [{ path: "Second", default: true }],
     });
 
     expect(decision.templateFolderSource).toBe("explicit");
-    expect(decision.selectedTemplateFolders).toEqual([{ path: "Second", mode: "manual", default: true }]);
+    expect(decision.selectedTemplateFolders).toEqual([{ path: "Second", default: true }]);
     expect(decision.proposal.managedSourcePaths).toEqual(["Second/two.md"]);
     expect(decision.templateFolderCandidates).toContainEqual({
       path: "Second",
@@ -153,7 +152,7 @@ describe("template-first setup service", () => {
     });
     const decision = await decideNonInteractiveSetup(await inspectSetup({
       vault: root,
-      templateFolders: [{ path: "Templates", mode: "auto", default: true }],
+      templateFolders: [{ path: "Templates", default: true }],
     }));
     const manifest = await composeSetup(decision, { base: { fields: {} } });
     const receipt = await applySetup(decision, manifest, { approvedDigest: manifest.approvalDigest });
@@ -171,7 +170,7 @@ describe("template-first setup service", () => {
     });
     const decision = await decideNonInteractiveSetup(await inspectSetup({
       vault: root,
-      templateFolders: [{ path: "Templates", mode: "auto", default: true }],
+      templateFolders: [{ path: "Templates", default: true }],
     }));
     const manifest = await composeSetup(decision, { base: { fields: {} } });
     const receipt = await applySetup(decision, manifest, { dryRun: true });

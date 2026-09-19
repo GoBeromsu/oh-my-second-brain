@@ -154,7 +154,11 @@ function placements(entries: readonly PlacementEntry[]): PlacementEntry[] {
 }
 
 function templateFolders(entries: readonly TemplateFolderRegistration[]): TemplateFolderRegistration[] {
-  const result = entries.map((entry) => ({ ...entry, path: normalizeTemplateFolderPath(entry.path) }))
+  const result = entries.map((entry) => ({
+    path: normalizeTemplateFolderPath(entry.path),
+    ...(entry.default === true ? { default: true as const } : {}),
+    ...(entry.extensions === undefined ? {} : { extensions: entry.extensions }),
+  }))
     .sort((left, right) => compare(left.path, right.path));
   for (let index = 1; index < result.length; index += 1) {
     if (result[index - 1]!.path === result[index]!.path) throw new TypeError("TEMPLATE_SOURCE_DUPLICATE");

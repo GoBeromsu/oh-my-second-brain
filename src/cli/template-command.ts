@@ -5,16 +5,16 @@ import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
 import { composeTemplateAdd } from "../kernel/templates/compose-add.js";
 import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
-import { planTemplateMigration } from "../kernel/templates/migration.js";
+import { nextTemplateInterview, answerTemplateInterview, commitTemplateContracts } from "../kernel/templates/interview-service.js";
 import { executeTemplateOperation } from "../kernel/templates/operations.js";
-import { deriveTemplateSourcePath, isTemplateSourceInFolder, normalizeTemplateFolderPath, normalizeTemplateSourcePath, validateTemplateId } from "../kernel/templates/paths.js";
+import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
+import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, validateTemplateId } from "../kernel/templates/paths.js";
 import { parseTemplatePolicy } from "../kernel/templates/policy.js";
-import { registerExistingTemplate } from "../kernel/templates/register.js";
 import { classifyTemplateRenderer } from "../kernel/templates/renderer.js";
 import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
 import { resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "../kernel/templates/transaction.js";
-import type { Digest, GuardedTemplateRequest, TemplateBinding, TemplatePolicy, TemplateRenderer, TemplateSemanticChange } from "../kernel/templates/types.js";
-import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
+import type { Digest, GuardedTemplateRequest, JsonValue, TemplateBinding, TemplatePolicy, TemplateRenderer, TemplateSemanticChange } from "../kernel/templates/types.js";
+import type { TemplateOperationTarget } from "../kernel/templates/operations.js";
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const MAX_SOURCE_BYTES = 262_144;
@@ -22,9 +22,9 @@ const DEFAULT_NAMING = "{{date}}-{{slug}}.md";
 
 type Options = Record<string, string | boolean>;
 interface Parsed { readonly verb: string; readonly positional: readonly string[]; readonly options: Options; }
-interface Target { readonly vault: string; readonly source: WriteTargetSource; }
+type Target = TemplateOperationTarget;
 
-const VALUE_FLAGS = new Set(["vault", "approved-digest", "mode", "id", "contract", "naming", "renderer", "folder", "from", "path", "class", "resume"]);
+const VALUE_FLAGS = new Set(["vault", "approved-digest", "id", "contract", "naming", "renderer", "folder", "from", "path", "class", "resume", "answer", "census-digest", "ledger-digest"]);
 const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "creation-default", "delete-source", "help"]);
 
 function fail(message: string): never { throw new Error(`TEMPLATE_ARGS_INVALID: ${message}`); }
@@ -35,7 +35,11 @@ function parse(argv: readonly string[]): Parsed {
   const options: Options = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]!;
-    if (!token.startsWith("--")) { positional.push(token); continue; }
+    if (!token.startsWith("--")) {
+      if (token.startsWith("-")) fail(`unknown flag ${token}`);
+      positional.push(token);
+      continue;
+    }
     const name = token.slice(2);
     if (!VALUE_FLAGS.has(name) && !BOOLEAN_FLAGS.has(name)) fail(`unknown flag --${name}`);
     if (Object.hasOwn(options, name)) fail(`duplicate flag --${name}`);
@@ -48,6 +52,38 @@ function parse(argv: readonly string[]): Parsed {
 }
 function text(options: Options, name: string): string | undefined { const value = options[name]; return typeof value === "string" ? value : undefined; }
 function flag(options: Options, name: string): boolean { return options[name] === true; }
+function jsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(jsonValue);
+  if (typeof value !== "object") return false;
+  return Object.values(value as Record<string, unknown>).every(jsonValue);
+}
+function answerValue(options: Options): JsonValue {
+  const raw = text(options, "answer");
+  if (raw === undefined) fail("--answer requires a value");
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    fail("--answer must be valid JSON");
+  }
+  if (!jsonValue(value)) fail("--answer must be a JSON value");
+  return value;
+}
+function requiredDigest(options: Options, name: string): Digest {
+  const raw = text(options, name);
+  if (raw === undefined) fail(`--${name} requires a value`);
+  if (!DIGEST.test(raw)) fail(`--${name} must be sha256:<64hex>`);
+  return raw as Digest;
+}
+function expectedLedgerDigest(options: Options): Digest | null {
+  const raw = text(options, "ledger-digest");
+  if (raw === undefined) fail("--ledger-digest requires a value");
+  if (raw === "null") return null;
+  if (!DIGEST.test(raw)) fail("--ledger-digest must be null or sha256:<64hex>");
+  return raw as Digest;
+}
 function only(parsed: Parsed, allowed: readonly string[], positional: number | readonly [number, number]): void {
   const unexpected = Object.keys(parsed.options).filter(key => !allowed.includes(key));
   if (unexpected.length > 0) fail(`--${unexpected[0]} is not valid for ${parsed.verb}`);
@@ -99,15 +135,24 @@ function print(value: unknown): void {
     const status = (value as { readonly status?: unknown }).status;
     if (status === "rejected" || status === "inconsistent") process.exitCode = 1;
   }
+  if (value !== null && typeof value === "object" && "state" in value) {
+    if ((value as { readonly state?: unknown }).state === "blocked") process.exitCode = 1;
+  }
   console.log(JSON.stringify(value, null, 2));
 }
-function summarizedScan(proposal: Awaited<ReturnType<typeof planTemplateMigration>>): unknown {
+function summarizedScan(context: Awaited<ReturnType<typeof readTemplateReviewContext>>): unknown {
+  const entries = context.census.entries.map(entry => ({
+    sourcePath: entry.sourcePath,
+    ...(entry.templateId === undefined ? {} : { templateId: entry.templateId }),
+    signature: entry.signature,
+    diagnostics: entry.diagnostics,
+  }));
   return {
-    templateFolders: proposal.templateFolders,
-    candidates: proposal.candidates.map(candidate => ({ templateId: candidate.templateId, sourcePath: candidate.sourcePath, renderer: candidate.renderer, filledBy: candidate.filledBy, bodyExternal: candidate.bodyExternal, selected: proposal.bindings.some(binding => binding.templateId === candidate.templateId && binding.sourcePath === candidate.sourcePath), samples: candidate.contractFromNotes?.samples ?? 0, coverage: candidate.contractFromNotes?.coverage ?? {}, diagnostics: [...candidate.rendererDiagnostics, ...(candidate.contractFromNotes?.diagnostics ?? [])] })),
-    diagnostics: proposal.diagnostics,
-    unresolved: proposal.unresolved,
-    inputDigest: proposal.inputDigest,
+    entries,
+    diffs: context.census.diffs,
+    diagnostics: context.census.diagnostics,
+    projectionUsable: context.projectionUsable,
+    freshTemplateIds: context.freshTemplateIds,
   };
 }
 
@@ -134,7 +179,35 @@ async function run(parsed: Parsed): Promise<void> {
   if (parsed.verb === "scan") {
     only(parsed, ["vault"], 0);
     const resolved = await target(parsed.options);
-    print(summarizedScan(await planTemplateMigration(resolved.vault))); return;
+    print(summarizedScan(await readTemplateReviewContext(resolved.vault))); return;
+  }
+  if (parsed.verb === "review") {
+    only(parsed, ["vault"], 0);
+    const resolved = await target(parsed.options);
+    print(await nextTemplateInterview(resolved)); return;
+  }
+  if (parsed.verb === "answer") {
+    only(parsed, ["vault", "answer", "census-digest", "ledger-digest"], 1);
+    const resolved = await target(parsed.options);
+    ensureMutableTarget(resolved);
+    const questionId = parsed.positional[0]!;
+    if (!DIGEST.test(questionId)) fail("answer requires a sha256:<64hex> question id");
+    print(await answerTemplateInterview(resolved, {
+      questionId: questionId as Digest,
+      answer: answerValue(parsed.options),
+      censusDigest: requiredDigest(parsed.options, "census-digest"),
+      expectedLedgerDigest: expectedLedgerDigest(parsed.options),
+    })); return;
+  }
+  if (parsed.verb === "commit") {
+    only(parsed, ["vault", "census-digest", "ledger-digest", "dry-run", "yes", "approved-digest"], 0);
+    const resolved = await target(parsed.options);
+    ensureMutableTarget(resolved);
+    print(await commitTemplateContracts(resolved, {
+      censusDigest: requiredDigest(parsed.options, "census-digest"),
+      expectedLedgerDigest: expectedLedgerDigest(parsed.options),
+      ...guard(parsed.options),
+    })); return;
   }
   if (parsed.verb === "check") {
     only(parsed, ["vault"], 0);
@@ -147,17 +220,18 @@ async function run(parsed: Parsed): Promise<void> {
     print(await regenerateTypes({ target: resolved, request: guard(parsed.options) })); return;
   }
   if (parsed.verb === "add") {
-    only(parsed, ["vault", "dry-run", "yes", "approved-digest", "mode", "creation-default", "id", "contract", "naming", "renderer", "folder", "from"], [0, 1]);
+    only(parsed, ["vault", "dry-run", "yes", "approved-digest", "creation-default", "id", "contract", "naming", "renderer", "folder", "from"], [0, 1]);
     const resolved = await target(parsed.options); ensureMutableTarget(resolved);
     const request = guard(parsed.options);
     const idText = text(parsed.options, "id");
     const from = text(parsed.options, "from");
     if (idText === undefined && from === undefined) {
       if (parsed.positional.length !== 1) fail("add <folder> requires one folder");
-      const mode = text(parsed.options, "mode") ?? "manual";
-      if (mode !== "auto" && mode !== "manual") fail("--mode must be auto or manual");
-      if (text(parsed.options, "contract") !== undefined || text(parsed.options, "naming") !== undefined || text(parsed.options, "renderer") !== undefined || text(parsed.options, "folder") !== undefined) fail("folder registration does not accept template binding flags");
-      print(await executeTemplateOperation(resolved, { mode: "register-folder", folder: { path: normalizeTemplateFolderPath(parsed.positional[0]!), mode, ...(flag(parsed.options, "creation-default") ? { default: true as const } : {}) } }, request)); return;
+      if (text(parsed.options, "contract") !== undefined || text(parsed.options, "naming") !== undefined || text(parsed.options, "renderer") !== undefined || text(parsed.options, "folder") !== undefined) fail("add <folder> accepts only the selected folder, --creation-default, and mutation guard");
+      print(await executeTemplateOperation(resolved, {
+        mode: "register-folder",
+        folder: { path: normalizeTemplateFolderPath(parsed.positional[0]!), ...(flag(parsed.options, "creation-default") ? { default: true as const } : {}) },
+      }, request)); return;
     }
     if (idText === undefined) fail("template add requires --id");
     const id = validateTemplateId(idText);
@@ -165,22 +239,11 @@ async function run(parsed: Parsed): Promise<void> {
     const contract = knownContract(current, text(parsed.options, "contract"));
     const naming = text(parsed.options, "naming") ?? DEFAULT_NAMING;
     if (from !== undefined) {
-      if (parsed.positional.length !== 0 || text(parsed.options, "renderer") !== undefined || flag(parsed.options, "creation-default") || text(parsed.options, "mode") !== undefined) fail("add --from conflicts with a positional source and folder registration flags");
+      if (parsed.positional.length !== 0 || text(parsed.options, "renderer") !== undefined || flag(parsed.options, "creation-default")) fail("add --from conflicts with a positional source and folder selection flags");
       const composed = composeTemplateAdd(current.templateFolders, { templateId: id, sourceFolder: text(parsed.options, "folder"), bytes: await boundedFile(from), contract, naming });
       print(await executeTemplateOperation(resolved, { mode: "create", binding: composed.binding, source: composed.source }, request)); return;
     }
-    if (parsed.positional.length !== 1 || flag(parsed.options, "creation-default") || text(parsed.options, "mode") !== undefined) fail("add <existing-file> --id requires exactly one source file");
-    const sourcePath = normalizeTemplateSourcePath(parsed.positional[0]!);
-    const bytes = await boundedFile(path.join(resolved.vault, sourcePath));
-    const classified = classifyTemplateRenderer(sourcePath, bytes);
-    const requestedRenderer = renderer(text(parsed.options, "renderer")) ?? classified.renderer;
-    if (requestedRenderer !== classified.renderer) throw new Error(`TEMPLATE_SOURCE_INVALID: requested renderer ${requestedRenderer} does not match observed renderer ${classified.renderer}`);
-    const explicitFolder = text(parsed.options, "folder");
-    const sourceFolder = explicitFolder === undefined
-      ? [...current.templateFolders].sort((a, b) => b.path.length - a.path.length).find(folder => isTemplateSourceInFolder(sourcePath, folder.path))?.path
-      : normalizeTemplateFolderPath(explicitFolder);
-    if (sourceFolder === undefined) throw new Error("TEMPLATE_SOURCE_INVALID: source is outside registered template folders; pass --folder after registering it");
-    print(await registerExistingTemplate(resolved.vault, { templateId: id, sourceFolder, sourcePath, renderer: requestedRenderer, filledBy: classified.filledBy, contract, naming }, request)); return;
+    fail("template add requires --from for source authoring; per-file registration is not supported");
   }
   if (parsed.verb === "update") {
     only(parsed, ["vault", "dry-run", "yes", "approved-digest", "contract", "naming", "renderer", "path", "class", "resume"], [0, 1]);
@@ -232,7 +295,31 @@ async function run(parsed: Parsed): Promise<void> {
 }
 
 export function templateUsage(): string {
-  return `Usage: oms template <verb> [options]\n\nRead-only:\n  list | show <id> | scan | check\nMutations (use --dry-run, then --yes --approved-digest <digest>):\n  add <folder> [--mode auto|manual] [--creation-default]\n  add <existing-file> --id <id> [--folder <folder>] [--contract <name>] [--naming <pattern>] [--renderer <renderer>]\n  add --id <id> --from <content.md> [--folder <folder>] [--contract <name>] [--naming <pattern>]\n  update <id> [--contract <name>] [--naming <pattern>] [--path <file>] [--renderer <renderer>]\n  update <id> --class managed-default|registered-existing\n  update --resume <transaction-id> --yes --approved-digest <digest>\n  move --folder <registered-folder>\n  remove <id> [--delete-source]\n  default <id>\n  regenerate-types`;
+  return `Usage: oms template <verb> [options]
+
+Leaves: scan | list | show | add | update | move | remove | default | check | regenerate-types | review | answer | commit
+
+Read-only:
+  list
+  show <id>
+  scan
+  check
+  review [--vault <vault>]
+
+Contract review:
+  answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null> [--vault <vault>]
+  commit --census-digest <digest> --ledger-digest <digest|null> (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]
+
+Guarded template operations (use --dry-run, then --yes --approved-digest <digest>):
+  add <folder> [--creation-default]
+  add --id <id> --from <content.md> [--folder <folder>] [--contract <name>] [--naming <pattern>]
+  update <id> [--contract <name>] [--naming <pattern>] [--path <file>] [--renderer <renderer>]
+  update <id> --class managed-default|registered-existing
+  update --resume <transaction-id> --yes --approved-digest <digest>
+  move --folder <registered-folder>
+  remove <id> [--delete-source]
+  default <id>
+  regenerate-types`;
 }
 
 export async function runTemplateCommand(argv: readonly string[]): Promise<void> {

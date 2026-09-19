@@ -7,7 +7,8 @@ import { McpEngineAdapter } from "./facade.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import type { EmbeddingProvider, ScoredHit, VectorStore } from "../types.js";
 import type { EngineStore } from "../embed/store.js";
-import { loadResolvedTemplates, sourceSignature } from "../../templates/resolver.js";
+import { deriveContentFormatContract } from "../../templates/content-contract.js";
+import { loadResolvedTemplates, sharedAuthoritySignature, sourceSignature } from "../../templates/resolver.js";
 import type { Digest, SourceDescriptor } from "../../templates/types.js";
 
 // ---------------------------------------------------------------------------
@@ -80,7 +81,7 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
   mkdirSync(path.join(dir, "Templates", "OMS"), { recursive: true });
   const policy = JSON.stringify({
     version: 3,
-    templateFolders: [{ path: "Templates/OMS", mode: "manual", default: true }],
+    templateFolders: [{ path: "Templates/OMS", default: true }],
     base: { fields: {} },
     contracts: {
       project: { intent: "project note.", fields: { status: { type: "text" }, rating: { type: "number" }, done: { type: "boolean" } }, views: [] },
@@ -110,6 +111,8 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
     { path: "Templates/OMS/reference.md", signature: digest(referenceTemplate) },
   ];
   const field = (type: string) => ({ type });
+  const projectContent = deriveContentFormatContract("Body\n", { templateId: "project" }).contract;
+  const referenceContent = deriveContentFormatContract("Body\n", { templateId: "reference" }).contract;
   const folderOntology = intentEntries.length === 0
     ? {}
     : {
@@ -124,12 +127,17 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
       };
   const projection = JSON.stringify({
     version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sources },
+    generatedFrom: {
+      algorithm: "sha256-lp-v1",
+      inputSignature: sourceSignature(sources),
+      sharedAuthoritySignature: sharedAuthoritySignature(sources),
+      sources,
+    },
     managed: {
       base: { fields: {} }, globalAxes: folderOntology,
       templates: {
-        project: { templateId: "project", destinationClass: "managed-default", sourcePath: "Templates/OMS/project.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["status", "rating", "done"], fields: { status: field("text"), rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: digest("Body\n") },
-        reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["rating", "done"], fields: { rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: digest("Body\n") },
+        project: { templateId: "project", destinationClass: "managed-default", sourcePath: "Templates/OMS/project.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["status", "rating", "done"], fields: { status: field("text"), rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: projectContent.bodySignature, content: projectContent },
+        reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["rating", "done"], fields: { rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: referenceContent.bodySignature, content: referenceContent },
       },
     },
   });
