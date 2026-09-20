@@ -100,8 +100,7 @@ jobs:
 
       - name: Publish to npm with provenance
         if: github.ref_type == 'tag'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Authentication comes from npm Trusted Publishing via GitHub OIDC.
         run: |
           set -euo pipefail
           V=$(node -p "require('./package.json').version")
