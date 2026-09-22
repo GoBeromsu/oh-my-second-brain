@@ -20,11 +20,19 @@ describe("template-native MCP surface", () => {
     expect(validate("search", { op: "get-document", target: "notes/a.md", targets: ["notes/a.md"] })).toBe(false);
   });
 
-  it("accepts explicit and default note creation as distinct branches", () => {
-    expect(validate("write", { op: "note", mode: "create", templateId: "note", body: "body" })).toBe(true);
-    expect(validate("write", { op: "note", mode: "create", body: "body" })).toBe(true);
-    expect(validate("write", { op: "note", mode: "create", templateId: "note", notePath: "notes/a.md", body: "body" })).toBe(false);
-    expect(validate("write", { op: "note", mode: "create", templateId: "note", targetFolder: "Inbox", body: "body" })).toBe(true);
+  it("advertises guide, check, and complete over a saved note", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    // guide may ask for a path; check always needs the saved note it reads.
+    expect(validate("write", { op: "guide" })).toBe(true);
+    expect(validate("write", { op: "guide", notePath: "notes/a.md", templateId: "note" })).toBe(true);
+    expect(validate("write", { op: "check", notePath: "notes/a.md" })).toBe(true);
+    expect(validate("write", { op: "check", notePath: "notes/a.md", evidencePaths: ["notes/source.md"] })).toBe(true);
+    expect(validate("write", { op: "check" })).toBe(false);
+    expect(validate("write", { op: "complete", checkpoint: { schemaVersion: 1 }, review: { requestDigest: digest } })).toBe(true);
+    expect(validate("write", { op: "complete", checkpoint: { schemaVersion: 1 } })).toBe(false);
+    // OMS does not write ordinary notes, so no note-write branch exists.
+    expect(validate("write", { op: "note", mode: "create", templateId: "note", body: "body" })).toBe(false);
+    expect(validate("write", { op: "check", notePath: "notes/a.md", body: "unsaved" })).toBe(false);
   });
 
   it("exposes the linear review protocol with canonical CAS and approval guards", () => {
@@ -80,69 +88,28 @@ describe("template-native MCP surface", () => {
     })).toBe(false);
   });
 
-  it("keeps folder registration while retiring per-file and guessed review modes", () => {
+  it("retires every template authoring and folder-registration mode", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    for (const mode of ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "register", "add-file", "later", "review"]) {
+      expect(validate("write", { op: "template", mode, dryRun: true }), mode).toBe(false);
+    }
+    // Only the interview mutates contract configuration.
+    expect(validate("write", { op: "template", mode: "interview-next" })).toBe(true);
     expect(validate("write", {
       op: "template",
-      mode: "register-folder",
-      folder: { path: "Templates/Review" },
+      mode: "commit-contracts",
+      censusDigest: digest,
+      expectedLedgerDigest: null,
       dryRun: true,
     })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "register-folder",
-      folder: { path: "Templates/Review", mode: "auto" },
-      dryRun: true,
-    })).toBe(false);
-    for (const mode of ["register", "add-file", "later", "review"]) {
-      expect(validate("write", { op: "template", mode, dryRun: true })).toBe(false);
-    }
   });
 
-  it("requires write publication for create while retaining verified moved updates", () => {
-    const binding = {
-      templateId: "note",
-      destinationClass: "managed-default",
-      renderer: "obsidian-core",
-      sourceFolder: "Templates/Review",
-      sourcePath: "Templates/Review/note.md",
-      contract: "note",
-      naming: "{{title}}.md",
-    };
-    const source = {
-      path: "Templates/Review/note.md",
-      content: "# Note\n",
-    };
-    expect(validate("write", {
-      op: "template",
-      mode: "create",
-      binding,
-      source: { ...source, publication: "write" },
-      dryRun: true,
-    })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "create",
-      binding,
-      source: { ...source, publication: "verify-existing" },
-      dryRun: true,
-    })).toBe(false);
-    expect(validate("write", {
-      op: "template",
-      mode: "update",
-      templateId: "note",
-      binding,
-      source: { ...source, publication: "verify-existing" },
-      moveStrategy: "register-already-moved",
-      dryRun: true,
-    })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "update",
-      templateId: "note",
-      binding: { ...binding, content: { version: 1 } },
-      source: { ...source, publication: "write" },
-      dryRun: true,
-    })).toBe(false);
+  it("keeps link read-only and doctor free of note backfill", () => {
+    expect(validate("link", { op: "suggest", notePath: "notes/a.md" })).toBe(true);
+    expect(validate("link", { op: "check", notePath: "notes/a.md" })).toBe(true);
+    expect(validate("link", { op: "apply", notePath: "notes/a.md", baseContentHash: "0".repeat(64), candidateIds: [] })).toBe(false);
+    expect(validate("doctor", { op: "validate" })).toBe(true);
+    expect(validate("doctor", { op: "backfill-defaults", notePath: "notes/a.md", dryRun: true })).toBe(false);
   });
 
   it("uses query and index discriminators without retired aliases", () => {
