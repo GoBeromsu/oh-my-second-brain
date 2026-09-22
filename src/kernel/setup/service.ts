@@ -114,19 +114,6 @@ function present(text: string): Extract<VerifiedFileState, { readonly state: "pr
  */
 export async function composeSetup(decision: SetupDecision): Promise<TemplateCompositionManifest> {
   const vault = decision.vault;
-  const policyText = serializeTemplatePolicy(decision.policy);
-  const taxonomyText = `${JSON.stringify({ templates: {}, folders: {} }, null, 2)}\n`;
-  const generationDigest = controlGenerationDigest(encoder.encode(policyText), encoder.encode(taxonomyText));
-  const projectionText = serializeDerivedProjection({
-    version: "oms.types.v2",
-    generatedFrom: generationDigest,
-    managed: expectedProjectionManaged(
-      decision.policy,
-      taxonomyRouting(TAXONOMY_PATH, encoder.encode(taxonomyText)),
-      generationDigest,
-    ),
-  });
-
   const [policyCurrent, taxonomyCurrent, projectionCurrent, draftCurrent] = await Promise.all([
     currentState(vault, POLICY_PATH),
     currentState(vault, TAXONOMY_PATH),
@@ -134,10 +121,35 @@ export async function composeSetup(decision: SetupDecision): Promise<TemplateCom
     currentState(vault, DEFAULT_MANAGED_TEMPLATE_PATH),
   ]);
 
+  // A present control is preserved, so the derived projection must be generated
+  // from the bytes that will actually be on disk. Generating it from the
+  // proposal would leave the vault reporting a contract it does not have.
+  const decoder = new TextDecoder();
+  const policyText = policyCurrent.state === "present"
+    ? decoder.decode(policyCurrent.bytes)
+    : serializeTemplatePolicy(decision.policy);
+  const taxonomyText = taxonomyCurrent.state === "present"
+    ? decoder.decode(taxonomyCurrent.bytes)
+    : `${JSON.stringify({ templates: {}, folders: {} }, null, 2)}\n`;
+  const effectivePolicy = policyCurrent.state === "present"
+    ? parseTemplatePolicy(policyText)
+    : decision.policy;
+  const generationDigest = controlGenerationDigest(encoder.encode(policyText), encoder.encode(taxonomyText));
+  const projectionText = serializeDerivedProjection({
+    version: "oms.types.v2",
+    generatedFrom: generationDigest,
+    managed: expectedProjectionManaged(
+      effectivePolicy,
+      taxonomyRouting(TAXONOMY_PATH, encoder.encode(taxonomyText)),
+      generationDigest,
+    ),
+  });
+
   const controls = [
     { kind: "policy" as const, path: POLICY_PATH, expectedCurrent: expectation(policyCurrent), current: policyCurrent, proposed: present(policyText), action: policyCurrent.state === "absent" ? "write" as const : "verify-only" as const },
     { kind: "taxonomy" as const, path: TAXONOMY_PATH, expectedCurrent: expectation(taxonomyCurrent), current: taxonomyCurrent, proposed: present(taxonomyText), action: taxonomyCurrent.state === "absent" ? "write" as const : "verify-only" as const },
-    { kind: "projection" as const, path: PROJECTION_PATH, expectedCurrent: expectation(projectionCurrent), current: projectionCurrent, proposed: present(projectionText), action: projectionCurrent.state === "absent" ? "write" as const : "verify-only" as const },
+    // The projection is derived, so a stale one is rewritten rather than kept.
+    { kind: "projection" as const, path: PROJECTION_PATH, expectedCurrent: expectation(projectionCurrent), current: projectionCurrent, proposed: present(projectionText), action: projectionCurrent.state === "present" && decoder.decode(projectionCurrent.bytes) === projectionText ? "verify-only" as const : "write" as const },
   ] as TemplateCompositionManifest["controls"];
 
   // A verify-only control must propose exactly the bytes already on disk.

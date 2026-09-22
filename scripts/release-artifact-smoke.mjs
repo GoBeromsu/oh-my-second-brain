@@ -152,18 +152,20 @@ function makeVault(tempRoot) {
 function setupSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
   const env = smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" });
-  const dryRun = run(process.execPath, [cli, "setup", "--vault", vault, "--template-folder", "Template Sources", "--dry-run", "--install-claude"], { cwd: packageRoot, env });
+  const dryRun = run(process.execPath, [cli, "setup", "--vault", vault, "--dry-run", "--install-claude"], { cwd: packageRoot, env });
   const approval = /"approvalDigest":\s*"(sha256:[0-9a-f]{64})"/u.exec(dryRun.stdout)?.[1];
   if (!approval) fail("setup dry-run did not return an approval digest");
-  if (!dryRun.stdout.includes("Template Sources/note.md")) fail("setup dry-run did not propose the starter in the explicit source folder");
-  if (existsSync(path.join(vault, "Template Sources", "note.md"))) fail("setup dry-run published its starter");
-  const result = run(process.execPath, [cli, "setup", "--vault", vault, "--template-folder", "Template Sources", "--yes", "--approved-digest", approval, "--install-claude"], { cwd: packageRoot, env });
+  // Setup proposes an empty version 4 contract and adopts no template.
+  if (!dryRun.stdout.includes('"policyVersion": 4')) fail("setup dry-run did not propose a version 4 contract");
+  if (!/"templates":\s*\[\]/u.test(dryRun.stdout)) fail("setup dry-run adopted a template instead of proposing an empty contract");
+  if (existsSync(path.join(vault, ".oms/template-policy.json"))) fail("setup dry-run published its proposal");
+  const result = run(process.execPath, [cli, "setup", "--vault", vault, "--yes", "--approved-digest", approval, "--install-claude"], { cwd: packageRoot, env });
   const output = `${result.stdout}\n${result.stderr}`;
   assertPath(path.join(vault, ".oms/taxonomy.json"), "vault taxonomy");
   if (existsSync(path.join(vault, ".oms/taxonomy.yaml"))) fail("setup retained retired vault taxonomy YAML");
   assertPath(path.join(vault, ".oms/template-policy.json"), "vault template policy");
   assertPath(path.join(vault, ".oms/types.json"), "vault derived projection");
-  assertPath(path.join(vault, "Template Sources", "note.md"), "approved starter template");
+  assertPath(path.join(vault, ".oms/templates/default.md"), "approved default layer draft");
   if (existsSync(path.join(vault, ".oms/concepts"))) fail("setup recreated the retired concepts directory");
   if (!output.includes("claude plugin install")) fail("setup output did not include Claude plugin install command");
   if (!output.includes("plugin-owned and plugin-qualified")) {
@@ -207,42 +209,48 @@ function canonicalCliSmoke(packageRoot, vault, smokeHome) {
     return expectExit([...mutationArgs, "--yes", "--approved-digest", approval], 0);
   };
 
-  // Source authoring stages content outside the vault: `template add --from`
-  // writes the new source itself, and a file already sitting at the destination
-  // is a collision, not a registration. Per-file registration no longer exists.
-  const literatureSource = path.join(smokeHome, "literature-source.md");
-  writeFileSync(
-    literatureSource,
-    "---\ntemplate: literature\ntitle: Untitled\ntags: []\n---\n# Literature\n<!-- oms:content -->\n",
-    "utf-8",
-  );
-  approvedMutation([
-    "template", "add", "--id", "literature", "--from", literatureSource,
-    "--folder", "Template Sources", "--contract", "base",
-  ]);
-  if (!existsSync(path.join(vault, "Template Sources", "literature.md"))) {
-    fail("packaged oms template add --from did not author the source inside the selected folder");
+  // Contract configuration changes only through the reviewed interview. The
+  // retired authoring verbs must be gone, not merely discouraged.
+  for (const retired of [["template", "add"], ["template", "update"], ["template", "remove"], ["template", "default"], ["template", "move"]]) {
+    const result = invoke([...retired, "--dry-run"]);
+    if (result.status === 0) fail(`packaged oms ${retired.join(" ")} still accepts a retired authoring verb`);
   }
-  const retiredPerFileAdd = expectExit([
-    "template", "add", "Template Sources/literature.md", "--id", "other", "--dry-run",
-  ], 1);
-  if (!`${retiredPerFileAdd.stdout}\n${retiredPerFileAdd.stderr}`.includes("per-file registration is not supported")) {
-    fail("packaged oms template add did not reject retired per-file registration");
+  const review = expectExit(["template", "review"], 0);
+  const reviewPayload = JSON.parse(review.stdout);
+  if (typeof reviewPayload.state !== "string") fail("packaged oms template review did not return an interview state");
+  if (!existsSync(path.join(vault, ".oms/template-policy.json"))) {
+    fail("packaged oms template review lost the approved contract");
   }
+
   const scan = expectExit(["template", "scan"], 0);
   const scanPayload = JSON.parse(scan.stdout);
-  if (!Array.isArray(scanPayload.entries) || !scanPayload.entries.some(entry => entry.sourcePath === "Template Sources/literature.md")) {
-    fail("packaged oms template scan did not report the selected-folder census");
+  if (!Array.isArray(scanPayload.approved) || scanPayload.approved.length === 0) {
+    fail("packaged oms template scan did not report approved contract evidence");
   }
-  if (scanPayload.entries.some(entry => "bytes" in entry)) {
+  if (scan.stdout.includes('"bytes"') || scan.stdout.includes('"approvedMarkdown":"')) {
     fail("packaged oms template scan exposed source bytes");
   }
-  approvedMutation(["template", "default", "literature"]);
   const listed = expectExit(["template", "list"], 0);
-  if (!listed.stdout.includes('"literature"')) fail("packaged template list omitted the registered template");
-  const shown = expectExit(["template", "show", "literature"], 0);
-  if (!shown.stdout.includes("Template Sources/literature.md") || shown.stdout.includes("Agent retrieval uses")) {
-    fail("packaged template show did not return safe registered-template metadata");
+  if (!listed.stdout.includes('"generationDigest"')) fail("packaged template list omitted the contract generation digest");
+  const checked = expectExit(["template", "check"], 0);
+  if (!checked.stdout.includes('"status"')) fail("packaged template check did not report contract health");
+
+  // The note family guides and inspects; it never writes an ordinary note.
+  const guide = invoke(["note", "guide", "Literature/semantic-retrieval.md"]);
+  if (guide.status !== 0) fail("packaged oms note guide failed on an approved vault");
+  const noteBefore = readFileSync(path.join(vault, "Literature", "semantic-retrieval.md"));
+  const noteCheck = invoke(["note", "check", "Literature/semantic-retrieval.md"]);
+  if (noteCheck.status !== 0 && noteCheck.status !== 1) {
+    fail(`packaged oms note check exited ${noteCheck.status}`);
+  }
+  if (!readFileSync(path.join(vault, "Literature", "semantic-retrieval.md")).equals(noteBefore)) {
+    fail("packaged oms note check rewrote the note");
+  }
+  for (const retired of [["note", "create"], ["note", "append"], ["note", "update"], ["note", "backfill"]]) {
+    if (invoke(retired).status === 0) fail(`packaged oms ${retired.join(" ")} still accepts a retired note-write verb`);
+  }
+  if (invoke(["link", "apply", "Literature/semantic-retrieval.md"]).status === 0) {
+    fail("packaged oms link apply still accepts a retired write verb");
   }
 
   const search = expectExit(["search", "query", "agent retrieval"], 0);
@@ -468,7 +476,7 @@ async function crossVersionHostRehearsal(tarball, tempRoot) {
     fail("new binary did not load matching installed Hermes manifest/provenance identity");
   }
   const skillRoot = path.join(hermesHome, "skills", "knowledge-management", "oms");
-  const expectedSkills = ["distill", "doctor", "link", "search", "status", "template", "write"];
+  const expectedSkills = ["distill", "doctor", "interview", "link", "search", "status", "template", "write"];
   for (const skill of expectedSkills) assertPath(path.join(skillRoot, skill, "SKILL.md"), `installed Hermes ${skill} skill`);
   const installedSkills = readdirSync(skillRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
