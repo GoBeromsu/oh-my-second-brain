@@ -1,6 +1,6 @@
 ---
 name: doctor
-description: Diagnose template authority and index problems, then run explicit repairs.
+description: Diagnose contract controls and indexes, then run only an explicit owned repair. Does not backfill notes.
 mcp_tool: doctor
 mcp_args:
   op: "validate"
@@ -8,19 +8,19 @@ mcp_args:
 
 # doctor
 
-Diagnose vault template and derived-index state, then run only the named repair.
-
-## Usage
+Diagnose `.oms` controls and derived indexes, then run only the repair the user named. Do not backfill notes, rewrite note bodies, or edit control files by hand. Unknown note values go back to `/write`, not to an invented repair. Contract meaning changes go to `/interview`.
 
 ```text
-/doctor <validate|regenerate-types|backfill-defaults|audit|build-graph|cleanup|sync-embeddings>
+/doctor <validate|regenerate-types|build-graph|cleanup|sync-embeddings>
 ```
 
-- `validate` is read-only. It reports policy/projection/source-signature drift, migration marker state, managed source exclusions, and unresolved legacy notes.
-- `regenerate-types` recomputes the derived `.oms/types.json` from actual templates, policy, taxonomy, and read-only Obsidian types.
-- `backfill-defaults` updates exactly one explicit note with stable template identity while preserving unrelated frontmatter and body bytes.
-- `audit` checks notes, optionally scoped by `folder`.
-- `build-graph` and `cleanup` repair their derived indexes.
-- `sync-embeddings` requires exactly one `mode`: `sync`, `embed`, or `repair`. Repair additionally requires `repairMode: "rebuild"` or `"drop"` and accepts `dryRun`; it backs up the engine store and verifies the resulting rebuilt/absent state. It does not mean forced embedding. Do not send retired boolean `embed` or `force` switches or repair-only fields with sync/embed.
+- `validate` is read-only. It reports policy, projection, and source-signature drift, the contract transaction marker, and managed-source exclusions. Unobserved is not healthy. A damaged policy is unverifiable; do not substitute an empty contract. Version 3 is unsupported and is not migrated here.
+- `regenerate-types` recomputes derived `.oms/types.json` from the approved policy, taxonomy, and read-only Obsidian types. Dry-run first, then submit that returned `approvalDigest` as `approvedDigest`. This does not repair notes.
+- `build-graph` and `cleanup` repair the derived graph or semantic index the user named.
+- `sync-embeddings` takes exactly one `mode`: `sync`, `embed`, or `repair`. `repair` also requires `repairMode: "rebuild"` or `"drop"` and may set `dryRun`. It backs up the engine store and checks the rebuilt or absent result. It is not forced embedding. Do not send retired boolean `embed` or `force` switches, and do not send repair-only fields with `sync` or `embed`.
 
-Every note/control repair requires a verified target and current authority. Run a dry-run, review the exact paths, diagnostics, and receipt, then submit its exact `approvalDigest`; never self-approve, repair all notes implicitly, edit controls directly, or treat an unobserved condition as healthy.
+Note-contract reporting is `oms note audit`. It is not a note rewrite. Index repairs run only when explicitly requested and do not edit notes. Never self-approve a projection publish.
+
+## Parent alignment
+
+The live doctor schema may still advertise `audit` and `backfill-defaults`. Do not call them. Note reporting is `oms note audit`, and it does not rewrite notes. `validate` remains the read-only control diagnosis.

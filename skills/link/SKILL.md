@@ -1,6 +1,6 @@
 ---
 name: link
-description: Check, suggest, or apply safe vault wikilinks without changing repository bridges.
+description: Suggest or check vault wikilinks. The agent applies accepted links in the note; link has no apply operation.
 mcp_tool: link
 mcp_args:
   op: "suggest"
@@ -9,25 +9,22 @@ mcp_args:
 
 # link
 
-Check, suggest, or apply `[[wikilinks]]` between vault notes. Repository bridge
-configuration is a separate CLI-only capability.
-
-## Use when
-
-Use CLI `oms link check` for read-only link validation. Use MCP `link` with
-`op: "suggest"` before writing or revising a note, or `op: "apply"` to add only
-accepted suggestions to an existing note.
-
-## Usage
+Suggest and check `[[wikilinks]]`. `link` does not write notes. There is no `op: "apply"`.
 
 ```text
-/link <suggest|apply> <vault-relative-note-path>
+/link suggest <vault-relative-note-path>
+/link check
 ```
 
-Link targets are term notes only. Suggestions are surface-anchored, add at most one link per target in a body, and report ambiguous matches rather than resolving them. Applying suggestions writes through the vault write kernel and requires the suggestion's `baseContentHash` and accepted candidate IDs.
+- `link { op: "suggest", notePath }` returns candidates. Optional `folder` limits the target scope. The call is read-only.
+- `link { op: "check" }` validates links without writing. `oms link check` is the CLI counterpart.
 
-`oms bridge add|remove|status` manages repository bridges and has no MCP
-operation. Do not route bridge work through `link`, and do not use retired
-command aliases. Checking and suggesting are read-only. Apply only links the
-user accepted; never infer consent from a suggestion and never expose private
-note content.
+Suggestions are surface-anchored to a term note's basename or alias, cover the first occurrence of each target only, and report an ambiguous span instead of resolving it. A suggestion is not consent. Show the candidates and insert only the links the user accepts, using the host's file tools at the reported span. If the note changed after the suggestion, suggest again rather than patching a stale span. Do not infer consent, and do not expose private note text beyond the span the user is accepting.
+
+After the edit, run `link` check. When the edit belongs to a note task, also run `write` check on the saved file. Neither call grants repair rights.
+
+`oms bridge add|remove|status` manages repository bridges and has no `link` operation. Do not route bridge work through `link`.
+
+## Parent alignment
+
+Do not call `op: "apply"`, `baseContentHash`, or `candidateIds` even if the live schema still advertises them. If `op: "check"` is not accepted yet, use `oms link check` and still do not apply through MCP.

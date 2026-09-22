@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = path.join(repositoryRoot, "assets", "skills");
 const destinationRoot = path.join(repositoryRoot, "skills");
-const exportedSkills = ["distill", "doctor", "link", "search", "status", "template", "write"];
+const exportedSkills = ["distill", "doctor", "interview", "link", "search", "status", "template", "write"];
 
 if (!existsSync(sourceRoot)) {
   console.error("[sync:skills] refusing to sync: assets/skills/ is missing.");

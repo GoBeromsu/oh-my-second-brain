@@ -10,7 +10,7 @@ mcp_args:
 
 # search
 
-Retrieve vault knowledge without changing the vault.
+Retrieve vault knowledge without changing the vault. Search does not depend on contract validity, note completeness, or status health. Unbound, invalid, and incomplete notes stay searchable. Do not add a passing-notes-only filter. Do not start validation, repair, a semantic judge, or `/interview`.
 
 ## Usage
 
@@ -34,26 +34,14 @@ Use `search { op: "templates" }` to list stable template IDs and declared axes, 
 - `axes.folder` scopes physical placement.
 - `axes.link` follows observed wikilinks.
 
-Axes intersect. They require current authority and fail loudly on an undeclared field or stale signature; remove the typed axis or run template diagnosis rather than guessing. Vector or HyDE retrieval also fails loudly without a configured embedding provider and model. Missing results and history are unobserved, not proof of absence or non-use.
+Axes intersect. They require current authority and fail loudly on an undeclared field or stale signature. Remove the typed axis rather than guessing a field. That failure does not stop lexical retrieval and does not start doctor, repair, or interview. Vector or HyDE retrieval fails loudly without a configured embedding provider and model. ADR-007 still applies: do not hide a provider or backend failure as an empty success, a fake embedder, or another backend. Missing results and history are unobserved, not proof of absence or non-use.
+
+Search never creates `.oms` and never mutates templates, notes, controls, indexes, or the interview ledger. Stale or mixed controls are not a search outage and not a repair trigger. A search call does not grant edit rights.
 
 ## Template-change notices
 
-Search is read-only, including census and notice handling. A result may carry a
-machine `templateNotice` for a selected-folder source change. Surface the first
-notice exactly as `템플릿에 변경이 있습니다` with exactly `확인하기` and
-`나중에`; do not render a template name, hash, or change taxonomy. This
-requirement applies to long-lived sessions even when boot instructions are
-stale. `status` returns the full notice on every poll; `search` emits it once
-per process and pending digest, and again when that digest changes.
+Search is read-only, including census and notice handling. A result may carry a machine `templateNotice` for a selected-folder source change. Surface the first notice exactly as `템플릿에 변경이 있습니다` with exactly `확인하기` and `나중에`; do not render a template name, hash, or change taxonomy. This requirement applies to long-lived sessions even when boot instructions are stale. `search` emits the notice once per process and pending digest, and again when that digest changes. `status` returns the full notice on every poll.
 
-`나중에` is host-only: it performs no server call and does not mutate the
-interview ledger. `확인하기` starts the linear interview with
-`write { op: "template", mode: "interview-next" }`. Answers use
-`interview-answer` and the server-returned question, request, and CAS values;
-resume from the server-returned next question rather than inventing fields.
-Unchanged confirmed answers are preserved. A zero-question response proceeds to
-final confirmation, and `commit-contracts` is sent only after the user approves
-the exact final digest; never self-approve.
+`나중에` is host-only: it performs no server call and does not mutate the interview ledger. `확인하기` offers `/interview` and does not write source bytes or block search. Do not run interview questions or `commit-contracts` here.
 
-The surface remains five MCP tools and seven skills. Search never mutates
-templates, notes, controls, or the interview ledger.
+The surface is five MCP tools and eight skills.

@@ -2,28 +2,63 @@
 
 <!-- Append this block to a project's AGENTS.md to activate Oh My Second Brain conventions in Codex. -->
 
-## Vault Convention
+## Vault authority
 
-The vault is governed by user-owned template conventions in `.oms/`.
+The vault owns its guidelines and `.oms/` policy. Reuse that intent rather than
+assigning product-wide meaning to a field, folder, or heading.
 
-- Actual Obsidian `.md` templates own note shape and body scaffolding.
-- `.obsidian/types.json` is read-only type authority.
-- The user-owned ontology remains active: `.oms/template-policy.json` records note/field meaning and policy; `.oms/taxonomy.json` records folder/link meaning and placement.
-- `.oms/types.json` is derived; never hand-edit it.
-- Humans and agents use the same stable `templateId` rules.
+- `.oms/template-policy.json` owns the shared property pool, always-on default
+  contract (initially empty), and individual additive contracts. An individual
+  template is optional; it cannot weaken the default.
+- `.oms/taxonomy.json` owns folder/link meaning and placement.
+- `.obsidian/types.json` is read-only diagnostic input. OMS-approved contracts
+  govern checks. `.oms/types.json` is derived and must never be hand-edited.
+- Agents interpret template syntax. OMS neither renders templates nor writes
+  ordinary notes. Source drift retains the last approved snapshot until approval.
 
-**Write:** Use `$oms-write` and MCP `oms_write`, never host Write/Edit for vault notes or managed templates. Notes use `op: "note"`. Template changes use `op: "template"`, first as a dry-run and then only with the exact reviewed `approvalDigest`.
+## Write, review, complete
 
-An explicitly selected template folder makes every `.md` beneath it a source candidate; no per-file registration or folder mode is required. Contract review verifies the selected source and preserves its bytes in place. A changed source makes only its dependent template pending; writes for other templates remain available, while a shared-authority failure remains fail-closed for the whole vault.
+Use `$oms-write`: obtain OMS `guide`, write with host file tools to the verified
+target, run `check`, invoke a separate reviewer, and submit the result to
+`complete`. OMS checks actual disk bytes and bound contract/evidence snapshots.
+Preserve undeclared properties; ask rather than invent unknown values. Choose
+placement explicitly or from approved taxonomy, otherwise ask. Never invent an
+Inbox or require individual-template registration for every note.
 
-When a source-change notice is returned, surface the initial notice exactly as `템플릿에 변경이 있습니다` with exactly `확인하기` and `나중에`; do not add a template name, hash, or change taxonomy. `나중에` is host-only and performs no server call or interview-ledger mutation. Surface a returned `templateNotice` in long-lived sessions even when boot guidance is stale.
+Use a **fresh Codex subagent conversation**, optionally the installed custom
+`oms-reviewer` role when actually discovered. Pass the returned review request,
+authorized evidence and non-mutation instructions. A generic separate subagent
+is legitimate when custom-role discovery is unavailable; writer self-review is
+not. Capture the real invocation and terminal per-criterion verdicts.
 
-`확인하기` starts MCP `write { op: "template", mode: "interview-next" }`; submit answers with `interview-answer` and commit only with `commit-contracts`, forwarding the server-returned next/request/CAS fields without inventing parameter names. The exact CLI counterparts are `oms template review`, `oms template answer`, and `oms template commit`. Continue through every required question, preserve unaffected confirmed answers, and never self-approve the final digest.
+The role's `sandbox_mode = "read-only"` is a requested filesystem posture, not
+proof of effective runtime restrictions or a boundary on inherited MCP tools.
+An empty `mcp_servers` table does not establish that inherited servers are off.
+Report instruction-only unless observed enforcement supports a stronger claim.
+Do not manufacture host IDs, tool-denial evidence, or an independence certificate.
+If no separate invocation is possible, completion remains incomplete.
 
-At note creation, choose placement by explicit caller folder, then taxonomy default, then `ask`; do not require template registration or invent an Inbox fallback.
+Mechanical success alone is not completion. Missing evidence, failed review,
+or changed snapshots require recovery and fresh evaluation—not self-PASS.
+Automatic repair defaults off, and an enabled repair remains agent-owned,
+context-scoped and bounded by the user's retry budget. Ordinary note questions
+must not silently change the contract.
 
-**Retrieve:** Use `$oms-search`; discover stable IDs with `op: "templates"`, then use template, declared field, folder, and link axes.
+## Configuration and read-only work
 
-**Maintain:** `$oms-status` is read-only. `$oms-doctor` diagnoses and performs explicit repairs.
+Use tool-less `$oms-interview` for setup and contract creation/addition/change/
+update. `$oms-template` routes these tasks through the same lifecycle. Read known
+intent first, ask one question at a time, and obtain explicit approval of the
+explained final diff. Forward returned request/CAS values; never self-approve.
 
-`oms host install --runtime codex` installs seven skills: `$oms-write`, `$oms-search`, `$oms-link`, `$oms-distill`, `$oms-status`, `$oms-doctor`, and tool-less `$oms-template`, plus managed MCP configuration using `oms serve mcp`.
+Initially display a returned source-change notice exactly as
+`템플릿에 변경이 있습니다` with `확인하기` and `나중에`. Deferral is host-only,
+with no server call or ledger mutation. Explicit review enters the interview
+skill; unrelated templates and search stay available.
+
+`$oms-search` is read-only and includes invalid, unbound and incomplete notes;
+it must not start validation, repair or interview. Preserve lexical/vector/HyDE/
+axis behavior and fail loudly when the requested backend is unavailable.
+`$oms-status` reads health; `$oms-doctor` handles explicit supported control/index
+repairs, not ordinary-note backfill. Codex installs eight shared skills: write,
+search, link, distill, status, doctor, and tool-less template and interview.
