@@ -88,8 +88,8 @@ describe("Gajae-Code skill surface", () => {
     const body = readFileSync(absolute("assets/skills/interview/SKILL.md"), "utf8");
     const payloads = [...body.matchAll(/```text\n([\s\S]*?)```/gu)]
       .map(match => match[1] ?? "")
-      .filter(block => /mode:\s*"(interview-answer|commit-contracts)"/u.test(block));
-    expect(payloads.length, "the interview skill must show its answer and commit payloads").toBeGreaterThanOrEqual(2);
+      .filter(block => /mode:\s*"(interview-next|interview-answer|commit-contracts)"/u.test(block));
+    expect(payloads.length, "the interview skill must show its next, answer, and commit payloads").toBeGreaterThanOrEqual(3);
     for (const payload of payloads) {
       expect(payload, `an interview payload omits proposals: ${payload}`).toMatch(/\bproposals\b/u);
     }

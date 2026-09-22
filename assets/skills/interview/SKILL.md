@@ -26,10 +26,14 @@ Read intent that already exists: policy field intent, taxonomy placement and lin
 Ask one decision at a time, using the server's `next` question. Do not batch questions or invent ids or digests.
 
 ```text
-write { op: "template", mode: "interview-next" }
+write {
+  op: "template",
+  mode: "interview-next",
+  proposals
+}
 ```
 
-`oms template review` is the CLI counterpart. Send no other fields. Resume from the returned `next`, `censusDigest`, and `expectedLedgerDigest`. An absent ledger is `expectedLedgerDigest: null`; pass that null. On `TEMPLATE_INTERVIEW_STALE`, call `interview-next` again and discard the old digests.
+`oms template review --proposals <JSON>` is the CLI counterpart. Send `proposals` and nothing else: it is the only way contract meaning enters OMS, and the same array must reach `interview-answer` and `commit-contracts`. Resume from the returned `next`, `censusDigest`, and `expectedLedgerDigest`. An absent ledger is `expectedLedgerDigest: null`; pass that null. On `TEMPLATE_INTERVIEW_STALE`, call `interview-next` again and discard the old digests.
 
 When existing intent already answers the question, propose that wording for confirmation. Do not submit it silently.
 
@@ -49,7 +53,7 @@ write {
 }
 ```
 
-`oms template answer` takes those same fields, with `--proposals` carrying the same array you sent to `interview-next`. Do not add a field the response did not return, and do not send `anchorDigest`. If the text does not fit the question, say so and ask once more. Do not guess a legal choice. Record a deferral only when the returned question accepts one. `나중에` on a template notice is host-only and must not call the server. Opening a review again reopens deferred deletion decisions and keeps other confirmed answers.
+`oms template answer` takes those same fields, with `--proposals` carrying the same array you sent to `interview-next`. Besides `proposals`, add no field the response did not return, and never send `anchorDigest`. If the text does not fit the question, say so and ask once more. Do not guess a legal choice. Record a deferral only when the returned question accepts one. `나중에` on a template notice is host-only and must not call the server. Opening a review again reopens deferred deletion decisions and keeps other confirmed answers.
 
 ## Exact diff and approval
 
