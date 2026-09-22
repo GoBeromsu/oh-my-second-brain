@@ -3,214 +3,124 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { digestBytes } from "../kernel/templates/canonical.js";
+import { parseTemplatePolicy, serializeDerivedProjection } from "../kernel/templates/policy.js";
+import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "../kernel/templates/resolver.js";
 import {
   TEMPLATE_CHANGE_NOTICE_ACTIONS,
   TEMPLATE_CHANGE_NOTICE_MESSAGE,
   attachTemplateNotice,
   readTemplateChangeNotice,
   resetTemplateNoticeDeliveryForTests,
-  templateNoticeFromContext,
   templateNoticeForTool,
   templateNoticeInstruction,
 } from "./template-notice.js";
-import type { TemplateReviewContext } from "../kernel/templates/review-context.js";
 
 const roots: string[] = [];
+const encoder = new TextEncoder();
+const RAW_SOURCE = "<%* raw template %>\n";
+const TEMPLATE_MARKDOWN = "---\ntemplate: note\n---\n\n## Summary\n";
 
 afterEach(async () => {
   resetTemplateNoticeDeliveryForTests();
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture(selected = true): Promise<string> {
+function layer(templatePath: string, markdown: string, extra: Record<string, unknown> = {}) {
+  return {
+    templatePath,
+    approvedMarkdown: markdown,
+    approvedMarkdownDigest: digestBytes(markdown),
+    fields: {},
+    headings: [],
+    semanticCriteria: [],
+    ...extra,
+  };
+}
+
+/** An approved v4 vault whose raw source is intact unless a test drifts it. */
+async function fixture(drifted = true): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "oms-template-notice-"));
   roots.push(root);
-  await mkdir(join(root, ".oms"), { recursive: true });
+  await mkdir(join(root, ".oms", "templates"), { recursive: true });
   await mkdir(join(root, ".obsidian"), { recursive: true });
-  if (selected) await mkdir(join(root, "Templates"), { recursive: true });
-  await writeFile(
-    join(root, ".oms", "template-policy.json"),
-    JSON.stringify({
-      version: 3,
-      templateFolders: selected ? [{ path: "Templates", default: true }] : [],
-      base: { fields: {} },
-      contracts: {},
-      templates: {},
-    }),
-  );
-  await writeFile(join(root, ".oms", "taxonomy.json"), JSON.stringify({ folders: {} }));
+  await mkdir(join(root, "Sources"), { recursive: true });
+  const policy = JSON.stringify({
+    version: 4,
+    properties: {},
+    default: layer(".oms/templates/default.md", ""),
+    templates: {
+      note: layer(".oms/templates/note.md", TEMPLATE_MARKDOWN, {
+        templateId: "note",
+        source: { path: "Sources/note.md", identity: "note-source", rawDigest: digestBytes(RAW_SOURCE) },
+      }),
+    },
+  });
+  const taxonomy = JSON.stringify({ templates: { note: { templateFolder: "notes" } }, folders: {} });
+  const generationDigest = controlGenerationDigest(encoder.encode(policy), encoder.encode(taxonomy));
+  await writeFile(join(root, ".oms", "template-policy.json"), policy);
+  await writeFile(join(root, ".oms", "taxonomy.json"), taxonomy);
+  await writeFile(join(root, ".oms", "types.json"), serializeDerivedProjection({
+    version: "oms.types.v2",
+    generatedFrom: generationDigest,
+    managed: expectedProjectionManaged(parseTemplatePolicy(policy), taxonomyRouting(".oms/taxonomy.json", encoder.encode(taxonomy)), generationDigest),
+  }));
+  await writeFile(join(root, ".oms", "templates", "default.md"), "");
+  await writeFile(join(root, ".oms", "templates", "note.md"), TEMPLATE_MARKDOWN);
   await writeFile(join(root, ".obsidian", "types.json"), JSON.stringify({ types: { title: "text" } }));
-  if (selected) {
-    await writeFile(join(root, "Templates", "new-note.md"), "---\ntitle: New\n---\nBody\n");
-  }
+  await writeFile(join(root, "Sources", "note.md"), drifted ? "<%* edited raw template %>\n" : RAW_SOURCE);
   return root;
 }
 
 describe("template notice", () => {
-  it("uses the generic first-line text and the two review actions", async () => {
+  it("offers review for a drifted raw source without naming it", async () => {
     const root = await fixture();
     const notice = await readTemplateChangeNotice(root);
-
     expect(notice).toMatchObject({
       state: "pending",
       pendingDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       pendingCount: 1,
       actions: TEMPLATE_CHANGE_NOTICE_ACTIONS,
-      next: {
-        tool: "oms_write",
-        arguments: { op: "template", mode: "interview-next" },
-      },
+      next: { tool: "oms_write", arguments: { op: "template", mode: "interview-next" } },
     });
-    expect(templateNoticeInstruction(notice)).toBe(TEMPLATE_CHANGE_NOTICE_MESSAGE);
-    expect(templateNoticeInstruction(notice)).not.toContain("new-note");
+    expect(templateNoticeInstruction(notice!)).toBe(TEMPLATE_CHANGE_NOTICE_MESSAGE);
+    expect(templateNoticeInstruction(notice!)).not.toContain("note");
+    expect(templateNoticeInstruction(notice!)).not.toContain("Sources");
   });
 
-  it("omits notices for an unchanged census", async () => {
+  it("omits a notice when nothing drifted from the approved contract", async () => {
     const root = await fixture(false);
     expect(await readTemplateChangeNotice(root)).toBeNull();
   });
 
-  it("deduplicates one digest across write/search delivery and resurfaces a changed digest", async () => {
+  it("counts one pending entry per affected source", async () => {
+    const root = await fixture();
+    await writeFile(join(root, ".oms", "templates", "note.md"), "---\ntemplate: note\n---\n\nEdited draft.\n");
+    const notice = await readTemplateChangeNotice(root);
+    // One drifted raw source and one drifted managed draft, counted separately.
+    expect(notice?.pendingCount).toBe(2);
+  });
+
+  it("deduplicates one digest across delivery and resurfaces a changed one", async () => {
     const root = await fixture();
     const first = await templateNoticeForTool(root, "dedupe");
     expect(first).not.toBeNull();
     expect(await templateNoticeForTool(root, "dedupe")).toBeNull();
 
-    await writeFile(join(root, "Templates", "new-note.md"), "---\ntitle: Changed\n---\nBody\n");
+    await writeFile(join(root, ".oms", "templates", "note.md"), "---\ntemplate: note\n---\n\nEdited draft.\n");
     const changed = await templateNoticeForTool(root, "dedupe");
     expect(changed).not.toBeNull();
     expect(changed?.pendingDigest).not.toBe(first?.pendingDigest);
   });
 
-  it("does not deduplicate identical content from separate canonical vaults", async () => {
+  it("does not deduplicate identical content from separate vaults", async () => {
     const firstRoot = await fixture();
     const secondRoot = await fixture();
     const first = await templateNoticeForTool(firstRoot, "dedupe");
     const second = await templateNoticeForTool(secondRoot, "dedupe");
-
     expect(first).not.toBeNull();
     expect(second).not.toBeNull();
     expect(second?.pendingDigest).not.toBe(first?.pendingDigest);
-  });
-
-  it("counts a source once when its diff and diagnostic use both identity forms", () => {
-    const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000" as `sha256:${string}`;
-    const context = {
-      vault: "/tmp/template-notice-vault",
-      policy: {
-        templates: {
-          note: {
-            templateId: "note",
-            sourcePath: "Templates/note.md",
-          },
-        },
-      },
-      census: {
-        entries: [{ sourcePath: "Templates/note.md", templateId: "note" }],
-        diffs: [{
-          kind: "edited",
-          sourcePath: "Templates/note.md",
-          templateId: "note",
-          automatic: true,
-          confirmationRequired: false,
-        }],
-        diagnostics: [{
-          code: "TEMPLATE_SOURCE_INVALID",
-          path: "Templates/note.md",
-          templateId: "note",
-          message: "invalid source",
-        }],
-      },
-      censusDigest: digest,
-      projectionUsable: true,
-      obsidianTypes: {},
-      freshTemplateIds: [],
-    } as unknown as TemplateReviewContext;
-
-    expect(templateNoticeFromContext(context)?.pendingCount).toBe(1);
-  });
-
-  it("surfaces stale body coverage without invalidating a fresh sibling", () => {
-    const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000" as `sha256:${string}`;
-    const context = {
-      vault: "/tmp/template-notice-stale-body",
-      policy: {
-        templates: {
-          note: {
-            templateId: "note",
-            sourcePath: "Templates/note.md",
-            renderer: "obsidian-core",
-            content: { bodySignature: digest },
-          },
-          sibling: {
-            templateId: "sibling",
-            sourcePath: "Templates/sibling.md",
-            renderer: "obsidian-core",
-          },
-        },
-      },
-      census: {
-        entries: [
-          {
-            sourcePath: "Templates/note.md",
-            templateId: "note",
-            bytes: new TextEncoder().encode("---\ntitle: Note\n---\nChanged body\n"),
-            signature: digest,
-            diagnostics: [],
-          },
-          {
-            sourcePath: "Templates/sibling.md",
-            templateId: "sibling",
-            bytes: new Uint8Array(),
-            signature: digest,
-            diagnostics: [],
-          },
-        ],
-        diffs: [],
-        diagnostics: [],
-      },
-      censusDigest: digest,
-      projectionUsable: true,
-      obsidianTypes: {},
-      // The resolver omits the stale-body binding from fresh coverage while
-      // retaining the unchanged sibling.
-      freshTemplateIds: ["sibling"],
-    } as unknown as TemplateReviewContext;
-
-    expect(templateNoticeFromContext(context)?.pendingCount).toBe(1);
-  });
-
-  it("surfaces a policy binding omitted from projection coverage once", () => {
-    const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111" as `sha256:${string}`;
-    const context = {
-      vault: "/tmp/template-notice-omitted-coverage",
-      policy: {
-        templates: {
-          missing: {
-            templateId: "missing",
-            sourcePath: "Templates/missing.md",
-          },
-          fresh: {
-            templateId: "fresh",
-            sourcePath: "Templates/fresh.md",
-          },
-        },
-      },
-      census: {
-        entries: [
-          { sourcePath: "Templates/missing.md", templateId: "missing", bytes: new Uint8Array(), signature: digest, diagnostics: [] },
-          { sourcePath: "Templates/fresh.md", templateId: "fresh", bytes: new Uint8Array(), signature: digest, diagnostics: [] },
-        ],
-        diffs: [],
-        diagnostics: [],
-      },
-      censusDigest: digest,
-      projectionUsable: true,
-      obsidianTypes: {},
-      freshTemplateIds: ["fresh"],
-    } as unknown as TemplateReviewContext;
-
-    expect(templateNoticeFromContext(context)?.pendingCount).toBe(1);
   });
 
   it("returns the full notice on every status poll", async () => {
