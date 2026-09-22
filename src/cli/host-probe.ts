@@ -1,12 +1,17 @@
 import { lstat, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import type { InstalledAssetDeclaration, InstalledAssetState, InstalledHostDeclaration } from "../kernel/install/asset-health.js";
+import { digestFileBytes } from "../kernel/install/provenance.js";
+import { hostHome } from "../kernel/install/common.js";
 import { isCodexOmsRegistration, isHermesOmsRegistration, isOmsHookEntry } from "./host-commands.js";
 
 type PathEvidence = "present" | "absent" | "error";
+
+const CODEX_SKILL_PREFIX = "oms-";
+const CODEX_REVIEWER_FILENAME = "oms-reviewer.toml";
+const CODEX_REVIEWER_PROVENANCE_FILENAME = "oms-reviewer.provenance.json";
 
 function errorCode(error: unknown): string {
   return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : error instanceof Error ? error.message : String(error);
@@ -22,9 +27,50 @@ async function pathEvidence(candidate: string): Promise<{ readonly state: PathEv
   }
 }
 
+function codexSurface() {
+  const host = harnessSurfaceRegistry.hosts.find(candidate => candidate.runtime === "codex");
+  if (host === undefined) throw new Error("Codex host surface is not registered");
+  return host;
+}
+
+function codexSkillPaths(home: string): readonly string[] {
+  return codexSurface().skillDirs.map(skill => path.join(home, "skills", `${CODEX_SKILL_PREFIX}${skill}`));
+}
+
+async function codexReviewerDeclaration(home: string, provenanceVersion: string): Promise<InstalledAssetDeclaration> {
+  const assetPath = codexSurface().reviewerMechanisms.find(candidate => candidate.id === "codex.custom-agent")?.assetPath;
+  if (assetPath === undefined || assetPath.trim() === "") throw new Error("Codex custom-agent assetPath is not registered");
+  const root = path.resolve(packageRoot());
+  if (path.isAbsolute(assetPath) || path.win32.isAbsolute(assetPath)) {
+    throw new Error("Codex custom-agent assetPath escapes the package root");
+  }
+  const source = path.resolve(root, assetPath);
+  const relative = path.relative(root, source);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Codex custom-agent assetPath escapes the package root");
+  }
+  let expectedShippedBytesDigest: string | undefined;
+  try {
+    expectedShippedBytesDigest = digestFileBytes(await readFile(source));
+  } catch (error) {
+    const code = errorCode(error);
+    if (code !== "ENOENT" && code !== "EACCES" && code !== "EPERM" && code !== "ENOTDIR") throw error;
+  }
+  return {
+    id: "reviewer:codex.custom-agent",
+    kind: "reviewer-definition",
+    declaredPath: path.join(home, "agents", CODEX_REVIEWER_FILENAME),
+    host: "codex",
+    provenancePath: path.join(home, "agents", CODEX_REVIEWER_PROVENANCE_FILENAME),
+    provenanceVersion,
+    ...(expectedShippedBytesDigest === undefined ? {} : { expectedShippedBytesDigest }),
+    oneFileRelativeName: CODEX_REVIEWER_FILENAME,
+  };
+}
+
 function hostDir(runtime: string): string {
   const variable = `OMS_${runtime.toUpperCase()}_HOME`;
-  return process.env[variable] ?? path.join(homedir(), `.${runtime}`);
+  return hostHome(undefined, `.${runtime}`, variable);
 }
 
 function packageRoot(): string {
@@ -97,7 +143,7 @@ async function probeNative(runtime: "codex" | "hermes"): Promise<{ readonly host
   if (typeof metadata.version !== "string") throw new Error("OMS package version is invalid");
   const provenanceVersion = metadata.version;
   const candidates = runtime === "codex"
-    ? [path.join(home, "plugins", "oms"), path.join(home, "rules", "oms.md"), path.join(home, "skills", "oms-setup")]
+    ? [path.join(home, "plugins", "oms"), path.join(home, "rules", "oms.md"), ...codexSkillPaths(home)]
     : [path.join(home, "skills", "knowledge-management", "oms"), path.join(home, "adapters", "oms", "oms-provenance.json")];
   const evidence = await Promise.all(candidates.map(pathEvidence));
   const registration = await registrationEvidence(runtime, configPath);
@@ -121,6 +167,8 @@ async function probeNative(runtime: "codex" | "hermes"): Promise<{ readonly host
       evidence: { state: evidence[index]?.state === "present" ? "ok" as const : "missing" as const, cause: null },
     })),
   ];
+  // Not a presence candidate: a missing optional role must not hide Codex or the generic subagent.
+  if (runtime === "codex") assets.push(await codexReviewerDeclaration(home, provenanceVersion));
   return { host: { host: runtime, state: registration.state === "inspection-error" ? "degraded" : "ok" }, assets };
 }
 

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,9 +14,11 @@ const roots: string[] = [];
 const previous = { claude: process.env.OMS_CLAUDE_HOME, codex: process.env.OMS_CODEX_HOME, hermes: process.env.OMS_HERMES_HOME };
 
 afterEach(async () => {
-  process.env.OMS_CLAUDE_HOME = previous.claude;
-  process.env.OMS_CODEX_HOME = previous.codex;
-  process.env.OMS_HERMES_HOME = previous.hermes;
+  for (const [runtime, value] of Object.entries(previous)) {
+    const key = `OMS_${runtime.toUpperCase()}_HOME`;
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
@@ -55,6 +58,20 @@ function hermesConfig(vault = "/vault"): string {
 }
 
 describe("discoverHostInstallAssets", () => {
+  it("resolves relative host overrides identically to installation", async () => {
+    const home = await homes();
+    process.env.OMS_CODEX_HOME = path.relative(process.cwd(), home.codex);
+    await installCodex({
+      action: "install", runtime: "codex", vault: "/vault",
+      adapterRoot: path.resolve(new URL("../../", import.meta.url).pathname),
+    }, hostSurfaceForRuntime("codex"));
+    const result = await discoverHostInstallAssets();
+    expect(result.assets.find(asset => asset.id === "registration:codex")?.declaredPath)
+      .toBe(path.join(home.codex, "config.toml"));
+    expect(result.assets.find(asset => asset.kind === "reviewer-definition")?.declaredPath)
+      .toBe(path.join(home.codex, "agents", "oms-reviewer.toml"));
+  });
+
   it("preserves corrupt Claude settings as inspection errors", async () => {
     const home = await homes();
     await mkdir(home.claude, { recursive: true });
@@ -187,5 +204,79 @@ describe("discoverHostInstallAssets", () => {
     expect(inspected.assets).toContainEqual(expect.objectContaining({ id: "hermes:0", kind: "skill-tree", state: "provenance-mismatch" }));
     await writeFile(provenance, serializeProvenance({ schemaVersion: 1, source: "npm", version: "0.0.0", skillTreeDigest: await computeTreeDigest(skills), installedAt: "2026-01-01T00:00:00.000Z" }));
     expect((await inspectInstalledAssets(await discoverHostInstallAssets())).assets).toContainEqual(expect.objectContaining({ id: "hermes:0", state: "provenance-mismatch" }));
+  });
+
+  it("does not report a Codex reviewer when that host has no install files", async () => {
+    const home = await homes();
+    const result = await discoverHostInstallAssets();
+    expect(result.hosts).toContainEqual({ host: "codex", state: "not-installed" });
+    expect(result.assets.filter(asset => asset.host === "codex")).toEqual([]);
+    expect(existsSync(home.codex)).toBe(false);
+  });
+
+  it("matches installer skill paths and reports reviewer drift without hiding Codex", async () => {
+    const home = await homes();
+    const host = hostSurfaceForRuntime("codex");
+    const adapterRoot = path.resolve(new URL("../../", import.meta.url).pathname);
+    const installed = await installCodex({ action: "install", runtime: "codex", vault: "/vault", adapterRoot }, host);
+    const expectedSkills = [
+      "distill",
+      "doctor",
+      "interview",
+      "link",
+      "search",
+      "status",
+      "template",
+      "write",
+    ].map(skill => path.join(home.codex, "skills", `oms-${skill}`));
+    expect(host.skillDirs).toEqual(["distill", "doctor", "interview", "link", "search", "status", "template", "write"]);
+    expect(installed.paths.filter(candidate => candidate.includes(`${path.sep}skills${path.sep}`)).sort()).toEqual([...expectedSkills].sort());
+    expect(installed.paths.some(candidate => candidate.endsWith(`${path.sep}oms-setup`))).toBe(false);
+
+    const discovered = await discoverHostInstallAssets();
+    const discoveredSkills = discovered.assets
+      .filter(asset => asset.host === "codex" && asset.declaredPath.includes(`${path.sep}skills${path.sep}`))
+      .map(asset => asset.declaredPath)
+      .sort();
+    expect(discoveredSkills).toEqual([...expectedSkills].sort());
+    expect(discovered.assets.some(asset => asset.declaredPath.includes("oms-setup"))).toBe(false);
+    expect(discovered.hosts).toContainEqual({ host: "codex", state: "ok" });
+    const reviewer = discovered.assets.find(asset => asset.kind === "reviewer-definition");
+    expect(reviewer).toMatchObject({
+      id: "reviewer:codex.custom-agent",
+      host: "codex",
+      kind: "reviewer-definition",
+      declaredPath: path.join(home.codex, "agents", "oms-reviewer.toml"),
+      provenancePath: path.join(home.codex, "agents", "oms-reviewer.provenance.json"),
+      oneFileRelativeName: "oms-reviewer.toml",
+    });
+    expect(reviewer?.expectedShippedBytesDigest).toMatch(/^[0-9a-f]{64}$/);
+    const matched = await inspectInstalledAssets({ assets: reviewer === undefined ? [] : [reviewer], vault: "/vault" });
+    expect(matched.assets[0]).toMatchObject({ state: "ok", digestMatch: true, cause: null, realPath: reviewer?.declaredPath });
+
+    const role = path.join(home.codex, "agents", "oms-reviewer.toml");
+    await writeFile(role, Buffer.concat([await readFile(role), Buffer.from("\n")]));
+    const drifted = await inspectInstalledAssets(await discoverHostInstallAssets());
+    expect(drifted.assets).toContainEqual(expect.objectContaining({
+      id: "reviewer:codex.custom-agent",
+      kind: "reviewer-definition",
+      state: "provenance-mismatch",
+      cause: "installed-bytes-differ",
+      digestMatch: false,
+    }));
+
+    await rm(role);
+    const missing = await inspectInstalledAssets(await discoverHostInstallAssets());
+    expect(missing.assets).toContainEqual(expect.objectContaining({
+      id: "reviewer:codex.custom-agent",
+      kind: "reviewer-definition",
+      state: "missing",
+      cause: "ENOENT",
+    }));
+    const after = await discoverHostInstallAssets();
+    expect(after.hosts).toContainEqual({ host: "codex", state: "ok" });
+    expect(after.assets).toContainEqual(expect.objectContaining({ id: "registration:codex", evidence: { state: "ok", cause: null } }));
+    expect(after.assets.some(asset => asset.id === "codex.subagent" || asset.declaredPath.includes("oms-setup"))).toBe(false);
+    expect(existsSync(role)).toBe(false);
   });
 });
