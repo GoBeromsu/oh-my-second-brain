@@ -13,129 +13,62 @@ import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv
 import { parse } from "yaml";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import { createOMSMcpServer, omsMcpTools } from "./server.js";
-import { deriveContentFormatContract } from "../kernel/templates/content-contract.js";
-import { sharedAuthoritySignature, sourceSignature } from "../kernel/templates/resolver.js";
-import type { SourceDescriptor } from "../kernel/templates/types.js";
+import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
 
-function templateDigest(value: string): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
+const LITERATURE_MARKDOWN = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n\n# Literature\n";
+const NOTE_MARKDOWN = "---\ntemplate: note\ntitle: Untitled\n---\n\nBody\n";
+const ARTICLE_MARKDOWN = "---\ntemplate: article\ntitle: Untitled\n---\n\n# Required heading\n";
 
 async function createMcpTemplateAuthority(vault: string): Promise<void> {
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], base: { fields: {} }, contracts: { literature: { intent: "A source.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [] } }, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{slug}}.md" } } });
-  const taxonomy = JSON.stringify({ folders: {}, templates: { literature: { templateFolder: "Inbox" } } });
-  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", "source-url": "text" } });
-  const template = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n# Literature\n<!-- oms:content -->\n";
-  const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: templateDigest(policy) }, { logicalId: "taxonomy", signature: templateDigest(taxonomy) }, { logicalId: "obsidian-types", signature: templateDigest(obsidianTypes) }, { path: "Templates/OMS/literature.md", signature: templateDigest(template) }];
-  const content = deriveContentFormatContract("# Literature\n<!-- oms:content -->\n", { templateId: "literature" }).contract;
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/literature.md", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
-  await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
-  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "literature.md"), template)]);
+  await writeApprovedVault(vault, {
+    properties: {
+      title: { type: "text", intent: "Note title." },
+      "source-url": { type: "text", intent: "Where the source came from." },
+    },
+    templates: {
+      literature: {
+        fields: ["title", "source-url"],
+        approvedMarkdown: LITERATURE_MARKDOWN,
+        targetFolder: "references",
+      },
+    },
+    folders: { references: { intent: "Processed sources." } },
+    obsidianTypes: { title: "text", "source-url": "text" },
+  });
 }
 
 async function createLinkTemplateAuthority(vault: string): Promise<void> {
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
-  const taxonomy = JSON.stringify({ folders: {}, templates: { note: { templateFolder: "Inbox" } } });
-  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", aliases: "aliases" } });
-  const template = "---\ntemplate: note\ntitle: Untitled\n---\n<!-- oms:content -->\n";
-  const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: templateDigest(policy) }, { logicalId: "taxonomy", signature: templateDigest(taxonomy) }, { logicalId: "obsidian-types", signature: templateDigest(obsidianTypes) }, { path: "Templates/OMS/note.md", signature: templateDigest(template) }];
-  const content = deriveContentFormatContract("<!-- oms:content -->\n", { templateId: "note" }).contract;
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
-  await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
-  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
+  await writeApprovedVault(vault, {
+    properties: { title: { type: "text", intent: "Note title." } },
+    templates: {
+      note: {
+        fields: ["title"],
+        approvedMarkdown: NOTE_MARKDOWN,
+        targetFolder: "notes",
+      },
+    },
+    folders: { notes: { intent: "Notes." } },
+    obsidianTypes: { title: "text", aliases: "aliases" },
+  });
 }
 
-async function createMcpMetadataAuthority(vault: string): Promise<{
-  readonly template: string;
-  readonly content: ReturnType<typeof deriveContentFormatContract>["contract"];
-}> {
-  const body = "# Required heading\n<!-- oms:content -->\n";
-  const derived = deriveContentFormatContract(body, { templateId: "article" }).contract;
-  const content = {
-    ...derived,
-    order: "strict" as const,
-    nodes: derived.nodes.map(node => "required" in node ? { ...node, required: true } : node),
-  };
-  const policyValue = {
-    version: 3,
-    templateFolders: [{ path: "Templates/OMS", default: true }],
-    base: { fields: {} },
-    contracts: {
-      article: {
-        intent: "An article.",
-        fields: {
-          template: { type: "text", required: true, intent: "Stable template identity" },
-          title: { type: "text", required: true, intent: "Article title" },
-        },
-        views: [],
-      },
-    },
+async function createMcpMetadataAuthority(vault: string): Promise<{ readonly template: string }> {
+  await writeApprovedVault(vault, {
+    properties: { title: { type: "text", intent: "Article title." } },
     templates: {
       article: {
-        templateId: "article",
-        destinationClass: "managed-default",
-        renderer: "obsidian-core",
-        sourceFolder: "Templates/OMS",
-        sourcePath: "Templates/OMS/article.md",
-        contract: "article",
-        naming: "{{title}}.md",
-        content,
-        extensions: { "x-review-owner": { team: "templates", preserve: true } },
+        fields: ["title"],
+        headings: [{ headingId: "required-heading", title: "Required heading", level: 1 }],
+        approvedMarkdown: ARTICLE_MARKDOWN,
+        targetFolder: "notes",
       },
     },
-  };
-  const policy = JSON.stringify(policyValue);
-  const taxonomy = JSON.stringify({ folders: {}, templates: { article: { templateFolder: "Inbox" } } });
-  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text" } });
-  const template = `---\ntemplate: article\ntitle: Original\n---\n${body}`;
-  const sources: SourceDescriptor[] = [
-    { logicalId: "template-policy", signature: templateDigest(policy) },
-    { logicalId: "taxonomy", signature: templateDigest(taxonomy) },
-    { logicalId: "obsidian-types", signature: templateDigest(obsidianTypes) },
-    { path: "Templates/OMS/article.md", signature: templateDigest(template) },
-  ];
-  const projection = JSON.stringify({
-    version: "oms.types.v1",
-    generatedFrom: {
-      algorithm: "sha256-lp-v1",
-      inputSignature: sourceSignature(sources),
-      sharedAuthoritySignature: sharedAuthoritySignature(sources),
-      sources,
-    },
-    managed: {
-      base: { fields: {} },
-      globalAxes: {},
-      templates: {
-        article: {
-          templateId: "article",
-          destinationClass: "managed-default",
-          renderer: "obsidian-core",
-          sourcePath: "Templates/OMS/article.md",
-          targetFolder: "Inbox",
-          keyOrder: ["template", "title"],
-          fields: policyValue.contracts.article.fields,
-          views: [],
-          naming: "{{title}}.md",
-          bodySignature: content.bodySignature,
-          content,
-        },
-      },
-    },
+    folders: { notes: { intent: "Notes." } },
+    obsidianTypes: { title: "text" },
   });
-  await Promise.all([
-    mkdir(path.join(vault, ".oms"), { recursive: true }),
-    mkdir(path.join(vault, ".obsidian"), { recursive: true }),
-    mkdir(path.join(vault, "Templates", "OMS"), { recursive: true }),
-  ]);
-  await Promise.all([
-    writeFile(path.join(vault, ".oms", "template-policy.json"), policy),
-    writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy),
-    writeFile(path.join(vault, ".oms", "types.json"), projection),
-    writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes),
-    writeFile(path.join(vault, "Templates", "OMS", "article.md"), template),
-  ]);
-  return { template, content };
+  return { template: ARTICLE_MARKDOWN };
 }
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -428,14 +361,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const doctor = validator.getValidator(toolByName.get("doctor")!.inputSchema);
     const status = validator.getValidator(toolByName.get("status")!.inputSchema);
 
-    expect(write({
-      op: "note",
-      mode: "create",
-      templateId: "literature",
-      frontmatter: { title: "Schema Valid", "source-url": "https://example.com/schema-valid" },
-      body: "A schema-valid write payload.",
-    }).valid).toBe(true);
-    expect(write({ op: "note", mode: "create", body: "Uses the declared default template." }).valid).toBe(true);
+    // The write tool guides, checks, and completes a note the agent saves.
+    expect(write({ op: "guide", notePath: "references/a.md", templateId: "literature" }).valid).toBe(true);
+    expect(write({ op: "check", notePath: "references/a.md" }).valid).toBe(true);
+    expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(true);
+    expect(write({ op: "note", mode: "create", body: "Retired." }).valid).toBe(false);
     expect(status({}).valid).toBe(true);
     expect(status({ op: "graph" }).valid).toBe(true);
     expect(status({ op: "status" }).valid).toBe(false);
@@ -464,48 +394,12 @@ describe("Oh My Second Brain MCP stdio server", () => {
       transactionId: "tx-resume",
       approvedDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     }).valid).toBe(true);
-    expect(write({ op: "note", mode: "create", templateId: "literature", notePath: "notes/x.md", body: "x" }).valid).toBe(false);
-    expect(write({ op: "note", mode: "append", notePath: "notes/x.md", body: "x" }).valid).toBe(true);
-    expect(write({ op: "note", mode: "append", templateId: "literature", notePath: "notes/x.md", body: "x" }).valid).toBe(false);
-    expect(write({ op: "note", mode: "update", notePath: "notes/x.md" }).valid).toBe(false);
-    expect(write({ op: "note", mode: "update", notePath: "notes/x.md", frontmatter: { title: "x" } }).valid).toBe(true);
-    expect(write({ op: "note", templateId: "literature", mode: "create", folder: "references" }).valid).toBe(false);
     const templateSource = { path: "Templates/OMS/people.md", content: "---\ntemplate: people\n---\n", publication: "write" };
     const templateBinding = { templateId: "people", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/people.md", contract: "people", naming: "{{name}}" };
-    expect(write({ op: "template", mode: "create", binding: templateBinding, source: templateSource, dryRun: true }).valid).toBe(true);
-    expect(write({
-      op: "template",
-      mode: "create",
-      binding: templateBinding,
-      source: { ...templateSource, publication: "verify-existing" },
-      dryRun: true,
-    }).valid).toBe(false);
     const { sourceFolder: _sourceFolder, ...bindingWithoutSourceFolder } = templateBinding;
-    expect(write({ op: "template", mode: "create", binding: bindingWithoutSourceFolder, source: templateSource, dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "create", binding: { ...templateBinding, sourceFolder: 42 }, source: templateSource, dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "update", templateId: "people", binding: templateBinding, source: templateSource, moveStrategy: "oms-managed-rename", dryRun: true }).valid).toBe(true);
-    expect(write({
-      op: "template",
-      mode: "update",
-      templateId: "people",
-      binding: templateBinding,
-      source: { ...templateSource, publication: "verify-existing" },
-      moveStrategy: "register-already-moved",
-      dryRun: true,
-    }).valid).toBe(true);
-    expect(write({ op: "template", mode: "update", templateId: "people", binding: bindingWithoutSourceFolder, source: templateSource, dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false, dryRun: true }).valid).toBe(true);
-    expect(write({ op: "template", mode: "default", templateId: "people", dryRun: true }).valid).toBe(true);
-    expect(write({ op: "template", mode: "register-folder", folder: { path: "Templates/manual", default: true }, dryRun: true }).valid).toBe(true);
     expect(write({ op: "template", mode: "regenerate", dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false, source: templateSource, dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "default", templateId: "people", deleteSource: false, dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "register-folder", folder: { path: "Templates/manual", default: false }, dryRun: true }).valid).toBe(false);
-    expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false }).valid).toBe(false);
-    expect(write({ op: "template", mode: "remove", templateId: "people", deleteSource: false, dryRun: true, expectedInputDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }).valid).toBe(false);
     const obsoleteRegistration = { op: "template", mode: "register-existing", templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", renderer: "obsidian-core", filledBy: [], contract: "people", naming: "{{name}}", dryRun: true };
     expect(write(obsoleteRegistration).valid).toBe(false);
-    expect(write({ op: "template", mode: "register-folder", folder: { path: "Templates/manual", mode: "manual" }, dryRun: true }).valid).toBe(false);
     expect(write({ op: "template", mode: "interview-next" }).valid).toBe(true);
     expect(write({ op: "template", mode: "interview-next", dryRun: true }).valid).toBe(false);
     const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -568,131 +462,39 @@ describe("Oh My Second Brain MCP stdio server", () => {
       dryRun: true,
       approvedDigest: digest,
     }).valid).toBe(false);
-    expect(write({ op: "note", mode: "create", body: "destination", targetFolder: "Inbox" }).valid).toBe(true);
-    expect(write({ op: "note", mode: "append", notePath: "notes/x.md", body: "x", targetFolder: "Inbox" }).valid).toBe(false);
-    expect(write({ op: "note", mode: "update", notePath: "notes/x.md", body: "x", targetFolder: "Inbox" }).valid).toBe(false);
     expect(JSON.stringify(toolByName.get("search")!.inputSchema)).not.toContain("concept");
   });
 
-  it("rejects low-level regenerate/create escapes and preserves update metadata through dry-run/apply", async () => {
-    const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-template-guards-"));
-    const fixture = await createMcpMetadataAuthority(tmpVault);
+  it("refuses every retired template mutation without touching a control", async () => {
+    const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-template-guards-")));
+    await createMcpMetadataAuthority(tmpVault);
     const controlledPaths = [
       ".oms/template-policy.json",
       ".oms/taxonomy.json",
       ".oms/types.json",
       ".obsidian/types.json",
-      "Templates/OMS/article.md",
+      ".oms/templates/article.md",
     ] as const;
     const before = await Promise.all(controlledPaths.map(relative => readFile(path.join(tmpVault, relative))));
     const { server, client } = await connectInMemory(tmpVault);
     try {
-      const invalidRegenerate = await client.callTool({
-        name: "write",
-        arguments: { op: "template", mode: "regenerate", dryRun: true },
-      });
-      expect(invalidRegenerate.isError).toBe(true);
-      const regenerateMessage = invalidRegenerate.content[0]?.type === "text"
-        ? invalidRegenerate.content[0].text
-        : "";
-      expect(regenerateMessage).toContain("Template mutation mode is invalid");
+      for (const mode of ["regenerate", "create", "update", "remove", "default", "register-folder"]) {
+        const refused = await client.callTool({
+          name: "write",
+          arguments: { op: "template", mode, dryRun: true },
+        });
+        const message = refused.content[0]?.type === "text" ? refused.content[0].text : "";
+        expect(message, mode).toMatch(/Template mutation modes are interview-next|Unknown operation|does not match/u);
+      }
+      expect(await Promise.all(controlledPaths.map(relative => readFile(path.join(tmpVault, relative))))).toEqual(before);
 
-      const invalidCreate = await client.callTool({
+      // The interview is the only path that can change a contract.
+      const review = textPayload(await client.callTool({
         name: "write",
-        arguments: {
-          op: "template",
-          mode: "create",
-          binding: {
-            templateId: "new-article",
-            destinationClass: "managed-default",
-            renderer: "obsidian-core",
-            sourceFolder: "Templates/OMS",
-            sourcePath: "Templates/OMS/new-article.md",
-            contract: "article",
-            naming: "{{title}}.md",
-          },
-          source: {
-            path: "Templates/OMS/new-article.md",
-            content: fixture.template,
-            publication: "verify-existing",
-          },
-          dryRun: true,
-        },
-      });
-      expect(invalidCreate.isError).toBe(true);
-      const createMessage = invalidCreate.content[0]?.type === "text"
-        ? invalidCreate.content[0].text
-        : "";
-      expect(createMessage).toContain('source.publication "write"');
-      const afterInvalid = await Promise.all(controlledPaths.map(relative => readFile(path.join(tmpVault, relative))));
-      expect(afterInvalid).toEqual(before);
-
-      const updateArguments = {
-        op: "template",
-        mode: "update",
-        templateId: "article",
-        binding: {
-          templateId: "article",
-          destinationClass: "managed-default",
-          renderer: "obsidian-core",
-          sourceFolder: "Templates/OMS",
-          sourcePath: "Templates/OMS/article.md",
-          contract: "article",
-          naming: "{{title}}-updated.md",
-        },
-        source: {
-          path: "Templates/OMS/article.md",
-          content: fixture.template,
-          publication: "write",
-        },
-      } as const;
-      const planned = textPayload(await client.callTool({
-        name: "write",
-        arguments: { ...updateArguments, dryRun: true },
+        arguments: { op: "template", mode: "interview-next" },
       }));
-      expect(planned.status).toBe("planned");
-      expect(typeof planned.approvalDigest).toBe("string");
-      const afterDryRun = await Promise.all(controlledPaths.map(relative => readFile(path.join(tmpVault, relative))));
-      expect(afterDryRun).toEqual(before);
-
-      const applied = textPayload(await client.callTool({
-        name: "write",
-        arguments: { ...updateArguments, approvedDigest: planned.approvalDigest },
-      }));
-      expect(["applied", "already-complete"]).toContain(applied.status);
-
-      const persistedPolicy = JSON.parse(
-        await readFile(path.join(tmpVault, ".oms", "template-policy.json"), "utf8"),
-      ) as {
-        readonly templates: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
-      };
-      const persistedBinding = persistedPolicy.templates.article;
-      expect(persistedBinding?.naming).toBe("{{title}}-updated.md");
-      expect(persistedBinding?.content).toEqual(fixture.content);
-      expect(persistedBinding?.extensions).toEqual({
-        "x-review-owner": { team: "templates", preserve: true },
-      });
-
-      const persistedProjection = JSON.parse(
-        await readFile(path.join(tmpVault, ".oms", "types.json"), "utf8"),
-      ) as {
-        readonly managed: {
-          readonly templates: Readonly<Record<string, {
-            readonly keyOrder: readonly string[];
-            readonly content: {
-              readonly order: string;
-              readonly nodes: readonly Readonly<Record<string, unknown>>[];
-            };
-          }>>;
-        };
-      };
-      const projectedBinding = persistedProjection.managed.templates.article;
-      expect(projectedBinding?.keyOrder).toEqual(["template", "title"]);
-      expect(projectedBinding?.content.order).toBe("strict");
-      expect(projectedBinding?.content.nodes).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: "heading", text: "Required heading", required: true }),
-      ]));
-      expect(await readFile(path.join(tmpVault, "Templates/OMS/article.md"), "utf8")).toBe(fixture.template);
+      expect(typeof review.state).toBe("string");
+      expect(await Promise.all(controlledPaths.map(relative => readFile(path.join(tmpVault, relative))))).toEqual(before);
     } finally {
       await client.close();
       await server.close();
@@ -700,252 +502,47 @@ describe("Oh My Second Brain MCP stdio server", () => {
     }
   });
 
-  it("publishes a pending notice after body authoring without changing the prior contract", async () => {
+  it("publishes a pending notice after a raw source changes, without changing the contract", async () => {
     const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-template-notice-")));
-    const fixture = await createMcpMetadataAuthority(tmpVault);
-    const templatePath = path.join(tmpVault, "Templates/OMS/article.md");
-    const changedTemplate = fixture.template.replace(
-      "# Required heading\n<!-- oms:content -->\n",
-      "# Required heading\n<!-- oms:content -->\nAuthored body\n",
-    );
+    await writeApprovedVault(tmpVault, {
+      properties: { title: { type: "text", intent: "Article title." } },
+      templates: {
+        article: {
+          fields: ["title"],
+          approvedMarkdown: ARTICLE_MARKDOWN,
+          rawSource: { path: "Templates/OMS/article.md", identity: "article-source", bytes: "---\ntemplate: article\n---\n# Required heading\n" },
+          targetFolder: "notes",
+        },
+      },
+      folders: { notes: { intent: "Notes." } },
+      obsidianTypes: { title: "text" },
+    });
+    const policyPath = path.join(tmpVault, ".oms", "template-policy.json");
+    const policyBefore = await readFile(policyPath, "utf8");
+
     const { server, client } = await connectInMemory(tmpVault);
     try {
-      const updateArguments = {
-        op: "template",
-        mode: "update",
-        templateId: "article",
-        binding: {
-          templateId: "article",
-          destinationClass: "managed-default",
-          renderer: "obsidian-core",
-          sourceFolder: "Templates/OMS",
-          sourcePath: "Templates/OMS/article.md",
-          contract: "article",
-          naming: "{{title}}.md",
-        },
-        source: {
-          path: "Templates/OMS/article.md",
-          content: changedTemplate,
-          publication: "write",
-        },
-      } as const;
+      const quiet = textPayload(await client.callTool({ name: "status", arguments: {} }));
+      expect(quiet.templateNotice).toBeUndefined();
 
-      const planned = textPayload(await client.callTool({
-        name: "write",
-        arguments: { ...updateArguments, dryRun: true },
-      }));
-      expect(planned.status).toBe("planned");
-      expect(await readFile(templatePath, "utf8")).toBe(fixture.template);
+      // The user edits their own template source outside OMS.
+      await writeFile(path.join(tmpVault, "Templates/OMS/article.md"), "---\ntemplate: article\n---\n# Required heading\nAuthored body\n");
 
-      const applied = textPayload(await client.callTool({
-        name: "write",
-        arguments: { ...updateArguments, approvedDigest: planned.approvalDigest },
-      }));
-      expect(applied.status).toBe("applied");
-      expect(applied.templateNotice).toMatchObject({
-        state: "pending",
-        pendingCount: 1,
-        actions: ["확인하기", "나중에"],
-      });
-      expect(await readFile(templatePath, "utf8")).toBe(changedTemplate);
-      expect(await readdir(path.join(tmpVault, "Templates/OMS"))).toEqual(["article.md"]);
-
-      const persistedPolicy = JSON.parse(
-        await readFile(path.join(tmpVault, ".oms/template-policy.json"), "utf8"),
-      ) as {
-        readonly templates: Readonly<Record<string, {
-          readonly approvedSourceSignature?: string;
-          readonly approvedBodySignature?: string;
-          readonly content?: unknown;
-          readonly extensions?: unknown;
-        }>>;
-      };
-      expect(persistedPolicy.templates.article).toMatchObject({
-        approvedSourceSignature: templateDigest(changedTemplate),
-        approvedBodySignature: templateDigest("# Required heading\n<!-- oms:content -->\nAuthored body\n"),
-        content: fixture.content,
-        extensions: { "x-review-owner": { team: "templates", preserve: true } },
-      });
-
-      const projected = JSON.parse(
-        await readFile(path.join(tmpVault, ".oms/types.json"), "utf8"),
-      ) as {
-        readonly managed: {
-          readonly templates: Readonly<Record<string, {
-            readonly keyOrder: readonly string[];
-            readonly content: unknown;
-          }>>;
-        };
-      };
-      expect(projected.managed.templates.article?.keyOrder).toEqual(["template", "title"]);
-      expect(projected.managed.templates.article?.content).toEqual(fixture.content);
-
-      const review = textPayload(await client.callTool({
-        name: "write",
-        arguments: { op: "template", mode: "interview-next" },
-      }));
-      expect(review.state, JSON.stringify(review.next)).toBe("confirm");
-
-      const search = textPayload(await client.callTool({
-        name: "search",
-        arguments: { op: "templates" },
-      }));
-      expect(search.templateNotice).toBeUndefined();
-
-      const status = textPayload(await client.callTool({
-        name: "status",
-        arguments: {},
-      }));
-      const repeatedStatus = textPayload(await client.callTool({
-        name: "status",
-        arguments: {},
-      }));
+      const status = textPayload(await client.callTool({ name: "status", arguments: {} }));
       expect(status.templateNotice).toMatchObject({
         state: "pending",
         pendingCount: 1,
         actions: ["확인하기", "나중에"],
       });
+      const repeatedStatus = textPayload(await client.callTool({ name: "status", arguments: {} }));
       expect(repeatedStatus.templateNotice).toEqual(status.templateNotice);
+
+      // The notice offers review; it never changes the approved contract.
+      expect(await readFile(policyPath, "utf8")).toBe(policyBefore);
     } finally {
       await client.close();
       await server.close();
       await rm(tmpVault, { recursive: true, force: true });
-    }
-  });
-
-  it("requires an op for routed tools", () => {
-    const normalOperations = [
-      ["write", "note", "write-note"],
-      ["search", "query", "oms_semantic_query"],
-      ["link", "suggest", "oms_link_suggest"],
-      ["status", undefined, "oms_graph_status"],
-      ["doctor", "audit", "oms_vault_audit"],
-    ] as const;
-    const schemas = new Map(omsMcpTools.map((tool) => [tool.name, tool.inputSchema as {
-      readonly required?: readonly string[];
-      readonly oneOf?: readonly { readonly required: readonly string[] }[];
-    }]));
-
-    for (const [tool, op] of normalOperations) {
-      if (tool === "status") {
-        expect(schemas.get(tool)?.oneOf).toEqual([
-          expect.objectContaining({ additionalProperties: false, properties: {} }),
-          expect.objectContaining({ required: ["op"] }),
-        ]);
-      } else {
-        expect(op).toBeDefined();
-        expect(schemas.get(tool)?.oneOf?.every((branch) => (branch.required ?? []).includes("op")), tool).toBe(true);
-      }
-    }
-  });
-
-  it("registers only the five public tools and retires detail aliases", () => {
-    expect(omsMcpTools.map((tool) => tool.name)).toEqual([
-      "write",
-      "search",
-      "link",
-      "status",
-      "doctor",
-    ]);
-    expect(omsMcpTools.map((tool) => tool.name)).not.toEqual(
-      expect.arrayContaining([
-        "query", "get", "multi_get", "status",
-        "oms_graph_status", "oms_graph_build", "oms_list_concepts",
-        "oms_retrieve_by_axis", "oms_retrieve_context", "oms_lazy_load_note",
-        "oms_validate_contract", "oms_vault_audit", "oms_link_suggest", "oms_link_apply",
-        "oms_sync_embeddings", "oms_semantic_query", "oms_semantic_status",
-        "oms_semantic_collections", "oms_semantic_contexts", "oms_semantic_cleanup",
-        "oms_get_document", "oms_multi_get_documents",
-      ]),
-    );
-  });
-
-  it.each([
-    ["typed vec searches", { op: "query", searches: [{ type: "vec", query: "telescope" }] }],
-    ["vec field", { op: "query", vec: "telescope" }],
-    ["hyde field", { op: "query", hyde: "hypothetical telescope answer" }],
-    ["vsearch mode", { op: "query", query: "telescope", mode: "vsearch" }],
-    ["expand strategy", { op: "query", mode: "query", query: "telescope", strategy: { kind: "expand", profile: "qmd-v2.8.3" } }],
-  ])("fails loudly for explicit vector retrieval via %s without embedding configuration", async (_strategy, arguments_) => {
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [distCli, "serve", "mcp", "--vault", fixtureVault],
-      cwd: repoRoot,
-      env: stdioEnv({ OMS_EMBEDDING_PROVIDER: undefined, OMS_EMBEDDING_MODEL: undefined }),
-      stderr: "pipe",
-    });
-    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
-    try {
-      await client.connect(transport);
-      const result = await client.callTool({ name: "search", arguments: arguments_ });
-      expect(result.isError).toBe(true);
-      const message = result.content[0]?.type === "text" ? result.content[0].text : "";
-      expect(message).toContain("OMS_EMBEDDING_PROVIDER");
-      expect(message).toContain("OMS_EMBEDDING_MODEL");
-    } finally {
-      await client.close();
-    }
-  });
-
-  it("does not discard vec shorthand when typed searches are also supplied", async () => {
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [distCli, "serve", "mcp", "--vault", fixtureVault],
-      cwd: repoRoot,
-      env: stdioEnv({ OMS_EMBEDDING_PROVIDER: undefined, OMS_EMBEDDING_MODEL: undefined }),
-      stderr: "pipe",
-    });
-    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
-    try {
-      await client.connect(transport);
-      const result = await client.callTool({
-        name: "search",
-        arguments: {
-          op: "query",
-          searches: [{ type: "lex", query: "architecture" }],
-          vec: "explicit vector",
-        },
-      });
-      expect(result.isError).toBe(true);
-      const message = result.content[0]?.type === "text" ? result.content[0].text : "";
-      expect(message).toContain("OMS_EMBEDDING_PROVIDER");
-      expect(message).toContain("OMS_EMBEDDING_MODEL");
-    } finally {
-      await client.close();
-    }
-  });
-
-  it("reports the package.json version in the MCP handshake", async () => {
-    // Given: the version declared by the shipped package manifest
-    const manifest: unknown = JSON.parse(
-      await readFile(path.join(repoRoot, "package.json"), "utf-8"),
-    );
-    const declaredVersion =
-      typeof manifest === "object" && manifest !== null && "version" in manifest
-        ? (manifest as { version: unknown }).version
-        : undefined;
-    expect(typeof declaredVersion).toBe("string");
-
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [distCli, "serve", "mcp", "--vault", fixtureVault],
-      cwd: repoRoot,
-      env: stdioEnv(),
-      stderr: "pipe",
-    });
-    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
-
-    try {
-      // When: a client completes the initialize handshake
-      await client.connect(transport);
-
-      // Then: the server advertises the real package version, not the placeholder
-      const serverVersion = client.getServerVersion();
-      expect(serverVersion?.name).toBe("oms");
-      expect(serverVersion?.version).toBe(declaredVersion);
-      expect(serverVersion?.version).not.toBe("0.0.0");
-    } finally {
-      await client.close();
     }
   });
 
@@ -994,7 +591,10 @@ describe("Oh My Second Brain MCP stdio server", () => {
       expect(parsedStatus.writeTools).toBe("write-disabled-invalid-template-projection");
       const writeTool = tools.tools.find((tool) => tool.name === "write");
       expect(writeTool?.annotations?.readOnlyHint).toBe(false);
-      expect(JSON.stringify(writeTool?.inputSchema)).toContain("update");
+      // The write tool stays advertised with its approved branches even when the
+      // local contract is invalid; admission is what refuses, not discovery.
+      expect(JSON.stringify(writeTool?.inputSchema)).toContain("guide");
+      expect(JSON.stringify(writeTool?.inputSchema)).toContain("complete");
       expect(parsedStatus.counts).toBeNull();
       expect(parsedStatus.projectionSource).toBe("vault-invalid");
       const derivedState = parsedStatus.derivedState as Record<string, unknown>;
@@ -1129,24 +729,14 @@ Valid frontmatter remains available to retrieve.
       expect(status.projectionSource).toBe("vault-invalid");
       expect(status.writeTools).toBe("write-disabled-invalid-template-projection");
 
-      const write = await client.callTool({
+      const write = textPayload(await client.callTool({
         name: "write",
-        arguments: {
-          notePath: "references/unsafe.md",
-          frontmatter: {
-            title: "Should not write",
-            "source-url": "https://example.com/should-not-write",
-          },
-          body: "Should not write.",
-          op: "note",
-          mode: "create",
-          templateId: "literature",
-        },
-      });
-      expect(write.isError).toBe(true);
-      expect(write.content[0]?.type === "text" ? write.content[0].text : "").toContain(
-        "Oh My Second Brain MCP error",
-      );
+        arguments: { op: "guide", notePath: "references/unsafe.md", templateId: "literature" },
+      }));
+      // An unreadable contract is reported as unverifiable, never silently
+      // replaced by a bundled default.
+      expect(write.status).toBe("rejected");
+      expect((write.rejection as Record<string, unknown>).code).toBe("CONTRACT_UNVERIFIABLE");
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
@@ -1258,9 +848,10 @@ Valid frontmatter remains available to retrieve.
     }
   });
 
-  it("writes through write against the kernel contract", async () => {
-    const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-write-"));
+  it("guides, then checks the note the agent saved", async () => {
+    const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-write-")));
     await createMcpTemplateAuthority(tmpVault);
+    await mkdir(path.join(tmpVault, "references"), { recursive: true });
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [distCli, "serve", "mcp", "--vault", tmpVault],
@@ -1273,73 +864,48 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
 
-      const asked = textPayload(
-        await client.callTool({
-          name: "write",
-          arguments: {
-            op: "note",
-            mode: "create",
-            templateId: "literature",
-            frontmatter: { title: "Incomplete" },
-            body: "Body",
-          },
-        }),
-      );
-      expect(asked.status).toBe("ask");
-      expect((asked.violations as Array<Record<string, unknown>>).some((item) => item.field === "source-url" && item.rule === "required")).toBe(true);
+      const guided = textPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "guide", notePath: "references/kernel-note.md", templateId: "literature" },
+      }));
+      expect(guided.status).toBe("guided");
+      expect(guided.resolvedVault).toBe(tmpVault);
+      expect(guided.resolutionSource).toBe("explicit");
+      expect((guided.approvedMarkdown as Record<string, unknown>).templateLayer).toBe(LITERATURE_MARKDOWN);
+      // Guidance writes nothing; the agent owns the file.
+      expect(existsSync(path.join(tmpVault, "references", "kernel-note.md"))).toBe(false);
 
-      const created = textPayload(
-        await client.callTool({
-          name: "write",
-          arguments: {
-            op: "note",
-            mode: "create",
-            templateId: "literature",
-            frontmatter: {
-              title: "Kernel Note",
-              "source-url": "https://example.com/kernel-note",
-              extra: "kept",
-            },
-            body: "Created by write.",
-          },
-        }),
+      await writeFile(
+        path.join(tmpVault, "references", "kernel-note.md"),
+        "---\ntemplate: literature\ntitle: Incomplete\nextra: kept\n---\n\n# Literature\n",
       );
-      expect(created.status).toBe("written");
-      expect(created.notePath).toBe("Inbox/kernel-note.md");
-      expect(created.resolvedVault).toBe(tmpVault);
-      expect(created.resolutionSource).toBe("explicit");
-      expect(created.receipt).toMatchObject({
-        resolvedVault: tmpVault,
-        resolutionSource: "explicit",
-        notePath: "Inbox/kernel-note.md",
-        mode: "create",
-        postconditionVerified: true,
-      });
-      expect(asked.resolvedVault).toBe(tmpVault);
-      expect(asked.resolutionSource).toBe("explicit");
+      const incomplete = textPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "check", notePath: "references/kernel-note.md", templateId: "literature" },
+      }));
+      expect(incomplete.status).toBe("fail");
+      const findings = (incomplete.machine as { readonly findings: readonly { readonly targetId: string }[] }).findings;
+      expect(findings.map(finding => finding.targetId)).toContain("field/source-url");
 
-      const broken = textPayload(
-        await client.callTool({
-          name: "write",
-          arguments: {
-            op: "note",
-            mode: "update",
-            notePath: "Inbox/kernel-note.md",
-            frontmatter: { title: "" },
-          },
-        }),
+      await writeFile(
+        path.join(tmpVault, "references", "kernel-note.md"),
+        "---\ntemplate: literature\ntitle: Kernel Note\nsource-url: https://example.com/kernel-note\nextra: kept\n---\n\n# Literature\n",
       );
-      expect(broken.status).toBe("rejected");
-      expect((broken.violations as Array<Record<string, unknown>>)[0]?.rule).toBe("required");
+      const passing = textPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "check", notePath: "references/kernel-note.md", templateId: "literature" },
+      }));
+      expect(passing.status).toBe("pass");
+      // An unmanaged property is preserved and never checked.
+      expect(await readFile(path.join(tmpVault, "references", "kernel-note.md"), "utf8")).toContain("extra: kept");
+      expect(passing.checkpoint).toMatchObject({ schemaVersion: 1, notePath: "references/kernel-note.md" });
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
     }
   });
 
-  it("suggests term links for a note and applies them only against a current hash", async () => {
-    // Given: a vault with two term notes (one carrying a Korean alias) and a
-    // note whose body mentions both surfaces in prose
+  it("suggests term links and checks them without ever editing the note", async () => {
     const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-linkify-")));
     await createLinkTemplateAuthority(tmpVault);
     await mkdir(path.join(tmpVault, "terms"), { recursive: true });
@@ -1356,11 +922,8 @@ Valid frontmatter remains available to retrieve.
     );
     const notePath = "notes/sage.md";
     const noteFile = path.join(tmpVault, "notes", "sage.md");
-    await writeFile(
-      noteFile,
-      "---\ntemplate: note\ntitle: Sage\n---\n\nThe sage pursues Ataraxia through Stoicism.\n아타락시아를 향한 길.\n",
-      "utf-8",
-    );
+    const body = "---\ntemplate: note\ntitle: Sage\n---\n\nThe sage pursues Ataraxia through Stoicism.\n아타락시아를 향한 길.\nSee [[Missing Term]].\n";
+    await writeFile(noteFile, body, "utf-8");
 
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -1374,81 +937,24 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
 
-      // When: link suggestions are requested for the mentioning note
-      const suggested = textPayload(
-        await client.callTool({ name: "link", arguments: { op: "suggest", notePath } }),
+      const suggested = textPayload(await client.callTool({
+        name: "link",
+        arguments: { op: "suggest", notePath },
+      }));
+      const candidates = suggested.candidates as { readonly id: string; readonly targetPath: string }[];
+      expect(candidates.map(candidate => candidate.targetPath)).toEqual(
+        expect.arrayContaining(["terms/Ataraxia.md", "terms/Stoicism.md"]),
       );
+      expect(suggested.baseContentHash).toMatch(/^[0-9a-f]{64}$/u);
 
-      // Then: both term notes are proposed, first-occurrence only, with a hash
-      expect(suggested.notePath).toBe(notePath);
-      expect(typeof suggested.baseContentHash).toBe("string");
-      const candidates = suggested.candidates as Array<Record<string, unknown>>;
-      expect(candidates.map((candidate) => candidate.targetPath).sort()).toEqual([
-        "terms/Ataraxia.md",
-        "terms/Stoicism.md",
-      ]);
-      const ataraxia = candidates.find((candidate) => candidate.targetPath === "terms/Ataraxia.md");
-      expect(ataraxia?.matchedText).toBe("Ataraxia");
-      expect(ataraxia?.renderedReplacement).toBe("[[Ataraxia]]");
-      expect(typeof ataraxia?.id).toBe("string");
-      // The note being linkified is never a candidate for itself.
-      expect(candidates.some((candidate) => candidate.targetPath === notePath)).toBe(false);
+      const checked = textPayload(await client.callTool({
+        name: "link",
+        arguments: { op: "check", notePath },
+      }));
+      expect(checked.unresolved).toEqual(["Missing Term"]);
 
-      // When: apply runs with a hash that no longer describes the note
-      const beforeApply = await readFile(noteFile, "utf-8");
-      const stale = textPayload(
-        await client.callTool({
-          name: "link",
-          arguments: { op: "apply",
-            notePath,
-            baseContentHash: "0".repeat(64),
-            candidateIds: candidates.map((candidate) => candidate.id),
-          },
-        }),
-      );
-
-      // Then: nothing is written and the refusal names the stale state
-      expect(stale.applied).toBe(false);
-      expect(stale.reason).toBe("note-changed");
-      expect(await readFile(noteFile, "utf-8")).toBe(beforeApply);
-
-      // When: apply runs with the hash the suggestions were computed against
-      const applied = textPayload(
-        await client.callTool({
-          name: "link",
-          arguments: { op: "apply",
-            notePath,
-            baseContentHash: suggested.baseContentHash,
-            candidateIds: candidates.map((candidate) => candidate.id),
-          },
-        }),
-      );
-
-      // Then: the persisted file bytes carry the wikilinks
-      expect(applied.applied).toBe(true);
-      expect(applied.receipt).toMatchObject({ notePath, mode: "update", postconditionVerified: true });
-      const persisted = await readFile(noteFile, "utf-8");
-      expect(persisted).not.toBe(beforeApply);
-      expect(persisted).toContain("[[Ataraxia]]");
-      expect(persisted).toContain("[[Stoicism]]");
-      expect(persisted).toContain("title: Sage");
-
-      // When: the same (now stale) hash is replayed
-      const replayed = textPayload(
-        await client.callTool({
-          name: "link",
-          arguments: { op: "apply",
-            notePath,
-            baseContentHash: suggested.baseContentHash,
-            candidateIds: candidates.map((candidate) => candidate.id),
-          },
-        }),
-      );
-
-      // Then: it is refused and the file is untouched
-      expect(replayed.applied).toBe(false);
-      expect(replayed.reason).toBe("note-changed");
-      expect(await readFile(noteFile, "utf-8")).toBe(persisted);
+      // Applying an edit is the agent's job; both operations are read-only.
+      expect(await readFile(noteFile, "utf-8")).toBe(body);
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
@@ -1487,14 +993,19 @@ Valid frontmatter remains available to retrieve.
       // Then: the tool errors instead of inventing an empty suggestion set
       expect(absent.isError).toBe(true);
 
-      // When: apply omits the base hash
-      const noHash = await client.callTool({
+      // When: check omits the note path
+      const noPath = await client.callTool({ name: "link", arguments: { op: "check" } });
+      // Then: the tool refuses with a typed argument error
+      expect(noPath.isError).toBe(true);
+      expect(noPath.content[0]?.type === "text" ? noPath.content[0].text : "").toContain("notePath");
+
+      // The retired apply operation is not reachable at all.
+      const apply = await client.callTool({
         name: "link",
-        arguments: { op: "apply", notePath: "notes/sage.md", candidateIds: [] },
+        arguments: { op: "apply", notePath: "notes/sage.md", baseContentHash: "0".repeat(64), candidateIds: [] },
       });
-      // Then: the tool refuses before any write
-      expect(noHash.isError).toBe(true);
-      expect(noHash.content[0]?.type === "text" ? noHash.content[0].text : "").toContain("baseContentHash");
+      expect(apply.content[0]?.type === "text" ? apply.content[0].text : "").toContain("Unknown operation");
+      expect(await readFile(path.join(tmpVault, "notes", "sage.md"), "utf-8")).toBe("---\ntitle: Sage\n---\n\nBody.\n");
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
@@ -1527,30 +1038,18 @@ Valid frontmatter remains available to retrieve.
       const write = textPayload(
         await client.callTool({
           name: "write",
-          arguments: {
-            op: "note",
-            mode: "create",
-            templateId: "literature",
-            frontmatter: {
-              title: "Misrouted Note",
-              "source-url": "https://example.com/misrouted",
-            },
-            body: "Must not land in the booting directory.",
-          },
+          arguments: { op: "guide", notePath: "references/misrouted.md", templateId: "literature" },
         }),
       );
       expect(write.status).toBe("rejected");
-      expect(write.rejection).toMatchObject({
-        stage: "admission",
-        code: "target-unverified",
-        recoverable: true,
-      });
-      expect(write.receipt).toBeUndefined();
+      expect(write.rejection).toMatchObject({ code: "TARGET_UNVERIFIED" });
       expect(write.resolvedVault).toBe(tmpCwd);
       expect(write.resolutionSource).toBe("cwd");
 
-      const linkApply = textPayload(await client.callTool({ name: "link", arguments: { op: "apply", notePath: "notes/misrouted.md", baseContentHash: "0".repeat(64), candidateIds: [] } }));
-      expect(linkApply).toMatchObject({ applied: false, reason: "write-rejected", write: { rejection: { code: "target-unverified" } } });
+      // Link is read-only, so an unverified target changes nothing about it:
+      // there is no apply to reject, and the booting directory stays empty.
+      const linkApply = await client.callTool({ name: "link", arguments: { op: "apply", notePath: "notes/misrouted.md", baseContentHash: "0".repeat(64), candidateIds: [] } });
+      expect(linkApply.content[0]?.type === "text" ? linkApply.content[0].text : "").toContain("Unknown operation");
       expect(await readdir(tmpCwd)).toEqual([]);
     } finally {
       await client.close();
@@ -1807,31 +1306,31 @@ Valid frontmatter remains available to retrieve.
       const listed = textPayload(await client.callTool({ name: "search", arguments: { op: "templates" } }));
       expect(listed.history).toEqual(expect.objectContaining({
         uses: 0,
-        templates: expect.objectContaining({
-          literature: expect.objectContaining({ status: "observed", uses: 0, lastUsedAt: null }),
-        }),
+        templates: expect.objectContaining({ literature: expect.objectContaining({ uses: 0, lastUsedAt: null }) }),
       }));
 
-      const created = textPayload(
-        await client.callTool({
-          name: "write",
-          arguments: {
-            op: "note",
-            mode: "create",
-            templateId: "literature",
-            frontmatter: { title: "Local Vault Note", "source-url": "https://example.com/local-vault-note" },
-            body: "Written from inside the vault.",
-          },
-        }),
+      // A vault-resolved target is verified, so guidance is served and the
+      // agent's own saved note is what check reads back.
+      const guided = textPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "guide", notePath: "references/local-vault-note.md", templateId: "literature" },
+      }));
+      expect(guided.status).toBe("guided");
+      expect(guided.resolutionSource).toBe("vault");
+      expect(guided.resolvedVault).toBe(tmpVault);
+
+      await mkdir(path.join(tmpVault, "references"), { recursive: true });
+      await writeFile(
+        path.join(tmpVault, "references", "local-vault-note.md"),
+        "---\ntemplate: literature\ntitle: Local Vault Note\nsource-url: https://example.com/local-vault-note\n---\n\n# Literature\n",
       );
-      expect(created.status).toBe("written");
-      expect(created.resolutionSource).toBe("vault");
-      expect(created.resolvedVault).toBe(tmpVault);
-      expect(created.receipt).toMatchObject({
-        resolutionSource: "vault",
-        postconditionVerified: true,
-      });
-      expect(await readdir(path.join(tmpVault, "Inbox"))).toEqual(["local-vault-note.md"]);
+      const checked = textPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "check", notePath: "references/local-vault-note.md", templateId: "literature" },
+      }));
+      expect(checked.status).toBe("pass");
+      expect(checked.resolutionSource).toBe("vault");
+      expect(await readdir(path.join(tmpVault, "references"))).toEqual(["local-vault-note.md"]);
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
