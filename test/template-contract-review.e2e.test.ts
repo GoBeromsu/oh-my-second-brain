@@ -11,6 +11,22 @@ import {
 } from "../src/kernel/templates/interview-service.js";
 import { loadResolvedTemplates } from "../src/kernel/templates/resolver.js";
 import { readTemplateChangeNotice } from "../src/mcp/template-notice.js";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const repoRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+const distCli = join(repoRoot, "dist", "cli", "oms.js");
+
+/** Runs the built CLI so the public surface itself is under test. */
+function cli(vault: string, args: readonly string[]) {
+  if (!existsSync(distCli)) throw new Error("dist/cli/oms.js is missing; run npm run build first.");
+  return spawnSync(process.execPath, [distCli, ...args, "--vault", vault], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { ...process.env, OMS_NO_UPDATE_NOTICE: "1" },
+  });
+}
 
 /**
  * Contract review end to end.
@@ -243,6 +259,85 @@ describe("contract review end to end", () => {
     expect(notice).toMatchObject({ state: "pending", actions: ["확인하기", "나중에"] });
     expect(JSON.stringify(notice)).not.toContain("article");
     expect(JSON.stringify(notice)).not.toContain("Templates/Review");
+  });
+
+
+  it("carries proposals through the public CLI from review to publication", async () => {
+    const root = await fixture();
+    const proposals = JSON.stringify(PROPOSALS);
+
+    const review = cli(root, ["template", "review", "--proposals", proposals]);
+    expect(review.status).toBe(0);
+    const question = JSON.parse(review.stdout) as {
+      readonly state: string;
+      readonly next: { readonly questionId: string };
+      readonly censusDigest: string;
+      readonly expectedLedgerDigest: string | null;
+    };
+    expect(question.state).toBe("question");
+
+    const answered = cli(root, [
+      "template", "answer", question.next.questionId,
+      "--answer", JSON.stringify({ disposition: "confirm", raw: "yes" }),
+      "--census-digest", question.censusDigest,
+      "--ledger-digest", question.expectedLedgerDigest ?? "null",
+      "--proposals", proposals,
+    ]);
+    expect(answered.status).toBe(0);
+    const ready = JSON.parse(answered.stdout) as { readonly censusDigest: string; readonly expectedLedgerDigest: string | null };
+
+    const planned = cli(root, [
+      "template", "commit",
+      "--census-digest", ready.censusDigest,
+      "--ledger-digest", ready.expectedLedgerDigest ?? "null",
+      "--proposals", proposals,
+      "--dry-run",
+    ]);
+    expect(planned.status).toBe(0);
+    const approvalDigest = (JSON.parse(planned.stdout) as { readonly approvalDigest: string }).approvalDigest;
+
+    const applied = cli(root, [
+      "template", "commit",
+      "--census-digest", ready.censusDigest,
+      "--ledger-digest", ready.expectedLedgerDigest ?? "null",
+      "--proposals", proposals,
+      "--yes", "--approved-digest", approvalDigest,
+    ]);
+    expect(applied.status).toBe(0);
+    expect(JSON.parse(applied.stdout).status).toBe("applied");
+
+    const snapshot = await loadResolvedTemplates(root);
+    expect(Object.keys(snapshot.templates)).toEqual(["article"]);
+    expect(await bytes(root, SOURCE_PATH)).toEqual(RAW_SOURCE);
+  });
+
+  it("refuses a public commit that omits the proposals its answers came from", async () => {
+    const root = await fixture();
+    const proposals = JSON.stringify(PROPOSALS);
+    const question = JSON.parse(cli(root, ["template", "review", "--proposals", proposals]).stdout) as {
+      readonly next: { readonly questionId: string };
+      readonly censusDigest: string;
+      readonly expectedLedgerDigest: string | null;
+    };
+    const ready = JSON.parse(cli(root, [
+      "template", "answer", question.next.questionId,
+      "--answer", JSON.stringify({ disposition: "confirm", raw: "yes" }),
+      "--census-digest", question.censusDigest,
+      "--ledger-digest", question.expectedLedgerDigest ?? "null",
+      "--proposals", proposals,
+    ]).stdout) as { readonly censusDigest: string; readonly expectedLedgerDigest: string | null };
+    const before = await bytes(root, ".oms/template-policy.json");
+
+    const orphaned = cli(root, [
+      "template", "commit",
+      "--census-digest", ready.censusDigest,
+      "--ledger-digest", ready.expectedLedgerDigest ?? "null",
+      "--dry-run",
+    ]);
+
+    // Publishing here would drop the confirmed template, so it is refused.
+    expect(orphaned.status).toBe(1);
+    expect(await bytes(root, ".oms/template-policy.json")).toEqual(before);
   });
 
   it("creates no vault state when an interview is only read", async () => {

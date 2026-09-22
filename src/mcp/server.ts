@@ -176,6 +176,9 @@ const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
 const digestSchema = { type: "string", pattern: "^sha256:[0-9a-f]{64}$" };
 const nullableDigestSchema = { anyOf: [digestSchema, { type: "null" }] };
+// Explicit contract proposals. Contract meaning enters OMS only this way; it is
+// never derived from a file name or from template syntax.
+const proposalsSchema = { type: "array", items: { } };
 const jsonValue = { };
 const axisScalar = { anyOf: [string, number, boolean] };
 const axisValue = { anyOf: [axisScalar, { type: "array", items: axisScalar }] };
@@ -190,7 +193,7 @@ const operations: Record<string, readonly Operation[]> = {
     { op: "guide", name: "write-guide", properties: { notePath: string, templateId: string } },
     { op: "check", name: "write-check", properties: { notePath: string, templateId: string, binding: jsonValue, evidencePaths: stringArray }, required: ["notePath"] },
     { op: "complete", name: "write-complete", properties: { checkpoint: jsonValue, review: jsonValue }, required: ["checkpoint", "review"] },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["interview-next", "interview-answer", "commit-contracts"] }, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, proposals: { type: "array", items: jsonValue }, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["interview-next", "interview-answer", "commit-contracts"] }, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, proposals: proposalsSchema, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "check", name: "oms_link_check", properties: { notePath: string, folder: string }, required: ["notePath"] }],
@@ -243,6 +246,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
         properties: {
           op: { ...string, const: "template" },
           mode: { const: "interview-next" },
+          proposals: proposalsSchema,
         },
         required: ["op", "mode"],
       });
@@ -253,6 +257,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
           mode: { const: "interview-answer" },
           questionId: digestSchema,
           answer: jsonValue,
+          proposals: proposalsSchema,
           censusDigest: digestSchema,
           expectedLedgerDigest: nullableDigestSchema,
         },
@@ -265,6 +270,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
           mode: { const: "commit-contracts" },
           censusDigest: digestSchema,
           expectedLedgerDigest: nullableDigestSchema,
+          proposals: proposalsSchema,
           dryRun: { const: true },
         },
         required: ["op", "mode", "censusDigest", "expectedLedgerDigest", "dryRun"],
@@ -276,6 +282,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
           mode: { const: "commit-contracts" },
           censusDigest: digestSchema,
           expectedLedgerDigest: nullableDigestSchema,
+          proposals: proposalsSchema,
           dryRun: { const: false },
           approvedDigest: digestSchema,
         },
@@ -1051,12 +1058,17 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         ) {
           return errorText("Template commit-contracts requires censusDigest, expectedLedgerDigest, and dryRun:true or an approvedDigest.");
         }
+        const commitProposals = args?.["proposals"];
+        if (commitProposals !== undefined && !Array.isArray(commitProposals)) {
+          return errorText('Argument "proposals" must be an array of explicit contract proposals.');
+        }
         return jsonText(await commitTemplateContracts({
           vault,
           source,
         }, {
           censusDigest,
           expectedLedgerDigest,
+          ...(commitProposals === undefined ? {} : { proposals: commitProposals as never }),
           ...request,
         }));
       }

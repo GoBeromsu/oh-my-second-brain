@@ -192,12 +192,16 @@ async function run(parsed: Parsed): Promise<void> {
     })); return;
   }
   if (parsed.verb === "commit") {
-    only(parsed, ["vault", "census-digest", "ledger-digest", "dry-run", "yes", "approved-digest"], 0);
+    only(parsed, ["vault", "census-digest", "ledger-digest", "dry-run", "yes", "approved-digest", "proposals"], 0);
     const resolved = await target(parsed.options);
     ensureMutableTarget(resolved);
+    // Commit rebuilds the interview, so it needs the same proposals that raised
+    // the answered questions; without them a recorded decision cannot be
+    // reproduced and publication is refused.
     print(await commitTemplateContracts(resolved, {
       censusDigest: requiredDigest(parsed.options, "census-digest"),
       expectedLedgerDigest: expectedLedgerDigest(parsed.options),
+      ...proposalsOption(parsed.options),
       ...guard(parsed.options),
     })); return;
   }
@@ -224,11 +228,16 @@ Read-only:
   show <id>
   scan
   check
-  review [--vault <vault>]
+  review [--proposals <JSON>] [--vault <vault>]
 
 Contract review:
-  answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null> [--vault <vault>]
-  commit --census-digest <digest> --ledger-digest <digest|null> (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]
+  answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null> [--proposals <JSON>] [--vault <vault>]
+  commit --census-digest <digest> --ledger-digest <digest|null> [--proposals <JSON>] (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]
+
+  --proposals carries the explicit contract proposals as a JSON array. Contract
+  meaning enters OMS only this way; it is never derived from a file name or from
+  template syntax. Pass the same proposals to review, answer, and commit, or a
+  recorded answer cannot be reproduced and publication is refused.
 
 Guarded:
   regenerate-types (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]`;
