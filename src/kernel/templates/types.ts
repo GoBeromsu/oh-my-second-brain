@@ -77,6 +77,7 @@ export type TemplateSemanticChange =
       readonly answers: Readonly<Record<string, InterviewLedgerAnswer>>;
       readonly proposedPolicy: TemplatePolicy;
       readonly reviewedTemplateIds: readonly TemplateId[];
+      readonly scopeTemplateId?: TemplateId;
     };
 export interface TaxonomyControlProposal { readonly expectedCurrent: FileExpectation; readonly proposedBytes: Uint8Array; readonly action: "write" | "verify-only"; }
 export interface TemplateCompositionOptions {

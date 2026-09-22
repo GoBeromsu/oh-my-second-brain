@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Pending selected-folder sources can now be repaired in place through an exact-path, expected-source-digest, approval-digest transaction before contract adoption. Contract interviews and commits may be scoped to one template identity; the full selected census remains the CAS authority while unrelated answers, bindings, projection entries, and source bytes are preserved.
+
 ## [0.15.0] - 2026-09-19
 
 - **Breaking: template contracts now reconcile from an explicit selected-folder census instead of per-file registration or auto/manual modes.** Every `.md` beneath the selected scope is classified for add, edit, delete, or rename; source bytes stay in place and only user-confirmed `.oms` controls publish. The two-tier freshness gate hashes raw shared authorities first and then isolates changed templates as pending while preserving unrelated note writes. Metadata and bounded body-node contracts (with per-node requiredness/order) replace opaque body assumptions; anchored resumable questions and a locked CAS preserve unaffected answers. Historical ledger census is not blanket stale rejection: current request CAS and per-answer anchors govern validity. Ambiguous repeated body nodes remain contextualized, missing required-body rules require explicit disposition, and placement is optional during review then resolves at note creation by explicit destination, taxonomy default, or `ask`.

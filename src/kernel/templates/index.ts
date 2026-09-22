@@ -8,6 +8,8 @@ export { canonicalPathKey, deriveManagedSourcePath, deriveTemplateSourcePath, no
 export { loadResolvedTemplates, sourceSignature, buildTemplateCompositionManifest } from "./resolver.js";
 export { nextTemplateInterview, answerTemplateInterview, commitTemplateContracts } from "./interview-service.js";
 export type { TemplateInterviewAnswerRequest, TemplateInterviewCommitRequest, TemplateInterviewServiceResult, TemplateInterviewServiceState } from "./interview-service.js";
+export { repairPendingTemplateSource } from "./pending-source.js";
+export type { PendingTemplateSourceRepair } from "./pending-source.js";
 export type { TemplateInterviewQuestion, TemplateInterviewQuestionKind } from "./interview.js";
 export type { TemplateOperationTarget } from "./operations.js";
 export { executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";

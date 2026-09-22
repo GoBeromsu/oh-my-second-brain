@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,7 @@ const KOREAN_PATH = "Templates/Review/한국어.md";
 const ENGLISH_ID = "english";
 const KOREAN_ID = "한국어";
 const digestPattern = /^sha256:[0-9a-f]{64}$/u;
+const sha256 = (value: Uint8Array): string => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 
 const target = (vault: string): TemplateOperationTarget => ({ vault, source: "explicit" });
 
@@ -189,6 +191,7 @@ async function connectMcp(
 }
 
 function answerFor(question: TemplateInterviewQuestion): string {
+  if (question.kind === "contract-selection") return question.choices?.[0] ?? "article";
   if (question.kind === "content-order") return "strict";
   if (question.kind === "naming") return "{{title}}.md";
   if (question.kind === "field-intent") return `Confirmed intent for ${question.subject}`;
@@ -267,6 +270,195 @@ describe("template contract review across CLI, MCP, and capture", () => {
       expect(instructions).not.toContain("english.md");
       expect(instructions).not.toContain("한국어.md");
       expect(pendingNotice.actions).toEqual([...TEMPLATE_CHANGE_NOTICE_ACTIONS]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("repairs one pending source, adopts it through scoped hosts, and admits its note without consuming unrelated work", async () => {
+    const { root } = await fixture();
+    const initial = await completeInterview(root);
+    expect(initial.state).toBe("confirm");
+    await applyInterview(root, initial);
+
+    const agentPath = "Templates/Review/agent-session.md";
+    const kakaoPath = "Templates/Review/kakaotalk.md";
+    const proposalPath = join(root, "agent-session.proposed.md");
+    const agentBefore = new TextEncoder().encode(
+      "---\ntitle: Agent Session\nlanguage: en\nstatus: draft\n---\n# Broken\n",
+    );
+    const agentProposed = new TextEncoder().encode(
+      "---\ntitle: Agent Session\nlanguage: en\nstatus: draft\n---\n# Agent Session\n<!-- oms:content -->\n",
+    );
+    const kakao = new TextEncoder().encode(
+      "---\ntitle: KakaoTalk\nlanguage: ko\nstatus: draft\n---\n# KakaoTalk\n<!-- oms:content -->\n",
+    );
+    await Promise.all([
+      writeFile(join(root, agentPath), agentBefore),
+      writeFile(join(root, kakaoPath), kakao),
+      writeFile(proposalPath, agentProposed),
+    ]);
+
+    const { server, client } = await connectMcp(root);
+    try {
+      const unrelatedReview = serviceResult(toolPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "template", mode: "interview-next", templateId: "kakaotalk" },
+      })));
+      expect(unrelatedReview).toMatchObject({ state: "question", next: { templateId: "kakaotalk" } });
+      const unrelatedQuestion = unrelatedReview.next;
+      if (unrelatedQuestion === undefined) throw new Error("unrelated scoped review omitted its question");
+      const unrelatedAnswered = serviceResult(toolPayload(await client.callTool({
+        name: "write",
+        arguments: {
+          op: "template",
+          mode: "interview-answer",
+          templateId: "kakaotalk",
+          questionId: unrelatedQuestion.questionId,
+          answer: answerFor(unrelatedQuestion),
+          censusDigest: unrelatedReview.censusDigest,
+          expectedLedgerDigest: unrelatedReview.expectedLedgerDigest,
+        },
+      })));
+      expect(unrelatedAnswered.expectedLedgerDigest).toMatch(digestPattern);
+      const ledgerPath = join(root, ".oms", "template-interview.json");
+      const ledgerBeforeRepair = JSON.parse(await readFile(ledgerPath, "utf8")) as {
+        readonly answers: Readonly<Record<string, unknown>>;
+      };
+      const savedUnrelatedAnswer = ledgerBeforeRepair.answers[unrelatedQuestion.questionId];
+      expect(savedUnrelatedAnswer).toBeDefined();
+
+      const repairPlan = await cliJson(root, [
+        "update", "agent-session",
+        "--path", agentPath,
+        "--from", proposalPath,
+        "--expected-source-digest", sha256(agentBefore),
+        "--renderer", "obsidian-core",
+        "--dry-run",
+      ]);
+      expect(repairPlan).toMatchObject({ status: "planned", approvalDigest: expect.stringMatching(digestPattern) });
+      expectExactBytes(await readFile(join(root, agentPath)), agentBefore);
+      expectExactBytes(await readFile(join(root, kakaoPath)), kakao);
+
+      const repairApproval = repairPlan.approvalDigest;
+      if (typeof repairApproval !== "string") throw new Error("pending repair omitted approval digest");
+      const repaired = await cliJson(root, [
+        "update", "agent-session",
+        "--path", agentPath,
+        "--from", proposalPath,
+        "--expected-source-digest", sha256(agentBefore),
+        "--renderer", "obsidian-core",
+        "--yes",
+        "--approved-digest", repairApproval,
+      ]);
+      expect(repaired.status).toBe("applied");
+      expectExactBytes(await readFile(join(root, agentPath)), agentProposed);
+      expectExactBytes(await readFile(join(root, kakaoPath)), kakao);
+
+      const rejectedBeforeAdoption = toolPayload(await client.callTool({
+        name: "write",
+        arguments: {
+          op: "note",
+          mode: "create",
+          templateId: "agent-session",
+          targetFolder: "Scoped",
+          frontmatter: { title: "Before Adoption", language: "en", status: "draft" },
+          body: "",
+        },
+      }));
+      expect(rejectedBeforeAdoption).toMatchObject({
+        status: "ask",
+        rejection: { code: "contract-violation" },
+      });
+
+      let current = serviceResult(await cliJson(root, ["review", "--template-id", "agent-session"]));
+      for (let index = 0; index < 128 && current.state === "question"; index += 1) {
+        const question = current.next;
+        if (question === undefined) throw new Error("scoped review omitted its next question");
+        expect(question.templateId).toBe("agent-session");
+        if (index % 2 === 0) {
+          current = serviceResult(await cliJson(root, [
+            "answer", question.questionId,
+            "--template-id", "agent-session",
+            "--answer", JSON.stringify(answerFor(question)),
+            "--census-digest", current.censusDigest,
+            "--ledger-digest", current.expectedLedgerDigest ?? "null",
+          ]));
+        } else {
+          current = serviceResult(toolPayload(await client.callTool({
+            name: "write",
+            arguments: {
+              op: "template",
+              mode: "interview-answer",
+              templateId: "agent-session",
+              questionId: question.questionId,
+              answer: answerFor(question),
+              censusDigest: current.censusDigest,
+              expectedLedgerDigest: current.expectedLedgerDigest,
+            },
+          })));
+        }
+      }
+      expect(current).toMatchObject({ state: "confirm", reviewedTemplateIds: ["agent-session"] });
+
+      const commitPlan = await cliJson(root, [
+        "commit",
+        "--template-id", "agent-session",
+        "--census-digest", current.censusDigest,
+        "--ledger-digest", current.expectedLedgerDigest ?? "null",
+        "--dry-run",
+      ]);
+      expect(commitPlan).toMatchObject({ status: "planned", approvalDigest: expect.stringMatching(digestPattern) });
+      const commitApproval = commitPlan.approvalDigest;
+      if (typeof commitApproval !== "string") throw new Error("scoped commit omitted approval digest");
+      const committed = toolPayload(await client.callTool({
+        name: "write",
+        arguments: {
+          op: "template",
+          mode: "commit-contracts",
+          templateId: "agent-session",
+          censusDigest: current.censusDigest,
+          expectedLedgerDigest: current.expectedLedgerDigest,
+          dryRun: false,
+          approvedDigest: commitApproval,
+        },
+      }));
+      expect(["applied", "already-complete"]).toContain(committed.status);
+
+      const ledgerAfterCommit = JSON.parse(await readFile(ledgerPath, "utf8")) as {
+        readonly answers: Readonly<Record<string, unknown>>;
+      };
+      expect(ledgerAfterCommit.answers[unrelatedQuestion.questionId]).toEqual(savedUnrelatedAnswer);
+      const pending = serviceResult(toolPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "template", mode: "interview-next" },
+      })));
+      expect(pending).toMatchObject({ state: "question", next: { templateId: "kakaotalk" } });
+      expectExactBytes(await readFile(join(root, agentPath)), agentProposed);
+      expectExactBytes(await readFile(join(root, kakaoPath)), kakao);
+
+      const created = toolPayload(await client.callTool({
+        name: "write",
+        arguments: {
+          op: "note",
+          mode: "create",
+          templateId: "agent-session",
+          targetFolder: "Scoped",
+          frontmatter: { title: "After Adoption", language: "en", status: "draft" },
+          body: "",
+        },
+      }));
+      expect(created).toMatchObject({
+        status: "written",
+        templateId: "agent-session",
+        notePath: expect.stringMatching(/^Scoped\/.+\.md$/u),
+      });
+      const notePath = created.notePath;
+      if (typeof notePath !== "string") throw new Error("native note create omitted notePath");
+      expect(await readFile(join(root, notePath), "utf8")).toContain("title: After Adoption");
+      expectExactBytes(await readFile(join(root, agentPath)), agentProposed);
+      expectExactBytes(await readFile(join(root, kakaoPath)), kakao);
     } finally {
       await client.close();
       await server.close();

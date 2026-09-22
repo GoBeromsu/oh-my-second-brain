@@ -122,7 +122,105 @@ async function complete(vault: string): Promise<TemplateInterviewServiceResult> 
   return result;
 }
 
+async function answerScopedNext(
+  vault: string,
+  templateId: string,
+  result: TemplateInterviewServiceResult,
+): Promise<TemplateInterviewServiceResult> {
+  if (result.state !== "question" || result.next === undefined) throw new Error("test expected a scoped interview question");
+  return answerTemplateInterview(target(vault), {
+    templateId,
+    questionId: result.next.questionId,
+    answer: answerFor(result.next),
+    censusDigest: result.censusDigest,
+    expectedLedgerDigest: result.expectedLedgerDigest,
+  });
+}
+
+async function completeScoped(vault: string, templateId: string): Promise<TemplateInterviewServiceResult> {
+  let result = await nextTemplateInterview(target(vault), templateId);
+  for (let pass = 0; pass < 32 && result.state === "question"; pass += 1) {
+    expect(result.next?.templateId).toBe(templateId);
+    result = await answerScopedNext(vault, templateId, result);
+  }
+  return result;
+}
+
 describe("template interview service", () => {
+  it("reviews and commits one template without consuming or rewriting unrelated pending work", async () => {
+    await externalRuntimeRoot();
+    const root = await fixture({ placement: false });
+    const initial = await complete(root);
+    expect(initial.state).toBe("confirm");
+    const initialPlan = await commitTemplateContracts(target(root), {
+      censusDigest: initial.censusDigest,
+      expectedLedgerDigest: initial.expectedLedgerDigest,
+      dryRun: true,
+    });
+    if (initialPlan.status !== "planned") throw new Error("expected an initial reconcile plan");
+    expect((await commitTemplateContracts(target(root), {
+      censusDigest: initial.censusDigest,
+      expectedLedgerDigest: initial.expectedLedgerDigest,
+      approvedDigest: initialPlan.approvalDigest,
+    })).status).toBe("applied");
+
+    const projectionPath = join(root, ".oms/types.json");
+    const policyPath = join(root, ".oms/template-policy.json");
+    const projectionBefore = JSON.parse(await readFile(projectionPath, "utf8")) as {
+      readonly managed: { readonly templates: Readonly<Record<string, unknown>> };
+    };
+    const policyBefore = JSON.parse(await readFile(policyPath, "utf8")) as {
+      readonly templates: Readonly<Record<string, unknown>>;
+      readonly contracts: Readonly<Record<string, unknown>>;
+    };
+    const unrelatedPath = join(root, "Templates/kakaotalk.md");
+    const scopedPath = join(root, "Templates/agent-session.md");
+    await Promise.all([
+      writeFile(unrelatedPath, "---\ntitle: Kakao\n---\n# Kakao\nUnrelated\n"),
+      writeFile(scopedPath, "---\ntitle: Agent Session\nstore:\n---\n# Agent Session\n<!-- oms:content -->\n"),
+    ]);
+    const unrelatedBefore = await readFile(unrelatedPath);
+
+    const reviewed = await completeScoped(root, "agent-session");
+    expect(reviewed.state).toBe("confirm");
+    expect(reviewed.reviewedTemplateIds).toEqual(["agent-session"]);
+    expect(reviewed.proposedPolicy?.templates).toHaveProperty("agent-session");
+    expect(reviewed.proposedPolicy?.templates).not.toHaveProperty("kakaotalk");
+    expect(reviewed.proposedPolicy?.templates["agent-session"]?.contract).toBe("note::agent-session");
+    expect(reviewed.proposedPolicy?.contracts.note).toEqual(policyBefore.contracts.note);
+    const planned = await commitTemplateContracts(target(root), {
+      templateId: "agent-session",
+      censusDigest: reviewed.censusDigest,
+      expectedLedgerDigest: reviewed.expectedLedgerDigest,
+      dryRun: true,
+    });
+    if (planned.status !== "planned") throw new Error("expected a scoped reconcile plan");
+    expect((await commitTemplateContracts(target(root), {
+      templateId: "agent-session",
+      censusDigest: reviewed.censusDigest,
+      expectedLedgerDigest: reviewed.expectedLedgerDigest,
+      approvedDigest: planned.approvalDigest,
+    })).status).toBe("applied");
+
+    const projectionAfter = JSON.parse(await readFile(projectionPath, "utf8")) as {
+      readonly managed: { readonly templates: Readonly<Record<string, unknown>> };
+    };
+    const policyAfter = JSON.parse(await readFile(policyPath, "utf8")) as {
+      readonly templates: Readonly<Record<string, unknown>>;
+      readonly contracts: Readonly<Record<string, unknown>>;
+    };
+    expect(projectionAfter.managed.templates.note).toEqual(projectionBefore.managed.templates.note);
+    expect(policyAfter.templates.note).toEqual(policyBefore.templates.note);
+    expect(policyAfter.contracts.note).toEqual(policyBefore.contracts.note);
+    expect(policyAfter.contracts).toHaveProperty("note::agent-session");
+    expect(await readFile(unrelatedPath)).toEqual(unrelatedBefore);
+    expect(await nextTemplateInterview(target(root), "agent-session")).toMatchObject({ state: "unchanged" });
+    expect(await nextTemplateInterview(target(root))).toMatchObject({
+      state: "question",
+      next: { templateId: "kakaotalk" },
+    });
+  });
+
   it("returns one linear question and leaves next read-only", async () => {
     const root = await fixture({ extra: true });
     const before = await readdir(root);
