@@ -49,10 +49,6 @@ function normalizedSourcePath(value: string): string {
   return value.replaceAll("\\", "/").normalize("NFC");
 }
 
-function normalizedTemplateId(value: string): string {
-  return value.normalize("NFC");
-}
-
 /**
  * One pending key per affected source. Raw drift, a missing or drifted managed
  * draft, and a contract diagnostic are all reasons to offer review; none of
