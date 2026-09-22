@@ -41,7 +41,7 @@ const RETIRED_COMMAND_GUIDANCE: Readonly<Record<string, string>> = {
   doctor: "Use `oms template check`, `oms note audit`, or `oms index repair`.",
   audit: "Use `oms note audit`.",
   reconcile: "Use `oms host sync`.",
-  linkify: "Use `oms link suggest` or `oms link apply`.",
+  linkify: "Use `oms link suggest` or `oms link check`; OMS does not edit note bodies.",
   embed: "Use `oms index embed`.",
   doc: "Use `oms note get`.",
   mcp: "Use `oms serve mcp`.",

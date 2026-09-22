@@ -138,7 +138,6 @@ export async function runSetup(opts: {
       starterTemplates: state.proposal.candidates.filter(candidate => candidate.publication === "write").map(candidate => candidate.sourcePath),
       policyPreimage: manifest.controls[0].expectedCurrent,
       policyProposal: JSON.parse(new TextDecoder().decode(manifest.controls[0].proposed.bytes)) as unknown,
-      inputDigest: manifest.proposed.inputDigest,
       approvalDigest: manifest.approvalDigest,
       outputDigest: manifest.outputDigest,
       ...(proposedModelsConfig === undefined ? {} : { modelsConfig: proposedModelsConfig }),
