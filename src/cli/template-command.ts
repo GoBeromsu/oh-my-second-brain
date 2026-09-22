@@ -7,6 +7,7 @@ import { composeTemplateAdd } from "../kernel/templates/compose-add.js";
 import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
 import { nextTemplateInterview, answerTemplateInterview, commitTemplateContracts } from "../kernel/templates/interview-service.js";
 import { executeTemplateOperation } from "../kernel/templates/operations.js";
+import { repairPendingTemplateSource } from "../kernel/templates/pending-source.js";
 import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
 import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, validateTemplateId } from "../kernel/templates/paths.js";
 import { parseTemplatePolicy } from "../kernel/templates/policy.js";
@@ -24,7 +25,7 @@ type Options = Record<string, string | boolean>;
 interface Parsed { readonly verb: string; readonly positional: readonly string[]; readonly options: Options; }
 type Target = TemplateOperationTarget;
 
-const VALUE_FLAGS = new Set(["vault", "approved-digest", "id", "contract", "naming", "renderer", "folder", "from", "path", "class", "resume", "answer", "census-digest", "ledger-digest"]);
+const VALUE_FLAGS = new Set(["vault", "approved-digest", "id", "template-id", "contract", "naming", "renderer", "folder", "from", "path", "expected-source-digest", "class", "resume", "answer", "census-digest", "ledger-digest"]);
 const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "creation-default", "delete-source", "help"]);
 
 function fail(message: string): never { throw new Error(`TEMPLATE_ARGS_INVALID: ${message}`); }
@@ -182,17 +183,18 @@ async function run(parsed: Parsed): Promise<void> {
     print(summarizedScan(await readTemplateReviewContext(resolved.vault))); return;
   }
   if (parsed.verb === "review") {
-    only(parsed, ["vault"], 0);
+    only(parsed, ["vault", "template-id"], 0);
     const resolved = await target(parsed.options);
-    print(await nextTemplateInterview(resolved)); return;
+    print(await nextTemplateInterview(resolved, text(parsed.options, "template-id"))); return;
   }
   if (parsed.verb === "answer") {
-    only(parsed, ["vault", "answer", "census-digest", "ledger-digest"], 1);
+    only(parsed, ["vault", "template-id", "answer", "census-digest", "ledger-digest"], 1);
     const resolved = await target(parsed.options);
     ensureMutableTarget(resolved);
     const questionId = parsed.positional[0]!;
     if (!DIGEST.test(questionId)) fail("answer requires a sha256:<64hex> question id");
     print(await answerTemplateInterview(resolved, {
+      ...(text(parsed.options, "template-id") === undefined ? {} : { templateId: text(parsed.options, "template-id") }),
       questionId: questionId as Digest,
       answer: answerValue(parsed.options),
       censusDigest: requiredDigest(parsed.options, "census-digest"),
@@ -200,10 +202,11 @@ async function run(parsed: Parsed): Promise<void> {
     })); return;
   }
   if (parsed.verb === "commit") {
-    only(parsed, ["vault", "census-digest", "ledger-digest", "dry-run", "yes", "approved-digest"], 0);
+    only(parsed, ["vault", "template-id", "census-digest", "ledger-digest", "dry-run", "yes", "approved-digest"], 0);
     const resolved = await target(parsed.options);
     ensureMutableTarget(resolved);
     print(await commitTemplateContracts(resolved, {
+      ...(text(parsed.options, "template-id") === undefined ? {} : { templateId: text(parsed.options, "template-id") }),
       censusDigest: requiredDigest(parsed.options, "census-digest"),
       expectedLedgerDigest: expectedLedgerDigest(parsed.options),
       ...guard(parsed.options),
@@ -246,10 +249,10 @@ async function run(parsed: Parsed): Promise<void> {
     fail("template add requires --from for source authoring; per-file registration is not supported");
   }
   if (parsed.verb === "update") {
-    only(parsed, ["vault", "dry-run", "yes", "approved-digest", "contract", "naming", "renderer", "path", "class", "resume"], [0, 1]);
+    only(parsed, ["vault", "dry-run", "yes", "approved-digest", "contract", "naming", "renderer", "path", "from", "expected-source-digest", "class", "resume"], [0, 1]);
     const resume = text(parsed.options, "resume");
     if (resume !== undefined) {
-      if (parsed.positional.length !== 0 || ["contract", "naming", "renderer", "path", "class"].some(name => text(parsed.options, name) !== undefined)) fail("--resume conflicts with update fields and template id");
+      if (parsed.positional.length !== 0 || ["contract", "naming", "renderer", "path", "from", "expected-source-digest", "class"].some(name => text(parsed.options, name) !== undefined)) fail("--resume conflicts with update fields and template id");
       const resolved = await target(parsed.options); ensureMutableTarget(resolved);
       const request = guard(parsed.options);
       if (request.approvedDigest === undefined) fail("--resume requires approved apply, not --dry-run");
@@ -268,7 +271,33 @@ async function run(parsed: Parsed): Promise<void> {
     const resolved = await target(parsed.options); ensureMutableTarget(resolved);
     const current = await policy(resolved.vault);
     const previous = current.templates[id];
-    if (previous === undefined) throw new Error(`TEMPLATE_NOT_FOUND: ${id}`);
+    if (previous === undefined) {
+      const sourcePath = text(parsed.options, "path");
+      const from = text(parsed.options, "from");
+      const expectedSourceDigestText = text(parsed.options, "expected-source-digest");
+      const requestedRenderer = renderer(text(parsed.options, "renderer"));
+      if (
+        sourcePath === undefined
+        || from === undefined
+        || expectedSourceDigestText === undefined
+        || !DIGEST.test(expectedSourceDigestText)
+        || requestedRenderer === undefined
+        || text(parsed.options, "contract") !== undefined
+        || text(parsed.options, "naming") !== undefined
+      ) fail("pending source update requires --path, --from, --expected-source-digest, and --renderer only");
+      const expectedSourceDigest = requiredDigest(parsed.options, "expected-source-digest");
+      print(await repairPendingTemplateSource(resolved, {
+        templateId: id,
+        sourcePath,
+        expectedSourceDigest,
+        renderer: requestedRenderer,
+        bytes: await boundedFile(from),
+      }, guard(parsed.options)));
+      return;
+    }
+    if (text(parsed.options, "from") !== undefined || text(parsed.options, "expected-source-digest") !== undefined) {
+      fail("--from and --expected-source-digest are only valid for a pending source update");
+    }
     const sourcePath = normalizeTemplateSourcePath(text(parsed.options, "path") ?? deriveTemplateSourcePath(previous));
     const bytes = await boundedFile(path.join(resolved.vault, sourcePath));
     const classified = classifyTemplateRenderer(sourcePath, bytes);
@@ -304,16 +333,17 @@ Read-only:
   show <id>
   scan
   check
-  review [--vault <vault>]
+  review [--template-id <id>] [--vault <vault>]
 
 Contract review:
-  answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null> [--vault <vault>]
-  commit --census-digest <digest> --ledger-digest <digest|null> (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]
+  answer <question-id> [--template-id <id>] --answer <JSON> --census-digest <digest> --ledger-digest <digest|null> [--vault <vault>]
+  commit [--template-id <id>] --census-digest <digest> --ledger-digest <digest|null> (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]
 
 Guarded template operations (use --dry-run, then --yes --approved-digest <digest>):
   add <folder> [--creation-default]
   add --id <id> --from <content.md> [--folder <folder>] [--contract <name>] [--naming <pattern>]
   update <id> [--contract <name>] [--naming <pattern>] [--path <file>] [--renderer <renderer>]
+  update <pending-id> --path <existing-file> --from <content.md> --expected-source-digest <digest> --renderer <renderer>
   update <id> --class managed-default|registered-existing
   update --resume <transaction-id> --yes --approved-digest <digest>
   move --folder <registered-folder>

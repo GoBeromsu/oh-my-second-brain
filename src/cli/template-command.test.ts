@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { execute, resume, diagnose, regenerate, load, reviewContext, next, answer, commit } = vi.hoisted(() => ({
+const { execute, repairPending, resume, diagnose, regenerate, load, reviewContext, next, answer, commit } = vi.hoisted(() => ({
   execute: vi.fn(async (_target: any, change: any, request: any) => ({ status: request.dryRun ? "planned" : "applied", mode: change.mode, approvalDigest: `sha256:${"a".repeat(64)}` })),
+  repairPending: vi.fn(async (_target: any, _change: any, request: any) => ({ status: request.dryRun ? "planned" : "applied", mode: "update", approvalDigest: `sha256:${"a".repeat(64)}` })),
   resume: vi.fn(async () => ({ status: "applied", mode: "update" })),
   diagnose: vi.fn(async () => ({ status: "healthy", diagnostics: [] })),
   regenerate: vi.fn(async ({ request }: { request: { dryRun?: boolean } }) => ({ status: request.dryRun ? "planned" : "applied", mode: "reconcile" })),
@@ -29,6 +30,7 @@ const { execute, resume, diagnose, regenerate, load, reviewContext, next, answer
 }));
 
 vi.mock("../kernel/templates/operations.js", () => ({ executeTemplateOperation: execute }));
+vi.mock("../kernel/templates/pending-source.js", () => ({ repairPendingTemplateSource: repairPending }));
 vi.mock("../kernel/templates/transaction.js", () => ({ resumeTemplateTransaction: resume, TEMPLATE_MUTATION_MARKER_PATH: ".oms/template-mutation.json" }));
 vi.mock("../kernel/templates/doctor.js", () => ({ diagnoseTemplates: diagnose, regenerateTypes: regenerate }));
 vi.mock("../kernel/templates/resolver.js", () => ({ loadResolvedTemplates: load }));
@@ -99,7 +101,7 @@ describe("template command", () => {
     const ledgerDigest = `sha256:${"e".repeat(64)}`;
 
     await runTemplateCommand(["review", "--vault", root]);
-    expect(next).toHaveBeenCalledWith({ vault: root, source: "explicit" });
+    expect(next).toHaveBeenCalledWith({ vault: root, source: "explicit" }, undefined);
     await runTemplateCommand(["review", "--vault", root, "--dry-run"]);
     expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
     expect(next).toHaveBeenCalledOnce();
@@ -129,6 +131,36 @@ describe("template command", () => {
       { vault: root, source: "explicit" },
       { censusDigest, expectedLedgerDigest: ledgerDigest, approvedDigest: digest },
     );
+  });
+
+  it("forwards template-scoped review CAS and guarded pending-source repair", async () => {
+    const root = await vault();
+    const proposal = path.join(root, "agent-session.md");
+    await writeFile(proposal, "---\ntitle: Agent Session\n---\n<!-- oms:content -->\n");
+    await runTemplateCommand(["review", "--template-id", "agent-session", "--vault", root]);
+    expect(next).toHaveBeenLastCalledWith({ vault: root, source: "explicit" }, "agent-session");
+
+    await runTemplateCommand([
+      "update", "agent-session",
+      "--path", "Templates/agent-session.md",
+      "--from", proposal,
+      "--expected-source-digest", digest,
+      "--renderer", "obsidian-core",
+      "--vault", root,
+      "--dry-run",
+    ]);
+    expect(repairPending).toHaveBeenCalledWith(
+      { vault: root, source: "explicit" },
+      expect.objectContaining({
+        templateId: "agent-session",
+        sourcePath: "Templates/agent-session.md",
+        expectedSourceDigest: digest,
+        renderer: "obsidian-core",
+        bytes: expect.any(Uint8Array),
+      }),
+      { dryRun: true },
+    );
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("reports needs-repair as warning-only while preserving rejected and inconsistent failures", async () => {

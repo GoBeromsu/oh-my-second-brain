@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- `write { op: "template" }` adds the guarded `repair-pending-source` mode and optional `templateId` scope on `interview-next`, `interview-answer`, and `commit-contracts`. Exact source and approval digests remain mandatory; scoped commits retain full-census CAS and do not consume unrelated review work.
+
 ## [0.15.0] - 2026-09-19
 
 - The bundled MCP SDK now resolves `hono` 4.13.8, clearing the moderate advisory group that affected its HTTP transport's body and query parsing. Only the lockfile moves; no declared dependency is added or changed.

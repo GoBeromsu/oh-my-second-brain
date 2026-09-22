@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { buildTemplateInterview } from "./interview.js";
 import { parseDerivedProjection, parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
 import { readTemplateReviewContext } from "./review-context.js";
+import { scopeTemplateReviewContext } from "./review-scope.js";
 import {
   deriveManagedTemplateProjection,
   sharedAuthoritySignature,
@@ -365,8 +367,11 @@ export async function buildReconcileCompositionManifest(
   change: Extract<TemplateSemanticChange, { readonly mode: "reconcile" }>,
 ): Promise<TemplateCompositionManifest> {
   if (change.ledgerDigest !== null && !DIGEST.test(change.ledgerDigest)) fail("TEMPLATE_RECONCILE_INVALID", "ledgerDigest is invalid");
-  const context = await readTemplateReviewContext(vault);
-  if (context.census.digest !== change.census.digest) fail("TEMPLATE_RECONCILE_STALE", "census changed since the interview snapshot");
+  const fullContext = await readTemplateReviewContext(vault);
+  if (fullContext.census.digest !== change.census.digest) fail("TEMPLATE_RECONCILE_STALE", "census changed since the interview snapshot");
+  const context = change.scopeTemplateId === undefined
+    ? fullContext
+    : scopeTemplateReviewContext(fullContext, change.scopeTemplateId);
   const interview = buildTemplateInterview(context, change.answers);
   if (interview.questions.length > 0) fail("TEMPLATE_RECONCILE_REVIEW_REQUIRED", "interview questions remain unanswered");
   if (interview.proposedPolicy === undefined) fail("TEMPLATE_RECONCILE_REVIEW_REQUIRED", "interview did not produce a proposed policy");
@@ -389,14 +394,14 @@ export async function buildReconcileCompositionManifest(
     ".obsidian/types.json": obsidianState,
   } as const;
   const paths = sourcePathSet(context.policy, proposedPolicy, [
-    ...context.census.entries.map(entry => entry.sourcePath),
-    ...context.census.diffs.flatMap(diff => [diff.sourcePath, diff.oldSourcePath, diff.newSourcePath].filter((value): value is TemplateSourcePath => value !== undefined)),
+    ...fullContext.census.entries.map(entry => entry.sourcePath),
+    ...fullContext.census.diffs.flatMap(diff => [diff.sourcePath, diff.oldSourcePath, diff.newSourcePath].filter((value): value is TemplateSourcePath => value !== undefined)),
   ]);
   const sourceStates = new Map<string, VerifiedFileState>();
   for (const path of paths) sourceStates.set(path, await readReviewedSourceState(root, path));
-  assertReviewedSnapshot(context, controlStates, paths, sourceStates);
+  assertReviewedSnapshot(fullContext, controlStates, paths, sourceStates);
   const followUpContext = await readReviewedContext(root);
-  assertReviewedReviewSnapshot(context, followUpContext);
+  assertReviewedReviewSnapshot(fullContext, followUpContext);
   if (policyState.state !== "present" || taxonomyState.state !== "present" || obsidianState.state !== "present") fail("TEMPLATE_RECONCILE_INVALID", "required controls are missing");
   const currentPolicy = parseTemplatePolicy(decoder.decode(policyState.bytes));
   const taxonomy = taxonomyRouting(".oms/taxonomy.json", taxonomyState.bytes);
@@ -417,9 +422,29 @@ export async function buildReconcileCompositionManifest(
   };
   const proposedBindings = Object.values(proposedPolicy.templates).sort((left, right) => left.templateId.localeCompare(right.templateId));
   const reviewed = new Set(change.reviewedTemplateIds);
+  let priorProjection: DerivedProjection | undefined;
+  if (projectionState.state === "present") {
+    try { priorProjection = parseDerivedProjection(decoder.decode(projectionState.bytes)); } catch { priorProjection = undefined; }
+  }
+  const priorTemplates = priorProjection?.managed.templates ?? {};
+  const priorSourceSignatures = new Map(
+    (priorProjection?.generatedFrom.sources ?? []).flatMap(source =>
+      source.path === undefined ? [] : [[source.path, source.signature] as const]),
+  );
   const proposedTemplates: Record<string, DerivedProjection["managed"]["templates"][string]> = {};
   for (const binding of proposedBindings) {
-    if (!reviewed.has(binding.templateId)) continue;
+    if (!reviewed.has(binding.templateId)) {
+      const currentBinding = currentPolicy.templates[binding.templateId];
+      const priorTemplate = priorTemplates[binding.templateId];
+      if (
+        change.scopeTemplateId !== undefined
+        && currentBinding !== undefined
+        && isDeepStrictEqual(currentBinding, binding)
+        && priorTemplate !== undefined
+        && priorTemplate.sourcePath === deriveTemplateSourcePath(binding)
+      ) proposedTemplates[binding.templateId] = priorTemplate;
+      continue;
+    }
     const path = deriveTemplateSourcePath(binding);
     const state = sourceStates.get(path);
     if (state?.state !== "present") continue;
@@ -438,15 +463,16 @@ export async function buildReconcileCompositionManifest(
     { logicalId: "obsidian-types", signature: proposedControls.obsidianTypes },
     ...proposedBindings.flatMap(binding => {
       if (proposedTemplates[binding.templateId] === undefined) return [];
-      const state = sourceStates.get(deriveTemplateSourcePath(binding));
-      return state?.state === "present" ? [{ path: deriveTemplateSourcePath(binding), signature: state.signature }] : [];
+      const path = deriveTemplateSourcePath(binding);
+      const state = sourceStates.get(path);
+      if (reviewed.has(binding.templateId)) {
+        return state?.state === "present" ? [{ path, signature: state.signature }] : [];
+      }
+      const priorSignature = priorSourceSignatures.get(path);
+      return priorSignature === undefined ? [] : [{ path, signature: priorSignature }];
     }),
   ];
   const proposedInputSignature = sourceSignature(proposedSourceDescriptors);
-  let priorProjection: DerivedProjection | undefined;
-  if (context.projectionUsable && projectionState.state === "present") {
-    try { priorProjection = parseDerivedProjection(decoder.decode(projectionState.bytes)); } catch { priorProjection = undefined; }
-  }
   const proposedProjection: DerivedProjection = {
     version: "oms.types.v1",
     generatedFrom: {
@@ -480,7 +506,7 @@ export async function buildReconcileCompositionManifest(
   const transitions: SourceTransition[] = [];
   for (const path of paths) {
     const state = sourceStates.get(path) ?? { state: "absent" as const };
-    const templateId = idForSource(path, currentByPath, proposedByPath, context);
+    const templateId = idForSource(path, currentByPath, proposedByPath, fullContext);
     transitions.push({
       templateId,
       path,
@@ -491,7 +517,10 @@ export async function buildReconcileCompositionManifest(
     });
   }
   transitions.sort((left, right) => left.templateId.localeCompare(right.templateId) || left.path.localeCompare(right.path));
-  const operations: LogicalOperation[] = proposedBindings.map(binding => ({
+  const operationBindings = change.scopeTemplateId === undefined
+    ? proposedBindings
+    : proposedBindings.filter(binding => reviewed.has(binding.templateId));
+  const operations: LogicalOperation[] = operationBindings.map(binding => ({
     kind: "reconcile",
     templateId: binding.templateId,
     destinationClass: binding.destinationClass,

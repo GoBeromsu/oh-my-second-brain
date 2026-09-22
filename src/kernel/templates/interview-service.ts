@@ -11,7 +11,9 @@ import {
 } from "./interview-ledger.js";
 import { buildReconcileCompositionManifest } from "./reconcile.js";
 import { readTemplateReviewContext, type TemplateReviewContext } from "./review-context.js";
+import { scopeTemplateReviewContext } from "./review-scope.js";
 import { executeTemplateOperation, type TemplateOperationTarget } from "./operations.js";
+import { validateTemplateId } from "./paths.js";
 import type {
   Diagnostic,
   Digest,
@@ -42,6 +44,7 @@ const BLOCKING = new Set<Diagnostic["code"]>([
 export type TemplateInterviewServiceState = "question" | "confirm" | "unchanged" | "blocked";
 
 export interface TemplateInterviewAnswerRequest {
+  readonly templateId?: string;
   readonly questionId: Digest;
   readonly answer: JsonValue;
   readonly censusDigest: Digest;
@@ -49,6 +52,7 @@ export interface TemplateInterviewAnswerRequest {
 }
 
 export interface TemplateInterviewCommitRequest {
+  readonly templateId?: string;
   readonly censusDigest: Digest;
   readonly expectedLedgerDigest: Digest | null;
   readonly dryRun?: boolean;
@@ -97,6 +101,7 @@ interface ModelResult {
   readonly ledgerDigest: Digest | null;
   readonly answers: Readonly<Record<string, InterviewLedgerAnswer>>;
   readonly diagnostics: readonly Diagnostic[];
+  readonly scopeTemplateId?: TemplateId;
 }
 
 function isDigest(value: unknown): value is Digest {
@@ -167,7 +172,12 @@ function isQuestionKind(value: unknown): value is TemplateInterviewQuestion["kin
   return typeof value === "string" && QUESTION_KINDS.has(value as TemplateInterviewQuestion["kind"]);
 }
 
-function hasWork(context: TemplateReviewContext): boolean {
+function hasWork(context: TemplateReviewContext, scopeTemplateId?: TemplateId): boolean {
+  if (scopeTemplateId !== undefined) {
+    return context.census.diffs.length > 0
+      || context.census.diagnostics.length > 0
+      || (context.policy.templates[scopeTemplateId] !== undefined && !context.freshTemplateIds.includes(scopeTemplateId));
+  }
   return context.census.diffs.length > 0
     || context.census.diagnostics.length > 0
     || !context.projectionUsable
@@ -229,20 +239,22 @@ function validateAnswerRequest(request: TemplateInterviewAnswerRequest): void {
   if (
     request === null
     || typeof request !== "object"
+    || (request.templateId !== undefined && typeof request.templateId !== "string")
     || !isDigest(request.questionId)
     || !isDigest(request.censusDigest)
     || !(request.expectedLedgerDigest === null || isDigest(request.expectedLedgerDigest))
-  ) throw codedError("TEMPLATE_INTERVIEW_ANSWER_INVALID", "questionId, censusDigest, and expectedLedgerDigest are invalid");
+  ) throw codedError("TEMPLATE_INTERVIEW_ANSWER_INVALID", "templateId, questionId, censusDigest, and expectedLedgerDigest are invalid");
 }
 
 function validateCommitRequest(request: TemplateInterviewCommitRequest): asserts request is TemplateInterviewCommitRequest & GuardedTemplateRequest {
   if (
     request === null
     || typeof request !== "object"
+    || (request.templateId !== undefined && typeof request.templateId !== "string")
     || !isDigest(request.censusDigest)
     || !(request.expectedLedgerDigest === null || isDigest(request.expectedLedgerDigest))
     || !validGuardedRequest(request)
-  ) throw codedError("TEMPLATE_RECONCILE_INVALID", "census/ledger CAS and guarded request are invalid");
+  ) throw codedError("TEMPLATE_RECONCILE_INVALID", "template scope, census/ledger CAS, and guarded request are invalid");
 }
 
 function appendEvent(vault: string, invocation: RuntimeInvocation, input: RuntimeEventInput): void {
@@ -337,7 +349,7 @@ async function resultFromModel(
   if (blocking(model.diagnostics) || interview.proposedPolicy === undefined) {
     return { state: "blocked", ...base };
   }
-  if (!hasWork(context)) return { state: "unchanged", ...base };
+  if (!hasWork(context, model.scopeTemplateId)) return { state: "unchanged", ...base };
   const change = reconcileChange(model);
   const proposal = compactProposal(await buildReconcileCompositionManifest(context.vault, change));
   return {
@@ -356,6 +368,7 @@ function makeModel(
   answers: Readonly<Record<string, InterviewLedgerAnswer>>,
   ledgerDigest: Digest | null,
   extraDiagnostics: readonly Diagnostic[] = [],
+  scopeTemplateId?: TemplateId,
 ): ModelResult {
   const interview = buildTemplateInterview(context, answers);
   return {
@@ -364,6 +377,7 @@ function makeModel(
     ledgerDigest,
     answers,
     diagnostics: [...extraDiagnostics, ...interview.diagnostics],
+    ...(scopeTemplateId === undefined ? {} : { scopeTemplateId }),
   };
 }
 
@@ -379,6 +393,7 @@ function reconcileChange(model: ModelResult): ReconcileChange {
     answers: model.answers,
     proposedPolicy: model.interview.proposedPolicy,
     reviewedTemplateIds: model.interview.reviewedTemplateIds,
+    ...(model.scopeTemplateId === undefined ? {} : { scopeTemplateId: model.scopeTemplateId }),
   };
 }
 
@@ -388,8 +403,9 @@ async function model(
   ledgerDigest: Digest | null,
   invocation: RuntimeInvocation,
   extraDiagnostics: readonly Diagnostic[] = [],
+  scopeTemplateId?: TemplateId,
 ): Promise<TemplateInterviewServiceResult> {
-  const current = makeModel(context, answers, ledgerDigest, extraDiagnostics);
+  const current = makeModel(context, answers, ledgerDigest, extraDiagnostics, scopeTemplateId);
   return resultFromModel(current, invocation);
 }
 
@@ -501,9 +517,14 @@ function recordCommitEvent(vault: string, receipt: TemplateTransactionReceipt): 
 }
 
 /** Reads the current review model without writing the vault or interview ledger. */
-export async function nextTemplateInterview(target: TemplateOperationTarget): Promise<TemplateInterviewServiceResult> {
+export async function nextTemplateInterview(
+  target: TemplateOperationTarget,
+  requestedTemplateId?: string,
+): Promise<TemplateInterviewServiceResult> {
   const invocation = createRuntimeInvocation({ surface: "kernel", operation: "template-interview-next", packageVersion: readBundledPackageVersion() });
-  const context = await readTemplateReviewContext(target.vault);
+  const fullContext = await readTemplateReviewContext(target.vault);
+  const scopeTemplateId = requestedTemplateId === undefined ? undefined : validateTemplateId(requestedTemplateId);
+  const context = scopeTemplateId === undefined ? fullContext : scopeTemplateReviewContext(fullContext, scopeTemplateId);
   const snapshot = await readLedgerSnapshot(context.vault);
   try {
     if (snapshot.invalidDiagnostic !== undefined) {
@@ -520,6 +541,7 @@ export async function nextTemplateInterview(target: TemplateOperationTarget): Pr
       snapshot.read.digest,
       invocation,
       snapshot.invalidDiagnostic === undefined ? [] : [snapshot.invalidDiagnostic],
+      scopeTemplateId,
     );
   } catch (error: unknown) {
     return {
@@ -539,6 +561,7 @@ export async function answerTemplateInterview(
   request: TemplateInterviewAnswerRequest,
 ): Promise<TemplateInterviewServiceResult> {
   validateAnswerRequest(request);
+  const scopeTemplateId = request.templateId === undefined ? undefined : validateTemplateId(request.templateId);
   const invocation = createRuntimeInvocation({ surface: "kernel", operation: "template-interview-answer", packageVersion: readBundledPackageVersion() });
   try {
     return await withInterviewLedgerLock(
@@ -549,7 +572,8 @@ export async function answerTemplateInterview(
         verifyCensus: async () => (await readTemplateReviewContext(target.vault)).censusDigest,
       },
       async locked => {
-        const context = await readTemplateReviewContext(target.vault);
+        const fullContext = await readTemplateReviewContext(target.vault);
+        const context = scopeTemplateId === undefined ? fullContext : scopeTemplateReviewContext(fullContext, scopeTemplateId);
         if (context.censusDigest !== request.censusDigest) stale("the template census changed; re-read before retrying");
         let answersForInterview = locked.answers;
         let interview = buildTemplateInterview(context, answersForInterview);
@@ -596,7 +620,7 @@ export async function answerTemplateInterview(
           context.censusDigest,
           question.templateId,
         );
-        return model(context, answers, saved.digest, invocation);
+        return model(context, answers, saved.digest, invocation, [], scopeTemplateId);
       },
     );
   } catch (error: unknown) {
@@ -611,13 +635,15 @@ export async function commitTemplateContracts(
   request: TemplateInterviewCommitRequest,
 ): Promise<TemplateTransactionReceipt> {
   validateCommitRequest(request);
+  const scopeTemplateId = request.templateId === undefined ? undefined : validateTemplateId(request.templateId);
   if (request.dryRun === true) {
     try {
-      const context = await readTemplateReviewContext(target.vault);
+      const fullContext = await readTemplateReviewContext(target.vault);
+      const context = scopeTemplateId === undefined ? fullContext : scopeTemplateReviewContext(fullContext, scopeTemplateId);
       if (context.censusDigest !== request.censusDigest) stale("the template census changed; re-read before retrying");
       const snapshot = await readLedgerSnapshot(context.vault);
       if (snapshot.read.digest !== request.expectedLedgerDigest) stale("the interview ledger changed; re-read before retrying");
-      const model = makeModel(context, snapshot.answers, snapshot.read.digest);
+      const model = makeModel(context, snapshot.answers, snapshot.read.digest, [], scopeTemplateId);
       const change = reconcileChange(model);
       const receipt = await executeTemplateOperation(target, change, request);
       const [afterContext, afterLedger] = await Promise.all([
@@ -645,9 +671,10 @@ export async function commitTemplateContracts(
         verifyCensus: async () => (await readTemplateReviewContext(target.vault)).censusDigest,
       },
       async locked => {
-        const context = await readTemplateReviewContext(target.vault);
+        const fullContext = await readTemplateReviewContext(target.vault);
+        const context = scopeTemplateId === undefined ? fullContext : scopeTemplateReviewContext(fullContext, scopeTemplateId);
         if (context.censusDigest !== request.censusDigest) stale("the template census changed; re-read before retrying");
-        const change = reconcileChange(makeModel(context, locked.answers, locked.ledgerDigest));
+        const change = reconcileChange(makeModel(context, locked.answers, locked.ledgerDigest, [], scopeTemplateId));
         const receipt = await executeTemplateOperation(target, change, request);
         recordCommitEvent(context.vault, receipt);
         return receipt;

@@ -45,6 +45,7 @@ import {
 } from "../kernel/semantic/semantic-engine.js";
 import { applyLinksForNote, linkApplyPayload, suggestLinksForNote } from "./link-tools.js";
 import { executeTemplateOperation } from "../kernel/templates/operations.js";
+import { repairPendingTemplateSource } from "../kernel/templates/pending-source.js";
 import {
   answerTemplateInterview,
   commitTemplateContracts,
@@ -193,12 +194,13 @@ const contextProperties = { template: string, folder: string, property: string, 
 const renderer = { ...string, enum: ["obsidian-core", "templater", "none"] };
 const templateBinding = { type: "object", additionalProperties: false, properties: { templateId: string, destinationClass: { ...string, enum: ["managed-default", "registered-existing"] }, renderer, sourceFolder: string, sourcePath: string, contract: string, naming: string }, required: ["templateId", "destinationClass", "renderer", "sourceFolder", "sourcePath", "contract", "naming"] };
 const source = { type: "object", additionalProperties: false, properties: { path: string, content: string, publication: { ...string, enum: ["write", "verify-existing"] } }, required: ["path", "content", "publication"] };
+const pendingSource = { type: "object", additionalProperties: false, properties: { path: string, content: string, expectedDigest: digestSchema, renderer }, required: ["path", "content", "expectedDigest", "renderer"] };
 const createSource = { ...source, properties: { ...source.properties, publication: { ...string, const: "write" } } };
 const templateFolder = { type: "object", additionalProperties: false, properties: { path: string, default: { const: true } }, required: ["path"] };
 const operations: Record<string, readonly Operation[]> = {
   write: [
     { op: "note", name: "write-note", properties: { mode: { ...string, enum: ["create", "append", "update"] }, templateId: string, notePath: string, targetFolder: string, frontmatter, body: string, dryRun: boolean } },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "interview-next", "interview-answer", "commit-contracts"] }, templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, folder: templateFolder, deleteSource: boolean, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["create", "update", "repair-pending-source", "reclassify", "relocate-folder", "remove", "default", "register-folder", "interview-next", "interview-answer", "commit-contracts"] }, templateId: string, binding: templateBinding, source, pendingSource, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] }, toClass: { ...string, enum: ["managed-default", "registered-existing"] }, templateFolder: string, folder: templateFolder, deleteSource: boolean, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "apply", name: "oms_link_apply", properties: { notePath: string, folder: string, baseContentHash: string, candidateIds: stringArray }, required: ["notePath", "baseContentHash", "candidateIds"] }],
@@ -265,6 +267,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
       const modes: readonly { readonly mode: string; readonly properties: Record<string, object>; readonly required: readonly string[] }[] = [
         { mode: "create", properties: { binding: templateBinding, source: createSource }, required: ["binding", "source"] },
         { mode: "update", properties: { templateId: string, binding: templateBinding, source, moveStrategy: { ...string, enum: ["oms-managed-rename", "register-already-moved"] } }, required: ["templateId", "binding", "source"] },
+        { mode: "repair-pending-source", properties: { templateId: string, pendingSource }, required: ["templateId", "pendingSource"] },
         { mode: "reclassify", properties: { templateId: string, toClass: { ...string, enum: ["managed-default", "registered-existing"] } }, required: ["templateId", "toClass"] },
         { mode: "relocate-folder", properties: { templateFolder: string }, required: ["templateFolder"] },
         { mode: "remove", properties: { templateId: string, deleteSource: boolean }, required: ["templateId", "deleteSource"] },
@@ -298,6 +301,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
         properties: {
           op: { ...string, const: "template" },
           mode: { const: "interview-next" },
+          templateId: string,
         },
         required: ["op", "mode"],
       });
@@ -310,6 +314,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
           answer: jsonValue,
           censusDigest: digestSchema,
           expectedLedgerDigest: nullableDigestSchema,
+          templateId: string,
         },
         required: ["op", "mode", "questionId", "answer", "censusDigest", "expectedLedgerDigest"],
       });
@@ -320,6 +325,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
           mode: { const: "commit-contracts" },
           censusDigest: digestSchema,
           expectedLedgerDigest: nullableDigestSchema,
+          templateId: string,
           dryRun: { const: true },
         },
         required: ["op", "mode", "censusDigest", "expectedLedgerDigest", "dryRun"],
@@ -331,6 +337,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
           mode: { const: "commit-contracts" },
           censusDigest: digestSchema,
           expectedLedgerDigest: nullableDigestSchema,
+          templateId: string,
           dryRun: { const: false },
           approvedDigest: digestSchema,
         },
@@ -1084,7 +1091,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
           return errorText("Template interview-next does not accept a guarded request.");
         }
-        return jsonText(await nextTemplateInterview({ vault, source }));
+        return jsonText(await nextTemplateInterview({ vault, source }, stringArg(args, "templateId")));
       }
       if (mode === "interview-answer") {
         if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
@@ -1094,6 +1101,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         const answer = args?.["answer"];
         const censusDigest = args?.["censusDigest"];
         const expectedLedgerDigest = args?.["expectedLedgerDigest"];
+        const templateId = stringArg(args, "templateId");
         if (
           !isDigest(questionId) ||
           !isJsonValue(answer) ||
@@ -1106,6 +1114,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           vault,
           source,
         }, {
+          ...(templateId === undefined ? {} : { templateId }),
           questionId,
           answer,
           censusDigest,
@@ -1115,6 +1124,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       if (mode === "commit-contracts") {
         const censusDigest = args?.["censusDigest"];
         const expectedLedgerDigest = args?.["expectedLedgerDigest"];
+        const templateId = stringArg(args, "templateId");
         const request = guardedTemplateRequest(args);
         if (
           !isDigest(censusDigest) ||
@@ -1127,10 +1137,32 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           vault,
           source,
         }, {
+          ...(templateId === undefined ? {} : { templateId }),
           censusDigest,
           expectedLedgerDigest,
           ...request,
         }));
+      }
+      if (mode === "repair-pending-source") {
+        const templateId = stringArg(args, "templateId");
+        const proposal = args?.["pendingSource"];
+        const request = guardedTemplateRequest(args);
+        if (
+          templateId === undefined
+          || !isRecord(proposal)
+          || typeof proposal["path"] !== "string"
+          || typeof proposal["content"] !== "string"
+          || !isDigest(proposal["expectedDigest"])
+          || (proposal["renderer"] !== "obsidian-core" && proposal["renderer"] !== "templater" && proposal["renderer"] !== "none")
+          || request === undefined
+        ) return errorText("Pending source repair requires templateId, path, content, expectedDigest, renderer, and dryRun:true or an approvedDigest.");
+        return jsonText(await repairPendingTemplateSource({ vault, source }, {
+          templateId,
+          sourcePath: proposal["path"],
+          expectedSourceDigest: proposal["expectedDigest"],
+          renderer: proposal["renderer"],
+          bytes: new TextEncoder().encode(proposal["content"]),
+        }, request));
       }
       const resumeId = stringArg(args, "transactionId");
       const resumeApproval = args?.["approvedDigest"];

@@ -30,6 +30,7 @@ describe("template-native MCP surface", () => {
   it("exposes the linear review protocol with canonical CAS and approval guards", () => {
     const digest = `sha256:${"a".repeat(64)}`;
     expect(validate("write", { op: "template", mode: "interview-next" })).toBe(true);
+    expect(validate("write", { op: "template", mode: "interview-next", templateId: "agent-session" })).toBe(true);
     expect(validate("write", { op: "template", mode: "interview-next", dryRun: true })).toBe(false);
     expect(validate("write", {
       op: "template",
@@ -78,6 +79,28 @@ describe("template-native MCP surface", () => {
       expectedLedgerDigest: null,
       question: [],
     })).toBe(false);
+  });
+
+  it("exposes exact-digest pending-source repair as a guarded branch", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    const request = {
+      op: "template",
+      mode: "repair-pending-source",
+      templateId: "agent-session",
+      pendingSource: {
+        path: "Templates/agent-session.md",
+        content: "---\ntitle: Agent Session\n---\n<!-- oms:content -->\n",
+        expectedDigest: digest,
+        renderer: "obsidian-core",
+      },
+    };
+    expect(validate("write", { ...request, dryRun: true })).toBe(true);
+    expect(validate("write", {
+      ...request,
+      pendingSource: { ...request.pendingSource, expectedDigest: "sha256:BAD" },
+      dryRun: true,
+    })).toBe(false);
+    expect(validate("write", request)).toBe(false);
   });
 
   it("keeps folder registration while retiring per-file and guessed review modes", () => {
