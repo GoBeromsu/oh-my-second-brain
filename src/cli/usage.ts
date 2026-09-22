@@ -33,7 +33,7 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
     ],
   },
   { name: "note", line: "  note     Create, append, update, audit, backfill, or get notes." },
-  { name: "link", line: "  link     Check, suggest, or apply vault wikilinks." },
+  { name: "link", line: "  link     Suggest or check vault wikilinks." },
   { name: "bridge", line: "  bridge   Add, remove, or inspect external-repository vault bridges." },
   { name: "search", line: "  search   Query notes or inspect search context." },
   { name: "index", line: "  index    Sync, embed, repair, inspect, or clean the vault index." },
@@ -76,12 +76,10 @@ export function cliUsageText(registry: HarnessSurfaceRegistry = harnessSurfaceRe
 oh-my-second-brain — Oh My Second Brain convention layer for Obsidian vaults
 
 Usage:
-  oh-my-second-brain setup [--vault <path>] [--template-folder <path> ...]
-                           [--dry-run | --yes --approved-digest <sha256:...>] [--install-claude]
-                           [--models-default | --models-descriptor <path> | --models-no-default]
-  oh-my-second-brain template <list|show|scan|add|update|remove|move|check|default|regenerate-types> [options]
-  oh-my-second-brain note <create|append|update|audit|backfill|get> [options]
-  oh-my-second-brain link <check|suggest|apply> [options]
+  oh-my-second-brain setup [--vault <path>] [--dry-run | --yes --approved-digest <sha256:...>]
+  oh-my-second-brain template <scan|list|show|check|regenerate-types|review|answer|commit> [options]
+  oh-my-second-brain note <guide|check|complete|audit|get> [options]
+  oh-my-second-brain link <suggest|check> [options]
   oh-my-second-brain bridge <add|remove|status> [options]
   oh-my-second-brain search <query|context> [options]
   oh-my-second-brain index <sync|embed|repair|status|clean> [options]
