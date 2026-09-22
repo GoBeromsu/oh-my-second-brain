@@ -1,491 +1,824 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, lstat, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { inputDigest, approvalDigest, outputDigest } from "./canonical.js";
+import { approvalDigest, canonicalJson, digestBytes, hashCanonical, outputDigest, parseDigest } from "./canonical.js";
 import { acquireTransactionLock, atomicWrite, releaseTransactionLock } from "./file-lock.js";
-import { normalizeTemplateControlPath, normalizeTemplateSourcePath, verifyTemplateControlPath, verifyTemplateSourcePath } from "./paths.js";
+import { normalizeManagedTemplatePath, normalizeTemplateControlPath, validateTemplateId, verifyManagedTemplatePath, verifyTemplateControlPath } from "./paths.js";
 import { readBundledPackageVersion } from "../runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../runtime/event-journal.js";
-import type { RuntimeEvent, RuntimeEventOutcome, RuntimeInvocation } from "../runtime/event-types.js";
-import type { ControlPath, Digest, FileExpectation, GuardedTemplateRequest, TemplateCompositionManifest, TemplateTransactionMarkerPath, TemplateTransactionReceipt, TransactionPath, TransactionVerifiedPath, VerifiedFileState } from "./types.js";
+import type {
+  ControlPath,
+  Diagnostic,
+  DiagnosticCode,
+  Digest,
+  FileExpectation,
+  GuardedTemplateRequest,
+  LogicalOperation,
+  ManagedTemplatePath,
+  PlannedPhysicalOutput,
+  TemplateCompositionManifest,
+  TemplateId,
+  TemplateTransactionMarker,
+  TemplateTransactionMarkerPath,
+  TemplateTransactionReceipt,
+  TransactionPath,
+  TransactionVerifiedPath,
+  VerifiedFileState,
+} from "./types.js";
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-const DEFAULT_MARKER_PATH: TemplateTransactionMarkerPath = ".oms/template-migration.json";
-export const TEMPLATE_MUTATION_MARKER_PATH: TemplateTransactionMarkerPath = ".oms/template-transaction.json";
-const DIGEST = /^sha256:[0-9a-f]{64}$/;
-type ManagedPath = TransactionPath | TemplateTransactionMarkerPath;
-type Boundary = { readonly path: TransactionPath; readonly expected: FileExpectation; readonly proposed: VerifiedFileState };
-type DurablePlan = { readonly version: 1; readonly transactionId: string; readonly approvalDigest: Digest; readonly outputDigest: Digest; readonly current: unknown; readonly proposed: unknown; readonly operations: unknown; readonly moves: unknown; readonly outputs: unknown; readonly manifest: string; readonly boundaries: readonly Boundary[]; };
-type Marker = { readonly status: "in-progress" | "complete"; readonly transactionId: string; readonly inputDigest: Digest; readonly approvalDigest: Digest; readonly outputDigest: Digest; readonly planDigest: Digest; readonly checksum: Digest; };
+/**
+ * Sole publication marker. On disk, canonical JSON plus a newline, with required
+ * status, transactionId, approvalDigest, outputDigest, planDigest, and checksum.
+ * checksum is hashCanonical("oms.contract-publish.marker.v1", every field except checksum).
+ * transactionId is the first 32 hex digits of digestBytes(`${approvalDigest}\0${outputDigest}`).
+ * The durable plan is `.oms/.template-transactions/<transactionId>/plan.json`.
+ */
+export const TEMPLATE_TRANSACTION_MARKER_PATH: TemplateTransactionMarkerPath = ".oms/template-transaction.json";
 
-function sha(value: Uint8Array | string): Digest { return `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest; }
-function bytes(value: string): Uint8Array { return encoder.encode(value); }
-function canonical(value: unknown): string {
-  if (value instanceof Uint8Array) return JSON.stringify({ bytes: Buffer.from(value).toString("base64") });
-  if (value === null || typeof value !== "object") { const encoded = JSON.stringify(value); return encoded === undefined ? "null" : encoded; }
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`;
-}
-function diagnostic(code: "MIGRATION_APPROVAL_MISMATCH" | "MIGRATION_RETRY_MISMATCH" | "MIGRATION_PUBLISHED_OUTPUT_CONFLICT" | "TEMPLATE_TRANSACTION_INCONSISTENT" | "TEMPLATE_TRANSACTION_MANIFEST_INVALID" | "migration-incomplete") { return [{ code }] as const; }
-function rejected(manifest: TemplateCompositionManifest, code: "MIGRATION_APPROVAL_MISMATCH" | "MIGRATION_RETRY_MISMATCH" | "MIGRATION_PUBLISHED_OUTPUT_CONFLICT" | "TEMPLATE_TRANSACTION_MANIFEST_INVALID" | "migration-incomplete", repair: readonly TransactionPath[] = []): TemplateTransactionReceipt { return { status: "rejected", mode: manifest.mode, currentInputDigest: manifest.current.inputDigest, proposedInputDigest: manifest.proposed.inputDigest, approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, diagnostics: diagnostic(code), repair }; }
-function inconsistent(manifest: TemplateCompositionManifest, repair: readonly TransactionPath[]): TemplateTransactionReceipt { return { status: "inconsistent", mode: manifest.mode, currentInputDigest: manifest.current.inputDigest, proposedInputDigest: manifest.proposed.inputDigest, approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, diagnostics: diagnostic("TEMPLATE_TRANSACTION_INCONSISTENT"), repair }; }
-async function state(vault: string, path: ManagedPath): Promise<VerifiedFileState> { try { const content = new Uint8Array(await readFile(join(vault, path))); return { state: "present", bytes: content, signature: sha(content) }; } catch (error: unknown) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return { state: "absent" }; throw error; } }
-function matches(actual: VerifiedFileState, expected: FileExpectation): boolean { return actual.state === "absent" || expected.state === "absent" ? actual.state === expected.state : actual.signature === expected.signature; }
-async function verifyPath(vault: string, path: TransactionPath, expectation: FileExpectation): Promise<boolean> { if (path.startsWith(".oms/")) await verifyTemplateControlPath(vault, normalizeTemplateControlPath(path), { expected: "either" }); else await verifyTemplateSourcePath(vault, normalizeTemplateSourcePath(path), { expected: "either" }); return matches(await state(vault, path), expectation); }
-function manifestValid(manifest: TemplateCompositionManifest): boolean {
-  const modes = ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "reconcile"] as const;
-  if (manifest.version !== 1 || !modes.includes(manifest.mode) || manifest.controls.length !== 3 || Object.hasOwn(manifest, "legacyCleanup")) return false;
-  const paths: readonly ControlPath[] = [".oms/template-policy.json", ".oms/taxonomy.json", ".oms/types.json"];
-  if (manifest.mode === "reconcile" && (
-    manifest.sources.some(source => source.action !== "verify-only"
-      || !matches(source.current, source.expectedCurrent)
-      || !matches(source.current, source.proposed))
-    || manifest.outputs.some(output => !paths.some(path => path === output.finalVaultRelativePath))
-    || manifest.moves.some(move => move.strategy === "oms-managed-rename")
-  )) return false;
-  if (!manifest.controls.every((control, index) => control.path === paths[index] && control.proposed.signature === sha(control.proposed.bytes))) return false;
-  try {
-    if (manifest.current.inputDigest !== inputDigest(manifest.current.input) || manifest.proposed.inputDigest !== inputDigest(manifest.proposed.input)) return false;
-    if (manifest.approvalDigest !== approvalDigest(manifest.proposed.inputDigest, manifest.operations, manifest.diagnostics, manifest)) return false;
-    if (manifest.outputDigest !== outputDigest(manifest.outputs)) return false;
-  } catch {
-    return false;
-  }
-  const ordered = <T>(values: readonly T[], key: (value: T) => string): boolean => values.every((value, index) => index === 0 || key(values[index - 1]!) <= key(value));
-  if (!ordered(manifest.sources, source => `${source.templateId}\0${source.path}`) || !ordered(manifest.moves, move => move.templateId)) return false;
-  const sourcePaths = new Set<string>();
-  if (manifest.sources.some(source => sourcePaths.has(source.path) || !sourcePaths.add(source.path))) return false;
-  const outputPaths = new Set<string>();
-  if (manifest.outputs.some(output => outputPaths.has(output.finalVaultRelativePath) || !outputPaths.add(output.finalVaultRelativePath))) return false;
-  return manifest.operations.every(operation => operation.stableRelativeSuffix === null);
-}
-function unchanged(manifest: TemplateCompositionManifest): boolean { return manifest.sources.every(source => source.action === "verify-only") && manifest.controls.every(control => control.action === "verify-only"); }
-function transactionId(manifest: TemplateCompositionManifest): string { return createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32); }
-function isMarkerPath(path: unknown): path is TemplateTransactionMarkerPath { return path === ".oms/template-migration.json" || path === ".oms/template-transaction.json" || path === ".oms/template-backfill.json"; }
-function isTransactionPath(path: ManagedPath): path is TransactionPath { return !isMarkerPath(path); }
-function markerDirectory(markerPath: TemplateTransactionMarkerPath): string { return markerPath.slice(".oms/".length, -".json".length); }
-function transactionDirectory(vault: string, id: string, marker: TemplateTransactionMarkerPath): string { return join(vault, ".oms", ".template-transactions", id, markerDirectory(marker)); }
-async function cleanupCommittedStaging(vault: string, id: string, marker: TemplateTransactionMarkerPath): Promise<void> {
-  const staging = join(transactionDirectory(vault, id, marker), "staging");
-  try {
-    await rm(staging, { recursive: true, force: true });
-  } catch (error: unknown) {
-    const detail = error instanceof Error ? error.message : String(error);
-    try {
-      process.emitWarning(
-        `Committed template transaction ${id} could not remove staging payloads: ${detail}`,
-        { code: "TEMPLATE_TRANSACTION_STAGING_CLEANUP_FAILED" },
-      );
-    } catch {
-      // Cleanup reporting cannot change an already committed vault outcome.
-    }
-  }
-}
-function appendJournalEvent(vault: string, event: RuntimeEvent): void {
-  let failure: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      appendRuntimeEvent(event, { vaultPath: vault });
-      return;
-    } catch (error: unknown) {
-      failure = error;
-    }
-  }
-  const detail = failure instanceof Error ? failure.message : String(failure);
-  try {
-    process.emitWarning(`LEDGER_APPEND_FAILED: ${detail}`, { code: "LEDGER_APPEND_FAILED" });
-  } catch {
-    // Runtime history is non-blocking after the vault outcome is known.
-  }
-}
-function journalInvocation(operation: string): RuntimeInvocation {
-  return createRuntimeInvocation({ surface: "kernel", operation, packageVersion: readBundledPackageVersion() });
-}
-function receiptOutcome(receipt: TemplateTransactionReceipt): RuntimeEventOutcome {
-  if (receipt.status === "rejected") return "rejected";
-  if (receipt.status === "unchanged" || receipt.status === "already-complete") return "unchanged";
-  if (receipt.status === "inconsistent") return "failure";
-  return "success";
-}
-function recordTransactionReceipt(vault: string, invocation: RuntimeInvocation, receipt: TemplateTransactionReceipt, manifest: TemplateCompositionManifest): void {
-  const transactionId = receipt.status === "applied" || receipt.status === "already-complete" ? receipt.transactionId : null;
-  appendJournalEvent(vault, createRuntimeEvent(invocation, {
-    kind: "template-transaction-invocation",
-    outcome: receiptOutcome(receipt),
-    transactionId,
-    inputSignature: "inputDigest" in receipt ? receipt.inputDigest : receipt.proposedInputDigest,
-  }));
-  if (receipt.status !== "applied") return;
-  const signatures = new Map(manifest.proposed.resolvedTemplates.map(template => [template.templateId, template.templateSignature]));
-  const currentBindings = new Map(manifest.current.bindings.map(binding => [binding.templateId, binding]));
-  const proposedBindings = new Map(manifest.proposed.bindings.map(binding => [binding.templateId, binding]));
-  const changedSources = new Set(
-    manifest.sources
-      .filter(source => source.action === "write" || source.action === "delete")
-      .map(source => source.templateId),
-  );
-  for (const operation of receipt.operations) {
-    let kind: string | null = null;
-    if (operation.kind === "create") {
-      kind = currentBindings.has(operation.templateId) ? null : "template-create";
-    } else if (operation.kind === "update") {
-      const before = currentBindings.get(operation.templateId);
-      const after = proposedBindings.get(operation.templateId);
-      if (changedSources.has(operation.templateId) || canonical(before) !== canonical(after)) kind = "template-update";
-    } else if (operation.kind === "reclassify") {
-      const before = currentBindings.get(operation.templateId);
-      const after = proposedBindings.get(operation.templateId);
-      if (before?.destinationClass !== after?.destinationClass) kind = "template-reclassify";
-    } else if (operation.kind === "remove") {
-      if (currentBindings.has(operation.templateId) && !proposedBindings.has(operation.templateId)) kind = "template-remove";
-    } else if (operation.kind === "default") {
-      kind = "template-default";
-    }
-    if (kind === null) continue;
-    appendJournalEvent(vault, createRuntimeEvent(invocation, {
-      kind,
-      outcome: "success",
-      transactionId,
-      templateId: operation.templateId,
-      inputSignature: receipt.inputDigest,
-      templateSignature: signatures.get(operation.templateId) ?? operation.payloadDigest,
-    }));
-  }
-  if (receipt.mode === "register-folder" && manifest.controls.some(control => control.kind === "policy" && control.action === "write")) {
-    appendJournalEvent(vault, createRuntimeEvent(invocation, {
-      kind: "template-folder-register",
-      outcome: "success",
-      transactionId,
-      inputSignature: receipt.inputDigest,
-    }));
-  }
-  for (const move of receipt.moves) {
-    if (move.strategy === "no-op") continue;
-    appendJournalEvent(vault, createRuntimeEvent(invocation, {
-      kind: "template-move",
-      outcome: "success",
-      transactionId,
-      templateId: move.templateId,
-      inputSignature: receipt.inputDigest,
-      templateSignature: move.sourceSignature,
-    }));
-  }
-}
-function recordTransactionFailure(vault: string, invocation: RuntimeInvocation): void {
-  appendJournalEvent(vault, createRuntimeEvent(invocation, { kind: "template-transaction-invocation", outcome: "failure" }));
-}
-function planFor(manifest: TemplateCompositionManifest): DurablePlan {
-  const boundaries: Boundary[] = [
-    ...manifest.sources.filter(source => source.action === "write").sort((left, right) => left.templateId.localeCompare(right.templateId)).map(source => ({ path: source.path as TransactionPath, expected: source.expectedCurrent, proposed: source.proposed })),
-    ...manifest.controls.filter(control => control.action === "write").map(control => ({ path: control.path as TransactionPath, expected: control.expectedCurrent, proposed: control.proposed })),
-    ...manifest.sources.filter(source => source.action === "delete").sort((left, right) => left.templateId.localeCompare(right.templateId)).map(source => ({ path: source.path as TransactionPath, expected: source.expectedCurrent, proposed: source.proposed })),
-  ];
-  return { version: 1, transactionId: transactionId(manifest), approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, current: manifest.current.input, proposed: manifest.proposed.input, operations: manifest.operations, moves: manifest.moves, outputs: manifest.outputs, manifest: canonical(manifest), boundaries };
-}
-function planDigest(plan: DurablePlan): Digest { return sha(canonical(plan)); }
-function markerFor(status: Marker["status"], manifest: TemplateCompositionManifest, plan: DurablePlan): Marker {
-  const bare = { status, transactionId: plan.transactionId, inputDigest: manifest.proposed.inputDigest, approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, planDigest: planDigest(plan) };
-  return { ...bare, checksum: sha(canonical(bare)) };
-}
-function markerBytes(value: Marker): Uint8Array { return bytes(`${canonical(value)}\n`); }
-async function writeDurablePlan(vault: string, marker: TemplateTransactionMarkerPath, plan: DurablePlan): Promise<void> {
-  const directory = transactionDirectory(vault, plan.transactionId, marker);
-  const staging = join(directory, "staging");
-  await mkdir(staging, { recursive: true, mode: 0o700 });
-  await writeFile(join(directory, "plan.json"), `${canonical(plan)}\n`, { mode: 0o600 });
-  await writeFile(join(directory, "progress.json"), "[]\n", { mode: 0o600 });
-  for (const boundary of plan.boundaries) {
-    if (boundary.proposed.state === "absent") continue;
-    const target = join(staging, boundary.path);
-    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-    await writeFile(target, boundary.proposed.bytes, { mode: 0o600 });
-  }
-}
-async function durablePlan(vault: string, marker: TemplateTransactionMarkerPath, value: Marker): Promise<DurablePlan | null> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(join(transactionDirectory(vault, value.transactionId, marker), "plan.json"), "utf8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) || sha(canonical(parsed)) !== value.planDigest) return null;
-    const raw = parsed as DurablePlan;
-    const boundaries = raw.boundaries.map((boundary): Boundary => {
-      if (boundary.proposed.state === "absent") return boundary;
-      const encoded = boundary.proposed.bytes as unknown;
-      if (
-        typeof encoded !== "object" ||
-        encoded === null ||
-        Array.isArray(encoded) ||
-        typeof (encoded as { readonly bytes?: unknown }).bytes !== "string"
-      ) {
-        throw new Error("invalid staged bytes");
-      }
-      const revived = new Uint8Array(Buffer.from((encoded as { readonly bytes: string }).bytes, "base64"));
-      if (sha(revived) !== boundary.proposed.signature) throw new Error("invalid staged digest");
-      return { ...boundary, proposed: { ...boundary.proposed, bytes: revived } };
-    });
-    const plan = { ...raw, boundaries };
-    if (plan.version !== 1 || plan.transactionId !== value.transactionId || plan.approvalDigest !== value.approvalDigest || plan.outputDigest !== value.outputDigest || !Array.isArray(plan.boundaries) || typeof plan.manifest !== "string" || !("current" in plan) || !("proposed" in plan) || !("operations" in plan) || !("moves" in plan) || !("outputs" in plan)) return null;
-    return plan;
-  } catch { return null; }
-}
-async function readMarker(vault: string, marker: TemplateTransactionMarkerPath): Promise<{ readonly state: "absent" } | { readonly state: "invalid" } | { readonly state: "valid"; readonly marker: Marker; readonly plan: DurablePlan | null }> {
-  const value = await state(vault, marker);
-  if (value.state === "absent") return { state: "absent" };
-  try {
-    const parsed: unknown = JSON.parse(decoder.decode(value.bytes));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { state: "invalid" };
-    const candidate = parsed as Marker;
-    const bare = { status: candidate.status, transactionId: candidate.transactionId, inputDigest: candidate.inputDigest, approvalDigest: candidate.approvalDigest, outputDigest: candidate.outputDigest, planDigest: candidate.planDigest };
-    if (
-      (candidate.status !== "in-progress" && candidate.status !== "complete") ||
-      !/^[0-9a-f]{32}$/.test(candidate.transactionId) ||
-      !DIGEST.test(candidate.inputDigest) ||
-      !DIGEST.test(candidate.approvalDigest) ||
-      !DIGEST.test(candidate.outputDigest) ||
-      !DIGEST.test(candidate.planDigest) ||
-      !DIGEST.test(candidate.checksum) ||
-      sha(canonical(bare)) !== candidate.checksum
-    ) return { state: "invalid" };
-    const plan = await durablePlan(vault, marker, candidate);
-    return plan === null && candidate.status === "in-progress"
-      ? { state: "invalid" }
-      : { state: "valid", marker: candidate, plan };
-  } catch { return { state: "invalid" }; }
-}
-export async function templateMigrationAdmission(vault: string): Promise<"clear" | "migration-incomplete"> { const value = await readMarker(vault, DEFAULT_MARKER_PATH); return value.state === "valid" && value.marker.status === "complete" || value.state === "absent" ? "clear" : "migration-incomplete"; }
-export async function templateMigrationMarkerState(vault: string): Promise<"absent" | "in-progress" | "complete" | "invalid"> { const value = await readMarker(vault, DEFAULT_MARKER_PATH); return value.state === "valid" ? value.marker.status : value.state; }
-type Published = { readonly path: ManagedPath; readonly old: VerifiedFileState; readonly newState: VerifiedFileState };
-async function publish(vault: string, path: ManagedPath, proposed: VerifiedFileState, published: Published[]): Promise<void> {
-  const old = await state(vault, path);
-  if (proposed.state === "absent") await rm(join(vault, path), { force: true });
-  else await atomicWrite(join(vault, path), proposed.bytes);
-  published.push({ path, old, newState: proposed });
-}
-async function rollback(vault: string, published: readonly Published[]): Promise<boolean> {
-  for (const item of [...published].reverse()) {
-    try {
-      const current = await state(vault, item.path);
-      if (!matches(current, item.newState)) return false;
-      if (item.old.state === "absent") await rm(join(vault, item.path), { force: true });
-      else await atomicWrite(join(vault, item.path), item.old.bytes);
-      if (!matches(await state(vault, item.path), item.old)) return false;
-    } catch { return false; }
-  }
-  return true;
-}
-function verified(path: TransactionPath, value: VerifiedFileState): TransactionVerifiedPath { return value.state === "absent" ? { path, state: "absent" } : { path, state: "present", payloadDigest: value.signature }; }
-function reviveState(value: unknown): VerifiedFileState {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("invalid durable state");
-  const record = value as Record<string, unknown>;
-  if (record["state"] === "absent") return { state: "absent" };
-  const encoded = record["bytes"];
-  if (
-    record["state"] !== "present" ||
-    typeof record["signature"] !== "string" ||
-    typeof encoded !== "object" ||
-    encoded === null ||
-    Array.isArray(encoded) ||
-    typeof (encoded as { readonly bytes?: unknown }).bytes !== "string"
-  ) {
-    throw new Error("invalid durable state");
-  }
-  const content = new Uint8Array(Buffer.from((encoded as { readonly bytes: string }).bytes, "base64"));
-  if (sha(content) !== record["signature"]) throw new Error("invalid durable state digest");
-  return { state: "present", bytes: content, signature: record["signature"] as Digest };
-}
-function manifestFromPlan(plan: DurablePlan): TemplateCompositionManifest | null {
-  try {
-    const parsed = JSON.parse(plan.manifest) as unknown;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-    const record = parsed as Record<string, unknown>;
-    if (!Array.isArray(record["controls"]) || !Array.isArray(record["sources"])) return null;
-    const controls = record["controls"].map((control) => {
-      if (typeof control !== "object" || control === null || Array.isArray(control)) throw new Error("invalid durable control");
-      const item = control as Record<string, unknown>;
-      return { ...item, current: reviveState(item["current"]), proposed: reviveState(item["proposed"]) };
-    });
-    const sources = record["sources"].map((source) => {
-      if (typeof source !== "object" || source === null || Array.isArray(source)) throw new Error("invalid durable source");
-      const item = source as Record<string, unknown>;
-      return { ...item, current: reviveState(item["current"]), proposed: reviveState(item["proposed"]) };
-    });
-    const manifest = { ...record, controls, sources } as unknown as TemplateCompositionManifest;
-    return manifestValid(manifest) ? manifest : null;
-  } catch {
-    return null;
-  }
+const CONTROL_SPECS = [
+  { kind: "policy", path: ".oms/template-policy.json" },
+  { kind: "taxonomy", path: ".oms/taxonomy.json" },
+  { kind: "projection", path: ".oms/types.json" },
+] as const;
+
+const DIAGNOSTIC_CODES = new Set<DiagnosticCode>([
+  "TEMPLATE_ID_DUPLICATE",
+  "TEMPLATE_SOURCE_DUPLICATE",
+  "TEMPLATE_SOURCE_UNSAFE",
+  "TEMPLATE_SOURCE_INVALID",
+  "TEMPLATE_POLICY_INVALID",
+  "TEMPLATE_POLICY_VERSION_UNSUPPORTED",
+  "TEMPLATE_POLICY_DANGLING_FIELD",
+  "TEMPLATE_EXTENSION_RESERVED",
+  "TEMPLATE_EXTENSION_CONFLICT",
+  "CONTRACT_COMPOSITION_CONFLICT",
+  "CONTRACT_UNVERIFIABLE",
+  "SOURCE_DRIFT",
+  "MANAGED_TEMPLATE_DRIFT",
+  "CONTRACT_TRANSACTION_IN_PROGRESS",
+  "PROJECTION_INVALID",
+  "PROJECTION_PAYLOAD_TAMPERED",
+  "OBSIDIAN_TYPE_CONFLICT",
+  "RUBRIC_INVALID",
+  "TEMPLATE_TRANSACTION_INCONSISTENT",
+  "TEMPLATE_TRANSACTION_MANIFEST_INVALID",
+]);
+
+interface Transition {
+  readonly path: TransactionPath;
+  readonly templateId: TemplateId | null;
+  readonly expectedCurrent: FileExpectation;
+  readonly proposed: VerifiedFileState;
+  readonly action: "write" | "verify-only";
 }
 
-/** Resumes one persisted in-progress transaction without rebuilding stale filesystem preflight state. */
-async function resumeTemplateTransactionInternal(
-  vault: string,
-  transactionId: string,
-  approvedDigest: Digest,
-  markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH,
-): Promise<TemplateTransactionReceipt> {
-  const active = await readMarker(vault, markerPath);
-  if (
-    active.state !== "valid" ||
-    active.marker.status !== "in-progress" ||
-    active.marker.transactionId !== transactionId ||
-    active.marker.approvalDigest !== approvedDigest
-  ) {
-    throw new Error("MIGRATION_RETRY_MISMATCH");
-  }
-  const manifest = active.plan === null ? null : manifestFromPlan(active.plan);
-  if (manifest === null) throw new Error("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
-  return executeTemplateTransactionInternal(vault, manifest, { approvedDigest }, markerPath);
+interface PlanBoundary {
+  readonly path: TransactionPath;
+  readonly templateId: TemplateId | null;
+  readonly expected: FileExpectation;
+  readonly proposed: FileExpectation;
 }
 
-export async function resumeTemplateTransaction(
-  vault: string,
-  transactionId: string,
-  approvedDigest: Digest,
-  markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH,
-): Promise<TemplateTransactionReceipt> {
-  const invocation = journalInvocation("resume-template-transaction");
-  try {
-    const receipt = await resumeTemplateTransactionInternal(vault, transactionId, approvedDigest, markerPath);
-    const active = await readMarker(vault, markerPath);
-    const manifest = active.state === "valid" && active.plan !== null ? manifestFromPlan(active.plan) : null;
-    if (manifest === null) recordTransactionFailure(vault, invocation);
-    else recordTransactionReceipt(vault, invocation, receipt, manifest);
-    return receipt;
-  } catch (error: unknown) {
-    recordTransactionFailure(vault, invocation);
-    throw error;
-  }
-}
-
-/** Returns a verified receipt for an already completed durable transaction. */
-export interface CompletedTemplateTransaction {
+interface DurablePlan {
+  readonly version: 1;
   readonly transactionId: string;
-  readonly inputDigest: Digest;
   readonly approvalDigest: Digest;
   readonly outputDigest: Digest;
-  readonly verified: readonly TransactionVerifiedPath[];
+  readonly planDigest: Digest;
+  readonly boundaries: readonly PlanBoundary[];
+  readonly outputs: readonly PlannedPhysicalOutput[];
 }
 
-export interface CompletedTemplateTransactionExpectation {
-  readonly inputDigest: Digest;
-  readonly outputs: readonly { readonly finalVaultRelativePath: TransactionPath; }[];
+interface StoredMarker {
+  readonly status: "in-progress" | "complete";
+  readonly transactionId: string;
+  readonly approvalDigest: Digest;
+  readonly outputDigest: Digest;
+  readonly planDigest: Digest;
 }
 
-export async function completedTemplateTransaction(
-  vault: string,
-  approvedDigest: Digest,
-  expected: CompletedTemplateTransactionExpectation,
-  markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH,
-): Promise<CompletedTemplateTransaction | null> {
-  const active = await readMarker(vault, markerPath);
-  if (
-    active.state !== "valid" ||
-    active.marker.status !== "complete" ||
-    active.marker.approvalDigest !== approvedDigest
-  ) {
+type MarkerRead =
+  | { readonly state: "absent"; readonly root: string }
+  | { readonly state: "invalid"; readonly root: string }
+  | { readonly state: "in-progress"; readonly root: string; readonly marker: StoredMarker; readonly plan: DurablePlan }
+  | { readonly state: "complete"; readonly root: string; readonly marker: StoredMarker; readonly plan: DurablePlan };
+
+export interface TemplateTransactionMarkerInspection {
+  readonly admission: "clear" | "blocked";
+  readonly state: "absent" | "in-progress" | "complete" | "invalid";
+  readonly marker: TemplateTransactionMarker | null;
+}
+
+class PublicationHalt extends Error {
+  constructor(readonly item: Diagnostic) {
+    super(item.message ?? item.code);
+    this.name = "PublicationHalt";
+  }
+}
+
+function diagnostic(code: DiagnosticCode, message: string, path?: string): Diagnostic {
+  return path === undefined ? { code, message } : { code, message, path };
+}
+
+function problem(
+  status: "rejected" | "resume-required" | "inconsistent",
+  approval: Digest | null,
+  output: Digest | null,
+  item: Diagnostic,
+): TemplateTransactionReceipt {
+  return { status, approvalDigest: approval, outputDigest: output, diagnostics: [item] };
+}
+
+function rejected(approval: Digest | null, output: Digest | null, item: Diagnostic): TemplateTransactionReceipt {
+  return problem("rejected", approval, output, item);
+}
+
+function resumeRequired(approval: Digest, output: Digest, message: string): TemplateTransactionReceipt {
+  return problem("resume-required", approval, output, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", message));
+}
+
+function inconsistent(approval: Digest | null, output: Digest | null, item: Diagnostic): TemplateTransactionReceipt {
+  return problem("inconsistent", approval, output, item);
+}
+
+function manifestRejected(manifest: TemplateCompositionManifest, item: Diagnostic): TemplateTransactionReceipt {
+  return rejected(digestOrNull(manifest.approvalDigest), digestOrNull(manifest.outputDigest), item);
+}
+
+function pathDiagnostic(error: unknown): Diagnostic {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("TEMPLATE_SOURCE_UNSAFE")) return diagnostic("TEMPLATE_SOURCE_UNSAFE", message);
+  if (message.startsWith("TEMPLATE_SOURCE_INVALID")) return diagnostic("TEMPLATE_SOURCE_INVALID", message);
+  return diagnostic("TEMPLATE_TRANSACTION_INCONSISTENT", message);
+}
+
+function errorCode(error: unknown): string | null {
+  return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function digestOrNull(value: unknown): Digest | null {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed = parseDigest(value);
+    return parsed === value ? parsed : null;
+  } catch {
     return null;
   }
-  const states = await Promise.all(expected.outputs.map(async (item) => ({ path: item.finalVaultRelativePath, state: await state(vault, item.finalVaultRelativePath) })));
-  if (states.some((item) => item.state.state === "absent")) return null;
-  const currentOutputs = states.map((item) => {
-    if (item.state.state === "absent") throw new Error("unreachable absent completed output");
-    return { finalVaultRelativePath: item.path, payloadDigest: item.state.signature };
-  });
-  const currentOutputDigest = outputDigest(currentOutputs);
-  if (active.marker.inputDigest !== expected.inputDigest || active.marker.outputDigest !== currentOutputDigest) return null;
+}
+
+function isControlPath(path: string): path is ControlPath {
+  return path === ".oms/template-policy.json" || path === ".oms/taxonomy.json" || path === ".oms/types.json";
+}
+
+function canonicalManaged(path: string): ManagedTemplatePath | null {
+  try {
+    const managed = normalizeManagedTemplatePath(path);
+    return managed === path ? managed : null;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalTransactionPath(path: string): TransactionPath | null {
+  if (isControlPath(path)) return path;
+  return canonicalManaged(path);
+}
+
+function expectationOf(value: FileExpectation | VerifiedFileState): FileExpectation {
+  return value.state === "absent" ? { state: "absent" } : { state: "present", signature: value.signature };
+}
+
+function sameFile(actual: VerifiedFileState, expected: FileExpectation | VerifiedFileState): boolean {
+  const left = expectationOf(actual);
+  const right = expectationOf(expected);
+  return left.state === "absent" || right.state === "absent" ? left.state === right.state : left.signature === right.signature;
+}
+
+function publicationId(approval: Digest, output: Digest): string {
+  return digestBytes(`${approval}\0${output}`).slice("sha256:".length, "sha256:".length + 32);
+}
+
+function rank(path: string): number {
+  if (path === ".oms/template-policy.json") return 0;
+  if (path === ".oms/taxonomy.json") return 1;
+  if (path === ".oms/types.json") return 2;
+  return 3;
+}
+
+function byPublication(left: { readonly path: string }, right: { readonly path: string }): number {
+  const difference = rank(left.path) - rank(right.path);
+  if (difference !== 0) return difference;
+  return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
+}
+
+function coherentExpectation(value: FileExpectation): boolean {
+  return value.state === "absent" ? true : digestOrNull(value.signature) === value.signature;
+}
+
+function coherentState(value: VerifiedFileState): boolean {
+  if (value.state === "absent") return true;
+  if (!(value.bytes instanceof Uint8Array) || digestOrNull(value.signature) !== value.signature) return false;
+  return digestBytes(value.bytes) === value.signature;
+}
+
+function canonicalTemplateId(value: TemplateId | null): TemplateId | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "string" || value === "default") return undefined;
+  try {
+    const canonical = validateTemplateId(value);
+    return canonical === value ? canonical : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function invalidManifest(message: string, path?: string): Diagnostic {
+  return diagnostic("TEMPLATE_TRANSACTION_MANIFEST_INVALID", message, path);
+}
+
+function validateManifest(manifest: TemplateCompositionManifest): { readonly ok: true; readonly transitions: readonly Transition[] } | { readonly ok: false; readonly diagnostic: Diagnostic } {
+  if (manifest.version !== 1 || manifest.markerPath !== TEMPLATE_TRANSACTION_MARKER_PATH) {
+    return { ok: false, diagnostic: invalidManifest("publication manifest must be version 1 with the single template transaction marker") };
+  }
+  if (!Array.isArray(manifest.controls) || manifest.controls.length !== 3 || !Array.isArray(manifest.drafts) || !Array.isArray(manifest.operations) || !Array.isArray(manifest.diagnostics) || !Array.isArray(manifest.outputs)) {
+    return { ok: false, diagnostic: invalidManifest("publication manifest collections are invalid") };
+  }
+  const transitions: Transition[] = [];
+  for (let index = 0; index < CONTROL_SPECS.length; index += 1) {
+    const spec = CONTROL_SPECS[index];
+    if (spec === undefined) return { ok: false, diagnostic: invalidManifest("controls must be policy, taxonomy, and projection in that order") };
+    const control = manifest.controls[index];
+    if (control === undefined || control.kind !== spec.kind || control.path !== spec.path || (control.action !== "write" && control.action !== "verify-only")) {
+      return { ok: false, diagnostic: invalidManifest("controls must be policy, taxonomy, and projection in that order", spec.path) };
+    }
+    if (!coherentExpectation(control.expectedCurrent) || !coherentState(control.current) || !coherentState(control.proposed) || control.proposed.state !== "present") {
+      return { ok: false, diagnostic: invalidManifest("control preimage or proposed bytes are not internally hashed", spec.path) };
+    }
+    if (control.action === "verify-only" && !sameFile(control.proposed, control.expectedCurrent)) {
+      return { ok: false, diagnostic: invalidManifest("verify-only control proposes different bytes", spec.path) };
+    }
+    transitions.push({ path: spec.path, templateId: null, expectedCurrent: control.expectedCurrent, proposed: control.proposed, action: control.action });
+  }
+  const seen = new Set<string>();
+  for (const draft of manifest.drafts) {
+    const path = canonicalManaged(draft.path);
+    if (path === null) return { ok: false, diagnostic: diagnostic("TEMPLATE_SOURCE_UNSAFE", "draft output is not .oms/templates/<id>.md", draft.path) };
+    if (seen.has(path) || (draft.action !== "write" && draft.action !== "verify-only")) {
+      return { ok: false, diagnostic: invalidManifest("managed drafts must be unique write or verify-only paths", path) };
+    }
+    const templateId = canonicalTemplateId(draft.templateId);
+    if (templateId === undefined) return { ok: false, diagnostic: invalidManifest("draft templateId is not canonical", path) };
+    if (path !== `.oms/templates/${templateId ?? "default"}.md`) {
+      return { ok: false, diagnostic: invalidManifest("draft path does not match its template identity", path) };
+    }
+    if (!coherentExpectation(draft.expectedCurrent) || !coherentState(draft.current) || !coherentState(draft.proposed)) {
+      return { ok: false, diagnostic: invalidManifest("draft preimage or proposed bytes are not internally hashed", path) };
+    }
+    if (draft.action === "verify-only" && !sameFile(draft.proposed, draft.expectedCurrent)) {
+      return { ok: false, diagnostic: invalidManifest("verify-only draft proposes different bytes", path) };
+    }
+    seen.add(path);
+    transitions.push({ path, templateId, expectedCurrent: draft.expectedCurrent, proposed: draft.proposed, action: draft.action });
+  }
+  const expectedOutputs = new Map<string, Digest>();
+  for (const transition of transitions) {
+    if (transition.action === "write" && transition.proposed.state === "present") expectedOutputs.set(transition.path, transition.proposed.signature);
+  }
+  const seenOutputs = new Set<string>();
+  for (const output of manifest.outputs) {
+    const path = canonicalTransactionPath(output.finalVaultRelativePath);
+    if (path === null) return { ok: false, diagnostic: diagnostic("TEMPLATE_SOURCE_UNSAFE", "output is not a policy, taxonomy, projection, or managed draft path", output.finalVaultRelativePath) };
+    const payload = digestOrNull(output.payloadDigest);
+    if (payload === null || seenOutputs.has(path) || expectedOutputs.get(path) !== payload) {
+      return { ok: false, diagnostic: invalidManifest("outputs are not the unique set of present write actions", path) };
+    }
+    seenOutputs.add(path);
+    expectedOutputs.delete(path);
+  }
+  if (expectedOutputs.size !== 0) return { ok: false, diagnostic: invalidManifest("a present write action is missing from outputs") };
+  for (const operation of manifest.operations) {
+    if (!validOperation(operation)) return { ok: false, diagnostic: invalidManifest("operation is not a commit-contract publication") };
+  }
+  for (const item of manifest.diagnostics) {
+    if (!DIAGNOSTIC_CODES.has(item.code) || (item.message !== undefined && typeof item.message !== "string") || (item.path !== undefined && typeof item.path !== "string")) {
+      return { ok: false, diagnostic: invalidManifest("diagnostic is not a known publication diagnostic") };
+    }
+  }
+  try {
+    const outputsDigest = outputDigest(manifest.outputs);
+    const approved = approvalDigest(manifest);
+    if (outputsDigest !== manifest.outputDigest || approved !== manifest.approvalDigest) {
+      return { ok: false, diagnostic: invalidManifest("approvalDigest or outputDigest does not match the proposed bytes") };
+    }
+  } catch (error: unknown) {
+    return { ok: false, diagnostic: pathDiagnostic(error) };
+  }
+  return { ok: true, transitions };
+}
+
+function validOperation(operation: LogicalOperation): boolean {
+  if (operation.kind !== "commit-contract" || digestOrNull(operation.payloadDigest) !== operation.payloadDigest) return false;
+  return canonicalTemplateId(operation.templateId) === operation.templateId;
+}
+
+function requestAccepted(request: GuardedTemplateRequest, approved: Digest): boolean {
+  if (typeof request !== "object" || request === null) return false;
+  if (request.dryRun === true) return !("approvedDigest" in request) || request.approvedDigest === undefined;
+  return request.approvedDigest === approved;
+}
+
+function boundaryOf(transition: Transition): PlanBoundary {
+  return { path: transition.path, templateId: transition.templateId, expected: transition.expectedCurrent, proposed: expectationOf(transition.proposed) };
+}
+
+function planMaterial(plan: Omit<DurablePlan, "planDigest">): object {
   return {
-    transactionId: active.marker.transactionId,
-    inputDigest: active.marker.inputDigest,
-    approvalDigest: active.marker.approvalDigest,
-    outputDigest: active.marker.outputDigest,
-    verified: states.map((item) => verified(item.path, item.state)),
+    version: plan.version,
+    transactionId: plan.transactionId,
+    approvalDigest: plan.approvalDigest,
+    outputDigest: plan.outputDigest,
+    boundaries: plan.boundaries.map(boundary => ({
+      path: boundary.path,
+      templateId: boundary.templateId,
+      expected: boundary.expected,
+      proposed: boundary.proposed,
+    })),
+    outputs: plan.outputs.map(output => ({ finalVaultRelativePath: output.finalVaultRelativePath, payloadDigest: output.payloadDigest })),
   };
 }
 
-/** Publishes a pre-composed manifest; semantic composition is intentionally outside this module. */
-async function executeTemplateTransactionInternal(vault: string, manifest: TemplateCompositionManifest, request: GuardedTemplateRequest, markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH): Promise<TemplateTransactionReceipt> {
-  if (!isMarkerPath(markerPath)) throw new TypeError("TEMPLATE_SOURCE_UNSAFE: marker path is not approved");
-  if (!manifestValid(manifest)) return rejected(manifest, "TEMPLATE_TRANSACTION_MANIFEST_INVALID");
-  if (request.dryRun && request.approvedDigest !== undefined || !request.dryRun && request.approvedDigest !== manifest.approvalDigest) return rejected(manifest, "MIGRATION_APPROVAL_MISMATCH");
-  const plan = planFor(manifest);
-  const active = await readMarker(vault, markerPath);
-  if (active.state === "invalid") return rejected(manifest, "migration-incomplete");
-  if (active.state === "valid" && active.marker.status === "in-progress" && request.dryRun) return rejected(manifest, "migration-incomplete");
-  if (markerPath !== DEFAULT_MARKER_PATH && await templateMigrationAdmission(vault) === "migration-incomplete") return rejected(manifest, "migration-incomplete");
-  if (unchanged(manifest)) {
-    for (const control of manifest.controls) if (!(await verifyPath(vault, control.path, control.expectedCurrent))) return rejected(manifest, "MIGRATION_APPROVAL_MISMATCH");
-    for (const source of manifest.sources) if (!(await verifyPath(vault, source.path, source.expectedCurrent))) return rejected(manifest, "MIGRATION_APPROVAL_MISMATCH");
-    return { status: "unchanged", mode: manifest.mode, currentInputDigest: manifest.current.inputDigest, proposedInputDigest: manifest.proposed.inputDigest, approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, operations: manifest.operations, moves: manifest.moves, outputs: manifest.outputs, writtenPaths: [], deletedPaths: [] };
-  }
-  if (active.state === "valid" && active.marker.status === "complete") {
-    if (active.marker.approvalDigest !== manifest.approvalDigest || active.marker.outputDigest !== manifest.outputDigest) {
-      // A completed record is history: a distinct approved transaction may replace it.
-    } else {
-      const final = [...manifest.controls.map(control => ({ path: control.path as TransactionPath, value: control.proposed })), ...manifest.sources.map(source => ({ path: source.path as TransactionPath, value: source.proposed }))];
-      if (!(await Promise.all(final.map(async item => matches(await state(vault, item.path), item.value)))).every(Boolean)) return rejected(manifest, "MIGRATION_RETRY_MISMATCH");
-      await cleanupCommittedStaging(vault, plan.transactionId, markerPath);
-      return { status: "already-complete", mode: manifest.mode, transactionId: plan.transactionId, currentInputDigest: manifest.current.inputDigest, inputDigest: manifest.proposed.inputDigest, approvedDigest: request.approvedDigest!, outputDigest: manifest.outputDigest, operations: manifest.operations, moves: manifest.moves, writtenPaths: [], deletedPaths: [], verified: await Promise.all(final.map(async item => verified(item.path, await state(vault, item.path)))), markerState: "complete" };
-    }
-  }
-  if (active.state === "valid" && active.marker.status === "in-progress" && (active.plan === null || canonical(active.plan) !== canonical(plan))) return rejected(manifest, "migration-incomplete");
-  for (const control of manifest.controls) if (!(await verifyPath(vault, control.path, control.expectedCurrent)) && !(active.state === "valid" && active.marker.status === "in-progress" && matches(await state(vault, control.path), control.proposed))) return rejected(manifest, active.state === "valid" ? "MIGRATION_RETRY_MISMATCH" : "MIGRATION_APPROVAL_MISMATCH");
-  for (const source of manifest.sources) if (!(await verifyPath(vault, source.path, source.expectedCurrent)) && !(active.state === "valid" && active.marker.status === "in-progress" && matches(await state(vault, source.path), source.proposed))) return rejected(manifest, active.state === "valid" ? "MIGRATION_RETRY_MISMATCH" : "MIGRATION_APPROVAL_MISMATCH");
-  if (request.dryRun) return { status: "planned", mode: manifest.mode, currentInputDigest: manifest.current.inputDigest, proposedInputDigest: manifest.proposed.inputDigest, approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, operations: manifest.operations, moves: manifest.moves, outputs: manifest.outputs, writtenPaths: [], deletedPaths: [] };
-  const directory = transactionDirectory(vault, plan.transactionId, markerPath);
-  const lock = join(directory, "lock");
-  let lockToken: string | null;
-  try {
-    lockToken = await acquireTransactionLock(directory, lock);
-    if (lockToken === null) return rejected(manifest, "MIGRATION_RETRY_MISMATCH");
-  } catch {
-    return rejected(manifest, "MIGRATION_RETRY_MISMATCH");
-  }
-  const published: Published[] = [];
-  try {
-    if (active.state === "absent" || active.state === "valid" && active.marker.status === "complete") await writeDurablePlan(vault, markerPath, plan);
-    const progressPath = join(directory, "progress.json");
-    let completed: string[];
-    try { const parsed: unknown = JSON.parse(await readFile(progressPath, "utf8")); if (!Array.isArray(parsed) || parsed.some(value => typeof value !== "string")) throw new Error("invalid progress"); completed = [...parsed]; } catch { throw new Error("invalid progress"); }
-    const boundaryKeys = new Set(plan.boundaries.map(boundary => `${boundary.path}\0${boundary.proposed.state === "present" ? boundary.proposed.signature : "absent"}`));
-    if (completed.some((key, index) => !boundaryKeys.has(key) || completed.indexOf(key) !== index)) throw new Error("invalid progress");
-    const inProgress = markerFor("in-progress", manifest, plan);
-    if (active.state === "absent" || active.state === "valid" && active.marker.status === "complete") await publish(vault, markerPath, { state: "present", bytes: markerBytes(inProgress), signature: sha(markerBytes(inProgress)) }, published);
-    for (const boundary of plan.boundaries) {
-      const key = `${boundary.path}\0${boundary.proposed.state === "present" ? boundary.proposed.signature : "absent"}`;
-      const actual = await state(vault, boundary.path);
-      if (matches(actual, boundary.proposed)) { if (!completed.includes(key)) { completed.push(key); await atomicWrite(progressPath, `${canonical(completed)}\n`); } continue; }
-      if (!matches(actual, boundary.expected)) throw new Error("boundary mismatch");
-      await publish(vault, boundary.path, boundary.proposed, published);
-      if (!matches(await state(vault, boundary.path), boundary.proposed)) throw new Error("read-back");
-      completed.push(key); await atomicWrite(progressPath, `${canonical(completed)}\n`);
-    }
-    const final = [...manifest.controls.map(control => ({ path: control.path as TransactionPath, value: control.proposed })), ...manifest.sources.map(source => ({ path: source.path as TransactionPath, value: source.proposed }))];
-    if (!(await Promise.all(final.map(async item => matches(await state(vault, item.path), item.value)))).every(Boolean)) throw new Error("read-back");
-    const complete = markerFor("complete", manifest, plan);
-    await publish(vault, markerPath, { state: "present", bytes: markerBytes(complete), signature: sha(markerBytes(complete)) }, published);
-    const verifiedFinal = await Promise.all(final.map(async item => verified(item.path, await state(vault, item.path))));
-    await cleanupCommittedStaging(vault, plan.transactionId, markerPath);
-    return { status: "applied", mode: manifest.mode, transactionId: plan.transactionId, currentInputDigest: manifest.current.inputDigest, inputDigest: manifest.proposed.inputDigest, approvedDigest: request.approvedDigest!, outputDigest: manifest.outputDigest, operations: manifest.operations, moves: manifest.moves, writtenPaths: published.map(item => item.path).filter(isTransactionPath), deletedPaths: manifest.sources.filter(source => source.action === "delete").map(source => source.path), verified: verifiedFinal, markerState: "complete" };
-  } catch {
-    if (active.state === "valid" && active.marker.status === "in-progress") {
-      return inconsistent(manifest, plan.boundaries.map(boundary => boundary.path));
-    }
-    const restored = await rollback(vault, published);
-    if (restored) { await rm(directory, { recursive: true, force: true }); return rejected(manifest, "MIGRATION_PUBLISHED_OUTPUT_CONFLICT"); }
-    return inconsistent(manifest, published.map(item => item.path).filter(isTransactionPath));
-  } finally { await releaseTransactionLock(lock, lockToken); }
+function digestPlan(plan: Omit<DurablePlan, "planDigest">): Digest {
+  return hashCanonical("oms.contract-publish.plan.v1", planMaterial(plan));
 }
 
-/** Executes one guarded transaction and records external runtime history without changing vault semantics. */
-export async function executeTemplateTransaction(vault: string, manifest: TemplateCompositionManifest, request: GuardedTemplateRequest, markerPath: TemplateTransactionMarkerPath = DEFAULT_MARKER_PATH): Promise<TemplateTransactionReceipt> {
-  const invocation = journalInvocation("execute-template-transaction");
+function createPlan(manifest: TemplateCompositionManifest, writes: readonly Transition[]): DurablePlan {
+  const boundaries = writes.map(boundaryOf);
+  const material = {
+    version: 1 as const,
+    transactionId: publicationId(manifest.approvalDigest, manifest.outputDigest),
+    approvalDigest: manifest.approvalDigest,
+    outputDigest: manifest.outputDigest,
+    boundaries,
+    outputs: manifest.outputs,
+  };
+  return { ...material, planDigest: digestPlan(material) };
+}
+
+function markerMaterial(marker: StoredMarker): object {
+  return {
+    status: marker.status,
+    transactionId: marker.transactionId,
+    approvalDigest: marker.approvalDigest,
+    outputDigest: marker.outputDigest,
+    planDigest: marker.planDigest,
+  };
+}
+
+function publicMarker(marker: StoredMarker): TemplateTransactionMarker {
+  return { status: marker.status, transactionId: marker.transactionId, approvalDigest: marker.approvalDigest, outputDigest: marker.outputDigest };
+}
+
+function verifiedFrom(path: TransactionPath, state: VerifiedFileState): TransactionVerifiedPath {
+  return state.state === "absent" ? { path, state: "absent" } : { path, state: "present", payloadDigest: state.signature };
+}
+
+function transactionRelative(id: string, suffix = ""): string {
+  const root = `.oms/.template-transactions/${id}`;
+  return suffix.length === 0 ? root : `${root}/${suffix}`;
+}
+
+async function openControl(root: string, relativePath: string, options: { readonly expected: "existing-file" | "absent" | "either" }): Promise<{ readonly vaultRoot: string; readonly absolutePath: string; readonly targetRealPath: string | null }> {
+  return verifyTemplateControlPath(root, normalizeTemplateControlPath(relativePath), options);
+}
+
+async function verifyFinal(root: string, relativePath: string): Promise<string> {
+  if (isControlPath(relativePath)) return (await openControl(root, relativePath, { expected: "either" })).absolutePath;
+  const managed = canonicalManaged(relativePath);
+  if (managed === null) throw new TypeError("TEMPLATE_SOURCE_UNSAFE: publication path is not an approved output");
+  return (await verifyManagedTemplatePath(root, managed, { expected: "either" })).absolutePath;
+}
+
+async function confinePublication(root: string, id: string, targets: readonly { readonly path: string; readonly stage: boolean }[]): Promise<void> {
+  await openControl(root, transactionRelative(id), { expected: "either" });
+  await openControl(root, transactionRelative(id, "plan.json"), { expected: "either" });
+  for (const target of targets) {
+    await verifyFinal(root, target.path);
+    if (target.stage) await openControl(root, transactionRelative(id, `staging/${target.path}`), { expected: "either" });
+  }
+}
+
+function confinementTargets(transitions: readonly Transition[]): { readonly path: string; readonly stage: boolean }[] {
+  return transitions.map(transition => ({ path: transition.path, stage: transition.action === "write" && transition.proposed.state === "present" }));
+}
+
+async function readState(absolute: string): Promise<VerifiedFileState> {
   try {
-    const receipt = await executeTemplateTransactionInternal(vault, manifest, request, markerPath);
-    recordTransactionReceipt(vault, invocation, receipt, manifest);
-    return receipt;
+    const stat = await lstat(absolute);
+    if (stat.isSymbolicLink()) throw new TypeError("TEMPLATE_SOURCE_UNSAFE: symlink is not allowed");
+    if (!stat.isFile()) throw new TypeError("TEMPLATE_SOURCE_INVALID: publication target must be a regular file");
+    const bytes = new Uint8Array(await readFile(absolute));
+    return { state: "present", bytes, signature: digestBytes(bytes) };
   } catch (error: unknown) {
-    recordTransactionFailure(vault, invocation);
+    if (errorCode(error) === "ENOENT") return { state: "absent" };
     throw error;
+  }
+}
+
+async function assertReplaceable(absolute: string): Promise<void> {
+  const state = await readState(absolute);
+  if (state.state === "absent") return;
+}
+
+function parseExpectation(value: unknown): FileExpectation | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  if (record["state"] === "absent") return { state: "absent" };
+  if (record["state"] !== "present" || typeof record["signature"] !== "string") return null;
+  const signature = digestOrNull(record["signature"]);
+  return signature === null ? null : { state: "present", signature };
+}
+
+function parseBoundary(value: unknown): PlanBoundary | null {
+  const record = asRecord(value);
+  if (record === null || typeof record["path"] !== "string") return null;
+  const path = canonicalTransactionPath(record["path"]);
+  const expected = parseExpectation(record["expected"]);
+  const proposed = parseExpectation(record["proposed"]);
+  if (path === null || path !== record["path"] || expected === null || proposed === null) return null;
+  if (isControlPath(path) && proposed.state !== "present") return null;
+  const templateId = record["templateId"] === null ? null : canonicalTemplateId(record["templateId"] as TemplateId);
+  if (templateId === undefined) return null;
+  if (isControlPath(path) ? templateId !== null : path !== `.oms/templates/${templateId ?? "default"}.md`) return null;
+  return { path, templateId, expected, proposed };
+}
+
+function outputsMatch(boundaries: readonly PlanBoundary[], outputs: readonly PlannedPhysicalOutput[]): boolean {
+  const present = new Map<string, Digest>();
+  for (const boundary of boundaries) {
+    if (boundary.proposed.state === "present") present.set(boundary.path, boundary.proposed.signature);
+  }
+  if (present.size !== outputs.length) return false;
+  const seen = new Set<string>();
+  for (const output of outputs) {
+    if (seen.has(output.finalVaultRelativePath) || present.get(output.finalVaultRelativePath) !== output.payloadDigest) return false;
+    seen.add(output.finalVaultRelativePath);
+  }
+  return true;
+}
+
+async function loadPlan(root: string, marker: StoredMarker): Promise<DurablePlan | null> {
+  if (!/^[0-9a-f]{32}$/.test(marker.transactionId)) return null;
+  try {
+    const located = await openControl(root, transactionRelative(marker.transactionId, "plan.json"), { expected: "existing-file" });
+    const parsed = asRecord(JSON.parse(await readFile(located.absolutePath, "utf8")));
+    if (parsed === null) return null;
+    const rawBoundaries = parsed["boundaries"];
+    const rawOutputs = parsed["outputs"];
+    if (parsed["version"] !== 1 || !Array.isArray(rawBoundaries) || !Array.isArray(rawOutputs)) return null;
+    if (parsed["transactionId"] !== marker.transactionId || parsed["approvalDigest"] !== marker.approvalDigest || parsed["outputDigest"] !== marker.outputDigest || parsed["planDigest"] !== marker.planDigest) return null;
+    const boundaries = rawBoundaries.map(parseBoundary);
+    if (boundaries.some(boundary => boundary === null)) return null;
+    const strictBoundaries: PlanBoundary[] = [];
+    for (const boundary of boundaries) {
+      if (boundary === null) return null;
+      strictBoundaries.push(boundary);
+    }
+    const outputs: PlannedPhysicalOutput[] = [];
+    for (const output of rawOutputs) {
+      const record = asRecord(output);
+      if (record === null || typeof record["finalVaultRelativePath"] !== "string") return null;
+      const path = canonicalTransactionPath(record["finalVaultRelativePath"]);
+      const payload = typeof record["payloadDigest"] === "string" ? digestOrNull(record["payloadDigest"]) : null;
+      if (path === null || path !== record["finalVaultRelativePath"] || payload === null) return null;
+      outputs.push({ finalVaultRelativePath: path, payloadDigest: payload });
+    }
+    const material = { version: 1 as const, transactionId: marker.transactionId, approvalDigest: marker.approvalDigest, outputDigest: marker.outputDigest, boundaries: strictBoundaries, outputs };
+    if (digestPlan(material) !== marker.planDigest || !outputsMatch(strictBoundaries, outputs)) return null;
+    const recomputed = outputDigest(outputs);
+    if (recomputed !== marker.outputDigest) return null;
+    return { ...material, planDigest: marker.planDigest };
+  } catch {
+    return null;
+  }
+}
+
+async function readMarker(vault: string): Promise<MarkerRead> {
+  const located = await openControl(vault, TEMPLATE_TRANSACTION_MARKER_PATH, { expected: "either" });
+  if (located.targetRealPath === null) return { state: "absent", root: located.vaultRoot };
+  try {
+    const parsed = asRecord(JSON.parse(await readFile(located.absolutePath, "utf8")));
+    if (parsed === null) return { state: "invalid", root: located.vaultRoot };
+    const status = parsed["status"];
+    if (status !== "in-progress" && status !== "complete") return { state: "invalid", root: located.vaultRoot };
+    const approval = typeof parsed["approvalDigest"] === "string" ? digestOrNull(parsed["approvalDigest"]) : null;
+    const output = typeof parsed["outputDigest"] === "string" ? digestOrNull(parsed["outputDigest"]) : null;
+    const planDigest = typeof parsed["planDigest"] === "string" ? digestOrNull(parsed["planDigest"]) : null;
+    const checksum = typeof parsed["checksum"] === "string" ? digestOrNull(parsed["checksum"]) : null;
+    const transactionId = parsed["transactionId"];
+    if (approval === null || output === null || planDigest === null || checksum === null || typeof transactionId !== "string" || transactionId !== publicationId(approval, output)) {
+      return { state: "invalid", root: located.vaultRoot };
+    }
+    const marker: StoredMarker = { status, transactionId, approvalDigest: approval, outputDigest: output, planDigest };
+    if (hashCanonical("oms.contract-publish.marker.v1", markerMaterial(marker)) !== checksum) return { state: "invalid", root: located.vaultRoot };
+    // Marker checksum and durable plan only. Do not stat published controls or managed drafts.
+    const plan = await loadPlan(located.vaultRoot, marker);
+    if (plan === null) return { state: "invalid", root: located.vaultRoot };
+    return status === "in-progress"
+      ? { state: "in-progress", root: located.vaultRoot, marker, plan }
+      : { state: "complete", root: located.vaultRoot, marker, plan };
+  } catch (error: unknown) {
+    if (errorCode(error) !== null && errorCode(error) !== "ENOENT") throw error;
+    return { state: "invalid", root: located.vaultRoot };
+  }
+}
+
+/** Receipt-only. Read admission must not call this; a drifted managed draft stays admissible. */
+async function revalidateProposed(root: string, boundaries: readonly PlanBoundary[], expectedOutput: Digest): Promise<readonly TransactionVerifiedPath[] | null> {
+  const verified: TransactionVerifiedPath[] = [];
+  const outputs: PlannedPhysicalOutput[] = [];
+  for (const boundary of [...boundaries].sort(byPublication)) {
+    const actual = await readState(await verifyFinal(root, boundary.path));
+    if (!sameFile(actual, boundary.proposed)) return null;
+    verified.push(verifiedFrom(boundary.path, actual));
+    if (boundary.proposed.state === "present") {
+      if (actual.state !== "present") return null;
+      outputs.push({ finalVaultRelativePath: boundary.path, payloadDigest: actual.signature });
+    }
+  }
+  return outputDigest(outputs) === expectedOutput ? verified : null;
+}
+
+async function writeJson(root: string, relativePath: string, value: unknown): Promise<void> {
+  const located = await openControl(root, relativePath, { expected: "either" });
+  await assertReplaceable(located.absolutePath);
+  await atomicWrite(located.absolutePath, `${canonicalJson(value)}\n`);
+}
+
+async function writeMarkerFile(root: string, status: StoredMarker["status"], plan: DurablePlan): Promise<void> {
+  const marker: StoredMarker = { status, transactionId: plan.transactionId, approvalDigest: plan.approvalDigest, outputDigest: plan.outputDigest, planDigest: plan.planDigest };
+  const checksum = hashCanonical("oms.contract-publish.marker.v1", markerMaterial(marker));
+  await writeJson(root, TEMPLATE_TRANSACTION_MARKER_PATH, { ...markerMaterial(marker), checksum });
+}
+
+async function stageWrites(root: string, id: string, writes: readonly Transition[]): Promise<void> {
+  for (const transition of writes) {
+    if (transition.proposed.state !== "present") continue;
+    const relativePath = transactionRelative(id, `staging/${transition.path}`);
+    const located = await openControl(root, relativePath, { expected: "either" });
+    await assertReplaceable(located.absolutePath);
+    await atomicWrite(located.absolutePath, transition.proposed.bytes);
+    const staged = await readState(located.absolutePath);
+    if (!sameFile(staged, transition.proposed)) throw new TypeError("TEMPLATE_TRANSACTION_INCONSISTENT: staged bytes do not match the proposed digest");
+  }
+}
+
+async function publishBoundary(root: string, id: string, boundary: PlanBoundary): Promise<boolean> {
+  const finalPath = await verifyFinal(root, boundary.path);
+  const current = await readState(finalPath);
+  if (sameFile(current, boundary.proposed)) return false;
+  if (!sameFile(current, boundary.expected)) {
+    throw new PublicationHalt(diagnostic("TEMPLATE_TRANSACTION_INCONSISTENT", "current bytes match neither the expected preimage nor the proposed bytes", boundary.path));
+  }
+  if (boundary.proposed.state === "absent") {
+    await rm(finalPath, { force: true });
+  } else {
+    const staged = await openControl(root, transactionRelative(id, `staging/${boundary.path}`), { expected: "existing-file" });
+    const stagedState = await readState(staged.absolutePath);
+    if (!sameFile(stagedState, boundary.proposed)) {
+      throw new PublicationHalt(diagnostic("TEMPLATE_TRANSACTION_INCONSISTENT", "staged bytes do not match the proposed digest", boundary.path));
+    }
+    await mkdir(dirname(finalPath), { recursive: true, mode: 0o700 });
+    await assertReplaceable(finalPath);
+    await rename(staged.absolutePath, finalPath);
+  }
+  const readBack = await readState(finalPath);
+  if (!sameFile(readBack, boundary.proposed)) throw new TypeError("TEMPLATE_TRANSACTION_INCONSISTENT: published bytes do not match the proposed digest");
+  return true;
+}
+
+function journalPublication(vault: string, operation: string, plan: DurablePlan): void {
+  try {
+    const invocation = createRuntimeInvocation({ surface: "kernel", operation, packageVersion: readBundledPackageVersion() });
+    const events = [
+      createRuntimeEvent(invocation, {
+        kind: "template-contract-commit",
+        outcome: "success",
+        transactionId: plan.transactionId,
+        inputSignature: plan.approvalDigest,
+        templateSignature: plan.outputDigest,
+      }),
+      ...plan.boundaries.map(boundary => createRuntimeEvent(invocation, {
+        kind: "template-contract-commit-control",
+        outcome: "success",
+        transactionId: plan.transactionId,
+        templateId: boundary.templateId,
+        notePath: boundary.path,
+        inputSignature: plan.approvalDigest,
+        templateSignature: boundary.proposed.state === "present" ? boundary.proposed.signature : null,
+      })),
+    ];
+    for (const event of events) appendRuntimeEvent(event, { vaultPath: vault });
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    try {
+      process.emitWarning(`LEDGER_APPEND_FAILED: ${detail}`, { code: "LEDGER_APPEND_FAILED" });
+    } catch {
+      // External history must not change a publication that has already reached its complete marker.
+    }
+  }
+}
+
+function warnStaging(id: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error);
+  try {
+    process.emitWarning(`Committed template transaction ${id} could not remove staging payloads: ${detail}`, { code: "TEMPLATE_TRANSACTION_STAGING_CLEANUP_FAILED" });
+  } catch {
+    // Cleanup reporting cannot change an already committed vault outcome.
+  }
+}
+
+async function finishPublication(root: string, plan: DurablePlan, boundaries: readonly PlanBoundary[], operation: string, written: readonly TransactionPath[]): Promise<TemplateTransactionReceipt> {
+  const verified = await revalidateProposed(root, boundaries, plan.outputDigest);
+  if (verified === null) throw new TypeError("TEMPLATE_TRANSACTION_INCONSISTENT: published outputs failed revalidation");
+  await writeMarkerFile(root, "complete", plan);
+  journalPublication(root, operation, plan);
+  await rm(join(root, ...transactionRelative(plan.transactionId, "staging").split("/")), { recursive: true, force: true }).catch(error => warnStaging(plan.transactionId, error));
+  return { status: "applied", transactionId: plan.transactionId, approvalDigest: plan.approvalDigest, outputDigest: plan.outputDigest, writtenPaths: written, verified, markerState: "complete" };
+}
+
+async function publishPrepared(root: string, plan: DurablePlan, boundaries: readonly PlanBoundary[], operation: string): Promise<TemplateTransactionReceipt> {
+  const written: TransactionPath[] = [];
+  for (const boundary of [...boundaries].sort(byPublication)) {
+    if (await publishBoundary(root, plan.transactionId, boundary)) written.push(boundary.path);
+  }
+  return finishPublication(root, plan, boundaries, operation, written);
+}
+
+async function withPublicationLock(root: string, id: string, approval: Digest, output: Digest, body: () => Promise<TemplateTransactionReceipt>): Promise<TemplateTransactionReceipt> {
+  const directory = (await openControl(root, transactionRelative(id), { expected: "either" })).absolutePath;
+  const lock = join(directory, "lock");
+  const token = await acquireTransactionLock(directory, lock);
+  if (token === null) return rejected(approval, output, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction lock is held"));
+  try {
+    return await body();
+  } catch (error: unknown) {
+    if (error instanceof PublicationHalt) return inconsistent(approval, output, error.item);
+    throw error;
+  } finally {
+    await releaseTransactionLock(lock, token);
+  }
+}
+
+function alreadyComplete(marker: StoredMarker, verified: readonly TransactionVerifiedPath[]): TemplateTransactionReceipt {
+  return { status: "already-complete", transactionId: marker.transactionId, approvalDigest: marker.approvalDigest, outputDigest: marker.outputDigest, writtenPaths: [], verified, markerState: "complete" };
+}
+
+function completedReceipt(root: string, marker: Extract<MarkerRead, { readonly state: "complete" }>, manifest: TemplateCompositionManifest): Promise<TemplateTransactionReceipt> {
+  if (marker.marker.approvalDigest !== manifest.approvalDigest) {
+    return Promise.resolve(inconsistent(manifest.approvalDigest, manifest.outputDigest, diagnostic("TEMPLATE_TRANSACTION_INCONSISTENT", "completed publication does not match this approval")));
+  }
+  if (marker.marker.outputDigest !== manifest.outputDigest) {
+    return Promise.resolve(inconsistent(manifest.approvalDigest, manifest.outputDigest, diagnostic("TEMPLATE_TRANSACTION_INCONSISTENT", "completed publication failed fresh output revalidation")));
+  }
+  return revalidateProposed(root, marker.plan.boundaries, marker.plan.outputDigest).then(verified => verified === null
+    ? inconsistent(manifest.approvalDigest, manifest.outputDigest, diagnostic("TEMPLATE_TRANSACTION_INCONSISTENT", "completed publication failed fresh output revalidation"))
+    : alreadyComplete(marker.marker, verified));
+}
+
+async function publishNew(root: string, manifest: TemplateCompositionManifest, transitions: readonly Transition[]): Promise<TemplateTransactionReceipt> {
+  const writes = transitions.filter(transition => transition.action === "write").sort(byPublication);
+  if (writes.length === 0) {
+    return { status: "unchanged", approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, outputs: manifest.outputs };
+  }
+  const plan = createPlan(manifest, writes);
+  let markerDurable = false;
+  try {
+    return await withPublicationLock(root, plan.transactionId, manifest.approvalDigest, manifest.outputDigest, async () => {
+      const marker = await readMarker(root);
+      if (marker.state === "invalid") return manifestRejected(manifest, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction marker is invalid"));
+      if (marker.state === "in-progress") return resumeRequired(manifest.approvalDigest, manifest.outputDigest, "an in-progress template transaction must be resumed");
+      if (marker.state === "complete" && marker.marker.approvalDigest === manifest.approvalDigest) return completedReceipt(root, marker, manifest);
+      for (const transition of transitions) {
+        const actual = await readState(await verifyFinal(root, transition.path));
+        if (!sameFile(actual, transition.expectedCurrent)) {
+          const code = isControlPath(transition.path) ? "CONTRACT_UNVERIFIABLE" : "MANAGED_TEMPLATE_DRIFT";
+          return manifestRejected(manifest, diagnostic(code, "observed bytes do not match expectedCurrent", transition.path));
+        }
+      }
+      await stageWrites(root, plan.transactionId, writes);
+      await writeJson(root, transactionRelative(plan.transactionId, "plan.json"), { ...planMaterial(plan), planDigest: plan.planDigest });
+      await writeMarkerFile(root, "in-progress", plan);
+      markerDurable = true;
+      return await publishPrepared(root, plan, plan.boundaries, "publish-template-contract");
+    });
+  } catch (error: unknown) {
+    if (markerDurable) return resumeRequired(manifest.approvalDigest, manifest.outputDigest, "publication stopped after the marker was durable; resume is required");
+    await rm(join(root, ...transactionRelative(plan.transactionId, "staging").split("/")), { recursive: true, force: true }).catch(() => undefined);
+    return manifestRejected(manifest, pathDiagnostic(error));
+  }
+}
+
+async function resumeLocked(root: string, marker: StoredMarker, plan: DurablePlan): Promise<TemplateTransactionReceipt> {
+  try {
+    return await withPublicationLock(root, marker.transactionId, marker.approvalDigest, marker.outputDigest, async () => {
+      const current = await readMarker(root);
+      if (current.state !== "in-progress" || current.marker.transactionId !== marker.transactionId || current.plan.planDigest !== plan.planDigest) {
+        return inconsistent(marker.approvalDigest, marker.outputDigest, diagnostic("TEMPLATE_TRANSACTION_INCONSISTENT", "durable marker changed before resume"));
+      }
+      return await publishPrepared(root, plan, plan.boundaries, "resume-template-contract");
+    });
+  } catch {
+    return resumeRequired(marker.approvalDigest, marker.outputDigest, "resume stopped after the marker was durable");
+  }
+}
+
+/**
+ * P05 read admission. Reads only: no lock, journal, staging, or other writes.
+ * Missing is clear. Invalid and in-progress are never admitted.
+ * Complete is clear only when the marker checksum and durable plan agree.
+ * A managed draft that later differs from the published bytes does not block admission.
+ * That is MANAGED_TEMPLATE_DRIFT and the approved snapshot remains usable.
+ * An already-complete receipt revalidates output bytes separately.
+ */
+export async function inspectTemplateTransactionMarker(vault: string): Promise<TemplateTransactionMarkerInspection> {
+  try {
+    const marker = await readMarker(vault);
+    if (marker.state === "absent") return { admission: "clear", state: "absent", marker: null };
+    if (marker.state === "invalid") return { admission: "blocked", state: "invalid", marker: null };
+    if (marker.state === "in-progress") return { admission: "blocked", state: "in-progress", marker: publicMarker(marker.marker) };
+    return { admission: "clear", state: "complete", marker: publicMarker(marker.marker) };
+  } catch {
+    return { admission: "blocked", state: "invalid", marker: null };
+  }
+}
+
+/** Publishes one approved v4 manifest. Dry-run only reads. A torn apply stays resume-required or inconsistent. */
+export async function executeTemplateTransaction(vault: string, manifest: TemplateCompositionManifest, request: GuardedTemplateRequest): Promise<TemplateTransactionReceipt> {
+  const validated = validateManifest(manifest);
+  if (!validated.ok) return manifestRejected(manifest, validated.diagnostic);
+  if (!requestAccepted(request, manifest.approvalDigest)) {
+    return manifestRejected(manifest, invalidManifest("approvedDigest must exactly equal the recomputed approval digest"));
+  }
+  let root: string;
+  try {
+    root = (await openControl(vault, TEMPLATE_TRANSACTION_MARKER_PATH, { expected: "either" })).vaultRoot;
+    await confinePublication(root, publicationId(manifest.approvalDigest, manifest.outputDigest), confinementTargets(validated.transitions));
+  } catch (error: unknown) {
+    return manifestRejected(manifest, pathDiagnostic(error));
+  }
+  try {
+    const marker = await readMarker(root);
+    if (marker.state === "invalid") return manifestRejected(manifest, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction marker is invalid"));
+    if (marker.state === "in-progress") return resumeRequired(manifest.approvalDigest, manifest.outputDigest, "an in-progress template transaction must be resumed");
+    if (marker.state === "complete" && marker.marker.approvalDigest === manifest.approvalDigest) return completedReceipt(root, marker, manifest);
+    for (const transition of [...validated.transitions].sort(byPublication)) {
+      const actual = await readState(await verifyFinal(root, transition.path));
+      if (!sameFile(actual, transition.expectedCurrent)) {
+        const code = isControlPath(transition.path) ? "CONTRACT_UNVERIFIABLE" : "MANAGED_TEMPLATE_DRIFT";
+        return manifestRejected(manifest, diagnostic(code, "observed bytes do not match expectedCurrent", transition.path));
+      }
+    }
+  } catch (error: unknown) {
+    return manifestRejected(manifest, pathDiagnostic(error));
+  }
+  if (request.dryRun === true || validated.transitions.every(transition => transition.action === "verify-only")) {
+    const status = validated.transitions.every(transition => transition.action === "verify-only") ? "unchanged" : "planned";
+    return { status, approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, outputs: manifest.outputs };
+  }
+  return publishNew(root, manifest, validated.transitions);
+}
+
+/** Continues one durable marker from staged and published bytes. External bytes that match neither old nor new stop resume. */
+export async function resumeTemplateTransaction(vault: string, transactionId: string, approvedDigest: Digest): Promise<TemplateTransactionReceipt> {
+  let marker: MarkerRead;
+  try {
+    marker = await readMarker(vault);
+  } catch (error: unknown) {
+    return rejected(digestOrNull(approvedDigest), null, pathDiagnostic(error));
+  }
+  if (marker.state === "absent" || marker.state === "invalid") {
+    return rejected(digestOrNull(approvedDigest), null, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction marker is missing or invalid"));
+  }
+  if (marker.marker.transactionId !== transactionId || marker.marker.approvalDigest !== approvedDigest) {
+    return rejected(marker.marker.approvalDigest, marker.marker.outputDigest, invalidManifest("resume does not match the durable marker"));
+  }
+  try {
+    await confinePublication(marker.root, marker.plan.transactionId, marker.plan.boundaries.map(boundary => ({
+      path: boundary.path,
+      stage: boundary.proposed.state === "present",
+    })));
+    if (marker.state === "complete") {
+      const verified = await revalidateProposed(marker.root, marker.plan.boundaries, marker.plan.outputDigest);
+      return verified === null
+        ? inconsistent(marker.marker.approvalDigest, marker.marker.outputDigest, diagnostic("TEMPLATE_TRANSACTION_INCONSISTENT", "completed publication failed fresh output revalidation"))
+        : alreadyComplete(marker.marker, verified);
+    }
+    return await resumeLocked(marker.root, marker.marker, marker.plan);
+  } catch (error: unknown) {
+    return inconsistent(marker.marker.approvalDigest, marker.marker.outputDigest, pathDiagnostic(error));
   }
 }
