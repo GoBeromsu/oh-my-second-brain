@@ -1,24 +1,92 @@
-export { approvalDigest, canonicalJson, frameHash, hashCanonical, inputDigest, outputDigest, parseDigest } from "./canonical.js";
-export { extractTemplate, parseTemplate } from "./extract.js";
+export { approvalDigest, canonicalJson, digestBytes, frameHash, hashCanonical, outputDigest } from "./canonical.js";
 export { axisValueEquals, deriveTemplateRetrievalAxes } from "./axes.js";
-export { buildTemplateNoteIndex, queryTemplateAxis, queryTemplateLexically, TEMPLATE_NOTE_INDEX_VERSION } from "./note-index.js";
-export { resolveDefaults, validateBaseSpecialization } from "./defaults.js";
-export { renderNoteName, slugify } from "./naming.js";
-export { canonicalPathKey, deriveManagedSourcePath, deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, validateTemplateId, verifyTemplateFolderPath, verifyTemplateSourcePath, verifyVaultPath } from "./paths.js";
-export { loadResolvedTemplates, sourceSignature, buildTemplateCompositionManifest } from "./resolver.js";
-export { nextTemplateInterview, answerTemplateInterview, commitTemplateContracts } from "./interview-service.js";
-export type { TemplateInterviewAnswerRequest, TemplateInterviewCommitRequest, TemplateInterviewServiceResult, TemplateInterviewServiceState } from "./interview-service.js";
-export type { TemplateInterviewQuestion, TemplateInterviewQuestionKind } from "./interview.js";
-export type { TemplateOperationTarget } from "./operations.js";
-export { executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
-export type { ExtractedTemplate, TemplateExpression } from "./extract.js";
-export type { SearchableAxis, TemplateAxisSet, TemplateFieldAxis, TemplateIdentityAxis, TemplateRetrievalAxes } from "./axes.js";
-export type { LexicalNoteMatch, TemplateAxisQuery, TemplateIndexedNote, TemplateNoteIndex } from "./note-index.js";
-export type { ResolveDefaultsRequest, ResolvedDefaults, WriteMode } from "./defaults.js";
-export type { RenderNameRequest } from "./naming.js";
-export type { LoadResolvedTemplatesOptions } from "./resolver.js";
-export type { AuthorityEntry, AuthorityKind, BaseContract, ContractDefinition, DerivedProjection, DerivedTemplateProjection, DestinationClass, Diagnostic, DiagnosticCode, Digest, FieldDefault, FieldNormalize, FieldPolicy, GlobalAxis, GlobalAxes, InputV2, JsonValue, LogicalOperation, MigrationMarker, MigrationReceipt, PlacementEntry, PlannedPhysicalOutput, PreparedWrite, ResolvedConvention, ResolvedTemplate, SourceSignature, TemplateBinding, TemplateFolderPath, TemplateId, TemplatePolicy, TemplateSourcePath, TemplateCompositionManifest, TemplateCompositionOptions, TemplateSemanticChange, TemplateTransactionReceipt, WriterRegistry } from "./types.js";
+export type { SearchableAxis, TemplateAxisSet, TemplateFieldAxis, TemplateIdentityAxis, TemplateRetrievalAxes, TemplateRetrievalSource } from "./axes.js";
+export {
+  buildTemplateNoteIndex,
+  classifyNoteTemplateIdentity,
+  queryTemplateAxis,
+  queryTemplateLexically,
+  TEMPLATE_NOTE_INDEX_VERSION,
+} from "./note-index.js";
+export type {
+  LexicalNoteMatch,
+  NoteTemplateIdentity,
+  TemplateAxisQuery,
+  TemplateIndexedNote,
+  TemplateNoteDiagnostic,
+  TemplateNoteIndex,
+  TemplateNoteLayer,
+  TemplateNoteUnresolved,
+} from "./note-index.js";
+export { composeTemplateContract } from "./defaults.js";
+export {
+  canonicalPathKey,
+  normalizeManagedTemplatePath,
+  normalizeTemplateControlPath,
+  normalizeTemplateFolderPath,
+  normalizeTemplateSourcePath,
+  validateTemplateId,
+  verifyManagedTemplatePath,
+  verifyTemplateControlPath,
+  verifyTemplateFolderPath,
+  verifyTemplateSourcePath,
+  verifyVaultPath,
+} from "./paths.js";
 export type { VaultPathVerificationOptions, VerifiedVaultPath } from "./paths.js";
-
-export { backfillDefaults, diagnoseTemplates, regenerateTypes } from "./doctor.js";
-export type { BackfillDefaultsRequest, RegenerateTypesRequest, TemplateDoctorDiagnosis, TemplateDoctorDiagnostic, TemplateDoctorRepair, TemplateDoctorTarget } from "./doctor.js";
+export {
+  DERIVED_PROJECTION_SCHEMA,
+  TEMPLATE_POLICY_SCHEMA,
+  contractDigest,
+  parseDerivedProjection,
+  parseTemplatePolicy,
+  serializeDerivedProjection,
+  serializeTemplatePolicy,
+  validateDerivedProjection,
+} from "./policy.js";
+export {
+  assertStableControlRead,
+  composeTemplateRetrievalSource,
+  controlGenerationDigest,
+  deriveFolderOntologyAxis,
+  expectedProjectionManaged,
+  loadResolvedTemplates,
+  loadResolvedTemplatesIfPresent,
+  requireTaxonomyPlacement,
+  taxonomyRouting,
+} from "./resolver.js";
+export type { ControlByteRead, ExactControlBytes, ResolvedTemplateSnapshot, TaxonomyRouting } from "./resolver.js";
+export { readTemplateReviewContext } from "./review-context.js";
+export { templateCensus } from "./census.js";
+export {
+  TEMPLATE_TRANSACTION_MARKER_PATH,
+  executeTemplateTransaction,
+  inspectTemplateTransactionMarker,
+  resumeTemplateTransaction,
+} from "./transaction.js";
+export type { TemplateTransactionMarkerInspection } from "./transaction.js";
+export type {
+  Diagnostic,
+  DiagnosticCode,
+  Digest,
+  FileExpectation,
+  GlobalAxes,
+  GlobalAxis,
+  GuardedTemplateRequest,
+  HeadingContract,
+  JsonValue,
+  LogicalOperation,
+  ManagedTemplatePath,
+  ObsidianContractType,
+  PlannedPhysicalOutput,
+  PropertyDefinition,
+  ResolvedContract,
+  ResolvedField,
+  ResolvedHeading,
+  TemplateCompositionManifest,
+  TemplateFolderPath,
+  TemplateId,
+  TemplatePolicy,
+  TemplateSourcePath,
+  TemplateTransactionReceipt,
+  VerifiedFileState,
+} from "./types.js";
