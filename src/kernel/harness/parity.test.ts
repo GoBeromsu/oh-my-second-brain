@@ -44,21 +44,72 @@ describe("harness registry parity", () => {
     expect(harnessSurfaceRegistry.cliCommands.map((command) => command.name)).toContain("status");
   });
 
+  it("keeps fourteen CLI families distinct from eight shared skills and five MCP tools", () => {
+    const commands = harnessSurfaceRegistry.cliCommands.map((command) => command.name);
+    expect(commands).toEqual([
+      "setup",
+      "template",
+      "note",
+      "link",
+      "bridge",
+      "search",
+      "index",
+      "graph",
+      "host",
+      "package",
+      "model",
+      "serve",
+      "hook",
+      "status",
+    ]);
+    const skills = [...harnessSurfaceRegistry.hosts[0]!.skillDirs].sort();
+    expect(skills).toEqual([
+      "distill",
+      "doctor",
+      "interview",
+      "link",
+      "search",
+      "status",
+      "template",
+      "write",
+    ]);
+    expect([...commands].sort()).not.toEqual(skills);
+    expect(harnessSurfaceRegistry.mcpTools.map((tool) => tool.name)).toEqual([
+      "write",
+      "search",
+      "link",
+      "status",
+      "doctor",
+    ]);
+    expect(harnessSurfaceRegistry.mcpTools.map((tool) => tool.name)).not.toEqual(
+      expect.arrayContaining(["interview", "distill", "template"]),
+    );
+  });
+
   it("declares the live MCP tool names in order", () => {
     expect(harnessSurfaceRegistry.mcpTools.map((tool) => tool.name)).toEqual(
       omsMcpTools.map((tool) => tool.name),
     );
   });
 
-  it("matches MCP posture metadata to live tool annotations", () => {
-    for (const registryTool of harnessSurfaceRegistry.mcpTools) {
-      const liveTool = omsMcpTools.find((tool) => tool.name === registryTool.name);
-      expect(liveTool, registryTool.name).toBeDefined();
-      expect(liveTool?.annotations?.readOnlyHint).toBe(registryTool.posture === "read");
-      expect(liveTool?.annotations?.destructiveHint).toBe(registryTool.destructive);
-      expect(liveTool?.annotations?.idempotentHint).toBe(registryTool.idempotent);
-      expect(liveTool?.annotations?.openWorldHint).toBe(registryTool.openWorld);
-    }
+  it("records link as read-only and write as mixed", () => {
+    const link = harnessSurfaceRegistry.mcpTools.find((tool) => tool.name === "link");
+    const write = harnessSurfaceRegistry.mcpTools.find((tool) => tool.name === "write");
+
+    expect(link).toMatchObject({
+      posture: "read",
+      destructive: false,
+      idempotent: true,
+      openWorld: false,
+    });
+    // Approved control commit mutates, so write stays a write tool. guide/check/complete do not.
+    expect(write).toMatchObject({
+      posture: "write",
+      destructive: false,
+      idempotent: false,
+      openWorld: false,
+    });
+    expect(write?.posture).not.toBe("read");
   });
 
   it("resolves every host's declared skills to the one shared source", async () => {
@@ -77,8 +128,59 @@ describe("harness registry parity", () => {
     // once the deletion lands.
     const declared = new Set(harnessSurfaceRegistry.hosts.map((host) => [...host.skillDirs].sort().join(",")));
     expect(declared.size, "hosts declare divergent skill sets").toBe(1);
+    await expect(fileExists("assets/skills/interview/SKILL.md"), "authored interview skill").resolves.toBe(true);
   });
 
+  it("declares fail-open or no write hook and instruction-only reviewer mechanisms", async () => {
+    expect(harnessSurfaceRegistry.hosts.map((host) => [host.runtime, host.writeHook])).toEqual([
+      ["claude", "fail-open"],
+      ["codex", "none"],
+      ["hermes", "none"],
+    ]);
+    expect(harnessSurfaceRegistry.hosts.every((host) => !("hardHookGuarantee" in host))).toBe(true);
+    for (const host of harnessSurfaceRegistry.hosts) {
+      if (host.writeHook === "fail-open") {
+        expect(host.hookFiles.length, host.runtime).toBeGreaterThan(0);
+      } else {
+        expect(host.hookFiles, host.runtime).toEqual([]);
+      }
+      expect(host.reviewerMechanisms.every((mechanism) => mechanism.isolation === "instruction-only")).toBe(true);
+    }
+
+    const claude = harnessSurfaceRegistry.hosts.find((host) => host.runtime === "claude");
+    const codex = harnessSurfaceRegistry.hosts.find((host) => host.runtime === "codex");
+    const hermes = harnessSurfaceRegistry.hosts.find((host) => host.runtime === "hermes");
+    expect(claude?.reviewerMechanisms).toEqual([
+      {
+        id: "claude.plugin-agent",
+        selection: "primary",
+        isolation: "instruction-only",
+        assetPath: "agents/oms-reviewer.md",
+      },
+    ]);
+    expect(codex?.reviewerMechanisms).toEqual([
+      {
+        id: "codex.subagent",
+        selection: "primary",
+        isolation: "instruction-only",
+      },
+      {
+        id: "codex.custom-agent",
+        selection: "optional",
+        isolation: "instruction-only",
+        assetPath: "assets/codex/agents/oms-reviewer.toml",
+      },
+    ]);
+    expect(hermes?.reviewerMechanisms).toEqual([
+      {
+        id: "hermes.delegate-task",
+        selection: "primary",
+        isolation: "instruction-only",
+      },
+    ]);
+    expect(JSON.stringify(harnessSurfaceRegistry.hosts)).not.toMatch(/unsupported|unavailable/);
+    await expect(fileExists("agents/oms-reviewer.md"), "owned claude reviewer").resolves.toBe(true);
+  });
 
   it("declares host manifest, guidance, hook, rule, and MCP config files that exist", async () => {
     for (const host of harnessSurfaceRegistry.hosts) {
@@ -101,7 +203,12 @@ describe("harness registry parity", () => {
       bin: Record<string, string>;
     }>("package.json");
 
-    expect(packageJson.files).toEqual(harnessSurfaceRegistry.packageAssets.npmFiles);
+    const registryFiles = harnessSurfaceRegistry.packageAssets.npmFiles;
+    const packageFiles = packageJson.files;
+    expect(registryFiles).toContain("agents");
+    expect([...packageFiles].sort()).toEqual(
+      [...registryFiles].sort(),
+    );
     for (const hook of harnessSurfaceRegistry.hooks) {
       expect(packageJson.bin[hook.bin]).toBe(hook.path);
       await expect(fileExists(hook.path), hook.bin).resolves.toBe(true);
@@ -116,6 +223,12 @@ describe("harness registry parity", () => {
         requiredPath,
       ).toBe(true);
     }
+    expect(harnessSurfaceRegistry.packageAssets.releaseRequiredPaths).toEqual(expect.arrayContaining([
+      "assets/skills/interview/SKILL.md",
+      "skills/interview/SKILL.md",
+      "agents/oms-reviewer.md",
+      "assets/codex/agents/oms-reviewer.toml",
+    ]));
   });
 
   it("matches runtime asset root declarations", () => {

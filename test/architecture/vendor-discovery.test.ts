@@ -5,6 +5,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import {
+  HARNESS_HOST_REVIEWERS,
+  HARNESS_MCP_TOOLS,
+  HARNESS_SHARED_SKILLS,
+  HARNESS_WRITE_HOOK,
+} from "../../src/kernel/harness/surface-registry.js";
 import { absolute, pathExists, readJson } from "./repo-root.js";
 
 /**
@@ -18,14 +24,15 @@ import { absolute, pathExists, readJson } from "./repo-root.js";
  * Every case resolves a manifest's declared skill path relative to the manifest
  * root and checks the real filesystem. A manifest that merely contains the right
  * string is not evidence: the string has to point at a directory that exists and
- * holds the seven skills.
+ * holds the eight shared skills.
  */
 
-const CANONICAL_SKILLS = ["distill", "doctor", "link", "search", "status", "template", "write"] as const;
+const CANONICAL_SKILLS = ["distill", "doctor", "interview", "link", "search", "status", "template", "write"] as const;
 
 interface ClaudeManifest {
   readonly name: string;
   readonly skills: readonly string[];
+  readonly agents: readonly string[];
   readonly mcpServers: string;
 }
 
@@ -106,7 +113,9 @@ async function packedFiles(root: string): Promise<readonly string[]> {
 }
 
 describe("packaged vendor discovery", () => {
-  it("keeps exactly the seven canonical skills in one authored location", async () => {
+  it("keeps exactly the eight canonical skills in one authored location", async () => {
+    expect([...HARNESS_SHARED_SKILLS]).toEqual([...CANONICAL_SKILLS]);
+    expect(CANONICAL_SKILLS).toHaveLength(8);
     for (const skill of CANONICAL_SKILLS) {
       await expect(pathExists(`assets/skills/${skill}/SKILL.md`), skill).resolves.toBe(true);
     }
@@ -117,6 +126,7 @@ describe("packaged vendor discovery", () => {
     const root = absolute(".");
 
     expect(manifest.skills.length).toBe(CANONICAL_SKILLS.length);
+    expect([...manifest.skills]).toEqual(CANONICAL_SKILLS.map((skill) => `./assets/skills/${skill}/`));
     for (const declared of manifest.skills) {
       await expect(resolvesToDirectory(root, declared), declared).resolves.toBe(true);
     }
@@ -173,16 +183,23 @@ describe("packaged vendor discovery", () => {
       expect(typeof frontmatter.description, `${skill}.description`).toBe("string");
       expect(frontmatter.description, `${skill}.description`).not.toHaveLength(0);
       expect(Object.keys(frontmatter).every((key) => (SKILL_FRONTMATTER_KEYS as readonly string[]).includes(key)), skill).toBe(true);
-      if (skill === "distill" || skill === "template") {
-        expect(frontmatter.mcp_tool).toBeUndefined();
-        expect(frontmatter.mcp_args).toBeUndefined();
+      if (skill === "distill" || skill === "interview" || skill === "template") {
+        expect(frontmatter.mcp_tool, skill).toBeUndefined();
+        expect(frontmatter.mcp_args, skill).toBeUndefined();
       } else {
         mcpSkillCount += 1;
-        expect(typeof frontmatter.mcp_tool, `${skill}.mcp_tool`).toBe("string");
+        expect(frontmatter.mcp_tool, `${skill}.mcp_tool`).toBe(skill);
         expect(frontmatter.mcp_args, `${skill}.mcp_args`).toBeDefined();
       }
     }
     expect(mcpSkillCount).toBe(5);
+    expect([...HARNESS_MCP_TOOLS].map((tool) => tool.name).sort()).toEqual([
+      "doctor",
+      "link",
+      "search",
+      "status",
+      "write",
+    ]);
   });
 
   // Manifest completeness. A host silently drops a plugin whose metadata is
@@ -211,11 +228,53 @@ describe("packaged vendor discovery", () => {
     }
   });
 
-  it("includes every canonical skill in the npm package, not only the working tree", async () => {
+  it("resolves owned reviewer assets and keeps Hermes instruction-only", async () => {
+    const claude = await readJson<ClaudeManifest>(".claude-plugin/plugin.json");
+    expect(claude.agents).toEqual(["./agents/oms-reviewer.md"]);
+    const repo = absolute(".");
+    for (const declared of claude.agents) {
+      const target = path.resolve(repo, declared);
+      const relative = path.relative(repo, target);
+      expect(relative.startsWith("..") || path.isAbsolute(relative), declared).toBe(false);
+      await expect(pathExists(relative), declared).resolves.toBe(true);
+    }
+    expect(HARNESS_HOST_REVIEWERS.claude).toEqual([
+      {
+        id: "claude.plugin-agent",
+        selection: "primary",
+        isolation: "instruction-only",
+        assetPath: "agents/oms-reviewer.md",
+      },
+    ]);
+    expect(HARNESS_HOST_REVIEWERS.codex).toEqual([
+      { id: "codex.subagent", selection: "primary", isolation: "instruction-only" },
+      {
+        id: "codex.custom-agent",
+        selection: "optional",
+        isolation: "instruction-only",
+        assetPath: "assets/codex/agents/oms-reviewer.toml",
+      },
+    ]);
+    expect(HARNESS_HOST_REVIEWERS.hermes).toEqual([
+      { id: "hermes.delegate-task", selection: "primary", isolation: "instruction-only" },
+    ]);
+    expect(HARNESS_WRITE_HOOK).toEqual({ claude: "fail-open", codex: "none", hermes: "none" });
+    await expect(pathExists("agents/oms-reviewer.md")).resolves.toBe(true);
+    await expect(pathExists("assets/codex/agents/oms-reviewer.toml")).resolves.toBe(true);
+    const hermes = await readJson<Record<string, unknown>>("assets/hermes-manifest.json");
+    expect(hermes.skills).toBeUndefined();
+    expect("agents" in hermes).toBe(false);
+    expect(JSON.stringify(hermes)).not.toMatch(/unavailable|unsupported|seven skills/);
+    expect(JSON.stringify(HARNESS_HOST_REVIEWERS)).not.toMatch(/unavailable|unsupported/);
+  });
+
+  it("includes every canonical skill and owned reviewer asset in the npm package", async () => {
     const files = await packedFiles(absolute("."));
     for (const skill of CANONICAL_SKILLS) {
       expect(files).toContain(`assets/skills/${skill}/SKILL.md`);
     }
+    expect(files).toContain("agents/oms-reviewer.md");
+    expect(files).toContain("assets/codex/agents/oms-reviewer.toml");
   });
 
   // Negative cases. Each names a concrete bad input the gate must reject, so a
