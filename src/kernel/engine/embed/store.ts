@@ -9,6 +9,7 @@
 
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import type { Chunk, ScoredHit, VectorStore } from "../types.js";
@@ -32,7 +33,7 @@ export interface EngineStoreCapabilities {
   readonly vecAvailable: boolean;
 }
 
-export type EngineStoreDiagnostic = "corrupt-or-incompatible";
+export type EngineStoreDiagnostic = "corrupt-or-incompatible" | "native-abi-mismatch";
 
 export class EngineStoreOpenError extends Error {
   readonly diagnostic: EngineStoreDiagnostic;
@@ -46,6 +47,57 @@ export class EngineStoreOpenError extends Error {
 
 export function engineStoreDiagnostic(error: unknown): EngineStoreDiagnostic | null {
   return error instanceof EngineStoreOpenError ? error.diagnostic : null;
+}
+
+const OMS_PACKAGE_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../..",
+);
+
+interface NativeAbiMismatch {
+  readonly addonPath: string;
+  readonly addonAbi: string;
+  readonly runtimeAbiFromMessage: string;
+}
+
+/**
+ * better-sqlite3 reports a Node native-module mismatch with this loader
+ * sentence. Keep the match narrow: an arbitrary open error must continue to
+ * propagate unchanged rather than being presented as an ABI problem.
+ */
+function nativeAbiMismatch(error: Error): NativeAbiMismatch | null {
+  const match = /['"]([^'"]+\.node)['"]\s+was compiled against a different Node\.js version using\s+NODE_MODULE_VERSION\s+(\d+)[\s\S]*?\bThis version of Node\.js requires\s+NODE_MODULE_VERSION\s+(\d+)/i.exec(
+    error.message,
+  );
+  if (match === null) return null;
+  return {
+    addonPath: match[1]!,
+    addonAbi: match[2]!,
+    runtimeAbiFromMessage: match[3]!,
+  };
+}
+
+function openDatabase(
+  dbPath: string,
+  options?: Database.Options,
+): Database.Database {
+  try {
+    return new Database(dbPath, options);
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    const mismatch = nativeAbiMismatch(error);
+    if (mismatch === null) throw error;
+
+    const runtimeAbi = process.versions.modules ?? "unknown";
+    const message = [
+      `better-sqlite3 native addon ABI mismatch while opening engine store "${dbPath}".`,
+      `Runtime: process.execPath=${process.execPath}; process.version=${process.version}; process.versions.modules=${runtimeAbi}.`,
+      `Addon: ${mismatch.addonPath}; built NODE_MODULE_VERSION=${mismatch.addonAbi}; loader-required NODE_MODULE_VERSION=${mismatch.runtimeAbiFromMessage}.`,
+      `Underlying error: ${error.message}`,
+      `No rebuild was attempted. From the OMS installation directory "${OMS_PACKAGE_ROOT}", run "npm rebuild better-sqlite3" with this exact Node runtime, then restart the MCP host.`,
+    ].join(" ");
+    throw new EngineStoreOpenError("native-abi-mismatch", message, { cause: error });
+  }
 }
 
 export interface EmbeddingIdentity {
@@ -327,7 +379,7 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
   if (dbPath !== ":memory:") {
     mkdirSync(path.dirname(dbPath), { recursive: true });
   }
-  const db = new Database(dbPath);
+  const db = openDatabase(dbPath);
   try {
     ensureCoreSchema(db);
   } catch (error) {
@@ -532,7 +584,7 @@ export function openEngineStore(
   opts: { readonly sqliteVecLoader?: SqliteVecLoader } = {},
 ): EngineStore {
   mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
+  const db = openDatabase(dbPath);
   try {
     ensureCoreSchema(db);
   } catch (error) {
@@ -819,9 +871,12 @@ function openExistingCoreStore(
 
   let db: Database.Database;
   try {
-    db = new Database(snapshot.dbPath, { fileMustExist: true });
+    db = openDatabase(snapshot.dbPath, { fileMustExist: true });
   } catch (error) {
     snapshot.dispose();
+    if (error instanceof EngineStoreOpenError) {
+      throw error;
+    }
     throw new EngineStoreOpenError(
       "corrupt-or-incompatible",
       `Engine store is unavailable at "${dbPath}": ${error instanceof Error ? error.message : String(error)}`,

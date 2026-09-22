@@ -62,6 +62,47 @@ describe("createHashProjectionProvider", () => {
 });
 
 describe("GGUF embedding provider runtime guards", () => {
+  it("routes node-llama-cpp diagnostics to stderr without touching stdout", async () => {
+    vi.doMock("node-llama-cpp", () => ({
+      getLlama: vi.fn(async (
+        options?: { logger?: (level: string, message: string) => void },
+      ) => {
+        options?.logger?.("info", "load: control-looking");
+        options?.logger?.("warn", "init: embeddings");
+        return {
+          loadModel: async () => ({
+            tokenize: (text: string) => [text],
+            detokenize: (tokens: string[]) => tokens.join(""),
+            createEmbeddingContext: async () => ({
+              getEmbeddingFor: async () => ({ vector: [3, 4] }),
+              dispose: async () => undefined,
+            }),
+            dispose: async () => undefined,
+          }),
+        };
+      }),
+    }));
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const provider = createGGUFEmbeddingProvider("/operator/model.gguf", { dimensions: 2 });
+      await provider.embed("native diagnostics");
+      await provider.dispose();
+
+      const stderrChunks = stderrWrite.mock.calls.map(([chunk]) => String(chunk));
+      expect(stderrChunks).toEqual(expect.arrayContaining([
+        "load: control-looking\n",
+        "init: embeddings\n",
+      ]));
+      expect(stdoutWrite).not.toHaveBeenCalled();
+    } finally {
+      stderrWrite.mockRestore();
+      stdoutWrite.mockRestore();
+      vi.doUnmock("node-llama-cpp");
+      vi.resetModules();
+    }
+  });
+
   it("uses the same closed formatter before fake GGUF embeddings", async () => {
     const inputs: string[] = [];
     const loadModel = async () => ({
