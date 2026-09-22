@@ -261,7 +261,8 @@ async function run(parsed: Parsed): Promise<void> {
     if (parsed.positional.length !== 1) fail("update requires a template id");
     const id = validateTemplateId(parsed.positional[0]!);
     const className = text(parsed.options, "class");
-    const other = ["contract", "naming", "renderer", "path"].some(name => text(parsed.options, name) !== undefined);
+    const other = ["contract", "naming", "renderer", "path", "from", "expected-source-digest"]
+      .some(name => text(parsed.options, name) !== undefined);
     if (className !== undefined) {
       if (other) fail("--class cannot be combined with binding/source updates");
       if (className !== "managed-default" && className !== "registered-existing") fail("--class is invalid");

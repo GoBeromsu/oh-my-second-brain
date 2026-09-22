@@ -4,7 +4,7 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
-- `template update <pending-id>` accepts `--path`, `--from`, `--expected-source-digest`, and `--renderer` for guarded in-place source repair. `template review|answer|commit --template-id <id>` limits contract questions and publication to that identity without resolving unrelated pending templates.
+- `template update <pending-id>` accepts `--path`, `--from`, `--expected-source-digest`, and `--renderer` for guarded in-place source repair. `template review|answer|commit --template-id <id>` limits contract questions and publication to that identity without resolving unrelated pending templates. `template update --class` now rejects source-repair flags instead of silently discarding their CAS intent while reclassifying.
 
 ## [0.15.0] - 2026-09-19
 

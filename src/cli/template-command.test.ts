@@ -244,6 +244,8 @@ describe("template command", () => {
       ["default", "note", "--vault", root, "--yes", "--approved-digest", "sha256:BAD"],
       ["move", "--folder", "Templates", "--vault", root, "--dry-run", "--approved-digest", digest],
       ["update", "note", "--class", "managed-default", "--naming", "x", "--vault", root, "--dry-run"],
+      ["update", "note", "--class", "managed-default", "--from", "ignored.md", "--vault", root, "--dry-run"],
+      ["update", "note", "--class", "managed-default", "--expected-source-digest", digest, "--vault", root, "--dry-run"],
       ["remove", "note", "--unknown", "x", "--vault", root, "--dry-run"],
     ]) {
       await runTemplateCommand(args);
