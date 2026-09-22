@@ -1,4 +1,6 @@
-import { loadResolvedTemplatesIfPresent } from "../../templates/resolver.js";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { deriveFolderOntologyAxis } from "../../templates/resolver.js";
 import type { GlobalAxis, JsonValue } from "../../templates/types.js";
 
 export interface TaxonomyIntentProvenance {
@@ -108,22 +110,27 @@ function folderOntologyIntents(axis: GlobalAxis | undefined): ReadonlyMap<string
   return intents;
 }
 
-/** Resolves model context from the active, verified template contract. */
+/** Reads user-declared retrieval intent without admitting or validating a writing contract. */
 export async function loadTaxonomyIntentProjection(
   vault: string,
   indexedPaths: readonly string[],
   collectionPath?: string,
 ): Promise<TaxonomyIntentProjection> {
-  let convention: Awaited<ReturnType<typeof loadResolvedTemplatesIfPresent>>;
+  let folders: unknown;
   try {
-    convention = await loadResolvedTemplatesIfPresent(vault);
+    const raw: unknown = JSON.parse(await readFile(path.join(vault, ".oms", "taxonomy.json"), "utf8"));
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error("taxonomy must be an object");
+    }
+    folders = (raw as Record<string, unknown>)["folders"];
   } catch (error: unknown) {
-    const diagnostic = error instanceof Error ? error.message : String(error);
-    throw new Error(`${diagnostic} Run oms template check --vault <vault>; if regeneration is required, use the approved oms template regenerate-types dry-run/apply flow.`);
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return projectTaxonomyIntents(new Map(), indexedPaths, collectionPath);
+    }
+    throw new Error(`TAXONOMY_CONTEXT_INVALID: .oms/taxonomy.json: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
-  if (convention === null) return projectTaxonomyIntents(new Map(), indexedPaths, collectionPath);
   return projectTaxonomyIntents(
-    folderOntologyIntents(convention.globalAxes["folder-ontology"]),
+    folderOntologyIntents(deriveFolderOntologyAxis(folders) ?? undefined),
     indexedPaths,
     collectionPath,
   );

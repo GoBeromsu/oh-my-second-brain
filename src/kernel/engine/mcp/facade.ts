@@ -23,9 +23,9 @@
 import path from "node:path";
 import { readFileSync, statSync } from "node:fs";
 import { deriveTemplateRetrievalAxes } from "../../templates/axes.js";
-import { loadResolvedTemplates } from "../../templates/resolver.js";
+import type { TemplateRetrievalSource } from "../../templates/axes.js";
+import { readSearchTemplateSource, type SearchTemplateSource } from "../retrieval/template-source.js";
 import { walkVaultMarkdown } from "../../conventions/vault-walk.js";
-import type { ResolvedConvention } from "../../templates/types.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import { retrieve } from "../retrieval/index.js";
 import type { Reranker } from "../retrieval/reranker.js";
@@ -321,12 +321,21 @@ function resultPageLimit(opts: McpSemanticQueryOptions): number | undefined {
   return opts.limit ?? (opts.collectionPath === undefined ? undefined : UNBOUNDED_CANDIDATE_LIMIT);
 }
 
-function templateFieldKeys(convention: ResolvedConvention): ReadonlySet<string> {
+function templateFieldKeys(source: TemplateRetrievalSource): ReadonlySet<string> {
   const keys = new Set<string>();
-  for (const template of deriveTemplateRetrievalAxes(convention).templates) {
+  const axes = deriveTemplateRetrievalAxes(source);
+  for (const axis of axes.defaultAxes) keys.add(axis.key.trim().toLowerCase());
+  for (const template of axes.templates) {
     for (const axis of template.axes) if (axis.key !== "template") keys.add(axis.key.trim().toLowerCase());
   }
   return keys;
+}
+
+/** A declared-axis request needs the template snapshot; a missing one is reported, never guessed. */
+function requestsDeclaredAxes(axes: QueryAxes | undefined): boolean {
+  if (axes === undefined) return false;
+  const record = axes as Record<string, unknown>;
+  return record["template"] !== undefined || record["field"] !== undefined;
 }
 
 function validateKnownFieldAxes(axes: QueryAxes | undefined, knownFields: ReadonlySet<string>): void {
@@ -455,11 +464,11 @@ export class McpEngineAdapter {
   }
 
   /** Load a projection-matched node index, scanning notes without writing on a cache miss. */
-  private async loadOrBuildNodes(vault: string, convention: ResolvedConvention): Promise<EngineGraphNode[]> {
-    const sourceSignature = await nodeSourceSignature(vault, convention);
-    const cached = await loadNodeIndex(this.nodeCachePath(vault), sourceSignature, convention.inputSignature);
+  private async loadOrBuildNodes(vault: string, meta: SearchTemplateSource): Promise<EngineGraphNode[]> {
+    const sourceSignature = await nodeSourceSignature(vault, meta);
+    const cached = await loadNodeIndex(this.nodeCachePath(vault), sourceSignature, meta.digest);
     if (cached !== null) return cached;
-    return buildNodeIndex({ vaultPath: vault, convention });
+    return buildNodeIndex({ vaultPath: vault, meta });
   }
 
   // -------------------------------------------------------------------------
@@ -477,11 +486,13 @@ export class McpEngineAdapter {
     subQueries: readonly { readonly type: string; readonly query: string }[],
   ): Promise<McpSemanticQueryResult> {
     const vault = opts.vault ?? this.vaultPath;
-    const convention = await loadResolvedTemplates(vault);
-    const baseNodes = await this.loadOrBuildNodes(vault, convention);
+    const meta = await readSearchTemplateSource(vault);
+    if (!meta.available && requestsDeclaredAxes(opts.axes as QueryAxes | undefined)) {
+      return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field axis requires the template snapshot: ${meta.reason}`);
+    }
+    const baseNodes = await this.loadOrBuildNodes(vault, meta);
     const indexDrift = false;
-    const knownFields = templateFieldKeys(convention);
-    validateKnownFieldAxes(opts.axes as QueryAxes | undefined, knownFields);
+    if (meta.available) validateKnownFieldAxes(opts.axes as QueryAxes | undefined, templateFieldKeys(meta.source));
     const nodes = baseNodes;
     const axisFiltered = opts.axes === undefined
       ? nodes
@@ -668,6 +679,7 @@ export class McpEngineAdapter {
       }
     }
     let rerankRequested = false;
+    const facetWarnings: string[] = [];
     try {
       // A core engine has a real lexical store but deliberately no embedding
       // provider. The default query mode is hybrid for vector-capable engines;
@@ -730,19 +742,22 @@ export class McpEngineAdapter {
       });
       let facetValues: McpSemanticFacet[] | undefined;
       const vault = opts.vault ?? this.vaultPath;
-      let indexDrift = false;
+      const indexDrift = false;
+      // Facets come from the inclusive node index. Template metadata is optional
+      // here, so an absent or invalid contract narrows the facet set. A failed
+      // vault read is reported as a warning rather than silently dropped, and it
+      // does not turn store-backed retrieval into an unavailable result.
       try {
-        const convention = await loadResolvedTemplates(vault);
-        const nodes = await this.loadOrBuildNodes(vault, convention);
+        const facetMeta = await readSearchTemplateSource(vault);
+        if (!facetMeta.available) facetWarnings.push(`Template metadata unavailable: ${facetMeta.reason}`);
+        const facetNodes = await this.loadOrBuildNodes(vault, facetMeta);
         const scoped = opts.collectionPath === undefined
-          ? nodes
-          : nodes.filter(node => node.path === opts.collectionPath || node.path.startsWith(`${opts.collectionPath}/`));
+          ? facetNodes
+          : facetNodes.filter(node => node.path === opts.collectionPath || node.path.startsWith(`${opts.collectionPath}/`));
         facetValues = queryFacets(scoped).map(facet => ({ ...facet, intent: facetIntent(facet, opts.intent) }));
-      } catch {
-        // Lexical/vector retrieval is projection-independent. Typed axis requests
-        // are routed through queryNodeAxes and still fail loudly above.
+      } catch (error: unknown) {
         facetValues = undefined;
-        indexDrift = false;
+        facetWarnings.push(`Facet metadata unavailable: ${error instanceof Error ? error.message : String(error)}`);
       }
       const requestedChannels = [...new Set(effectiveSubQueries.map((search) => search.type))]
         .filter((type): type is "lex" | "vec" | "hyde" => type === "lex" || type === "vec" || type === "hyde");
@@ -759,7 +774,7 @@ export class McpEngineAdapter {
         generatedSearches,
         rerankApplied: shouldRerank,
         taxonomyIntents: taxonomyProjection?.matched ?? [],
-        warnings: taxonomyProjection?.warnings ?? [],
+        warnings: [...(taxonomyProjection?.warnings ?? []), ...facetWarnings],
       });
       // Fill title + doc-head snippet from disk so engine hits reach practical
       // parity with the src/search preview (the pure mapper stays text-free).
@@ -774,6 +789,7 @@ export class McpEngineAdapter {
         taxonomyIntents: taxonomyProjection?.matched ?? [],
         warnings: [
           ...(taxonomyProjection?.warnings ?? []),
+          ...facetWarnings,
           ...(rerankRequested ? ["Reranking was requested but the query did not complete."] : []),
         ],
       });
@@ -1031,33 +1047,34 @@ export class McpEngineAdapter {
    */
   async graphBuild(opts: McpGraphBuildOptions, vaultPath: string): Promise<McpGraphBuildResult> {
     const args = graphBuildOptionsToEngineArgs(opts, vaultPath);
-    const convention = await loadResolvedTemplates(args.vaultPath);
+    const meta = await readSearchTemplateSource(args.vaultPath);
     const graphCachePath = this.graphCachePath(args.vaultPath);
+    const metadataWarnings = meta.available ? [] : [`Template metadata unavailable: ${meta.reason}`];
 
     if (args.dryRun) {
-      const meta = await loadCachedGraphMeta(graphCachePath, convention.inputSignature);
-      if (meta !== null) {
-        const sourceSignature = await nodeSourceSignature(args.vaultPath, convention);
-        const nodes = await loadNodeIndex(this.nodeCachePath(args.vaultPath), sourceSignature, convention.inputSignature);
-        if (nodes !== null) return engineGraphBuildResultToMcp({ notes: nodes.length, edges: meta.edges.length, generatedAt: meta.generatedAt, warnings: [] });
+      const cached = await loadCachedGraphMeta(graphCachePath, meta.digest);
+      if (cached !== null) {
+        const sourceSignature = await nodeSourceSignature(args.vaultPath, meta);
+        const nodes = await loadNodeIndex(this.nodeCachePath(args.vaultPath), sourceSignature, meta.digest);
+        if (nodes !== null) return engineGraphBuildResultToMcp({ notes: nodes.length, edges: cached.edges.length, generatedAt: cached.generatedAt, warnings: metadataWarnings });
       }
       return engineGraphBuildResultToMcp({
         notes: 0,
         edges: 0,
         generatedAt: new Date().toISOString(),
-        warnings: [],
+        warnings: metadataWarnings,
       });
     }
 
-    const built = await buildGraphWithWarnings({ vaultPath: args.vaultPath, convention });
+    const built = await buildGraphWithWarnings({ vaultPath: args.vaultPath, meta });
     const edges = built.edges;
-    await saveCachedGraph(graphCachePath, edges, convention.inputSignature);
+    await saveCachedGraph(graphCachePath, edges, meta.digest);
 
-    const nodes = await buildNodeIndex({ vaultPath: args.vaultPath, convention });
-    const sourceSignature = await nodeSourceSignature(args.vaultPath, convention);
-    await saveNodeIndex(this.nodeCachePath(args.vaultPath), nodes, sourceSignature, convention.inputSignature);
+    const nodes = await buildNodeIndex({ vaultPath: args.vaultPath, meta });
+    const sourceSignature = await nodeSourceSignature(args.vaultPath, meta);
+    await saveNodeIndex(this.nodeCachePath(args.vaultPath), nodes, sourceSignature, meta.digest);
 
-    return engineGraphBuildResultToMcp({ notes: nodes.length, edges: edges.length, generatedAt: new Date().toISOString(), warnings: built.warnings });
+    return engineGraphBuildResultToMcp({ notes: nodes.length, edges: edges.length, generatedAt: new Date().toISOString(), warnings: [...metadataWarnings, ...built.warnings] });
   }
 
   // -------------------------------------------------------------------------
@@ -1067,13 +1084,13 @@ export class McpEngineAdapter {
   /** Report graph cache status (notes / edges / generatedAt) from disk. */
   async graphStatus(vaultPath: string): Promise<McpGraphStatusResult> {
     try {
-      const convention = await loadResolvedTemplates(vaultPath);
-      const meta = await loadCachedGraphMeta(this.graphCachePath(vaultPath), convention.inputSignature);
-      if (meta === null) return engineGraphBuildToStatusResult(null);
-      const sourceSignature = await nodeSourceSignature(vaultPath, convention);
-      const nodes = await loadNodeIndex(this.nodeCachePath(vaultPath), sourceSignature, convention.inputSignature);
+      const meta = await readSearchTemplateSource(vaultPath);
+      const cached = await loadCachedGraphMeta(this.graphCachePath(vaultPath), meta.digest);
+      if (cached === null) return engineGraphBuildToStatusResult(null);
+      const sourceSignature = await nodeSourceSignature(vaultPath, meta);
+      const nodes = await loadNodeIndex(this.nodeCachePath(vaultPath), sourceSignature, meta.digest);
       if (nodes === null) return engineGraphBuildToStatusResult(null);
-      return engineGraphBuildToStatusResult({ notes: nodes.length, edges: meta.edges.length, generatedAt: meta.generatedAt });
+      return engineGraphBuildToStatusResult({ notes: nodes.length, edges: cached.edges.length, generatedAt: cached.generatedAt });
     } catch {
       return engineGraphBuildToStatusResult(null);
     }
@@ -1091,8 +1108,11 @@ export class McpEngineAdapter {
    */
   async retrieveByAxis(filters: McpAxisFilters): Promise<McpSemanticQueryResult> {
     try {
-      const convention = await loadResolvedTemplates(this.vaultPath);
-      const baseNodes = await this.loadOrBuildNodes(this.vaultPath, convention);
+      const meta = await readSearchTemplateSource(this.vaultPath);
+      if (!meta.available && (filters.template !== undefined || filters.property !== undefined)) {
+        return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field filter requires the template snapshot: ${meta.reason}`);
+      }
+      const baseNodes = await this.loadOrBuildNodes(this.vaultPath, meta);
       const nodes = baseNodes;
       const indexDrift = false;
       const limit = Math.max(1, filters.limit ?? 10);

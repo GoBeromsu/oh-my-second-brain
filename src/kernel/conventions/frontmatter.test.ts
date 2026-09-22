@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { parseNote } from "./frontmatter.js";
 
 describe("parseNote frontmatter diagnostics", () => {
+  it("retains the body when an unresolved YAML alias fails during conversion", () => {
+    const parsed = parseNote("---\nvalue: *missing\n---\nSearchable body.\n");
+    expect(parsed.frontmatter).toEqual({});
+    expect(parsed.body).toBe("Searchable body.\n");
+    expect(parsed.frontmatterRaw).toBe("value: *missing");
+    expect(parsed.diagnostics).toEqual([
+      expect.objectContaining({ code: "frontmatter-yaml-parse-error", message: expect.stringContaining("alias") }),
+    ]);
+  });
+
   it("parses BOM-prefixed CRLF frontmatter with byte-accurate range", () => {
     const parsed = parseNote("\ufeff---\r\ntemplate: note\r\n---\r\nBody\r\n");
     expect(parsed.frontmatter).toEqual({ template: "note" });

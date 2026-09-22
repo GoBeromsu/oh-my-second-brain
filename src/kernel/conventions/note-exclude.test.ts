@@ -126,6 +126,42 @@ describe("excludedNoteMatcher", () => {
 });
 
 describe("managedSourceExclusionMatcher", () => {
+  it.each([
+    "{broken",
+    "null",
+    JSON.stringify({ version: 4, templates: [] }),
+    JSON.stringify({ version: 4, templates: { bad: null, missing: {}, unsafe: { source: { path: "../private.md" } } } }),
+    JSON.stringify({ version: 3, templates: { old: { sourcePath: "notes/idea.md" } } }),
+  ])("does not turn invalid or retired contract metadata into search admission: %s", async policy => {
+    const vault = await makeVault({
+      ".oms/template-policy.json": policy,
+      "notes/idea.md": "searchable",
+    });
+    const isExcluded = await managedSourceExclusionMatcher(vault);
+    await expect(isExcluded("notes/idea.md")).resolves.toBe(false);
+  });
+
+  it("uses optional v4 source paths without demanding a complete valid contract", async () => {
+    const vault = await makeVault({
+      ".oms/template-policy.json": JSON.stringify({
+        version: 4,
+        templates: {
+          imported: { source: { path: "Sources/raw.md" } },
+          defaultOnly: {},
+          missing: { source: { path: "Sources/deleted.md" } },
+        },
+      }),
+      "Sources/raw.md": "<%* arbitrary raw syntax %>",
+      "notes/idea.md": "searchable",
+    });
+    const isExcluded = await managedSourceExclusionMatcher(vault);
+    await expect(isExcluded("Sources/raw.md")).resolves.toBe(true);
+    await expect(isExcluded("notes/idea.md")).resolves.toBe(false);
+    const syncMatcher = await excludedNoteMatcher(vault);
+    expect(syncMatcher("Sources/raw.md")).toBe(true);
+    expect(syncMatcher("notes/idea.md")).toBe(false);
+  });
+
   it("excludes arbitrary managed source names through a symlink alias", async () => {
     const vault = await makeVault({ "authored/नोट 이름.md": "---\ntitle: template\n---\n" });
     await mkdir(path.join(vault, "aliases"), { recursive: true });

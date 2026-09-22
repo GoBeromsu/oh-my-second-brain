@@ -1,9 +1,15 @@
-/** Per-note metadata used for template-bound graph retrieval. */
+/** How a note relates to available template metadata. There is no synthetic default id. */
+export type NodeTemplateBinding = "template" | "default" | "unresolved";
+
+/** Per-note metadata used for inclusive graph retrieval. */
 export interface EngineGraphNode {
   /** Vault-relative path. */
   readonly path: string;
-  /** Stable frontmatter template identity. */
-  readonly template: string;
+  /** Registered template id, or null for the default layer and unresolved notes. */
+  readonly template: string | null;
+  readonly binding: NodeTemplateBinding;
+  /** Per-note parse and identity diagnostics. Empty when the note has none. */
+  readonly diagnostics: readonly string[];
   /** First vault-relative path segment. */
   readonly folder: string;
   /** Declared fields for this node's template only. */
@@ -59,13 +65,43 @@ export function tokenize(text: string): string[] {
   return out;
 }
 
-export function toAxisScalars(value: unknown): AxisScalar[] {
-  if (Array.isArray(value)) return value.flatMap(toAxisScalars);
-  if (typeof value === "string") return value.trim() ? [value.trim()] : [];
-  if (typeof value === "number") return Number.isFinite(value) ? [value] : [];
-  if (typeof value === "boolean") return [value];
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return [value.toISOString()];
-  return [];
+export interface AxisScalarConversion {
+  readonly values: readonly AxisScalar[];
+  /** False when a cycle or a non-scalar was skipped. Empty and null input stays supported. */
+  readonly supported: boolean;
+}
+
+/**
+ * Flattens a frontmatter value into axis scalars.
+ * Cyclic YAML arrays are cut instead of walked forever. Unsupported values are
+ * omitted; callers record a diagnostic and keep the note.
+ */
+export function toAxisScalars(value: unknown): AxisScalarConversion {
+  return readAxisScalars(value, new Set<object>());
+}
+
+function readAxisScalars(value: unknown, ancestors: Set<object>): AxisScalarConversion {
+  if (value === null || value === undefined) return { values: [], supported: true };
+  if (typeof value === "string") return { values: value.trim() ? [value.trim()] : [], supported: true };
+  if (typeof value === "number") return Number.isFinite(value) ? { values: [value], supported: true } : { values: [], supported: false };
+  if (typeof value === "boolean") return { values: [value], supported: true };
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? { values: [], supported: false } : { values: [value.toISOString()], supported: true };
+  if (typeof value !== "object") return { values: [], supported: false };
+  if (ancestors.has(value)) return { values: [], supported: false };
+  if (!Array.isArray(value)) return { values: [], supported: false };
+  ancestors.add(value);
+  const values: AxisScalar[] = [];
+  let supported = true;
+  try {
+    for (const item of value) {
+      const child = readAxisScalars(item, ancestors);
+      if (!child.supported) supported = false;
+      values.push(...child.values);
+    }
+  } finally {
+    ancestors.delete(value);
+  }
+  return { values, supported };
 }
 
 export function wikilinkStemMatch(link: string, target: string): boolean {
@@ -97,7 +133,8 @@ function comparable(value: AxisScalar): string | number | boolean {
 function equals(left: AxisScalar, right: AxisScalar): boolean {
   const a = comparable(left);
   const b = comparable(right);
-  return typeof a === typeof b && Object.is(a, b);
+  // Finite note numbers follow axisValueEquals: decimals and large values stay, and -0 matches 0.
+  return typeof a === typeof b && a === b;
 }
 
 function compare(left: AxisScalar, right: AxisScalar): number {
@@ -133,7 +170,7 @@ export function filterNodesByQueryAxes(nodes: readonly EngineGraphNode[], axes: 
   const links = axisValues(axes.link, "link");
   const fields = Object.entries(axes.field ?? {}).map(([key, value]) => [key, fieldPredicate(value, key)] as const);
   return nodes.filter(node => {
-    if (templates.length && !matches([node.template], templates)) return false;
+    if (templates.length && (node.template === null || !matches([node.template], templates))) return false;
     if (folders.length && !matches([node.folder], folders)) return false;
     if (links.length && !links.some(link => typeof link === "string" && node.wikilinks.some(target => wikilinkStemMatch(target, link)))) return false;
     for (const [key, predicate] of fields) {
@@ -165,7 +202,7 @@ export function queryFacets(nodes: readonly EngineGraphNode[]): QueryFacet[] {
     else counts.set(identity, { axis, value: normalized, ...(key === undefined ? {} : { key }), count: 1 });
   };
   for (const node of nodes) {
-    add("template", node.template);
+    if (node.template !== null) add("template", node.template);
     add("folder", node.folder);
     for (const [key, values] of Object.entries(node.axes)) for (const value of new Set(values)) add("field", String(value), key);
     for (const target of new Set(node.wikilinks)) add("link", target);

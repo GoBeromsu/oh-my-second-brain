@@ -14,6 +14,7 @@
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { loadConfiguredTemplatePaths } from "../templates/hints.js";
+import { normalizeTemplateSourcePath } from "../templates/paths.js";
 
 /**
  * Default audit exemptions - build artifacts, self-documenting templates, and
@@ -21,7 +22,7 @@ import { loadConfiguredTemplatePaths } from "../templates/hints.js";
  * declaration shared by current vault walkers.
  */
 export const DEFAULT_EXCLUDE_GLOBS: readonly string[] = [
-  "25. Digital Garden/.deploy-staging/**",
+  "**/.deploy-staging/**",
   "**/*.template.md",
   "**/SKILL.md",
   ".obsidian/**",
@@ -56,7 +57,7 @@ export function matchesAnyGlob(notePath: string, globs: readonly string[]): bool
   return globs.some((glob) => globToRegExp(glob).test(notePath));
 }
 
-/** Setup migration injects a legacy declaration here; runtime readers stay JSON-only. */
+/** Explicit exclusion declarations; runtime readers stay JSON-only. */
 export function noteExcludeMatcherFromGlobs(globs: readonly string[]): (notePath: string) => boolean {
   const matchers = [...DEFAULT_EXCLUDE_GLOBS, ...globs].map(globToRegExp);
   return (notePath: string) => matchers.some((matcher) => matcher.test(normalizedPath(notePath)));
@@ -142,26 +143,33 @@ async function managedSourcePaths(vaultRoot: string): Promise<readonly string[]>
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw) as unknown;
-  } catch (error) {
-    return failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    // Optional source metadata is not contract admission. Invalid policy cannot
+    // block ordinary-note search; explicit exclusion settings remain separate.
+    return [];
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: policy must be an object`);
+    return [];
   }
+  if ((parsed as Record<string, unknown>)["version"] !== 4) return [];
   const templates = (parsed as Record<string, unknown>)["templates"];
   if (templates === null || typeof templates !== "object" || Array.isArray(templates)) {
-    return failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: templates must be an object`);
+    return [];
   }
   const sources: string[] = [];
-  for (const [templateId, binding] of Object.entries(templates)) {
+  for (const binding of Object.values(templates)) {
     if (binding === null || typeof binding !== "object" || Array.isArray(binding)) {
-      failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: templates.${templateId} must be an object`);
+      continue;
     }
-    const sourcePath = (binding as Record<string, unknown>)["sourcePath"];
-    if (typeof sourcePath !== "string" || sourcePath === "") {
-      failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${policyPath}: templates.${templateId}.sourcePath must be a non-empty string`);
+    const source = (binding as Record<string, unknown>)["source"];
+    if (source === null || typeof source !== "object" || Array.isArray(source)) continue;
+    const sourcePath = (source as Record<string, unknown>)["path"];
+    if (typeof sourcePath !== "string") continue;
+    try {
+      sources.push(normalizeTemplateSourcePath(sourcePath));
+    } catch {
+      // An unsafe or incomplete source declaration never grants a path read.
     }
-    sources.push(normalizedPath(sourcePath));
   }
   return sources;
 }
@@ -189,8 +197,8 @@ export async function excludedNoteMatcher(
 
 /**
  * Resolves managed source identities once and matches both lexical paths and
- * aliases that resolve to the same on-disk file. Resolution failures reject
- * the scan with the source path that could not be established.
+ * aliases that resolve to the same on-disk file. Missing source drafts do not
+ * block note scans; other filesystem failures retain actionable diagnostics.
  */
 export async function managedSourceExclusionMatcher(
   vaultRoot: string,
@@ -204,6 +212,7 @@ export async function managedSourceExclusionMatcher(
     try {
       resolved.add(await realpath(path.resolve(root, sourcePath)));
     } catch (error) {
+      if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) continue;
       failure("MANAGED_SOURCE_RESOLUTION_FAILED", `${sourcePath}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

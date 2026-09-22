@@ -82,7 +82,22 @@ export function parseNote(raw: string): ParsedNote {
     };
   }
 
-  const parsed: unknown = document.toJS();
+  let parsed: unknown;
+  try {
+    parsed = document.toJS();
+  } catch (error: unknown) {
+    return {
+      frontmatter: {},
+      body: raw.slice(match[0].length),
+      hasFrontmatter: true,
+      diagnostics: [{
+        code: "frontmatter-yaml-parse-error",
+        message: error instanceof Error ? error.message : String(error),
+      }],
+      frontmatterRaw: yamlText,
+      frontmatterRange: { start: frontmatterStart, end: frontmatterStart + yamlText.length },
+    };
+  }
   const frontmatter = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? Object.fromEntries(Object.entries(parsed))
     : {};

@@ -1,33 +1,95 @@
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { deriveContentFormatContract } from "../templates/content-contract.js";
-import { sharedAuthoritySignature, sourceSignature } from "../templates/resolver.js";
-import type { SourceDescriptor } from "../templates/types.js";
+import { digestBytes } from "../templates/canonical.js";
+import { parseTemplatePolicy, serializeDerivedProjection } from "../templates/policy.js";
+import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "../templates/resolver.js";
 
-const digest = (value: string): `sha256:${string}` => `sha256:${createHash("sha256").update(value).digest("hex")}`;
+const encoder = new TextEncoder();
 
+const DEFAULT_MARKDOWN = "";
+const REFERENCE_MARKDOWN = "---\ntemplate: reference\ntitle: Untitled\ntags: []\n---\n\n## Summary\n";
+
+function layer(templatePath: string, markdown: string, extra: Record<string, unknown> = {}) {
+  return {
+    templatePath,
+    approvedMarkdown: markdown,
+    approvedMarkdownDigest: digestBytes(markdown),
+    fields: {},
+    headings: [],
+    semanticCriteria: [],
+    ...extra,
+  };
+}
+
+/**
+ * A real approved version 4 vault: a user-owned property pool, an always-on
+ * empty default layer, and one additive template. Notes are written as an agent
+ * would write them; OMS does not render them.
+ */
 export async function writeMorningVaultFixture(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-morning-"));
-  for (const directory of [".oms", ".obsidian", "Templates/OMS", "references"]) await mkdir(path.join(vault, directory), { recursive: true });
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], base: { fields: {} }, contracts: { reference: { intent: "reference", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text" }, tags: { type: "list" } }, views: [] } }, templates: { reference: { templateId: "reference", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", contract: "reference", naming: "{{slug}}.md" } } });
-  const taxonomy = JSON.stringify({ folders: {}, templates: { reference: { templateFolder: "Inbox" } } });
-  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", "source-url": "text", tags: "list" } });
-  const template = "---\ntemplate: reference\ntitle: Untitled\nsource-url:\ntags: []\n---\n<!-- oms:content -->\n";
-  const sources: SourceDescriptor[] = [{ logicalId: "template-policy", signature: digest(policy) }, { logicalId: "taxonomy", signature: digest(taxonomy) }, { logicalId: "obsidian-types", signature: digest(obsidianTypes) }, { path: "Templates/OMS/reference.md", signature: digest(template) }];
-  const content = deriveContentFormatContract("<!-- oms:content -->\n", { templateId: "reference" }).contract;
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url", "tags"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text" }, tags: { type: "list" } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
+  for (const directory of [".oms/templates", ".obsidian", "references"]) {
+    await mkdir(path.join(vault, directory), { recursive: true });
+  }
+  const policyText = JSON.stringify({
+    version: 4,
+    properties: {
+      title: { type: "text", intent: "Note title." },
+      "source-url": { type: "text", intent: "Where the reference came from.", format: "url" },
+      tags: { type: "list", intent: "Retrieval tags." },
+    },
+    default: layer(".oms/templates/default.md", DEFAULT_MARKDOWN),
+    templates: {
+      reference: layer(".oms/templates/reference.md", REFERENCE_MARKDOWN, {
+        templateId: "reference",
+        fields: {
+          title: { property: "title", required: true },
+          "source-url": { property: "source-url" },
+          tags: { property: "tags" },
+        },
+        headings: [{ headingId: "summary", title: "Summary", level: 2, required: true }],
+      }),
+    },
+  });
+  const taxonomyText = JSON.stringify({
+    templates: { reference: { templateFolder: "references" } },
+    folders: { references: { intent: "Processed external sources." } },
+  });
+  const obsidianTypes = JSON.stringify({ types: { title: "text", "source-url": "text", tags: "list" } });
+  const policyBytes = encoder.encode(policyText);
+  const taxonomyBytes = encoder.encode(taxonomyText);
+  const generationDigest = controlGenerationDigest(policyBytes, taxonomyBytes);
+  const projectionText = serializeDerivedProjection({
+    version: "oms.types.v2",
+    generatedFrom: generationDigest,
+    managed: expectedProjectionManaged(
+      parseTemplatePolicy(policyText),
+      taxonomyRouting(".oms/taxonomy.json", taxonomyBytes),
+      generationDigest,
+    ),
+  });
   await Promise.all([
-    writeFile(path.join(vault, ".oms/template-policy.json"), policy),
-    writeFile(path.join(vault, ".oms/taxonomy.json"), taxonomy),
-    writeFile(path.join(vault, ".oms/types.json"), projection),
+    writeFile(path.join(vault, ".oms/template-policy.json"), policyText),
+    writeFile(path.join(vault, ".oms/taxonomy.json"), taxonomyText),
+    writeFile(path.join(vault, ".oms/types.json"), projectionText),
+    writeFile(path.join(vault, ".oms/templates/default.md"), DEFAULT_MARKDOWN),
+    writeFile(path.join(vault, ".oms/templates/reference.md"), REFERENCE_MARKDOWN),
     writeFile(path.join(vault, ".obsidian/types.json"), obsidianTypes),
-    writeFile(path.join(vault, "Templates/OMS/reference.md"), template),
   ]);
-  const note = (title: string, source: string | undefined, tags: readonly string[], body: string) => `---\ntemplate: reference\ntitle: ${title}\n${source === undefined ? "" : `source-url: ${source}\n`}tags:\n${tags.map(tag => `  - ${tag}`).join("\n")}\n---\n\n${body}\n`;
-  await writeFile(path.join(vault, "references/Agent Retrieval.md"), note("Agent Retrieval", "https://example.com/agent-retrieval", ["agent-graph"], "Agent retrieval follows [[Graph Index]] and combines semantic evidence with graph context."));
-  await writeFile(path.join(vault, "references/Graph Index.md"), note("Graph Index", "https://example.com/graph-index", ["agent-graph"], "Index note for graph neighborhoods."));
-  await writeFile(path.join(vault, "references/Unrelated.md"), note("Unrelated", undefined, ["archive"], "Agent retrieval outside the selected graph should only appear for global semantic fusion."));
+  const note = (title: string, source: string | undefined, tags: readonly string[], body: string): string =>
+    `---\ntemplate: reference\ntitle: ${title}\n${source === undefined ? "" : `source-url: ${source}\n`}tags:\n${tags.map(tag => `  - ${tag}`).join("\n")}\n---\n\n## Summary\n\n${body}\n`;
+  await writeFile(
+    path.join(vault, "references/Agent Retrieval.md"),
+    note("Agent Retrieval", "https://example.com/agent-retrieval", ["agent-graph"], "Agent retrieval follows [[Graph Index]] and combines semantic evidence with graph context."),
+  );
+  await writeFile(
+    path.join(vault, "references/Graph Index.md"),
+    note("Graph Index", "https://example.com/graph-index", ["agent-graph"], "Index note for graph neighborhoods."),
+  );
+  await writeFile(
+    path.join(vault, "references/Unrelated.md"),
+    note("Unrelated", undefined, ["archive"], "Agent retrieval outside the selected graph should only appear for global semantic fusion."),
+  );
   return vault;
 }
