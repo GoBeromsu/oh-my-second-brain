@@ -191,13 +191,17 @@ function runtimeOptions(
 }
 
 async function loadGGUFModel(modelPath: string): Promise<LlamaModelInstance> {
-  const { getLlama } = await import("node-llama-cpp");
-  // node-llama-cpp's default logger sends info/log records to console.info and
-  // emits progress dots with process.stdout.write.  Both are invalid bytes on
-  // the MCP stdio protocol.  Its supported logger callback is invoked for every
-  // native level, so forward the records unchanged to stderr instead of
-  // suppressing warnings or intercepting the process-global stdout stream.
+  const { getLlama, LlamaLogLevel } = await import("node-llama-cpp");
+  // Two separate stdout hazards on the MCP stdio protocol.  node-llama-cpp's
+  // own logger writes info records with console.info and progress dots with
+  // process.stdout.write, so the supported logger callback forwards every
+  // record to stderr unchanged rather than suppressing warnings.  llama.cpp
+  // itself also prints loader and context diagnostics such as "load:" and
+  // "init:" lines, which the JavaScript logger never sees, so native logging is
+  // raised to error level: those records are informational and would otherwise
+  // land on stdout and corrupt the frame stream.
   const llama = await getLlama({
+    logLevel: LlamaLogLevel.error,
     logger: (_level, message) => {
       process.stderr.write(`${message}\n`);
     },

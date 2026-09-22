@@ -63,10 +63,13 @@ describe("createHashProjectionProvider", () => {
 
 describe("GGUF embedding provider runtime guards", () => {
   it("routes node-llama-cpp diagnostics to stderr without touching stdout", async () => {
+    const observedOptions: { logLevel?: string }[] = [];
     vi.doMock("node-llama-cpp", () => ({
+      LlamaLogLevel: { disabled: "disabled", fatal: "fatal", error: "error", warn: "warn", info: "info", log: "log", debug: "debug" },
       getLlama: vi.fn(async (
-        options?: { logger?: (level: string, message: string) => void },
+        options?: { logLevel?: string; logger?: (level: string, message: string) => void },
       ) => {
+        observedOptions.push({ ...(options ?? {}) });
         options?.logger?.("info", "load: control-looking");
         options?.logger?.("warn", "init: embeddings");
         return {
@@ -95,6 +98,9 @@ describe("GGUF embedding provider runtime guards", () => {
         "init: embeddings\n",
       ]));
       expect(stdoutWrite).not.toHaveBeenCalled();
+      // llama.cpp's own loader diagnostics never reach the JavaScript logger, so
+      // native logging is raised to error to keep them off stdout entirely.
+      expect(observedOptions[0]?.logLevel).toBe("error");
     } finally {
       stderrWrite.mockRestore();
       stdoutWrite.mockRestore();
