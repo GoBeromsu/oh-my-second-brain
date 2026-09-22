@@ -675,7 +675,18 @@ export function buildTemplateInterview(census: CensusResult, options: TemplateIn
   const settled = new Set<string>();
   for (const answer of answers) {
     const question = questions.find(item => item.questionId === answer.questionId);
-    if (question === undefined) continue;
+    if (question === undefined) {
+      // The ledger records a decision this run cannot reproduce, usually because
+      // the proposals that raised the question were not supplied again. Dropping
+      // it silently would publish a contract missing the user's own answer.
+      diagnostics.push(diagnostic(
+        "TEMPLATE_INTERVIEW_ANSWER_ORPHANED",
+        "A recorded answer has no matching question in this review. Supply the same proposals, or clear the recorded answer before publishing.",
+        undefined,
+        answer.questionId,
+      ));
+      continue;
+    }
     if (seen.has(answer.questionId)) {
       diagnostics.push(diagnostic("TEMPLATE_INTERVIEW_ANSWER_INVALID", "Duplicate stored answer", undefined, answer.questionId));
       continue;

@@ -190,7 +190,7 @@ const operations: Record<string, readonly Operation[]> = {
     { op: "guide", name: "write-guide", properties: { notePath: string, templateId: string } },
     { op: "check", name: "write-check", properties: { notePath: string, templateId: string, binding: jsonValue, evidencePaths: stringArray }, required: ["notePath"] },
     { op: "complete", name: "write-complete", properties: { checkpoint: jsonValue, review: jsonValue }, required: ["checkpoint", "review"] },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["interview-next", "interview-answer", "commit-contracts"] }, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["interview-next", "interview-answer", "commit-contracts"] }, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, proposals: { type: "array", items: jsonValue }, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "check", name: "oms_link_check", properties: { notePath: string, folder: string }, required: ["notePath"] }],
@@ -1001,7 +1001,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
           return errorText("Template interview-next does not accept a guarded request.");
         }
-        return jsonText(await nextTemplateInterview({ vault, source }));
+        // Proposals are the caller's explicit contract meaning. OMS never
+        // derives one by reading template syntax.
+        const proposals = args?.["proposals"];
+        if (proposals !== undefined && !Array.isArray(proposals)) {
+          return errorText('Argument "proposals" must be an array of explicit contract proposals.');
+        }
+        return jsonText(await nextTemplateInterview({ vault, source }, proposals === undefined ? {} : { proposals: proposals as never }));
       }
       if (mode === "interview-answer") {
         if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
@@ -1019,6 +1025,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         ) {
           return errorText("Template interview-answer requires questionId, JSON answer, censusDigest, and expectedLedgerDigest.");
         }
+        const answerProposals = args?.["proposals"];
+        if (answerProposals !== undefined && !Array.isArray(answerProposals)) {
+          return errorText('Argument "proposals" must be an array of explicit contract proposals.');
+        }
         return jsonText(await answerTemplateInterview({
           vault,
           source,
@@ -1027,6 +1037,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           answer,
           censusDigest,
           expectedLedgerDigest,
+          ...(answerProposals === undefined ? {} : { proposals: answerProposals as never }),
         }));
       }
       if (mode === "commit-contracts") {

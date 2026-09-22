@@ -108,7 +108,8 @@ describe("template command", () => {
     const ledgerDigest = `sha256:${"e".repeat(64)}`;
 
     await runTemplateCommand(["review", "--vault", root]);
-    expect(next).toHaveBeenCalledWith({ vault: root, source: "explicit" });
+    // review forwards an explicit-proposal slot; with no --proposals it is empty.
+    expect(next).toHaveBeenCalledWith({ vault: root, source: "explicit" }, {});
     await runTemplateCommand(["review", "--vault", root, "--dry-run"]);
     expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
     expect(next).toHaveBeenCalledOnce();

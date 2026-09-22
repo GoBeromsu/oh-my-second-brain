@@ -57,6 +57,8 @@ const BLOCKING = new Set<string>([
   "CONTRACT_COMPOSITION_CONFLICT",
   "PROJECTION_INVALID",
   "RUBRIC_INVALID",
+  // Publishing while a recorded decision cannot be reproduced would drop it.
+  "TEMPLATE_INTERVIEW_ANSWER_ORPHANED",
 ]);
 const QUESTION_KINDS: ReadonlySet<TemplateInterviewQuestion["kind"]> = new Set([
   "pool",

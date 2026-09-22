@@ -4,6 +4,7 @@ import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
 import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
 import { nextTemplateInterview, answerTemplateInterview, commitTemplateContracts } from "../kernel/templates/interview-service.js";
+import type { TemplateProposalInput } from "../kernel/templates/interview.js";
 import type { TemplateOperationTarget } from "../kernel/templates/operations.js";
 import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
 import { validateTemplateId } from "../kernel/templates/paths.js";
@@ -16,7 +17,7 @@ type Options = Record<string, string | boolean>;
 interface Parsed { readonly verb: string; readonly positional: readonly string[]; readonly options: Options; }
 type Target = TemplateOperationTarget;
 
-const VALUE_FLAGS = new Set(["vault", "approved-digest", "answer", "census-digest", "ledger-digest"]);
+const VALUE_FLAGS = new Set(["vault", "approved-digest", "answer", "census-digest", "ledger-digest", "proposals"]);
 const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "help"]);
 
 function fail(message: string): never { throw new Error(`TEMPLATE_ARGS_INVALID: ${message}`); }
@@ -51,6 +52,23 @@ function jsonValue(value: unknown): value is JsonValue {
   if (typeof value !== "object") return false;
   return Object.values(value as Record<string, unknown>).every(jsonValue);
 }
+/**
+ * Explicit contract proposals, as JSON. OMS never derives contract meaning by
+ * reading template syntax, so a proposal is the only way to introduce one.
+ */
+function proposalsOption(options: Options): { readonly proposals?: readonly TemplateProposalInput[] } {
+  const raw = text(options, "proposals");
+  if (raw === undefined) return {};
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    fail("--proposals must be valid JSON");
+  }
+  if (!Array.isArray(value) || !value.every(jsonValue)) fail("--proposals must be a JSON array of proposals");
+  return { proposals: value as unknown as readonly TemplateProposalInput[] };
+}
+
 function answerValue(options: Options): JsonValue {
   const raw = text(options, "answer");
   if (raw === undefined) fail("--answer requires a value");
@@ -155,12 +173,12 @@ async function run(parsed: Parsed): Promise<void> {
     print(summarizedScan(await readTemplateReviewContext(resolved.vault))); return;
   }
   if (parsed.verb === "review") {
-    only(parsed, ["vault"], 0);
+    only(parsed, ["vault", "proposals"], 0);
     const resolved = await target(parsed.options);
-    print(await nextTemplateInterview(resolved)); return;
+    print(await nextTemplateInterview(resolved, proposalsOption(parsed.options))); return;
   }
   if (parsed.verb === "answer") {
-    only(parsed, ["vault", "answer", "census-digest", "ledger-digest"], 1);
+    only(parsed, ["vault", "answer", "census-digest", "ledger-digest", "proposals"], 1);
     const resolved = await target(parsed.options);
     ensureMutableTarget(resolved);
     const questionId = parsed.positional[0]!;
@@ -170,6 +188,7 @@ async function run(parsed: Parsed): Promise<void> {
       answer: answerValue(parsed.options),
       censusDigest: requiredDigest(parsed.options, "census-digest"),
       expectedLedgerDigest: expectedLedgerDigest(parsed.options),
+      ...proposalsOption(parsed.options),
     })); return;
   }
   if (parsed.verb === "commit") {
