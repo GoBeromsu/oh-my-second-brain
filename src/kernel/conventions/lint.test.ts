@@ -64,7 +64,8 @@ describe("detectLinkIssues", () => {
   it("excludes managed template sources from the lint note universe", async () => {
     const { vaultPath, cleanup } = await makeVault({
       ".oms/template-policy.json": JSON.stringify({
-        templates: { note: { sourcePath: "Templates/note.md" } },
+        version: 4,
+        templates: { note: { source: { path: "Templates/note.md" } } },
       }),
       "Templates/note.md": "---\ntemplate: note\n---\n[[Missing]]",
       "notes/live.md": "---\ntemplate: note\n---\nlive",

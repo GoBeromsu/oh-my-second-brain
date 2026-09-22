@@ -8,9 +8,7 @@ import Database from "better-sqlite3";
 import { syncEngineStore } from "../kernel/engine/embed/sync.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import * as engineAssembly from "../kernel/engine/assemble.js";
-import { deriveContentFormatContract } from "../kernel/templates/content-contract.js";
-import { sharedAuthoritySignature, sourceSignature } from "../kernel/templates/resolver.js";
-import type { SourceDescriptor } from "../kernel/templates/types.js";
+import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
 import { runGraphCommand } from "./graph-command.js";
 import { runStatusCommand } from "./status-command.js";
 
@@ -21,33 +19,23 @@ const digest = (value: string): `sha256:${string}` =>
 async function freshVault(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-graph-command-"));
   roots.push(vault);
-  await Promise.all([
-    mkdir(path.join(vault, ".oms"), { recursive: true }),
-    mkdir(path.join(vault, ".obsidian"), { recursive: true }),
-    mkdir(path.join(vault, "Templates/OMS"), { recursive: true }),
-    mkdir(path.join(vault, "notes"), { recursive: true }),
-  ]);
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], defaultTemplate: "note", base: { fields: {} }, contracts: { note: { intent: "note", fields: { template: { type: "text", required: true }, status: { type: "text" } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/note.md", renderer: "obsidian-core", contract: "note", naming: "{{slug}}.md" } } });
-  const taxonomy = JSON.stringify({ folders: {}, templates: { note: { templateFolder: "Inbox" } } });
-  const obsidianTypes = JSON.stringify({ types: { template: "text", status: "text" } });
-  const template = "---\ntemplate: note\nstatus: active\n---\n<!-- oms:content -->\n";
-  const sources: SourceDescriptor[] = [
-    { logicalId: "template-policy", signature: digest(policy) },
-    { logicalId: "taxonomy", signature: digest(taxonomy) },
-    { logicalId: "obsidian-types", signature: digest(obsidianTypes) },
-    { path: "Templates/OMS/note.md", signature: digest(template) },
-  ];
-  const content = deriveContentFormatContract("<!-- oms:content -->\n", { templateId: "note" }).contract;
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", sourcePath: "Templates/OMS/note.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["template", "status"], fields: { template: { type: "text", required: true }, status: { type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
-  await Promise.all([
-    writeFile(path.join(vault, ".oms/template-policy.json"), policy),
-    writeFile(path.join(vault, ".oms/taxonomy.json"), taxonomy),
-    writeFile(path.join(vault, ".oms/types.json"), projection),
-    writeFile(path.join(vault, ".obsidian/types.json"), obsidianTypes),
-    writeFile(path.join(vault, "Templates/OMS/note.md"), template),
-    writeFile(path.join(vault, "notes/alpha.md"), "---\ntemplate: note\nstatus: active\n---\nAlpha links [[beta]].\n"),
-    writeFile(path.join(vault, "notes/beta.md"), "---\ntemplate: note\nstatus: reference\n---\nBeta note.\n"),
-  ]);
+  await writeApprovedVault(vault, {
+    properties: { status: { type: "text", intent: "Workflow state." } },
+    templates: {
+      note: {
+        fields: ["status"],
+        optionalFields: ["status"],
+        approvedMarkdown: "---\ntemplate: note\nstatus: active\n---\n\nBody\n",
+        targetFolder: "notes",
+      },
+    },
+    folders: { notes: { intent: "Notes." } },
+    obsidianTypes: { status: "text" },
+    notes: {
+      "notes/alpha.md": "---\ntemplate: note\nstatus: active\n---\nAlpha links [[beta]].\n",
+      "notes/beta.md": "---\ntemplate: note\nstatus: reference\n---\nBeta note.\n",
+    },
+  });
   return vault;
 }
 
@@ -127,7 +115,7 @@ describe("graph command", () => {
     expect(output.pop()).toMatchObject({
       vault,
       source: "explicit",
-      convention: { defaultTemplate: "note", templates: { note: { id: "note" } } },
+      convention: { templates: { note: {} } },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false, reason: "Graph cache not built" },
@@ -179,7 +167,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "invalid", diagnostics: [{ code: "TEMPLATE_POLICY_INVALID" }] },
+      convention: { status: "invalid", diagnostics: [{ code: "CONTRACT_UNVERIFIABLE" }] },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },
@@ -202,7 +190,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { defaultTemplate: "note" },
+      convention: { status: "approved", templates: { note: {} } },
       history: { status: "unavailable", diagnostics: [{ code: "LEDGER_ROOT_INSIDE_VAULT" }] },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },
@@ -220,7 +208,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { defaultTemplate: "note" },
+      convention: { status: "approved", templates: { note: {} } },
       history: { events: 0 },
       engine: {
         available: false,
@@ -243,7 +231,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { defaultTemplate: "note" },
+      convention: { status: "approved", templates: { note: {} } },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: {
@@ -278,7 +266,7 @@ describe("graph command", () => {
 
       expect(output.pop()).toMatchObject({
         vault,
-        convention: { defaultTemplate: "note" },
+        convention: { status: "approved", templates: { note: {} } },
         history: { events: 0 },
         engine: { available: true },
         graph: { available: false },
