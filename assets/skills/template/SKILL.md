@@ -19,7 +19,7 @@ Turn a note design into a user-owned contract. People and agents share that cont
 
 ## Source syntax
 
-The agent reads Templater or any other source syntax and proposes ordinary Markdown plus an explicit contract. OMS does not parse or execute `tp`, JavaScript, or a private token language, and it has no note renderer. Keep unmanaged frontmatter. Leave original source bytes where they are; contract review verifies them and does not rewrite them. Selecting a folder is an explicit setup or interview decision, not a per-file registration and not a contract guess. One sample value does not become a rule.
+The agent reads Templater or any other source syntax and proposes ordinary Markdown plus an explicit contract. OMS does not parse or execute `tp`, JavaScript, or a private token language, and it has no note renderer. Keep unmanaged frontmatter. Leave original source bytes where they are; contract review verifies them and does not rewrite them. Selecting a folder is an explicit interview decision, not a setup decision, not a per-file registration, and not a contract guess. One sample value does not become a rule.
 
 ## Notice
 

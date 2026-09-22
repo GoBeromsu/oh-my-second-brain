@@ -43,12 +43,13 @@ write {
   mode: "interview-answer",
   questionId,
   answer,
+  proposals,
   censusDigest,
   expectedLedgerDigest
 }
 ```
 
-`oms template answer` takes those same fields. Do not add a field the response did not return, and do not send `anchorDigest`. If the text does not fit the question, say so and ask once more. Do not guess a legal choice. Record a deferral only when the returned question accepts one. `나중에` on a template notice is host-only and must not call the server. Opening a review again reopens deferred deletion decisions and keeps other confirmed answers.
+`oms template answer` takes those same fields, with `--proposals` carrying the same array you sent to `interview-next`. Do not add a field the response did not return, and do not send `anchorDigest`. If the text does not fit the question, say so and ask once more. Do not guess a legal choice. Record a deferral only when the returned question accepts one. `나중에` on a template notice is host-only and must not call the server. Opening a review again reopens deferred deletion decisions and keeps other confirmed answers.
 
 ## Exact diff and approval
 
@@ -60,6 +61,7 @@ Preview with `mode: "commit-contracts"`, the returned `censusDigest` and `expect
 write {
   op: "template",
   mode: "commit-contracts",
+  proposals,
   censusDigest,
   expectedLedgerDigest,
   dryRun: false,
@@ -67,7 +69,7 @@ write {
 }
 ```
 
-`oms template commit` is the CLI counterpart. Never self-approve. The publish writes policy, taxonomy, the derived projection, and approved managed Markdown. It does not write original sources, Obsidian type files, or ordinary notes. Do not use template create, update, move, remove, or renderer modes.
+`oms template commit` is the CLI counterpart and takes the same `--proposals`. Never self-approve. The publish writes policy, taxonomy, the derived projection, and approved managed Markdown. It does not write original sources, Obsidian type files, or ordinary notes. Do not use template create, update, move, remove, or renderer modes.
 
 ## Notice
 
@@ -79,4 +81,4 @@ The first display of a selected-source change is exactly `템플릿에 변경이
 
 Contract meaning enters OMS only through the `proposals` array you supply. It is never derived from a file name or from template syntax, so a source the census discovered stays unbound until you propose what it means. Pass the same `proposals` to `interview-next`, `interview-answer`, and `commit-contracts`: commit rebuilds the interview, and an answer whose question cannot be reproduced is refused rather than silently dropped from the published contract.
 
-Answer with `questionId`, `answer`, `censusDigest`, and `expectedLedgerDigest`. The server binds the question anchor; never send `anchorDigest`.
+Answer with `questionId`, `answer`, `proposals`, `censusDigest`, and `expectedLedgerDigest`. The server binds the question anchor; never send `anchorDigest`.

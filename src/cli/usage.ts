@@ -14,9 +14,7 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
     detailLines: [
       "             First run `setup --dry-run` to show an approval digest.",
       "             Apply only with `setup --yes --approved-digest <shown-digest>`.",
-      "             Selected folders use auto scan/proposal mode; omitted flags reuse saved v3 modes.",
-      "             Dry-run shows saved selections and configured-folder candidates without auto-selecting them.",
-      "             The first explicit folder is the template-creation default, not the note defaultTemplate.",
+      "             Setup proposes an empty contract; templates are declared through `oms template review`.",
       "             --models-default          Install the pinned local model (EmbeddingGemma-300M, 768d).",
       "             --models-descriptor <path> Install an operator-supplied model descriptor instead.",
       "             --models-no-default       Waive model installation; vector search stays unavailable.",

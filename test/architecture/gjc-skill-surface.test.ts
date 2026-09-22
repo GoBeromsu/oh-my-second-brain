@@ -82,11 +82,27 @@ describe("Gajae-Code skill surface", () => {
     }
   });
 
-  it("documents the explicit proposal protocol in the interview skill", () => {
+  it("carries proposals in every executable interview payload it shows", () => {
+    // Commit rebuilds the interview from the proposals it is given, so a shown
+    // payload that omits them teaches a call that cannot publish.
     const body = readFileSync(absolute("assets/skills/interview/SKILL.md"), "utf8");
-    expect(body).toContain("proposals");
-    // Commit rebuilds the interview, so the same proposals must reach it.
-    expect(body).toContain("commit-contracts");
+    const payloads = [...body.matchAll(/```text\n([\s\S]*?)```/gu)]
+      .map(match => match[1] ?? "")
+      .filter(block => /mode:\s*"(interview-answer|commit-contracts)"/u.test(block));
+    expect(payloads.length, "the interview skill must show its answer and commit payloads").toBeGreaterThanOrEqual(2);
+    for (const payload of payloads) {
+      expect(payload, `an interview payload omits proposals: ${payload}`).toMatch(/\bproposals\b/u);
+    }
+    expect(body).toMatch(/interview-next.*interview-answer.*commit-contracts/su);
+  });
+
+  it("never tells an agent that setup selects a template folder", () => {
+    // Setup proposes an empty contract and adopts nothing; folder selection is
+    // an interview decision.
+    for (const relativePath of regularFiles(absolute("assets/skills")).filter(file => file.endsWith("SKILL.md"))) {
+      const body = readFileSync(path.join(absolute("assets/skills"), relativePath), "utf8");
+      expect(body, `${relativePath} still says setup selects a folder`).not.toMatch(/setup or interview decision/u);
+    }
   });
 
   it("fails closed when an authored scan is empty", () => {
