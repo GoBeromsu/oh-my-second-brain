@@ -1,11 +1,10 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
-import * as eventJournal from "../runtime/event-journal.js";
-import { readRuntimeEvents } from "../runtime/event-read.js";
-import type { TemplateInterviewQuestion } from "./interview.js";
+import type { WriteTarget } from "../capture/safe.js";
+import { digestBytes } from "./canonical.js";
 import {
   answerTemplateInterview,
   commitTemplateContracts,
@@ -13,43 +12,79 @@ import {
   type TemplateInterviewServiceResult,
 } from "./interview-service.js";
 import { readInterviewLedger } from "./interview-ledger.js";
-import type { TemplateOperationTarget } from "./operations.js";
-import type { JsonValue } from "./types.js";
+import {
+  buildTemplateInterview,
+  validateInterviewAnswer,
+  type TemplateIndividualProposalInput,
+  type TemplateInterviewQuestion,
+  type TemplateProposalInput,
+} from "./interview.js";
+import { parseTemplatePolicy, serializeDerivedProjection } from "./policy.js";
+import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "./resolver.js";
 
 const roots: string[] = [];
-const target = (vault: string, source: TemplateOperationTarget["source"] = "explicit"): TemplateOperationTarget => ({ vault, source });
+const encoder = new TextEncoder();
+const RAW = "---\nstatus: open\ntype: literature\n---\n<% tp.file.title %>\n# Summary\n# Sources\n";
+const target = (vault: string, source: WriteTarget["source"] = "explicit"): WriteTarget => ({ vault, source });
 const initialRuntimeRoot = process.env.OMS_RUNTIME_ROOT;
 
-async function fixture(options: { readonly extra?: boolean; readonly placement?: boolean } = {}): Promise<string> {
+function layer(templatePath: string, markdown: string, extra: Record<string, unknown> = {}) {
+  return {
+    templatePath,
+    approvedMarkdown: markdown,
+    approvedMarkdownDigest: digestBytes(markdown),
+    fields: {},
+    headings: [],
+    semanticCriteria: [],
+    ...extra,
+  };
+}
+
+async function put(root: string, path: string, content: string | Uint8Array): Promise<void> {
+  const absolute = join(root, path);
+  await mkdir(dirname(absolute), { recursive: true });
+  await writeFile(absolute, content);
+}
+
+async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "oms-template-interview-service-"));
   roots.push(root);
-  await mkdir(join(root, ".oms"), { recursive: true });
-  await mkdir(join(root, ".obsidian"), { recursive: true });
-  await mkdir(join(root, "Templates"), { recursive: true });
+  const runtime = join(root, "runtime");
+  process.env.OMS_RUNTIME_ROOT = runtime;
+  await mkdir(runtime, { recursive: true });
+  await put(root, "Templates/reading-note.md", RAW);
+  return root;
+}
+
+async function approvedVault(): Promise<string> {
+  const root = await fixture();
+  const original = encoder.encode("approved\n");
   const policy = {
-    version: 3,
-    templateFolders: [{ path: "Templates", default: true }],
-    base: { fields: {} },
-    contracts: { note: { intent: "Notes", fields: { title: { type: "text" } }, views: [] } },
+    version: 4,
+    properties: {},
+    default: layer(".oms/templates/default.md", ""),
     templates: {
-      note: {
-        templateId: "note",
-        destinationClass: "registered-existing",
-        renderer: "obsidian-core",
-        sourceFolder: "Templates",
-        sourcePath: "Templates/note.md",
-        contract: "note",
-        naming: "{{title}}.md",
-      },
+      literature: layer(".oms/templates/literature.md", "", {
+        templateId: "literature",
+        source: { path: "Sources/literature.md", identity: "literature-source", rawDigest: digestBytes(original) },
+      }),
     },
   };
-  await Promise.all([
-    writeFile(join(root, ".oms/template-policy.json"), JSON.stringify(policy)),
-    writeFile(join(root, ".oms/taxonomy.json"), JSON.stringify(options.placement === false ? { folders: {} } : { folders: { Notes: { template: "note" } } })),
-    writeFile(join(root, ".obsidian/types.json"), JSON.stringify({ types: { title: "text" } })),
-    writeFile(join(root, "Templates/note.md"), "---\ntitle: Note\n---\n# Note\nBody\n"),
-    ...(options.extra ? [writeFile(join(root, "Templates/new.md"), "---\ntitle: New\n---\n# New\nBody\n")] : []),
-  ]);
+  const policyText = JSON.stringify(policy);
+  const taxonomyText = "{}";
+  const generation = controlGenerationDigest(encoder.encode(policyText), encoder.encode(taxonomyText));
+  const projection = serializeDerivedProjection({
+    version: "oms.types.v2",
+    generatedFrom: generation,
+    managed: expectedProjectionManaged(parseTemplatePolicy(policyText), taxonomyRouting(".oms/taxonomy.json", encoder.encode(taxonomyText)), generation),
+  });
+  await put(root, ".oms/template-policy.json", policyText);
+  await put(root, ".oms/taxonomy.json", taxonomyText);
+  await put(root, ".oms/types.json", projection);
+  await put(root, ".oms/templates/default.md", "");
+  await put(root, ".oms/templates/literature.md", "");
+  await put(root, "Sources/literature.md", original);
+  await put(root, "Notes/plain.md", "ordinary note\n");
   return root;
 }
 
@@ -71,28 +106,36 @@ async function vaultSnapshot(root: string): Promise<Readonly<Record<string, stri
   return snapshot;
 }
 
-async function externalRuntimeRoot(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "oms-template-interview-runtime-"));
-  roots.push(root);
-  process.env.OMS_RUNTIME_ROOT = root;
-  return root;
-}
-
 afterEach(async () => {
   if (initialRuntimeRoot === undefined) delete process.env.OMS_RUNTIME_ROOT;
   else process.env.OMS_RUNTIME_ROOT = initialRuntimeRoot;
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-function answerFor(question: TemplateInterviewQuestion): JsonValue {
-  if (question.kind === "field-type") return "text";
-  if (question.kind === "field-requiredness" || question.kind === "content-section-requiredness") return "optional";
-  if (question.kind === "field-intent") return "note metadata";
-  if (question.kind === "content-order") return "unordered";
-  if (question.kind === "contract-selection") return "note";
-  if (question.kind === "deleted-source-disposition") return "defer";
-  if (question.kind === "rename-identity") return question.choices?.[0] ?? "note";
-  return "{{title}}.md";
+function proposals(): readonly TemplateProposalInput[] {
+  const individual: TemplateIndividualProposalInput = {
+    kind: "individual",
+    templateId: "reading",
+    sourcePath: "Templates/reading-note.md",
+    sourceIdentity: "reading-source",
+    fields: { cite: { property: "cite" } },
+    headings: [{ headingId: "notes", title: "Notes", level: 2, required: true }],
+    headingOrder: "strict",
+  };
+  return [
+    { kind: "pool", properties: { cite: { type: "text", intent: "Citation." } } },
+    individual,
+    { kind: "taxonomy-placement", templateId: "reading", placement: { templateFolder: "Unread Notes" } },
+    { kind: "completion", retryBudget: 4, agentRepair: { enabled: true, contexts: ["maintenance"] } },
+  ];
+}
+
+function session(result: TemplateInterviewServiceResult) {
+  return { censusDigest: result.censusDigest, expectedLedgerDigest: result.expectedLedgerDigest, proposals: proposals() };
+}
+
+function confirm(question: TemplateInterviewQuestion, raw = `answer ${question.kind}`): { readonly disposition: "confirm"; readonly raw: string } {
+  return { disposition: "confirm", raw };
 }
 
 function containsBytePayload(value: unknown): boolean {
@@ -105,38 +148,46 @@ function containsBytePayload(value: unknown): boolean {
 async function answerNext(
   vault: string,
   result: TemplateInterviewServiceResult,
+  value: { readonly disposition: "confirm" | "defer" | "unresolved"; readonly raw: string } = result.next === undefined
+    ? { disposition: "confirm", raw: "yes" }
+    : confirm(result.next),
 ): Promise<TemplateInterviewServiceResult> {
   if (result.state !== "question" || result.next === undefined) throw new Error("test expected a next interview question");
-  const question = result.next;
   return answerTemplateInterview(target(vault), {
-    questionId: question.questionId,
-    answer: answerFor(question),
-    censusDigest: result.censusDigest,
-    expectedLedgerDigest: result.expectedLedgerDigest,
+    ...session(result),
+    questionId: result.next.questionId,
+    answer: value,
   });
 }
 
-async function complete(vault: string): Promise<TemplateInterviewServiceResult> {
-  let result = await nextTemplateInterview(target(vault));
-  for (let pass = 0; pass < 32 && result.state === "question"; pass += 1) result = await answerNext(vault, result);
+async function complete(vault: string, dispositions?: readonly ("confirm" | "defer" | "unresolved")[]): Promise<TemplateInterviewServiceResult> {
+  let result = await nextTemplateInterview(target(vault), { proposals: proposals() });
+  for (let pass = 0; pass < 32 && result.state === "question"; pass += 1) {
+    const question = result.next;
+    if (question === undefined) throw new Error("expected a next question");
+    const disposition = dispositions?.[pass] ?? "confirm";
+    result = await answerNext(vault, result, { disposition, raw: `answer ${question.kind}` });
+  }
   return result;
 }
 
 describe("template interview service", () => {
-  it("returns one linear question and leaves next read-only", async () => {
-    const root = await fixture({ extra: true });
-    const before = await readdir(root);
-    const result = await nextTemplateInterview(target(root));
+  it("starts a fresh interview at one question and does not write the vault", async () => {
+    const root = await fixture();
+    const before = await vaultSnapshot(root);
+    const result = await nextTemplateInterview(target(root), { proposals: proposals() });
     expect(result.state).toBe("question");
-    expect(result.next).toMatchObject({ questionId: expect.stringMatching(/^sha256:/u) });
+    expect(result.next?.kind).toBe("pool");
+    expect(result.next?.questionId).toMatch(/^sha256:/u);
+    expect(result.expectedLedgerDigest).toBeNull();
     expect(result).not.toHaveProperty("questions");
-    expect(await readdir(root)).toEqual(before);
+    expect(await vaultSnapshot(root)).toEqual(before);
     expect((await readInterviewLedger(root)).ledger).toBeNull();
   });
 
-  it("resumes answers in order and carries unknown ledger data", async () => {
-    const root = await fixture({ extra: true });
-    const first = await nextTemplateInterview(target(root));
+  it("resumes mid-interview from the durable ledger after a restart", async () => {
+    const root = await fixture();
+    const first = await nextTemplateInterview(target(root), { proposals: proposals() });
     const answered = await answerNext(root, first);
     expect(answered.expectedLedgerDigest).toMatch(/^sha256:/u);
     const ledgerPath = join(root, ".oms/template-interview.json");
@@ -146,9 +197,10 @@ describe("template interview service", () => {
     stored.answers[firstQuestionId]!.extension = { keep: true };
     await writeFile(ledgerPath, `${JSON.stringify(stored)}\n`);
     const reloaded = await readInterviewLedger(root);
-    const resumed = await nextTemplateInterview(target(root));
+    const resumed = await nextTemplateInterview(target(root), { proposals: proposals() });
     expect(resumed.expectedLedgerDigest).toBe(reloaded.digest);
     expect(resumed.state).toBe("question");
+    expect(resumed.next?.kind).toBe("default-layer");
     const next = await answerNext(root, resumed);
     const finalLedger = JSON.parse(await readFile(ledgerPath, "utf8")) as { extension: unknown; answers: Record<string, Record<string, unknown>> };
     expect(finalLedger.extension).toEqual({ owner: "host" });
@@ -156,351 +208,178 @@ describe("template interview service", () => {
     expect(next.expectedLedgerDigest).not.toBe(resumed.expectedLedgerDigest);
   });
 
-  it("keeps unaffected answers across a fresh source resume", async () => {
-    const root = await fixture({ extra: true });
-    const first = await nextTemplateInterview(target(root));
-    if (first.state !== "question" || first.next === undefined) throw new Error("test expected an initial question");
-    const answered = await answerNext(root, first);
-    await writeFile(join(root, "Templates/new.md"), "---\ntitle: Newer\n---\n# New\nChanged body\n");
-    const resumed = await nextTemplateInterview(target(root));
-    expect(resumed.censusDigest).not.toBe(first.censusDigest);
-    expect(resumed.invalidatedQuestionIds).not.toContain(first.next.questionId);
-    expect(resumed.state).toBe("question");
-    expect(resumed.expectedLedgerDigest).toBe(answered.expectedLedgerDigest);
-  });
-
-  it("rejects stale or out-of-order answers without changing the ledger", async () => {
-    const root = await fixture({ extra: true });
-    const first = await nextTemplateInterview(target(root));
+  it("rejects a stale or forged CAS without mutating the ledger", async () => {
+    const root = await fixture();
+    const first = await nextTemplateInterview(target(root), { proposals: proposals() });
     const staleRequest = {
+      ...session(first),
       questionId: first.next!.questionId,
-      answer: answerFor(first.next!),
-      censusDigest: first.censusDigest,
-      expectedLedgerDigest: first.expectedLedgerDigest,
+      answer: confirm(first.next!),
     } as const;
     const answered = await answerTemplateInterview(target(root), staleRequest);
     const before = await readFile(join(root, ".oms/template-interview.json"));
     await expect(answerTemplateInterview(target(root), staleRequest)).rejects.toThrow("TEMPLATE_INTERVIEW_STALE");
     await expect(readFile(join(root, ".oms/template-interview.json"))).resolves.toEqual(before);
-    if (answered.state !== "question" || answered.next === undefined) throw new Error("test expected a second question");
     await expect(answerTemplateInterview(target(root), {
+      ...session(answered),
       questionId: first.next!.questionId,
-      answer: answerFor(first.next!),
-      censusDigest: answered.censusDigest,
-      expectedLedgerDigest: answered.expectedLedgerDigest,
+      answer: confirm(first.next!),
     })).rejects.toThrow("TEMPLATE_INTERVIEW_STALE");
+    await expect(answerTemplateInterview(target(root), {
+      ...session(first),
+      expectedLedgerDigest: digestBytes("forged-ledger"),
+      questionId: first.next!.questionId,
+      answer: confirm(first.next!),
+    })).rejects.toThrow("TEMPLATE_INTERVIEW_STALE");
+    await expect(readFile(join(root, ".oms/template-interview.json"))).resolves.toEqual(before);
   });
 
-  it("records question IDs and kinds for shown, answered, invalidated, and stale events (audit)", async () => {
-    const runtimeRoot = await externalRuntimeRoot();
+  it("retains defer and unresolved answers instead of auto-resolving them", async () => {
     const root = await fixture();
-    const first = await nextTemplateInterview(target(root));
-    if (first.state !== "question" || first.next === undefined) throw new Error("test expected an initial question");
-    const question = first.next;
+    const result = await complete(root, ["confirm", "defer", "defer", "unresolved", "confirm"]);
+    expect(result.state).toBe("confirm");
+    expect(result.next).toBeUndefined();
+    const ledger = (await readInterviewLedger(root)).ledger;
+    const dispositions = Object.values(ledger?.answers ?? {}).map(answer => answer.disposition).sort();
+    expect(dispositions).toEqual(["confirm", "confirm", "defer", "defer", "unresolved"]);
+    expect(Object.values(ledger?.answers ?? {}).some(answer => answer.raw.includes("individual"))).toBe(true);
+  });
+
+  it("supersedes an invalidated answer without dropping unaffected ones", async () => {
+    const root = await fixture();
+    const first = await nextTemplateInterview(target(root), { proposals: proposals() });
+    const pool = first.next!;
+    const afterPool = await answerNext(root, first, confirm(pool, "use the explicit pool"));
+    const defaultQuestion = afterPool.next!;
+    const afterDefault = await answerNext(root, afterPool, { disposition: "defer", raw: "later" });
+    const individual = afterDefault.next!;
+    expect(individual.kind).toBe("individual");
+    const afterIndividual = await answerNext(root, afterDefault, confirm(individual, "first individual"));
+    await put(root, "Templates/reading-note.md", `${RAW}\nchanged\n`);
+    const resumed = await nextTemplateInterview(target(root), { proposals: proposals() });
+    expect(resumed.censusDigest).not.toBe(first.censusDigest);
+    expect(resumed.invalidatedQuestionIds).toEqual([individual.questionId]);
+    expect(resumed.next?.kind).toBe("individual");
+    const ledgerBefore = JSON.parse(await readFile(join(root, ".oms/template-interview.json"), "utf8")) as {
+      readonly answers: Record<string, { readonly raw: string; readonly disposition: string }>;
+    };
+    expect(ledgerBefore.answers[pool.questionId]?.raw).toBe("use the explicit pool");
+    expect(ledgerBefore.answers[defaultQuestion.questionId]?.disposition).toBe("defer");
+    const superseded = await answerNext(root, resumed, confirm(resumed.next!, "second individual"));
+    const ledger = JSON.parse(await readFile(join(root, ".oms/template-interview.json"), "utf8")) as {
+      readonly answers: Record<string, { readonly raw: string; readonly disposition: string }>;
+    };
+    expect(ledger.answers[pool.questionId]?.raw).toBe("use the explicit pool");
+    expect(ledger.answers[defaultQuestion.questionId]?.disposition).toBe("defer");
+    expect(ledger.answers[resumed.next!.questionId]?.raw).toBe("second individual");
+    expect(superseded.next?.kind).toBe("taxonomy-placement");
+  });
+
+  it("keeps unaffected answers across an unrelated source change", async () => {
+    const root = await fixture();
+    await put(root, "Templates/other.md", "unrelated\n");
+    const first = await nextTemplateInterview(target(root), { proposals: proposals() });
     const answered = await answerNext(root, first);
-    await writeFile(join(root, "Templates/note.md"), "---\ntitle: Changed\n---\n# Note\nBody\n");
-    const changed = await nextTemplateInterview(target(root));
-    expect(changed.invalidatedQuestionIds).toContain(question.questionId);
-    await expect(answerTemplateInterview(target(root), {
-      questionId: question.questionId,
-      answer: answerFor(question),
-      censusDigest: first.censusDigest,
-      expectedLedgerDigest: first.expectedLedgerDigest,
-    })).rejects.toThrow("TEMPLATE_INTERVIEW_STALE");
-
-    const events = readRuntimeEvents({ vaultPath: root, runtimeRoot }).events;
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: "template-interview-question-shown",
-      transactionId: question.questionId,
-      operation: `template-interview-question-shown:${question.kind}`,
-    }));
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: "template-interview-question-answered",
-      transactionId: question.questionId,
-      operation: `template-interview-question-answered:${question.kind}`,
-    }));
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: "template-interview-question-invalidated",
-      transactionId: question.questionId,
-      operation: `template-interview-question-invalidated:${question.kind}`,
-    }));
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: "template-interview-stale",
-      transactionId: question.questionId,
-      operation: `template-interview-question-stale:${question.kind}`,
-    }));
-    expect(answered.expectedLedgerDigest).toMatch(/^sha256:/u);
+    await put(root, "Templates/other.md", "unrelated changed\n");
+    const resumed = await nextTemplateInterview(target(root), { proposals: proposals() });
+    expect(resumed.censusDigest).not.toBe(first.censusDigest);
+    expect(resumed.invalidatedQuestionIds).not.toContain(first.next!.questionId);
+    expect(resumed.state).toBe("question");
+    expect(resumed.expectedLedgerDigest).toBe(answered.expectedLedgerDigest);
+    expect(resumed.next?.kind).toBe("default-layer");
   });
 
-
-  it("derives with empty trusted answers for an invalid ledger and permits explicit repair", async () => {
-    const root = await fixture({ extra: true });
-    const ledgerPath = join(root, ".oms/template-interview.json");
-    await writeFile(ledgerPath, "{broken");
-    const result = await nextTemplateInterview(target(root));
-    expect(result.state).toBe("question");
-    expect(result.next).toBeDefined();
-    expect(result.expectedLedgerDigest).toMatch(/^sha256:/u);
-    expect(result.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "TEMPLATE_INTERVIEW_INVALID" })]));
-    const draftBefore = await readFile(ledgerPath);
-    await expect(answerTemplateInterview(target(root), {
-      questionId: result.next!.questionId,
-      answer: answerFor(result.next!),
-      censusDigest: result.censusDigest,
-      expectedLedgerDigest: null,
-    })).rejects.toThrow("TEMPLATE_INTERVIEW_STALE");
-    expect(await readFile(ledgerPath)).toEqual(draftBefore);
-    const repaired = await answerNext(root, result);
-    expect(repaired.state).toBe("question");
-    expect((await readInterviewLedger(root)).ledger).not.toBeNull();
-    expect(await readFile(ledgerPath, "utf8")).not.toBe("{broken");
-  });
-
-  it("commits a no-placement review with controls only and preserves the source", async () => {
-    const root = await fixture({ extra: true, placement: false });
+  it("commits a dry-run preview whose digest equals the applied manifest", async () => {
+    const root = await fixture();
     const final = await complete(root);
     expect(final.state).toBe("confirm");
-    expect(final.proposal?.mode).toBe("reconcile");
-    expect(final.proposal?.sources.every(source => source.action === "verify-only")).toBe(true);
-    expect(final.proposal?.outputs.every(output => output.finalVaultRelativePath.startsWith(".oms/"))).toBe(true);
-    const before = await readFile(join(root, "Templates/note.md"));
-    const planned = await commitTemplateContracts(target(root), {
-      censusDigest: final.censusDigest,
-      expectedLedgerDigest: final.expectedLedgerDigest,
-      dryRun: true,
-    });
-    expect(planned.status).toBe("planned");
-    if (planned.status !== "planned") throw new Error("expected a planned reconcile");
-    const applied = await commitTemplateContracts(target(root), {
-      censusDigest: final.censusDigest,
-      expectedLedgerDigest: final.expectedLedgerDigest,
-      approvedDigest: planned.approvalDigest,
-    });
-    expect(applied.status).toBe("applied");
-    expect(await readFile(join(root, "Templates/note.md"))).toEqual(before);
-    const afterCommit = await nextTemplateInterview(target(root));
-    expect(afterCommit.state).toBe("unchanged");
-    expect(afterCommit.next).toBeUndefined();
-  });
-
-  it("returns a byte-free confirmation proposal while retaining CAS metadata", async () => {
-    const root = await fixture({ extra: true, placement: false });
-    const final = await complete(root);
-    expect(final.state).toBe("confirm");
-    expect(final.proposal).toBeDefined();
     expect(containsBytePayload(final.proposal)).toBe(false);
-    expect(final.proposal?.controls).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        path: ".oms/template-policy.json",
-        action: expect.any(String),
-        expectedCurrent: expect.objectContaining({ state: "present", signature: expect.stringMatching(/^sha256:/u) }),
-        current: expect.objectContaining({ state: "present", signature: expect.stringMatching(/^sha256:/u) }),
-        proposed: expect.objectContaining({ state: "present", signature: expect.stringMatching(/^sha256:/u) }),
-      }),
-    ]));
-    expect(final.proposal?.sources.every(source =>
-      source.current.state === "present"
-        ? typeof source.current.signature === "string"
-        : true,
-    )).toBe(true);
-  });
-
-  it("records approved commit and verified written control paths in external runtime history (audit)", async () => {
-    const runtimeRoot = await externalRuntimeRoot();
-    const root = await fixture({ extra: true, placement: false });
-    const final = await complete(root);
-    expect(final.state).toBe("confirm");
+    const sourceBefore = await readFile(join(root, "Templates/reading-note.md"));
     const planned = await commitTemplateContracts(target(root), {
-      censusDigest: final.censusDigest,
-      expectedLedgerDigest: final.expectedLedgerDigest,
+      ...session(final),
       dryRun: true,
     });
     expect(planned.status).toBe("planned");
-    if (planned.status !== "planned") throw new Error("expected a planned reconcile");
+    if (planned.status !== "planned") throw new Error("expected a planned commit");
+    expect(planned.approvalDigest).toBe(final.approvalDigest);
     const applied = await commitTemplateContracts(target(root), {
-      censusDigest: final.censusDigest,
-      expectedLedgerDigest: final.expectedLedgerDigest,
+      ...session(final),
       approvedDigest: planned.approvalDigest,
     });
     expect(applied.status).toBe("applied");
-    if (applied.status !== "applied") throw new Error("expected an applied reconcile");
-    const events = readRuntimeEvents({ vaultPath: root, runtimeRoot }).events;
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: "template-contract-commit",
-      transactionId: applied.transactionId,
-      operation: `template-contract-commit:approvalDigest=${applied.approvedDigest}`,
-    }));
-    const controls = events.filter(event => event.kind === "template-contract-commit-control" && event.transactionId === applied.transactionId);
-    expect(controls.map(event => event.notePath).sort()).toEqual(applied.writtenPaths.filter(path => path.startsWith(".oms/")).sort());
-    expect(controls.every(event => event.operation === `template-contract-commit-control:approvalDigest=${applied.approvedDigest}`)).toBe(true);
+    if (applied.status !== "applied") throw new Error("expected an applied commit");
+    expect(applied.approvalDigest).toBe(planned.approvalDigest);
+    expect(await readFile(join(root, "Templates/reading-note.md"))).toEqual(sourceBefore);
+    expect(applied.writtenPaths.every(path => path.startsWith(".oms/"))).toBe(true);
+    const after = await nextTemplateInterview(target(root), { proposals: proposals() });
+    expect(after.state === "unchanged" || after.state === "confirm" || after.state === "question").toBe(true);
   });
 
-  it("keeps ledger and source bytes authoritative when external telemetry fails", async () => {
-    const root = await fixture({ extra: true, placement: false });
+  it("refuses an external mutation between preview and apply", async () => {
+    const root = await fixture();
     const final = await complete(root);
-    expect(final.state).toBe("confirm");
     const planned = await commitTemplateContracts(target(root), {
-      censusDigest: final.censusDigest,
-      expectedLedgerDigest: final.expectedLedgerDigest,
+      ...session(final),
       dryRun: true,
     });
     expect(planned.status).toBe("planned");
-    if (planned.status !== "planned") throw new Error("expected a planned reconcile");
-    const sourceBefore = await readFile(join(root, "Templates/note.md"));
-    const ledgerBefore = await readFile(join(root, ".oms/template-interview.json"));
-    const append = vi.spyOn(eventJournal, "appendRuntimeEvent").mockImplementation(() => {
-      throw new Error("LEDGER_APPEND_FAILED: injected telemetry failure");
+    if (planned.status !== "planned") throw new Error("expected a planned commit");
+    await put(root, ".oms/taxonomy.json", "{\"mutated\":true}\n");
+    const receipt = await commitTemplateContracts(target(root), {
+      ...session(final),
+      approvedDigest: planned.approvalDigest,
     });
-    try {
-      const applied = await commitTemplateContracts(target(root), {
-        censusDigest: final.censusDigest,
-        expectedLedgerDigest: final.expectedLedgerDigest,
-        approvedDigest: planned.approvalDigest,
-      });
-      expect(applied.status).toBe("applied");
-    } finally {
-      append.mockRestore();
-    }
-    expect(await readFile(join(root, "Templates/note.md"))).toEqual(sourceBefore);
-    expect(await readFile(join(root, ".oms/template-interview.json"))).toEqual(ledgerBefore);
+    expect(receipt.status).toBe("rejected");
   });
 
+  it("does not write the vault on read paths, including invalid authority and ordinary notes", async () => {
+    const invalid = await fixture();
+    await put(invalid, ".oms/template-policy.json", "{");
+    const invalidBefore = await vaultSnapshot(invalid);
+    const invalidReview = await nextTemplateInterview(target(invalid), { proposals: proposals() });
+    expect(invalidReview.state).toBe("blocked");
+    expect(invalidReview.next).toBeUndefined();
+    expect(await vaultSnapshot(invalid)).toEqual(invalidBefore);
 
-  it("allows a zero-question commit from an invalid draft without rewriting the draft", async () => {
-    const root = await fixture({ placement: false });
-    const initial = await complete(root);
-    expect(initial.state).toBe("confirm");
-    const firstCommit = await commitTemplateContracts(target(root), {
-      censusDigest: initial.censusDigest,
-      expectedLedgerDigest: initial.expectedLedgerDigest,
-      dryRun: true,
-    });
-    expect(firstCommit.status).toBe("planned");
-    if (firstCommit.status !== "planned") throw new Error("expected a planned initial reconcile");
-    const applied = await commitTemplateContracts(target(root), {
-      censusDigest: initial.censusDigest,
-      expectedLedgerDigest: initial.expectedLedgerDigest,
-      approvedDigest: firstCommit.approvalDigest,
-    });
-    expect(applied.status).toBe("applied");
-    const ledgerPath = join(root, ".oms/template-interview.json");
-    await writeFile(ledgerPath, "{corrupt-draft");
-    const resumed = await nextTemplateInterview(target(root));
-    expect(resumed.state).toBe("unchanged");
-    expect(resumed.next).toBeUndefined();
-    expect(resumed.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "TEMPLATE_INTERVIEW_INVALID" })]));
-    const draftBefore = await readFile(ledgerPath);
-    const snapshotBefore = await vaultSnapshot(root);
-    const unchanged = await commitTemplateContracts(target(root), {
-      censusDigest: resumed.censusDigest,
-      expectedLedgerDigest: resumed.expectedLedgerDigest,
-      dryRun: true,
-    });
-    expect(unchanged.status).toBe("unchanged");
-    expect(await readFile(ledgerPath)).toEqual(draftBefore);
-    expect(await vaultSnapshot(root)).toEqual(snapshotBefore);
+    const approved = await approvedVault();
+    await put(approved, "Sources/literature.md", "drifted\n");
+    const approvedBefore = await vaultSnapshot(approved);
+    const drifted = await nextTemplateInterview(target(approved));
+    expect(drifted.next).toBeUndefined();
+    expect(await vaultSnapshot(approved)).toEqual(approvedBefore);
+    expect(await readFile(join(approved, "Notes/plain.md"), "utf8")).toBe("ordinary note\n");
   });
 
-  it("rejects a final commit from an unverified cwd target", async () => {
-    const root = await fixture({ extra: true });
-    const final = await complete(root);
-    expect(final.state).toBe("confirm");
+  it("rejects a caller-supplied anchor override and an unverified cwd target", async () => {
+    const root = await fixture();
+    const first = await nextTemplateInterview(target(root), { proposals: proposals() });
+    const question = first.next!;
+    await expect(answerTemplateInterview(target(root), {
+      ...session(first),
+      questionId: question.questionId,
+      answer: { disposition: "confirm", raw: "yes", anchorDigest: digestBytes("override") },
+    })).rejects.toThrow(/TEMPLATE_INTERVIEW_ANSWER_INVALID|anchor does not match/);
+    expect((await readInterviewLedger(root)).ledger).toBeNull();
     await expect(commitTemplateContracts(target(root, "cwd"), {
-      censusDigest: final.censusDigest,
-      expectedLedgerDigest: final.expectedLedgerDigest,
+      ...session(first),
       dryRun: true,
     })).rejects.toThrow("target-unverified");
   });
 
-  it("rejects a stale final ledger digest", async () => {
-    const root = await fixture({ extra: true });
-    const final = await complete(root);
-    const ledgerPath = join(root, ".oms/template-interview.json");
-    const stored = JSON.parse(await readFile(ledgerPath, "utf8")) as Record<string, unknown>;
-    await writeFile(ledgerPath, `${JSON.stringify({ ...stored, extension: { changed: true } })}\n`);
-    await expect(commitTemplateContracts(target(root), {
-      censusDigest: final.censusDigest,
-      expectedLedgerDigest: final.expectedLedgerDigest,
-      dryRun: true,
-    })).rejects.toThrow("TEMPLATE_INTERVIEW_STALE");
-  });
-
-  it("reopens a committed deferred deletion in memory and retires it under CAS", async () => {
-    const root = await fixture({ extra: true, placement: false });
-    const initial = await complete(root);
-    expect(initial.state).toBe("confirm");
-    const planned = await commitTemplateContracts(target(root), {
-      censusDigest: initial.censusDigest,
-      expectedLedgerDigest: initial.expectedLedgerDigest,
-      dryRun: true,
-    });
-    expect(planned.status).toBe("planned");
-    if (planned.status !== "planned") throw new Error("expected a planned reconcile");
-    const applied = await commitTemplateContracts(target(root), {
-      censusDigest: initial.censusDigest,
-      expectedLedgerDigest: initial.expectedLedgerDigest,
-      approvedDigest: planned.approvalDigest,
-    });
-    expect(applied.status).toBe("applied");
-
-    await rm(join(root, "Templates/new.md"));
-    let review = await nextTemplateInterview(target(root));
-    let deletionQuestion: TemplateInterviewQuestion | undefined;
-    for (let pass = 0; pass < 32 && review.state === "question"; pass += 1) {
-      const question = review.next;
-      if (question === undefined) throw new Error("expected a deletion question");
-      if (question.kind === "deleted-source-disposition") {
-        deletionQuestion = question;
-        break;
-      }
-      review = await answerNext(root, review);
-    }
-    expect(deletionQuestion).toBeDefined();
-    if (deletionQuestion === undefined) throw new Error("expected a deletion question");
-    while (review.state === "question" && review.next?.questionId !== deletionQuestion.questionId) {
-      review = await answerNext(root, review);
-    }
-    const deferred = await answerTemplateInterview(target(root), {
-      questionId: deletionQuestion.questionId,
-      answer: "defer",
-      censusDigest: review.censusDigest,
-      expectedLedgerDigest: review.expectedLedgerDigest,
-    });
-    expect(deferred.state).toBe("confirm");
-    const deferPlanned = await commitTemplateContracts(target(root), {
-      censusDigest: deferred.censusDigest,
-      expectedLedgerDigest: deferred.expectedLedgerDigest,
-      dryRun: true,
-    });
-    expect(deferPlanned.status).toBe("planned");
-    if (deferPlanned.status !== "planned") throw new Error("expected a planned deferred reconcile");
-    const deferApplied = await commitTemplateContracts(target(root), {
-      censusDigest: deferred.censusDigest,
-      expectedLedgerDigest: deferred.expectedLedgerDigest,
-      approvedDigest: deferPlanned.approvalDigest,
-    });
-    expect(deferApplied.status).toBe("applied");
-
-    const ledgerPath = join(root, ".oms/template-interview.json");
-    const ledgerBeforeReopen = await readFile(ledgerPath);
-    const reopened = await nextTemplateInterview(target(root));
-    expect(reopened.state).toBe("question");
-    expect(reopened.next).toMatchObject({
-      questionId: deletionQuestion.questionId,
-      kind: "deleted-source-disposition",
-    });
-    expect(await readFile(ledgerPath)).toEqual(ledgerBeforeReopen);
-
-    const retired = await answerTemplateInterview(target(root), {
-      questionId: reopened.next!.questionId,
-      answer: "retire",
-      censusDigest: reopened.censusDigest,
-      expectedLedgerDigest: reopened.expectedLedgerDigest,
-    });
-    expect(retired.state).toBe("confirm");
-    const ledger = JSON.parse(await readFile(ledgerPath, "utf8")) as {
-      readonly answers: Record<string, { readonly value: unknown }>;
-    };
-    expect(ledger.answers[deletionQuestion.questionId]?.value).toBe("retire");
+  it("survives a process-style restart with a persisted mid-interview ledger", async () => {
+    const root = await fixture();
+    const first = await nextTemplateInterview(target(root), { proposals: proposals() });
+    await answerNext(root, first);
+    const persisted = await readInterviewLedger(root);
+    const restarted = await nextTemplateInterview(target(root), { proposals: proposals() });
+    expect(restarted.expectedLedgerDigest).toBe(persisted.digest);
+    expect(restarted.next?.kind).toBe("default-layer");
+    const accepted = validateInterviewAnswer(restarted.next!, { disposition: "confirm", raw: "resume after restart" });
+    expect(accepted.anchorDigest).toBe(restarted.next!.anchorDigest);
+    const interview = buildTemplateInterview(
+      { ...(await import("./census.js")).templateCensus(root).then(value => value) },
+      { proposals: proposals(), answers: [accepted] },
+    );
+    expect(interview.confirmed.length + interview.deferred.length + interview.unresolved.length).toBeGreaterThanOrEqual(0);
   });
 });

@@ -2,10 +2,9 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
-import { admitWriteTarget } from "../capture/safe.js";
+import { admitWriteTarget, type WriteTarget } from "../capture/safe.js";
 import { acquireTransactionLock, atomicWrite, releaseTransactionLock } from "./file-lock.js";
 import { normalizeTemplateControlPath, verifyTemplateControlPath } from "./paths.js";
-import type { TemplateOperationTarget } from "./operations.js";
 import type { Digest, JsonValue } from "./types.js";
 
 const encoder = new TextEncoder();
@@ -13,14 +12,13 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const LEDGER_PATH = ".oms/template-interview.json";
 const LOCK_PATH = ".oms/.template-transactions/interview/lock";
+const DISPOSITIONS = new Set(["confirm", "defer", "unresolved"]);
 
-/** One persisted answer, keyed by its stable interview question id. */
+/** One persisted answer. Anchors are server-observed; callers cannot replace them. */
 export interface InterviewLedgerAnswer {
-  readonly templateId: string;
-  readonly kind: string;
-  readonly subject: string;
   readonly anchorDigest: Digest;
-  readonly value: JsonValue;
+  readonly disposition: "confirm" | "defer" | "unresolved";
+  readonly raw: string;
   readonly [key: string]: unknown;
 }
 
@@ -106,14 +104,10 @@ function validateLedger(value: unknown): value is InterviewLedger {
   for (const [questionId, answer] of Object.entries(value.answers)) {
     if (questionId.length === 0 || !record(answer)) return false;
     if (
-      typeof answer.templateId !== "string" ||
-      answer.templateId.length === 0 ||
-      typeof answer.kind !== "string" ||
-      answer.kind.length === 0 ||
-      typeof answer.subject !== "string" ||
-      answer.subject.length === 0 ||
-      !isDigest(answer.anchorDigest) ||
-      !jsonValue(answer.value)
+      !isDigest(answer.anchorDigest)
+      || typeof answer.raw !== "string"
+      || typeof answer.disposition !== "string"
+      || !DISPOSITIONS.has(answer.disposition)
     ) return false;
   }
   return true;
@@ -187,11 +181,11 @@ async function readLockedLedger(vault: string): Promise<LockedLedgerRead> {
     };
   } catch (error: unknown) {
     if (
-      !(error instanceof Error) ||
-      !("code" in error) ||
-      error.code !== "TEMPLATE_INTERVIEW_INVALID" ||
-      !("digest" in error) ||
-      !isDigest(error.digest)
+      !(error instanceof Error)
+      || !("code" in error)
+      || error.code !== "TEMPLATE_INTERVIEW_INVALID"
+      || !("digest" in error)
+      || !isDigest(error.digest)
     ) {
       throw error;
     }
@@ -224,7 +218,7 @@ interface VerifiedLedgerPaths {
   readonly lock: string;
 }
 
-async function verifyWritePaths(target: TemplateOperationTarget): Promise<VerifiedLedgerPaths> {
+async function verifyWritePaths(target: WriteTarget): Promise<VerifiedLedgerPaths> {
   const admission = await admitWriteTarget(target);
   if (admission !== undefined) throw new Error(`${admission.code}: ${admission.remediation}`);
   const root = resolve(target.vault);
@@ -256,16 +250,16 @@ function validDigestOption(value: unknown): value is Digest {
  * while retaining the same lock through its return.
  */
 export async function withInterviewLedgerLock<T>(
-  target: TemplateOperationTarget,
+  target: WriteTarget,
   options: InterviewLedgerLockOptions,
   callback: (context: InterviewLedgerLockContext) => Promise<T>,
 ): Promise<T> {
   if (
-    options === null ||
-    typeof options !== "object" ||
-    (options.expectedLedgerDigest !== null && !validDigestOption(options.expectedLedgerDigest)) ||
-    !validDigestOption(options.expectedCensusDigest) ||
-    typeof options.verifyCensus !== "function"
+    options === null
+    || typeof options !== "object"
+    || (options.expectedLedgerDigest !== null && !validDigestOption(options.expectedLedgerDigest))
+    || !validDigestOption(options.expectedCensusDigest)
+    || typeof options.verifyCensus !== "function"
   ) {
     throw new TypeError("Interview ledger lock options are invalid");
   }

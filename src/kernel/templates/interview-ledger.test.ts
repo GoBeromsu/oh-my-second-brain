@@ -8,7 +8,7 @@ import {
   readInterviewLedger,
   type InterviewLedger,
 } from "./interview-ledger.js";
-import type { TemplateOperationTarget } from "./operations.js";
+import type { WriteTarget } from "../capture/safe.js";
 
 const roots: string[] = [];
 
@@ -20,21 +20,19 @@ function digest(value: string): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
-function target(vault: string, source: TemplateOperationTarget["source"] = "explicit"): TemplateOperationTarget {
+function target(vault: string, source: WriteTarget["source"] = "explicit"): WriteTarget {
   return { vault, source };
 }
 
-function ledger(censusDigest: `sha256:${string}`, value: string): InterviewLedger {
+function ledger(censusDigest: `sha256:${string}`, raw: string): InterviewLedger {
   return {
     version: 1,
     censusDigest,
     answers: {
       "question-1": {
-        templateId: "daily",
-        kind: "field-intent",
-        subject: "title",
         anchorDigest: digest("anchor"),
-        value,
+        disposition: "confirm",
+        raw,
         extension: { preserved: true },
       },
     },
@@ -64,7 +62,7 @@ describe("template interview ledger", () => {
       { expectedLedgerDigest: null, expectedCensusDigest: censusDigest, verifyCensus: async () => censusDigest },
       async ({ save }) => save(ledger(censusDigest, "confirmed")),
     );
-    expect(saved.ledger?.answers["question-1"]?.value).toBe("confirmed");
+    expect(saved.ledger?.answers["question-1"]?.raw).toBe("confirmed");
     expect(saved.digest).toEqual(expect.any(String));
 
     const reloaded = await readInterviewLedger(vault);
@@ -93,11 +91,9 @@ describe("template interview ledger", () => {
           answers: {
             ...current.answers,
             "question-2": {
-              templateId: "daily",
-              kind: "field-requiredness",
-              subject: "status",
               anchorDigest: digest("status-anchor"),
-              value: "optional",
+              disposition: "defer",
+              raw: "later",
             },
           },
         });
@@ -106,7 +102,8 @@ describe("template interview ledger", () => {
     expect(resumed.ledger?.censusDigest).toBe(newCensusDigest);
     expect(resumed.ledger?.extension).toEqual({ preserved: ["user", "data"] });
     expect(resumed.ledger?.answers["question-1"]?.extension).toEqual({ preserved: true });
-    expect(resumed.ledger?.answers["question-2"]?.value).toBe("optional");
+    expect(resumed.ledger?.answers["question-2"]?.raw).toBe("later");
+    expect(resumed.ledger?.answers["question-2"]?.disposition).toBe("defer");
   });
 
   it("rejects stale ledger and census writes without changing bytes", async () => {
@@ -159,6 +156,27 @@ describe("template interview ledger", () => {
     await writeFile(path, JSON.stringify({ version: 1, answers: {} }));
     await expect(readInterviewLedger(vault)).rejects.toThrow("TEMPLATE_INTERVIEW_INVALID");
     await expect(readFile(path, "utf8")).resolves.toBe(JSON.stringify({ version: 1, answers: {} }));
+  });
+
+  it("rejects a caller-shaped answer that tries to replace the server anchor", async () => {
+    const vault = await fixture();
+    const censusDigest = digest("census");
+    await expect(withInterviewLedgerLock(
+      target(vault),
+      { expectedLedgerDigest: null, expectedCensusDigest: censusDigest, verifyCensus: async () => censusDigest },
+      async ({ save }) => save({
+        version: 1,
+        censusDigest,
+        answers: {
+          "question-1": {
+            anchorDigest: "not-a-digest",
+            disposition: "confirm",
+            raw: "no",
+          },
+        },
+      }),
+    )).rejects.toThrow("TEMPLATE_INTERVIEW_INVALID");
+    await expect(readdir(vault)).resolves.toEqual([]);
   });
 
   it("rejects symlinked controls and unverified cwd targets before creation", async () => {
