@@ -104,7 +104,8 @@ describe("syncEngineStore — embed=false (lex-only)", () => {
   it("excludes an explicit symlink alias of a managed template source", async () => {
     writeDoc("Templates/note.md", "managed template");
     writeDoc(".oms/template-policy.json", JSON.stringify({
-      templates: { note: { sourcePath: "Templates/note.md" } },
+      version: 4,
+      templates: { note: { source: { path: "Templates/note.md" } } },
     }));
     mkdirSync(path.join(vault, "notes"), { recursive: true });
     symlinkSync(path.join(vault, "Templates", "note.md"), path.join(vault, "notes", "template-alias.md"));

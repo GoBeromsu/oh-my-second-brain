@@ -1,181 +1,155 @@
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { digestBytes } from "../templates/canonical.js";
+import { parseTemplatePolicy } from "../templates/policy.js";
+import { writeApprovedVault } from "../templates/approved-vault-fixture.js";
+import { applySetup, composeSetup, decideNonInteractiveSetup, emptyTemplatePolicy, inspectSetup, publishSetupModels } from "./service.js";
 
-import type { ModelsConfigV1 } from "../engine/embed/config.js";
-import { applySetup, composeSetup, decideNonInteractiveSetup, decideSetup, inspectSetup, publishSetupModels } from "./service.js";
+const roots: string[] = [];
+let previousRuntime: string | undefined;
 
-let vault: string | undefined;
+beforeEach(() => { previousRuntime = process.env.OMS_RUNTIME_ROOT; });
 afterEach(async () => {
-  if (vault !== undefined) await rm(vault, { recursive: true, force: true });
-  vault = undefined;
+  if (previousRuntime === undefined) delete process.env.OMS_RUNTIME_ROOT;
+  else process.env.OMS_RUNTIME_ROOT = previousRuntime;
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-const modelsConfig: ModelsConfigV1 = {
-  schemaVersion: 1,
-  embed: { provider: "gguf", model: "embeddinggemma-300m", revision: "v1.0.0", sha256: "a".repeat(64), promptScheme: "embeddinggemma-v1" },
-  rerank: { provider: "gguf", model: "reranker", revision: "v1.0.0", sha256: "b".repeat(64) },
-  generate: { provider: "gguf", model: "generator", revision: "v1.0.0", sha256: "c".repeat(64), promptScheme: "qmd-query-expansion-v2.8.3" },
-};
-
-async function fresh(files: Record<string, string> = {}): Promise<string> {
-  vault = await mkdtemp(path.join(tmpdir(), "oms-template-setup-"));
+async function emptyVault(files: Readonly<Record<string, string>> = {}): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "oms-setup-"));
+  roots.push(root);
+  process.env.OMS_RUNTIME_ROOT = join(root, "runtime");
+  const vault = join(root, "vault");
+  await mkdir(vault, { recursive: true });
   for (const [relative, content] of Object.entries(files)) {
-    const absolute = path.join(vault, relative);
-    await mkdir(path.dirname(absolute), { recursive: true });
-    await writeFile(absolute, content, "utf8");
+    await mkdir(join(vault, relative, ".."), { recursive: true });
+    await writeFile(join(vault, relative), content);
   }
   return vault;
 }
 
-const template = "---\ntemplate: note\n---\nbody\n";
-const taxonomy = `${JSON.stringify({ folders: { Notes: { template: "note" } } })}\n`;
-const obsidianTypes = JSON.stringify({ types: { template: "string" } });
-
-function savedPolicy(folder = "Saved Templates"): string {
-  return `${JSON.stringify({
-    version: 3,
-    templateFolders: [{ path: folder, default: true }],
-    defaultTemplate: "note",
-    base: { fields: {} },
-    contracts: { base: { intent: "Base note", fields: {}, views: [] } },
-    templates: {
-      note: {
-        templateId: "note",
-        destinationClass: "registered-existing",
-        sourceFolder: folder,
-        sourcePath: `${folder}/note.md`,
-        contract: "base",
-        naming: "{{date}}-{{slug}}.md",
-      },
-    },
-  })}\n`;
-}
-
-describe("template-first setup service", () => {
-  it("uses an explicit folder selection and exposes its provenance without writing", async () => {
-    const root = await fresh({ "My Templates/nested/reading.md": template });
-    const before = await readdir(root);
-
-    const state = await inspectSetup({
-      vault: root,
-      templateFolders: [{ path: "My Templates", default: true }],
-    });
-
-    expect(state.selectedTemplateFolders).toEqual([{ path: "My Templates", default: true }]);
-    expect(state.templateFolderSource).toBe("explicit");
-    expect(state.templateFolderCandidates).toContainEqual({
-      path: "My Templates",
-      provenance: ["explicit", "vault-walk"],
-    });
-    expect(state.proposal.managedSourcePaths).toEqual(["My Templates/nested/reading.md"]);
-    expect(await readdir(root)).toEqual(before);
-    expect(existsSync(path.join(root, ".oms"))).toBe(false);
-  });
-
-  it("reuses saved valid-v3 folders as the only implicit selection", async () => {
-    const root = await fresh({
-      ".oms/template-policy.json": savedPolicy(),
-      "Saved Templates/note.md": template,
-    });
-
-    const state = await inspectSetup({ vault: root });
-
-    expect(state.templateFolderSource).toBe("stored-v3");
-    expect(state.selectedTemplateFolders.map(folder => folder.path)).toEqual(["Saved Templates"]);
-    expect(state.templateFolderCandidates).toContainEqual({
-      path: "Saved Templates",
-      provenance: ["stored-v3", "vault-walk"],
+describe("setup proposal", () => {
+  it("proposes an empty always-on default layer and no templates", async () => {
+    const vault = await emptyVault();
+    const state = await inspectSetup({ vault });
+    expect(state.policy.version).toBe(4);
+    expect(Object.keys(state.policy.properties)).toEqual([]);
+    expect(Object.keys(state.policy.templates)).toEqual([]);
+    expect(state.policy.default.approvedMarkdown).toBe("");
+    expect(state.document.questionnaire).toMatchObject({
+      policyVersion: 4,
+      defaultLayer: { templatePath: ".oms/templates/default.md", fields: [], headings: [], semanticCriteria: [] },
+      properties: [],
+      templates: [],
+      nextStep: "interview",
     });
   });
 
-  it("shows configuration and vault-walk hints without automatically selecting them", async () => {
-    const root = await fresh({
-      ".obsidian/templates.json": JSON.stringify({ folder: "Suggested" }),
-      "Suggested/note.template.md": template,
+  it("reports folder observations as raw hints without adopting any template", async () => {
+    const vault = await emptyVault({
+      "Templates/note.md": "---\ntitle: <% tp.file.title %>\n---\nBody\n",
+      ".obsidian/templates.json": JSON.stringify({ folder: "Templates" }),
     });
-
-    const state = await inspectSetup({ vault: root });
-
-    expect(state.selectedTemplateFolders).toEqual([]);
-    expect(state.templateFolderSource).toBeUndefined();
-    expect(state.templateFolderCandidates).toContainEqual({
-      path: "Suggested",
-      provenance: ["obsidian-core", "vault-walk"],
-    });
-    expect(state.proposal.unresolved).toContainEqual(expect.objectContaining({
-      code: "TEMPLATE_FOLDER_SELECTION_REQUIRED",
-    }));
-    expect(state.proposal.inputDigest).toBeUndefined();
+    const state = await inspectSetup({ vault });
+    expect(state.templateFolderCandidates.map(candidate => candidate.path)).toContain("Templates");
+    // A hint is an observation, not a selection: no template was adopted.
+    expect(Object.keys(state.policy.templates)).toEqual([]);
+    expect(state.document.questionnaire.templateFolderHints.map(hint => hint.path)).toContain("Templates");
   });
 
-  it("keeps non-interactive setup blocked when folder selection is unresolved", async () => {
-    const state = await inspectSetup({ vault: await fresh() });
-    const decision = await decideNonInteractiveSetup(state);
-    expect(decision.proposal.unresolved).toContainEqual(expect.objectContaining({
-      code: "TEMPLATE_FOLDER_SELECTION_REQUIRED",
-    }));
-    expect(decision.proposal.inputDigest).toBeUndefined();
-    await expect(composeSetup(decision, { base: { fields: {} } })).rejects.toThrow("MIGRATION_UNRESOLVED_MAPPING");
+  it("does not read or execute template syntax while inspecting", async () => {
+    const source = "---\ntitle: <%* throw new Error(\"executed\") %>\n---\n";
+    const vault = await emptyVault({ "Templates/danger.md": source });
+    await inspectSetup({ vault });
+    expect(await readFile(join(vault, "Templates", "danger.md"), "utf8")).toBe(source);
   });
 
-  it("honors a changed explicit folder choice instead of retaining the inspected choice", async () => {
-    const root = await fresh({
-      "First/one.md": template,
-      "Second/two.md": "---\ntemplate: two\n---\nbody\n",
-    });
-    const state = await inspectSetup({
-      vault: root,
-      templateFolders: [{ path: "First" }],
-    });
-    const decision = await decideSetup(state, {
-      templateFolders: [{ path: "Second", default: true }],
-    });
-
-    expect(decision.templateFolderSource).toBe("explicit");
-    expect(decision.selectedTemplateFolders).toEqual([{ path: "Second", default: true }]);
-    expect(decision.proposal.managedSourcePaths).toEqual(["Second/two.md"]);
-    expect(decision.templateFolderCandidates).toContainEqual({
-      path: "Second",
-      provenance: ["explicit"],
-    });
+  it("creates nothing on disk while inspecting", async () => {
+    const vault = await emptyVault();
+    await inspectSetup({ vault });
+    expect(await readdir(vault)).toEqual([]);
   });
+});
 
-  it("publishes canonical model selections only after approved setup", async () => {
-    const root = await fresh({
-      ".obsidian/types.json": obsidianTypes,
-      ".oms/taxonomy.json": taxonomy,
-      ".oms/template-policy.json": savedPolicy("Templates"),
-      "Templates/note.md": template,
-    });
-    const decision = await decideNonInteractiveSetup(await inspectSetup({
-      vault: root,
-      templateFolders: [{ path: "Templates", default: true }],
-    }));
-    const manifest = await composeSetup(decision, { base: { fields: {} } });
-    const receipt = await applySetup(decision, manifest, { approvedDigest: manifest.approvalDigest });
+describe("setup publication", () => {
+  it("dry-runs the approval manifest without writing the vault", async () => {
+    const vault = await emptyVault();
+    const decision = await decideNonInteractiveSetup(await inspectSetup({ vault }));
+    const manifest = await composeSetup(decision);
 
-    await expect(publishSetupModels(decision, receipt, { approvedDigest: manifest.approvalDigest }, modelsConfig)).resolves.toBe(true);
-    await expect(readFile(path.join(root, ".oms", "models.json"), "utf8")).resolves.toBe(`${JSON.stringify(modelsConfig, null, 2)}\n`);
-  });
+    expect(manifest.controls.map(control => control.path)).toEqual([
+      ".oms/template-policy.json",
+      ".oms/taxonomy.json",
+      ".oms/types.json",
+    ]);
+    expect(manifest.drafts.map(draft => draft.path)).toEqual([".oms/templates/default.md"]);
+    // Ordinary notes and raw sources are never publication outputs.
+    expect(manifest.outputs.every(output => output.finalVaultRelativePath.startsWith(".oms/"))).toBe(true);
 
-  it("does not publish models from a dry-run receipt", async () => {
-    const root = await fresh({
-      ".obsidian/types.json": obsidianTypes,
-      ".oms/taxonomy.json": taxonomy,
-      ".oms/template-policy.json": savedPolicy("Templates"),
-      "Templates/note.md": template,
-    });
-    const decision = await decideNonInteractiveSetup(await inspectSetup({
-      vault: root,
-      templateFolders: [{ path: "Templates", default: true }],
-    }));
-    const manifest = await composeSetup(decision, { base: { fields: {} } });
     const receipt = await applySetup(decision, manifest, { dryRun: true });
+    expect(receipt.status).toBe("planned");
+    expect(await readdir(vault)).toEqual([]);
+  });
 
-    await expect(publishSetupModels(decision, receipt, { dryRun: true }, modelsConfig)).rejects.toThrow("MIGRATION_APPROVAL_MISMATCH");
-    expect(existsSync(path.join(root, ".oms", "models.json"))).toBe(false);
+  it("publishes the empty policy only with the exact approved digest", async () => {
+    const vault = await emptyVault();
+    const decision = await decideNonInteractiveSetup(await inspectSetup({ vault }));
+    const manifest = await composeSetup(decision);
+
+    const forged = await applySetup(decision, manifest, { approvedDigest: digestBytes("not the approval") });
+    expect(forged.status).toBe("rejected");
+    expect(await readdir(vault)).toEqual([]);
+
+    const receipt = await applySetup(decision, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt.status).toBe("applied");
+    const policy = parseTemplatePolicy(await readFile(join(vault, ".oms", "template-policy.json"), "utf8"));
+    expect(policy.version).toBe(4);
+    expect(Object.keys(policy.templates)).toEqual([]);
+    expect(await readFile(join(vault, ".oms", "templates", "default.md"), "utf8")).toBe("");
+  });
+
+  it("refuses to replace an approved contract that already exists", async () => {
+    const vault = await emptyVault();
+    await writeApprovedVault(vault, {
+      properties: { status: { type: "text", intent: "Workflow state." } },
+      templates: { note: { fields: ["status"], targetFolder: "notes" } },
+      folders: { notes: { intent: "Notes." } },
+    });
+    const before = await readFile(join(vault, ".oms", "template-policy.json"), "utf8");
+
+    const decision = await decideNonInteractiveSetup(await inspectSetup({ vault }));
+    const manifest = await composeSetup(decision);
+    // Every existing control is verify-only, so an approved vault is preserved.
+    expect(manifest.controls.every(control => control.action === "verify-only")).toBe(true);
+    const receipt = await applySetup(decision, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt.status).not.toBe("rejected");
+    expect(await readFile(join(vault, ".oms", "template-policy.json"), "utf8")).toBe(before);
+  });
+
+  it("never writes an ordinary note during setup", async () => {
+    const vault = await emptyVault({ "notes/one.md": "Existing note.\n" });
+    const decision = await decideNonInteractiveSetup(await inspectSetup({ vault }));
+    const manifest = await composeSetup(decision);
+    await applySetup(decision, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(await readFile(join(vault, "notes", "one.md"), "utf8")).toBe("Existing note.\n");
+  });
+
+  it("refuses to publish model selections before an approved, applied transaction", async () => {
+    const vault = await emptyVault();
+    const decision = await decideNonInteractiveSetup(await inspectSetup({ vault }));
+    const config = { version: 1 as const, embedding: { provider: "gguf", model: "test-model" } };
+    await expect(publishSetupModels(decision, { status: "planned" } as never, { dryRun: true }, config as never))
+      .rejects.toThrow(/SETUP_APPROVAL_MISMATCH/);
+  });
+});
+
+describe("empty policy", () => {
+  it("is a valid v4 policy with an empty approved default draft", () => {
+    const policy = emptyTemplatePolicy();
+    expect(policy.default.approvedMarkdownDigest).toBe(digestBytes(""));
+    expect(policy.default.fields).toEqual({});
+    expect(policy.default.headings).toEqual([]);
   });
 });
