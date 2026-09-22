@@ -11,10 +11,10 @@ export {
   validateDerivedProjection,
 } from "../templates/policy.js";
 export type {
-  BaseContract,
   DerivedProjection,
-  FieldPolicy,
   ObsidianContractType,
+  PropertyDefinition,
+  ResolvedContract,
   TemplatePolicy,
 } from "../templates/types.js";
 

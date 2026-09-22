@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,12 +7,16 @@ import {
   deriveManagedSourcePath,
   deriveTemplateSourcePath,
   isTemplateSourceInFolder,
+  normalizeManagedTemplatePath,
   normalizeTemplateControlPath,
   normalizeTemplateFolderPath,
   normalizeTemplateSourcePath,
   selectTemplateFolder,
   validateTemplateId,
+  verifyManagedTemplatePath,
+  verifyTemplateControlPath,
   verifyTemplateSourcePath,
+  type TemplateControlPath,
 } from "./paths.js";
 
 const roots: string[] = [];
@@ -76,6 +80,45 @@ describe("template path contract", () => {
     expect(normalizeTemplateControlPath(".oms/template-interview.json")).toBe(".oms/template-interview.json");
     expect(() => normalizeTemplateControlPath(".oms/taxonomy.yaml")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
     expect(() => normalizeTemplateControlPath(".oms/other.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
+    expect(() => normalizeTemplateControlPath(".oms/template-migration.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
+    expect(() => normalizeTemplateControlPath(".oms/.template-transactions/task/../../note.md")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
+    expect(normalizeTemplateControlPath(".oms/.template-transactions/task/policy.json")).toBe(".oms/.template-transactions/task/policy.json");
+  });
+
+  it("confines managed drafts to the approved internal namespace", () => {
+    expect(normalizeManagedTemplatePath(".oms/templates/default.md")).toBe(".oms/templates/default.md");
+    expect(normalizeManagedTemplatePath(".oms\\templates\\한글-노트.md")).toBe(".oms/templates/한글-노트.md");
+    for (const candidate of ["Notes/note.md", ".oms/types.json", ".oms/templates/../note.md", ".oms/templates/.md", ".oms/templates/a/b.md", "/.oms/templates/note.md", ".oms/templates/note.MD"]) {
+      expect(() => normalizeManagedTemplatePath(candidate)).toThrow(/TEMPLATE_SOURCE_(?:UNSAFE|INVALID)/);
+    }
+  });
+
+  it("verifies managed drafts without creating missing controls or drafts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "oms-managed-path-"));
+    roots.push(root);
+    const draft = ".oms/templates/default.md";
+    expect((await verifyManagedTemplatePath(root, draft, { expected: "absent" })).targetRealPath).toBeNull();
+    await expect(verifyManagedTemplatePath(root, draft)).rejects.toThrow("must exist");
+    await mkdir(join(root, ".oms", "templates"), { recursive: true });
+    await writeFile(join(root, draft), "approved");
+    expect((await verifyManagedTemplatePath(root, draft)).absolutePath).toBe(await realpath(join(root, draft)));
+    await expect(verifyManagedTemplatePath(root, draft, { expected: "absent" })).rejects.toThrow("must be absent");
+    await mkdir(join(root, ".oms/templates/folder.md"));
+    await expect(verifyManagedTemplatePath(root, ".oms/templates/folder.md", { expected: "either" })).rejects.toThrow("regular file");
+    await expect(verifyTemplateControlPath(root, "notes.md" as TemplateControlPath, { expected: "either" })).rejects.toThrow("approved template control");
+  });
+
+  it("rejects symlinked managed draft leaves and ancestors", async () => {
+    const root = await mkdtemp(join(tmpdir(), "oms-managed-path-"));
+    const outside = await mkdtemp(join(tmpdir(), "oms-managed-outside-"));
+    roots.push(root, outside);
+    await mkdir(join(root, ".oms/templates"), { recursive: true });
+    await writeFile(join(outside, "default.md"), "outside");
+    await symlink(join(outside, "default.md"), join(root, ".oms/templates/default.md"));
+    await expect(verifyManagedTemplatePath(root, ".oms/templates/default.md")).rejects.toThrow("symlink");
+    await rm(join(root, ".oms/templates"), { recursive: true });
+    await symlink(outside, join(root, ".oms/templates"));
+    await expect(verifyManagedTemplatePath(root, ".oms/templates/new.md", { expected: "absent" })).rejects.toThrow("symlink");
   });
 
   it("rejects a symlinked template source", async () => {

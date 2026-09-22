@@ -1,170 +1,75 @@
 import { describe, expect, it } from "vitest";
-import { deriveContentFormatContract } from "../templates/content-contract.js";
-import type { BaseContract, ResolvedTemplate } from "../templates/types.js";
+import { digestBytes } from "../templates/canonical.js";
+import type { JsonValue, ObsidianContractType, ResolvedContract, ResolvedField } from "../templates/types.js";
 import { evaluateResolvedTemplateContract } from "./write-contract.js";
 
-const base: BaseContract = { fields: { created: { type: "date", required: true } } };
-const content = deriveContentFormatContract("").contract;
-const template: ResolvedTemplate = {
-  id: "note" as ResolvedTemplate["id"],
-  destinationClass: "managed-default",
-  renderer: "obsidian-core",
-  sourcePath: "Templates/note.md" as ResolvedTemplate["sourcePath"],
-  targetFolder: "notes" as ResolvedTemplate["targetFolder"],
-  bom: false,
-  eol: "lf",
-  finalNewline: true,
-  keyOrder: ["title", "source", "status"],
-  fields: {
-    title: { type: "text", required: true, normalize: "trim" },
-    source: { type: "text", format: "url" },
-    status: { type: "select", allowedValues: ["draft"] },
-  },
-  frontmatterTemplate: {},
-  body: "",
-  content,
-  naming: "{{slug}}.md",
-  views: [],
-  inputSignature: "sha256:test" as ResolvedTemplate["inputSignature"],
-  templateSignature: "sha256:test" as ResolvedTemplate["templateSignature"],
-  managedSourcePaths: [],
-};
+function contract(fields: Readonly<Record<string, ResolvedField>> = {}): ResolvedContract {
+  return {
+    templateId: null, fields, headings: [], headingOrder: "unordered", semanticCriteria: [],
+    approved: { defaultLayer: { templatePath: ".oms/templates/default.md" as ResolvedContract["approved"]["defaultLayer"]["templatePath"], approvedMarkdown: "", approvedMarkdownDigest: digestBytes("") } },
+    contractDigest: digestBytes("contract"),
+  };
+}
+function field(type: ObsidianContractType, extra: Partial<ResolvedField> = {}): ResolvedField {
+  return { property: "value", type, intent: "Approved user meaning", required: false, ...extra };
+}
 
-describe("evaluateResolvedTemplateContract", () => {
-  it("accepts declared values while preserving unknown frontmatter at the caller", () => {
-    const result = evaluateResolvedTemplateContract(
-      { title: "note", source: "https://example.com", status: "draft", created: "2026-08-30", extra: true },
-      template,
-      base,
-    );
-    expect(result).toEqual({ valid: true, violations: [] });
+describe("v4 note mechanical contract", () => {
+  it("keeps template-free notes and undeclared properties without inventing field meaning", () => {
+    const note = { cover_url: 42, arbitrary: { nested: true }, status: "Unmanaged" };
+    const before = structuredClone(note);
+    expect(evaluateResolvedTemplateContract(note, contract(), "free prose")).toEqual({ valid: true, violations: [] });
+    expect(note).toEqual(before);
   });
-
-  it("reports required, allowed-value, and URL-format failures", () => {
-    const result = evaluateResolvedTemplateContract(
-      { title: "", source: "ftp://example.com", status: "published", created: "2026-08-30" },
-      template,
-      base,
-    );
-    expect(result.violations).toEqual(expect.arrayContaining([
-      expect.objectContaining({ field: "title", rule: "required" }),
-      expect.objectContaining({ field: "source", rule: "format" }),
-      expect.objectContaining({ field: "status", rule: "allowed-values" }),
-    ]));
+  it.each<readonly [ObsidianContractType, JsonValue]>([
+    ["text", " x "], ["string", "text"], ["select", "chosen"], ["file", "[[Note]]"],
+    ["number", 0], ["boolean", false], ["checkbox", true], ["date", "2024-02-29"],
+    ["datetime", "2024-02-29T12:30:00+09:00"], ["list", [1, { k: true }]],
+    ["multi", [1, false]], ["multitext", ["a"]], ["tags", ["tag"]], ["aliases", ["Alias"]],
+  ])("accepts declared %s values without normalizing them", (type, value) => {
+    const note = { value };
+    const before = structuredClone(note);
+    expect(evaluateResolvedTemplateContract(note, contract({ value: field(type, { required: true }) }), "").valid).toBe(true);
+    expect(note).toEqual(before);
   });
-
-  it("admits a registered writer identifier", () => {
-    expect(evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30", created_by: "oms-agent" }, template, base, { field: "created_by", identifiers: ["oms-agent"] })).toEqual({ valid: true, violations: [] });
+  it.each<readonly [ObsidianContractType, JsonValue]>([
+    ["text", 1], ["number", "1"], ["number", Infinity], ["boolean", "false"],
+    ["date", "2023-02-29"], ["date", "2024-13-01"], ["date", "tomorrow"],
+    ["datetime", "2024-02-30T12:00:00Z"], ["datetime", "2024-02-29"], ["datetime", "2024-02-29Tbad"],
+    ["tags", [1]], ["multitext", [false]], ["aliases", "one"], ["list", {}],
+  ])("rejects incompatible %s values", (type, value) => {
+    expect(evaluateResolvedTemplateContract({ value }, contract({ value: field(type) }), "").violations)
+      .toEqual([expect.objectContaining({ field: "value", rule: "type" })]);
   });
-
-  it("reports exactly one violation for an unregistered writer identifier", () => {
-    const writerTemplate = { ...template, fields: { ...template.fields, created_by: { type: "text", required: true } } };
-    const result = evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30", created_by: "unknown-agent" }, writerTemplate, base, { field: "created_by", identifiers: ["oms-agent"] });
-    expect(result.violations).toEqual([expect.objectContaining({ field: "created_by", rule: "writer-identity" })]);
-    expect(result.violations[0]?.message).toContain("unknown-agent");
+  it.each([undefined, null, "", "  ", []])("reports missing required values without supplying defaults: %s", value => {
+    const note = value === undefined ? {} : { value };
+    const before = structuredClone(note);
+    expect(evaluateResolvedTemplateContract(note, contract({ value: field("text", { required: true }) }), "").violations)
+      .toEqual([expect.objectContaining({ rule: "required" })]);
+    expect(note).toEqual(before);
   });
-
-  it("enforces the writer field policy and registry independently", () => {
-    const writerTemplate = {
-      ...template,
-      fields: { ...template.fields, created_by: { type: "select", required: true, allowedValues: ["human"] } },
-    };
-    const writers = { field: "created_by", identifiers: ["human", "oms-agent"] };
-
-    const result = evaluateResolvedTemplateContract(
-      { title: "note", created: "2026-08-30", created_by: "oms-agent" },
-      writerTemplate,
-      base,
-      writers,
-    );
-
-    expect(result.valid).toBe(false);
-    expect(result.violations).toEqual([
-      expect.objectContaining({ field: "created_by", rule: "allowed-values" }),
-    ]);
-
-    const unregistered = evaluateResolvedTemplateContract(
-      { title: "note", created: "2026-08-30", created_by: "human" },
-      writerTemplate,
-      base,
-      { field: "created_by", identifiers: ["oms-agent"] },
-    );
-
-    expect(unregistered.valid).toBe(false);
-    expect(unregistered.violations).toEqual([
-      expect.objectContaining({ field: "created_by", rule: "writer-identity" }),
-    ]);
+  it("allows absent optional values and applies enum constraints to each list item", () => {
+    const policy = contract({ value: field("tags", { allowedValues: ["allowed"] }) });
+    expect(evaluateResolvedTemplateContract({}, policy, "").valid).toBe(true);
+    expect(evaluateResolvedTemplateContract({ value: null }, policy, "").valid).toBe(true);
+    expect(evaluateResolvedTemplateContract({ value: ["allowed"] }, policy, "").valid).toBe(true);
+    expect(evaluateResolvedTemplateContract({ value: ["allowed", "other"] }, policy, "").violations)
+      .toEqual([expect.objectContaining({ rule: "allowed-values" })]);
+    expect(evaluateResolvedTemplateContract({ value: "other" }, contract({ value: field("select", { allowedValues: ["allowed"] }) }), "").valid).toBe(false);
   });
-
-  it("reports field policy and writer identity violations when a configured writer field is missing", () => {
-    const writerTemplate = { ...template, fields: { ...template.fields, created_by: { type: "text", required: true } } };
-    const result = evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30" }, writerTemplate, base, { field: "created_by", identifiers: ["oms-agent"] });
-    expect(result.violations).toEqual(expect.arrayContaining([
-      expect.objectContaining({ field: "created_by", rule: "required" }),
-      expect.objectContaining({ field: "created_by", rule: "writer-identity" }),
-    ]));
+  it("enforces only explicitly declared HTTP(S) URL format", () => {
+    const policy = contract({ source: field("text", { format: "url" }) });
+    expect(evaluateResolvedTemplateContract({ source: "https://example.org/path" }, policy, "").valid).toBe(true);
+    for (const source of ["ftp://example.org", "not a url"]) {
+      expect(evaluateResolvedTemplateContract({ source }, policy, "").violations)
+        .toEqual([expect.objectContaining({ field: "source", rule: "format" })]);
+    }
   });
-
-  it("does not enforce writer identity without a registry", () => {
-    expect(evaluateResolvedTemplateContract({ title: "note", created: "2026-08-30", created_by: "unknown-agent" }, template, base)).toEqual({ valid: true, violations: [] });
-  });
-
-  it("threads confirmed body requirements through the field contract", () => {
-    const observed = deriveContentFormatContract("# Required\n<!-- oms:content -->");
-    const heading = observed.contract.nodes.find(node => node.kind === "heading");
-    if (heading === undefined) throw new Error("test fixture did not produce Required heading");
-    const bodyTemplate: ResolvedTemplate = {
-      ...template,
-      body: "# Required\n<!-- oms:content -->",
-      content: deriveContentFormatContract("# Required\n<!-- oms:content -->", {
-        decisions: { nodes: [{ anchorDigest: heading.anchorDigest, required: true }] },
-      }).contract,
-    };
-    const missing = evaluateResolvedTemplateContract(
-      { title: "note", created: "2026-08-30" },
-      bodyTemplate,
-      base,
-      undefined,
-      "# Other\nbody",
-      "update",
-    );
-    expect(missing.valid).toBe(false);
-    expect(missing.violations).toEqual([
-      expect.objectContaining({ field: "body:heading:1:Required", rule: "required" }),
-    ]);
-    expect(evaluateResolvedTemplateContract(
-      { title: "note", created: "2026-08-30", extra: true },
-      bodyTemplate,
-      base,
-      undefined,
-      "ordinary prose with an unknown field-like word",
-      "append",
-    )).toEqual({ valid: true, violations: [] });
-  });
-
-  it("asks when rendered create body omits a confirmed required heading", () => {
-    const observed = deriveContentFormatContract("# Required");
-    const heading = observed.contract.nodes.find(node => node.kind === "heading");
-    if (heading === undefined) throw new Error("test fixture did not produce Required heading");
-    const bodyTemplate: ResolvedTemplate = {
-      ...template,
-      body: "# Required",
-      content: deriveContentFormatContract("# Required", {
-        decisions: { nodes: [{ anchorDigest: heading.anchorDigest, required: true }] },
-      }).contract,
-    };
-    const result = evaluateResolvedTemplateContract(
-      { title: "note", created: "2026-08-30" },
-      bodyTemplate,
-      base,
-      undefined,
-      "# Rendered without section",
-      "create",
-    );
-    expect(result.valid).toBe(false);
-    expect(result.violations[0]).toMatchObject({
-      field: "body:heading:1:Required",
-      rule: "required",
-    });
+  it("validates the entire body on every check rather than bypassing append checks", () => {
+    const policy: ResolvedContract = { ...contract(), headings: [{ headingId: "approved", title: "Approved section", level: 2, required: true, origin: "default" }] };
+    expect(evaluateResolvedTemplateContract({}, policy, "## Approved section\nFree content").valid).toBe(true);
+    expect(evaluateResolvedTemplateContract({}, policy, "only new appended text").violations)
+      .toEqual([expect.objectContaining({ rule: "heading" })]);
+    expect(() => evaluateResolvedTemplateContract({}, policy, undefined as never)).toThrow("complete saved note body");
   });
 });
