@@ -65,6 +65,6 @@ Agent repair is off unless the user policy sets `agentRepair.enabled` and names 
 
 A `templateNotice` uses the first display `템플릿에 변경이 있습니다` and exactly `확인하기` and `나중에`, with no template name, hash, or change list. `나중에` is host-only. `확인하기` offers `/interview` and does not write source bytes or block search.
 
-## Parent alignment
+## Surface
 
-The live `write` schema and `oms note` CLI may still advertise `create`, `append`, `update`, and `backfill`, and may not yet accept `guide`, `check`, or `complete`. Those three names are the approved operations. Do not call the retired note modes, and do not add another public tool. Parent locks the task-binding shape and the reviewer-envelope property name at cutover. Until then, pass the binding guide returns and do not invent field names. Parent also locks `templateId: null` versus omitting it. An empty slash template id must not be sent as `""`.
+The write operations are `guide`, `check`, and `complete`. Note creation, appending, updating, and backfilling do not exist: the agent writes the note and OMS inspects what was saved. Pass the task binding exactly as `guide` returned it; do not invent field names. A note with no template omits `templateId` rather than sending an empty string.

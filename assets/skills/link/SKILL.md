@@ -25,6 +25,6 @@ After the edit, run `link` check. When the edit belongs to a note task, also run
 
 `oms bridge add|remove|status` manages repository bridges and has no `link` operation. Do not route bridge work through `link`.
 
-## Parent alignment
+## Surface
 
-Do not call `op: "apply"`, `baseContentHash`, or `candidateIds` even if the live schema still advertises them. If `op: "check"` is not accepted yet, use `oms link check` and still do not apply through MCP.
+Link is read-only: `op: "suggest"` and `op: "check"`. There is no `apply`, and no `baseContentHash` or `candidateIds`. Applying a suggested link is the agent's own edit to the note.

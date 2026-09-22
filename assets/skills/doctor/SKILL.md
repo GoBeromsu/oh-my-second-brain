@@ -21,6 +21,6 @@ Diagnose `.oms` controls and derived indexes, then run only the repair the user 
 
 Note-contract reporting is `oms note audit`. It is not a note rewrite. Index repairs run only when explicitly requested and do not edit notes. Never self-approve a projection publish.
 
-## Parent alignment
+## Surface
 
-The live doctor schema may still advertise `audit` and `backfill-defaults`. Do not call them. Note reporting is `oms note audit`, and it does not rewrite notes. `validate` remains the read-only control diagnosis.
+`validate` is the read-only control diagnosis and `regenerate-types` is the only guarded repair; it publishes through the reviewed interview transaction. There is no `backfill-defaults`: OMS never rewrites a note. Note reporting is `oms note audit`, which reports and repairs nothing.

@@ -29,7 +29,6 @@ export async function runSetup(opts: {
   installClaude?: boolean;
   dryRun?: boolean;
   approvedDigest?: Digest;
-  templateFolders?: readonly string[];
   prompt?: SetupPrompt;
   /** Strict setup-only acquisition manifest for one or more model capabilities. */
   modelSetManifest?: ModelSetAcquisitionManifest | unknown;

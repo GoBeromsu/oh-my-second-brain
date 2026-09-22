@@ -203,7 +203,7 @@ npm install -g ./oh-my-second-brain-0.14.0.tgz
 
 The automated rehearsal additionally isolates npm cache/config, XDG data,
 runtime journal, and Hermes home; preserves an unrelated custom Hermes setting;
-checks the installed manifest version, seven skill files, canonical
+checks the installed manifest version, eight skill files, canonical
 `serve mcp` registration, and five-tool discovery through the actual new global
 binary. It does not scan active Hermes logs, databases, unrelated profiles, or
 profile home links, which may change concurrently. It never accesses a private

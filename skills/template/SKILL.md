@@ -33,6 +33,6 @@ oms template scan|list|show|check|regenerate-types
 
 `scan`, `list`, `show`, and `check` are read-only. `regenerate-types` republishes the derived projection only, through its dry-run and the exact returned `approvalDigest` submitted as `approvedDigest`. `review`, `answer`, and `commit` belong to `/interview`. Do not self-approve, and do not edit policy, taxonomy, or `.oms/types.json` directly.
 
-## Parent alignment
+## Surface
 
-Live MCP template modes may still include create, update, move, remove, reclassify, default, register-folder, and a renderer. Live CLI may still include `add`, `update`, `move`, and `remove`. Do not call them. Contract changes go through `/interview`.
+The template modes are `interview-next`, `interview-answer`, and `commit-contracts`. Creating, updating, moving, removing, reclassifying, defaulting, and folder registration do not exist, on either MCP or the CLI, and neither does a renderer. Every contract change goes through `/interview`.

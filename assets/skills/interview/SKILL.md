@@ -73,6 +73,10 @@ write {
 
 The first display of a selected-source change is exactly `템플릿에 변경이 있습니다`, with exactly `확인하기` and `나중에` and no template name, hash, or change list. `확인하기` starts this interview. It does not write source bytes or block search.
 
-## Parent alignment
+## Surface
 
-`interview-next`, `interview-answer`, and `commit-contracts` are the approved template mutations. The live schema may still accept create, update, move, remove, and the other authoring modes; do not call them. Answer with exactly `questionId`, `answer`, `censusDigest`, and `expectedLedgerDigest`. The server binds the question anchor. Do not send `anchorDigest` unless parent names that caller field at cutover.
+`interview-next`, `interview-answer`, and `commit-contracts` are the only template mutations.
+
+Contract meaning enters OMS only through the `proposals` array you supply. It is never derived from a file name or from template syntax, so a source the census discovered stays unbound until you propose what it means. Pass the same `proposals` to `interview-next`, `interview-answer`, and `commit-contracts`: commit rebuilds the interview, and an answer whose question cannot be reproduced is refused rather than silently dropped from the published contract.
+
+Answer with `questionId`, `answer`, `censusDigest`, and `expectedLedgerDigest`. The server binds the question anchor; never send `anchorDigest`.

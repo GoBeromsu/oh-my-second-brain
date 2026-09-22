@@ -320,7 +320,7 @@ describe("oms CLI dispatch", () => {
     await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text" } }));
     await mkdir(path.join(vault, "Templates"), { recursive: true });
     await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\n---\nbody\n");
-    const dryRun = runCli(["setup", "--vault", vault, "--template-folder", "Templates", "--dry-run"]);
+    const dryRun = runCli(["setup", "--vault", vault, "--dry-run"]);
     expect(dryRun.status).toBe(0);
     expect(dryRun.stdout).not.toContain("TEMPLATE_PLACEMENT_UNDECLARED");
     expect(dryRun.stdout).toContain("approvalDigest");

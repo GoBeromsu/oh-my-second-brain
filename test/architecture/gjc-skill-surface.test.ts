@@ -58,6 +58,37 @@ describe("Gajae-Code skill surface", () => {
     assertGjcSkillMirror(absolute("assets/skills"), absolute("skills"));
   });
 
+
+  it("never tells an agent that a retired operation may still be live", () => {
+    // Shipped guidance describes the approved surface as final. Transitional
+    // wording that hedges about retired modes teaches the wrong contract and
+    // outlives the cutover.
+    const forbidden = [
+      "Parent alignment",
+      "may still advertise",
+      "may still accept",
+      "may still include",
+      "not yet accept",
+      "until then",
+      "at cutover",
+    ];
+    const skillFiles = regularFiles(absolute("assets/skills")).filter(file => file.endsWith("SKILL.md"));
+    expect(skillFiles.length).toBeGreaterThan(0);
+    for (const relativePath of skillFiles) {
+      const body = readFileSync(path.join(absolute("assets/skills"), relativePath), "utf8").toLowerCase();
+      for (const phrase of forbidden) {
+        expect(body, `${relativePath} still hedges about the retired surface: ${phrase}`).not.toContain(phrase.toLowerCase());
+      }
+    }
+  });
+
+  it("documents the explicit proposal protocol in the interview skill", () => {
+    const body = readFileSync(absolute("assets/skills/interview/SKILL.md"), "utf8");
+    expect(body).toContain("proposals");
+    // Commit rebuilds the interview, so the same proposals must reach it.
+    expect(body).toContain("commit-contracts");
+  });
+
   it("fails closed when an authored scan is empty", () => {
     const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
     fixtures.push(fixture);
