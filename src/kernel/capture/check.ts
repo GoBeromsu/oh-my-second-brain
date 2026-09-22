@@ -281,6 +281,17 @@ function evaluateSavedNote(note: ReadSnapshot, preparation: WritePreparation): E
   return { note, machine: machineEvaluation(result.violations, binding) };
 }
 
+/** The template a saved note declares for itself, or null when it declares none. */
+async function declaredTemplateId(vault: string, notePath: string): Promise<string | null | undefined> {
+  const verified = await verifyVaultNotePath(vault, notePath);
+  // An unsafe path is refused downstream by guidance; identity stays unknown here.
+  if (!verified.ok) return undefined;
+  const parsed = parseNote(await readFile(verified.absolutePath, "utf8"));
+  const declared = parsed.frontmatter["template"];
+  if (typeof declared === "string" && declared.trim() !== "") return declared;
+  return declared === undefined ? null : undefined;
+}
+
 async function resolvePreparation(
   request: Pick<CheckRequest, "target" | "notePath" | "templateId">,
 ): Promise<{ readonly preparation: WritePreparation; readonly vaultRoot: string } | { readonly rejection: CheckRejection }> {
@@ -313,9 +324,22 @@ export async function checkSavedNote(request: CheckRequest): Promise<CheckReport
   const admission = await admitWriteTarget(request.target);
   if (admission !== undefined) return { ...empty, status: "rejected", rejection: reject("TARGET_UNVERIFIED", admission.message) };
 
+  // The saved note declares its own identity. When the caller does not name a
+  // template, that declaration decides the contract; otherwise a note bound to
+  // a template would be checked against the default layer alone and its
+  // template's rules would go unreported.
+  let templateId = request.templateId;
+  if (templateId === undefined) {
+    try {
+      templateId = await declaredTemplateId(request.target.vault, request.notePath);
+    } catch {
+      templateId = undefined;
+    }
+  }
+
   let resolved: Awaited<ReturnType<typeof resolvePreparation>>;
   try {
-    resolved = await resolvePreparation(request);
+    resolved = await resolvePreparation({ ...request, ...(templateId === undefined ? {} : { templateId }) });
   } catch (error: unknown) {
     return { ...empty, status: "rejected", rejection: contractRejection(error) };
   }
