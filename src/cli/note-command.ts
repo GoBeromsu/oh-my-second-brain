@@ -1,33 +1,26 @@
-import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
-import { writeResolvedTemplateNote } from "../kernel/capture/safe.js";
-import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
+import { checkSavedNote, completeSavedNote } from "../kernel/capture/check.js";
+import { getWriteGuidance, prepareApprovedWrite } from "../kernel/capture/guidance.js";
+import { admitWriteTarget, verifyVaultNotePath, type WriteTarget } from "../kernel/capture/safe.js";
+import type { WriteRejection } from "../kernel/conventions/write-protocol.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
-import { backfillDefaults } from "../kernel/templates/doctor.js";
 import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
-import type { Digest, JsonValue } from "../kernel/templates/types.js";
 import { runAudit } from "./audit.js";
 import { getNoteDocuments } from "./doc-command.js";
 
-const DIGEST = /^sha256:[0-9a-f]{64}$/u;
-const MAX_INPUT_BYTES = 1_048_576;
 const VALUE_FLAGS = new Set([
-  "vault", "body", "body-file", "frontmatter", "frontmatter-file", "resolved-at",
-  "folder", "max-per-template", "approved-digest", "note-path", "collection",
-  "from-line", "line-count", "line-limit", "max-bytes",
+  "vault", "note-path", "template-id", "binding", "checkpoint", "review", "evidence-path",
+  "folder", "max-per-template", "collection", "from-line", "line-count", "line-limit", "max-bytes",
 ]);
-const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "json", "line-numbers", "full-path", "help"]);
+const BOOLEAN_FLAGS = new Set(["json", "line-numbers", "full-path", "help"]);
+const REPEATABLE_FLAGS = new Set(["evidence-path"]);
 
-type Options = Readonly<Record<string, string | boolean>>;
+type Options = Readonly<Record<string, string | boolean | readonly string[]>>;
 interface Parsed {
   readonly verb: string;
   readonly positional: readonly string[];
   readonly options: Options;
-}
-interface Target {
-  readonly vault: string;
-  readonly source: WriteTargetSource;
 }
 
 function fail(message: string): never {
@@ -37,7 +30,7 @@ function fail(message: string): never {
 function parse(argv: readonly string[]): Parsed {
   if (argv.length === 0) fail("missing note verb");
   const positional: string[] = [];
-  const options: Record<string, string | boolean> = {};
+  const options: Record<string, string | boolean | string[]> = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]!;
     if (!token.startsWith("--")) {
@@ -47,13 +40,19 @@ function parse(argv: readonly string[]): Parsed {
     }
     const name = token.slice(2);
     if (!VALUE_FLAGS.has(name) && !BOOLEAN_FLAGS.has(name)) fail(`unknown flag --${name}`);
-    if (Object.hasOwn(options, name)) fail(`duplicate flag --${name}`);
     if (BOOLEAN_FLAGS.has(name)) {
+      if (Object.hasOwn(options, name)) fail(`duplicate flag --${name}`);
       options[name] = true;
       continue;
     }
     const value = argv[++index];
     if (value === undefined || value.startsWith("--")) fail(`--${name} requires a value`);
+    if (REPEATABLE_FLAGS.has(name)) {
+      const current = options[name];
+      options[name] = [...(Array.isArray(current) ? current : []), value];
+      continue;
+    }
+    if (Object.hasOwn(options, name)) fail(`duplicate flag --${name}`);
     options[name] = value;
   }
   return { verb: argv[0]!, positional, options };
@@ -62,6 +61,11 @@ function parse(argv: readonly string[]): Parsed {
 function text(options: Options, name: string): string | undefined {
   const value = options[name];
   return typeof value === "string" ? value : undefined;
+}
+
+function values(options: Options, name: string): readonly string[] {
+  const value = options[name];
+  return Array.isArray(value) ? value : [];
 }
 
 function flag(options: Options, name: string): boolean {
@@ -77,40 +81,11 @@ function only(parsed: Parsed, allowed: readonly string[], positional: number | r
   }
 }
 
-async function target(options: Options): Promise<Target> {
+async function target(options: Options): Promise<WriteTarget> {
   const explicit = text(options, "vault");
   if (explicit !== undefined) return { vault: path.resolve(explicit), source: "explicit" };
   const resolved = await resolveEffectiveVault(process.cwd(), process.env);
   return { vault: resolved.vault, source: resolved.source };
-}
-
-async function boundedText(filename: string): Promise<string> {
-  const size = (await stat(filename)).size;
-  if (size > MAX_INPUT_BYTES) fail(`input file exceeds ${MAX_INPUT_BYTES} bytes`);
-  const bytes = await readFile(filename);
-  if (bytes.byteLength > MAX_INPUT_BYTES) fail(`input file exceeds ${MAX_INPUT_BYTES} bytes`);
-  return bytes.toString("utf8");
-}
-
-async function exclusiveText(options: Options, inlineName: string, fileName: string): Promise<string | undefined> {
-  const inline = text(options, inlineName);
-  const filename = text(options, fileName);
-  if (inline !== undefined && filename !== undefined) fail(`--${inlineName} conflicts with --${fileName}`);
-  return inline ?? (filename === undefined ? undefined : boundedText(filename));
-}
-
-function frontmatterObject(raw: string | undefined): Readonly<Record<string, JsonValue>> | undefined {
-  if (raw === undefined) return undefined;
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    fail("--frontmatter input must be valid JSON");
-  }
-  if (value === null || Array.isArray(value) || typeof value !== "object") {
-    fail("--frontmatter input must be a JSON object");
-  }
-  return value as Readonly<Record<string, JsonValue>>;
 }
 
 function positiveInteger(options: Options, name: string): number | undefined {
@@ -122,59 +97,143 @@ function positiveInteger(options: Options, name: string): number | undefined {
   return value;
 }
 
+function jsonOption(options: Options, name: string): unknown | undefined {
+  const raw = text(options, name);
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    fail(`--${name} must be valid JSON`);
+  }
+}
+
+function notePathArg(parsed: Parsed): string | undefined {
+  const flagged = text(parsed.options, "note-path");
+  const positional = parsed.positional[0];
+  if (flagged !== undefined && positional !== undefined) fail("--note-path conflicts with a positional path");
+  return flagged ?? positional;
+}
+
+function evidencePaths(options: Options): readonly string[] {
+  return values(options, "evidence-path");
+}
+
+function overlayEvidence(checkpoint: unknown, paths: readonly string[]): unknown {
+  if (paths.length === 0) return checkpoint;
+  if (checkpoint === null || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
+    fail("--checkpoint must be a JSON object when --evidence-path is set");
+  }
+  return { ...(checkpoint as Record<string, unknown>), evidencePaths: paths };
+}
+
+function admissionReport(admission: WriteRejection): unknown {
+  return {
+    status: "rejected",
+    rejection: {
+      code: "TARGET_UNVERIFIED",
+      message: admission.message,
+      remediation: admission.remediation,
+    },
+  };
+}
+
+function pathReport(rejection: WriteRejection): unknown {
+  return {
+    status: "rejected",
+    rejection: {
+      code: rejection.code === "target-invalid" ? "TARGET_INVALID" : "PATH_UNSAFE",
+      message: rejection.message,
+      remediation: rejection.remediation,
+    },
+  };
+}
+
 function print(value: unknown): void {
   const status = value !== null && typeof value === "object" && "status" in value
     ? (value as { readonly status?: unknown }).status
     : undefined;
-  if (status === "ask" || status === "rejected" || status === "needs-repair") process.exitCode = 1;
+  if (
+    status === "ask" || status === "rejected" || status === "needs-repair" || status === "needs-path"
+    || status === "fail" || status === "incomplete"
+  ) process.exitCode = 1;
   console.log(JSON.stringify(value, null, 2));
 }
 
-async function runWrite(parsed: Parsed): Promise<void> {
-  if (parsed.verb !== "create" && parsed.verb !== "append" && parsed.verb !== "update") {
-    fail(`unknown write verb ${parsed.verb}`);
+async function prepareGuide(resolved: WriteTarget, notePath: string, templateId: string | null): Promise<void> {
+  const verified = await verifyVaultNotePath(resolved.vault, notePath);
+  if (!verified.ok) return;
+  try {
+    const snapshot = await loadResolvedTemplates(verified.vaultRoot);
+    prepareApprovedWrite({
+      vaultRealPath: snapshot.vault,
+      notePath: verified.notePath,
+      snapshot,
+      templateId,
+    });
+  } catch {
+    // getWriteGuidance maps the same load and contract failures into the printed report.
   }
-  const mode = parsed.verb;
-  const common = ["vault", "dry-run", "body", "body-file", "resolved-at"];
-  if (mode === "create") {
-    only(parsed, [...common, "frontmatter", "frontmatter-file", "folder"], [0, 1]);
-  } else if (mode === "append") {
-    only(parsed, common, 1);
-  } else {
-    only(parsed, [...common, "frontmatter", "frontmatter-file"], 1);
-  }
-  const body = await exclusiveText(parsed.options, "body", "body-file");
-  const frontmatter = frontmatterObject(await exclusiveText(parsed.options, "frontmatter", "frontmatter-file"));
-  if ((mode === "create" || mode === "append") && body === undefined) fail(`${mode} requires --body or --body-file`);
-  if (mode === "update" && body === undefined && frontmatter === undefined) fail("update requires body or frontmatter input");
+}
+
+async function runGuide(parsed: Parsed): Promise<void> {
+  only(parsed, ["vault", "note-path", "template-id"], [0, 1]);
+  const notePath = notePathArg(parsed);
+  const templateId = text(parsed.options, "template-id");
   const resolved = await target(parsed.options);
-  const convention = await loadResolvedTemplates(resolved.vault);
-  print(await writeResolvedTemplateNote({
+  const admission = await admitWriteTarget(resolved);
+  if (admission === undefined && notePath !== undefined) {
+    await prepareGuide(resolved, notePath, templateId ?? null);
+  }
+  print(await getWriteGuidance({
     target: resolved,
-    convention,
-    mode,
-    dryRun: flag(parsed.options, "dry-run"),
-    ...(mode === "create"
-      ? { ...(parsed.positional[0] === undefined ? {} : { templateId: parsed.positional[0] }), ...(text(parsed.options, "folder") === undefined ? {} : { targetFolder: text(parsed.options, "folder") }) }
-      : { notePath: parsed.positional[0] }),
-    ...(body === undefined ? {} : { body }),
-    ...(frontmatter === undefined ? {} : { frontmatter }),
-    ...(text(parsed.options, "resolved-at") === undefined ? {} : { resolvedAt: text(parsed.options, "resolved-at") }),
+    ...(notePath === undefined ? {} : { notePath }),
+    ...(templateId === undefined ? {} : { templateId }),
   }));
 }
 
-function backfillGuard(options: Options): { readonly dryRun: true } | { readonly approvedDigest: Digest } {
-  const dryRun = flag(options, "dry-run");
-  const yes = flag(options, "yes");
-  const approvedDigest = text(options, "approved-digest");
-  if (dryRun) {
-    if (yes || approvedDigest !== undefined) fail("--dry-run conflicts with --yes and --approved-digest");
-    return { dryRun: true };
+async function runCheck(parsed: Parsed): Promise<void> {
+  only(parsed, ["vault", "note-path", "template-id", "binding", "evidence-path"], [0, 1]);
+  const notePath = notePathArg(parsed);
+  if (notePath === undefined) fail("check requires a note path");
+  const resolved = await target(parsed.options);
+  const admission = await admitWriteTarget(resolved);
+  if (admission !== undefined) {
+    print(admissionReport(admission));
+    return;
   }
-  if (!yes || approvedDigest === undefined || !DIGEST.test(approvedDigest)) {
-    fail("backfill requires --dry-run or --yes --approved-digest sha256:<64hex>");
+  const verified = await verifyVaultNotePath(resolved.vault, notePath);
+  if (!verified.ok) {
+    print(pathReport(verified.rejection));
+    return;
   }
-  return { approvedDigest: approvedDigest as Digest };
+  const binding = jsonOption(parsed.options, "binding");
+  const templateId = text(parsed.options, "template-id");
+  print(await checkSavedNote({
+    target: resolved,
+    notePath: verified.notePath,
+    ...(templateId === undefined ? {} : { templateId }),
+    ...(binding === undefined ? {} : { binding }),
+    evidencePaths: evidencePaths(parsed.options),
+  }));
+}
+
+async function runComplete(parsed: Parsed): Promise<void> {
+  only(parsed, ["vault", "checkpoint", "review", "evidence-path"], 0);
+  const checkpoint = jsonOption(parsed.options, "checkpoint");
+  const review = jsonOption(parsed.options, "review");
+  if (checkpoint === undefined) fail("complete requires --checkpoint");
+  if (review === undefined) fail("complete requires --review");
+  const resolved = await target(parsed.options);
+  const admission = await admitWriteTarget(resolved);
+  if (admission !== undefined) {
+    print(admissionReport(admission));
+    return;
+  }
+  print(await completeSavedNote({
+    target: resolved,
+    checkpoint: overlayEvidence(checkpoint, evidencePaths(parsed.options)),
+    review,
+  }));
 }
 
 async function runGet(parsed: Parsed): Promise<void> {
@@ -210,8 +269,16 @@ async function runGet(parsed: Parsed): Promise<void> {
 }
 
 async function run(parsed: Parsed): Promise<void> {
-  if (parsed.verb === "create" || parsed.verb === "append" || parsed.verb === "update") {
-    await runWrite(parsed);
+  if (parsed.verb === "guide") {
+    await runGuide(parsed);
+    return;
+  }
+  if (parsed.verb === "check") {
+    await runCheck(parsed);
+    return;
+  }
+  if (parsed.verb === "complete") {
+    await runComplete(parsed);
     return;
   }
   if (parsed.verb === "audit") {
@@ -225,16 +292,6 @@ async function run(parsed: Parsed): Promise<void> {
     });
     return;
   }
-  if (parsed.verb === "backfill") {
-    only(parsed, ["vault", "dry-run", "yes", "approved-digest"], 1);
-    const resolved = await target(parsed.options);
-    print(await backfillDefaults({
-      target: resolved,
-      notePath: parsed.positional[0]!,
-      request: backfillGuard(parsed.options),
-    }));
-    return;
-  }
   if (parsed.verb === "get") {
     await runGet(parsed);
     return;
@@ -245,11 +302,12 @@ async function run(parsed: Parsed): Promise<void> {
 export function noteUsage(): string {
   return `Usage: oms note <verb> [options]
 
-  create [template-id] --body <text>|--body-file <file> [--frontmatter <json>|--frontmatter-file <file>] [--folder <note-folder>]
-  append <note-path> --body <text>|--body-file <file>
-  update <note-path> [--body <text>|--body-file <file>] [--frontmatter <json>|--frontmatter-file <file>]
-  audit [--folder <folder>] [--max-per-template <count>]
-  backfill <note-path> (--dry-run | --yes --approved-digest <digest>)
+Leaves: guide | check | complete | audit | get
+
+  guide [--note-path <path>] [--template-id <id>] [--vault <vault>]
+  check <note-path> [--template-id <id>] [--binding <json>] [--evidence-path <path>] [--vault <vault>]
+  complete --checkpoint <json> --review <json> [--evidence-path <path>] [--vault <vault>]
+  audit [--folder <folder>] [--max-per-template <count>] [--json] [--vault <vault>]
   get <target...> | get --note-path <path> (--from-line <line>|--line-count <count>)`;
 }
 
