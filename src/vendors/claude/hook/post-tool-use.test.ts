@@ -1,33 +1,60 @@
-import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { deriveContentFormatContract } from "../../../kernel/templates/content-contract.js";
-import { sharedAuthoritySignature, sourceSignature } from "../../../kernel/templates/resolver.js";
-import type { Digest } from "../../../kernel/templates/types.js";
+import { digestBytes } from "../../../kernel/templates/canonical.js";
+import { parseTemplatePolicy, serializeDerivedProjection } from "../../../kernel/templates/policy.js";
+import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "../../../kernel/templates/resolver.js";
 import { auditNote } from "./post-tool-use.js";
 
 const roots: string[] = [];
-const sha = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
+const encoder = new TextEncoder();
+const TEMPLATE_MARKDOWN = "---\ntemplate: note\ntitle: template\n---\nbody\n";
+const RAW_SOURCE = "<%* raw template %>\n";
+
+function layer(templatePath: string, markdown: string, extra: Record<string, unknown> = {}) {
+  return {
+    templatePath,
+    approvedMarkdown: markdown,
+    approvedMarkdownDigest: digestBytes(markdown),
+    fields: {},
+    headings: [],
+    semanticCriteria: [],
+    ...extra,
+  };
+}
 
 async function vault(notes: Record<string, string> = {}): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "oms-claude-hook-"));
   roots.push(root);
-  await Promise.all([".oms", ".obsidian", "Templates", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
-  const policy = `${JSON.stringify({ version: 3, templateFolders: [{ path: "Templates", default: true }], base: { fields: {} }, contracts: { note: { intent: "note", fields: { title: { required: true, type: "text" } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", sourceFolder: "Templates", sourcePath: "Templates/note.md", contract: "note", naming: "{{slug}}.md" } } })}\n`;
-  const taxonomy = JSON.stringify({ folders: { notes: { template: "note" } } });
-  const obsidian = "{\"title\":\"text\"}\n";
-  const template = "---\ntitle: template\n---\nbody\n";
-  const descriptors = [{ logicalId: "template-policy", signature: sha(policy) }, { logicalId: "taxonomy", signature: sha(taxonomy) }, { logicalId: "obsidian-types", signature: sha(obsidian) }, { path: "Templates/note.md", signature: sha(template) }];
-  const content = deriveContentFormatContract("body\n", { templateId: "note" }).contract;
-  const projection = `${JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(descriptors), sharedAuthoritySignature: sharedAuthoritySignature(descriptors), sources: descriptors }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/note.md", targetFolder: "notes", keyOrder: ["title"], fields: { title: { required: true, type: "text" } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } }, null, 2)}\n`;
+  await Promise.all([".oms/templates", ".obsidian", "Sources", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
+  const policy = JSON.stringify({
+    version: 4,
+    properties: { title: { type: "text", intent: "Note title." } },
+    default: layer(".oms/templates/default.md", ""),
+    templates: {
+      note: layer(".oms/templates/note.md", TEMPLATE_MARKDOWN, {
+        templateId: "note",
+        fields: { title: { property: "title", required: true } },
+        source: { path: "Sources/note.md", identity: "note-source", rawDigest: digestBytes(RAW_SOURCE) },
+      }),
+    },
+  });
+  const taxonomy = JSON.stringify({ templates: { note: { templateFolder: "notes" } }, folders: { notes: { intent: "Notes." } } });
+  const obsidian = "{\"types\":{\"title\":\"text\"}}\n";
+  const generationDigest = controlGenerationDigest(encoder.encode(policy), encoder.encode(taxonomy));
   await Promise.all([
     writeFile(path.join(root, ".oms", "template-policy.json"), policy, "utf8"),
     writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy, "utf8"),
-    writeFile(path.join(root, ".oms", "types.json"), projection, "utf8"),
+    writeFile(path.join(root, ".oms", "types.json"), serializeDerivedProjection({
+      version: "oms.types.v2",
+      generatedFrom: generationDigest,
+      managed: expectedProjectionManaged(parseTemplatePolicy(policy), taxonomyRouting(".oms/taxonomy.json", encoder.encode(taxonomy)), generationDigest),
+    }), "utf8"),
+    writeFile(path.join(root, ".oms", "templates", "default.md"), "", "utf8"),
+    writeFile(path.join(root, ".oms", "templates", "note.md"), TEMPLATE_MARKDOWN, "utf8"),
     writeFile(path.join(root, ".obsidian", "types.json"), obsidian, "utf8"),
-    writeFile(path.join(root, "Templates", "note.md"), template, "utf8"),
+    writeFile(path.join(root, "Sources", "note.md"), RAW_SOURCE, "utf8"),
     ...Object.entries(notes).map(([relative, content]) => writeFile(path.join(root, relative), content, "utf8")),
   ]);
   return root;
@@ -57,31 +84,51 @@ describe("Claude PostToolUse template audit", () => {
     expect(await tree(root)).toEqual(before);
   });
 
-  it("accepts a note with a valid stable template ID", async () => {
+  it("accepts a note bound to a registered template", async () => {
     const root = await vault({ "notes/one.md": "---\ntemplate: note\ntitle: One\n---\nBody\n" });
     await expect(auditNote(root, "notes/one.md")).resolves.toEqual([]);
   });
 
-  it("warns for a legacy concept-only note without falling back", async () => {
-    const root = await vault({ "notes/one.md": "---\nconcept: note\ntitle: One\n---\nBody\n" });
+  it("accepts an unbound note under the always-on default layer", async () => {
+    const root = await vault({ "notes/plain.md": "Ordinary note with no frontmatter.\n" });
+    await expect(auditNote(root, "notes/plain.md")).resolves.toEqual([]);
+  });
+
+  it("reports a missing required field without repairing the note", async () => {
+    const note = "---\ntemplate: note\n---\nBody\n";
+    const root = await vault({ "notes/one.md": note });
     await expect(auditNote(root, "notes/one.md")).resolves.toEqual([
-      expect.stringContaining("legacy concept-only frontmatter"),
+      expect.stringContaining('does not yet satisfy template "note"'),
+    ]);
+    expect(await readFile(path.join(root, "notes", "one.md"), "utf8")).toBe(note);
+  });
+
+  it("rejects an unknown or non-string template identity without guessing one", async () => {
+    const root = await vault({
+      "notes/unknown.md": "---\ntemplate: ghost\n---\nBody\n",
+      "notes/numeric.md": "---\ntemplate: 1\n---\nBody\n",
+    });
+    await expect(auditNote(root, "notes/unknown.md")).resolves.toEqual([
+      expect.stringContaining('unknown template "ghost"'),
+    ]);
+    await expect(auditNote(root, "notes/numeric.md")).resolves.toEqual([
+      expect.stringContaining("non-string template identity"),
     ]);
   });
 
-  it("guides doctor operations for a managed template source", async () => {
+  it("points a raw template source at contract review", async () => {
     const root = await vault();
-    await expect(auditNote(root, "Templates/note.md")).resolves.toEqual([
-      expect.stringContaining("validate"),
+    await expect(auditNote(root, "Sources/note.md")).resolves.toEqual([
+      expect.stringContaining("oms template review"),
     ]);
   });
 
-  it("reports a malformed projection without throwing", async () => {
+  it("reports an unreadable contract without throwing", async () => {
     const root = await vault({ "notes/one.md": "---\ntemplate: note\ntitle: One\n---\nBody\n" });
     await writeFile(path.join(root, ".oms", "types.json"), "{", "utf8");
 
     await expect(auditNote(root, "notes/one.md")).resolves.toEqual([
-      expect.stringContaining("Cannot read the resolved template projection"),
+      expect.stringContaining("Cannot read the approved contract"),
     ]);
   });
 

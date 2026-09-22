@@ -22,45 +22,44 @@ function guidance(lines: readonly string[]): string[] {
 }
 
 /**
- * Evaluates a changed markdown note against the resolved template convention.
- * This function is intentionally read-only: repairs belong to doctor operations.
+ * Advisory check of a note the agent just saved.
+ *
+ * The hook never blocks or repairs a save: it reports what the approved
+ * contract says about the bytes on disk. An unbound note is checked against the
+ * always-on default layer, which is the correct contract for it.
  */
 export async function auditNote(vault: string, relPath: string): Promise<string[]> {
   try {
-    const convention = await loadResolvedTemplates(vault);
+    const snapshot = await loadResolvedTemplates(vault);
     const normalizedPath = relPath.replaceAll("\\", "/");
-    const managedSource = Object.values(convention.templates).find(template =>
-      template.destinationClass === "managed-default" && template.sourcePath === normalizedPath,
-    );
+    const managedSource = snapshot.sources.find(freshness => freshness.source.path === normalizedPath);
     if (managedSource !== undefined) {
       return guidance([
-        `${normalizedPath} is a managed template source; run oms_doctor validate, then regenerate-types through its approved operation.`,
+        `${normalizedPath} is a raw template source; review it with oms template review before publishing a contract change.`,
       ]);
     }
 
     const raw = await readFile(safeVaultNotePath(vault, normalizedPath), "utf8");
-    const { frontmatter } = parseNote(raw);
-    const templateId = frontmatter["template"];
-    if (typeof templateId !== "string" || templateId.trim() === "") {
-      if (Object.hasOwn(frontmatter, "concept")) {
-        return guidance([`${normalizedPath} has legacy concept-only frontmatter; add a stable template ID through oms_doctor backfill-defaults.`]);
-      }
-      return guidance([`${normalizedPath} is missing a stable template ID; add frontmatter template: <id>.`]);
+    const { frontmatter, body } = parseNote(raw);
+    const identity = frontmatter["template"];
+    if (identity !== undefined && typeof identity !== "string") {
+      return guidance([`${normalizedPath} declares a non-string template identity; use template: <id> or omit it.`]);
     }
-
-    const template = convention.templates[templateId];
-    if (template === undefined) {
-      return guidance([`${normalizedPath} references unknown template "${templateId}"; use a stable ID from the resolved template convention.`]);
+    const templateId = typeof identity === "string" && identity.trim() !== "" ? identity : null;
+    if (templateId !== null && snapshot.templates[templateId] === undefined) {
+      return guidance([`${normalizedPath} references unknown template "${templateId}"; use a registered template id or omit the field.`]);
     }
+    const contract = templateId === null ? snapshot.defaultContract : snapshot.templates[templateId]!;
 
-    const result = evaluateResolvedTemplateContract(frontmatter as Record<string, JsonValue>, template, convention.base, convention.writers);
+    const result = evaluateResolvedTemplateContract(frontmatter as Record<string, JsonValue>, contract, body);
     if (result.valid) return [];
+    const label = templateId === null ? "the default contract" : `template "${templateId}"`;
     return guidance([
-      `${normalizedPath} violates template "${templateId}": ${result.violations.map(violation => `${violation.field} (${violation.rule})`).join(", ")}.`,
+      `${normalizedPath} does not yet satisfy ${label}: ${result.violations.map(violation => `${violation.field} (${violation.rule})`).join(", ")}.`,
     ]);
   } catch (error) {
     return guidance([
-      `Cannot read the resolved template projection for ${relPath}: ${diagnostic(error)}. Run oms_doctor validate, then regenerate-types through its approved operation.`,
+      `Cannot read the approved contract for ${relPath}: ${diagnostic(error)}. Run oms template check, then publish the reviewed contract.`,
     ]);
   }
 }
