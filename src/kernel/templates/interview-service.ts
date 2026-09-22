@@ -382,14 +382,25 @@ function composeProposedPolicy(census: CensusResult, interview: TemplateIntervie
     }
     const approved = census.approvedPolicy;
     if (approved === null) return undefined;
+    const templates: Record<string, unknown> = { ...approved.templates };
+    for (const item of individuals) {
+      const existing = approved.templates[item.templateId];
+      templates[item.templateId] = existing === undefined
+        ? individualLayer(item)
+        : {
+          ...existing,
+          fields: { ...existing.fields, ...item.fields },
+          headings: [...existing.headings, ...item.headings],
+          semanticCriteria: [...existing.semanticCriteria, ...item.semanticCriteria],
+          ...(item.headingOrder === null ? {} : { headingOrder: item.headingOrder }),
+          ...(item.source === null ? {} : { source: item.source }),
+        };
+    }
     return parseTemplatePolicy({
       version: 4,
       properties: { ...approved.properties, ...(pool?.kind === "pool" ? pool.properties : {}) },
       default: approved.default,
-      templates: {
-        ...approved.templates,
-        ...Object.fromEntries(individuals.map(item => [item.templateId, individualLayer(item)])),
-      },
+      templates,
       completion: completion?.kind === "completion"
         ? { retryBudget: completion.retryBudget, agentRepair: completion.agentRepair }
         : approved.completion,
@@ -437,8 +448,11 @@ async function resultFromModel(
     diagnostics: model.diagnostics,
   };
   if (interview.next !== undefined) return { state: "question", next: interview.next, ...base };
-  if (census.authority === "invalid" || blocking(model.diagnostics) || model.proposedPolicy === undefined) {
+  if (census.authority === "invalid" || blocking(model.diagnostics)) {
     return { state: "blocked", ...base };
+  }
+  if (model.proposedPolicy === undefined) {
+    return { state: census.authority === "absent" ? "blocked" : "unchanged", ...base };
   }
   const manifest = await composeCommitManifest(census, model.proposedPolicy, interview);
   if (manifest.outputs.length === 0) {
@@ -724,7 +738,10 @@ export async function answerTemplateInterview(
         if (question === undefined || question.questionId !== request.questionId) stale("the answer does not match the current interview question");
         let accepted: TemplateInterviewAnswer;
         try {
-          accepted = validateInterviewAnswer(question, request.answer);
+          const payload = typeof request.answer === "string"
+            ? { disposition: "confirm" as const, raw: request.answer }
+            : request.answer;
+          accepted = validateInterviewAnswer(question, payload);
         } catch (error: unknown) {
           questionEvent(
             census.vault,

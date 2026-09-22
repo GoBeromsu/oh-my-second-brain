@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { admitWriteTarget, type WriteTarget } from "../capture/safe.js";
@@ -266,6 +267,13 @@ export async function withInterviewLedgerLock<T>(
   if (typeof callback !== "function") throw new TypeError("Interview ledger lock callback is required");
 
   const paths = await verifyWritePaths(target);
+  // A refused answer must leave the vault exactly as it was, so directories
+  // created only to hold the lock are removed again when nothing was published.
+  const created: string[] = [];
+  for (let directory = paths.lockDirectory; directory.startsWith(paths.vault) && directory !== paths.vault; directory = dirname(directory)) {
+    if (!existsSync(directory)) created.push(directory);
+  }
+  let persisted = false;
   const token = await acquireTransactionLock(paths.lockDirectory, paths.lock);
   if (token === null) stale("the interview ledger is busy; re-read before retrying");
 
@@ -291,6 +299,7 @@ export async function withInterviewLedgerLock<T>(
       }
       const bytes = serializedLedger(nextLedger);
       await atomicWrite(paths.ledger, bytes);
+      persisted = true;
       currentDigest = digest(bytes);
       return { ledger: nextLedger, digest: currentDigest };
     };
@@ -305,5 +314,12 @@ export async function withInterviewLedgerLock<T>(
     });
   } finally {
     await releaseTransactionLock(paths.lock, token);
+    if (!persisted) {
+      // Deepest first. rmdir removes an empty directory only, so any vault
+      // content that already existed stops the cleanup instead of being deleted.
+      for (const directory of created) {
+        await rmdir(directory).catch(() => undefined);
+      }
+    }
   }
 }

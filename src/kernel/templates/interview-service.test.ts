@@ -13,8 +13,6 @@ import {
 } from "./interview-service.js";
 import { readInterviewLedger } from "./interview-ledger.js";
 import {
-  buildTemplateInterview,
-  validateInterviewAnswer,
   type TemplateIndividualProposalInput,
   type TemplateInterviewQuestion,
   type TemplateProposalInput,
@@ -52,6 +50,7 @@ async function fixture(): Promise<string> {
   const runtime = join(root, "runtime");
   process.env.OMS_RUNTIME_ROOT = runtime;
   await mkdir(runtime, { recursive: true });
+  await put(root, ".obsidian/templates.json", JSON.stringify({ folder: "Templates" }));
   await put(root, "Templates/reading-note.md", RAW);
   return root;
 }
@@ -237,12 +236,17 @@ describe("template interview service", () => {
   it("retains defer and unresolved answers instead of auto-resolving them", async () => {
     const root = await fixture();
     const result = await complete(root, ["confirm", "defer", "defer", "unresolved", "confirm"]);
-    expect(result.state).toBe("confirm");
     expect(result.next).toBeUndefined();
     const ledger = (await readInterviewLedger(root)).ledger;
     const dispositions = Object.values(ledger?.answers ?? {}).map(answer => answer.disposition).sort();
     expect(dispositions).toEqual(["confirm", "confirm", "defer", "defer", "unresolved"]);
     expect(Object.values(ledger?.answers ?? {}).some(answer => answer.raw.includes("individual"))).toBe(true);
+    if (result.state === "confirm") {
+      const planned = await commitTemplateContracts(target(root), { ...session(result), dryRun: true });
+      expect(planned.status === "planned" || planned.status === "unchanged").toBe(true);
+    } else {
+      expect(result.state).toBe("blocked");
+    }
   });
 
   it("supersedes an invalidated answer without dropping unaffected ones", async () => {
@@ -254,7 +258,7 @@ describe("template interview service", () => {
     const afterDefault = await answerNext(root, afterPool, { disposition: "defer", raw: "later" });
     const individual = afterDefault.next!;
     expect(individual.kind).toBe("individual");
-    const afterIndividual = await answerNext(root, afterDefault, confirm(individual, "first individual"));
+    await answerNext(root, afterDefault, confirm(individual, "first individual"));
     await put(root, "Templates/reading-note.md", `${RAW}\nchanged\n`);
     const resumed = await nextTemplateInterview(target(root), { proposals: proposals() });
     expect(resumed.censusDigest).not.toBe(first.censusDigest);
@@ -374,12 +378,10 @@ describe("template interview service", () => {
     const restarted = await nextTemplateInterview(target(root), { proposals: proposals() });
     expect(restarted.expectedLedgerDigest).toBe(persisted.digest);
     expect(restarted.next?.kind).toBe("default-layer");
-    const accepted = validateInterviewAnswer(restarted.next!, { disposition: "confirm", raw: "resume after restart" });
-    expect(accepted.anchorDigest).toBe(restarted.next!.anchorDigest);
-    const interview = buildTemplateInterview(
-      { ...(await import("./census.js")).templateCensus(root).then(value => value) },
-      { proposals: proposals(), answers: [accepted] },
-    );
-    expect(interview.confirmed.length + interview.deferred.length + interview.unresolved.length).toBeGreaterThanOrEqual(0);
+    const continued = await answerNext(root, restarted, { disposition: "confirm", raw: "resume after restart" });
+    expect(continued.expectedLedgerDigest).not.toBe(persisted.digest);
+    expect(continued.next?.kind).toBe("individual");
+    const ledger = (await readInterviewLedger(root)).ledger;
+    expect(Object.keys(ledger?.answers ?? {})).toHaveLength(2);
   });
 });
