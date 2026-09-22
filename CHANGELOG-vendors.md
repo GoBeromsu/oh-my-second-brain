@@ -4,6 +4,9 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- Codex installs an optional provenance-owned reviewer role while preserving unowned collisions; a genuine generic separate subagent remains valid without custom-role discovery. Dry-run skill paths now match the eight installed shared skills.
+- Hermes guidance uses its native fresh-conversation delegation with inherited tools and explicit non-modification instructions, without claiming unavailable sandbox enforcement.
+
 ## [0.15.0] - 2026-09-19
 
 - **Claude, Codex, and Hermes guidance now aligns with folder-sourced template contracts.** Each native host surface explains selected-folder census without per-file registration or folder modes, the exact minimal notice and host-only `나중에`, and the resumable `interview-next` → `interview-answer` → `commit-contracts` flow. Review preserves source bytes and publishes only user-confirmed controls; affected-template pending remains scoped while shared-authority failures stay fail-closed globally. Note creation uses explicit folder, taxonomy default, then `ask`, without changing the host-specific skill/tool asymmetry.

@@ -1,8 +1,12 @@
 # CLI and MCP surface map
 
-OMS exposes fourteen CLI command families and exactly five MCP tools. CLI commands that have no MCP equivalent remain first-class CLI capabilities; MCP detail operations are discriminated by `op` and never become extra tools.
+OMS exposes fourteen CLI command families and exactly five MCP tools. The families are `setup`, `template`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. CLI commands that have no MCP equivalent remain first-class CLI capabilities; MCP detail operations are discriminated by `op` and never become extra tools.
 
 The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doctor`. The server id is `oms`; the tables below use the host-qualified spellings `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`, not additional wire tools.
+
+The eight skills are `distill`, `doctor`, `interview`, `link`, `search`, `status`, `template`, and `write`. `interview` and `template` are tool-less. Skills are workflows. They are not the five tools.
+
+Agents write and repair notes. OMS `guide` supplies approved material before writing; `check` and `complete` inspect the saved note. The `write` tool keeps a write posture because interview answers and approved contract publication mutate managed state. `guide`, `check`, and `complete` themselves write no vault bytes. Link's posture is read-only.
 
 ## Template
 
@@ -11,73 +15,43 @@ The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doct
 | `oms template scan` | `oms_search` | `template-scan` | none |
 | `oms template list` | `oms_search` | `templates` | `templateId` absent |
 | `oms template show <id>` | `oms_search` | `templates` | `templateId` required |
-| `oms template add <folder>` | `oms_write` | `template` | `mode=register-folder`; explicit `folder.path` scope |
-| `oms template add --id <id> --from <file>` | `oms_write` | `template` | `mode=create` |
-| `oms template update <id>` | `oms_write` | `template` | `mode=update` |
-| `oms template update <id> --class <class>` | `oms_write` | `template` | `mode=reclassify` |
-| `oms template move --folder <folder>` | `oms_write` | `template` | `mode=relocate-folder` |
-| `oms template remove <id>` | `oms_write` | `template` | `mode=remove`, explicit `deleteSource` boolean |
-| `oms template default <id>` | `oms_write` | `template` | `mode=default` |
 | `oms template check` | `oms_doctor` | `validate` | none |
 | `oms template regenerate-types` | `oms_doctor` | `regenerate-types` | `dryRun` XOR `approvedDigest` |
 | `oms template review` | `oms_write` | `template` | `mode=interview-next` |
-| `oms template answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null>` | `oms_write` | `template` | `mode=interview-answer`; exact question and CAS fields |
-| `oms template commit --census-digest <digest> --ledger-digest <digest|null>` | `oms_write` | `template` | `mode=commit-contracts`; plus `--dry-run` or `--yes --approved-digest <digest>` |
-| `oms template update --resume` | `oms_write` | `template` | `transactionId` and `approvedDigest` |
+| `oms template answer` | `oms_write` | `template` | `mode=interview-answer`; forward the server-returned question and compare-and-swap fields |
+| `oms template commit` | `oms_write` | `template` | `mode=commit-contracts`; the user's approved digest, compare-and-swap, approved diff only |
 
-`template add <folder>` selects an explicit source scope: every `.md` beneath
-the folder is a candidate, with no per-file registration or auto/manual mode.
-`add --id <id> --from <file>` is explicit source authoring. Review verifies
-source bytes in place and does not write them. A changed source makes only its
-dependent template pending; unrelated template writes remain available, while
-shared-authority failures fail closed for the whole vault.
+Policy version 4 is the authority. The default layer is always on and starts empty. An individual template only adds constraints, and a note with no individual template is valid. `commit` publishes policy, taxonomy, projection, and approved managed Markdown. It does not publish ordinary notes or original template sources.
 
-Review derives a metadata contract from frontmatter keys, types, requiredness,
-and `filledBy`, plus a bounded body structure of ATX headings, fenced code
-blocks, ordered/unordered list runs outside fences, `<!-- oms:content -->`, and
-document order/EOL/BOM/final-newline details. It does not claim to enforce
-paragraphs, setext headings, or all Markdown.
+`review` is read-only. `answer` records the interview draft. `commit` runs only after the user approves the exact final digest. Source drift warns for that template and leaves the last approved snapshot in place. An unverifiable policy stops the affected evaluation; it does not become an empty contract, and it does not stop search.
 
-The initial source-change notice is exactly `템플릿에 변경이 있습니다` with
-exactly `확인하기` and `나중에`; it displays no template name, hash, or change
-class. `나중에` is host-only and makes no server call or ledger mutation.
-`확인하기` enters the linear, resumable interview through
-`mode=interview-next`; continue with the server-returned next question and
-preserve unaffected confirmed answers. After all necessary questions, show the
-exact final digest and use `mode=commit-contracts` only after user approval;
-the commit publishes controls only. `templateNotice` must still be surfaced by
-long-lived hosts when boot instructions are stale.
-
-`oms template review` has no approval guard. `answer` is draft-only and uses
-the server-returned question, `--answer <JSON>`, `--census-digest <digest>`, and
-`--ledger-digest <digest|null>`. `commit` uses those same CAS flags plus the
-existing `--dry-run` or `--yes --approved-digest <digest>` guard.
+The host notice text and its two buttons are fixed in the [host asset contract](./adapters.md). Confirming starts `interview-next`. Deferring makes no server call. The `interview` skill owns the one-question lifecycle. Search, a general question, or a note error does not start it.
 
 ## Note
 
 | CLI | MCP tool | `op` | Required discriminator |
 |---|---|---|---|
-| `oms note create` | `oms_write` | `note` | `mode=create`; optional `templateId`, `--folder <note-folder>`, or declared `defaultTemplate` |
-| `oms note append` | `oms_write` | `note` | `mode=append` |
-| `oms note update` | `oms_write` | `note` | `mode=update` |
+| `oms note guide` | `oms_write` | `guide` | New or existing note path. Returns approved Markdown, the effective contract, and the task binding. An unset path asks and does not issue a check. |
+| `oms note check` | `oms_write` | `check` | Reads the saved note, controls, and declared evidence. No unsaved body and no caller PASS. |
+| `oms note complete` | `oms_write` | `complete` | Structured result from a separate reviewer, then a fresh read of the same inputs. |
 | `oms note audit` | `oms_doctor` | `audit` | optional `folder` |
-| `oms note backfill` | `oms_doctor` | `backfill-defaults` | `notePath`, then `dryRun` XOR `approvedDigest` |
 | `oms note get` | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window) |
 
-Exact note-create usage is `oms note create [template-id] --body <text>|--body-file <file> [--frontmatter <json>|--frontmatter-file <file>] [--folder <note-folder>]`. The folder is a note destination, with precedence explicit caller folder, taxonomy default, then `ask`; template registration is not a placement prerequisite. Omitting `templateId` during create never selects the first template; it uses only `defaultTemplate` or returns `TEMPLATE_DEFAULT_UNDECLARED`. Append and update use the persisted note identity. `note get` replaces the retired document aliases without changing single-target, multi-target, or windowed retrieval capability.
+`complete` accepts the host's separate review. A value from a host tool or event is H. Transcribed into the completion request, that value is T. A definition byte match is not launch or enforcement proof. Instruction-only review is valid when the separate call, the non-modification instruction, and the input snapshot agree. Details are in the [host asset contract](./adapters.md).
+
+`note get` replaces the retired document aliases without changing single-target, multi-target, or windowed retrieval.
 
 ## Link and bridge
 
 | CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
-| `oms link check` | none | — | Check wikilinks; replaces the retired lint command. |
-| `oms link suggest` | `oms_link` | `suggest` | Suggest wikilink edits. |
-| `oms link apply` | `oms_link` | `apply` | Apply reviewed wikilink edits; optional `folder` scopes the operation. |
+| `oms link suggest` | `oms_link` | `suggest` | Suggest wikilink edits without writing them. |
+| `oms link check` | `oms_link` | `check` | Check wikilinks. Replaces the retired lint command. |
 | `oms bridge add` | none | — | Add repository-to-vault bridge configuration. |
 | `oms bridge remove` | none | — | Remove bridge configuration. |
 | `oms bridge status` | none | — | Read bridge configuration status. |
 
-Link operations edit wikilinks. Bridge operations manage target resolution metadata. There is no bridge repair command.
+Link suggest and check do not edit notes. Bridge operations manage target resolution metadata. There is no bridge repair command.
 
 ## Search, index, graph, and status
 
@@ -96,21 +70,25 @@ Link operations edit wikilinks. Bridge operations manage target resolution metad
 
 Index sync, embed, and repair are exclusive modes, not combinable `embed` or `force` booleans. Repair performs the same verified store backup and rebuild/drop through CLI and MCP; it is not forced embedding. The collections and contexts capabilities are views of `index-status`, not standalone search operations. Graph status returns graph-only health; the zero-argument status tool returns the aggregate view.
 
+Read-only search is independent of policy validity. Lexical, vector, HyDE, and typed-axis queries still include unbound, invalid, and incomplete notes. Search does not write notes and does not start a review. `oms status` reports observation, including separate source, contract, and reviewer state. It does not decide completion.
+
 ## CLI-only lifecycle and servers
 
 | CLI | Purpose |
 |---|---|
-| `oms setup` | Inspect and publish the guarded vault setup proposal. |
-| `oms host install|remove|sync|status` | Manage host-native assets and registrations. |
+| `oms setup` | Propose an empty v4 policy and publish it only after interview approval. |
+| `oms host install|remove|sync|status` | Manage host-native assets and registrations. Install is a user-run command. `remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. |
 | `oms package check|update` | Check or update the npm package without implicitly syncing hosts. |
 | `oms model install|select|waive|status` | Manage model acquisition, selection, waiver, and status. |
 | `oms serve mcp|http` | Start MCP or HTTP without creating a vault engine store at startup. |
-| `oms hook pre|post` | Run pre-tool-use or post-tool-use hooks; post records the tool result and does not build the graph. |
+| `oms hook pre|post` | Run pre-tool-use or post-tool-use hooks. Post records the tool result and does not build the graph. Claude's write hook is fail-open; Codex and Hermes have none. |
 
 OMS has no host launcher and no `--runtime gjc` command path.
 
-## Removed aliases
+## Removed leaves
 
-The former top-level `doctor`, `audit`, `reconcile`, `linkify`, `embed`, `doc`, `mcp`, `lint`, `install`, `uninstall`, and `update` commands have no compatibility aliases. The old repository-bridge meaning of a standalone `link` command is now the `bridge` family. `oms status` and `oms index embed` are retained names.
+The public note leaves are `guide`, `check`, `complete`, `audit`, and `get`. Create, append, update, and backfill are not note operations. The public template leaves are `scan`, `list`, `show`, `check`, `regenerate-types`, `review`, `answer`, and `commit`. Template add, update, move, remove, and default are not operations. Link leaves are `suggest` and `check`. Link apply is not an operation.
 
-Removed MCP operation aliases are `lazy-load`, `multi-get-documents`, and the standalone search operations `collections`, `contexts`, and `status`; their capabilities remain reachable through `get-document` and `index-status` views as mapped above.
+The former top-level `doctor`, `audit`, `reconcile`, `linkify`, `embed`, `doc`, `mcp`, `lint`, `install`, `uninstall`, and `update` commands have no compatibility aliases. The old repository-bridge meaning of a standalone `link` command is now the `bridge` family. `oms status` and `oms index embed` are retained names. `oms note audit` remains the note-family diagnosis; it is not the retired top-level `audit` command.
+
+Removed MCP operation aliases are `lazy-load`, `multi-get-documents`, and the standalone search operations `collections`, `contexts`, and `status`; their capabilities remain reachable through `get-document` and `index-status` views as mapped above. Note-write modes, link apply, and note backfill are not MCP operations.

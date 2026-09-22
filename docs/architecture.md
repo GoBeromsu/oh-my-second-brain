@@ -1,133 +1,91 @@
 # Architecture
 
-Oh My Second Brain is a template-first vault integration. It keeps the vault as plain Markdown and separates user-owned authorities from generated runtime data.
+Oh My Second Brain is an Obsidian-first vault integration. It keeps the vault as plain Markdown the user owns, and it separates that meaning from generated runtime data. Obsidian remains usable when OMS is absent. OMS does not become the note store, and one example does not become a required rule.
+
+These pages record the approved architecture. They are not a host-smoke result and not a product-gate pass. The text figure below is a repository sketch. It is not the G002 Excalidraw artifact, which has to be drawn in the bound vault and checked by save, reload, and render.
 
 ## Authorities and derived state
 
 ```text
-vault Markdown templates ──> frontmatter/body shape ──> ResolvedTemplate writes
-         │                              │
-         │                              └── BaseContract inheritance
-         │
-.obsidian/types.json ───────────────> read-only type authority
-.oms/template-policy.json ──────────> note/field ontology, naming, defaults
-.oms/taxonomy.json ─────────────────> folder/link ontology and placement
-         │
-         └───────────────────────────> .oms/types.json (validated derived projection)
+property pool (type, format, intent)
+        │
+        ▼
+always-on default layer, initially empty
+        │  an individual template may only add or tighten
+        ▼
+approved Markdown snapshot (exact UTF-8, including BOM and EOL)
+        │
+        ├── .oms/taxonomy.json          placement, folder meaning, link meaning
+        ├── .obsidian/types.json        read-only observation, not the contract
+        └── .oms/types.json             derived oms.types.v2, not authority
 ```
 
-Vault-resident Obsidian Markdown templates own a managed note's shape and body. Each managed template has a stable `templateId`; moving or editing the file does not make identity path- or digest-derived. The BaseContract is inherited by every managed TemplateContract.
+Version 4 of `.oms/template-policy.json` is the only approved structure and meaning. The pool holds each property's type, intent, and any format or allowed values. The default layer and each individual layer point at a pool property. A layer may mark a field required or narrow allowed values. It cannot override type, format, or intent, and it cannot make a default requirement optional. An empty intersection or a conflicting declaration is a composition conflict, not a silent overwrite. A reference to a missing pool property is a dangling field.
 
-`.obsidian/types.json` is read-only. The user-owned ontology is the semantic metadata separated from template shape: `.oms/template-policy.json` records note and field `intent` alongside naming/default policy, while `.oms/taxonomy.json` records folder/link `intent` and placement. `.oms/types.json` is generated after validation and is used as a write/search projection; it is never authority or hand-edited configuration.
+The default layer is always on. It starts with empty fields, headings, and criteria, and with empty approved Markdown. A note that selects no individual template is valid under that default. An individual template adds fields, headings, or semantic criteria, or it tightens heading order. Extra body text and descendant headings stay free. The same criterion id cannot carry two statements; a stronger criterion is a new id. OMS does not hardcode property names, folder names, personas, or the meaning of a heading.
 
-Policy version 3 stores explicitly selected template folders as source scopes.
-Every `.md` beneath a selected folder is a census candidate; no per-file
-registration or auto/manual folder mode is required. Bindings carry their
-`sourceFolder` and exact `sourcePath`. The independent optional
-`defaultTemplate` chooses a note binding.
+Unmanaged frontmatter is preserved and left unchecked. OMS does not insert required values, rewrite a source into a note, or apply a naming expression on the user's behalf.
 
-Approved review and source-authoring transactions record
-`approvedSourceSignature` and `approvedBodySignature` in the user-owned binding.
-These record actual source and raw-body evidence, not inferred body requirements.
-Automatic identical-byte
-renames require this independent evidence; a derived projection's self-reported
-digest cannot authorize identity transfer. Approved body signatures can suggest
-renames after restart even without a body contract, but those suggestions still
-require confirmation. Mutation IDs and taxonomy references use the same NFC
-identity before routing; canonical definition collisions are invalid authority.
+Each layer stores `approvedMarkdown` as the exact approved UTF-8 bytes, including BOM and line endings, plus the digest of those bytes. `.oms/templates/default.md` and `.oms/templates/<id>.md` are editable managed drafts. After a local edit, guide and check keep using the last approved snapshot and report drift for that template only. Editing a draft or an original source does not approve new meaning. The agent may interpret Templater or another source syntax. OMS does not parse or execute `tp`, JavaScript, or a private token, and it does not infer a contract from those tokens.
 
-Taxonomy controls placement without deciding a template's keys. Its
-`templateFolder` is a note destination and need not be within a template source
-folder. Placement is optional during contract review; at note creation the
-precedence is explicit caller folder, then taxonomy default, then `ask`, with no
-invented Inbox fallback. Folder and wikilink relationships are global axes, so
-retrieval is not constrained to a single placement rule. Authored folder intents
-are exposed through the derived `folder-ontology` axis. `.oms/taxonomy.json` is
-the sole taxonomy authority; setup does not parse or convert legacy
-`taxonomy.yaml` or concept YAML. Removing the legacy `concept` note identity and
-bundled ontology runtime defaults does not remove ontology: meaning remains
-active, vault-owned data.
+`.oms/taxonomy.json` decides placement and what folders and links mean. It does not decide a template's keys. Destination precedence is an explicit note path or folder, then that template's placement, then a question. There is no Inbox guess. Folder and wikilink axes stay available regardless of where a note is placed.
 
-## Lifecycle
+`.obsidian/types.json` is a read-only observation. A conflict with it is a separate diagnostic. It does not replace the version-4 contract, and OMS does not write the file.
 
-Runtime observations use an external SQLite journal at `~/.oms/runtime/v1/<hostId>/events.sqlite` (`OMS_RUNTIME_ROOT` overrides the base directory). Containment is checked before creation, and WAL/SHM files stay outside the vault. Each actual event has a UUID; only replay of that same event ID is deduplicated. Invocation and attempt indexes are nonunique. History queries are readonly/no-create and filter by current host and canonical vault fingerprint. Journal bytes are never convention authority or approval-digest input.
+`.oms/types.json` carries `oms.types.v2`: effective fields, headings, and axes, plus the `generatedFrom` digest of the snapshot that produced them. It is a projection for retrieval and maintenance. It is not approved Markdown and not semantic authority. Do not hand-edit it.
 
-Read-only engine consumers share a stable, temporary snapshot of the existing database and committed WAL outside the source vault. They never open a SQLite connection to the original, so even transient source WAL/SHM creation is forbidden. The snapshot is removed when the reader closes; it is not another authoritative store. Missing indexes use the existing ephemeral core path, while corrupt or unstable existing input fails visibly.
+The contract digest covers the default layer, the selected individual template when there is one, the pool entries those layers reference, and the placement that applies. An unrelated template change does not stale another note's task. `completion.retryBudget` and `agentRepair` sit outside that digest, so changing the repair budget does not pretend the approved contract changed.
 
-MCP and HTTP SQLite engines are request-scoped so later requests see external index replacements. Within each MCP server, index sync, embedding, cleanup, and repair share a FIFO mutation queue held until the request's engines close. Read-only requests do not wait on this queue. A failed engine close returns `ENGINE_LIFECYCLE_FAILED` and prevents subsequent index mutations until the server restarts.
+Version 3 is unsupported. There is no automatic migration, no compatibility reader, no note renderer, and no note-write, link-apply, or backfill compatibility path. The retired `concept` identity and bundled defaults are not a reason to drop ontology: meaning remains data the user owns.
 
-Renderer classification separates executable Obsidian templates from OMS note scaffolds. Templater frontmatter supplies a contract with Obsidian-filled fields; script-first sources derive proposals from observed notes. The kernel validates bounded host proposals and transaction evidence, never executes scripts or provides a Templater transpiler.
+ADR-014 is the successor of ADR-013. [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) records the debt to Ouroboros for an explicit contract and a split between writing and evaluation, and to Gajae Code's deep-interview for one confirmed question at a time. Neither credit is a code port or a measured research claim.
 
-Setup selects folders through repeated explicit `--template-folder` arguments.
-Each selected folder is a census scope for every `.md` beneath it; there is no
-per-file registration or folder mode. Obsidian, Templater, and bounded
-vault-walk evidence is suggestion-only and carries provenance, never automatic
-selection. Without a selection, non-interactive setup is blocked and produces
-no approval digest. There are no invented `Templates` or `Inbox` defaults.
+## Guide, write, check, review, complete
 
-Setup recursively discovers templates within selected folders, produces a
-migration proposal, and leaves notes unchanged. Unsupported policy versions
-fail closed at runtime. Setup exposes replaced legacy fields as `droppedKeys`,
-preserves writers and unknown extensions in its proposed v3 policy, and includes
-the old policy bytes in compare-and-swap approval. A resolved dry run exposes
-proposed state; applying requires the exact `--approved-digest` returned by that
-dry run.
+The agent writes and repairs the note with ordinary file tools. OMS does not write that file.
 
-Template mutations follow the same boundary: dry run, explicit digest approval, compare-and-swap, and a transaction receipt. This prevents applying a review to different template contents.
+`guide` returns approved Markdown, the effective contract, and the task binding for a chosen new or existing path. An unset path is a question. That question does not issue a check task. `check` reads the saved note, the controls, and the declared evidence from disk. It does not accept an unsaved body or a caller PASS. The host then launches a separate reviewer. `complete` accepts that reviewer's structured result and reads the same inputs again.
 
-The source census derives both a metadata contract (frontmatter keys, types,
-requiredness, and `filledBy`) and a bounded body contract for ATX headings,
-fenced code blocks, ordered or unordered list runs outside fences, and the
-`<!-- oms:content -->` placeholder, with document order/EOL/BOM/final-newline
-details. It does not claim to enforce paragraphs, setext headings, or all
-Markdown. The two-tier freshness gate checks shared authority first, then
-makes only a changed source's dependent template pending; unrelated templates
-remain usable. Shared-authority changes fail closed vault-wide.
+A task binding is the canonical tuple of schema version, vault fingerprint, template id or null, note path, contract digest, and rubric digest. The task id is the hash of that tuple. The same snapshot reproduces the same id after a CLI, MCP, or host restart. That is content integrity. It is not authentication, a user approval, or proof that a reviewer ran. No secret, daemon, or journal is required to recompute it.
 
-Contract review is a linear, resumable interview. The initial notice is exactly
-`템플릿에 변경이 있습니다` with exactly `확인하기` and `나중에`; it displays no
-template name, hash, or change class. `나중에` is host-only and does not call
-the server or mutate the interview ledger. `확인하기` enters
-`write { op: "template", mode: "interview-next" }`; answers use
-`interview-answer` and the server-returned next/request/CAS fields. After all
-necessary questions, only the exact user-approved final digest may invoke
-`commit-contracts`, which publishes controls only. The CLI counterparts are
-`oms template review`, `oms template answer`, and `oms template commit`.
-Long-lived hosts surface `templateNotice` on tool results even when boot
-instructions are stale. Pending body contracts and incomplete fresh projection
-coverage also trigger the notice, even when the raw census has no new diff.
-Approval rechecks the complete selected census as well as captured control and
-known-source bytes, so a newly appearing unbound source invalidates the review.
+The review-request digest binds the task, the note, the contract, the rubric, the target ids, the evidence manifest, and the reviewer prompt. `check` and `complete` recompute it. Note text and evidence text are untrusted data, not new instructions. An external reference stays unverified: OMS does not fetch it during `complete`, and it cannot satisfy a criterion that requires bytes.
 
-For note operations, the runtime resolves a `ResolvedTemplate` before writing.
-`create`, `append`, and `update` have separate existence preconditions. At
-create, an explicit caller folder takes precedence over a taxonomy default,
-then `ask`; placement is not a contract-review prerequisite. Admission
-completes before disk mutation. A successful mutation returns a receipt with
-target and operation information.
+Completion requires the machine result, a pass on every required criterion, a real separate review, and the same scoped inputs before and after that review. A machine pass alone does not complete the task. A PASS string from the writing role, a missing criterion, a missing rubric, or a failed launch does not either. Agreement of the reviewed inputs is not a claim that the whole vault stayed unchanged, that a hook blocked a save, or that a tool sandbox was enforced.
 
-## Retrieval and operations
+Instruction-only review is valid: another role or conversation, a non-modification instruction, the request digest, a terminal result, and those matching inputs. A byte-for-byte match between a shipped reviewer file and an installed copy shows only that those bytes match. It does not show that the host loaded the file or launched the role. OMS does not certify reviewer independence. The host launches the reviewer. OMS adds no model provider and runs no reviewer daemon. The host-specific boundary is the [host asset contract](./adapters.md).
 
-Search is lexical and works without `.oms/types.json`. It supports narrowing by managed template, declared field, folder, and wikilink; managed sources are excluded from normal note results. Vector search is never faked: unavailable vector capability remains unavailable.
+Agent repair is off unless the user sets `agentRepair.enabled` and names post-write or explicit maintenance. A search or check call does not grant that permission. `completion.retryBudget` is the user's finite nonnegative integer, default 2, and 0 is allowed. There is no separate product cap. The host counts attempts. OMS checks the attempt chain it is shown. A receipt is not a signature, and it does not prove that unseen retries did not happen. Budget exhaustion or cancellation waits for the user. OMS does not weaken the contract to force a pass.
 
-`doctor` diagnoses vault state and can regenerate projections or backfill supported data. Repair is subject to verified-target admission. `status` only reports state and never mutates it.
+The runtime journal, outside the vault, may record digests and outcomes. It is not validity authority. A journal write failure is a warning, not a change to the verdict. See [conventions](./conventions.md).
+
+## Drift, publication, and search
+
+Source drift and managed-draft drift are warnings for that template. Guide and check continue with the last approved contract and Markdown. Other templates stay usable.
+
+A missing, damaged, or digest-mismatched approved policy is unverifiable. OMS does not substitute an empty contract. An in-progress or torn contract transaction stops `guide`, `check`, and `complete` for the affected evaluation. It does not stop search. Publication is not claimed to make several files atomic. The transaction marker and generation check are what reject a torn read. An interrupted publish is resumed or reported from the staged and published bytes. Notes are not rolled back.
+
+Only contract publication uses a verified target, the exact approved digest, and compare-and-swap. Its outputs are policy, taxonomy, the derived projection, and approved managed Markdown. Original sources, Obsidian type files, and ordinary notes are not publication outputs. Publishing a managed draft also requires the expected current digest, so an edit made after the interview is not overwritten. The config interview is the tool-less `interview` skill: one confirmed question at a time, then the exact diff. The initial notice is exactly `템플릿에 변경이 있습니다` with exactly `확인하기` and `나중에`, and it shows no template name, hash, or change class. `나중에` is host-only. `확인하기` starts the interview. A general question, an unknown value, a note error, an unmanaged property, or a search does not. The leaves and the fixed notice behavior are in [the CLI map](./cli-map.md) and the [host asset contract](./adapters.md).
+
+Lexical search does not need `.oms/types.json`. Lexical, vector, HyDE, and typed-axis queries include unbound, invalid, and incomplete notes. Managed template sources stay out of ordinary note results. A missing, malformed, or stale projection fails a typed axis loudly. Vector, HyDE, and rerank requests fail loudly when their provider and model pair is missing or unusable. Those failures are not replaced with an empty success or another backend. That is the ADR-007 boundary. Search does not write notes, start an interview, or repair anything.
+
+`status` reports observation, including source, contract, and reviewer state as separate facts. It does not decide completion. `doctor` diagnoses controls and indexes. Its repairs are explicit managed-state repairs after verified-target admission. Note backfill is not a repair. Target precedence and admission are in [verified targets](./verified-target.md).
 
 ## Public surfaces
 
-The CLI works independently of host integrations. Installable assets are under [`assets/`](../assets/): seven public skills (`write`, `search`, `link`, `distill`, `status`, `doctor`, and tool-less `template`) and host guidance. `assets/claude/`, `assets/codex/`, and `assets/hermes/` contain host-specific files.
+The CLI does not require a host. The three public sets stay independent:
 
-MCP is a separate API surface. `oms serve mcp` serves exactly five public capabilities: write, search, link, status, and doctor. Skills are host-facing workflows; MCP tools are callable operations. Neither replaces the independent CLI.
+| Set | What it is |
+| --- | --- |
+| Eight skills | `distill`, `doctor`, `interview`, `link`, `search`, `status`, `template`, `write`. Host workflows. `interview` and `template` are tool-less. |
+| Five MCP tools | `write`, `search`, `link`, `status`, `doctor`, from `oms serve mcp`. A subset of the skills. |
+| Fourteen CLI families | `setup`, `template`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, `status`. Not the skill list and not the tool list. |
 
-The [command map](./cli-map.md) assigns each capability one CLI leaf and, where exposed, one exclusive MCP operation or mode. `bridge` owns repository-to-vault links; `link` owns note wikilinks. `package update` installs OMS, while `host sync` refreshes host registrations separately. `serve mcp` and `serve http` must not create a vault engine store on startup. Retired top-level commands are not aliases.
+Leaves, discriminators, and removed operations are only in [the CLI map](./cli-map.md). `bridge` is the repository-to-vault target. `link` suggests and checks note wikilinks and does not apply them. `package update` does not sync hosts. `oms serve mcp` and `oms serve http` do not create a vault engine store by starting.
 
 ### MCP namespace boundary
 
-The MCP server id is `oms`, while its local tool names are capability-only:
-`write`, `search`, `link`, `status`, and `doctor`. Qualifying supported hosts
-therefore display `oms_write`, `oms_search`, `oms_link`, `oms_status`, and
-`oms_doctor` exactly once; no supported host may render `oms_oms_*`. Raw MCP
-clients call the local names, so callers using the former `oms_write`,
-`oms_search`, `oms_link`, `oms_status`, or `oms_doctor` names must migrate to
-`write`, `search`, `link`, `status`, or `doctor`.
+The MCP server id is `oms`. Local tool names are `write`, `search`, `link`, `status`, and `doctor`. Qualifying hosts therefore display `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor` exactly once, never `oms_oms_*`. Raw MCP clients call the local names.
 
-See [conventions](./conventions.md) for vault data and [verified targets](./verified-target.md) for target resolution and mutation admission.
+Directly under `src`, the five top-level entries are still assets, cli, kernel, mcp, and vendors. This cutover adds no sixth and no sixth MCP tool. The skill, tool, and command names above are the approved public surface. A build that still accepts a retired note, link, or template operation has not finished the cutover. That behavior is not a compatibility path.
+
+See [conventions](./conventions.md) for vault data and [installation](./install.md) for host setup.

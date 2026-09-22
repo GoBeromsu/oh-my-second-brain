@@ -1,7 +1,8 @@
 ---
 slug: ADR-013-folder-sourced-template-contracts
 title: "선택 폴더 원본 템플릿 계약 — 인터뷰로 확인하는 파생 controls"
-status: Proposed
+status: Superseded
+superseded_by: ./ADR-014-user-owned-contract-completion-harness.md
 date: 2026-09-14
 created_by: gjc
 deciders: [beomsu]
@@ -14,8 +15,9 @@ relates_to:
 
 ## Status
 
-Proposed. This supersedes the placement-only direction of #134/PR #135 for
-this flow; the optional-placement reuse remains a note-create rule.
+Superseded by [ADR-014](./ADR-014-user-owned-contract-completion-harness.md).
+The decisions below record the earlier design, not the current contract
+authority, rendering responsibility, or completion policy.
 
 ## Context
 

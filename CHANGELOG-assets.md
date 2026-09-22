@@ -4,6 +4,9 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- Eight shared skills now include a tool-less contract interview. Guidance separates agent-owned note writing from OMS guidance, saved-file checks, and completion using a separate reviewer; search and ordinary note errors do not start configuration interviews. Generated GJC mirrors share the authored skill bytes.
+- Reviewer guidance distinguishes host claims, agent transcription, and OMS-computed digests. Matching role-definition bytes is not proof of a separate launch, enforced tool restrictions, or whole-vault immutability.
+
 ## [0.15.0] - 2026-09-19
 
 - **Host guidance now teaches selected-folder template sources instead of per-file registration or folder modes.** It documents the exact `템플릿에 변경이 있습니다` / `확인하기` / `나중에` notice, host-only deferral, long-lived `templateNotice` results, and the resumable `interview-next` → `interview-answer` → `commit-contracts` flow that publishes only user-confirmed controls. Placement is write-time only (explicit destination, then taxonomy default, then `ask`); source review preserves Markdown bytes and does not invent a registration prerequisite, widget, or host configuration.

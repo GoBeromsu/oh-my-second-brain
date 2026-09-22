@@ -4,6 +4,12 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Version 4 contracts compose a user-owned property pool, an always-on default layer, and optional additive template constraints. Approved Markdown remains byte-exact; raw source or managed-draft drift reports locally without replacing the approved snapshot. Full derived-projection validation and transaction-generation checks reject inconsistent writing evaluations.
+- Contract publication confines outputs to approved controls and managed drafts, checks exact approval and current-byte preconditions, and supports honest interrupted-publication recovery. A completed publication marker does not make later user draft edits a global reading failure.
+- Search source exclusions and taxonomy intent no longer require a valid writing contract. Missing raw templates or invalid policy cannot block ordinary-note scanning; explicit exclusion and taxonomy errors remain visible.
+- Native embedding diagnostics now use stderr through node-llama-cpp's logger callback, keeping diagnostic output separate from MCP stdout without suppressing warnings. (#133)
+- Native SQLite ABI mismatches report the actual Node executable, version, module ABI and addon path with rebuild guidance. The original loader error remains the cause; unrelated opening errors are not relabeled, and no backend fallback or automatic rebuild occurs. (#139)
+
 ## [0.15.0] - 2026-09-19
 
 - **Breaking: template contracts now reconcile from an explicit selected-folder census instead of per-file registration or auto/manual modes.** Every `.md` beneath the selected scope is classified for add, edit, delete, or rename; source bytes stay in place and only user-confirmed `.oms` controls publish. The two-tier freshness gate hashes raw shared authorities first and then isolates changed templates as pending while preserving unrelated note writes. Metadata and bounded body-node contracts (with per-node requiredness/order) replace opaque body assumptions; anchored resumable questions and a locked CAS preserve unaffected answers. Historical ledger census is not blanket stale rejection: current request CAS and per-answer anchors govern validity. Ambiguous repeated body nodes remain contextualized, missing required-body rules require explicit disposition, and placement is optional during review then resolves at note creation by explicit destination, taxonomy default, or `ask`.
