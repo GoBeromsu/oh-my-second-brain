@@ -167,6 +167,15 @@ function assertCleanProtocolOutput(probe: ProbeResult): void {
   expect(probe.frames.every(isJsonRpcFrame)).toBe(true);
 }
 
+/** The raw JSON-RPC result of one frame, for methods that do not return tool content. */
+function frameResult(probe: ProbeResult, id: number): Record<string, unknown> {
+  const frame = probe.frames.find((candidate) => frameId(candidate) === id);
+  expect(frame).toBeDefined();
+  const result = (frame as Record<string, unknown>).result;
+  expect(result).toBeDefined();
+  return result as Record<string, unknown>;
+}
+
 function toolPayload(probe: ProbeResult, id: number): Record<string, unknown> {
   const frame = probe.frames.find((candidate) => frameId(candidate) === id);
   expect(frame).toBeDefined();
@@ -212,7 +221,8 @@ describe("MCP stdio framing", () => {
         env: { ...getDefaultEnvironment(), HOME: vault },
       });
       assertCleanProtocolOutput(probe);
-      expect(toolPayload(probe, 2).tools).toBeInstanceOf(Array);
+      const tools = frameResult(probe, 2).tools as { readonly name: string }[];
+      expect(tools.map(tool => tool.name)).toEqual(["write", "search", "link", "status", "doctor"]);
     } finally {
       await import("node:fs/promises").then(({ rm }) => rm(vault, { recursive: true, force: true }));
     }
