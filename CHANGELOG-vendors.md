@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-23
+
 - Codex installs an optional provenance-owned reviewer role while preserving unowned collisions; a genuine generic separate subagent remains valid without custom-role discovery. Dry-run skill paths now match the eight installed shared skills.
 - Hermes guidance uses its native fresh-conversation delegation with inherited tools and explicit non-modification instructions, without claiming unavailable sandbox enforcement.
 

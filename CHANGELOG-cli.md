@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-23
+
 - Host discovery reports the eight actual Codex skill paths and installed reviewer-definition health instead of the retired setup skill. Discovery and installation now resolve relative host-home overrides consistently; definition health is not reviewer execution proof.
 
 ## [0.15.0] - 2026-09-19

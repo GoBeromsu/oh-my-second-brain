@@ -3,6 +3,8 @@
 Domain logic changes belong here.
 
 ## [Unreleased]
+
+## [0.16.0] - 2026-09-23
 - Guide now binds a saved note to the template it declares when the caller omits `templateId`, matching check. Passing `templateId: null` still uses the default layer only.
 
 - Version 4 contracts compose a user-owned property pool, an always-on default layer, and optional additive template constraints. Approved Markdown remains byte-exact; raw source or managed-draft drift reports locally without replacing the approved snapshot. Full derived-projection validation and transaction-generation checks reject inconsistent writing evaluations.
