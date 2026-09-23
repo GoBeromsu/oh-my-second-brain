@@ -9,6 +9,7 @@ This aggregate changelog contains changes that span multiple layers.
 - [Assets changelog](./CHANGELOG-assets.md) — skills, agents, templates, and host guidance
 
 ## [Unreleased]
+- **Breaking: OMS is a user-owned contract and completion harness, not a note writer or template renderer.** Version 4 of `.oms/template-policy.json` is the only approved structure and meaning: an always-on empty default layer, optional templates that only add or tighten, and unmanaged frontmatter left unchecked. Agents write and repair notes. OMS guides, checks the saved file, and completes from a separate host review. Search stays read-only even when the contract is missing or mid-publish. Contract meaning enters only through explicit `proposals` on `interview-next`, `interview-answer`, and `commit-contracts`; a recorded answer whose proposals were omitted is refused rather than dropped. The public surface is eight skills (`interview` and `template` are tool-less), five MCP tools, and fourteen CLI families. Retired v3 registration, note-write, link-apply, and renderer paths are deleted, not aliased. The machine template notice `next` field is a mode hint into `/interview`, not a replayable CallToolRequest.
 
 ## [0.15.0] - 2026-09-19
 
