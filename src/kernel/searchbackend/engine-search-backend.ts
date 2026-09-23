@@ -1,3 +1,4 @@
+import { summarizePublicFacets } from "../engine/mcp/query-mapper.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 import type {
   McpSemanticFacet,
@@ -111,16 +112,17 @@ export class EngineSearchBackend implements SearchBackend {
     const page = limit === undefined ? hits.slice(offset) : hits.slice(offset, offset + Math.max(0, limit));
     const facets = mergeFacets(results);
     const receipt = mergeReceipts(results);
+    const summary = summarizePublicFacets(facets, receipt.warnings);
     const intent = normalized.intent ?? results.find((result) => result.intent !== undefined)?.intent;
     const nextOffset = offset + page.length;
     return {
       available: true,
       hits: page,
       totalCount,
-      facets,
+      facets: summary.facets,
       cursor: nextOffset < totalCount ? String(nextOffset) : null,
       ...(intent === undefined ? {} : { intent }),
-      receipt,
+      receipt: { ...receipt, warnings: summary.warnings },
     };
   }
 }

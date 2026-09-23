@@ -371,7 +371,11 @@ async function assertMarkerAdmitted(vault: string): Promise<void> {
   const inspection = await inspectTemplateTransactionMarker(vault);
   if (inspection.admission === "clear" && (inspection.state === "absent" || inspection.state === "complete")) return;
   if (inspection.state === "in-progress") fail("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction is in progress");
-  fail("CONTRACT_TRANSACTION_IN_PROGRESS", "transaction marker is invalid");
+  const failure = inspection.failure;
+  const detail = failure === undefined
+    ? "transaction marker is invalid"
+    : `${failure.message} (${failure.reason}; ${failure.path})`;
+  fail("CONTRACT_TRANSACTION_IN_PROGRESS", `transaction marker is invalid: ${detail}`);
 }
 
 function parseApprovedPolicy(bytes: Uint8Array): TemplatePolicy {

@@ -190,6 +190,97 @@ describe("Oh My Second Brain MCP stdio server", () => {
     }
   });
 
+  it("projects branch fields onto tools/list properties without weakening oneOf", () => {
+    const validator = new AjvJsonSchemaValidator();
+    const tools = new Map(omsMcpTools.map((tool) => [tool.name, tool]));
+    const expectedOps: Record<string, readonly string[]> = {
+      write: ["guide", "check", "complete", "template"],
+      search: ["context", "template-scan", "templates", "query", "index-status", "get-document"],
+      link: ["suggest", "check"],
+      status: ["graph"],
+      doctor: ["audit", "validate", "regenerate-types", "build-graph", "cleanup", "sync-embeddings"],
+    };
+
+    expect([...tools.keys()].sort()).toEqual(["doctor", "link", "search", "status", "write"]);
+    for (const [name, ops] of Object.entries(expectedOps)) {
+      const schema = tools.get(name)?.inputSchema as {
+        readonly properties?: Record<string, { readonly enum?: readonly string[]; readonly type?: string; readonly anyOf?: readonly unknown[] }>;
+        readonly required?: readonly string[];
+        readonly oneOf?: readonly {
+          readonly additionalProperties?: false;
+          readonly properties?: Record<string, { readonly const?: string }>;
+          readonly required?: readonly string[];
+        }[];
+      };
+      const op = schema.properties?.["op"];
+      expect(op?.enum, name).toEqual([...ops]);
+      expect(schema.required ?? [], name).toEqual(name === "status" ? [] : ["op"]);
+      for (const branch of schema.oneOf ?? []) {
+        expect(branch.additionalProperties, name).toBe(false);
+      }
+      const branchOps = [...new Set((schema.oneOf ?? [])
+        .map((branch) => branch.properties?.["op"]?.const)
+        .filter((value): value is string => typeof value === "string"))];
+      expect(branchOps, name).toEqual([...ops]);
+    }
+
+    const searchSchema = tools.get("search")!.inputSchema as {
+      readonly properties: Record<string, { readonly type?: string; readonly default?: unknown; readonly anyOf?: readonly unknown[] }>;
+    };
+    expect(searchSchema.properties["query"]).toEqual({ type: "string" });
+    expect(searchSchema.properties["limit"]).toEqual({
+      anyOf: [
+        { type: "integer", minimum: 0 },
+        { type: "integer", minimum: 0, default: 10 },
+      ],
+    });
+    expect(searchSchema.properties["axes"]).toMatchObject({
+      type: "object",
+      properties: { template: { type: "string" }, folder: expect.any(Object), field: expect.any(Object), link: expect.any(Object) },
+    });
+    const writeSchema = tools.get("write")!.inputSchema as {
+      readonly properties: Record<string, { readonly const?: unknown; readonly enum?: readonly string[]; readonly anyOf?: readonly { readonly const?: unknown; readonly enum?: readonly string[] }[] }>;
+    };
+    expect(writeSchema.properties["notePath"]).toEqual({ type: "string" });
+    expect(writeSchema.properties["checkpoint"]).toEqual({});
+    expect(writeSchema.properties["review"]).toEqual({});
+    const mode = writeSchema.properties["mode"];
+    expect(mode?.enum).toBeUndefined();
+    expect(mode?.const).toBeUndefined();
+    expect(mode?.anyOf?.map((alternative) => alternative.const ?? alternative.enum)).toEqual([
+      "interview-next",
+      "interview-answer",
+      "commit-contracts",
+    ]);
+    const dryRun = writeSchema.properties["dryRun"];
+    expect(dryRun?.anyOf).toEqual([{ const: true }, { const: false }]);
+
+    const write = validator.getValidator(tools.get("write")!.inputSchema);
+    const search = validator.getValidator(tools.get("search")!.inputSchema);
+    const doctor = validator.getValidator(tools.get("doctor")!.inputSchema);
+    const status = validator.getValidator(tools.get("status")!.inputSchema);
+    const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    expect(search({ op: "query", query: "architecture", limit: 10, axes: { template: "literature" } }).valid).toBe(true);
+    expect(search({ op: "query", limit: 10 }).valid).toBe(false);
+    expect(search({ op: "guide", notePath: "notes/a.md" }).valid).toBe(false);
+    expect(write({ op: "guide", notePath: "notes/a.md" }).valid).toBe(true);
+    expect(write({ op: "check", notePath: "notes/a.md" }).valid).toBe(true);
+    expect(write({ op: "guide", checkpoint: {}, review: {} }).valid).toBe(false);
+    expect(write({ op: "complete", notePath: "notes/a.md" }).valid).toBe(false);
+    expect(write({
+      op: "template",
+      mode: "commit-contracts",
+      censusDigest: digest,
+      expectedLedgerDigest: null,
+      dryRun: true,
+      approvedDigest: digest,
+    }).valid).toBe(false);
+    expect(doctor({ op: "regenerate-types", dryRun: false }).valid).toBe(false);
+    expect(doctor({ op: "regenerate-types", dryRun: false, approvedDigest: digest }).valid).toBe(true);
+    expect(status({}).valid).toBe(true);
+    expect(status({ op: "graph", extra: true }).valid).toBe(false);
+  });
+
   it("keeps query budget schemas aligned with the runtime contract", () => {
     const validator = new AjvJsonSchemaValidator();
     const search = omsMcpTools.find((tool) => tool.name === "search");

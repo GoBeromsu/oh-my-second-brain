@@ -5,14 +5,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const injectedFault = vi.hoisted(() => ({
-  operation: "" as "" | "write" | "remove" | "read",
+  operation: "" as "" | "write" | "remove" | "read" | "realpath",
   suffix: "",
   armed: false,
   skip: 0,
+  code: "",
 }));
 
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const denyAccess = (value: string): boolean => injectedFault.armed && injectedFault.operation === "realpath" && value.endsWith(injectedFault.suffix);
   const shouldFail = (operation: typeof injectedFault.operation, value: string): boolean => {
     if (!injectedFault.armed || injectedFault.operation !== operation || !value.endsWith(injectedFault.suffix)) return false;
     if (injectedFault.skip > 0) {
@@ -36,6 +38,14 @@ vi.mock("node:fs/promises", async importOriginal => {
       if (shouldFail("remove", String(args[0]))) throw new Error("injected remove failure");
       await actual.rm(...args);
     },
+    realpath: async (...args: Parameters<typeof actual.realpath>) => {
+      if (denyAccess(String(args[0]))) {
+        const error = new Error("denied") as NodeJS.ErrnoException;
+        error.code = injectedFault.code || "EACCES";
+        throw error;
+      }
+      return actual.realpath(...args);
+    },
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
       const result = await actual.readFile(...args);
       if (shouldFail("read", String(args[0]))) return Buffer.from("injected read-back mismatch");
@@ -44,7 +54,11 @@ vi.mock("node:fs/promises", async importOriginal => {
   };
 });
 
-import { approvalDigest, digestBytes, outputDigest } from "./canonical.js";
+import { approvalDigest, digestBytes, hashCanonical, outputDigest } from "./canonical.js";
+import { diagnoseTemplates } from "./doctor.js";
+import { parseTemplatePolicy } from "./policy.js";
+import { loadResolvedTemplates } from "./resolver.js";
+import { readSearchTemplateSource } from "../engine/retrieval/template-source.js";
 import * as eventJournal from "../runtime/event-journal.js";
 import { readRuntimeEvents } from "../runtime/event-read.js";
 import {
@@ -52,6 +66,8 @@ import {
   inspectTemplateTransactionMarker,
   resumeTemplateTransaction,
   TEMPLATE_TRANSACTION_MARKER_PATH,
+  type TemplateTransactionFailure,
+  type TemplateTransactionFailureReason,
 } from "./transaction.js";
 import type {
   ControlTransition,
@@ -90,6 +106,7 @@ beforeEach(() => {
   injectedFault.suffix = "";
   injectedFault.armed = false;
   injectedFault.skip = 0;
+  injectedFault.code = "";
   previousRuntime = process.env.OMS_RUNTIME_ROOT;
 });
 
@@ -533,13 +550,228 @@ describe("v4 guarded template publication", () => {
     const item = await fixture();
     expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({ admission: "clear", state: "absent", marker: null });
     await writeFile(path.join(item.vault, TEMPLATE_TRANSACTION_MARKER_PATH), "{\"status\":\"in-progress\"}\n");
-    expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({ admission: "blocked", state: "invalid", marker: null });
+    expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({
+      admission: "blocked",
+      state: "invalid",
+      marker: null,
+      failure: {
+        reason: "marker-fields-invalid",
+        message: "transaction marker is missing a required digest or publication id",
+        path: TEMPLATE_TRANSACTION_MARKER_PATH,
+      },
+    });
     const manifest = publication();
     const before = await text(item.vault, POLICY);
     const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
     expect(receipt.status).toBe("rejected");
     expect(code(receipt)).toBe("CONTRACT_TRANSACTION_IN_PROGRESS");
     expect(await text(item.vault, POLICY)).toBe(before);
+    await untouched(item.vault);
+  });
+
+  it("reports a bounded reason for each invalid marker or plan class without changing vault bytes", async () => {
+    const item = await fixture();
+    const manifest = publication();
+    expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+    const markerPath = path.join(item.vault, TEMPLATE_TRANSACTION_MARKER_PATH);
+    const stored = JSON.parse(await text(item.vault, TEMPLATE_TRANSACTION_MARKER_PATH)) as {
+      status: "complete";
+      transactionId: string;
+      approvalDigest: Digest;
+      outputDigest: Digest;
+      planDigest: Digest;
+      checksum: Digest;
+    };
+    const planPath = `.oms/.template-transactions/${stored.transactionId}/plan.json`;
+    const planText = await text(item.vault, planPath);
+    const before = await files(item.vault);
+    const cases: ReadonlyArray<readonly [string, () => Promise<void>, TemplateTransactionFailure]> = [
+      ["malformed-json", async () => { await writeFile(markerPath, "{"); }, {
+        reason: "marker-malformed",
+        message: "transaction marker is not valid JSON",
+        path: TEMPLATE_TRANSACTION_MARKER_PATH,
+      }],
+      ["non-object", async () => { await writeFile(markerPath, "[]\n"); }, {
+        reason: "marker-malformed",
+        message: "transaction marker is not a JSON object",
+        path: TEMPLATE_TRANSACTION_MARKER_PATH,
+      }],
+      ["missing-fields", async () => { await writeFile(markerPath, `${JSON.stringify({ status: "complete" })}\n`); }, {
+        reason: "marker-fields-invalid",
+        message: "transaction marker is missing a required digest or publication id",
+        path: TEMPLATE_TRANSACTION_MARKER_PATH,
+      }],
+      ["checksum", async () => {
+        await writeFile(markerPath, `${JSON.stringify({ ...stored, checksum: digestBytes("not-the-marker") })}\n`);
+      }, {
+        reason: "marker-checksum-mismatch",
+        message: "transaction marker checksum does not match its fields",
+        path: TEMPLATE_TRANSACTION_MARKER_PATH,
+      }],
+      ["missing-plan", async () => { await rm(path.join(item.vault, planPath)); }, {
+        reason: "plan-missing",
+        message: "durable plan is missing",
+        path: planPath,
+      }],
+      ["invalid-plan", async () => { await writeFile(path.join(item.vault, planPath), "{}\n"); }, {
+        reason: "plan-invalid",
+        message: "durable plan shape is not version 1",
+        path: planPath,
+      }],
+      ["unreadable-plan", async () => {
+        await rm(path.join(item.vault, planPath));
+        await mkdir(path.join(item.vault, planPath));
+      }, {
+        reason: "control-unreadable",
+        message: "template control path is not a readable regular file",
+        path: planPath,
+      }],
+    ];
+    for (const [name, mutate, failure] of cases) {
+      await writeFile(markerPath, `${JSON.stringify(stored)}\n`);
+      await mkdir(path.dirname(path.join(item.vault, planPath)), { recursive: true });
+      await writeFile(path.join(item.vault, planPath), planText);
+      await mutate();
+      const inspection = await inspectTemplateTransactionMarker(item.vault);
+      expect(inspection, name).toMatchObject({ admission: "blocked", state: "invalid", marker: null, failure });
+      expect(inspection.failure?.message, name).not.toMatch(/\/Users\/|injected|sha256:[0-9a-f]{64}/);
+      const diagnosis = await diagnoseTemplates({ vault: item.vault, source: "explicit" });
+      expect(diagnosis.transactionMarker, name).toBe("invalid");
+      expect(diagnosis.diagnostics[0], name).toMatchObject({
+        code: "CONTRACT_TRANSACTION_IN_PROGRESS",
+        reason: failure.reason,
+        message: failure.message,
+        path: failure.path,
+      });
+      expect(diagnosis.diagnostics[0]?.remediation, name).toBe("restore the durable marker and its matching plan from a known publication; deleting the marker or regenerating types does not repair it");
+      expect(diagnosis.diagnostics[0]?.remediation, name).not.toMatch(/^resume/);
+      await expect(loadResolvedTemplates(item.vault), name).rejects.toThrow(
+        `CONTRACT_TRANSACTION_IN_PROGRESS: transaction marker is invalid: ${failure.message} (${failure.reason}; ${failure.path})`,
+      );
+    }
+    await rm(path.join(item.vault, planPath), { recursive: true, force: true });
+    await writeFile(markerPath, `${JSON.stringify(stored)}\n`);
+    await writeFile(path.join(item.vault, planPath), planText);
+    expect(await files(item.vault)).toEqual(before);
+    expect((await inspectTemplateTransactionMarker(item.vault)).state).toBe("complete");
+    const progressMaterial = {
+      status: "in-progress" as const,
+      transactionId: stored.transactionId,
+      approvalDigest: stored.approvalDigest,
+      outputDigest: stored.outputDigest,
+      planDigest: stored.planDigest,
+    };
+    await writeFile(markerPath, `${JSON.stringify({ ...progressMaterial, checksum: hashCanonical("oms.contract-publish.marker.v1", progressMaterial) })}\n`);
+    const open = await inspectTemplateTransactionMarker(item.vault);
+    expect(open).toMatchObject({ admission: "blocked", state: "in-progress" });
+    expect(open.failure).toBeUndefined();
+    const openDiagnosis = await diagnoseTemplates({ vault: item.vault, source: "explicit" });
+    expect(openDiagnosis.transactionMarker).toBe("in-progress");
+    expect(openDiagnosis.diagnostics[0]?.reason).toBeUndefined();
+    expect(openDiagnosis.diagnostics[0]?.remediation).toMatch(/resume or complete/);
+    await expect(loadResolvedTemplates(item.vault)).rejects.toThrow("CONTRACT_TRANSACTION_IN_PROGRESS: template transaction is in progress");
+    await writeFile(markerPath, `${JSON.stringify(stored)}\n`);
+    await untouched(item.vault);
+  });
+
+  it("does not treat unsupported policy version 3 as marker corruption", async () => {
+    const item = await fixture();
+    const v3 = `${JSON.stringify({ version: 3, properties: {}, templates: {} })}\n`;
+    await writeFile(path.join(item.vault, POLICY), v3);
+    await expect(loadResolvedTemplates(item.vault)).rejects.toThrow(/TEMPLATE_POLICY_VERSION_UNSUPPORTED: version 3 is unsupported/);
+    const search = await readSearchTemplateSource(item.vault);
+    expect(search.available).toBe(false);
+    if (search.available) throw new Error("v3 policy must stay unavailable to search");
+    expect(search.reason).toMatch(/TEMPLATE_POLICY_VERSION_UNSUPPORTED/);
+    expect(search.reason).not.toMatch(/marker|transaction/);
+    expect(() => parseTemplatePolicy(v3)).toThrow(/TEMPLATE_POLICY_VERSION_UNSUPPORTED/);
+
+    const manifest = publication({ policy: [v3, POLICY_V2, "write"] });
+    expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+    await writeFile(path.join(item.vault, TEMPLATE_TRANSACTION_MARKER_PATH), "{\"status\":\"complete\"}\n");
+    await writeFile(path.join(item.vault, POLICY), v3);
+    const inspection = await inspectTemplateTransactionMarker(item.vault);
+    expect(inspection.failure?.reason).toBe("marker-fields-invalid" satisfies TemplateTransactionFailureReason);
+    expect(inspection.failure?.message).not.toMatch(/version 3|TEMPLATE_POLICY/);
+    await expect(loadResolvedTemplates(item.vault)).rejects.toThrow(/transaction marker is invalid: .*marker-fields-invalid/);
+    const masked = await readSearchTemplateSource(item.vault);
+    expect(masked.available).toBe(false);
+    if (!masked.available) {
+      expect(masked.reason).toMatch(/TEMPLATE_POLICY_VERSION_UNSUPPORTED/);
+      expect(masked.reason).not.toMatch(/marker-fields-invalid/);
+    }
+    await untouched(item.vault);
+  });
+
+  it("reports symlink controls and inaccessible vaults without marker-byte remediation", async () => {
+    const item = await fixture();
+    const manifest = publication();
+    expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+    const markerPath = path.join(item.vault, TEMPLATE_TRANSACTION_MARKER_PATH);
+    const stored = JSON.parse(await text(item.vault, TEMPLATE_TRANSACTION_MARKER_PATH)) as { transactionId: string };
+    const planPath = `.oms/.template-transactions/${stored.transactionId}/plan.json`;
+    const markerText = await text(item.vault, TEMPLATE_TRANSACTION_MARKER_PATH);
+    const planText = await text(item.vault, planPath);
+    const unsafe = {
+      reason: "control-unreadable",
+      message: "template control path is unsafe or a symlink inside the approved marker and plan namespace",
+    };
+    await rm(markerPath);
+    await symlink(path.join(item.root, "marker-target.json"), markerPath);
+    await writeFile(path.join(item.root, "marker-target.json"), markerText);
+    const markerLink = await inspectTemplateTransactionMarker(item.vault);
+    expect(markerLink).toMatchObject({ admission: "blocked", state: "invalid", failure: { ...unsafe, path: TEMPLATE_TRANSACTION_MARKER_PATH } });
+    expect(markerLink.failure?.message).not.toMatch(/outside the approved/);
+    await rm(markerPath);
+    await writeFile(markerPath, markerText);
+    await rm(path.join(item.vault, planPath));
+    await symlink(path.join(item.root, "plan-target.json"), path.join(item.vault, planPath));
+    await writeFile(path.join(item.root, "plan-target.json"), planText);
+    const planLink = await inspectTemplateTransactionMarker(item.vault);
+    expect(planLink).toMatchObject({ admission: "blocked", state: "invalid", failure: { ...unsafe, path: planPath } });
+    const linkDiagnosis = await diagnoseTemplates({ vault: item.vault, source: "explicit" });
+    expect(linkDiagnosis.diagnostics[0]?.remediation).not.toMatch(/restore access to the vault path/);
+    await rm(path.join(item.vault, planPath));
+    await writeFile(path.join(item.vault, planPath), planText);
+
+    const missing = path.join(item.root, "missing-vault");
+    const missingInspection = await inspectTemplateTransactionMarker(missing);
+    expect(missingInspection.failure).toMatchObject({ reason: "vault-inaccessible", message: "vault path is missing or not accessible" });
+    const missingDiagnosis = await diagnoseTemplates({ vault: missing, source: "explicit" });
+    expect(missingDiagnosis.diagnostics[0]?.remediation).toBe("restore access to the vault or template control path before retrying inspection");
+    expect(missingDiagnosis.diagnostics[0]?.remediation).not.toMatch(/restore the durable marker/);
+    // The resolver resolves the vault root before marker inspection.
+    await expect(loadResolvedTemplates(missing)).rejects.toMatchObject({ code: "ENOENT" });
+
+    injectedFault.operation = "realpath";
+    injectedFault.suffix = item.vault;
+    injectedFault.code = "EACCES";
+    injectedFault.armed = true;
+    const deniedInspection = await inspectTemplateTransactionMarker(item.vault);
+    expect(deniedInspection.failure?.reason).toBe("vault-inaccessible");
+    expect(deniedInspection.failure?.message).not.toMatch(item.vault);
+    expect(deniedInspection.failure?.message).toBe("vault or template control path is not accessible");
+    const deniedDiagnosis = await diagnoseTemplates({ vault: item.vault, source: "explicit" });
+    expect(deniedDiagnosis.diagnostics[0]?.remediation).toBe("restore access to the vault or template control path before retrying inspection");
+    injectedFault.armed = false;
+    await untouched(item.vault);
+  });
+
+  it("keeps a valid complete marker clear when policy bytes later become version 3", async () => {
+    const item = await fixture();
+    const manifest = publication();
+    expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+    const v3 = `${JSON.stringify({ version: 3, properties: {}, templates: {} })}\n`;
+    await writeFile(path.join(item.vault, POLICY), v3);
+    const inspection = await inspectTemplateTransactionMarker(item.vault);
+    expect(inspection).toMatchObject({ admission: "clear", state: "complete" });
+    expect(inspection.failure).toBeUndefined();
+    await expect(loadResolvedTemplates(item.vault)).rejects.toThrow(/TEMPLATE_POLICY_VERSION_UNSUPPORTED: version 3 is unsupported/);
+    const search = await readSearchTemplateSource(item.vault);
+    expect(search.available).toBe(false);
+    if (search.available) throw new Error("v3 policy must stay unavailable to search");
+    expect(search.reason).toMatch(/TEMPLATE_POLICY_VERSION_UNSUPPORTED/);
+    expect(search.reason).not.toMatch(/marker|transaction/);
     await untouched(item.vault);
   });
 

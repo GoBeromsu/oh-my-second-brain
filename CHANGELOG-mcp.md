@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- Tool schemas expose operation names and arguments at the top level so hosts can discover them without unpacking branch schemas. Strict operation-specific validation and approval requirements remain enforced. (#144)
+
 ## [0.16.0] - 2026-09-23
 - Host-facing docs no longer show a copyable `interview-next` call without `proposals`. Confirming the template notice still starts that mode, but the same proposals array must reach review, answer, and commit.
 - The machine template notice `next` field is a mode hint (`skill: interview`, `mode: interview-next`), not a replayable CallToolRequest. OMS still does not invent proposals; `확인하기` enters `/interview`.

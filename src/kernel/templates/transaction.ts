@@ -97,9 +97,24 @@ interface StoredMarker {
   readonly planDigest: Digest;
 }
 
+export type TemplateTransactionFailureReason =
+  | "marker-malformed"
+  | "marker-fields-invalid"
+  | "marker-checksum-mismatch"
+  | "plan-missing"
+  | "plan-invalid"
+  | "control-unreadable"
+  | "vault-inaccessible";
+
+export interface TemplateTransactionFailure {
+  readonly reason: TemplateTransactionFailureReason;
+  readonly message: string;
+  readonly path: string;
+}
+
 type MarkerRead =
   | { readonly state: "absent"; readonly root: string }
-  | { readonly state: "invalid"; readonly root: string }
+  | { readonly state: "invalid"; readonly root: string; readonly failure: TemplateTransactionFailure }
   | { readonly state: "in-progress"; readonly root: string; readonly marker: StoredMarker; readonly plan: DurablePlan }
   | { readonly state: "complete"; readonly root: string; readonly marker: StoredMarker; readonly plan: DurablePlan };
 
@@ -107,6 +122,8 @@ export interface TemplateTransactionMarkerInspection {
   readonly admission: "clear" | "blocked";
   readonly state: "absent" | "in-progress" | "complete" | "invalid";
   readonly marker: TemplateTransactionMarker | null;
+  /** Present only for an invalid marker. Absent, in-progress, and complete omit it. */
+  readonly failure?: TemplateTransactionFailure;
 }
 
 class PublicationHalt extends Error {
@@ -143,6 +160,44 @@ function inconsistent(approval: Digest | null, output: Digest | null, item: Diag
 
 function manifestRejected(manifest: TemplateCompositionManifest, item: Diagnostic): TemplateTransactionReceipt {
   return rejected(digestOrNull(manifest.approvalDigest), digestOrNull(manifest.outputDigest), item);
+}
+const MARKER_RELATIVE_PATH = TEMPLATE_TRANSACTION_MARKER_PATH;
+const INVALID_MARKER_REMEDIATION = "restore the durable marker and its matching plan from a known publication; deleting the marker or regenerating types does not repair it";
+const VAULT_ACCESS_REMEDIATION = "restore access to the vault or template control path before retrying inspection";
+
+function invalidMarker(root: string, reason: TemplateTransactionFailureReason, message: string, relativePath: string = MARKER_RELATIVE_PATH): Extract<MarkerRead, { readonly state: "invalid" }> {
+  return { state: "invalid", root, failure: { reason, message, path: relativePath } };
+}
+
+function safeRelativeControlPath(value: string): string | null {
+  const normalized = value.normalize("NFC").replaceAll("\\", "/").replace(/^\.?\//, "");
+  if (normalized.length === 0 || normalized.length > 240 || normalized.split("/").some(segment => segment === "" || segment === "." || segment === "..")) return null;
+  return normalized.startsWith(".oms/") ? normalized : null;
+}
+
+function controlFailure(error: unknown, relativePath: string): TemplateTransactionFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = errorCode(error);
+  const safe = safeRelativeControlPath(relativePath) ?? MARKER_RELATIVE_PATH;
+  if (code === "EACCES" || code === "EPERM") {
+    return { reason: "vault-inaccessible", message: "vault or template control path is not accessible", path: safe };
+  }
+  if (message.startsWith("TEMPLATE_SOURCE_UNSAFE")) {
+    return { reason: "control-unreadable", message: "template control path is unsafe or a symlink inside the approved marker and plan namespace", path: safe };
+  }
+  if (message.startsWith("TEMPLATE_SOURCE_INVALID")) {
+    return { reason: "control-unreadable", message: "template control path is not a readable regular file", path: safe };
+  }
+  return {
+    reason: "control-unreadable",
+    message: code === null ? "template control could not be read" : `template control could not be read (${code})`,
+    path: safe,
+  };
+}
+
+function markerInvalidDiagnostic(failure: TemplateTransactionFailure): Diagnostic {
+  const remediation = failure.reason === "vault-inaccessible" ? VAULT_ACCESS_REMEDIATION : INVALID_MARKER_REMEDIATION;
+  return diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", `${failure.message} (${failure.reason}; ${failure.path}). ${remediation}`, failure.path);
 }
 
 function pathDiagnostic(error: unknown): Diagnostic {
@@ -470,69 +525,102 @@ function outputsMatch(boundaries: readonly PlanBoundary[], outputs: readonly Pla
   return true;
 }
 
-async function loadPlan(root: string, marker: StoredMarker): Promise<DurablePlan | null> {
-  if (!/^[0-9a-f]{32}$/.test(marker.transactionId)) return null;
+type PlanLoad = { readonly ok: true; readonly plan: DurablePlan } | { readonly ok: false; readonly failure: TemplateTransactionFailure };
+
+async function loadPlan(root: string, marker: StoredMarker): Promise<PlanLoad> {
+  const relativePath = /^[0-9a-f]{32}$/.test(marker.transactionId)
+    ? transactionRelative(marker.transactionId, "plan.json")
+    : MARKER_RELATIVE_PATH;
+  const fail = (reason: TemplateTransactionFailureReason, message: string, path = relativePath): PlanLoad => ({ ok: false, failure: { reason, message, path } });
+  if (!/^[0-9a-f]{32}$/.test(marker.transactionId)) return fail("plan-missing", "durable plan path is not a confined publication id");
   try {
-    const located = await openControl(root, transactionRelative(marker.transactionId, "plan.json"), { expected: "existing-file" });
-    const parsed = asRecord(JSON.parse(await readFile(located.absolutePath, "utf8")));
-    if (parsed === null) return null;
+    const located = await openControl(root, relativePath, { expected: "existing-file" });
+    let parsed: Record<string, unknown> | null;
+    try {
+      parsed = asRecord(JSON.parse(await readFile(located.absolutePath, "utf8")));
+    } catch (error: unknown) {
+      if (error instanceof SyntaxError) return fail("plan-invalid", "durable plan is not valid JSON");
+      throw error;
+    }
+    if (parsed === null) return fail("plan-invalid", "durable plan is not a JSON object");
     const rawBoundaries = parsed["boundaries"];
     const rawOutputs = parsed["outputs"];
-    if (parsed["version"] !== 1 || !Array.isArray(rawBoundaries) || !Array.isArray(rawOutputs)) return null;
-    if (parsed["transactionId"] !== marker.transactionId || parsed["approvalDigest"] !== marker.approvalDigest || parsed["outputDigest"] !== marker.outputDigest || parsed["planDigest"] !== marker.planDigest) return null;
+    if (parsed["version"] !== 1 || !Array.isArray(rawBoundaries) || !Array.isArray(rawOutputs)) return fail("plan-invalid", "durable plan shape is not version 1");
+    if (parsed["transactionId"] !== marker.transactionId || parsed["approvalDigest"] !== marker.approvalDigest || parsed["outputDigest"] !== marker.outputDigest || parsed["planDigest"] !== marker.planDigest) {
+      return fail("plan-invalid", "durable plan identity does not match the marker");
+    }
     const boundaries = rawBoundaries.map(parseBoundary);
-    if (boundaries.some(boundary => boundary === null)) return null;
+    if (boundaries.some(boundary => boundary === null)) return fail("plan-invalid", "durable plan boundary is invalid");
     const strictBoundaries: PlanBoundary[] = [];
     for (const boundary of boundaries) {
-      if (boundary === null) return null;
+      if (boundary === null) return fail("plan-invalid", "durable plan boundary is invalid");
       strictBoundaries.push(boundary);
     }
     const outputs: PlannedPhysicalOutput[] = [];
     for (const output of rawOutputs) {
       const record = asRecord(output);
-      if (record === null || typeof record["finalVaultRelativePath"] !== "string") return null;
+      if (record === null || typeof record["finalVaultRelativePath"] !== "string") return fail("plan-invalid", "durable plan output is invalid");
       const path = canonicalTransactionPath(record["finalVaultRelativePath"]);
       const payload = typeof record["payloadDigest"] === "string" ? digestOrNull(record["payloadDigest"]) : null;
-      if (path === null || path !== record["finalVaultRelativePath"] || payload === null) return null;
+      if (path === null || path !== record["finalVaultRelativePath"] || payload === null) return fail("plan-invalid", "durable plan output is invalid");
       outputs.push({ finalVaultRelativePath: path, payloadDigest: payload });
     }
     const material = { version: 1 as const, transactionId: marker.transactionId, approvalDigest: marker.approvalDigest, outputDigest: marker.outputDigest, boundaries: strictBoundaries, outputs };
-    if (digestPlan(material) !== marker.planDigest || !outputsMatch(strictBoundaries, outputs)) return null;
-    const recomputed = outputDigest(outputs);
-    if (recomputed !== marker.outputDigest) return null;
-    return { ...material, planDigest: marker.planDigest };
-  } catch {
-    return null;
+    if (digestPlan(material) !== marker.planDigest) return fail("plan-invalid", "durable plan digest does not match the marker");
+    if (!outputsMatch(strictBoundaries, outputs) || outputDigest(outputs) !== marker.outputDigest) return fail("plan-invalid", "durable plan outputs do not match the marker");
+    return { ok: true, plan: { ...material, planDigest: marker.planDigest } };
+  } catch (error: unknown) {
+    const code = errorCode(error);
+    const text = error instanceof Error ? error.message : String(error);
+    if (text.startsWith("TEMPLATE_SOURCE_INVALID: control path must exist")) return fail("plan-missing", "durable plan is missing");
+    if (code === "ENOENT" && safeRelativeControlPath(relativePath) !== null) return fail("plan-missing", "durable plan is missing");
+    const failure = controlFailure(error, relativePath);
+    return fail(failure.reason, failure.message, failure.path);
   }
 }
 
 async function readMarker(vault: string): Promise<MarkerRead> {
-  const located = await openControl(vault, TEMPLATE_TRANSACTION_MARKER_PATH, { expected: "either" });
+  let located: { readonly vaultRoot: string; readonly targetRealPath: string | null; readonly absolutePath: string };
+  try {
+    located = await openControl(vault, TEMPLATE_TRANSACTION_MARKER_PATH, { expected: "either" });
+  } catch (error: unknown) {
+    // An absent marker is accepted by openControl; failure to resolve its
+    // vault/ancestor is an access failure, not corrupt publication metadata.
+    if (errorCode(error) === "ENOENT") {
+      return invalidMarker(vault, "vault-inaccessible", "vault path is missing or not accessible");
+    }
+    const failure = controlFailure(error, MARKER_RELATIVE_PATH);
+    return invalidMarker(vault, failure.reason, failure.message, failure.path);
+  }
   if (located.targetRealPath === null) return { state: "absent", root: located.vaultRoot };
   try {
     const parsed = asRecord(JSON.parse(await readFile(located.absolutePath, "utf8")));
-    if (parsed === null) return { state: "invalid", root: located.vaultRoot };
+    if (parsed === null) return invalidMarker(located.vaultRoot, "marker-malformed", "transaction marker is not a JSON object");
     const status = parsed["status"];
-    if (status !== "in-progress" && status !== "complete") return { state: "invalid", root: located.vaultRoot };
+    if (status !== "in-progress" && status !== "complete") return invalidMarker(located.vaultRoot, "marker-fields-invalid", "transaction marker status is missing or invalid");
     const approval = typeof parsed["approvalDigest"] === "string" ? digestOrNull(parsed["approvalDigest"]) : null;
     const output = typeof parsed["outputDigest"] === "string" ? digestOrNull(parsed["outputDigest"]) : null;
     const planDigest = typeof parsed["planDigest"] === "string" ? digestOrNull(parsed["planDigest"]) : null;
     const checksum = typeof parsed["checksum"] === "string" ? digestOrNull(parsed["checksum"]) : null;
     const transactionId = parsed["transactionId"];
-    if (approval === null || output === null || planDigest === null || checksum === null || typeof transactionId !== "string" || transactionId !== publicationId(approval, output)) {
-      return { state: "invalid", root: located.vaultRoot };
+    if (approval === null || output === null || planDigest === null || checksum === null || typeof transactionId !== "string") {
+      return invalidMarker(located.vaultRoot, "marker-fields-invalid", "transaction marker is missing a required digest or publication id");
     }
+    if (transactionId !== publicationId(approval, output)) return invalidMarker(located.vaultRoot, "marker-fields-invalid", "transaction marker publication id does not match its digests");
     const marker: StoredMarker = { status, transactionId, approvalDigest: approval, outputDigest: output, planDigest };
-    if (hashCanonical("oms.contract-publish.marker.v1", markerMaterial(marker)) !== checksum) return { state: "invalid", root: located.vaultRoot };
+    if (hashCanonical("oms.contract-publish.marker.v1", markerMaterial(marker)) !== checksum) {
+      return invalidMarker(located.vaultRoot, "marker-checksum-mismatch", "transaction marker checksum does not match its fields");
+    }
     // Marker checksum and durable plan only. Do not stat published controls or managed drafts.
-    const plan = await loadPlan(located.vaultRoot, marker);
-    if (plan === null) return { state: "invalid", root: located.vaultRoot };
+    const loaded = await loadPlan(located.vaultRoot, marker);
+    if (!loaded.ok) return invalidMarker(located.vaultRoot, loaded.failure.reason, loaded.failure.message, loaded.failure.path);
     return status === "in-progress"
-      ? { state: "in-progress", root: located.vaultRoot, marker, plan }
-      : { state: "complete", root: located.vaultRoot, marker, plan };
+      ? { state: "in-progress", root: located.vaultRoot, marker, plan: loaded.plan }
+      : { state: "complete", root: located.vaultRoot, marker, plan: loaded.plan };
   } catch (error: unknown) {
-    if (errorCode(error) !== null && errorCode(error) !== "ENOENT") throw error;
-    return { state: "invalid", root: located.vaultRoot };
+    if (error instanceof SyntaxError) return invalidMarker(located.vaultRoot, "marker-malformed", "transaction marker is not valid JSON");
+    const failure = controlFailure(error, MARKER_RELATIVE_PATH);
+    return invalidMarker(located.vaultRoot, failure.reason, failure.message, failure.path);
   }
 }
 
@@ -699,7 +787,7 @@ async function publishNew(root: string, manifest: TemplateCompositionManifest, t
   try {
     return await withPublicationLock(root, plan.transactionId, manifest.approvalDigest, manifest.outputDigest, async () => {
       const marker = await readMarker(root);
-      if (marker.state === "invalid") return manifestRejected(manifest, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction marker is invalid"));
+      if (marker.state === "invalid") return manifestRejected(manifest, markerInvalidDiagnostic(marker.failure));
       if (marker.state === "in-progress") return resumeRequired(manifest.approvalDigest, manifest.outputDigest, "an in-progress template transaction must be resumed");
       if (marker.state === "complete" && marker.marker.approvalDigest === manifest.approvalDigest) return completedReceipt(root, marker, manifest);
       for (const transition of transitions) {
@@ -748,11 +836,12 @@ export async function inspectTemplateTransactionMarker(vault: string): Promise<T
   try {
     const marker = await readMarker(vault);
     if (marker.state === "absent") return { admission: "clear", state: "absent", marker: null };
-    if (marker.state === "invalid") return { admission: "blocked", state: "invalid", marker: null };
+    if (marker.state === "invalid") return { admission: "blocked", state: "invalid", marker: null, failure: marker.failure };
     if (marker.state === "in-progress") return { admission: "blocked", state: "in-progress", marker: publicMarker(marker.marker) };
     return { admission: "clear", state: "complete", marker: publicMarker(marker.marker) };
-  } catch {
-    return { admission: "blocked", state: "invalid", marker: null };
+  } catch (error: unknown) {
+    const failure = controlFailure(error, MARKER_RELATIVE_PATH);
+    return { admission: "blocked", state: "invalid", marker: null, failure };
   }
 }
 
@@ -772,7 +861,7 @@ export async function executeTemplateTransaction(vault: string, manifest: Templa
   }
   try {
     const marker = await readMarker(root);
-    if (marker.state === "invalid") return manifestRejected(manifest, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction marker is invalid"));
+    if (marker.state === "invalid") return manifestRejected(manifest, markerInvalidDiagnostic(marker.failure));
     if (marker.state === "in-progress") return resumeRequired(manifest.approvalDigest, manifest.outputDigest, "an in-progress template transaction must be resumed");
     if (marker.state === "complete" && marker.marker.approvalDigest === manifest.approvalDigest) return completedReceipt(root, marker, manifest);
     for (const transition of [...validated.transitions].sort(byPublication)) {
@@ -800,9 +889,10 @@ export async function resumeTemplateTransaction(vault: string, transactionId: st
   } catch (error: unknown) {
     return rejected(digestOrNull(approvedDigest), null, pathDiagnostic(error));
   }
-  if (marker.state === "absent" || marker.state === "invalid") {
-    return rejected(digestOrNull(approvedDigest), null, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction marker is missing or invalid"));
+  if (marker.state === "absent") {
+    return rejected(digestOrNull(approvedDigest), null, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction marker is missing"));
   }
+  if (marker.state === "invalid") return rejected(digestOrNull(approvedDigest), null, markerInvalidDiagnostic(marker.failure));
   if (marker.marker.transactionId !== transactionId || marker.marker.approvalDigest !== approvedDigest) {
     return rejected(marker.marker.approvalDigest, marker.marker.outputDigest, invalidManifest("resume does not match the durable marker"));
   }

@@ -210,17 +210,63 @@ interface SchemaBranch {
   readonly anyOf?: readonly { readonly required: readonly string[] }[];
 }
 
+function schemaEqual(left: object, right: object): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+// Clients such as Hermes tool_describe read only the top-level properties
+// object and ignore oneOf. Project every field that a branch actually accepts
+// so the model can see query/limit/axes and guide/check without parsing oneOf.
+// Branch schemas stay authoritative: additionalProperties:false and required
+// constraints are not copied up, and fields whose branch schemas differ keep
+// every alternative instead of collapsing to one enum or const.
+function projectBranchProperties(
+  branches: readonly SchemaBranch[],
+  opOptional: boolean,
+): { readonly properties: Record<string, object>; readonly required: readonly string[] } {
+  const byField = new Map<string, object[]>();
+  const opValues: string[] = [];
+  for (const branch of branches) {
+    const op = branch.properties["op"] as { readonly const?: unknown } | undefined;
+    if (typeof op?.const === "string" && !opValues.includes(op.const)) opValues.push(op.const);
+    for (const [field, schema] of Object.entries(branch.properties)) {
+      if (field === "op") continue;
+      const schemas = byField.get(field) ?? [];
+      if (!schemas.some((existing) => schemaEqual(existing, schema))) schemas.push(schema);
+      byField.set(field, schemas);
+    }
+  }
+  const properties: Record<string, object> = {};
+  if (opValues.length > 0) {
+    properties["op"] = opOptional
+      ? { type: "string", enum: opValues }
+      : { ...string, enum: opValues };
+  }
+  for (const field of [...byField.keys()].sort((left, right) => left.localeCompare(right))) {
+    const schemas = byField.get(field) ?? [];
+    const only = schemas[0];
+    properties[field] = schemas.length === 1 && only !== undefined ? only : { anyOf: schemas };
+  }
+  return { properties, required: opOptional || opValues.length === 0 ? [] : ["op"] };
+}
+
+function withBranchProjection(
+  branches: readonly SchemaBranch[],
+  opOptional: boolean,
+): Tool["inputSchema"] {
+  const { properties, required } = projectBranchProperties(branches, opOptional);
+  return { type: "object", properties, required: [...required], oneOf: branches };
+}
+
 function operationSchema(tool: string): Tool["inputSchema"] {
   const toolOperations = operations[tool];
   if (!toolOperations) throw new Error(`Missing MCP operation definition for ${tool}.`);
   if (tool === "status") {
-    return {
-      type: "object",
-      oneOf: [
-        { additionalProperties: false, properties: {} },
-        { additionalProperties: false, properties: { op: { ...string, const: "graph" } }, required: ["op"] },
-      ],
-    };
+    const branches: SchemaBranch[] = [
+      { additionalProperties: false, properties: {}, required: [] },
+      { additionalProperties: false, properties: { op: { ...string, const: "graph" } }, required: ["op"] },
+    ];
+    return withBranchProjection(branches, true);
   }
   if (toolOperations.length === 1 && toolOperations[0]?.direct) {
     const { properties = {}, required = [] } = toolOperations[0];
@@ -338,7 +384,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
     }
     branches.push({ additionalProperties: false, properties: base, required: baseRequired });
   }
-  return { type: "object", oneOf: branches };
+  return withBranchProjection(branches, false);
 }
 function resolveOperation(tool: string, op: string | undefined): string | undefined {
   return operations[tool]?.find(

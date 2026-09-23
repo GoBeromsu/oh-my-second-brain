@@ -321,6 +321,15 @@ function resultPageLimit(opts: McpSemanticQueryOptions): number | undefined {
   return opts.limit ?? (opts.collectionPath === undefined ? undefined : UNBOUNDED_CANDIDATE_LIMIT);
 }
 
+/**
+ * Collection children must return their complete facet set. The backend caps
+ * the public summary once, after merging. A normalized request already has an
+ * effective hit limit, so this uses the original collection/limit distinction.
+ */
+function deferFacetSummary(opts: McpSemanticQueryOptions): boolean {
+  return opts.collectionPath !== undefined && opts.limit === undefined;
+}
+
 function templateFieldKeys(source: TemplateRetrievalSource): ReadonlySet<string> {
   const keys = new Set<string>();
   const axes = deriveTemplateRetrievalAxes(source);
@@ -567,6 +576,7 @@ export class McpEngineAdapter {
       cursor: opts.cursor,
       intent: opts.intent,
       facetValues: facets,
+      deferFacetSummary: deferFacetSummary(opts),
       // Axis queries are evaluated by the model-free node matcher. A vector
       // request is reported as approximated rather than falsely claiming vec
       // evidence in the receipt.
@@ -674,7 +684,7 @@ export class McpEngineAdapter {
           for await (const docPath of walkVaultMarkdown(vault)) paths.push(docPath);
         }
         const ranked = paths.slice().sort((left, right) => left.localeCompare(right)).map(docPath => ({ docPath, score: 0 }));
-        const result = retrievalResultsToQueryResult(ranked, { limit: resultPageLimit(opts), cursor: opts.cursor, intent: opts.intent, facetValues: [], usedChannels: [], approximated: false, indexDrift: false });
+        const result = retrievalResultsToQueryResult(ranked, { limit: resultPageLimit(opts), cursor: opts.cursor, intent: opts.intent, facetValues: [], usedChannels: [], approximated: false, indexDrift: false, deferFacetSummary: deferFacetSummary(opts) });
         return enrichQueryHits(result, vault);
       }
     }
@@ -765,6 +775,7 @@ export class McpEngineAdapter {
         ...opts,
         limit: resultPageLimit(opts),
         facetValues,
+        deferFacetSummary: deferFacetSummary(opts),
         usedChannels: requestedChannels,
         approximated:
           modelLessFallback ||

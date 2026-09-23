@@ -4,6 +4,9 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Search query responses summarize at most 20 facet values and disclose truncation, keeping large link vocabularies out of ordinary agent responses without reducing hit counts or pagination. Collection facets are merged before summarizing. (#143)
+- Invalid contract publication markers and durable plans report specific, safe failure reasons through diagnosis and contract loading. Admission remains blocked; diagnosis does not migrate policy, remove markers, or authorize recovery. (#145)
+
 ## [0.16.0] - 2026-09-23
 - Guide now binds a saved note to the template it declares when the caller omits `templateId`, matching check. Passing `templateId: null` still uses the default layer only.
 

@@ -35,6 +35,8 @@ export interface TemplateDoctorDiagnostic {
   readonly expected?: Digest;
   readonly actual?: Digest;
   readonly remediation: string;
+  readonly reason?: string;
+  readonly message?: string;
 }
 export interface TemplateDoctorDiagnosis {
   readonly status: "healthy" | "needs-repair";
@@ -54,6 +56,9 @@ export type TemplateDoctorRepair =
   | { readonly status: "rejected"; readonly code: string; readonly remediation: string };
 
 const REVIEW_REMEDIATION = "run oms template review, answer its questions, then commit the reviewed contract";
+const INVALID_MARKER_REMEDIATION = "restore the durable marker and its matching plan from a known publication; deleting the marker or regenerating types does not repair it";
+const IN_PROGRESS_REMEDIATION = "resume or complete the contract publication before reading or repairing contract state";
+const VAULT_ACCESS_REMEDIATION = "restore access to the vault or template control path before retrying inspection";
 
 function rejected(code: string, remediation: string): TemplateDoctorRepair {
   return { status: "rejected", code, remediation };
@@ -113,12 +118,16 @@ async function diagnoseTemplatesInternal(target: TemplateDoctorTarget): Promise<
   const root = resolve(target.vault);
   const inspection = await inspectTemplateTransactionMarker(root);
   if (inspection.admission !== "clear") {
+    const failure = inspection.failure;
+    const invalid = inspection.state === "invalid";
+    const vaultAccess = failure?.reason === "vault-inaccessible";
     return {
       status: "needs-repair",
       diagnostics: [{
         code: "CONTRACT_TRANSACTION_IN_PROGRESS",
-        path: ".oms/template-transaction.json",
-        remediation: "resume or complete the contract publication before reading or repairing contract state",
+        path: failure?.path ?? ".oms/template-transaction.json",
+        remediation: vaultAccess ? VAULT_ACCESS_REMEDIATION : invalid ? INVALID_MARKER_REMEDIATION : IN_PROGRESS_REMEDIATION,
+        ...(failure === undefined ? {} : { reason: failure.reason, message: failure.message }),
       }],
       managedSourceExclusions: [],
       invalidNotes: [],
