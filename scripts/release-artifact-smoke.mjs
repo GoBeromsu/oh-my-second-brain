@@ -143,7 +143,7 @@ function makeVault(tempRoot) {
   }), "utf-8");
   writeFileSync(
     path.join(vault, "Literature", "semantic-retrieval.md"),
-    "---\ntemplate: literature\ntitle: Semantic Retrieval\ntags:\n  - smoke-semantic\n---\n# Semantic Retrieval\n\nAgent retrieval uses OMS native semantic search.\n",
+    "---\ntitle: Semantic Retrieval\ntags:\n  - smoke-semantic\n---\n# Semantic Retrieval\n\nAgent retrieval uses OMS native semantic search.\n",
     "utf-8",
   );
   return vault;
