@@ -17,7 +17,7 @@ Agents write and repair notes. OMS `guide` supplies approved material before wri
 | `oms template show <id>` | `oms_search` | `templates` | `templateId` required |
 | `oms template check` | `oms_doctor` | `validate` | none |
 | `oms template regenerate-types` | `oms_doctor` | `regenerate-types` | `dryRun` XOR `approvedDigest` |
-| `oms template review` | `oms_write` | `template` | `mode=interview-next` |
+| `oms template review` | `oms_write` | `template` | `mode=interview-next`; same `proposals` as answer and commit |
 | `oms template answer` | `oms_write` | `template` | `mode=interview-answer`; forward the server-returned question and compare-and-swap fields |
 | `oms template commit` | `oms_write` | `template` | `mode=commit-contracts`; the user's approved digest, compare-and-swap, approved diff only |
 
@@ -25,7 +25,7 @@ Policy version 4 is the authority. The default layer is always on and starts emp
 
 `review` is read-only. `answer` records the interview draft. `commit` runs only after the user approves the exact final digest. Source drift warns for that template and leaves the last approved snapshot in place. An unverifiable policy stops the affected evaluation; it does not become an empty contract, and it does not stop search.
 
-The host notice text and its two buttons are fixed in the [host asset contract](./adapters.md). Confirming starts `interview-next`. Deferring makes no server call. The `interview` skill owns the one-question lifecycle. Search, a general question, or a note error does not start it.
+The host notice text and its two buttons are fixed in the [host asset contract](./adapters.md). Confirming starts `interview-next` with the same `proposals` the caller will send to answer and commit. Deferring makes no server call. The `interview` skill owns the one-question lifecycle. Search, a general question, or a note error does not start it.
 
 ## Note
 

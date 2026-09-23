@@ -3,6 +3,7 @@
 MCP server tools and resources belong here.
 
 ## [Unreleased]
+- Host-facing docs no longer show a copyable `interview-next` call without `proposals`. Confirming the template notice still starts that mode, but the same proposals array must reach review, answer, and commit.
 
 ## [0.15.0] - 2026-09-19
 

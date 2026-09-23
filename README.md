@@ -25,7 +25,9 @@ oms setup --vault /path/to/vault --dry-run
 oms setup --vault /path/to/vault --yes --approved-digest <digest>
 ```
 
-The interview leaves are `oms template review`, `oms template answer`, and `oms template commit`. Forward the question and compare-and-swap fields the server returns. Do not invent parameter names. A general question, an unknown note value, a note error, an unmanaged property, or a search does not start that interview.
+The interview leaves are `oms template review --proposals`, `oms template answer`, and `oms template commit`. Forward the question and compare-and-swap fields the server returns, and send the same `proposals` on every call. Do not invent parameter names. A general question, an unknown note value, a note error, an unmanaged property, or a search does not start that interview.
+
+The host notice text is exactly `템플릿에 변경이 있습니다` and its actions are exactly `확인하기` and `나중에`. The first notice shows no template name, hash, or change class. `나중에` is host-only and makes no server call. `확인하기` starts a resumable one-question interview at `write { op: "template", mode: "interview-next", proposals }`.
 
 ## CLI
 

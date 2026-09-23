@@ -25,9 +25,9 @@ oms setup --vault /path/to/vault --dry-run
 oms setup --vault /path/to/vault --yes --approved-digest <digest>
 ```
 
-interview leaf는 `oms template review`, `oms template answer`, `oms template commit`이다. 서버가 돌려준 question과 compare-and-swap 값을 그대로 전달하고 parameter 이름을 만들어내지 않는다. 일반 질문, 알 수 없는 노트 값, 노트 오류, 관리되지 않는 속성, 검색은 그 interview를 시작하지 않는다.
+interview leaf는 `oms template review --proposals`, `oms template answer`, `oms template commit`이다. 서버가 돌려준 question과 compare-and-swap 값을 그대로 전달하고, 세 호출 모두에 같은 `proposals`를 보낸다. parameter 이름을 만들어내지 않는다. 일반 질문, 알 수 없는 노트 값, 노트 오류, 관리되지 않는 속성, 검색은 그 interview를 시작하지 않는다.
 
-호스트 알림 문구는 정확히 `템플릿에 변경이 있습니다`이고 동작은 `확인하기`와 `나중에` 둘뿐이다. 처음 알림에는 템플릿 이름·hash·change class를 표시하지 않는다. `나중에`는 host-only이며 서버를 호출하지 않는다. `확인하기`는 `write { op: "template", mode: "interview-next" }`로 한 번에 한 질문씩 진행하는 resumable interview를 시작한다.
+호스트 알림 문구는 정확히 `템플릿에 변경이 있습니다`이고 동작은 `확인하기`와 `나중에` 둘뿐이다. 처음 알림에는 템플릿 이름·hash·change class를 표시하지 않는다. `나중에`는 host-only이며 서버를 호출하지 않는다. `확인하기`는 `write { op: "template", mode: "interview-next", proposals }`로 한 번에 한 질문씩 진행하는 resumable interview를 시작한다.
 
 ## CLI
 

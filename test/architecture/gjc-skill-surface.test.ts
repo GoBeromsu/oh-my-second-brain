@@ -95,6 +95,27 @@ describe("Gajae-Code skill surface", () => {
     }
     expect(body).toMatch(/interview-next.*interview-answer.*commit-contracts/su);
   });
+  it("never shows a copyable interview-next call without proposals", () => {
+    // The skill payloads already carry proposals. Live docs that still show
+    // `write { op: "template", mode: "interview-next" }` teach the same
+    // orphan-answer refusal the previous payload gap caused.
+    const files = [
+      "README.md",
+      "README.ko.md",
+      "docs/adapters.md",
+      "docs/cli-map.md",
+      "docs/harness-architecture.md",
+      "assets/skills/interview/SKILL.md",
+    ];
+    const bare = /write \{ op: "template", mode: "interview-next" \}/gu;
+    for (const relativePath of files) {
+      const body = readFileSync(absolute(relativePath), "utf8");
+      expect(
+        body.match(bare) ?? [],
+        `${relativePath} still shows a copyable interview-next without proposals`,
+      ).toEqual([]);
+    }
+  });
 
   it("never tells an agent that setup selects a template folder", () => {
     // Setup proposes an empty contract and adopts nothing; folder selection is
