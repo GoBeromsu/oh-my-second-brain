@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- Host discovery reports the eight actual Codex skill paths and installed reviewer-definition health instead of the retired setup skill. Discovery and installation now resolve relative host-home overrides consistently; definition health is not reviewer execution proof.
+
 ## [0.15.0] - 2026-09-19
 
 - **Breaking: the template CLI now exposes a selected-folder census and linear review flow.** The exact leaves are `scan|list|show|add|update|move|remove|default|check|regenerate-types|review|answer|commit`; `scan` is read-only, `add <folder>` selects source scope, and `add --id <id> --from <file>` remains explicit source authoring rather than contract review. `answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null>` forwards server-returned CAS fields, while `commit` adds the existing dry-run or `--yes --approved-digest` guard. This removes the per-file registration ritual without weakening verified-target writes; note creation considers `--folder <note-folder>` before a taxonomy default and then `ask`, with no template-creation target-folder form.

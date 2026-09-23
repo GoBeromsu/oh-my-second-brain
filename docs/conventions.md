@@ -1,208 +1,60 @@
 # Vault conventions
 
-## Template-first authority
+The vault is the user's plain Markdown. Obsidian can open it with no OMS process. OMS does not own the notes, and it does not hardcode property names, folders, or personas. Ontology is the user's statement of what a field, folder, or link means. The retired piece is `concept` as note identity and a bundled default shape, not that statement of meaning.
 
-A managed note is defined by its vault-resident Obsidian Markdown template. The template owns note shape and body; OMS provides no bundled default shape.
+ADR-014 is the successor of ADR-013. [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as acknowledged design ideas, not ported code and not a research result. This page is approved architecture. It is not a host-smoke result.
 
-Each managed template has a stable `templateId`, independent of its file location or current digest. Every managed TemplateContract inherits one BaseContract. Identity therefore remains stable while content changes through the approved mutation flow.
+## Where meaning lives
 
 | Path | Role |
 | --- | --- |
-| Vault Markdown template | Frontmatter key scaffolding/default literals and body shape. |
-| `.obsidian/types.json` | Read-only Obsidian type authority. OMS reads it but never writes it. |
-| `.oms/template-policy.json` | User-owned note/field ontology (`intent`) plus naming rules and defaults. |
-| `.oms/taxonomy.json` | User-owned folder/link ontology (`intent`) plus template placement. |
-| `.oms/types.json` | Validated derived projection used by write and search operations; never hand-edit it. |
+| Vault Markdown notes | User-owned plain Markdown. The agent writes and repairs them. OMS does not write note bytes. |
+| `.obsidian/types.json` | Read-only Obsidian observation. OMS never writes it. A type conflict is a diagnostic. The version-4 contract still decides. |
+| `.oms/template-policy.json` | Version 4, the only approved structure and meaning. Holds the property pool, the always-on default, optional individual templates, approved Markdown, and completion policy. |
+| `.oms/templates/default.md` | Editable managed draft of the default layer. It starts empty. Approved bytes live in the policy snapshot, not in whatever the draft says today. |
+| `.oms/templates/<id>.md` | Editable managed draft of one individual template. |
+| `.oms/taxonomy.json` | Placement, folder meaning, and link meaning. Not a property-type file and not the list of template keys. |
+| `.oms/types.json` | Derived `oms.types.v2` projection (`generatedFrom` names the snapshot). Not semantic authority. Never hand-edit it. |
+| `.oms/template-transaction.json` | Marker for contract publication. Not a note and not a second policy. |
+| `.oms/engine-store.sqlite` | Runtime index. Do not commit it. |
+| Runtime journal | Outside the vault, under `~/.oms/runtime/v1` unless `OMS_RUNTIME_ROOT` is set. Digests and outcomes only. Not completion authority. Do not commit it. |
 
-These authorities coexist: templates decide what a note contains, ontology explains what those fields, folders, and relationships mean, taxonomy places notes, and Obsidian decides property types. The removed legacy surface is `concept` as note identity and bundled runtime defaults—not ontology itself.
+These files are not interchangeable. The pool says what a property is and what it means. The default layer says which of those properties, headings, and criteria apply to every note. An individual template may add more, or tighten allowed values and heading order. It may not remove or weaken the default. Taxonomy says where a note goes and what a folder or wikilink means. Obsidian's type file is evidence OMS may read. The derived projection is a cache of the effective contract for retrieval and maintenance.
 
-Taxonomy decides note placement. Folders and wikilinks are global axes
-available to retrieval regardless of placement; authored folder intents appear
-on the derived `folder-ontology` axis. Placement is optional during contract
-review. At note creation, precedence is explicit caller folder, then taxonomy
-default, then `ask`; OMS has no Inbox fallback. A taxonomy `templateFolder` is
-the note destination and may be outside every template source folder.
+A note with no individual template is valid. Unmanaged frontmatter is preserved and is not checked. OMS does not fill in required values, convert a source file into the note, or expand a naming expression.
 
-Template policy uses version 3. Explicitly selected `templateFolders` define
-source census scopes; every `.md` beneath one is a candidate. No per-file
-registration or auto/manual folder mode is required. The optional
-`defaultTemplate` separately names a note binding. Every binding declares both
-`sourceFolder` and `sourcePath`:
+Approved Markdown is stored as exact UTF-8, including a BOM and the file's line endings. A later edit to the managed draft or to an original template source is local drift. Guide and check keep the last approved snapshot and warn for that template only. The edit is not a new approval. OMS does not parse or execute Templater, JavaScript, or a private token, and it does not infer headings or fields from those tokens. The agent may interpret a source. The approved policy is the contract.
 
-```json
-{
-  "version": 3,
-  "templateFolders": [
-    { "path": "Vault Shape/Generated" },
-    { "path": "Team/Curated Shapes" }
-  ],
-  "defaultTemplate": "note",
-  "base": { "fields": {} },
-  "contracts": {
-    "note": { "intent": "General note.", "fields": {}, "views": [] }
-  },
-  "templates": {
-    "note": {
-      "templateId": "note",
-      "destinationClass": "registered-existing",
-      "sourceFolder": "Team/Curated Shapes",
-      "sourcePath": "Team/Curated Shapes/note.md",
-      "contract": "note",
-      "naming": "{{date}}-{{slug}}.md"
-    }
-  }
-}
-```
+Version 3 fields are unsupported. There is no migration, no compatibility reader, no note renderer, and no note-write, link-apply, or backfill path that keeps the old contract alive.
 
-Here `destinationClass: "registered-existing"` records the source's existing
-path classification; it is not a per-file registration command or prerequisite.
+## Placement
 
-For example, `.oms/taxonomy.json` can place that note type elsewhere:
+Taxonomy does not choose a template's keys. Resolve a destination from an explicit note path or folder, then the template's placement, then a question. There is no Inbox fallback. A taxonomy folder is a note destination. It does not have to sit inside a template source folder. Folder and wikilink relationships remain global axes, so retrieval is not limited to one placement rule.
 
-```json
-{ "templates": { "note": { "templateFolder": "Notes" } } }
-```
+Changing placement policy is a contract change. It goes through the config interview, not through a note write.
 
-## Setup and migration
+## How a contract change is approved
 
-`oms template` exposes readonly census/inspection, explicit source authoring,
-update, movement, removal, and default selection. Folder selection is explicit;
-it makes every contained `.md` a source candidate and does not require a
-per-file registration act. A default note binding is explicitly selected with
-`template default <id>`; it never follows folder order. Binding removal retains
-existing source files, and deleting bytes requires an explicit managed-source
-deletion request. All mutations derive current signatures server-side and
-require the exact reviewed approval digest.
+Do not hand-edit policy, taxonomy, or `.oms/types.json` to change meaning. The tool-less `interview` skill reads intent the user already wrote, asks one question at a time, and publishes only the approved diff by compare-and-swap. The tool-less `template` skill shapes that contract. It does not render a note.
 
-Control-changing operations cannot absorb pending sibling source edits: complete
-their contract review first. Unchanged sibling note writes remain available.
-Review records approved source signatures in policy; missing proof or a
-hand-edited derived descriptor never authorizes an automatic rename.
-`approvedBodySignature` records independently approved raw-body evidence for
-confirmation-only rename hints after restart; it does not declare requiredness
-or order. Canonically equivalent NFC/NFD template references retain the same
-identity and taxonomy destination; conflicting canonical definitions are invalid.
+`oms setup` proposes an empty version-4 policy for a vault that does not have one yet. It ships no bundled note shape and never modifies notes. Model install, selection, waiver, and status are `oms model` leaves, not setup-era model flags.
 
-Template use and checks verify current authoritative files, not an N-day freshness window. Runtime observations are permanent external history, separate from `.oms/` controls. Actual event time and observation time are distinct; unknown external modification times remain unknown, with observed change intervals when evidence exists. Missing use observations do not mean a template is unused. Journal failures are reported as `LEDGER_APPEND_FAILED` without undoing a successful note write.
+The leaves are `oms template scan`, `list`, `show`, `check`, `regenerate-types`, `review`, `answer`, and `commit`. `review` reads. `answer` records the interview. `commit` runs only after the user approves the exact final digest. Callers forward the question and compare-and-swap fields the server returns and do not invent parameter names. Publish outputs are policy, taxonomy, the derived projection, and approved managed Markdown. Original sources, `.obsidian/types.json`, and ordinary notes are not outputs. A managed draft is overwritten only when its current digest is still the one the approval named.
 
-Bindings distinguish `renderer: "obsidian-core" | "templater" | "none"`. Parsable Templater frontmatter contributes its field contract, not executable defaults: `filledBy: "obsidian"` fields need caller values (`FIELD_FILLED_BY_OBSIDIAN`). External body tags and `none` note creation are rejected with `TEMPLATE_RENDERER_EXTERNAL`; raw `<%` tags must never reach a written note.
+The first host notice for a selected-source change names no template and shows no hash or change class. The exact sentence and the two buttons are in the [host asset contract](./adapters.md). Deferring does not call the server. Confirming starts the interview. It does not rewrite source bytes and it does not block search. A general question, an unknown note value, a failed check, an unmanaged property, or a search does not start the interview.
 
-Script-first sources obtain contract proposals from existing notes matching template identity or explicit taxonomy placement. Proposals show sample counts and field coverage; no matching notes means `TEMPLATE_CONTRACT_UNOBSERVED`, not unused. Proposal limits are 262144 source bytes, 64 fields, 50 samples, and path depth 16. Exceeding limits is reported as `TEMPLATE_PROPOSAL_OVERSIZE`, not silently truncated. Hosts may propose a converted Core template copy, but OMS validates supported syntax, paths, contracts, signatures, and approved transactions rather than transpiling or executing scripts.
+If the approved snapshot is missing, damaged, or its digest does not match, that evaluation stops. OMS does not replace it with an empty contract. An in-progress publication stops guide, check, and complete for the affected work and leaves search running. Interrupted publication is distinguished from the bytes actually staged or published. Notes are not rolled back. Multi-file publication is not claimed to be atomic.
 
-Run setup to discover templates recursively and inspect the proposed migration:
+`completion.retryBudget` and `agentRepair` live on the policy as operation settings. They are not part of the contract digest. Repair is off by default. The budget is a finite nonnegative integer the user sets, default 2, and 0 is allowed. There is no fixed product cap of 3.
 
-```bash
-oms setup --vault /path/to/vault \
-  --template-folder "Vault Shape/Generated" \
-  --template-folder "Team/Curated Shapes" \
-  --dry-run
-```
+## Notes, search, and what may be committed
 
-The dry run changes neither templates nor notes. Apply the reviewed proposal only with its reported digest:
+The agent writes the note after `guide` and before `check`. `complete` follows a separate review of the saved inputs. Those three operations read the note. They do not render it and they do not backfill it. Create, append, update, and backfill are not note operations. Link leaves are suggest and check. Link apply is not an operation.
 
-```bash
-oms setup --vault /path/to/vault --yes --approved-digest <digest>
-```
+`oms search query <text>` is plain lexical search and does not need `.oms/types.json`. `--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit channels. `--max-queries` accepts only integers from 1 through 32. Lexical, vector, HyDE, and typed-axis queries include unbound, invalid, and incomplete notes. Managed sources do not appear as ordinary note results. A missing or stale projection fails a typed axis loudly. Vector search requires `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL`. HyDE also requires `OMS_GENERATE_PROVIDER` and `OMS_GENERATE_MODEL`. Reranking requires `OMS_RERANK_PROVIDER` and `OMS_RERANK_MODEL`. An incomplete pair fails loudly. G004 expansion makes no replacement, parity, or outperformance claim. Search does not write notes and does not start a review. This is the ADR-007 rule, not a new backend.
 
-Repeat `--template-folder` to select source folders explicitly. Each selected
-folder is a census scope for every contained `.md`; there is no auto/manual
-proposal mode and no per-file registration. Obsidian core settings, Templater
-settings, and the read-only vault walk provide candidates only; provenance is
-reported as `explicit`, `obsidian-core`, `templater-folder`,
-`templater-file-templates`, `templater-startup`, or `vault-walk`. Candidates
-never select or persist a folder. Consequently, an unselected non-interactive
-run is blocked with `TEMPLATE_FOLDER_SELECTION_REQUIRED` and has no approval
-digest. OMS does not invent `Templates` or `Inbox` defaults.
+`oms template check` validates template authority. `oms note audit` reports note-contract diagnosis. `oms template regenerate-types` republishes the derived projection only, after a verified target and the exact approved digest. Index and graph maintenance are `oms index sync`, `oms index embed`, `oms index repair`, `oms index clean`, and `oms graph build`. `oms index status` is read-only. The `status` skill, `oms status`, and the `status` MCP tool are read-only and do not decide completion. Note backfill is not a repair.
 
-Discovery isolates incompatible files instead of aborting the whole scan. Dry-run `diagnostics` identify `TEMPLATE_EXPRESSION_UNSUPPORTED`, `TEMPLATE_SOURCE_INVALID`, or `TEMPLATE_ID_DUPLICATE` with a path, field when applicable, blocking status, and remediation; only that file is excluded. If every selected candidate is incompatible, setup blocks with `TEMPLATE_CANDIDATE_INCOMPATIBLE`. Proposed template IDs strip `.template` or `.eta` before slugging.
+Every leaf and discriminator is in [the CLI map](./cli-map.md). Admission is in [verified targets](./verified-target.md). The authority rationale is in [architecture](./architecture.md).
 
-Obsidian core `{{date:FMT}}` and `{{time:FMT}}` expressions support `YYYY YY MM M DD D HH H hh h mm m ss s A a`, separated by `-`, `/`, `.`, `:`, space, or `T`. Bracket literals such as `[text]` are unsupported and appear in diagnostics. A `date` or `datetime` property containing a supported tag is compatible with that property type.
-
-Setup has no bundled note shapes and never modifies vault notes. `.oms/taxonomy.json` is the only taxonomy authority. Setup does not parse or convert legacy `taxonomy.yaml` or concept YAML files and leaves them untouched. An unsupported template-policy version fails closed at runtime; setup retains the old bytes as a compare-and-swap input, preserves writers and unknown extensions in its proposed v3 document, and names replaced legacy fields in `droppedKeys` for dry-run review.
-
-When a selected template folder is empty, the dry run lists a starter `note.md`
-under `starterTemplates`; this is a proposal rather than a bundled runtime
-fallback. Only an approved apply writes it, using the same guarded setup
-transaction. A source census reports adds, edits, deletes, and renames. The
-two-tier freshness gate checks shared authority first, then makes only changed
-sources' dependent templates pending; shared-authority changes fail closed
-vault-wide.
-
-The review flow derives metadata (frontmatter keys, types, requiredness, and
-`filledBy`) and a bounded body structure: ATX headings, fenced code blocks,
-ordered/unordered list runs outside fences, and `<!-- oms:content -->`, plus
-document order/EOL/BOM/final-newline details. It does not claim to enforce
-paragraphs, setext headings, or all Markdown. Source review preserves bytes in
-place and publishes only user-confirmed `.oms` controls.
-
-The initial notice is exactly `템플릿에 변경이 있습니다` with exactly
-`확인하기` and `나중에`; it displays no template name, hash, or change class.
-`나중에` is host-only and makes no server call or interview-ledger mutation.
-`확인하기` starts `write { op: "template", mode: "interview-next" }`.
-Answers use `interview-answer` and server-returned next/request/CAS fields;
-after all necessary questions, `commit-contracts` publishes controls only after
-the user approves the exact final digest. The CLI counterparts are
-`oms template review`, `oms template answer`, and `oms template commit`.
-Long-lived hosts must surface a returned `templateNotice` even when boot
-instructions are stale. Pending body contracts and incomplete fresh projection
-coverage still produce the notice when there is no new raw source diff.
-Confirmation rechecks the full selected census, including newly appearing
-unbound files, as well as the captured controls and known source bytes.
-
-## Managed template mutation
-
-Do not hand-edit generated projection data. Change a managed template through the template operation flow:
-
-1. Request a dry run.
-2. Review its planned mutation and digest.
-3. Apply with the exact approved digest.
-4. Retain the transaction receipt.
-
-The apply step uses compare-and-swap, so a template changed after review cannot be mutated by an obsolete approval.
-
-## Folder source census and contract review
-
-`oms template scan` is a read-only census and pending view. Review is a linear,
-resumable contract interview over the selected-folder sources; it verifies
-source bytes in place and never writes a source. Use
-`oms template add --id <id> --from <content.md>` only for explicit source
-authoring. Updates, moves, removals, and defaults remain separate guarded
-operations, not contract-review steps.
-
-## Writing notes
-
-OMS resolves a `ResolvedTemplate` before writing. Available modes are:
-
-- `create`: create a new note from the resolved template.
-- `append`: add body content to an existing note.
-- `update`: update an existing note according to the resolved template.
-
-The runtime admits the target and operation before disk mutation. The resolved template, mode preconditions, vault confinement, and target verification are checked at that boundary. A completed operation returns a receipt; dry runs return the proposed result without changing the note.
-
-## Search and maintenance
-
-`oms search query <text>` is plain lexical search and independent of `.oms/types.json`.
-`--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit opt-in channels;
-`--max-queries` accepts only integers from 1 through 32. It can narrow by managed
-template, declared field, folder, and wikilink. Managed sources do not appear as
-ordinary note results.
-
-OMS does not invent vector results. Vector search requires
-`OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL`; HyDE also requires
-`OMS_GENERATE_PROVIDER` and `OMS_GENERATE_MODEL`, while reranking requires
-`OMS_RERANK_PROVIDER` and `OMS_RERANK_MODEL`. Missing or incomplete capability
-pairs fail loudly rather than returning simulated matches. G004 expansion is
-available only when explicitly selected and makes no replacement, parity, or
-outperformance claim.
-
-Use `oms template check` for template authority validation and `oms note audit`
-for note-contract reporting. Guarded repair is exposed by the relevant family:
-`oms template regenerate-types`, `oms note backfill`, `oms index sync|embed|repair|clean`,
-and `oms graph build`. Use `oms index status` for read-only index state; the
-`status` skill, `oms status`, and `oms_status` MCP tool remain read-only.
-
-`.oms/template-policy.json`, `.oms/taxonomy.json`, and the derived
-`.oms/types.json` are vault convention artifacts and may be committed with the
-notes they govern. `.oms/engine-store.sqlite` is runtime index state and must
-not be committed. Runtime event journals also must not be committed or placed
-inside the vault; they are external, host-and-vault-scoped observation history.
+`.oms/template-policy.json`, `.oms/taxonomy.json`, approved managed drafts, and the derived `.oms/types.json` may be committed with the notes they govern. Commit the policy if you want the approved meaning in git. Do not treat a dirty managed draft as that approval. `.oms/engine-store.sqlite` and the external runtime journal must not be committed.

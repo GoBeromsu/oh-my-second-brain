@@ -6,6 +6,26 @@ oh-my-secondbrain은 아래 공개 작업들의 아이디어와 구현에 빚지
 > 우리가 무엇을 흡수했는지(설계 로직·근거)는 `docs/research/*` 에 기록한다.
 > 관리 규칙: [`docs/rules/external-attribution.md`](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/rules/external-attribution.md)
 
+## 계약·평가·인터뷰 설계
+
+### Ouroboros
+
+- **저자 / 기여자**: Q00와 Ouroboros 기여자
+- **URL**: https://github.com/Q00/ouroboros
+- **라이선스**: [MIT](https://github.com/Q00/ouroboros/blob/main/LICENSE)
+- **흡수 종류**: absorbed logic — 설계 아이디어 참고, 코드 직접 이식 없음
+- **배운 점**: 명시적 계약, 작성과 평가의 책임 분리, 기계 검사와 의미 평가의 구분, 실제 산출물의 근거에 기반한 완료 판정.
+- **감사**: Ouroboros의 계약 중심 설계와 단계적 검증에서 많은 것을 배웠다. 그 배움을 사용자가 자신의 지식 체계와 정책을 소유하는 OMS의 철학으로 구체화할 수 있도록 공개해 주신 프로젝트와 기여자분들께 진심으로 감사드린다.
+
+### Gajae Code
+
+- **저자 / 기여자**: Yeachan-Heo와 Gajae Code 기여자
+- **URL**: https://github.com/Yeachan-Heo/gajae-code
+- **라이선스**: [MIT](https://github.com/Yeachan-Heo/gajae-code/blob/main/LICENSE)
+- **흡수 종류**: absorbed logic — 인터뷰 상호작용 설계 참고, 코드 직접 이식 없음
+- **배운 점**: [deep-interview](https://github.com/Yeachan-Heo/gajae-code/blob/main/packages/coding-agent/src/defaults/gjc/skills/deep-interview/SKILL.md)의 맥락 사전 확인, 한 번에 한 질문, 자유답변의 의도 확인, 결정 기록과 최종 승인.
+- **감사**: 사용자에게 같은 설명을 반복하게 하기보다 이미 표현한 의도를 정리하고 필요한 결정만 확인하는 인터뷰 방식에서 배웠다. OMS의 설정·계약 인터뷰를 구체화하는 데 도움을 준 공개 작업에 감사드린다.
+
 ## LLM-Wiki 패턴 & 구현체
 
 - https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f

@@ -15,7 +15,6 @@ export interface ParsedCliArgs {
   readonly vaultExplicit: boolean;
   readonly yes: boolean;
   readonly approvedDigest?: string;
-  readonly templateFolders: readonly string[];
   readonly installClaude: boolean;
   readonly runtime: RuntimeSelection | undefined;
   readonly agentVault: string | undefined;
@@ -39,7 +38,6 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   let vaultExplicit = false;
   let yes = false;
   let approvedDigest: string | undefined;
-  const templateFolders: string[] = [];
   let installClaude = false;
   let runtime: RuntimeSelection | undefined;
   let agentVault: string | undefined;
@@ -74,11 +72,9 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       approvedDigest = next;
       index += 1;
     } else if (arg === "--template-folder") {
-      if (next === undefined || next.startsWith("--")) {
-        return failure("[oms] Missing value for --template-folder.");
-      }
-      if (!templateFolders.includes(next)) templateFolders.push(next);
-      index += 1;
+      // Setup proposes an empty contract and adopts no template, so selecting a
+      // folder here would silently do nothing. Refuse instead of ignoring it.
+      return failure("[oms] --template-folder was removed: setup proposes an empty contract, and templates are declared through `oms template review`.");
     } else if (arg === "--install-claude") {
       installClaude = true;
     } else if (arg === "--runtime") {
@@ -137,7 +133,6 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       vaultExplicit,
       yes,
       approvedDigest,
-      templateFolders,
       installClaude,
       runtime,
       agentVault,

@@ -3,6 +3,13 @@
 Domain logic changes belong here.
 
 ## [Unreleased]
+- Guide now binds a saved note to the template it declares when the caller omits `templateId`, matching check. Passing `templateId: null` still uses the default layer only.
+
+- Version 4 contracts compose a user-owned property pool, an always-on default layer, and optional additive template constraints. Approved Markdown remains byte-exact; raw source or managed-draft drift reports locally without replacing the approved snapshot. Full derived-projection validation and transaction-generation checks reject inconsistent writing evaluations.
+- Contract publication confines outputs to approved controls and managed drafts, checks exact approval and current-byte preconditions, and supports honest interrupted-publication recovery. A completed publication marker does not make later user draft edits a global reading failure.
+- Search source exclusions and taxonomy intent no longer require a valid writing contract. Missing raw templates or invalid policy cannot block ordinary-note scanning; explicit exclusion and taxonomy errors remain visible.
+- Native embedding diagnostics now use stderr through node-llama-cpp's logger callback, keeping diagnostic output separate from MCP stdout without suppressing warnings. (#133)
+- Native SQLite ABI mismatches report the actual Node executable, version, module ABI and addon path with rebuild guidance. The original loader error remains the cause; unrelated opening errors are not relabeled, and no backend fallback or automatic rebuild occurs. (#139)
 
 ## [0.15.0] - 2026-09-19
 

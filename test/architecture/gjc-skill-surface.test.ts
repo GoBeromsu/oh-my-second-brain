@@ -58,6 +58,74 @@ describe("Gajae-Code skill surface", () => {
     assertGjcSkillMirror(absolute("assets/skills"), absolute("skills"));
   });
 
+
+  it("never tells an agent that a retired operation may still be live", () => {
+    // Shipped guidance describes the approved surface as final. Transitional
+    // wording that hedges about retired modes teaches the wrong contract and
+    // outlives the cutover.
+    const forbidden = [
+      "Parent alignment",
+      "may still advertise",
+      "may still accept",
+      "may still include",
+      "not yet accept",
+      "until then",
+      "at cutover",
+    ];
+    const skillFiles = regularFiles(absolute("assets/skills")).filter(file => file.endsWith("SKILL.md"));
+    expect(skillFiles.length).toBeGreaterThan(0);
+    for (const relativePath of skillFiles) {
+      const body = readFileSync(path.join(absolute("assets/skills"), relativePath), "utf8").toLowerCase();
+      for (const phrase of forbidden) {
+        expect(body, `${relativePath} still hedges about the retired surface: ${phrase}`).not.toContain(phrase.toLowerCase());
+      }
+    }
+  });
+
+  it("carries proposals in every executable interview payload it shows", () => {
+    // Commit rebuilds the interview from the proposals it is given, so a shown
+    // payload that omits them teaches a call that cannot publish.
+    const body = readFileSync(absolute("assets/skills/interview/SKILL.md"), "utf8");
+    const payloads = [...body.matchAll(/```text\n([\s\S]*?)```/gu)]
+      .map(match => match[1] ?? "")
+      .filter(block => /mode:\s*"(interview-next|interview-answer|commit-contracts)"/u.test(block));
+    expect(payloads.length, "the interview skill must show its next, answer, and commit payloads").toBeGreaterThanOrEqual(3);
+    for (const payload of payloads) {
+      expect(payload, `an interview payload omits proposals: ${payload}`).toMatch(/\bproposals\b/u);
+    }
+    expect(body).toMatch(/interview-next.*interview-answer.*commit-contracts/su);
+  });
+  it("never shows a copyable interview-next call without proposals", () => {
+    // The skill payloads already carry proposals. Live docs that still show
+    // `write { op: "template", mode: "interview-next" }` teach the same
+    // orphan-answer refusal the previous payload gap caused.
+    const files = [
+      "README.md",
+      "README.ko.md",
+      "docs/adapters.md",
+      "docs/cli-map.md",
+      "docs/harness-architecture.md",
+      "assets/skills/interview/SKILL.md",
+    ];
+    const bare = /write \{ op: "template", mode: "interview-next" \}/gu;
+    for (const relativePath of files) {
+      const body = readFileSync(absolute(relativePath), "utf8");
+      expect(
+        body.match(bare) ?? [],
+        `${relativePath} still shows a copyable interview-next without proposals`,
+      ).toEqual([]);
+    }
+  });
+
+  it("never tells an agent that setup selects a template folder", () => {
+    // Setup proposes an empty contract and adopts nothing; folder selection is
+    // an interview decision.
+    for (const relativePath of regularFiles(absolute("assets/skills")).filter(file => file.endsWith("SKILL.md"))) {
+      const body = readFileSync(path.join(absolute("assets/skills"), relativePath), "utf8");
+      expect(body, `${relativePath} still says setup selects a folder`).not.toMatch(/setup or interview decision/u);
+    }
+  });
+
   it("fails closed when an authored scan is empty", () => {
     const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
     fixtures.push(fixture);

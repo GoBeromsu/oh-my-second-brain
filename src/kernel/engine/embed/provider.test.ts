@@ -62,6 +62,53 @@ describe("createHashProjectionProvider", () => {
 });
 
 describe("GGUF embedding provider runtime guards", () => {
+  it("routes node-llama-cpp diagnostics to stderr without touching stdout", async () => {
+    const observedOptions: { logLevel?: string }[] = [];
+    vi.doMock("node-llama-cpp", () => ({
+      LlamaLogLevel: { disabled: "disabled", fatal: "fatal", error: "error", warn: "warn", info: "info", log: "log", debug: "debug" },
+      getLlama: vi.fn(async (
+        options?: { logLevel?: string; logger?: (level: string, message: string) => void },
+      ) => {
+        observedOptions.push({ ...(options ?? {}) });
+        options?.logger?.("info", "load: control-looking");
+        options?.logger?.("warn", "init: embeddings");
+        return {
+          loadModel: async () => ({
+            tokenize: (text: string) => [text],
+            detokenize: (tokens: string[]) => tokens.join(""),
+            createEmbeddingContext: async () => ({
+              getEmbeddingFor: async () => ({ vector: [3, 4] }),
+              dispose: async () => undefined,
+            }),
+            dispose: async () => undefined,
+          }),
+        };
+      }),
+    }));
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const provider = createGGUFEmbeddingProvider("/operator/model.gguf", { dimensions: 2 });
+      await provider.embed("native diagnostics");
+      await provider.dispose();
+
+      const stderrChunks = stderrWrite.mock.calls.map(([chunk]) => String(chunk));
+      expect(stderrChunks).toEqual(expect.arrayContaining([
+        "load: control-looking\n",
+        "init: embeddings\n",
+      ]));
+      expect(stdoutWrite).not.toHaveBeenCalled();
+      // llama.cpp's own loader diagnostics never reach the JavaScript logger, so
+      // native logging is raised to error to keep them off stdout entirely.
+      expect(observedOptions[0]?.logLevel).toBe("error");
+    } finally {
+      stderrWrite.mockRestore();
+      stdoutWrite.mockRestore();
+      vi.doUnmock("node-llama-cpp");
+      vi.resetModules();
+    }
+  });
+
   it("uses the same closed formatter before fake GGUF embeddings", async () => {
     const inputs: string[] = [];
     const loadModel = async () => ({

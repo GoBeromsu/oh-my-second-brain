@@ -6,9 +6,7 @@ import {
   resolveEffectiveVault,
   type CreateVaultLinkResult,
 } from "../kernel/link/link.js";
-import { admitWriteTarget } from "../kernel/capture/safe.js";
-import { loadResolvedTemplates } from "../kernel/templates/index.js";
-import { applyLinksForNote, suggestLinksForNote } from "../kernel/link/workflow.js";
+import { checkLinksForNote, suggestLinksForNote } from "../kernel/link/workflow.js";
 import { writeConventionUsageSection } from "../kernel/link/convention-note.js";
 import { lstat, readlink, rm, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -25,9 +23,9 @@ interface Target {
   readonly source: "explicit" | "vault" | "bridge" | "env" | "cwd";
 }
 
-const VALUE_FLAGS = new Set(["vault", "folder", "base-content-hash", "candidate-id"]);
+const VALUE_FLAGS = new Set(["vault", "folder"]);
 const BOOLEAN_FLAGS = new Set(["yes", "json", "verbose", "no-convention-note"]);
-const REPEATABLE_FLAGS = new Set(["folder", "candidate-id"]);
+const REPEATABLE_FLAGS = new Set(["folder"]);
 
 function fail(message: string): never {
   throw new Error(`LINK_ARGS_INVALID: ${message}`);
@@ -177,69 +175,50 @@ function formatSuggestion(result: Awaited<ReturnType<typeof suggestLinksForNote>
   return lines.join("\n");
 }
 
-function formatApply(result: Awaited<ReturnType<typeof applyLinksForNote>>): string {
-  if (result.result.applied) {
-    return `Applied ${String(result.resolvedIds.length)} approved link(s) to ${result.notePath}.\n  Content hash: ${result.result.contentHash}`;
+function formatLinkCheck(report: Awaited<ReturnType<typeof checkLinksForNote>>): string {
+  const lines = [`Checked ${String(report.links.length)} wikilink(s) in ${report.notePath}.`];
+  for (const link of report.links) {
+    lines.push(`  ${link.state}: ${link.target}${link.matches.length === 0 ? "" : ` → ${link.matches.join(", ")}`}`);
   }
-  return `No links applied to ${result.notePath}: ${result.result.reason}.`;
+  if (report.links.length === 0) lines.push("  No wikilinks.");
+  return lines.join("\n");
 }
 
 export async function runLinkFamilyCommand(argv: readonly string[]): Promise<void> {
   try {
     const parsed = parse(argv);
     if (parsed.verb === "check") {
-      only(parsed, ["vault", "json", "verbose"], 0);
+      // Zero positionals keeps the existing vault-wide link report; one note path
+      // checks exactly that saved note's wikilinks.
+      if (parsed.positional.length === 0) {
+        only(parsed, ["vault", "json", "verbose"], 0);
+        const resolved = await target(parsed.options);
+        process.exitCode = await runLinkCheck({
+          vault: resolved.vault,
+          json: flag(parsed.options, "json"),
+          verbose: flag(parsed.options, "verbose"),
+        });
+        return;
+      }
+      only(parsed, ["vault", "folder", "json"], 1);
       const resolved = await target(parsed.options);
-      process.exitCode = await runLinkCheck({
-        vault: resolved.vault,
-        json: flag(parsed.options, "json"),
-        verbose: flag(parsed.options, "verbose"),
-      });
+      const report = await checkLinksForNote(
+        { ...resolved, notePath: parsed.positional[0]! },
+        { folder: folder(parsed.options) },
+      );
+      print(flag(parsed.options, "json") ? report : formatLinkCheck(report), flag(parsed.options, "json"));
+      process.exitCode = report.unresolved.length === 0 && report.ambiguous.length === 0 ? 0 : 1;
       return;
     }
     if (parsed.verb === "suggest") {
       only(parsed, ["vault", "folder", "json"], 1);
       const resolved = await target(parsed.options);
-      const convention = await loadResolvedTemplates(resolved.vault);
       const result = await suggestLinksForNote(
-        { ...resolved, convention, notePath: parsed.positional[0]! },
+        { ...resolved, notePath: parsed.positional[0]! },
         { folder: folder(parsed.options) },
       );
       print(flag(parsed.options, "json") ? result : formatSuggestion(result), flag(parsed.options, "json"));
       process.exitCode = 0;
-      return;
-    }
-    if (parsed.verb === "apply") {
-      only(parsed, ["vault", "folder", "base-content-hash", "candidate-id", "yes", "json"], 1);
-      if (!flag(parsed.options, "yes")) fail("apply requires --yes");
-      const baseContentHash = text(parsed.options, "base-content-hash");
-      if (baseContentHash === undefined || !/^[0-9a-f]{64}$/.test(baseContentHash)) {
-        fail("apply requires --base-content-hash with 64 lowercase hexadecimal characters");
-      }
-      const candidateIds = values(parsed.options, "candidate-id");
-      if (candidateIds.length === 0) fail("apply requires at least one --candidate-id");
-      if (new Set(candidateIds).size !== candidateIds.length) fail("--candidate-id values must be unique");
-      const resolved = await target(parsed.options);
-      const rejection = await admitWriteTarget(resolved);
-      if (rejection !== undefined) throw new Error(`${rejection.code}: ${rejection.remediation}`);
-      const convention = await loadResolvedTemplates(resolved.vault);
-      const linkScope = { folder: folder(parsed.options) };
-      const current = await suggestLinksForNote(
-        { ...resolved, convention, notePath: parsed.positional[0]! },
-        linkScope,
-      );
-      const availableIds = new Set(current.candidates.map((candidate) => candidate.id));
-      if (current.baseContentHash === baseContentHash) {
-        const unknownId = candidateIds.find((id) => !availableIds.has(id));
-        if (unknownId !== undefined) fail(`candidate id is not present in the current proposal: ${unknownId}`);
-      }
-      const result = await applyLinksForNote(
-        { ...resolved, convention, notePath: parsed.positional[0]! },
-        { baseContentHash, candidateIds },
-        linkScope,
-      );
-      print(flag(parsed.options, "json") ? result : formatApply(result), flag(parsed.options, "json"));
-      process.exitCode = result.result.applied ? 0 : 1;
       return;
     }
     fail(`unknown link command ${parsed.verb}`);

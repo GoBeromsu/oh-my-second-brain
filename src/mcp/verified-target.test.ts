@@ -1,40 +1,36 @@
 import { describe, it, expect, afterEach } from "vitest";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { writeResolvedTemplateNote } from "../kernel/capture/safe.js";
-import { deriveContentFormatContract } from "../kernel/templates/content-contract.js";
-import { loadResolvedTemplates, sharedAuthoritySignature, sourceSignature } from "../kernel/templates/resolver.js";
-import type { SourceDescriptor } from "../kernel/templates/types.js";
+import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
-function digest(value: string): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
+const LITERATURE_MARKDOWN = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n\n# Literature\n";
 
 async function createTemplateAuthority(vault: string): Promise<void> {
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], base: { fields: {} }, contracts: { literature: { intent: "A source.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [] } }, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/literature.md", contract: "literature", naming: "{{slug}}.md" } } });
-  const taxonomy = JSON.stringify({ folders: {}, templates: { literature: { templateFolder: "Inbox" } } });
-  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", "source-url": "text" } });
-  const template = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n# Literature\n<!-- oms:content -->\n";
-  const sources: SourceDescriptor[] = [
-    { logicalId: "template-policy", signature: digest(policy) },
-    { logicalId: "taxonomy", signature: digest(taxonomy) },
-    { logicalId: "obsidian-types", signature: digest(obsidianTypes) },
-    { path: "Templates/OMS/literature.md", signature: digest(template) },
-  ];
-  const content = deriveContentFormatContract("# Literature\n<!-- oms:content -->\n", { templateId: "literature" }).contract;
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { literature: { templateId: "literature", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/literature.md", targetFolder: "Inbox", keyOrder: ["template", "title", "source-url"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, "source-url": { type: "text", required: true } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
-  await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
-  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "literature.md"), template)]);
+  await writeApprovedVault(vault, {
+    properties: {
+      title: { type: "text", intent: "Note title." },
+      "source-url": { type: "text", intent: "Where the source came from." },
+    },
+    templates: {
+      literature: {
+        fields: ["title", "source-url"],
+        approvedMarkdown: LITERATURE_MARKDOWN,
+        targetFolder: "references",
+      },
+    },
+    folders: { references: { intent: "Processed sources." } },
+    obsidianTypes: { title: "text", "source-url": "text" },
+  });
+  await mkdir(path.join(vault, "references"), { recursive: true });
 }
 
 function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
@@ -45,28 +41,20 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
   catch { throw new Error(text); }
 }
 
-describe("Issue #58: Verified-target write kernel", () => {
+describe("Issue #58: Verified-target admission", () => {
   let tmpHome: string;
   let tmpDocuments: string;
   let tmpVault: string;
 
   afterEach(async () => {
-    if (tmpHome) {
-      await rm(tmpHome, { recursive: true, force: true });
-    }
-    if (tmpDocuments) {
-      await rm(tmpDocuments, { recursive: true, force: true });
-    }
-    if (tmpVault) {
-      await rm(tmpVault, { recursive: true, force: true });
+    for (const dir of [tmpHome, tmpDocuments, tmpVault]) {
+      if (dir) await rm(dir, { recursive: true, force: true });
     }
   });
 
-  it("(3) Documents cwd with no vault, bridge, or OMS_VAULT: write rejected with target-unverified, zero files", async () => {
+  it("refuses a current-directory inference and writes nothing", async () => {
     tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
     tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
-
-    // No vault, no bridge, no OMS_VAULT, empty HOME
 
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -78,73 +66,35 @@ describe("Issue #58: Verified-target write kernel", () => {
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
 
     try {
-      const docsBefore = await readdir(tmpDocuments);
-      expect(docsBefore.length).toBe(0);
-
+      expect((await readdir(tmpDocuments)).length).toBe(0);
       await client.connect(transport);
 
-      const write = textPayload(
-        await client.callTool({
-          name: "write",
-          arguments: {
-            op: "note",
-            mode: "create",
-            templateId: "literature",
-            notePath: "references/rejected-note.md",
-            frontmatter: {
-              title: "Should Be Rejected",
-              "source-url": "https://example.com/rejected",
-            },
-            body: "Must not be written.",
-          },
-        }),
-      );
+      const guide = textPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "guide", notePath: "references/rejected-note.md", templateId: "literature" },
+      }));
+      expect(guide.status).toBe("rejected");
+      expect((guide.rejection as Record<string, unknown>).code).toBe("TARGET_UNVERIFIED");
+      expect((guide.rejection as Record<string, unknown>).remediation).toContain("oms setup");
 
-      expect(write.status).toBe("rejected");
-      expect(write.rejection).toBeDefined();
-      expect((write.rejection as Record<string, unknown>).stage).toBe("admission");
-      expect((write.rejection as Record<string, unknown>).code).toBe("target-unverified");
-      expect((write.rejection as Record<string, unknown>).recoverable).toBe(true);
-      expect((write.rejection as Record<string, unknown>).remediation).toContain("oms setup");
-      expect(write.receipt).toBeUndefined();
+      const check = textPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "check", notePath: "references/rejected-note.md" },
+      }));
+      expect(check.status).toBe("rejected");
+      expect((check.rejection as Record<string, unknown>).code).toBe("TARGET_UNVERIFIED");
 
-      // Assert Documents dir gained zero files
-      const docsAfter = await readdir(tmpDocuments);
-      expect(docsAfter.length).toBe(0);
+      // The inferred directory gained nothing.
+      expect((await readdir(tmpDocuments)).length).toBe(0);
     } finally {
       await client.close();
     }
   });
 
-  it("(4) explicit source passthrough via the template writer", async () => {
-    const envVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-env-")));
-    const bareDir = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-bare-")));
-    await createTemplateAuthority(bareDir);
-    const result = await writeResolvedTemplateNote({
-      target: { vault: bareDir, source: "explicit" },
-      convention: await loadResolvedTemplates(bareDir),
-      templateId: "literature",
-      mode: "create",
-      dryRun: false,
-      frontmatter: { title: "Explicit Vault", "source-url": "https://example.com/explicit" },
-      body: "Written with explicit source.",
-    });
-
-    expect(result.status).toBe("written");
-    expect(result.receipt).toBeDefined();
-    expect((result.receipt as Record<string, unknown>).resolutionSource).toBe("explicit");
-
-    // Cleanup extra vaults
-    await rm(bareDir, { recursive: true, force: true });
-    tmpVault = envVault;
-  });
-
-  it("(5) every write response exposes resolvedVault + resolutionSource in written and rejected shapes", async () => {
+  it("guides an environment-resolved vault and reports its resolution source", async () => {
     tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
     tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
     tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-vault-")));
-
-    // Legacy direct-kernel coverage still needs its ontology; MCP note writes use the template authority.
     await createTemplateAuthority(tmpVault);
 
     const transport = new StdioClientTransport({
@@ -159,51 +109,63 @@ describe("Issue #58: Verified-target write kernel", () => {
     try {
       await client.connect(transport);
 
-      // Case A: Written response with receipt
-      const written = textPayload(
-        await client.callTool({
-          name: "write",
-          arguments: {
-            op: "note",
-            mode: "create",
-            templateId: "literature",
-            frontmatter: {
-              title: "Response Test",
-              "source-url": "https://example.com/response",
-            },
-            body: "Testing response shape.",
-          },
-        }),
+      const guide = textPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "guide", notePath: "references/new-note.md", templateId: "literature" },
+      }));
+      expect(guide.status).toBe("guided");
+      expect(guide.resolvedVault).toBe(tmpVault);
+      expect(guide.resolutionSource).toBe("env");
+      // Guidance returns the approved bytes and a binding; it writes nothing.
+      expect((guide.approvedMarkdown as Record<string, unknown>).templateLayer).toBe(LITERATURE_MARKDOWN);
+      expect(guide.contractDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+      await expect(readFile(path.join(tmpVault, "references", "new-note.md"), "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
+
+      // The agent saves the note, then OMS checks the bytes on disk.
+      await writeFile(
+        path.join(tmpVault, "references", "new-note.md"),
+        "---\ntemplate: literature\ntitle: Response Test\n---\n\n# Literature\n\nBody.\n",
       );
+      const check = textPayload(await client.callTool({
+        name: "write",
+        arguments: { op: "check", notePath: "references/new-note.md", templateId: "literature" },
+      }));
+      expect(check.status).toBe("fail");
+      expect(check.resolvedVault).toBe(tmpVault);
+      expect(check.resolutionSource).toBe("env");
+      const findings = (check.machine as { readonly findings: readonly { readonly targetId: string }[] }).findings;
+      expect(findings.map(finding => finding.targetId)).toContain("field/source-url");
+    } finally {
+      await client.close();
+    }
+  });
 
-      expect(written.status).toBe("written");
-      expect(written.resolvedVault).toBe(tmpVault);
-      expect(written.resolutionSource).toBe("env");
-      expect(written.receipt).toBeDefined();
-      expect((written.receipt as Record<string, unknown>).resolvedVault).toBe(tmpVault);
-      expect((written.receipt as Record<string, unknown>).resolutionSource).toBe("env");
+  it("does not advertise a retired note-write operation", async () => {
+    tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
+    tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-vault-")));
+    await createTemplateAuthority(tmpVault);
 
-      // Case B: Rejected response (ask status - contract violation)
-      const rejected = textPayload(
-        await client.callTool({
-          name: "write",
-          arguments: {
-            op: "note",
-            mode: "create",
-            templateId: "literature",
-            frontmatter: {
-              title: "Incomplete",
-              // Missing source-url - required field
-            },
-            body: "Body present",
-          },
-        }),
-      );
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distCli, "serve", "mcp", "--vault", tmpVault],
+      cwd: repoRoot,
+      env: { HOME: tmpHome, PATH: process.env.PATH ?? "" },
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "oms-test-client", version: "0.0.0" });
 
-      expect(rejected.status).toBe("ask");
-      expect(rejected.resolvedVault).toBe(tmpVault);
-      expect(rejected.resolutionSource).toBe("env");
-      expect((rejected.violations as Array<Record<string, unknown>>).some((item) => item.field === "source-url" && item.rule === "required")).toBe(true);
+    try {
+      await client.connect(transport);
+      const write = (await client.listTools()).tools.find(tool => tool.name === "write");
+      expect(JSON.stringify(write?.inputSchema)).not.toContain('"note"');
+      const rejected = await client.callTool({
+        name: "write",
+        arguments: { op: "note", mode: "create", templateId: "literature", body: "Must not be written." },
+      });
+      const text = rejected.content[0]?.type === "text" ? rejected.content[0].text : "";
+      expect(text).toContain("Unknown operation");
+      expect((await readdir(path.join(tmpVault, "references"))).length).toBe(0);
     } finally {
       await client.close();
     }

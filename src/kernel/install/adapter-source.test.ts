@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import type { HarnessHostSurface } from "../harness/surface-registry.js";
+import { HARNESS_HOST_REVIEWERS, type HarnessHostSurface } from "../harness/surface-registry.js";
 import { HostAdapterSourceError, resolveHostAdapterSource } from "./hosts.js";
 import { resolveSharedSkillsSource } from "../../assets/shared-skills.js";
 
@@ -15,7 +15,8 @@ describe("host registry adapter source resolution", () => {
       hookFiles: [],
       ruleFiles: [],
       mcpConfigFiles: [],
-      hardHookGuarantee: true,
+      writeHook: "fail-open",
+      reviewerMechanisms: HARNESS_HOST_REVIEWERS.claude,
     };
 
     const source = resolveHostAdapterSource("/package", registryHost);
@@ -34,7 +35,8 @@ describe("host registry adapter source resolution", () => {
       hookFiles: [],
       ruleFiles: [],
       mcpConfigFiles: [],
-      hardHookGuarantee: false,
+      writeHook: "none",
+      reviewerMechanisms: HARNESS_HOST_REVIEWERS.codex,
     };
 
     expect(() => resolveHostAdapterSource("/package", registryHost)).toThrow(HostAdapterSourceError);

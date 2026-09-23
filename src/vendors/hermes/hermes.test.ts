@@ -229,7 +229,7 @@ describe("installHermes transaction", () => {
     expect(existsSync(path.join(home, ".hermes", "skills", "knowledge-management", "oms"))).toBe(false);
   });
 
-  it("records provenance outside the seven-skill layout and makes an identical reinstall a no-op", async () => {
+  it("records provenance outside the eight-skill layout and makes an identical reinstall a no-op", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-"));
     temporaryDirectories.push(home);
     const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
@@ -254,7 +254,11 @@ describe("installHermes transaction", () => {
       if (previousHermesHome === undefined) delete process.env.OMS_HERMES_HOME;
       else process.env.OMS_HERMES_HOME = previousHermesHome;
     }
-    expect(await readdir(skills)).toHaveLength(7);
+    expect((await readdir(skills)).sort()).toEqual([
+      "distill", "doctor", "interview", "link", "search", "status", "template", "write",
+    ]);
+    expect(await readFile(path.join(skills, "interview", "SKILL.md"), "utf8"))
+      .toBe(await readFile("assets/skills/interview/SKILL.md", "utf8"));
     expect(provenance).toMatchObject({ source: "npm", version: packageVersion, skillTreeDigest: await computeTreeDigest(skills) });
     const before = await readFile(provenanceFile, "utf8");
     await expect(installHermes(options, host)).resolves.toMatchObject({ changed: false, skipped: true });

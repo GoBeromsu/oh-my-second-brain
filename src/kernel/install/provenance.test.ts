@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   computeTreeDigest,
   decideOwnership,
+  digestFileBytes,
+  digestOneFile,
   parseProvenance,
   serializeProvenance,
   type OmsInstallProvenance,
@@ -41,6 +43,20 @@ describe("OMS install provenance", () => {
     await writeFile(path.join(root, "nested", "a.txt"), "a");
 
     expect(await computeTreeDigest(root)).toBe("11931989af15faac33fe84458ebc88e766673f121a4d5de4ab3bbaeefbb8df9d");
+  });
+
+  it("hashes one named file and ignores sibling files", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oms-provenance-one-file-"));
+    roots.push(root);
+    const name = "oms-reviewer.toml";
+    const bytes = Buffer.from("role\n");
+    await writeFile(path.join(root, name), bytes);
+
+    expect(digestOneFile(name, bytes)).toBe(await computeTreeDigest(root));
+    expect(digestFileBytes(bytes)).not.toBe(digestOneFile(name, bytes));
+
+    await writeFile(path.join(root, "personal.toml"), "other\n");
+    expect(digestOneFile(name, bytes)).not.toBe(await computeTreeDigest(root));
   });
 
   it.each([

@@ -6,10 +6,7 @@ import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { deriveContentFormatContract } from "../kernel/templates/content-contract.js";
-import { sharedAuthoritySignature, sourceSignature } from "../kernel/templates/resolver.js";
-import type { SourceDescriptor } from "../kernel/templates/types.js";
-import { createHash } from "node:crypto";
+import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
 import { demotedOperationNames } from "./server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,25 +14,24 @@ const repoRoot = path.resolve(__dirname, "../../");
 const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
-function digest(value: string): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
 async function createTemplateAuthority(vault: string): Promise<void> {
-  const policy = JSON.stringify({ version: 3, templateFolders: [{ path: "Templates/OMS", default: true }], base: { fields: {} }, contracts: { note: { intent: "A note.", fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [] } }, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/note.md", contract: "note", naming: "{{slug}}.md" } } });
-  const taxonomy = JSON.stringify({ folders: {}, templates: { note: { templateFolder: "Inbox" } } });
-  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", status: "select" } });
-  const template = "---\ntemplate: note\ntitle: Untitled\nstatus: open\n---\n# Note\n<!-- oms:content -->\n";
-  const sources: SourceDescriptor[] = [
-    { logicalId: "template-policy", signature: digest(policy) },
-    { logicalId: "taxonomy", signature: digest(taxonomy) },
-    { logicalId: "obsidian-types", signature: digest(obsidianTypes) },
-    { path: "Templates/OMS/note.md", signature: digest(template) },
-  ];
-  const content = deriveContentFormatContract("# Note\n<!-- oms:content -->\n", { templateId: "note" }).contract;
-  const projection = JSON.stringify({ version: "oms.types.v1", generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources }, managed: { base: { fields: {} }, globalAxes: {}, templates: { note: { templateId: "note", destinationClass: "managed-default", renderer: "obsidian-core", sourcePath: "Templates/OMS/note.md", targetFolder: "Inbox", keyOrder: ["template", "title", "status"], fields: { template: { type: "text", required: true }, title: { type: "text", required: true }, status: { type: "select", required: true, allowedValues: ["open", "closed"] } }, views: [], naming: "{{slug}}.md", bodySignature: content.bodySignature, content } } } });
-  await Promise.all([mkdir(path.join(vault, ".oms"), { recursive: true }), mkdir(path.join(vault, ".obsidian"), { recursive: true }), mkdir(path.join(vault, "Templates", "OMS"), { recursive: true })]);
-  await Promise.all([writeFile(path.join(vault, ".oms", "template-policy.json"), policy), writeFile(path.join(vault, ".oms", "taxonomy.json"), taxonomy), writeFile(path.join(vault, ".oms", "types.json"), projection), writeFile(path.join(vault, ".obsidian", "types.json"), obsidianTypes), writeFile(path.join(vault, "Templates", "OMS", "note.md"), template)]);
+  await writeApprovedVault(vault, {
+    properties: {
+      title: { type: "text", intent: "Note title." },
+      status: { type: "select", intent: "Workflow state.", allowedValues: ["open", "closed"] },
+    },
+    templates: {
+      note: {
+        fields: ["title", "status"],
+        optionalFields: ["status"],
+        approvedMarkdown: "---\ntemplate: note\ntitle: Untitled\nstatus: open\n---\n\n# Note\n",
+        rawSource: { path: "Templates/OMS/note.md", identity: "note-source", bytes: "---\ntemplate: note\n---\n# Note\n" },
+        targetFolder: "references",
+      },
+    },
+    folders: { references: { intent: "Processed sources." } },
+    obsidianTypes: { title: "text", status: "select" },
+  });
   const targetPath = path.join(vault, "references", "clean-architecture.md");
   const target = await readFile(targetPath, "utf-8");
   await writeFile(targetPath, target.replace(/^---\n/u, "---\ntemplate: note\n"), "utf-8");
@@ -93,36 +89,30 @@ describe("MCP detail-tool demotion", () => {
       expect(payload(await call("doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
       const scan = payload(await call("search", { op: "template-scan" }));
       expect(scan).toMatchObject({
-        projectionUsable: true,
-        entries: [
-          expect.objectContaining({
-            sourcePath: "Templates/OMS/note.md",
-            signature: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
-            templateId: "note",
-            diagnostics: [],
-          }),
-        ],
-        diffs: [],
-        pending: [],
-        diagnostics: [],
+        generationDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+        approved: expect.arrayContaining([
+          expect.objectContaining({ templateId: null }),
+          expect.objectContaining({ templateId: "note", approvedMarkdownDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) }),
+        ]),
+        raw: [expect.objectContaining({ templateId: "note", path: "Templates/OMS/note.md", drift: null })],
       });
-      expect(scan).not.toHaveProperty("candidates");
+      // Review evidence carries digests, never raw bytes or approved Markdown.
       expect(JSON.stringify(scan)).not.toContain('"bytes"');
+      expect(JSON.stringify(scan)).not.toContain("approvedMarkdown\":\"");
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
       const regeneration = payload(await call("doctor", { op: "regenerate-types", dryRun: true }));
       expect(regeneration.status).toMatch(/planned|unchanged/);
       expect(regeneration).not.toHaveProperty("rejection");
-      const beforeBackfill = await readFile(path.join(vault, "references/clean-architecture.md"));
-      const backfill = payload(await call("doctor", { op: "backfill-defaults", notePath: "references/clean-architecture.md", dryRun: true }));
-      expect(backfill).toMatchObject({ status: "rejected", code: "MIGRATION_NOTE_IDENTITY_UNRESOLVED" });
-      expect(await readFile(path.join(vault, "references/clean-architecture.md"))).toEqual(beforeBackfill);
       expect(payload(await call("search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", targets: ["references/clean-architecture.md"] })).documents).toBeInstanceOf(Array);
       const suggested = payload(await call("link", { op: "suggest", notePath: "references/clean-architecture.md" }));
       expect(suggested.baseContentHash).toBeTypeOf("string");
-      const apply = await call("link", { op: "apply", notePath: "references/clean-architecture.md", baseContentHash: "0".repeat(64), candidateIds: [] });
-      expect(apply.content[0]?.type).toBe("text");
+      const beforeLinkCheck = await readFile(path.join(vault, "references/clean-architecture.md"));
+      const linkCheck = payload(await call("link", { op: "check", notePath: "references/clean-architecture.md" }));
+      expect(linkCheck.links).toBeInstanceOf(Array);
+      // The read-only link tool leaves the note exactly as the agent saved it.
+      expect(await readFile(path.join(vault, "references/clean-architecture.md"))).toEqual(beforeLinkCheck);
       for (const view of ["status", "collections", "contexts"]) {
         const result = await call("search", { op: "index-status", view });
         expect(result.content[0]?.type).toBe("text");

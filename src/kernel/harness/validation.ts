@@ -1,9 +1,14 @@
-import type {
-  HarnessHostRuntime,
-  HarnessPosture,
-  HarnessStability,
-  HarnessSurfaceOwner,
-  HarnessSurfaceRegistry,
+import {
+  HARNESS_CLI_COMMANDS,
+  HARNESS_HOST_REVIEWERS,
+  HARNESS_MCP_TOOLS,
+  HARNESS_SHARED_SKILLS,
+  HARNESS_WRITE_HOOK,
+  type HarnessHostRuntime,
+  type HarnessPosture,
+  type HarnessStability,
+  type HarnessSurfaceOwner,
+  type HarnessSurfaceRegistry,
 } from "./surface-registry.js";
 import { posix as pathPosix } from "node:path";
 
@@ -15,9 +20,12 @@ export type HarnessRegistryViolationCode =
   | "invalid_owner"
   | "invalid_posture"
   | "invalid_stability"
+  | "invalid_write_hook"
   | "missing_owner"
   | "missing_path"
-  | "missing_runtime";
+  | "missing_runtime"
+  | "missing_surface"
+  | "unregistered_surface";
 
 export interface HarnessRegistryViolation {
   readonly code: HarnessRegistryViolationCode;
@@ -64,13 +72,14 @@ const SKILLS_PREFIX = "skills/";
  * The vendor plugin roots sit at the repository root because a host resolves a
  * manifest's `skills` pointer relative to the manifest, and only a root-level
  * manifest can reference `./assets/skills/` without climbing out of its own
- * plugin root.
+ * plugin root. `agents/` ships the owned Claude reviewer definition.
  */
 const PACKAGE_ROOT_ENTRIES = [
   ".claude-plugin",
   ".codex-plugin",
   ".mcp.json",
   ".mcp.codex.json",
+  "agents",
   "package.json",
 ] as const;
 
@@ -108,6 +117,34 @@ function pushDuplicateViolations(
       surface,
       value,
       message: `${surface} contains duplicate ${code === "duplicate_name" ? "name" : "path"}: ${value}`,
+    });
+  }
+}
+
+function validateClosedSet(
+  violations: HarnessRegistryViolation[],
+  surface: string,
+  declared: readonly string[],
+  required: readonly string[],
+): void {
+  const requiredSet = new Set(required);
+  const declaredSet = new Set(declared);
+  for (const value of requiredSet) {
+    if (declaredSet.has(value)) continue;
+    violations.push({
+      code: "missing_surface",
+      surface,
+      value,
+      message: `${surface} is missing registered surface: ${value}`,
+    });
+  }
+  for (const value of declaredSet) {
+    if (requiredSet.has(value)) continue;
+    violations.push({
+      code: "unregistered_surface",
+      surface,
+      value,
+      message: `${surface} declares unregistered surface: ${value}`,
     });
   }
 }
@@ -277,17 +314,208 @@ function validateRuntime(
   }
 }
 
+function validateWriteHook(
+  violations: HarnessRegistryViolation[],
+  runtime: string,
+  writeHook: unknown,
+): void {
+  const surface = `hosts.${runtime}.writeHook`;
+  if (writeHook === undefined || writeHook === null || writeHook === "") {
+    violations.push({
+      code: "missing_surface",
+      surface,
+      message: `${surface} is missing write-hook metadata.`,
+    });
+    return;
+  }
+  if (writeHook !== "fail-open" && writeHook !== "none") {
+    violations.push({
+      code: "invalid_write_hook",
+      surface,
+      value: String(writeHook),
+      message: `${surface} must be fail-open or none: ${String(writeHook)}`,
+    });
+    return;
+  }
+  if (!includesValue(HOSTS, runtime)) return;
+  const required = HARNESS_WRITE_HOOK[runtime];
+  if (writeHook !== required) {
+    violations.push({
+      code: "invalid_write_hook",
+      surface,
+      value: writeHook,
+      message: `${surface} must be ${required}; a boolean hook guarantee is not a write-hook posture.`,
+    });
+  }
+}
+
+function readReviewerMechanisms(value: unknown): readonly {
+  readonly id: string;
+  readonly selection: unknown;
+  readonly isolation: unknown;
+  readonly assetPath: unknown;
+}[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((mechanism) => {
+    const record = mechanism !== null && typeof mechanism === "object"
+      ? mechanism as Record<string, unknown>
+      : {};
+    return {
+      id: typeof record.id === "string" ? record.id : "",
+      selection: record.selection,
+      isolation: record.isolation,
+      assetPath: record.assetPath,
+    };
+  });
+}
+
+function validateHostReviewers(
+  violations: HarnessRegistryViolation[],
+  runtime: string,
+  mechanisms: unknown,
+): void {
+  const surface = `hosts.${runtime}.reviewerMechanisms`;
+  if (!includesValue(HOSTS, runtime)) return;
+  const required = HARNESS_HOST_REVIEWERS[runtime];
+  const declared = readReviewerMechanisms(mechanisms);
+  if (declared === undefined) {
+    violations.push({
+      code: "missing_surface",
+      surface,
+      message: `${surface} is missing reviewer mechanisms.`,
+    });
+    for (const mechanism of required) {
+      violations.push({
+        code: "missing_surface",
+        surface,
+        value: mechanism.id,
+        message: `${surface} is missing registered surface: ${mechanism.id}`,
+      });
+    }
+    return;
+  }
+
+  pushDuplicateViolations(
+    violations,
+    surface,
+    declared.map((mechanism) => mechanism.id).filter((id) => id.length > 0),
+    "duplicate_name",
+  );
+  validateClosedSet(
+    violations,
+    surface,
+    declared.map((mechanism) => mechanism.id),
+    required.map((mechanism) => mechanism.id),
+  );
+
+  for (const requirement of required) {
+    const match = declared.find((mechanism) => mechanism.id === requirement.id);
+    if (match === undefined) continue;
+    const mechanismSurface = `${surface}.${requirement.id}`;
+    if (match.selection !== requirement.selection || match.isolation !== requirement.isolation) {
+      violations.push({
+        code: "unregistered_surface",
+        surface: mechanismSurface,
+        value: `${String(match.selection)}/${String(match.isolation)}`,
+        message: `${mechanismSurface} is not the registered reviewer mechanism.`,
+      });
+    }
+    if (requirement.assetPath !== undefined) {
+      if (match.assetPath !== requirement.assetPath) {
+        const declaredAsset = typeof match.assetPath === "string" && match.assetPath.length > 0
+          ? match.assetPath
+          : undefined;
+        violations.push({
+          code: declaredAsset === undefined ? "missing_surface" : "unregistered_surface",
+          surface: mechanismSurface,
+          value: declaredAsset ?? requirement.assetPath,
+          message: declaredAsset === undefined
+            ? `${mechanismSurface} is missing owned reviewer asset: ${requirement.assetPath}`
+            : `${mechanismSurface} declares unregistered reviewer asset: ${declaredAsset}`,
+        });
+      } else {
+        validatePackagePath(violations, mechanismSurface, match.assetPath);
+      }
+    } else if (match.assetPath !== undefined) {
+      violations.push({
+        code: "unregistered_surface",
+        surface: mechanismSurface,
+        value: String(match.assetPath),
+        message: `${mechanismSurface} owns no reviewer asset.`,
+      });
+    }
+  }
+}
+
+function npmFileCovers(npmFiles: readonly string[], requiredPath: string): boolean {
+  if (requiredPath === "package.json") return true;
+  return npmFiles.some((root) => requiredPath === root || requiredPath.startsWith(`${root}/`));
+}
+
+function validateRegisteredShipPaths(
+  violations: HarnessRegistryViolation[],
+  registry: HarnessSurfaceRegistry,
+): void {
+  const requiredPaths: string[] = [];
+  for (const skill of HARNESS_SHARED_SKILLS) {
+    requiredPaths.push(`assets/skills/${skill}/SKILL.md`, `skills/${skill}/SKILL.md`);
+  }
+  for (const runtime of HOSTS) {
+    for (const mechanism of HARNESS_HOST_REVIEWERS[runtime]) {
+      if (mechanism.assetPath !== undefined) requiredPaths.push(mechanism.assetPath);
+    }
+  }
+  for (const requiredPath of requiredPaths) {
+    if (registry.packageAssets.releaseRequiredPaths.includes(requiredPath)) continue;
+    violations.push({
+      code: "missing_surface",
+      surface: "packageAssets.releaseRequiredPaths",
+      value: requiredPath,
+      message: `packageAssets.releaseRequiredPaths is missing registered surface: ${requiredPath}`,
+    });
+  }
+  for (const requiredPath of registry.packageAssets.releaseRequiredPaths) {
+    if (npmFileCovers(registry.packageAssets.npmFiles, requiredPath)) continue;
+    violations.push({
+      code: "missing_surface",
+      surface: "packageAssets.npmFiles",
+      value: requiredPath,
+      message: `packageAssets.npmFiles does not ship registered surface: ${requiredPath}`,
+    });
+  }
+}
+
 export function validateHarnessRegistry(registry: HarnessSurfaceRegistry): HarnessRegistryViolation[] {
   const violations: HarnessRegistryViolation[] = [];
 
   pushDuplicateViolations(violations, "cliCommands", registry.cliCommands.map((command) => command.name), "duplicate_name");
+  validateClosedSet(
+    violations,
+    "cliCommands",
+    registry.cliCommands.map((command) => command.name),
+    HARNESS_CLI_COMMANDS.map((command) => command.name),
+  );
   for (const command of registry.cliCommands) {
     validateOwner(violations, `cliCommands.${command.name}`, command.owner);
     validateStability(violations, `cliCommands.${command.name}`, command.stability);
   }
 
-
+  for (const tool of HARNESS_MCP_TOOLS) {
+    if (HARNESS_SHARED_SKILLS.some((skill) => skill === tool.name)) continue;
+    violations.push({
+      code: "unregistered_surface",
+      surface: "mcpTools",
+      value: tool.name,
+      message: `mcpTools.${tool.name} is outside the shared skill set.`,
+    });
+  }
   pushDuplicateViolations(violations, "mcpTools", registry.mcpTools.map((tool) => tool.name), "duplicate_name");
+  validateClosedSet(
+    violations,
+    "mcpTools",
+    registry.mcpTools.map((tool) => tool.name),
+    HARNESS_MCP_TOOLS.map((tool) => tool.name),
+  );
   for (const tool of registry.mcpTools) {
     validateOwner(violations, `mcpTools.${tool.name}`, tool.owner);
     if (!includesValue(POSTURES, tool.posture)) {
@@ -302,15 +530,27 @@ export function validateHarnessRegistry(registry: HarnessSurfaceRegistry): Harne
   }
 
   pushDuplicateViolations(violations, "hosts", registry.hosts.map((host) => host.runtime), "duplicate_name");
+  validateClosedSet(violations, "hosts", registry.hosts.map((host) => host.runtime), HOSTS);
   for (const host of registry.hosts) {
     validateRuntime(violations, `hosts.${host.runtime}`, host.runtime);
     validateAdapterDir(violations, `hosts.${host.runtime}.adapterDir`, host.adapterDir);
+    const skillDirs = Array.isArray(host.skillDirs) ? host.skillDirs : [];
+    if (!Array.isArray(host.skillDirs)) {
+      violations.push({
+        code: "missing_surface",
+        surface: `hosts.${host.runtime}.skillDirs`,
+        message: `hosts.${host.runtime}.skillDirs is missing shared skills.`,
+      });
+    }
     pushDuplicateViolations(
       violations,
       `hosts.${host.runtime}.skillDirs`,
-      host.skillDirs.map((skillDir) => `${host.runtime}:${skillDir}`),
+      skillDirs.map((skillDir) => `${host.runtime}:${skillDir}`),
       "duplicate_name",
     );
+    validateClosedSet(violations, `hosts.${host.runtime}.skillDirs`, skillDirs, HARNESS_SHARED_SKILLS);
+    validateWriteHook(violations, host.runtime, host.writeHook);
+    validateHostReviewers(violations, host.runtime, host.reviewerMechanisms);
   }
 
   pushDuplicateViolations(violations, "hooks", registry.hooks.map((hook) => hook.bin), "duplicate_name");
@@ -376,6 +616,7 @@ export function validateHarnessRegistry(registry: HarnessSurfaceRegistry): Harne
   for (const requiredPath of registry.packageAssets.releaseRequiredPaths) {
     validatePackagePath(violations, `packageAssets.releaseRequiredPaths.${requiredPath}`, requiredPath);
   }
+  validateRegisteredShipPaths(violations, registry);
 
   return violations;
 }

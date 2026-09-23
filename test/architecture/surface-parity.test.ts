@@ -1,28 +1,33 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseNote } from "../../src/kernel/conventions/frontmatter.js";
-import { harnessSurfaceRegistry } from "../../src/kernel/harness/surface-registry.js";
+import {
+  HARNESS_CLI_COMMANDS,
+  HARNESS_HOST_REVIEWERS,
+  HARNESS_MCP_TOOLS,
+  HARNESS_SHARED_SKILLS,
+  HARNESS_WRITE_HOOK,
+  harnessSurfaceRegistry,
+} from "../../src/kernel/harness/surface-registry.js";
 import { omsMcpTools } from "../../src/mcp/server.js";
 import { SHARED_SKILLS_SOURCE } from "../../src/assets/shared-skills.js";
 
 /**
  * Surface-set parity gate.
  *
- * The live target set (7 skills / 5 tools) is asserted directly. The fixture
- * cases below prove that the rules also fail closed when a surface drifts.
+ * The live target set (8 skills / 5 tools / 14 CLI families) is asserted directly.
+ * The fixture cases below prove that the rules also fail closed when a surface drifts.
  *
  * The rule set is deliberately NOT "all three lists are equal". The three
  * surfaces are related but distinct:
  *
- *   skills      - the authored skill set
- *   mcpTools    - a strict SUBSET of skills, namely those declaring `mcp_tool`
- *   cliCommands - an INDEPENDENT allowlist of every real CLI command,
- *                 including the five public search commands and the guarded
- *                 template command family. It is
- *                 intentionally distinct from the skill and MCP-tool surfaces.
+ *   skills      - the authored skill set, including tool-less interview
+ *   mcpTools    - a strict SUBSET of those skills: write, search, link, status, doctor
+ *   cliCommands - an INDEPENDENT allowlist of fourteen real CLI families.
+ *                 It is intentionally distinct from the skill and MCP-tool surfaces.
  *
  * Enforcing equality across all three would let a contributor satisfy the gate
  * by silently deleting a surface. That is the failure this shape exists to
@@ -178,11 +183,11 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
   return violations;
 }
 
-const TARGET = { skills: 7, tools: 5 } as const;
+const TARGET = { skills: 8, tools: 5 } as const;
 const MCP_SERVER_ID = "oms";
 
 const CLEAN: SurfaceSets = {
-  skills: ["write", "search", "link", "distill", "status", "doctor", "template"],
+  skills: ["distill", "doctor", "interview", "link", "search", "status", "template", "write"],
   skillsWithTool: ["write", "search", "link", "status", "doctor"],
   // In this fixture, a tool is identified by its declaring skill; the `oms_`
   // naming convention is verified separately by the registry parity suite.
@@ -190,14 +195,14 @@ const CLEAN: SurfaceSets = {
   registryMcpTools: [
     { name: "write", posture: "write", destructive: false, idempotent: false, openWorld: false },
     { name: "search", posture: "read", destructive: false, idempotent: false, openWorld: false },
-    { name: "link", posture: "write", destructive: true, idempotent: false, openWorld: false },
+    { name: "link", posture: "read", destructive: false, idempotent: true, openWorld: false },
     { name: "status", posture: "read", destructive: false, idempotent: true, openWorld: false },
     { name: "doctor", posture: "write", destructive: false, idempotent: false, openWorld: false },
   ],
   registeredMcpTools: [
     { name: "write", posture: "write", destructive: false, idempotent: false, openWorld: false },
     { name: "search", posture: "read", destructive: false, idempotent: false, openWorld: false },
-    { name: "link", posture: "write", destructive: true, idempotent: false, openWorld: false },
+    { name: "link", posture: "read", destructive: false, idempotent: true, openWorld: false },
     { name: "status", posture: "read", destructive: false, idempotent: true, openWorld: false },
     { name: "doctor", posture: "write", destructive: false, idempotent: false, openWorld: false },
   ],
@@ -212,6 +217,10 @@ const CLEAN: SurfaceSets = {
 
 describe("surface-set parity gate (rules)", () => {
   it("passes on the target surface", () => {
+    expect(HARNESS_SHARED_SKILLS).toHaveLength(TARGET.skills);
+    expect(HARNESS_MCP_TOOLS).toHaveLength(TARGET.tools);
+    expect(HARNESS_CLI_COMMANDS).toHaveLength(TARGET_CLI_COMMANDS.length);
+    expect([...HARNESS_CLI_COMMANDS].map((command) => command.name).sort()).toEqual([...TARGET_CLI_COMMANDS].sort());
     expect(checkSurfaceSets(CLEAN, TARGET)).toEqual([]);
   });
 
@@ -291,6 +300,14 @@ describe("surface-set parity gate (rules)", () => {
   it("does NOT require CLI commands to equal the skill set", () => {
     const violations = checkSurfaceSets(CLEAN, TARGET);
     expect(violations).toEqual([]);
+    expect(CLEAN.skills).toHaveLength(8);
+    expect(CLEAN.skills).toContain("interview");
+    expect(CLEAN.mcpTools).toHaveLength(5);
+    expect(CLEAN.mcpTools).not.toContain("interview");
+    expect(CLEAN.mcpTools).not.toContain("distill");
+    expect(CLEAN.mcpTools).not.toContain("template");
+    expect(CLEAN.cliCommands).toHaveLength(14);
+    expect([...CLEAN.cliCommands].sort()).not.toEqual([...CLEAN.skills].sort());
     expect(CLEAN.cliCommands).toContain("index");
     expect(CLEAN.cliCommands).toContain("template");
     expect(CLEAN.skills).not.toContain("index");
@@ -328,40 +345,7 @@ function realDispatcherCommands(): string[] {
   return [...new Set(directCommands)].sort();
 }
 
-function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): SurfaceSets {
-  const skillDirs = readdirSync(skillRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-  expect(skillDirs, "assets/skills scan must not be empty").not.toEqual([]);
-
-  const parsedSkills = skillDirs.map((skill) => {
-    const parsed = parseNote(readFileSync(path.join(skillRoot, skill, "SKILL.md"), "utf-8"));
-    expect(parsed.hasFrontmatter, `${skill}/SKILL.md must have frontmatter`).toBe(true);
-    expect(parsed.diagnostics, `${skill}/SKILL.md frontmatter must parse`).toEqual([]);
-    expect(Object.keys(parsed.frontmatter).every((key) => allowedSkillFrontmatterKeys.has(key))).toBe(true);
-    return { skill, frontmatter: parsed.frontmatter };
-  });
-  // Inspect authored files, not merely directory names, so an empty or
-  // stubbed skill tree cannot satisfy the parity gate.
-  expect(parsedSkills.length, "authored skill file scan must be nonzero").toBeGreaterThan(0);
-
-  expect(parsedSkills).toHaveLength(TARGET.skills);
-  const skillsWithTool = parsedSkills.filter(({ frontmatter }) => frontmatter["mcp_tool"] !== undefined);
-  expect(skillsWithTool).toHaveLength(TARGET.tools);
-  for (const { frontmatter } of skillsWithTool) {
-    expect(typeof frontmatter["mcp_tool"]).toBe("string");
-    expect(frontmatter["mcp_args"]).toBeDefined();
-  }
-  const distill = parsedSkills.find(({ skill }) => skill === "distill");
-  expect(distill, "distill skill must exist").toBeDefined();
-  expect(distill!.frontmatter["mcp_tool"]).toBeUndefined();
-  expect(distill!.frontmatter["mcp_args"]).toBeUndefined();
-
-  const declaredMcpTools = skillsWithTool.map(({ frontmatter }) => frontmatter["mcp_tool"] as string).sort();
-  const mcpTools = harnessSurfaceRegistry.mcpTools.map((tool) => tool.name).sort();
-  expect(mcpTools, "MCP tool registry must not be empty").not.toEqual([]);
-  expect(mcpTools).toEqual(declaredMcpTools);
+function assertServerOperationInventory(): void {
   const searchTool = omsMcpTools.find((tool) => tool.name === "search");
   const searchOperations = (
     (searchTool?.inputSchema as {
@@ -423,13 +407,51 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     .filter((op): op is string => typeof op === "string"))];
   expect(doctorOperations.sort()).toEqual([
     "audit",
-    "backfill-defaults",
     "build-graph",
     "cleanup",
     "regenerate-types",
     "sync-embeddings",
     "validate",
   ]);
+}
+
+function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): SurfaceSets {
+  const skillDirs = readdirSync(skillRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  expect(skillDirs, "assets/skills scan must not be empty").not.toEqual([]);
+
+  const parsedSkills = skillDirs.map((skill) => {
+    const parsed = parseNote(readFileSync(path.join(skillRoot, skill, "SKILL.md"), "utf-8"));
+    expect(parsed.hasFrontmatter, `${skill}/SKILL.md must have frontmatter`).toBe(true);
+    expect(parsed.diagnostics, `${skill}/SKILL.md frontmatter must parse`).toEqual([]);
+    expect(Object.keys(parsed.frontmatter).every((key) => allowedSkillFrontmatterKeys.has(key))).toBe(true);
+    return { skill, frontmatter: parsed.frontmatter };
+  });
+  // Inspect authored files, not merely directory names, so an empty or
+  // stubbed skill tree cannot satisfy the parity gate.
+  expect(parsedSkills.length, "authored skill file scan must be nonzero").toBeGreaterThan(0);
+
+  expect(parsedSkills).toHaveLength(TARGET.skills);
+  const skillsWithTool = parsedSkills.filter(({ frontmatter }) => frontmatter["mcp_tool"] !== undefined);
+  expect(skillsWithTool).toHaveLength(TARGET.tools);
+  for (const { frontmatter } of skillsWithTool) {
+    expect(typeof frontmatter["mcp_tool"]).toBe("string");
+    expect(frontmatter["mcp_args"]).toBeDefined();
+  }
+  for (const name of ["distill", "interview", "template"] as const) {
+    const toolLess = parsedSkills.find(({ skill }) => skill === name);
+    expect(toolLess, `${name} skill must exist and stay tool-less`).toBeDefined();
+    expect(toolLess!.frontmatter["mcp_tool"], name).toBeUndefined();
+    expect(toolLess!.frontmatter["mcp_args"], name).toBeUndefined();
+  }
+
+  const declaredMcpTools = skillsWithTool.map(({ frontmatter }) => frontmatter["mcp_tool"] as string).sort();
+  const mcpTools = harnessSurfaceRegistry.mcpTools.map((tool) => tool.name).sort();
+  expect(mcpTools, "MCP tool registry must not be empty").not.toEqual([]);
+  expect(mcpTools).toEqual(declaredMcpTools);
+  // Operation inventory is a separate test so a stale doctor leaf cannot hide annotation drift.
   const registeredMcpTools = omsMcpTools.map((tool) => ({
     name: tool.name,
     posture: tool.annotations?.readOnlyHint === true ? "read" : "write" as const,
@@ -496,6 +518,10 @@ const RETIRED_GUIDANCE_SPELLINGS: readonly {
   { retiredSpelling: "old repository-link syntax", pattern: /\boms\s+link\s+(?:--vault|--folder)\b/g },
   { retiredSpelling: "old hook leaf", pattern: /\boms\s+hook\s+(?:pre-tool-use|post-tool-use)\b/g },
   { retiredSpelling: "--embedding-*", pattern: /--embedding-[A-Za-z0-9_-]+\b/g },
+  { retiredSpelling: "seven-skill surface", pattern: /\bseven skills\b/g },
+  { retiredSpelling: "retired note leaf", pattern: /\boms\s+note\s+(?:create|append|update|backfill)\b/g },
+  { retiredSpelling: "retired link apply leaf", pattern: /\boms\s+link\s+apply\b/g },
+  { retiredSpelling: "retired template authoring leaf", pattern: /\boms\s+template\s+(?:add|update|move|remove|default)\b/g },
 ];
 
 function currentGuidanceViolations(files: readonly CurrentGuidanceFile[]): CurrentGuidanceViolation[] {
@@ -557,6 +583,10 @@ describe("current guidance CLI spellings", () => {
       { category: "shared-skills", path: "accepted-embed", content: "`oms index embed`" },
       { category: "shared-skills", path: "accepted-index-status", content: "`oms index status`" },
       { category: "shared-skills", path: "accepted-index-clean", content: "`oms index clean`" },
+      { category: "shared-skills", path: "accepted-note-guide", content: "`oms note guide|check|complete|audit|get`" },
+      { category: "shared-skills", path: "accepted-link", content: "`oms link suggest|check`" },
+      { category: "shared-skills", path: "accepted-template", content: "`oms template scan|list|show|check|regenerate-types|review|answer|commit`" },
+      { category: "shared-skills", path: "accepted-eight-skills", content: "eight shared skills, including tool-less interview" },
     ];
 
     expect(currentGuidanceViolations(fixtures)).toEqual([]);
@@ -593,6 +623,17 @@ describe("current guidance CLI spellings", () => {
       { category: "shared-skills", path: "embedding-default", content: "`oms setup --embedding-default`" },
       { category: "shared-skills", path: "embedding-descriptor", content: "`oms setup --embedding-descriptor model.json`" },
       { category: "shared-skills", path: "embedding-no-default", content: "`oms setup --embedding-no-default`" },
+      { category: "shared-skills", path: "seven-skills", content: "installs seven skills: write and search" },
+      { category: "shared-skills", path: "note-create", content: "`oms note create`" },
+      { category: "shared-skills", path: "note-append", content: "`oms note append`" },
+      { category: "shared-skills", path: "note-update", content: "`oms note update`" },
+      { category: "shared-skills", path: "note-backfill", content: "`oms note backfill`" },
+      { category: "shared-skills", path: "link-apply", content: "`oms link apply`" },
+      { category: "shared-skills", path: "template-add", content: "`oms template add <folder>`" },
+      { category: "shared-skills", path: "template-update", content: "`oms template update <id>`" },
+      { category: "shared-skills", path: "template-move", content: "`oms template move --folder <folder>`" },
+      { category: "shared-skills", path: "template-remove", content: "`oms template remove <id>`" },
+      { category: "shared-skills", path: "template-default", content: "`oms template default <id>`" },
     ];
 
     expect(currentGuidanceViolations(fixtures).map((violation) => violation.path)).toEqual([
@@ -625,6 +666,17 @@ describe("current guidance CLI spellings", () => {
       "embedding-default",
       "embedding-descriptor",
       "embedding-no-default",
+      "seven-skills",
+      "note-create",
+      "note-append",
+      "note-update",
+      "note-backfill",
+      "link-apply",
+      "template-add",
+      "template-update",
+      "template-move",
+      "template-remove",
+      "template-default",
     ]);
   });
 
@@ -638,9 +690,64 @@ describe("current guidance CLI spellings", () => {
   });
 });
 
+describe("host reviewer metadata", () => {
+  it("keeps write hooks and reviewer roles instruction-only, with real owned assets", () => {
+    expect(harnessSurfaceRegistry.hosts.map((host) => [host.runtime, host.writeHook])).toEqual([
+      ["claude", HARNESS_WRITE_HOOK.claude],
+      ["codex", HARNESS_WRITE_HOOK.codex],
+      ["hermes", HARNESS_WRITE_HOOK.hermes],
+    ]);
+    expect(HARNESS_WRITE_HOOK).toEqual({ claude: "fail-open", codex: "none", hermes: "none" });
+    for (const host of harnessSurfaceRegistry.hosts) {
+      expect(host.reviewerMechanisms, host.runtime).toEqual(HARNESS_HOST_REVIEWERS[host.runtime]);
+      expect(host.reviewerMechanisms.every((mechanism) => mechanism.isolation === "instruction-only"), host.runtime).toBe(true);
+      expect(JSON.stringify(host.reviewerMechanisms), host.runtime).not.toMatch(/unavailable|unsupported/);
+      for (const mechanism of host.reviewerMechanisms) {
+        if (mechanism.assetPath === undefined) continue;
+        expect(existsSync(path.join(repoRoot, mechanism.assetPath)), mechanism.assetPath).toBe(true);
+      }
+    }
+    expect(HARNESS_HOST_REVIEWERS.claude).toEqual([
+      {
+        id: "claude.plugin-agent",
+        selection: "primary",
+        isolation: "instruction-only",
+        assetPath: "agents/oms-reviewer.md",
+      },
+    ]);
+    expect(HARNESS_HOST_REVIEWERS.codex).toEqual([
+      { id: "codex.subagent", selection: "primary", isolation: "instruction-only" },
+      {
+        id: "codex.custom-agent",
+        selection: "optional",
+        isolation: "instruction-only",
+        assetPath: "assets/codex/agents/oms-reviewer.toml",
+      },
+    ]);
+    expect(HARNESS_HOST_REVIEWERS.hermes).toEqual([
+      { id: "hermes.delegate-task", selection: "primary", isolation: "instruction-only" },
+    ]);
+    expect(HARNESS_HOST_REVIEWERS.hermes[0]).not.toHaveProperty("assetPath");
+    expect(HARNESS_HOST_REVIEWERS.codex[0]).not.toHaveProperty("assetPath");
+  });
+});
+
 describe("surface-set parity gate (live surface)", () => {
-  it("reads the seven disk-authored skills, MCP registry, and CLI dispatcher", () => {
-    expect(checkSurfaceSets(liveSurfaceSets(), TARGET)).toEqual([]);
+  it("rejects note backfill as a current doctor leaf without dropping preserved search operations", () => {
+    assertServerOperationInventory();
+  });
+
+  it("reads the eight disk-authored skills, five-tool subset, and fourteen CLI families", () => {
+    const live = liveSurfaceSets();
+    expect([...live.skills].sort()).toEqual([...HARNESS_SHARED_SKILLS]);
+    expect(live.mcpTools).toEqual([...HARNESS_MCP_TOOLS].map((tool) => tool.name).sort());
+    expect(live.skillsWithTool).not.toContain("interview");
+    expect(live.skillsWithTool).not.toContain("distill");
+    expect(live.skillsWithTool).not.toContain("template");
+    expect(live.cliCommands).toHaveLength(14);
+    expect([...live.cliCommands].sort()).toEqual([...HARNESS_CLI_COMMANDS].map((command) => command.name).sort());
+    expect([...live.cliCommands].sort()).not.toEqual([...live.skills].sort());
+    expect(checkSurfaceSets(live, TARGET)).toEqual([]);
     expect(harnessSurfaceRegistry.hosts, "supported host registry must not be empty").not.toEqual([]);
     for (const host of harnessSurfaceRegistry.hosts) {
       const qualifiedNames = omsMcpTools.map((tool) => `${MCP_SERVER_ID}_${tool.name}`);

@@ -1,36 +1,19 @@
 import { createHash } from "node:crypto";
-
-import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath } from "./paths.js";
 import type {
-  AuthorityEntry,
-  Diagnostic,
-  Digest,
-  InputV2,
-  LogicalOperation,
-  PlacementEntry,
-  PlannedPhysicalOutput,
-  TemplateBinding,
+  Digest, FileExpectation, PlannedPhysicalOutput, TemplateCasExpectation,
   TemplateCompositionManifest,
-  TemplateFolderRegistration,
-  TemplatePolicy,
 } from "./types.js";
 
 const encoder = new TextEncoder();
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
-
-type CanonicalObject = { readonly [key: string]: Canonical };
-type Canonical = null | boolean | number | string | readonly Canonical[] | CanonicalObject;
-
-function isCanonicalArray(value: Canonical): value is readonly Canonical[] {
-  return Array.isArray(value);
-}
+type Canonical = null | boolean | number | string | readonly Canonical[] | { readonly [key: string]: Canonical };
 
 function scalar(value: string): string {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
+      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) {
         throw new TypeError("String contains an unpaired surrogate");
       }
       index += 1;
@@ -42,19 +25,19 @@ function scalar(value: string): string {
 }
 
 function compare(left: string, right: string): number {
-  const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? 0);
-  const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? 0);
-  for (let index = 0; index < Math.min(leftPoints.length, rightPoints.length); index += 1) {
-    const difference = leftPoints[index]! - rightPoints[index]!;
+  const a = Array.from(left, character => character.codePointAt(0)!);
+  const b = Array.from(right, character => character.codePointAt(0)!);
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    const difference = a[index]! - b[index]!;
     if (difference !== 0) return difference;
   }
-  return leftPoints.length - rightPoints.length;
+  return a.length - b.length;
 }
 
 function quote(value: string): string {
   let output = '"';
   for (const character of value) {
-    const code = character.codePointAt(0) ?? 0;
+    const code = character.codePointAt(0)!;
     if (character === '"') output += '\\"';
     else if (character === "\\") output += "\\\\";
     else if (code <= 0x1f) output += `\\u${code.toString(16).padStart(4, "0")}`;
@@ -76,13 +59,10 @@ function normalize(value: unknown): Canonical {
   if (typeof value !== "object" || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) {
     throw new TypeError("Canonical JSON value is unsupported");
   }
-
-  const result: Record<string, Canonical> = {};
+  const result: Record<string, Canonical> = Object.create(null);
   for (const [key, member] of Object.entries(value)) {
     const normalizedKey = scalar(key);
-    if (Object.hasOwn(result, normalizedKey)) {
-      throw new TypeError("Object keys collide after NFC normalization");
-    }
+    if (Object.hasOwn(result, normalizedKey)) throw new TypeError("Object keys collide after NFC normalization");
     result[normalizedKey] = normalize(member);
   }
   return result;
@@ -92,12 +72,9 @@ function serialize(value: Canonical): string {
   if (value === null) return "null";
   if (typeof value === "boolean" || typeof value === "number") return String(value);
   if (typeof value === "string") return quote(value);
-  if (isCanonicalArray(value)) return `[${value.map(serialize).join(",")}]`;
-
-  const entries = Object.keys(value)
-    .sort(compare)
-    .map((key) => `${quote(key)}:${serialize(value[key]!)}`);
-  return `{${entries.join(",")}}`;
+  if (Array.isArray(value)) return `[${value.map(serialize).join(",")}]`;
+  const object = value as { readonly [key: string]: Canonical };
+  return `{${Object.keys(object).sort(compare).map(key => `${quote(key)}:${serialize(object[key]!)}`).join(",")}}`;
 }
 
 export function canonicalJson(value: unknown): string {
@@ -125,150 +102,68 @@ export function frameHash(domain: string, value: unknown): Uint8Array {
 }
 
 export function hashCanonical(domain: string, value: unknown): Digest {
-  return `sha256:${createHash("sha256").update(frameHash(domain, value)).digest("hex")}` as Digest;
+  return digestBytes(frameHash(domain, value));
 }
 
-function authorities(entries: readonly AuthorityEntry[]): AuthorityEntry[] {
-  return [...entries]
-    .sort((left, right) => compare(left.kind, right.kind) || compare(left.logicalId, right.logicalId) || compare(left.vaultRelativePath ?? "", right.vaultRelativePath ?? ""))
-    .map((entry) => ({
-      ...entry,
-      vaultRelativePath: entry.vaultRelativePath ?? null,
-      contentDigest: parseDigest(entry.contentDigest),
-    }));
+/** Raw bytes, not Unicode-normalized contract values. */
+export function digestBytes(value: string | Uint8Array): Digest {
+  const bytes = typeof value === "string" ? encoder.encode(value) : value;
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
-function placements(entries: readonly PlacementEntry[]): PlacementEntry[] {
-  const result = entries.map((entry) => ({
-    ...entry,
-    templateFolder: entry.templateFolder === null ? null : normalizeTemplateFolderPath(entry.templateFolder),
-    sourceFolder: normalizeTemplateFolderPath(entry.sourceFolder),
-    sourcePath: normalizeTemplateSourcePath(entry.sourcePath),
-  })).sort((left, right) => compare(left.templateId, right.templateId));
-  for (let index = 1; index < result.length; index += 1) {
-    if (result[index - 1]!.templateId === result[index]!.templateId) {
-      throw new TypeError("TEMPLATE_ID_DUPLICATE");
-    }
-  }
-  return result;
+function expected(value: FileExpectation): object {
+  return value.state === "absent" ? { state: "absent" } : { state: "present", signature: parseDigest(value.signature) };
 }
 
-function templateFolders(entries: readonly TemplateFolderRegistration[]): TemplateFolderRegistration[] {
-  const result = entries.map((entry) => ({
-    path: normalizeTemplateFolderPath(entry.path),
-    ...(entry.default === true ? { default: true as const } : {}),
-    ...(entry.extensions === undefined ? {} : { extensions: entry.extensions }),
-  }))
-    .sort((left, right) => compare(left.path, right.path));
-  for (let index = 1; index < result.length; index += 1) {
-    if (result[index - 1]!.path === result[index]!.path) throw new TypeError("TEMPLATE_SOURCE_DUPLICATE");
-  }
-  return result;
-}
-
-/** Builds the authority and placement payload shared by registration, resolution, and repair. */
-export function templateInput(
-  policy: TemplatePolicy,
-  controls: {
-    readonly policy: Digest;
-    readonly taxonomy: Digest;
-    readonly obsidianTypes: Digest;
-    readonly obsidianTypesPath: string;
-  },
-  bindings: readonly TemplateBinding[],
-  sourceDigest: (binding: TemplateBinding) => Digest,
-): InputV2 {
-  const authority: AuthorityEntry[] = [
-    { kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: controls.policy },
-    { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: controls.taxonomy },
-    { kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: controls.obsidianTypesPath, contentDigest: controls.obsidianTypes },
-    ...bindings.map((binding) => ({ kind: "template" as const, logicalId: binding.templateId, vaultRelativePath: deriveTemplateSourcePath(binding), contentDigest: sourceDigest(binding) })),
-  ];
-  authority.sort((left, right) => left.kind.localeCompare(right.kind) || left.logicalId.localeCompare(right.logicalId));
-  return {
-    version: 2,
-    templateFolders: templateFolders(policy.templateFolders),
-    authority,
-    placement: bindings.map((binding) => ({
-      templateId: binding.templateId,
-      destinationClass: binding.destinationClass,
-      templateFolder: binding.destinationClass === "managed-default" ? binding.sourceFolder : null,
-      sourceFolder: binding.sourceFolder,
-      sourcePath: deriveTemplateSourcePath(binding),
-    })),
-  };
-}
-
-export function inputDigest(input: InputV2): Digest {
-  if (input.version !== 2) throw new TypeError("InputV2 version must be 2");
-  return hashCanonical("oms.template-migration.input.v2", {
-    version: 2,
-    templateFolders: templateFolders(input.templateFolders),
-    authority: authorities(input.authority),
-    placement: placements(input.placement),
+/** Binds current control and managed-draft expectations, not source syntax or Obsidian types. */
+export function inputDigest(input: TemplateCasExpectation): Digest {
+  return hashCanonical("oms.contract-publish.input.v1", {
+    controls: {
+      policy: expected(input.controls.policy),
+      taxonomy: expected(input.controls.taxonomy),
+      projection: expected(input.controls.projection),
+    },
+    drafts: input.drafts.map(draft => ({
+      templateId: draft.templateId,
+      path: draft.path,
+      expected: expected(draft.expected),
+    })).sort((left, right) => compare(left.path, right.path)),
   });
 }
 
-function diagnostic(value: Diagnostic): Record<string, unknown> {
-  return {
-    code: value.code,
-    templateId: value.templateId ?? null,
-    path: value.path ?? null,
-    field: value.field ?? null,
-    message: value.message ?? null,
-    extensions: value.extensions ?? null,
-  };
-}
+type ApprovalManifest = Pick<TemplateCompositionManifest, "markerPath" | "controls" | "drafts" | "operations" | "diagnostics" | "outputs">;
 
-export function approvalDigest(
-  input: Digest,
-  operations: readonly LogicalOperation[],
-  diagnostics: readonly Diagnostic[],
-  preimage: Pick<TemplateCompositionManifest, "current" | "controls" | "sources">,
-): Digest {
-  parseDigest(input);
-  const expectedState = (value: import("./types.js").FileExpectation): Record<string, string> =>
-    value.state === "absent"
+/** The complete publication proposal and CAS preimage are covered; receipt fields never hash themselves. */
+export function approvalDigest(manifest: ApprovalManifest): Digest {
+  const transitions = [...manifest.controls, ...manifest.drafts].map(transition => ({
+    path: transition.path,
+    kind: "kind" in transition ? transition.kind : "draft",
+    templateId: "templateId" in transition ? transition.templateId : null,
+    expectedCurrent: expected(transition.expectedCurrent),
+    action: transition.action,
+    proposed: transition.proposed.state === "absent"
       ? { state: "absent" }
-      : { state: "present", signature: parseDigest(value.signature) };
-  const canonicalPreimage = {
-    currentInputDigest: parseDigest(preimage.current.inputDigest),
-    controls: [...preimage.controls]
-      .sort((left, right) => compare(left.path, right.path))
-      .map((control) => ({ path: control.path, expectedCurrent: expectedState(control.expectedCurrent) })),
-    sources: [...preimage.sources]
-      .sort((left, right) => compare(left.templateId, right.templateId) || compare(left.path, right.path))
-      .map((source) => ({ templateId: source.templateId, path: source.path, expectedCurrent: expectedState(source.expectedCurrent) })),
-  };
-  const canonicalOperations = [...operations]
-    .sort((left, right) =>
-      compare(left.kind, right.kind) ||
-      compare(left.templateId, right.templateId) ||
-      compare(left.destinationClass, right.destinationClass) ||
-      compare(left.stableRelativeSuffix ?? "", right.stableRelativeSuffix ?? "") ||
-      compare(left.payloadDigest, right.payloadDigest),
-    )
-    .map((operation) => ({
-      kind: operation.kind,
-      templateId: operation.templateId,
-      destinationClass: operation.destinationClass,
-      payloadDigest: parseDigest(operation.payloadDigest),
-      stableRelativeSuffix: operation.stableRelativeSuffix ?? null,
-    }));
-  const canonicalDiagnostics = [...diagnostics]
-    .sort((left, right) =>
-      compare(left.code, right.code) ||
-      compare(left.templateId ?? "", right.templateId ?? "") ||
-      compare(left.path ?? "", right.path ?? "") ||
-      compare(left.field ?? "", right.field ?? "") ||
-      compare(canonicalJson(diagnostic(left)), canonicalJson(diagnostic(right))),
-    )
-    .map(diagnostic);
-  return hashCanonical("oms.template-migration.approval.v2", {
-    inputDigest: input,
-    preimage: canonicalPreimage,
-    operations: canonicalOperations,
-    diagnostics: canonicalDiagnostics,
+      : { state: "present", signature: digestBytes(transition.proposed.bytes) },
+  })).sort((left, right) => compare(left.path, right.path));
+  const operations = manifest.operations.map(operation => ({
+    kind: operation.kind,
+    templateId: operation.templateId,
+    payloadDigest: parseDigest(operation.payloadDigest),
+  })).sort((left, right) => compare(canonicalJson(left), canonicalJson(right)));
+  const diagnostics = manifest.diagnostics.map(diagnostic => ({
+    code: diagnostic.code,
+    templateId: diagnostic.templateId ?? null,
+    path: diagnostic.path ?? null,
+    field: diagnostic.field ?? null,
+    message: diagnostic.message ?? null,
+    extensions: diagnostic.extensions ?? null,
+  })).sort((left, right) => compare(canonicalJson(left), canonicalJson(right)));
+  return hashCanonical("oms.contract-publish.approval.v1", {
+    markerPath: manifest.markerPath,
+    transitions,
+    operations,
+    diagnostics,
+    outputDigest: outputDigest(manifest.outputs),
   });
 }
 
@@ -278,13 +173,12 @@ export function outputDigest(outputs: readonly PlannedPhysicalOutput[]): Digest 
     const payloadDigest = parseDigest(output.payloadDigest);
     const existing = unique.get(output.finalVaultRelativePath);
     if (existing !== undefined && existing !== payloadDigest) {
-      throw new TypeError("MIGRATION_OUTPUT_CONFLICT");
+      throw new TypeError("TEMPLATE_TRANSACTION_INCONSISTENT: conflicting output payloads");
     }
     unique.set(output.finalVaultRelativePath, payloadDigest);
   }
-
   const canonicalOutputs = [...unique.entries()]
     .map(([finalVaultRelativePath, payloadDigest]) => ({ finalVaultRelativePath, payloadDigest }))
-    .sort((left, right) => compare(left.finalVaultRelativePath, right.finalVaultRelativePath) || compare(left.payloadDigest, right.payloadDigest));
-  return hashCanonical("oms.template-migration.output.v1", { outputs: canonicalOutputs });
+    .sort((left, right) => compare(left.finalVaultRelativePath, right.finalVaultRelativePath));
+  return hashCanonical("oms.contract-publish.output.v1", { outputs: canonicalOutputs });
 }

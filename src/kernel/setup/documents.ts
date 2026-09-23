@@ -1,51 +1,64 @@
-import type { MigrationProposal } from "../templates/migration.js";
+import type { TemplateFolderCandidate, TemplateHintDiagnostic } from "../templates/hints.js";
+import type { TemplatePolicy } from "../templates/types.js";
 
-/** Read-only setup questionnaire; its proposal must be approved before guarded publication. */
+/**
+ * Setup proposes an empty version 4 policy and nothing else.
+ *
+ * It discovers no templates, adopts no note types, and reads no template syntax.
+ * Folder hints are raw observations the user may act on during the interview;
+ * they are not selections and not contract meaning.
+ */
 export interface TemplateSetupQuestionnaire {
-  readonly templateFolders: readonly {
-    readonly path: string;
-    readonly default: boolean;
-  }[];
-  readonly discoveredTemplates: readonly {
-    readonly templateId: string;
-    readonly sourcePath: string;
-    readonly sourceFolder: string;
-    readonly publication: "verify-existing" | "write";
-  }[];
-  readonly noteIdentities: readonly { readonly path: string; readonly templateId: string | null }[];
-  readonly droppedKeys: readonly string[];
-  readonly diagnostics: readonly {
-    readonly code: string;
-    readonly message: string;
-    readonly path?: string;
-    readonly templateId?: string;
-    readonly field?: string;
-    readonly remediation?: string;
-    readonly blocking: boolean;
-  }[];
-  readonly unresolvedMappings: readonly string[];
+  readonly policyVersion: 4;
+  /** The always-on default layer starts empty; individual templates are added by interview. */
+  readonly defaultLayer: {
+    readonly templatePath: string;
+    readonly fields: readonly string[];
+    readonly headings: readonly string[];
+    readonly semanticCriteria: readonly string[];
+  };
+  readonly properties: readonly string[];
+  readonly templates: readonly string[];
+  /** Raw folder observations, with no syntax or contract inference. */
+  readonly templateFolderHints: readonly { readonly path: string; readonly provenance: readonly string[] }[];
+  readonly diagnostics: readonly { readonly code: string; readonly message: string; readonly path: string }[];
+  readonly nextStep: "interview";
 }
 
-export interface TemplateSetupDocument { readonly questionnaire: TemplateSetupQuestionnaire; readonly proposal: MigrationProposal; }
+export interface TemplateSetupDocument {
+  readonly questionnaire: TemplateSetupQuestionnaire;
+  readonly policy: TemplatePolicy;
+}
 
-export function describeTemplateSetup(proposal: MigrationProposal): TemplateSetupDocument {
+export function describeTemplateSetup(
+  policy: TemplatePolicy,
+  hints: {
+    readonly candidates: readonly TemplateFolderCandidate[];
+    readonly diagnostics: readonly TemplateHintDiagnostic[];
+  },
+): TemplateSetupDocument {
   return {
     questionnaire: {
-      templateFolders: proposal.templateFolders.map(folder => ({
-        path: folder.path,
-        default: folder.default === true,
+      policyVersion: 4,
+      defaultLayer: {
+        templatePath: policy.default.templatePath,
+        fields: Object.keys(policy.default.fields).sort(),
+        headings: policy.default.headings.map(heading => heading.headingId),
+        semanticCriteria: policy.default.semanticCriteria.map(criterion => criterion.criterionId),
+      },
+      properties: Object.keys(policy.properties).sort(),
+      templates: Object.keys(policy.templates).sort(),
+      templateFolderHints: hints.candidates.map(candidate => ({
+        path: candidate.path,
+        provenance: candidate.provenance.map(entry => String(entry)),
       })),
-      discoveredTemplates: proposal.candidates.map(candidate => ({
-        templateId: candidate.templateId,
-        sourcePath: candidate.sourcePath,
-        sourceFolder: candidate.sourceFolder,
-        publication: candidate.publication,
+      diagnostics: hints.diagnostics.map(diagnostic => ({
+        code: diagnostic.code,
+        message: diagnostic.message,
+        path: diagnostic.path,
       })),
-      noteIdentities: proposal.existingNotes,
-      droppedKeys: proposal.droppedKeys,
-      diagnostics: proposal.diagnostics.map(diagnostic => ({ ...diagnostic })),
-      unresolvedMappings: proposal.unresolved.map(item => `${item.code}: ${item.message}`),
+      nextStep: "interview",
     },
-    proposal,
+    policy,
   };
 }

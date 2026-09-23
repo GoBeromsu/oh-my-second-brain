@@ -1,31 +1,24 @@
-import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
-import { composeTemplateAdd } from "../kernel/templates/compose-add.js";
 import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
 import { nextTemplateInterview, answerTemplateInterview, commitTemplateContracts } from "../kernel/templates/interview-service.js";
-import { executeTemplateOperation } from "../kernel/templates/operations.js";
-import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
-import { deriveTemplateSourcePath, normalizeTemplateFolderPath, normalizeTemplateSourcePath, validateTemplateId } from "../kernel/templates/paths.js";
-import { parseTemplatePolicy } from "../kernel/templates/policy.js";
-import { classifyTemplateRenderer } from "../kernel/templates/renderer.js";
-import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
-import { resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "../kernel/templates/transaction.js";
-import type { Digest, GuardedTemplateRequest, JsonValue, TemplateBinding, TemplatePolicy, TemplateRenderer, TemplateSemanticChange } from "../kernel/templates/types.js";
+import type { TemplateProposalInput } from "../kernel/templates/interview.js";
 import type { TemplateOperationTarget } from "../kernel/templates/operations.js";
+import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
+import { validateTemplateId } from "../kernel/templates/paths.js";
+import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
+import type { Digest, GuardedTemplateRequest, JsonValue } from "../kernel/templates/types.js";
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
-const MAX_SOURCE_BYTES = 262_144;
-const DEFAULT_NAMING = "{{date}}-{{slug}}.md";
 
 type Options = Record<string, string | boolean>;
 interface Parsed { readonly verb: string; readonly positional: readonly string[]; readonly options: Options; }
 type Target = TemplateOperationTarget;
 
-const VALUE_FLAGS = new Set(["vault", "approved-digest", "id", "contract", "naming", "renderer", "folder", "from", "path", "class", "resume", "answer", "census-digest", "ledger-digest"]);
-const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "creation-default", "delete-source", "help"]);
+const VALUE_FLAGS = new Set(["vault", "approved-digest", "answer", "census-digest", "ledger-digest", "proposals"]);
+const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "help"]);
 
 function fail(message: string): never { throw new Error(`TEMPLATE_ARGS_INVALID: ${message}`); }
 function parse(argv: readonly string[]): Parsed {
@@ -59,6 +52,23 @@ function jsonValue(value: unknown): value is JsonValue {
   if (typeof value !== "object") return false;
   return Object.values(value as Record<string, unknown>).every(jsonValue);
 }
+/**
+ * Explicit contract proposals, as JSON. OMS never derives contract meaning by
+ * reading template syntax, so a proposal is the only way to introduce one.
+ */
+function proposalsOption(options: Options): { readonly proposals?: readonly TemplateProposalInput[] } {
+  const raw = text(options, "proposals");
+  if (raw === undefined) return {};
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    fail("--proposals must be valid JSON");
+  }
+  if (!Array.isArray(value) || !value.every(jsonValue)) fail("--proposals must be a JSON array of proposals");
+  return { proposals: value as unknown as readonly TemplateProposalInput[] };
+}
+
 function answerValue(options: Options): JsonValue {
   const raw = text(options, "answer");
   if (raw === undefined) fail("--answer requires a value");
@@ -110,26 +120,6 @@ function guard(options: Options): GuardedTemplateRequest {
 function ensureMutableTarget(value: Target): void {
   if (value.source === "cwd") fail("mutations require --vault or an existing verified vault/bridge/env target");
 }
-async function policy(vault: string): Promise<TemplatePolicy> {
-  return parseTemplatePolicy(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"));
-}
-function knownContract(value: TemplatePolicy, requested: string | undefined): string {
-  const contract = requested ?? "base";
-  if (value.contracts[contract] === undefined) throw new Error(`TEMPLATE_CONTRACT_UNKNOWN: contract ${contract} does not exist`);
-  return contract;
-}
-function renderer(value: string | undefined): TemplateRenderer | undefined {
-  if (value === undefined) return undefined;
-  if (value !== "obsidian-core" && value !== "templater" && value !== "none") fail("--renderer must be obsidian-core, templater, or none");
-  return value;
-}
-async function boundedFile(filename: string): Promise<Uint8Array> {
-  const size = (await stat(filename)).size;
-  if (size > MAX_SOURCE_BYTES) throw new Error(`TEMPLATE_PROPOSAL_OVERSIZE: source exceeds ${MAX_SOURCE_BYTES} bytes`);
-  const bytes = new Uint8Array(await readFile(filename));
-  if (bytes.byteLength > MAX_SOURCE_BYTES) throw new Error(`TEMPLATE_PROPOSAL_OVERSIZE: source exceeds ${MAX_SOURCE_BYTES} bytes`);
-  return bytes;
-}
 function print(value: unknown): void {
   if (value !== null && typeof value === "object" && "status" in value) {
     const status = (value as { readonly status?: unknown }).status;
@@ -141,25 +131,19 @@ function print(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 function summarizedScan(context: Awaited<ReturnType<typeof readTemplateReviewContext>>): unknown {
-  const entries = context.census.entries.map(entry => ({
-    sourcePath: entry.sourcePath,
-    ...(entry.templateId === undefined ? {} : { templateId: entry.templateId }),
-    signature: entry.signature,
-    diagnostics: entry.diagnostics,
-  }));
   return {
-    entries,
-    diffs: context.census.diffs,
-    diagnostics: context.census.diagnostics,
-    projectionUsable: context.projectionUsable,
-    freshTemplateIds: context.freshTemplateIds,
+    generationDigest: context.resolved.generationDigest,
+    // Approved Markdown is reported by digest; raw source bytes are identified,
+    // never parsed for meaning.
+    approved: context.approved.map(entry => ({
+      templateId: entry.templateId,
+      templatePath: entry.templatePath,
+      approvedMarkdownDigest: entry.approvedMarkdownDigest,
+    })),
+    raw: context.raw,
+    drafts: context.resolved.drafts,
+    diagnostics: context.resolved.diagnostics,
   };
-}
-
-async function mutate(parsed: Parsed, change: TemplateSemanticChange): Promise<void> {
-  const resolved = await target(parsed.options);
-  ensureMutableTarget(resolved);
-  print(await executeTemplateOperation(resolved, change, guard(parsed.options)));
 }
 
 async function run(parsed: Parsed): Promise<void> {
@@ -168,13 +152,20 @@ async function run(parsed: Parsed): Promise<void> {
     const resolved = await target(parsed.options);
     const convention = await loadResolvedTemplates(resolved.vault);
     if (parsed.verb === "list") {
-      print({ templates: Object.values(convention.templates), inputSignature: convention.inputSignature, history: summarizeRuntimeHistory({ vaultPath: resolved.vault }) });
+      print({
+        // The always-on default layer applies to every note, so it is listed
+        // beside the optional individual templates.
+        default: convention.defaultContract,
+        templates: Object.values(convention.templates),
+        generationDigest: convention.generationDigest,
+        history: summarizeRuntimeHistory({ vaultPath: resolved.vault }),
+      });
       return;
     }
     const id = validateTemplateId(parsed.positional[0]!);
     const found = convention.templates[id];
     if (found === undefined) throw new Error(`TEMPLATE_NOT_FOUND: ${id}`);
-    print({ template: found, inputSignature: convention.inputSignature }); return;
+    print({ template: found, generationDigest: convention.generationDigest }); return;
   }
   if (parsed.verb === "scan") {
     only(parsed, ["vault"], 0);
@@ -182,12 +173,12 @@ async function run(parsed: Parsed): Promise<void> {
     print(summarizedScan(await readTemplateReviewContext(resolved.vault))); return;
   }
   if (parsed.verb === "review") {
-    only(parsed, ["vault"], 0);
+    only(parsed, ["vault", "proposals"], 0);
     const resolved = await target(parsed.options);
-    print(await nextTemplateInterview(resolved)); return;
+    print(await nextTemplateInterview(resolved, proposalsOption(parsed.options))); return;
   }
   if (parsed.verb === "answer") {
-    only(parsed, ["vault", "answer", "census-digest", "ledger-digest"], 1);
+    only(parsed, ["vault", "answer", "census-digest", "ledger-digest", "proposals"], 1);
     const resolved = await target(parsed.options);
     ensureMutableTarget(resolved);
     const questionId = parsed.positional[0]!;
@@ -197,15 +188,20 @@ async function run(parsed: Parsed): Promise<void> {
       answer: answerValue(parsed.options),
       censusDigest: requiredDigest(parsed.options, "census-digest"),
       expectedLedgerDigest: expectedLedgerDigest(parsed.options),
+      ...proposalsOption(parsed.options),
     })); return;
   }
   if (parsed.verb === "commit") {
-    only(parsed, ["vault", "census-digest", "ledger-digest", "dry-run", "yes", "approved-digest"], 0);
+    only(parsed, ["vault", "census-digest", "ledger-digest", "dry-run", "yes", "approved-digest", "proposals"], 0);
     const resolved = await target(parsed.options);
     ensureMutableTarget(resolved);
+    // Commit rebuilds the interview, so it needs the same proposals that raised
+    // the answered questions; without them a recorded decision cannot be
+    // reproduced and publication is refused.
     print(await commitTemplateContracts(resolved, {
       censusDigest: requiredDigest(parsed.options, "census-digest"),
       expectedLedgerDigest: expectedLedgerDigest(parsed.options),
+      ...proposalsOption(parsed.options),
       ...guard(parsed.options),
     })); return;
   }
@@ -219,107 +215,32 @@ async function run(parsed: Parsed): Promise<void> {
     const resolved = await target(parsed.options); ensureMutableTarget(resolved);
     print(await regenerateTypes({ target: resolved, request: guard(parsed.options) })); return;
   }
-  if (parsed.verb === "add") {
-    only(parsed, ["vault", "dry-run", "yes", "approved-digest", "creation-default", "id", "contract", "naming", "renderer", "folder", "from"], [0, 1]);
-    const resolved = await target(parsed.options); ensureMutableTarget(resolved);
-    const request = guard(parsed.options);
-    const idText = text(parsed.options, "id");
-    const from = text(parsed.options, "from");
-    if (idText === undefined && from === undefined) {
-      if (parsed.positional.length !== 1) fail("add <folder> requires one folder");
-      if (text(parsed.options, "contract") !== undefined || text(parsed.options, "naming") !== undefined || text(parsed.options, "renderer") !== undefined || text(parsed.options, "folder") !== undefined) fail("add <folder> accepts only the selected folder, --creation-default, and mutation guard");
-      print(await executeTemplateOperation(resolved, {
-        mode: "register-folder",
-        folder: { path: normalizeTemplateFolderPath(parsed.positional[0]!), ...(flag(parsed.options, "creation-default") ? { default: true as const } : {}) },
-      }, request)); return;
-    }
-    if (idText === undefined) fail("template add requires --id");
-    const id = validateTemplateId(idText);
-    const current = await policy(resolved.vault);
-    const contract = knownContract(current, text(parsed.options, "contract"));
-    const naming = text(parsed.options, "naming") ?? DEFAULT_NAMING;
-    if (from !== undefined) {
-      if (parsed.positional.length !== 0 || text(parsed.options, "renderer") !== undefined || flag(parsed.options, "creation-default")) fail("add --from conflicts with a positional source and folder selection flags");
-      const composed = composeTemplateAdd(current.templateFolders, { templateId: id, sourceFolder: text(parsed.options, "folder"), bytes: await boundedFile(from), contract, naming });
-      print(await executeTemplateOperation(resolved, { mode: "create", binding: composed.binding, source: composed.source }, request)); return;
-    }
-    fail("template add requires --from for source authoring; per-file registration is not supported");
-  }
-  if (parsed.verb === "update") {
-    only(parsed, ["vault", "dry-run", "yes", "approved-digest", "contract", "naming", "renderer", "path", "class", "resume"], [0, 1]);
-    const resume = text(parsed.options, "resume");
-    if (resume !== undefined) {
-      if (parsed.positional.length !== 0 || ["contract", "naming", "renderer", "path", "class"].some(name => text(parsed.options, name) !== undefined)) fail("--resume conflicts with update fields and template id");
-      const resolved = await target(parsed.options); ensureMutableTarget(resolved);
-      const request = guard(parsed.options);
-      if (request.approvedDigest === undefined) fail("--resume requires approved apply, not --dry-run");
-      print(await resumeTemplateTransaction(resolved.vault, resume, request.approvedDigest, TEMPLATE_MUTATION_MARKER_PATH)); return;
-    }
-    if (parsed.positional.length !== 1) fail("update requires a template id");
-    const id = validateTemplateId(parsed.positional[0]!);
-    const className = text(parsed.options, "class");
-    const other = ["contract", "naming", "renderer", "path"].some(name => text(parsed.options, name) !== undefined);
-    if (className !== undefined) {
-      if (other) fail("--class cannot be combined with binding/source updates");
-      if (className !== "managed-default" && className !== "registered-existing") fail("--class is invalid");
-      await mutate(parsed, { mode: "reclassify", templateId: id, toClass: className }); return;
-    }
-    if (!other) fail("update requires at least one of --contract, --naming, --renderer, --path, or --class");
-    const resolved = await target(parsed.options); ensureMutableTarget(resolved);
-    const current = await policy(resolved.vault);
-    const previous = current.templates[id];
-    if (previous === undefined) throw new Error(`TEMPLATE_NOT_FOUND: ${id}`);
-    const sourcePath = normalizeTemplateSourcePath(text(parsed.options, "path") ?? deriveTemplateSourcePath(previous));
-    const bytes = await boundedFile(path.join(resolved.vault, sourcePath));
-    const classified = classifyTemplateRenderer(sourcePath, bytes);
-    const nextRenderer = renderer(text(parsed.options, "renderer")) ?? previous.renderer;
-    if (nextRenderer !== classified.renderer) throw new Error(`TEMPLATE_SOURCE_INVALID: renderer ${nextRenderer} does not match observed renderer ${classified.renderer}`);
-    const binding: TemplateBinding = { ...previous, renderer: nextRenderer, sourcePath, contract: knownContract(current, text(parsed.options, "contract") ?? previous.contract), naming: text(parsed.options, "naming") ?? previous.naming };
-    const change: TemplateSemanticChange = { mode: "update", templateId: id, binding, source: { path: sourcePath, bytes, publication: "verify-existing" }, ...(sourcePath === deriveTemplateSourcePath(previous) ? {} : { moveStrategy: "register-already-moved" as const }) };
-    print(await executeTemplateOperation(resolved, change, guard(parsed.options))); return;
-  }
-  if (parsed.verb === "move") {
-    only(parsed, ["vault", "dry-run", "yes", "approved-digest", "folder"], 0);
-    const folder = text(parsed.options, "folder"); if (folder === undefined) fail("move requires --folder");
-    await mutate(parsed, { mode: "relocate-folder", templateFolder: normalizeTemplateFolderPath(folder) }); return;
-  }
-  if (parsed.verb === "remove") {
-    only(parsed, ["vault", "dry-run", "yes", "approved-digest", "delete-source"], 1);
-    await mutate(parsed, { mode: "remove", templateId: validateTemplateId(parsed.positional[0]!), deleteSource: flag(parsed.options, "delete-source") }); return;
-  }
-  if (parsed.verb === "default") {
-    only(parsed, ["vault", "dry-run", "yes", "approved-digest"], 1);
-    await mutate(parsed, { mode: "default", templateId: validateTemplateId(parsed.positional[0]!) }); return;
-  }
   fail(`unknown template verb ${parsed.verb}`);
 }
 
 export function templateUsage(): string {
   return `Usage: oms template <verb> [options]
 
-Leaves: scan | list | show | add | update | move | remove | default | check | regenerate-types | review | answer | commit
+Leaves: scan | list | show | check | regenerate-types | review | answer | commit
 
 Read-only:
   list
   show <id>
   scan
   check
-  review [--vault <vault>]
+  review [--proposals <JSON>] [--vault <vault>]
 
 Contract review:
-  answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null> [--vault <vault>]
-  commit --census-digest <digest> --ledger-digest <digest|null> (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]
+  answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null> [--proposals <JSON>] [--vault <vault>]
+  commit --census-digest <digest> --ledger-digest <digest|null> [--proposals <JSON>] (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]
 
-Guarded template operations (use --dry-run, then --yes --approved-digest <digest>):
-  add <folder> [--creation-default]
-  add --id <id> --from <content.md> [--folder <folder>] [--contract <name>] [--naming <pattern>]
-  update <id> [--contract <name>] [--naming <pattern>] [--path <file>] [--renderer <renderer>]
-  update <id> --class managed-default|registered-existing
-  update --resume <transaction-id> --yes --approved-digest <digest>
-  move --folder <registered-folder>
-  remove <id> [--delete-source]
-  default <id>
-  regenerate-types`;
+  --proposals carries the explicit contract proposals as a JSON array. Contract
+  meaning enters OMS only this way; it is never derived from a file name or from
+  template syntax. Pass the same proposals to review, answer, and commit, or a
+  recorded answer cannot be reproduced and publication is refused.
+
+Guarded:
+  regenerate-types (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]`;
 }
 
 export async function runTemplateCommand(argv: readonly string[]): Promise<void> {

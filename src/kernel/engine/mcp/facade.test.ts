@@ -7,9 +7,10 @@ import { McpEngineAdapter } from "./facade.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import type { EmbeddingProvider, ScoredHit, VectorStore } from "../types.js";
 import type { EngineStore } from "../embed/store.js";
-import { deriveContentFormatContract } from "../../templates/content-contract.js";
-import { loadResolvedTemplates, sharedAuthoritySignature, sourceSignature } from "../../templates/resolver.js";
-import type { Digest, SourceDescriptor } from "../../templates/types.js";
+import { digestBytes } from "../../templates/canonical.js";
+import { parseTemplatePolicy, serializeDerivedProjection } from "../../templates/policy.js";
+import { controlGenerationDigest, expectedProjectionManaged, loadResolvedTemplates, taxonomyRouting } from "../../templates/resolver.js";
+import type { Digest } from "../../templates/types.js";
 
 // ---------------------------------------------------------------------------
 // Fake backends
@@ -79,74 +80,62 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
   mkdirSync(path.join(dir, ".oms"), { recursive: true });
   mkdirSync(path.join(dir, ".obsidian"), { recursive: true });
   mkdirSync(path.join(dir, "Templates", "OMS"), { recursive: true });
+  const layer = (templatePath: string, markdown: string, extra: Record<string, unknown> = {}) => ({
+    templatePath,
+    approvedMarkdown: markdown,
+    approvedMarkdownDigest: digestBytes(markdown),
+    fields: {},
+    headings: [],
+    semanticCriteria: [],
+    ...extra,
+  });
   const policy = JSON.stringify({
-    version: 3,
-    templateFolders: [{ path: "Templates/OMS", default: true }],
-    base: { fields: {} },
-    contracts: {
-      project: { intent: "project note.", fields: { status: { type: "text" }, rating: { type: "number" }, done: { type: "boolean" } }, views: [] },
-      reference: { intent: "reference note.", fields: { rating: { type: "number" }, done: { type: "boolean" } }, views: [] },
+    version: 4,
+    properties: {
+      status: { type: "text", intent: "Workflow state." },
+      rating: { type: "number", intent: "Numeric rating." },
+      done: { type: "boolean", intent: "Completion flag." },
     },
+    default: layer(".oms/templates/default.md", ""),
     templates: {
-      project: { templateId: "project", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/project.md", renderer: "obsidian-core", contract: "project", naming: "{{title}}" },
-      reference: { templateId: "reference", destinationClass: "managed-default", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", contract: "reference", naming: "{{title}}" },
+      project: layer(".oms/templates/project.md", "---\nstatus: active\nrating: 1\ndone: false\n---\nBody\n", {
+        templateId: "project",
+        fields: { status: { property: "status" }, rating: { property: "rating" }, done: { property: "done" } },
+      }),
+      reference: layer(".oms/templates/reference.md", "---\nrating: 1\ndone: false\n---\nBody\n", {
+        templateId: "reference",
+        fields: { rating: { property: "rating" }, done: { property: "done" } },
+      }),
     },
   });
   const intentEntries = Object.entries(intents).sort(([left], [right]) => left.localeCompare(right));
   const taxonomy = JSON.stringify({
     folders: Object.fromEntries(intentEntries.map(([folder, intent]) => [folder, { intent }])),
     templates: {
-      project: { templateFolder: "Inbox" },
-      reference: { templateFolder: "Inbox" },
+      project: { templateFolder: "notes" },
+      reference: { templateFolder: "notes" },
     },
   });
   const types = JSON.stringify({ types: { status: "text", rating: "number", done: "boolean" } });
-  const projectTemplate = "---\nstatus: active\nrating: 1\ndone: false\n---\nBody\n";
-  const referenceTemplate = "---\nrating: 1\ndone: false\n---\nBody\n";
-  const sources: SourceDescriptor[] = [
-    { logicalId: "template-policy", signature: digest(policy) },
-    { logicalId: "taxonomy", signature: digest(taxonomy) },
-    { logicalId: "obsidian-types", signature: digest(types) },
-    { path: "Templates/OMS/project.md", signature: digest(projectTemplate) },
-    { path: "Templates/OMS/reference.md", signature: digest(referenceTemplate) },
-  ];
-  const field = (type: string) => ({ type });
-  const projectContent = deriveContentFormatContract("Body\n", { templateId: "project" }).contract;
-  const referenceContent = deriveContentFormatContract("Body\n", { templateId: "reference" }).contract;
-  const folderOntology = intentEntries.length === 0
-    ? {}
-    : {
-        "folder-ontology": {
-          kind: "folder",
-          key: "folder",
-          type: "text",
-          intent: "Semantic meanings of vault folders.",
-          members: intentEntries.map(([folder]) => folder),
-          extensions: { intents: Object.fromEntries(intentEntries) },
-        },
-      };
-  const projection = JSON.stringify({
-    version: "oms.types.v1",
-    generatedFrom: {
-      algorithm: "sha256-lp-v1",
-      inputSignature: sourceSignature(sources),
-      sharedAuthoritySignature: sharedAuthoritySignature(sources),
-      sources,
-    },
-    managed: {
-      base: { fields: {} }, globalAxes: folderOntology,
-      templates: {
-        project: { templateId: "project", destinationClass: "managed-default", sourcePath: "Templates/OMS/project.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["status", "rating", "done"], fields: { status: field("text"), rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: projectContent.bodySignature, content: projectContent },
-        reference: { templateId: "reference", destinationClass: "managed-default", sourcePath: "Templates/OMS/reference.md", renderer: "obsidian-core", targetFolder: "Inbox", keyOrder: ["rating", "done"], fields: { rating: field("number"), done: field("boolean") }, views: [], naming: "{{title}}", bodySignature: referenceContent.bodySignature, content: referenceContent },
-      },
-    },
+  const encoder = new TextEncoder();
+  const generationDigest = controlGenerationDigest(encoder.encode(policy), encoder.encode(taxonomy));
+  const projection = serializeDerivedProjection({
+    version: "oms.types.v2",
+    generatedFrom: generationDigest,
+    managed: expectedProjectionManaged(
+      parseTemplatePolicy(policy),
+      taxonomyRouting(".oms/taxonomy.json", encoder.encode(taxonomy)),
+      generationDigest,
+    ),
   });
+  mkdirSync(path.join(dir, ".oms", "templates"), { recursive: true });
   writeFileSync(path.join(dir, ".oms", "template-policy.json"), policy);
   writeFileSync(path.join(dir, ".oms", "taxonomy.json"), taxonomy);
   writeFileSync(path.join(dir, ".obsidian", "types.json"), types);
   writeFileSync(path.join(dir, ".oms", "types.json"), projection);
-  writeFileSync(path.join(dir, "Templates", "OMS", "project.md"), projectTemplate);
-  writeFileSync(path.join(dir, "Templates", "OMS", "reference.md"), referenceTemplate);
+  writeFileSync(path.join(dir, ".oms", "templates", "default.md"), "");
+  writeFileSync(path.join(dir, ".oms", "templates", "project.md"), "---\nstatus: active\nrating: 1\ndone: false\n---\nBody\n");
+  writeFileSync(path.join(dir, ".oms", "templates", "reference.md"), "---\nrating: 1\ndone: false\n---\nBody\n");
   writeFileSync(path.join(dir, "notes", "alpha.md"), "---\ntemplate: project\nstatus: active\n---\n# Alpha\n\nLinks to [[beta]].\n");
   writeFileSync(path.join(dir, "notes", "beta.md"), "---\ntemplate: reference\n---\n# Beta\n\nreferenced by alpha.\n");
   tempDirs.push(dir);
@@ -260,7 +249,7 @@ folders:
     ]);
   });
 
-  it("reports template-contract diagnostics and template-check guidance for expansion", async () => {
+  it("keeps expansion available when the derived projection is missing", async () => {
     const vault = freshVault();
     rmSync(path.join(vault, ".oms", "types.json"));
     const adapter = new McpEngineAdapter(
@@ -277,11 +266,9 @@ folders:
       strategy: { kind: "expand", profile: "qmd-v2.8.3" },
     });
 
-    expect(result.available).toBe(false);
-    if (result.available) return;
-    expect(result.reason).toContain("TEMPLATE_SOURCE_INVALID");
-    expect(result.reason).toContain("Run oms template check --vault <vault>");
-    expect(result.reason).toContain("approved oms template regenerate-types dry-run/apply flow");
+    // The derived projection is not a search authority. Expansion still runs and
+    // fails only for its own reason, never because a control file is absent.
+    if (!result.available) expect(result.reason).not.toContain("template check");
   });
 
   it("reports generate-unavailable for expansion without an expander", async () => {
@@ -399,9 +386,9 @@ folders:
     });
   });
 
-  it("reports template-contract diagnostics and template-check guidance for reranking", async () => {
+  it("keeps reranking available while a contract publication is in progress", async () => {
     const vault = freshVault();
-    writeFileSync(path.join(vault, ".oms", "template-migration.json"), "{}\n");
+    writeFileSync(path.join(vault, ".oms", "template-transaction.json"), JSON.stringify({ status: "in-progress" }));
     const adapter = new McpEngineAdapter(
       { store: makeEngineStore(["notes/alpha.md"]), embed: makeEmbed() },
       vault,
@@ -413,11 +400,11 @@ folders:
 
     const result = await adapter.semanticQuery({ query: "ataraxia", rerank: true });
 
-    expect(result.available).toBe(false);
-    if (result.available) return;
-    expect(result.reason).toContain("MIGRATION_INCOMPLETE");
-    expect(result.reason).toContain("Run oms template check --vault <vault>");
-    expect(result.reason).toContain("approved oms template regenerate-types dry-run/apply flow");
+    // An in-progress publication blocks writing evaluation, not read-only search.
+    expect(result.available).toBe(true);
+    if (!result.available) return;
+    expect(result.receipt.rerankApplied).toBe(true);
+    expect(result.receipt.warnings.join(" ")).not.toContain("template check");
   });
 
   it("does not download a model while serving an MCP query", async () => {
@@ -1066,6 +1053,6 @@ describe("McpEngineAdapter.retrieveByAxis", () => {
     const adapter = new McpEngineAdapter(makeDeps(), v);
     const result = await adapter.retrieveByAxis({ template: "project" });
     expect(result.available).toBe(false);
-    if (!result.available) expect(result.reason).toMatch(/TEMPLATE/);
+    if (!result.available) expect(result.reason).toContain("TEMPLATE_SNAPSHOT_UNAVAILABLE");
   });
 });

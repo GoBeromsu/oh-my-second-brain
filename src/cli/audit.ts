@@ -1,7 +1,7 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
-import { buildTemplateNoteIndex, diagnoseTemplates, loadResolvedTemplates } from "../kernel/templates/index.js";
-import type { TemplateDoctorDiagnostic } from "../kernel/templates/doctor.js";
+import { buildTemplateNoteIndex, loadResolvedTemplates } from "../kernel/templates/index.js";
+import { diagnoseTemplates, type TemplateDoctorDiagnostic } from "../kernel/templates/doctor.js";
 
 function validatedFolder(folder: string | undefined): string | undefined {
   if (folder === undefined) return undefined;
@@ -49,27 +49,35 @@ export async function runAudit(opts: {
     }));
     const scopedDiagnosis = folder === undefined
       ? diagnosis.diagnostics
-      : diagnosis.diagnostics.filter(item => item.code !== "MIGRATION_NOTE_IDENTITY_UNRESOLVED" || item.path === undefined || item.path === folder || item.path.startsWith(`${folder}/`));
+      : diagnosis.diagnostics.filter(item => item.path === undefined || item.path === folder || item.path.startsWith(`${folder}/`));
     const diagnostics = boundedDiagnostics([...scopedDiagnosis, ...identityDiagnostics], opts.maxPerTemplate);
-    const templateCounts: Record<string, number> = {};
-    for (const note of notes) templateCounts[note.templateId] = (templateCounts[note.templateId] ?? 0) + 1;
+    // An unbound note is valid under the default layer, so it is counted rather
+    // than reported as a defect.
+    const templateCounts: Record<string, number> = { "<default>": 0 };
+    for (const note of notes) {
+      const key = note.templateId ?? "<default>";
+      templateCounts[key] = (templateCounts[key] ?? 0) + 1;
+    }
+    const invalidNotes = folder === undefined
+      ? diagnosis.invalidNotes
+      : diagnosis.invalidNotes.filter(notePath => notePath === folder || notePath.startsWith(`${folder}/`));
     const result = {
       vault: opts.vault,
       folder: folder ?? null,
-      projectionSignature: convention.inputSignature,
+      generationDigest: convention.generationDigest,
       templates: Object.keys(convention.templates).length,
       scannedNotes: notes.length,
-      excludedTemplateSources: convention.managedSourcePaths,
+      excludedTemplateSources: convention.sources.map(freshness => freshness.source.path),
       templateCounts,
       status: scopedDiagnosis.length === 0 && unresolvedNotes.length === 0 ? "healthy" : "needs-repair",
       diagnostics,
       unresolvedNotes,
-      unresolvedLegacyNotes: folder === undefined ? diagnosis.unresolvedLegacyNotes : diagnosis.unresolvedLegacyNotes.filter(notePath => notePath === folder || notePath.startsWith(`${folder}/`)),
+      invalidNotes,
       clean: scopedDiagnosis.length === 0 && unresolvedNotes.length === 0,
     };
     if (opts.json) console.log(JSON.stringify(result, null, 2));
     else {
-      console.log(`\nOh My Second Brain audit: ${result.scannedNotes} template-bound note(s), ${result.templates} template(s), status ${result.status}.`);
+      console.log(`\nOh My Second Brain audit: ${result.scannedNotes} note(s), ${result.templates} template(s), status ${result.status}.`);
       for (const item of result.diagnostics) console.log(`  [${item.code}]${item.path === undefined ? "" : ` ${item.path}`} — ${item.remediation}`);
       console.log("");
     }

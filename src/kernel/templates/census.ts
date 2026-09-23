@@ -1,152 +1,147 @@
-import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
+
+import { digestBytes, hashCanonical } from "./canonical.js";
+import { loadConfiguredTemplatePaths } from "./hints.js";
 import {
-  deriveTemplateSourcePath,
+  normalizeTemplateControlPath,
   normalizeTemplateFolderPath,
   normalizeTemplateSourcePath,
+  verifyTemplateControlPath,
   verifyTemplateFolderPath,
   verifyTemplateSourcePath,
-  validateTemplateId,
 } from "./paths.js";
-import { MAX_TEMPLATE_SOURCE_BYTES } from "./renderer.js";
-import type { Digest, TemplateBinding, TemplateFolderPath, TemplateId, TemplatePolicy, TemplateSourcePath } from "./types.js";
+import { readTemplateReviewContext } from "./review-context.js";
+import type { Digest, TemplateId, TemplatePolicy, TemplateSourcePath } from "./types.js";
 
-const decoder = new TextDecoder();
-const encoder = new TextEncoder();
-const DIGEST = /^sha256:[0-9a-f]{64}$/u;
+/**
+ * Read-only inventory of raw template candidates.
+ * Bytes are digested exactly and decoded as UTF-8 without stripping a BOM or
+ * rewriting newlines. Templater, JavaScript, tokens, and frontmatter are not
+ * parsed or executed. A new file name is not a template id.
+ */
+
+export const TEMPLATE_CENSUS_DIGEST_DOMAIN = "oms.template-census.v4";
+/** Historical source cap previously published by the removed renderer. */
+export const MAX_TEMPLATE_SOURCE_BYTES = 262_144;
 const MAX_TEMPLATE_SOURCE_DEPTH = 16;
+const MAX_TEMPLATE_SOURCE_FILES = 10_000;
+const MAX_TEMPLATE_SOURCE_DIRECTORIES = 2_048;
+const POLICY_PATH = ".oms/template-policy.json";
 
-export type CensusDiffKind = "added" | "edited" | "deleted" | "renamed";
-export type CensusRenameStrategy = "identical-bytes" | "body-signature" | "lone-delete-add";
-export type CensusDiagnosticCode =
-  | "TEMPLATE_FOLDER_INVALID"
-  | "TEMPLATE_SOURCE_UNSAFE"
-  | "TEMPLATE_SOURCE_INVALID"
-  | "TEMPLATE_SOURCE_READ_FAILED"
-  | "TEMPLATE_SOURCE_DUPLICATE"
-  | "TEMPLATE_PROPOSAL_OVERSIZE"
-  | "TEMPLATE_ID_INVALID"
-  | "TEMPLATE_ID_DUPLICATE"
-  | "TEMPLATE_RENAME_AMBIGUOUS";
+export type CensusAuthority = "absent" | "approved" | "invalid";
+export type CensusBindingStatus = "matched" | "drift" | "missing" | "relocated" | "ambiguous" | "unreadable" | "conflict";
+export type CensusDiffKind = "added" | "edited" | "missing" | "relocated" | "ambiguous";
 
 export interface CensusDiagnostic {
-  readonly code: CensusDiagnosticCode;
+  readonly code: string;
   readonly message: string;
   readonly path?: string;
   readonly templateId?: TemplateId;
 }
 
-/** A prior source identity/signature; verification gates automatic exact-byte pairing. */
-export interface CensusPriorEntry {
-  readonly sourcePath: TemplateSourcePath;
-  readonly templateId: TemplateId;
-  readonly signature: Digest;
-  /**
-   * Indicates that the prior signature was independently approved by policy,
-   * rather than merely copied from an untrusted projection descriptor.
-   */
-  readonly signatureVerified: boolean;
-  readonly bodySignature?: Digest;
+export interface TemplateCensusSelection {
+  readonly path: string;
+  readonly kind: "file" | "folder";
 }
 
-export interface CensusEntry {
-  readonly sourcePath: TemplateSourcePath;
+export interface TemplateCensusOptions {
+  /** Caller-explicit files or folders. These are not discovered from note content. */
+  readonly selections?: readonly TemplateCensusSelection[];
+  /**
+   * When omitted, configured Obsidian and Templater paths are included as raw
+   * file or folder selections. Content hints are never consulted.
+   */
+  readonly includeConfiguredPaths?: boolean;
+}
+
+export interface CensusSource {
+  readonly path: TemplateSourcePath;
   readonly bytes: Uint8Array;
-  readonly signature: Digest;
-  readonly templateId?: TemplateId;
+  readonly rawDigest: Digest;
+  /** UTF-8 with the BOM retained. Null when the bytes are not UTF-8. */
+  readonly text: string | null;
   readonly diagnostics: readonly CensusDiagnostic[];
+}
+
+export interface CensusBinding {
+  readonly templateId: TemplateId;
+  readonly identity: string;
+  readonly approvedPath: TemplateSourcePath;
+  readonly approvedRawDigest: Digest;
+  readonly observedPath: TemplateSourcePath | null;
+  readonly observedRawDigest: Digest | null;
+  readonly status: CensusBindingStatus;
+  readonly candidatePaths: readonly TemplateSourcePath[];
 }
 
 export interface CensusDiff {
   readonly kind: CensusDiffKind;
-  /** The current path for add/edit/rename, or the former path for delete. */
-  readonly sourcePath: TemplateSourcePath;
-  readonly oldSourcePath?: TemplateSourcePath;
-  readonly newSourcePath?: TemplateSourcePath;
-  readonly templateId?: TemplateId;
+  readonly path: TemplateSourcePath;
+  readonly fromPath: TemplateSourcePath | null;
+  readonly templateId: TemplateId | null;
+  readonly rawDigest: Digest | null;
+  readonly approvedRawDigest: Digest | null;
+  readonly candidatePaths: readonly TemplateSourcePath[];
   readonly automatic: boolean;
-  readonly confirmationRequired: boolean;
-  readonly strategy?: CensusRenameStrategy;
 }
 
 export interface CensusResult {
-  readonly entries: readonly CensusEntry[];
+  readonly vault: string;
+  readonly authority: CensusAuthority;
+  readonly generationDigest: Digest | null;
+  readonly approvedPolicy: TemplatePolicy | null;
+  readonly sources: readonly CensusSource[];
+  readonly bindings: readonly CensusBinding[];
   readonly diffs: readonly CensusDiff[];
   readonly diagnostics: readonly CensusDiagnostic[];
-  readonly digest: Digest;
+  readonly censusDigest: Digest;
 }
 
-interface InternalEntry {
-  readonly sourcePath: TemplateSourcePath;
-  readonly bytes: Uint8Array;
-  readonly signature: Digest;
-  readonly bodySignature?: Digest;
-  readonly rawPath: string;
-  readonly diagnostics: CensusDiagnostic[];
-  templateId?: TemplateId;
-  identity: "policy" | "prior" | "slug" | "none";
-}
-
-interface IndexedBinding {
-  readonly binding: TemplateBinding;
-  readonly sourcePath: TemplateSourcePath;
-}
-
-interface IndexedPrior {
-  readonly prior: CensusPriorEntry;
-  readonly sourcePath: TemplateSourcePath;
-}
-
-interface MissingBinding {
-  readonly sourcePath: TemplateSourcePath;
+interface ApprovedRef {
   readonly templateId: TemplateId;
-  readonly signature?: Digest;
-  readonly signatureVerified: boolean;
-  readonly bodySignature?: Digest;
+  readonly identity: string;
+  readonly path: TemplateSourcePath;
+  readonly rawDigest: Digest;
 }
 
-type DeletedCandidate = IndexedPrior | MissingBinding;
-
-function deletedTemplateId(value: DeletedCandidate): TemplateId {
-  return "prior" in value ? value.prior.templateId : value.templateId;
+interface ReadySource {
+  readonly path: TemplateSourcePath;
+  readonly bytes: Uint8Array;
+  readonly rawDigest: Digest;
+  readonly text: string | null;
+  readonly diagnostics: CensusDiagnostic[];
 }
 
-function deletedSignature(value: DeletedCandidate): Digest | undefined {
-  return "prior" in value ? value.prior.signature : value.signature;
+interface Budget {
+  files: number;
+  directories: number;
+  exhausted: boolean;
 }
 
-function deletedSignatureVerified(value: DeletedCandidate): boolean {
-  return "prior" in value ? value.prior.signatureVerified : value.signatureVerified;
-}
-
-function deletedBodySignature(value: DeletedCandidate): Digest | undefined {
-  return "prior" in value ? value.prior.bodySignature : value.bodySignature;
-}
-
-function digest(bytes: Uint8Array): Digest {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}` as Digest;
-}
-
-function compare(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+function compareText(left: string, right: string): number {
+  const leftCodes = Array.from(left, character => character.codePointAt(0) ?? 0);
+  const rightCodes = Array.from(right, character => character.codePointAt(0) ?? 0);
+  const length = Math.min(leftCodes.length, rightCodes.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = leftCodes[index]! - rightCodes[index]!;
+    if (difference !== 0) return difference;
+  }
+  return leftCodes.length - rightCodes.length;
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function pathCaseKey(path: string): string {
-  return path.toLocaleLowerCase("en-US");
+function prefixedCode(error: unknown, fallback: string): string {
+  if (error instanceof Error && "code" in error && error.code === "ELOOP") return "TEMPLATE_SOURCE_UNSAFE";
+  const code = errorMessage(error).split(":", 1)[0] ?? "";
+  return /^[A-Z][A-Z0-9_]*$/u.test(code) ? code : fallback;
 }
 
-function diagnostic(
-  code: CensusDiagnosticCode,
-  message: string,
-  path?: string,
-  templateId?: TemplateId,
-): CensusDiagnostic {
+function diagnostic(code: string, message: string, path?: string, templateId?: TemplateId): CensusDiagnostic {
   return {
     code,
     message,
@@ -155,116 +150,9 @@ function diagnostic(
   };
 }
 
-function addDiagnostic(entry: InternalEntry, value: CensusDiagnostic): void {
-  if (!entry.diagnostics.some(item => item.code === value.code && item.message === value.message)) entry.diagnostics.push(value);
-}
-
-/** Derives the stable template identity shared by census and migration. */
-export function proposedTemplateId(path: string): TemplateId | null {
-  const stem = basename(path, ".md").replace(/\.(?:template|eta)$/iu, "");
-  const slug = stem
-    .normalize("NFC")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}-]+/gu, "-")
-    .replace(/-{3,}/gu, "--")
-    .replace(/^-+|-+$/gu, "");
-  if (slug.length === 0) return null;
-  try {
-    return validateTemplateId(slug);
-  } catch {
-    return null;
-  }
-}
-
-function bodySignature(bytes: Uint8Array): Digest | undefined {
-  const decoded = decoder.decode(bytes);
-  const content = decoded.startsWith("\ufeff") ? decoded.slice(1) : decoded;
-  if (!/^---(?:\r?\n)/u.test(content)) return undefined;
-  const close = /^(?:---)\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u.exec(content);
-  if (close === null) return undefined;
-  return digest(encoder.encode(content.slice(close[0].length)));
-}
-
-function canonicalPrior(prior: readonly CensusPriorEntry[], diagnostics: CensusDiagnostic[]): readonly IndexedPrior[] {
-  const result: IndexedPrior[] = [];
-  const seen = new Set<string>();
-  for (const value of prior) {
-    if (value === null || typeof value !== "object") {
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_INVALID", "Prior census entry must be an object"));
-      continue;
-    }
-    const rawPath = typeof value.sourcePath === "string" ? value.sourcePath : "";
-    let sourcePath: TemplateSourcePath;
-    try {
-      sourcePath = normalizeTemplateSourcePath(rawPath);
-    } catch (error: unknown) {
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_INVALID", `Prior census source is invalid: ${errorMessage(error)}`, rawPath || undefined));
-      continue;
-    }
-    if (seen.has(sourcePath)) {
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_DUPLICATE", "Prior census contains a duplicate source path", sourcePath));
-      continue;
-    }
-    seen.add(sourcePath);
-    if (typeof value.templateId !== "string" || value.templateId.length === 0) {
-      diagnostics.push(diagnostic("TEMPLATE_ID_INVALID", "Prior census source has no template id", sourcePath));
-      continue;
-    }
-    if (typeof value.signature !== "string" || !DIGEST.test(value.signature)) {
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_INVALID", "Prior census source has an invalid signature", sourcePath, value.templateId as TemplateId));
-      continue;
-    }
-    if (typeof value.signatureVerified !== "boolean") {
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_INVALID", "Prior census source has no signature verification status", sourcePath, value.templateId as TemplateId));
-      continue;
-    }
-    if (value.bodySignature !== undefined && !DIGEST.test(value.bodySignature)) {
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_INVALID", "Prior census source has an invalid body signature", sourcePath, value.templateId as TemplateId));
-      continue;
-    }
-    result.push({ prior: value, sourcePath });
-  }
-  return result.sort((left, right) => compare(left.sourcePath, right.sourcePath));
-}
-
-function indexedBindings(policy: TemplatePolicy, diagnostics: CensusDiagnostic[]): ReadonlyMap<string, readonly IndexedBinding[]> {
-  const grouped = new Map<string, IndexedBinding[]>();
-  for (const binding of Object.values(policy.templates)) {
-    let rawPath: string;
-    let sourcePath: TemplateSourcePath;
-    try {
-      rawPath = deriveTemplateSourcePath(binding);
-      sourcePath = normalizeTemplateSourcePath(rawPath);
-    } catch (error: unknown) {
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_INVALID", `Policy source is invalid: ${errorMessage(error)}`, binding.sourcePath, binding.templateId));
-      continue;
-    }
-    const values = grouped.get(sourcePath) ?? [];
-    values.push({ binding, sourcePath });
-    grouped.set(sourcePath, values);
-  }
-  return grouped;
-}
-
-function folderDepth(path: string): number {
-  return path.split("/").length;
-}
-
-function validFolderPaths(policy: TemplatePolicy, diagnostics: CensusDiagnostic[]): readonly TemplateFolderPath[] {
-  const result: TemplateFolderPath[] = [];
-  const seen = new Set<string>();
-  for (const folder of policy.templateFolders) {
-    const rawPath = folder.path;
-    try {
-      const normalized = normalizeTemplateFolderPath(rawPath);
-      if (seen.has(normalized)) continue;
-      seen.add(normalized);
-      result.push(normalized);
-    } catch (error: unknown) {
-      diagnostics.push(diagnostic("TEMPLATE_FOLDER_INVALID", `Selected template folder is invalid: ${errorMessage(error)}`, rawPath));
-    }
-  }
-  return result.sort((left, right) => folderDepth(right) - folderDepth(left) || compare(left, right));
+function pushDiagnostic(diagnostics: CensusDiagnostic[], value: CensusDiagnostic): void {
+  if (diagnostics.some(item => item.code === value.code && item.path === value.path && item.templateId === value.templateId && item.message === value.message)) return;
+  diagnostics.push(value);
 }
 
 function contained(root: string, target: string): boolean {
@@ -272,26 +160,23 @@ function contained(root: string, target: string): boolean {
   return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
 }
 
-interface BoundedSourceRead {
-  readonly bytes?: Uint8Array;
-  readonly oversized: boolean;
+function vaultRelative(root: string, absolutePath: string): string {
+  return relative(root, absolutePath).replaceAll("\\", "/");
 }
 
-async function readBoundedSource(root: string, absolutePath: string): Promise<BoundedSourceRead> {
+function decodeRaw(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+}
+
+async function readBounded(root: string, absolutePath: string): Promise<{ readonly bytes?: Uint8Array; readonly oversized: boolean }> {
   const parent = dirname(absolutePath);
   const canonicalParent = await realpath(parent);
-  if (!contained(root, canonicalParent)) {
-    throw new Error(`TEMPLATE_SOURCE_UNSAFE: ${absolutePath} has a parent outside the vault`);
-  }
-
+  if (!contained(root, canonicalParent)) throw new Error(`TEMPLATE_SOURCE_UNSAFE: ${absolutePath} has a parent outside the vault`);
   const handle = await open(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const before = await handle.stat();
-    if (!before.isFile()) {
-      throw new Error(`TEMPLATE_SOURCE_UNSAFE: ${absolutePath} is not a regular file`);
-    }
+    if (!before.isFile()) throw new Error(`TEMPLATE_SOURCE_UNSAFE: ${absolutePath} is not a regular file`);
     if (before.size > MAX_TEMPLATE_SOURCE_BYTES) return { oversized: true };
-
     const buffer = Buffer.alloc(MAX_TEMPLATE_SOURCE_BYTES + 1);
     let total = 0;
     while (total < buffer.length) {
@@ -302,593 +187,479 @@ async function readBoundedSource(root: string, absolutePath: string): Promise<Bo
       }
       total += bytesRead;
     }
-
     const after = await handle.stat();
-    const canonicalParentAfter = await realpath(parent);
-    if (!contained(root, canonicalParentAfter)) {
-      throw new Error(`TEMPLATE_SOURCE_UNSAFE: ${absolutePath} parent escaped the vault while reading`);
-    }
-    const canonicalSourceAfter = await realpath(absolutePath);
-    if (!contained(root, canonicalSourceAfter)) {
+    if (!contained(root, await realpath(parent)) || !contained(root, await realpath(absolutePath))) {
       throw new Error(`TEMPLATE_SOURCE_UNSAFE: ${absolutePath} escaped the vault while reading`);
     }
     if (total > MAX_TEMPLATE_SOURCE_BYTES || after.size > MAX_TEMPLATE_SOURCE_BYTES) return { oversized: true };
     if (after.size !== before.size || total !== after.size) {
       throw new Error(`TEMPLATE_SOURCE_READ_FAILED: ${absolutePath} changed while reading`);
     }
-    return { bytes: buffer.subarray(0, total), oversized: false };
+    return { bytes: new Uint8Array(buffer.subarray(0, total)), oversized: false };
   } finally {
     await handle.close();
   }
 }
 
-async function scanFolder(
-  root: string,
-  folder: TemplateFolderPath,
-  seenPhysicalPaths: Set<string>,
-  entries: InternalEntry[],
-  diagnostics: CensusDiagnostic[],
-  scanFailures: Set<string>,
-): Promise<void> {
-  let verified: Awaited<ReturnType<typeof verifyTemplateFolderPath>>;
+async function readCandidate(root: string, sourcePath: TemplateSourcePath): Promise<
+  | { readonly state: "absent" }
+  | { readonly state: "blocked"; readonly diagnostic: CensusDiagnostic }
+  | { readonly state: "ready"; readonly source: ReadySource }
+> {
+  let absolutePath: string;
   try {
-    verified = await verifyTemplateFolderPath(root, folder);
+    const verified = await verifyTemplateSourcePath(root, sourcePath, { expected: "either" });
+    if (verified.targetRealPath === null) return { state: "absent" };
+    absolutePath = verified.absolutePath;
   } catch (error: unknown) {
-    scanFailures.add(folder);
-    diagnostics.push(diagnostic(
-      sourceErrorCode(error),
-      `Selected template folder cannot be verified: ${errorMessage(error)}`,
-      folder,
-    ));
-    return;
+    return { state: "blocked", diagnostic: diagnostic(prefixedCode(error, "TEMPLATE_SOURCE_READ_FAILED"), `Template source cannot be verified: ${errorMessage(error)}`, sourcePath) };
   }
-  // A selected folder that is absent is a verified empty scope. Keep it
-  // distinct from a directory that vanished after the scan began: callers may
-  // safely retire bindings under this scope, while a mid-scan race remains
-  // unavailable evidence.
-  if (verified.targetRealPath === null) return;
   let stat;
   try {
-    stat = await lstat(verified.absolutePath);
+    stat = await lstat(absolutePath);
   } catch (error: unknown) {
-    scanFailures.add(folder);
-    diagnostics.push(diagnostic("TEMPLATE_FOLDER_INVALID", `Selected template folder cannot be read: ${errorMessage(error)}`, folder));
-    return;
+    return { state: "blocked", diagnostic: diagnostic("TEMPLATE_SOURCE_READ_FAILED", `Template source cannot be read: ${errorMessage(error)}`, sourcePath) };
   }
-  if (!stat.isDirectory()) {
-    scanFailures.add(folder);
-    if (stat.isSymbolicLink()) {
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_UNSAFE", "Selected template folder became a symlink while scanning", folder));
-      return;
+  if (stat.isSymbolicLink()) return { state: "blocked", diagnostic: diagnostic("TEMPLATE_SOURCE_UNSAFE", "Symlink template entry is skipped", sourcePath) };
+  if (!stat.isFile()) return { state: "blocked", diagnostic: diagnostic("TEMPLATE_SOURCE_INVALID", "Template source is not a regular file", sourcePath) };
+  try {
+    const bounded = await readBounded(root, absolutePath);
+    if (bounded.oversized || bounded.bytes === undefined) {
+      return {
+        state: "blocked",
+        diagnostic: diagnostic("TEMPLATE_PROPOSAL_OVERSIZE", `Template source exceeds the ${MAX_TEMPLATE_SOURCE_BYTES}-byte source limit`, sourcePath),
+      };
     }
-    diagnostics.push(diagnostic("TEMPLATE_FOLDER_INVALID", "Selected template folder is not a directory", folder));
+    const bytes = bounded.bytes;
+    const diagnostics: CensusDiagnostic[] = [];
+    let text: string | null = null;
+    try {
+      text = decodeRaw(bytes);
+    } catch {
+      diagnostics.push(diagnostic("TEMPLATE_SOURCE_MALFORMED", "Template source is not valid UTF-8; bytes were not decoded or parsed", sourcePath));
+    }
+    return { state: "ready", source: { path: sourcePath, bytes, rawDigest: digestBytes(bytes), text, diagnostics } };
+  } catch (error: unknown) {
+    return { state: "blocked", diagnostic: diagnostic(prefixedCode(error, "TEMPLATE_SOURCE_READ_FAILED"), `Template source cannot be read: ${errorMessage(error)}`, sourcePath) };
+  }
+}
+
+function exhaust(budget: Budget, diagnostics: CensusDiagnostic[], path: string, kind: "files" | "directories"): boolean {
+  if (budget.exhausted) return true;
+  if (kind === "files" && budget.files >= MAX_TEMPLATE_SOURCE_FILES) {
+    budget.exhausted = true;
+    pushDiagnostic(diagnostics, diagnostic("TEMPLATE_PROPOSAL_OVERSIZE", `Template source scan exceeds ${MAX_TEMPLATE_SOURCE_FILES} files`, path));
+    return true;
+  }
+  if (kind === "directories" && budget.directories >= MAX_TEMPLATE_SOURCE_DIRECTORIES) {
+    budget.exhausted = true;
+    pushDiagnostic(diagnostics, diagnostic("TEMPLATE_PROPOSAL_OVERSIZE", `Template source scan exceeds ${MAX_TEMPLATE_SOURCE_DIRECTORIES} directories`, path));
+    return true;
+  }
+  return false;
+}
+
+async function scanFolder(root: string, folder: string, budget: Budget, files: Set<string>, diagnostics: CensusDiagnostic[]): Promise<void> {
+  let verified: Awaited<ReturnType<typeof verifyTemplateFolderPath>>;
+  try {
+    verified = await verifyTemplateFolderPath(root, normalizeTemplateFolderPath(folder));
+  } catch (error: unknown) {
+    pushDiagnostic(diagnostics, diagnostic(prefixedCode(error, "TEMPLATE_FOLDER_INVALID"), `Selected template folder cannot be verified: ${errorMessage(error)}`, folder));
     return;
   }
-
+  if (verified.targetRealPath === null) {
+    pushDiagnostic(diagnostics, diagnostic("TEMPLATE_FOLDER_INVALID", "Selected template folder is absent", folder));
+    return;
+  }
   const visit = async (directory: string, depth: number): Promise<void> => {
+    if (exhaust(budget, diagnostics, vaultRelative(root, directory), "directories")) return;
+    budget.directories += 1;
     let directoryStat;
     try {
       directoryStat = await lstat(directory);
     } catch (error: unknown) {
-      const scope = relative(root, directory).replaceAll("\\", "/");
-      scanFailures.add(scope);
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_READ_FAILED", `Template directory cannot be read: ${errorMessage(error)}`, scope));
+      pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_READ_FAILED", `Template directory cannot be read: ${errorMessage(error)}`, vaultRelative(root, directory)));
       return;
     }
     if (directoryStat.isSymbolicLink()) {
-      const scope = relative(root, directory).replaceAll("\\", "/");
-      scanFailures.add(scope);
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_UNSAFE", "Symlink directory is not a trusted template scope", scope));
+      pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_UNSAFE", "Symlink directory is not a trusted template scope", vaultRelative(root, directory)));
       return;
     }
     if (!directoryStat.isDirectory()) {
-      scanFailures.add(relative(root, directory).replaceAll("\\", "/"));
+      pushDiagnostic(diagnostics, diagnostic("TEMPLATE_FOLDER_INVALID", "Selected template folder is not a directory", vaultRelative(root, directory)));
       return;
     }
-
     let children;
     try {
       children = await readdir(directory, { withFileTypes: true });
     } catch (error: unknown) {
-      const scope = relative(root, directory).replaceAll("\\", "/");
-      scanFailures.add(scope);
-      diagnostics.push(diagnostic("TEMPLATE_SOURCE_READ_FAILED", `Template directory cannot be read: ${errorMessage(error)}`, scope));
+      pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_READ_FAILED", `Template directory cannot be read: ${errorMessage(error)}`, vaultRelative(root, directory)));
       return;
     }
-    children.sort((left, right) => compare(left.name, right.name));
+    children.sort((left, right) => compareText(left.name, right.name));
     for (const child of children) {
+      if (budget.exhausted) return;
       const absolutePath = join(directory, child.name);
-      const rawPath = relative(root, absolutePath).replaceAll("\\", "/");
+      const rawPath = vaultRelative(root, absolutePath);
       if (child.isSymbolicLink()) {
-        scanFailures.add(rawPath);
-        diagnostics.push(diagnostic("TEMPLATE_SOURCE_UNSAFE", "Symlink template entry is skipped", rawPath));
+        pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_UNSAFE", "Symlink template entry is skipped", rawPath));
         continue;
       }
       if (child.name.startsWith(".")) continue;
       if (child.isDirectory()) {
-        if (child.name.endsWith(".md")) scanFailures.add(rawPath);
+        if (child.name.endsWith(".md")) {
+          pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_INVALID", "Template directory leaf is not a markdown file", rawPath));
+          continue;
+        }
         if (depth >= MAX_TEMPLATE_SOURCE_DEPTH) {
-          scanFailures.add(rawPath);
-          diagnostics.push(diagnostic(
-            "TEMPLATE_PROPOSAL_OVERSIZE",
-            `Template source depth exceeds the limit of ${MAX_TEMPLATE_SOURCE_DEPTH}`,
-            rawPath,
-          ));
+          pushDiagnostic(diagnostics, diagnostic("TEMPLATE_PROPOSAL_OVERSIZE", `Template source depth exceeds the limit of ${MAX_TEMPLATE_SOURCE_DEPTH}`, rawPath));
           continue;
         }
         await visit(absolutePath, depth + 1);
         continue;
       }
-      if (!child.isFile()) {
-        if (child.name.endsWith(".md")) scanFailures.add(rawPath);
-        continue;
-      }
-      if (!child.name.endsWith(".md")) continue;
-      if (seenPhysicalPaths.has(rawPath)) continue;
-      seenPhysicalPaths.add(rawPath);
-
+      if (!child.isFile() || !child.name.endsWith(".md")) continue;
       let sourcePath: TemplateSourcePath;
       try {
         sourcePath = normalizeTemplateSourcePath(rawPath);
       } catch (error: unknown) {
-        diagnostics.push(diagnostic("TEMPLATE_SOURCE_INVALID", `Template source is invalid: ${errorMessage(error)}`, rawPath));
+        pushDiagnostic(diagnostics, diagnostic(prefixedCode(error, "TEMPLATE_SOURCE_INVALID"), `Template source is invalid: ${errorMessage(error)}`, rawPath));
         continue;
       }
-      let verifiedSource;
-      try {
-        verifiedSource = await verifyTemplateSourcePath(root, sourcePath, { expected: "existing-file" });
-      } catch (error: unknown) {
-        diagnostics.push(diagnostic(sourceErrorCode(error), errorMessage(error), sourcePath));
-        continue;
-      }
-      try {
-        const bounded = await readBoundedSource(root, verifiedSource.absolutePath);
-        if (bounded.oversized || bounded.bytes === undefined) {
-          scanFailures.add(sourcePath);
-          diagnostics.push(diagnostic(
-            "TEMPLATE_PROPOSAL_OVERSIZE",
-            `Template source exceeds the ${MAX_TEMPLATE_SOURCE_BYTES}-byte source limit`,
-            sourcePath,
-          ));
-          continue;
-        }
-        const bytes = bounded.bytes;
-        entries.push({
-          sourcePath,
-          bytes,
-          signature: digest(bytes),
-          bodySignature: bodySignature(bytes),
-          rawPath,
-          diagnostics: [],
-          identity: "none",
-        });
-      } catch (error: unknown) {
-        scanFailures.add(sourcePath);
-        const message = errorMessage(error);
-        const unsafe = message.startsWith("TEMPLATE_SOURCE_UNSAFE:")
-          || (error instanceof Error && "code" in error && error.code === "ELOOP");
-        diagnostics.push(diagnostic(
-          unsafe ? "TEMPLATE_SOURCE_UNSAFE" : "TEMPLATE_SOURCE_READ_FAILED",
-          `Template source cannot be read: ${message}`,
-          sourcePath,
-        ));
-        continue;
-      }
+      if (files.has(sourcePath) || exhaust(budget, diagnostics, sourcePath, "files")) continue;
+      budget.files += 1;
+      files.add(sourcePath);
     }
   };
-
   await visit(verified.absolutePath, 0);
 }
 
-type SourcePresence = "verified-absent" | "present" | "unavailable";
-
-function sourceWithin(path: string, scope: string): boolean {
-  return path === scope || path.startsWith(`${scope}/`);
-}
-
-function sourceErrorCode(error: unknown): Extract<CensusDiagnosticCode, "TEMPLATE_SOURCE_UNSAFE" | "TEMPLATE_SOURCE_INVALID" | "TEMPLATE_SOURCE_READ_FAILED"> {
-  const message = errorMessage(error);
-  if (message.startsWith("TEMPLATE_SOURCE_UNSAFE:") || (error instanceof Error && "code" in error && error.code === "ELOOP")) {
-    return "TEMPLATE_SOURCE_UNSAFE";
-  }
-  if (message.startsWith("TEMPLATE_SOURCE_INVALID:")) return "TEMPLATE_SOURCE_INVALID";
-  return "TEMPLATE_SOURCE_READ_FAILED";
-}
-
-function verificationDiagnostic(path: string, error: unknown): CensusDiagnostic {
-  const message = errorMessage(error);
-  return diagnostic(
-    sourceErrorCode(error),
-    `Template source cannot be verified: ${message}`,
-    path,
-  );
-}
-
-/**
- * A path is considered absent only after a direct, bounded vault-path
- * verification. In particular, an omitted scan entry is never enough: a
- * failed directory walk, unsafe path, or unreadable source leaves the prior
- * identity unresolved rather than converting it into deletion evidence.
- */
-async function sourcePresence(
-  root: string,
-  path: TemplateSourcePath,
-  scanFailures: ReadonlySet<string>,
-  diagnostics: CensusDiagnostic[],
-): Promise<SourcePresence> {
-  if ([...scanFailures].some(scope => sourceWithin(path, scope))) return "unavailable";
+async function configuredSelections(root: string, diagnostics: CensusDiagnostic[]): Promise<readonly TemplateCensusSelection[]> {
   try {
-    const verified = await verifyTemplateSourcePath(root, path, { expected: "either" });
-    if (verified.targetRealPath === null) return "verified-absent";
-    const stat = await lstat(verified.absolutePath);
-    if (stat.isSymbolicLink()) {
-      const value = diagnostic("TEMPLATE_SOURCE_UNSAFE", "Template source became a symlink while being verified", path);
-      if (!diagnostics.some(item => item.path === value.path && item.code === value.code)) diagnostics.push(value);
-      return "unavailable";
-    }
-    if (!stat.isFile()) {
-      const value = diagnostic("TEMPLATE_SOURCE_INVALID", "Template source is not a regular file", path);
-      if (!diagnostics.some(item => item.path === value.path && item.code === value.code)) diagnostics.push(value);
-      return "unavailable";
-    }
-    return "present";
+    const configured = await loadConfiguredTemplatePaths(root);
+    return configured.map(item => ({ path: item.path, kind: item.kind }));
   } catch (error: unknown) {
-    const value = verificationDiagnostic(path, error);
-    if (!diagnostics.some(item => item.path === value.path && item.code === value.code)) diagnostics.push(value);
-    return "unavailable";
+    pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_READ_FAILED", `Configured template paths cannot be read: ${errorMessage(error)}`));
+    return [];
   }
 }
 
-function assignIdentities(
-  entries: InternalEntry[],
-  bindings: ReadonlyMap<string, readonly IndexedBinding[]>,
-  priorByPath: ReadonlyMap<string, IndexedPrior>,
-): void {
-  for (const entry of entries) {
-    const matchedBindings = bindings.get(entry.sourcePath) ?? [];
-    if (matchedBindings.length > 1) {
-      addDiagnostic(entry, diagnostic("TEMPLATE_SOURCE_DUPLICATE", "Multiple policy bindings claim this source path", entry.sourcePath));
+async function readAuthority(root: string, diagnostics: CensusDiagnostic[]): Promise<{
+  readonly authority: CensusAuthority;
+  readonly generationDigest: Digest | null;
+  readonly approvedPolicy: TemplatePolicy | null;
+  readonly approved: readonly ApprovedRef[];
+}> {
+  let policyPresent = false;
+  try {
+    const verified = await verifyTemplateControlPath(root, normalizeTemplateControlPath(POLICY_PATH), { expected: "either" });
+    policyPresent = verified.targetRealPath !== null;
+  } catch (error: unknown) {
+    pushDiagnostic(diagnostics, diagnostic(prefixedCode(error, "CONTRACT_UNVERIFIABLE"), `Approved policy cannot be verified: ${errorMessage(error)}`, POLICY_PATH));
+    return { authority: "invalid", generationDigest: null, approvedPolicy: null, approved: [] };
+  }
+  if (!policyPresent) return { authority: "absent", generationDigest: null, approvedPolicy: null, approved: [] };
+  try {
+    const review = await readTemplateReviewContext(root);
+    for (const item of review.resolved.diagnostics) {
+      if (item.code === "SOURCE_DRIFT") continue;
+      const detail = item.field === undefined ? item.message ?? item.code : `${item.message ?? item.code} (${item.field})`;
+      pushDiagnostic(diagnostics, diagnostic(item.code, detail, item.path, item.templateId));
+    }
+    const approved: ApprovedRef[] = [];
+    for (const templateId of Object.keys(review.resolved.policy.templates).sort(compareText)) {
+      const template = review.resolved.policy.templates[templateId];
+      if (template?.source === undefined) continue;
+      approved.push({
+        templateId: template.templateId,
+        identity: template.source.identity,
+        path: template.source.path,
+        rawDigest: template.source.rawDigest,
+      });
+    }
+    return {
+      authority: "approved",
+      generationDigest: review.resolved.generationDigest,
+      approvedPolicy: review.resolved.policy,
+      approved,
+    };
+  } catch (error: unknown) {
+    pushDiagnostic(diagnostics, diagnostic(prefixedCode(error, "CONTRACT_UNVERIFIABLE"), errorMessage(error), POLICY_PATH));
+    return { authority: "invalid", generationDigest: null, approvedPolicy: null, approved: [] };
+  }
+}
+
+function pair(
+  approved: readonly ApprovedRef[],
+  sources: readonly ReadySource[],
+  blocked: ReadonlySet<string>,
+  diagnostics: CensusDiagnostic[],
+): { readonly bindings: CensusBinding[]; readonly diffs: CensusDiff[] } {
+  const observed = new Map<string, ReadySource>(sources.map(source => [source.path, source]));
+  const byPath = new Map<string, ApprovedRef[]>();
+  for (const ref of approved) {
+    const group = byPath.get(ref.path) ?? [];
+    group.push(ref);
+    byPath.set(ref.path, group);
+  }
+  const consumed = new Set<string>();
+  const bindings: CensusBinding[] = [];
+  const pending: ApprovedRef[] = [];
+  for (const path of [...byPath.keys()].sort(compareText)) {
+    const group = byPath.get(path) ?? [];
+    if (group.length > 1) {
+      pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_DUPLICATE", "Multiple approved templates claim this source path", path));
+      for (const ref of group) {
+        bindings.push({
+          templateId: ref.templateId,
+          identity: ref.identity,
+          approvedPath: ref.path,
+          approvedRawDigest: ref.rawDigest,
+          observedPath: null,
+          observedRawDigest: null,
+          status: "conflict",
+          candidatePaths: [],
+        });
+      }
+      if (observed.has(path)) consumed.add(path);
       continue;
     }
-    const binding = matchedBindings[0];
-    if (binding !== undefined) {
-      entry.templateId = binding.binding.templateId;
-      entry.identity = "policy";
-      returnIfKnownId(entry);
+    const ref = group[0]!;
+    const source = observed.get(path);
+    if (source !== undefined) {
+      consumed.add(path);
+      const drift = source.rawDigest !== ref.rawDigest;
+      if (drift) pushDiagnostic(diagnostics, diagnostic("SOURCE_DRIFT", `Raw source ${path} does not match the approved raw digest`, path, ref.templateId));
+      bindings.push({
+        templateId: ref.templateId,
+        identity: ref.identity,
+        approvedPath: ref.path,
+        approvedRawDigest: ref.rawDigest,
+        observedPath: source.path,
+        observedRawDigest: source.rawDigest,
+        status: drift ? "drift" : "matched",
+        candidatePaths: [],
+      });
       continue;
     }
-    const prior = priorByPath.get(entry.sourcePath);
-    if (prior !== undefined) {
-      entry.templateId = prior.prior.templateId;
-      entry.identity = "prior";
-      returnIfKnownId(entry);
+    if (blocked.has(path)) {
+      bindings.push({
+        templateId: ref.templateId,
+        identity: ref.identity,
+        approvedPath: ref.path,
+        approvedRawDigest: ref.rawDigest,
+        observedPath: null,
+        observedRawDigest: null,
+        status: "unreadable",
+        candidatePaths: [],
+      });
       continue;
     }
-    const candidate = proposedTemplateId(entry.sourcePath);
-    if (candidate === null) {
-      entry.identity = "none";
-      addDiagnostic(entry, diagnostic("TEMPLATE_ID_INVALID", "File name yields no stable Unicode template id", entry.sourcePath));
+    pending.push(ref);
+  }
+
+  const unbound = sources.filter(source => !consumed.has(source.path));
+  const unboundByDigest = new Map<string, ReadySource[]>();
+  for (const source of unbound) {
+    const group = unboundByDigest.get(source.rawDigest) ?? [];
+    group.push(source);
+    unboundByDigest.set(source.rawDigest, group);
+  }
+  const ambiguousPaths = new Set<string>();
+  for (const ref of [...pending].sort((left, right) => compareText(left.templateId, right.templateId))) {
+    const candidates = (unboundByDigest.get(ref.rawDigest) ?? []).map(source => source.path).sort(compareText);
+    const sameDigest = pending.filter(item => item.rawDigest === ref.rawDigest);
+    if (candidates.length === 1 && sameDigest.length === 1) {
+      const match = unbound.find(source => source.path === candidates[0]);
+      if (match === undefined) continue;
+      consumed.add(match.path);
+      bindings.push({
+        templateId: ref.templateId,
+        identity: ref.identity,
+        approvedPath: ref.path,
+        approvedRawDigest: ref.rawDigest,
+        observedPath: match.path,
+        observedRawDigest: match.rawDigest,
+        status: "relocated",
+        candidatePaths: [],
+      });
       continue;
     }
-    entry.templateId = candidate;
-    entry.identity = "slug";
+    if (candidates.length > 0) {
+      for (const candidate of candidates) ambiguousPaths.add(candidate);
+      pushDiagnostic(diagnostics, diagnostic(
+        "TEMPLATE_RENAME_AMBIGUOUS",
+        `Raw source ${ref.path} has no unique exact-byte replacement`,
+        ref.path,
+        ref.templateId,
+      ));
+      bindings.push({
+        templateId: ref.templateId,
+        identity: ref.identity,
+        approvedPath: ref.path,
+        approvedRawDigest: ref.rawDigest,
+        observedPath: null,
+        observedRawDigest: null,
+        status: "ambiguous",
+        candidatePaths: candidates,
+      });
+      continue;
+    }
+    pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_MISSING", `Raw source ${ref.path} is missing`, ref.path, ref.templateId));
+    bindings.push({
+      templateId: ref.templateId,
+      identity: ref.identity,
+      approvedPath: ref.path,
+      approvedRawDigest: ref.rawDigest,
+      observedPath: null,
+      observedRawDigest: null,
+      status: "missing",
+      candidatePaths: [],
+    });
   }
-}
 
-function returnIfKnownId(entry: InternalEntry): void {
-  // Existing policy/prior identifiers are authoritative and are deliberately not re-derived.
-  if (entry.templateId === undefined || entry.templateId.length === 0) {
-    entry.identity = "none";
-    addDiagnostic(entry, diagnostic("TEMPLATE_ID_INVALID", "Authoritative template id is empty", entry.sourcePath));
+  for (const source of sources) {
+    if (consumed.has(source.path) || ambiguousPaths.has(source.path)) continue;
+    const owners = bindings.filter(binding => binding.observedRawDigest === source.rawDigest && binding.status !== "ambiguous");
+    if (owners.length > 0) {
+      pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_DUPLICATE", `Raw bytes at ${source.path} duplicate an approved source`, source.path, owners[0]?.templateId));
+    }
   }
-}
 
-function markPathCollisions(entries: InternalEntry[]): void {
-  const normalized = new Map<string, InternalEntry[]>();
-  const caseFolded = new Map<string, InternalEntry[]>();
-  for (const entry of entries) {
-    const exact = normalized.get(entry.sourcePath) ?? [];
-    exact.push(entry);
-    normalized.set(entry.sourcePath, exact);
-    const folded = caseFolded.get(pathCaseKey(entry.sourcePath)) ?? [];
-    folded.push(entry);
-    caseFolded.set(pathCaseKey(entry.sourcePath), folded);
-  }
-  for (const group of normalized.values()) {
-    if (group.length < 2) continue;
-    for (const entry of group) addDiagnostic(entry, diagnostic("TEMPLATE_SOURCE_DUPLICATE", "Multiple physical files normalize to this source path", entry.sourcePath));
-  }
-  for (const group of caseFolded.values()) {
-    if (group.length < 2) continue;
-    const paths = new Set(group.map(entry => entry.sourcePath));
-    if (paths.size < 2) continue;
-    for (const entry of group) addDiagnostic(entry, diagnostic("TEMPLATE_SOURCE_DUPLICATE", "Source path collides with another file by case", entry.sourcePath));
-  }
-}
-
-function markIdCollisions(entries: InternalEntry[]): void {
-  const grouped = new Map<string, InternalEntry[]>();
-  for (const entry of entries) {
-    if (entry.templateId === undefined) continue;
-    const key = entry.templateId.normalize("NFC").toLocaleLowerCase("en-US");
-    const group = grouped.get(key) ?? [];
-    group.push(entry);
-    grouped.set(key, group);
-  }
-  for (const group of grouped.values()) {
-    if (group.length < 2) continue;
-    for (const entry of group) addDiagnostic(entry, diagnostic("TEMPLATE_ID_DUPLICATE", "Template id is claimed by more than one source", entry.sourcePath, entry.templateId));
-  }
-}
-
-function publicEntry(entry: InternalEntry): CensusEntry {
-  return {
-    sourcePath: entry.sourcePath,
-    bytes: entry.bytes,
-    signature: entry.signature,
-    ...(entry.templateId === undefined ? {} : { templateId: entry.templateId }),
-    diagnostics: [...entry.diagnostics].sort((left, right) => compare(left.code, right.code) || compare(left.message, right.message)),
-  };
-}
-
-function renameDiff(
-  oldEntry: DeletedCandidate,
-  current: InternalEntry,
-  strategy: CensusRenameStrategy,
-  automatic: boolean,
-): CensusDiff {
-  return {
-    kind: "renamed",
-    sourcePath: current.sourcePath,
-    oldSourcePath: oldEntry.sourcePath,
-    newSourcePath: current.sourcePath,
-    templateId: current.templateId,
-    automatic,
-    confirmationRequired: !automatic,
-    strategy,
-  };
-}
-
-function diffSort(left: CensusDiff, right: CensusDiff): number {
-  return compare(left.sourcePath, right.sourcePath)
-    || compare(left.oldSourcePath ?? "", right.oldSourcePath ?? "")
-    || compare(left.kind, right.kind);
-}
-
-function buildDiffs(
-  entries: InternalEntry[],
-  prior: readonly IndexedPrior[],
-  verifiedAbsent: ReadonlySet<string>,
-  policyMissing: readonly MissingBinding[],
-): CensusDiff[] {
-  const priorByPath = new Map(prior.map(entry => [entry.sourcePath, entry]));
-  const matchedPrior = new Set<string>();
-  const handledCurrent = new Set<InternalEntry>();
   const diffs: CensusDiff[] = [];
-
-  for (const entry of entries) {
-    const previous = priorByPath.get(entry.sourcePath);
-    if (previous === undefined) continue;
-    matchedPrior.add(previous.sourcePath);
-    handledCurrent.add(entry);
-    if (entry.signature !== previous.prior.signature) {
+  for (const binding of bindings) {
+    if (binding.status === "drift") {
       diffs.push({
         kind: "edited",
-        sourcePath: entry.sourcePath,
-        ...(entry.templateId === undefined ? {} : { templateId: entry.templateId }),
+        path: binding.observedPath ?? binding.approvedPath,
+        fromPath: null,
+        templateId: binding.templateId,
+        rawDigest: binding.observedRawDigest,
+        approvedRawDigest: binding.approvedRawDigest,
+        candidatePaths: [],
+        automatic: false,
+      });
+    } else if (binding.status === "relocated" && binding.observedPath !== null) {
+      diffs.push({
+        kind: "relocated",
+        path: binding.observedPath,
+        fromPath: binding.approvedPath,
+        templateId: binding.templateId,
+        rawDigest: binding.observedRawDigest,
+        approvedRawDigest: binding.approvedRawDigest,
+        candidatePaths: [],
         automatic: true,
-        confirmationRequired: false,
+      });
+    } else if (binding.status === "missing") {
+      diffs.push({
+        kind: "missing",
+        path: binding.approvedPath,
+        fromPath: null,
+        templateId: binding.templateId,
+        rawDigest: null,
+        approvedRawDigest: binding.approvedRawDigest,
+        candidatePaths: [],
+        automatic: false,
+      });
+    } else if (binding.status === "ambiguous") {
+      diffs.push({
+        kind: "ambiguous",
+        path: binding.approvedPath,
+        fromPath: null,
+        templateId: binding.templateId,
+        rawDigest: null,
+        approvedRawDigest: binding.approvedRawDigest,
+        candidatePaths: binding.candidatePaths,
+        automatic: false,
       });
     }
   }
-
-  const added = entries.filter(entry => !handledCurrent.has(entry));
-  const policyByPath = new Map(policyMissing.map(value => [value.sourcePath, value]));
-  const priorCandidates: DeletedCandidate[] = prior
-    .filter(value => !matchedPrior.has(value.sourcePath) && verifiedAbsent.has(value.sourcePath))
-    .map(value => {
-      const policy = policyByPath.get(value.sourcePath);
-      return policy?.signatureVerified === true ? policy : value;
-    });
-  const deleted: DeletedCandidate[] = [
-    ...priorCandidates,
-    ...policyMissing.filter(value => !priorByPath.has(value.sourcePath) && verifiedAbsent.has(value.sourcePath)),
-  ];
-  const availableAdded = new Set(added);
-  const availableDeleted = new Set(deleted);
-
-  const bySignature = new Map<string, { readonly current: InternalEntry[]; readonly previous: DeletedCandidate[] }>();
-  for (const entry of added) {
-    const group = bySignature.get(entry.signature) ?? { current: [], previous: [] };
-    group.current.push(entry);
-    bySignature.set(entry.signature, group);
-  }
-  for (const previous of deleted) {
-    const signature = deletedSignature(previous);
-    if (signature === undefined || !deletedSignatureVerified(previous)) continue;
-    const group = bySignature.get(signature) ?? { current: [], previous: [] };
-    group.previous.push(previous);
-    bySignature.set(signature, group);
-  }
-  for (const group of bySignature.values()) {
-    if (group.current.length === 1 && group.previous.length === 1 && deletedSignatureVerified(group.previous[0]!)) {
-      const current = group.current[0]!;
-      const previous = group.previous[0]!;
-      if (current.diagnostics.length === 0) {
-        if (current.identity !== "policy") current.templateId = deletedTemplateId(previous);
-        availableAdded.delete(current);
-        availableDeleted.delete(previous);
-        matchedPrior.add(previous.sourcePath);
-        handledCurrent.add(current);
-        diffs.push(renameDiff(previous, current, "identical-bytes", true));
-      }
-      continue;
-    }
-    if (group.current.length > 0 && group.previous.length > 0) {
-      for (const current of group.current) {
-        for (const previous of group.previous) {
-          diffs.push({
-            ...renameDiff(previous, current, "identical-bytes", false),
-            automatic: false,
-            confirmationRequired: true,
-            ...(current.templateId === undefined ? {} : { templateId: current.templateId }),
-          });
-        }
-      }
-    }
-  }
-
-  const byBody = new Map<string, { readonly current: InternalEntry[]; readonly previous: DeletedCandidate[] }>();
-  for (const entry of availableAdded) {
-    if (entry.bodySignature === undefined) continue;
-    const group = byBody.get(entry.bodySignature) ?? { current: [], previous: [] };
-    group.current.push(entry);
-    byBody.set(entry.bodySignature, group);
-  }
-  for (const previous of availableDeleted) {
-    const body = deletedBodySignature(previous);
-    if (body === undefined) continue;
-    const group = byBody.get(body) ?? { current: [], previous: [] };
-    group.previous.push(previous);
-    byBody.set(body, group);
-  }
-  for (const group of byBody.values()) {
-    if (group.current.length === 1 && group.previous.length === 1) {
-      const current = group.current[0]!;
-      const previous = group.previous[0]!;
-      availableAdded.delete(current);
-      availableDeleted.delete(previous);
-      diffs.push(renameDiff(previous, current, "body-signature", false));
-      continue;
-    }
-    if (group.current.length > 0 && group.previous.length > 0) {
-      for (const current of group.current) {
-        for (const previous of group.previous) {
-          diffs.push({
-            ...renameDiff(previous, current, "body-signature", false),
-            automatic: false,
-            confirmationRequired: true,
-          });
-        }
-      }
-    }
-  }
-
-  if (availableAdded.size === 1 && availableDeleted.size === 1) {
-    const current = [...availableAdded][0]!;
-    const previous = [...availableDeleted][0]!;
-    availableAdded.delete(current);
-    availableDeleted.delete(previous);
-    diffs.push(renameDiff(previous, current, "lone-delete-add", false));
-  }
-
-  for (const entry of availableAdded) {
+  for (const source of sources) {
+    if (consumed.has(source.path) || ambiguousPaths.has(source.path)) continue;
     diffs.push({
       kind: "added",
-      sourcePath: entry.sourcePath,
-      ...(entry.templateId === undefined ? {} : { templateId: entry.templateId }),
+      path: source.path,
+      fromPath: null,
+      templateId: null,
+      rawDigest: source.rawDigest,
+      approvedRawDigest: null,
+      candidatePaths: [],
       automatic: false,
-      confirmationRequired: false,
     });
   }
-  for (const previous of availableDeleted) {
-    diffs.push({
-      kind: "deleted",
-      sourcePath: previous.sourcePath,
-      templateId: deletedTemplateId(previous),
-      automatic: false,
-      confirmationRequired: false,
-    });
-  }
-
-  return diffs.sort(diffSort);
+  bindings.sort((left, right) => compareText(left.templateId, right.templateId) || compareText(left.approvedPath, right.approvedPath));
+  diffs.sort((left, right) => compareText(left.kind, right.kind) || compareText(left.path, right.path) || compareText(left.templateId ?? "", right.templateId ?? ""));
+  return { bindings, diffs };
 }
 
-function censusDigest(entries: readonly CensusEntry[], diffs: readonly CensusDiff[], diagnostics: readonly CensusDiagnostic[]): Digest {
-  const preimage = JSON.stringify({
-    version: 1,
-    entries: entries.map(entry => ({
-      sourcePath: entry.sourcePath,
-      signature: entry.signature,
-      templateId: entry.templateId ?? null,
-      diagnostics: entry.diagnostics,
+function censusDigest(result: Omit<CensusResult, "censusDigest">): Digest {
+  return hashCanonical(TEMPLATE_CENSUS_DIGEST_DOMAIN, {
+    authority: result.authority,
+    generationDigest: result.generationDigest,
+    sources: result.sources.map(source => ({ path: source.path, rawDigest: source.rawDigest, decoded: source.text !== null })),
+    bindings: result.bindings,
+    diffs: result.diffs,
+    diagnostics: result.diagnostics.map(item => ({
+      code: item.code,
+      path: item.path ?? null,
+      templateId: item.templateId ?? null,
+      message: item.message,
     })),
-    diffs,
-    diagnostics,
   });
-  return digest(encoder.encode(preimage));
 }
 
 /**
- * Recursively discovers Markdown sources in exactly the folders selected by the
- * current policy. This function only reads vault bytes; it never creates or
- * modifies OMS controls, indexes, or source files.
+ * Lists raw candidates from explicit selections, configured file or folder
+ * settings, and approved source refs. Invalid policy stays unverifiable.
+ * Exact-byte identity pairing is the only automatic match.
  */
-export async function templateCensus(vault: string, policy: TemplatePolicy, prior: readonly CensusPriorEntry[] = []): Promise<CensusResult> {
+export async function templateCensus(vault: string, options: TemplateCensusOptions = {}): Promise<CensusResult> {
   const root = await realpath(vault);
   const diagnostics: CensusDiagnostic[] = [];
-  const folders = validFolderPaths(policy, diagnostics);
-  const bindings = indexedBindings(policy, diagnostics);
-  const indexedPriorEntries = canonicalPrior(prior, diagnostics);
-  const priorByPath = new Map(indexedPriorEntries.map(value => [value.sourcePath, value]));
-  const entries: InternalEntry[] = [];
-  const seenPhysicalPaths = new Set<string>();
-  const scanFailures = new Set<string>();
-
-  for (const folder of folders) {
+  const authority = await readAuthority(root, diagnostics);
+  const requested: TemplateCensusSelection[] = [...(options.selections ?? [])];
+  if (options.includeConfiguredPaths !== false) requested.push(...await configuredSelections(root, diagnostics));
+  const files = new Set<string>(authority.approved.map(ref => ref.path));
+  const budget: Budget = { files: files.size, directories: 0, exhausted: false };
+  for (const selection of requested) {
+    if (selection.kind === "folder") {
+      await scanFolder(root, selection.path, budget, files, diagnostics);
+      continue;
+    }
     try {
-      await scanFolder(root, folder, seenPhysicalPaths, entries, diagnostics, scanFailures);
+      const sourcePath = normalizeTemplateSourcePath(selection.path);
+      if (!files.has(sourcePath) && !exhaust(budget, diagnostics, sourcePath, "files")) {
+        budget.files += 1;
+        files.add(sourcePath);
+      }
     } catch (error: unknown) {
-      diagnostics.push(diagnostic("TEMPLATE_FOLDER_INVALID", `Selected template folder cannot be read: ${errorMessage(error)}`, folder));
+      pushDiagnostic(diagnostics, diagnostic(prefixedCode(error, "TEMPLATE_SOURCE_INVALID"), `Selected template file is invalid: ${errorMessage(error)}`, selection.path));
     }
   }
-
-  entries.sort((left, right) => compare(left.sourcePath, right.sourcePath) || compare(left.rawPath, right.rawPath));
-  markPathCollisions(entries);
-  assignIdentities(entries, bindings, priorByPath);
-  markIdCollisions(entries);
-
-  const pathsToVerify = new Set<string>(indexedPriorEntries.map(value => value.sourcePath));
-  for (const group of bindings.values()) {
-    for (const value of group) pathsToVerify.add(value.sourcePath);
-  }
-  const presence = new Map<string, SourcePresence>();
-  for (const path of [...pathsToVerify].sort(compare)) {
-    const normalized = normalizeTemplateSourcePath(path);
-    const scopedToScan = folders.some(folder => sourceWithin(normalized, folder));
-    if (!scopedToScan && !indexedPriorEntries.some(value => value.sourcePath === normalized)) continue;
-    presence.set(normalized, await sourcePresence(root, normalized, scanFailures, diagnostics));
-  }
-  const verifiedAbsent = new Set(
-    [...presence].flatMap(([path, state]) => state === "verified-absent" ? [path] : []),
-  );
-  // Policy-owned approval is independent evidence. It remains available when
-  // a projection is missing or its path descriptor is untrusted; without a
-  // stamp we deliberately leave the signature undefined.
-  const policyMissing: MissingBinding[] = [];
-  for (const group of bindings.values()) {
-    for (const value of group) {
-      if (presence.get(value.sourcePath) !== "verified-absent") continue;
-      const body = value.binding.approvedBodySignature ?? value.binding.content?.bodySignature;
-      policyMissing.push({
-        sourcePath: value.sourcePath,
-        templateId: value.binding.templateId,
-        ...(value.binding.approvedSourceSignature === undefined ? {} : { signature: value.binding.approvedSourceSignature }),
-        signatureVerified: value.binding.approvedSourceSignature !== undefined,
-        ...(body === undefined ? {} : { bodySignature: body }),
-      });
+  const sources: ReadySource[] = [];
+  const blocked = new Set<string>();
+  for (const path of [...files].sort(compareText)) {
+    const read = await readCandidate(root, path as TemplateSourcePath);
+    if (read.state === "absent") continue;
+    if (read.state === "blocked") {
+      blocked.add(path);
+      pushDiagnostic(diagnostics, read.diagnostic);
+      continue;
     }
+    sources.push(read.source);
+    for (const item of read.source.diagnostics) pushDiagnostic(diagnostics, item);
   }
-  const diffs = buildDiffs(entries, indexedPriorEntries, verifiedAbsent, policyMissing);
-  const publicEntries = entries.map(publicEntry).sort((left, right) => compare(left.sourcePath, right.sourcePath));
-  const allDiagnostics = [
-    ...diagnostics,
-    ...entries.flatMap(entry => entry.diagnostics),
-  ].sort((left, right) => compare(left.path ?? "", right.path ?? "") || compare(left.code, right.code) || compare(left.message, right.message));
-  return {
-    entries: publicEntries,
-    diffs,
-    diagnostics: allDiagnostics,
-    digest: censusDigest(publicEntries, diffs, allDiagnostics),
+  const paired = pair(authority.approved, sources, blocked, diagnostics);
+  diagnostics.sort((left, right) => compareText(left.path ?? "", right.path ?? "") || compareText(left.code, right.code) || compareText(left.message, right.message));
+  const result: Omit<CensusResult, "censusDigest"> = {
+    vault: root,
+    authority: authority.authority,
+    generationDigest: authority.generationDigest,
+    approvedPolicy: authority.approvedPolicy,
+    sources,
+    bindings: paired.bindings,
+    diffs: paired.diffs,
+    diagnostics,
   };
+  return { ...result, censusDigest: censusDigest(result) };
 }

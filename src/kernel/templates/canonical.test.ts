@@ -1,131 +1,94 @@
 import { describe, expect, it } from "vitest";
-import { approvalDigest, frameHash, inputDigest, templateInput } from "./canonical.js";
-import { parseTemplatePolicy } from "./policy.js";
-import type { Digest, InputV2, TemplateCompositionManifest, TemplatePolicy } from "./types.js";
+import { approvalDigest, canonicalJson, digestBytes, frameHash, hashCanonical, inputDigest, outputDigest } from "./canonical.js";
+import type { ControlTransition, ManagedTemplatePath, TemplateCasExpectation, TemplateCompositionManifest } from "./types.js";
 
-const minimal: InputV2 = { authority: [], placement: [], templateFolders: [], version: 2 };
+const a = digestBytes("before");
+const b = digestBytes("after");
+const draftPath = ".oms/templates/default.md" as ManagedTemplatePath;
+const cas: TemplateCasExpectation = {
+  controls: { policy: { state: "present", signature: a }, taxonomy: { state: "absent" }, projection: { state: "absent" } },
+  drafts: [{ templateId: null, path: draftPath, expected: { state: "present", signature: a } }],
+};
+function manifest(): Omit<TemplateCompositionManifest, "approvalDigest" | "outputDigest"> {
+  function control<K extends "policy" | "taxonomy" | "projection", P extends ".oms/template-policy.json" | ".oms/taxonomy.json" | ".oms/types.json">(kind: K, path: P): ControlTransition<K, P> {
+    return {
+      kind, path, expectedCurrent: { state: "present", signature: a },
+      current: { state: "present", bytes: Buffer.from("before"), signature: a },
+      proposed: { state: "present", bytes: Buffer.from("after"), signature: b }, action: "write",
+    };
+  }
+  return {
+    version: 1, markerPath: ".oms/template-transaction.json",
+    controls: [control("policy", ".oms/template-policy.json"), control("taxonomy", ".oms/taxonomy.json"), control("projection", ".oms/types.json")],
+    drafts: [{ templateId: null, path: draftPath, expectedCurrent: { state: "absent" }, current: { state: "absent" }, proposed: { state: "present", bytes: Buffer.from("after"), signature: b }, action: "write" }],
+    operations: [{ kind: "commit-contract", templateId: null, payloadDigest: b }],
+    diagnostics: [], outputs: [{ finalVaultRelativePath: draftPath, payloadDigest: b }],
+  };
+}
 
-describe("InputV2 canonical identity", () => {
-  it("pins the approved minimal frame bytes and digest", () => {
-    expect(Buffer.from(frameHash("oms.template-migration.input.v2", minimal)).toString("hex")).toBe(
-      "6f6d732d686173682d6672616d652d7631003331006f6d732e74656d706c6174652d6d6967726174696f6e2e696e7075742e76323634007b22617574686f72697479223a5b5d2c22706c6163656d656e74223a5b5d2c2274656d706c617465466f6c64657273223a5b5d2c2276657273696f6e223a327d",
-    );
-    expect(inputDigest(minimal)).toBe("sha256:0d9461686e8dcb8adce4da4aa07b6c19518d95b3dc4280e249c1d6a73a7f489f");
+describe("canonical byte and value hashing", () => {
+  it("pins raw SHA256 and framed byte lengths without normalizing raw bytes", () => {
+    expect(digestBytes("abc")).toBe("sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    expect(Buffer.from(frameHash("x", { b: 1, a: 2 })).toString()).toBe('oms-hash-frame-v1\0' + '1\0x13\0{"a":2,"b":1}');
+    expect(digestBytes("é")).not.toBe(digestBytes("é"));
+    expect(hashCanonical("x", "é")).toBe(hashCanonical("x", "é"));
+    expect(hashCanonical("x", "é")).not.toBe(hashCanonical("y", "é"));
   });
-
-  it("preserves the resolver and doctor authority digest assembly", () => {
-    const policy: TemplatePolicy = {
-      version: 3,
-      templateFolders: [
-        { path: "Templates/zebra" as TemplatePolicy["templateFolders"][number]["path"] },
-        { path: "Templates/OMS" as TemplatePolicy["templateFolders"][number]["path"], default: true },
-      ],
-      base: { fields: {} },
-      contracts: {},
-      templates: {
-        zebra: { templateId: "zebra", destinationClass: "registered-existing", renderer: "obsidian-core", sourceFolder: "Templates/zebra" as TemplatePolicy["templates"][string]["sourceFolder"], sourcePath: "Templates/zebra/zebra.md" as TemplatePolicy["templates"][string]["sourcePath"], contract: "zebra", naming: "{{title}}" },
-        alpha: { templateId: "alpha", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS" as TemplatePolicy["templates"][string]["sourceFolder"], sourcePath: "Templates/OMS/alpha.md" as TemplatePolicy["templates"][string]["sourcePath"], contract: "alpha", naming: "{{title}}" },
-      },
-    };
-    const bindings = Object.values(policy.templates);
-    const sourceDigests = new Map<string, Digest>([
-      ["zebra", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-      ["alpha", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
-    ]);
-    const sourceDigest = (templateId: string): Digest => {
-      const value = sourceDigests.get(templateId);
-      if (value === undefined) throw new Error(`missing digest for ${templateId}`);
-      return value;
-    };
-    const legacy: InputV2 = {
-      version: 2,
-      templateFolders: [...policy.templateFolders].sort((left, right) => left.path.localeCompare(right.path)),
-      authority: [
-        { kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
-        { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" },
-        { kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: ".obsidian/types.json", contentDigest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" },
-        ...bindings.map((binding) => ({ kind: "template" as const, logicalId: binding.templateId, vaultRelativePath: binding.sourcePath, contentDigest: sourceDigest(binding.templateId) })),
-      ].sort((left, right) => left.kind.localeCompare(right.kind) || left.logicalId.localeCompare(right.logicalId)),
-      placement: bindings.map((binding) => ({ templateId: binding.templateId, destinationClass: binding.destinationClass, templateFolder: binding.destinationClass === "managed-default" ? binding.sourceFolder : null, sourceFolder: binding.sourceFolder, sourcePath: binding.sourcePath })),
-    };
-
-    const shared = templateInput(policy, {
-      policy: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      taxonomy: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      obsidianTypes: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      obsidianTypesPath: ".obsidian/types.json",
-    }, bindings, (binding) => sourceDigest(binding.templateId));
-
-    expect(shared).toEqual(legacy);
-    expect(inputDigest(shared)).toBe(inputDigest(legacy));
+  it("escapes controls and preserves prototype-named keys", () => {
+    expect(canonicalJson({ line: '\n\t"\\' })).toBe('{"line":"\\u000a\\u0009\\"\\\\"}');
+    const value: unknown = JSON.parse('{"__proto__":{"safe":true}}');
+    expect(canonicalJson(value)).toBe('{"__proto__":{"safe":true}}');
+    expect(hashCanonical("x", value)).not.toBe(hashCanonical("x", {}));
   });
-
-  it("canonicalizes registration order while binding folder semantics into the digest", () => {
-    const folderA = { path: "Templates/A" as TemplatePolicy["templateFolders"][number]["path"], default: true as const };
-    const folderB = { path: "Templates/B" as TemplatePolicy["templateFolders"][number]["path"] };
-    const placement = {
-      templateId: "alpha" as InputV2["placement"][number]["templateId"],
-      destinationClass: "registered-existing" as const,
-      templateFolder: null,
-      sourceFolder: folderA.path,
-      sourcePath: "Templates/A/alpha.md" as InputV2["placement"][number]["sourcePath"],
-    };
-    const input = (templateFolders: InputV2["templateFolders"], currentPlacement = placement): InputV2 => ({
-      version: 2, authority: [], templateFolders, placement: [currentPlacement],
-    });
-    const folderAWithoutDefault = { path: folderA.path };
-    expect(inputDigest(input([folderA, folderB]))).toBe(inputDigest(input([folderB, folderA])));
-    expect(inputDigest(input([folderA, folderB]))).toBe(inputDigest(input([{ ...folderA, path: "Templates//A/." as typeof folderA.path }, folderB])));
-    expect(inputDigest(input([folderA, folderB]))).not.toBe(inputDigest(input([folderAWithoutDefault, { ...folderB, default: true }])));
-    expect(inputDigest(input([folderA, folderB]))).not.toBe(inputDigest(input([folderA, folderB], { ...placement, sourceFolder: folderB.path })));
+  it("orders scalar keys by codepoint and rejects ambiguous or unsupported values", () => {
+    expect(canonicalJson({ z: false, a: [null, true, 1] })).toBe('{"a":[null,true,1],"z":false}');
+    expect(() => canonicalJson({ "é": 1, "é": 2 })).toThrow("collide");
+    for (const value of [NaN, Infinity, -0, 1.5, undefined, new Date(), "\ud800", "\udc00", "\ud800x"]) {
+      expect(() => canonicalJson(value)).toThrow();
+    }
+    expect(canonicalJson("𝄞")).toBe('"𝄞"');
   });
+});
 
-  it("retains old folder mode as an unknown extension without restoring mode semantics", () => {
-    const raw = {
-      version: 3 as const,
-      templateFolders: [{ path: "Templates/OMS", mode: "auto", default: true }],
-      base: { fields: {} },
-      contracts: {},
-      templates: {},
-    };
-    const oldPolicy = parseTemplatePolicy(raw);
-    const currentPolicy = parseTemplatePolicy({ ...raw, templateFolders: [{ path: "Templates/OMS", default: true }] });
-    const controls = {
-      policy: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" as Digest,
-      taxonomy: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" as Digest,
-      obsidianTypes: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" as Digest,
-      obsidianTypesPath: ".obsidian/types.json",
-    };
-    const oldInput = templateInput(oldPolicy, controls, [], () => "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    const currentInput = templateInput(currentPolicy, controls, [], () => "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    expect(oldInput.templateFolders).toEqual([{ path: "Templates/OMS", default: true, extensions: { mode: "auto" } }]);
-    expect(currentInput.templateFolders).toEqual([{ path: "Templates/OMS", default: true }]);
-    expect(inputDigest(oldInput)).not.toBe(inputDigest(currentInput));
+describe("v4 publication bindings", () => {
+  it("binds current control and managed-draft CAS state", () => {
+    const baseline = inputDigest(cas);
+    expect(inputDigest({ ...cas, controls: { ...cas.controls, policy: { state: "present", signature: b } } })).not.toBe(baseline);
+    expect(inputDigest({ ...cas, drafts: [{ ...cas.drafts[0]!, expected: { state: "absent" } }] })).not.toBe(baseline);
+    expect(inputDigest({ ...cas, drafts: [{ ...cas.drafts[0]!, path: ".oms/templates/other.md" as ManagedTemplatePath }] })).not.toBe(baseline);
+    expect(() => inputDigest({ ...cas, controls: { ...cas.controls, policy: { state: "present", signature: "invalid" as typeof a } } })).toThrow("Digest");
   });
-
-  it("binds the current control and source CAS preimage even when the proposal is identical", () => {
-    const digestA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Digest;
-    const digestB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as Digest;
-    const proposed = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" as Digest;
-    const preimage = (oldPolicy: Digest): Pick<TemplateCompositionManifest, "current" | "controls" | "sources"> => ({
-      current: { inputDigest: digestA },
-      controls: [
-        { path: ".oms/template-policy.json", expectedCurrent: { state: "present", signature: oldPolicy } },
-        { path: ".oms/taxonomy.json", expectedCurrent: { state: "present", signature: digestA } },
-        { path: ".oms/types.json", expectedCurrent: { state: "present", signature: digestA } },
-      ],
-      sources: [{ templateId: "note", path: "Templates/note.md", expectedCurrent: { state: "present", signature: digestA } }],
-    }) as unknown as Pick<TemplateCompositionManifest, "current" | "controls" | "sources">;
-
-    const fromA = approvalDigest(proposed, [], [], preimage(digestA));
-    const fromB = approvalDigest(proposed, [], [], preimage(digestB));
-    expect(fromA).not.toBe(fromB);
-
-    const reversed = {
-      ...preimage(digestA),
-      controls: [...preimage(digestA).controls].reverse(),
-      sources: [...preimage(digestA).sources].reverse(),
-    };
-    expect(approvalDigest(proposed, [], [], reversed)).toBe(fromA);
+  it("normalizes draft iteration order without mutating caller inputs", () => {
+    const withTwo = { ...cas, drafts: [...cas.drafts, { templateId: null, path: ".oms/templates/z.md" as ManagedTemplatePath, expected: { state: "absent" as const } }] };
+    const before = structuredClone(withTwo);
+    expect(inputDigest(withTwo)).toBe(inputDigest({ ...withTwo, drafts: [...withTwo.drafts].reverse() }));
+    expect(withTwo).toEqual(before);
+  });
+  it("binds proposed bytes rather than trusting their declared signature", () => {
+    const proposal = manifest();
+    const baseline = approvalDigest(proposal);
+    const changed = structuredClone(proposal);
+    changed.controls[0].proposed.bytes[0] = 88;
+    expect(approvalDigest(changed)).not.toBe(baseline);
+    expect(approvalDigest(proposal)).toBe(baseline);
+  });
+  it("binds preimages, actions, operations and diagnostics", () => {
+    const proposal = manifest();
+    const baseline = approvalDigest(proposal);
+    expect(approvalDigest({ ...proposal, drafts: [{ ...proposal.drafts[0]!, expectedCurrent: { state: "present", signature: a } }] })).not.toBe(baseline);
+    expect(approvalDigest({ ...proposal, drafts: [{ ...proposal.drafts[0]!, templateId: "other" as NonNullable<TemplateCasExpectation["drafts"][number]["templateId"]> }] })).not.toBe(baseline);
+    expect(approvalDigest({ ...proposal, drafts: [{ ...proposal.drafts[0]!, action: "verify-only" }] })).not.toBe(baseline);
+    expect(approvalDigest({ ...proposal, operations: [{ ...proposal.operations[0]!, payloadDigest: a }] })).not.toBe(baseline);
+    expect(approvalDigest({ ...proposal, diagnostics: [{ code: "CONTRACT_UNVERIFIABLE", message: "Missing approval" }] })).not.toBe(baseline);
+    expect(approvalDigest({ ...proposal, drafts: [{ ...proposal.drafts[0]!, proposed: { state: "absent" } }] })).not.toBe(baseline);
+  });
+  it("canonicalizes transaction ordering and rejects conflicting output bytes", () => {
+    const proposal = manifest();
+    const outputs = [...proposal.outputs, { finalVaultRelativePath: ".oms/types.json" as const, payloadDigest: a }];
+    expect(outputDigest(outputs)).toBe(outputDigest([...outputs].reverse()));
+    expect(outputDigest(outputs)).toBe(outputDigest([...outputs, outputs[0]!]));
+    expect(() => outputDigest([...outputs, { ...outputs[0]!, payloadDigest: a }])).toThrow("TEMPLATE_TRANSACTION_INCONSISTENT");
+    const reordered = { ...proposal, controls: [proposal.controls[2], proposal.controls[1], proposal.controls[0]] as unknown as TemplateCompositionManifest["controls"] };
+    expect(approvalDigest(reordered)).toBe(approvalDigest(proposal));
   });
 });

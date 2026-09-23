@@ -1,5 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import {
+  HARNESS_CLI_COMMANDS,
+  HARNESS_MCP_TOOLS,
+  HARNESS_SHARED_SKILLS,
+} from "../../src/kernel/harness/surface-registry.js";
 import { absolute, assertNonVacuous, collectFiles } from "./repo-root.js";
 
 /**
@@ -85,6 +90,17 @@ function toolNames(text: string): string[] {
     : matches(surfaceLine, /`([a-z][a-z-]*)`/gu).map((entry) => entry.slice(1, -1));
 }
 
+/** Shared-skill identifiers on the MCP section's skill line. An absent line fails closed. */
+function documentedSkills(text: string, file: string): string[] {
+  const line = text.split("\n").find((entry) => /\bskills?\b|스킬/u.test(entry));
+  if (line === undefined) {
+    throw new Error(`${file} MCP section does not enumerate shared skills; update readme-parity.test.ts`);
+  }
+  const names = matches(line, /`([a-z][a-z-]*)`/gu).map((entry) => entry.slice(1, -1));
+  assertNonVacuous(names, `${file} shared-skill identifiers`);
+  return names;
+}
+
 /** `OMS_*` environment variable identifiers. */
 function envVars(text: string): string[] {
   return matches(text, /OMS_[A-Z0-9_]+/gu);
@@ -126,15 +142,15 @@ const CLI_SURFACES = [
   "oms hook pre|post",
   "oms host install|remove|sync|status",
   "oms index sync|embed|repair|status|clean",
-  "oms link check|suggest|apply",
+  "oms link suggest|check",
   "oms model install|select|waive|status",
-  "oms note create|append|update|audit|backfill|get",
+  "oms note guide|check|complete|audit|get",
   "oms package check|update",
   "oms search query|context",
   "oms serve mcp|http",
   "oms setup",
   "oms status",
-  "oms template scan|list|show|add|update|move|remove|default|check|regenerate-types|review|answer|commit",
+  "oms template scan|list|show|check|regenerate-types|review|answer|commit",
 ] as const;
 
 const CURRENT_CLI_SURFACES = [
@@ -142,7 +158,7 @@ const CURRENT_CLI_SURFACES = [
   "oms search context",
   "oms index sync|embed|repair|status|clean",
   "oms index status --view status|collections|contexts",
-  "oms note create|append|update|audit|backfill|get",
+  "oms note guide|check|complete|audit|get",
   "oms host install|remove|sync|status",
   "oms package check|update",
   "oms serve mcp|http",
@@ -161,13 +177,39 @@ describe("README.md and README.ko.md agree on product facts", () => {
     const advertised = advertisedTools(server);
 
     assertNonVacuous(advertised, `${MCP_SERVER} omsMcpTools entries`);
+    expect([...HARNESS_MCP_TOOLS].map((tool) => tool.name).sort()).toEqual([...MCP_TOOLS]);
     expect(advertised).toEqual(MCP_TOOLS);
     expect(toolNames(section(en, SECTIONS.mcp[EN], EN))).toEqual(advertised);
     expect(toolNames(section(ko, SECTIONS.mcp[KO], KO))).toEqual(advertised);
   });
 
+  it("enumerates eight shared skills, including tool-less interview, distinct from the five tools", async () => {
+    const skills = [
+      "distill",
+      "doctor",
+      "interview",
+      "link",
+      "search",
+      "status",
+      "template",
+      "write",
+    ];
+    expect([...HARNESS_SHARED_SKILLS]).toEqual(skills);
+    expect(MCP_TOOLS).toHaveLength(5);
+    for (const tool of MCP_TOOLS) expect(skills).toContain(tool);
+    expect(MCP_TOOLS).not.toContain("interview");
+    expect(MCP_TOOLS).not.toContain("distill");
+    expect(MCP_TOOLS).not.toContain("template");
+
+    const [en, ko] = await Promise.all([read(EN), read(KO)]);
+    expect(documentedSkills(section(en, SECTIONS.mcp[EN], EN), EN)).toEqual(skills);
+    expect(documentedSkills(section(ko, SECTIONS.mcp[KO], KO), KO)).toEqual(skills);
+  });
+
   it("lists the complete current CLI families and synchronized canonical surfaces", async () => {
     const [en, ko] = await Promise.all([read(EN), read(KO)]);
+    expect([...HARNESS_CLI_COMMANDS].map((command) => `oms ${command.name}`).sort()).toEqual([...CLI_FAMILIES]);
+    expect(CLI_FAMILIES).toHaveLength(14);
     for (const [file, source] of [[EN, en], [KO, ko]] as const) {
       const cli = section(source, SECTIONS.cli[file], file);
       expect(cliCommands(cli)).toEqual(CLI_FAMILIES);

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import Database from "better-sqlite3";
 import { openEngineStore, openEngineStoreCore, SQLITE_VEC_MAX_K } from "./store.js";
 import type { EngineStore } from "./store.js";
@@ -47,6 +47,68 @@ function makeLexRow(docPath: string, text: string) {
     sha: docPath,
   };
 }
+
+async function storeModuleWithDatabaseOpenFailure(error: unknown): Promise<typeof import("./store.js")> {
+  vi.resetModules();
+  vi.doMock("better-sqlite3", () => ({
+    default: class BetterSqlite3OpenFailure {
+      constructor() {
+        throw error;
+      }
+    },
+  }));
+  try {
+    return await import("./store.js");
+  } finally {
+    vi.doUnmock("better-sqlite3");
+  }
+}
+
+describe("better-sqlite3 native addon opening", () => {
+  it("reports runtime/addon ABI context and preserves the loader cause", async () => {
+    const loaderError = new Error(
+      "The module '/opt/oms/node_modules/better-sqlite3/build/Release/better_sqlite3.node' was compiled against a different Node.js version using NODE_MODULE_VERSION 137. This version of Node.js requires NODE_MODULE_VERSION 127. Please try re-compiling or re-installing the module (for instance, using `npm rebuild` or `npm install`).",
+    );
+    const { openEngineStore } = await storeModuleWithDatabaseOpenFailure(loaderError);
+
+    let thrown: unknown;
+    try {
+      openEngineStore(path.join(dir, "abi-mismatch.db"), DIMS);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toMatchObject({
+      diagnostic: "native-abi-mismatch",
+      cause: loaderError,
+    });
+    const message = (thrown as Error).message;
+    expect(message).toContain(`process.execPath=${process.execPath}`);
+    expect(message).toContain(`process.version=${process.version}`);
+    expect(message).toContain(`process.versions.modules=${process.versions.modules}`);
+    expect(message).toContain("better_sqlite3.node");
+    expect(message).toContain("built NODE_MODULE_VERSION=137");
+    expect(message).toContain("loader-required NODE_MODULE_VERSION=127");
+    expect(message).toContain("npm rebuild better-sqlite3");
+  });
+
+  it.each([new Error("database path is not accessible"), "native loader failed", null])(
+    "propagates unrelated opening failures unchanged: %s",
+    async (unrelated) => {
+    const { openEngineStore } = await storeModuleWithDatabaseOpenFailure(unrelated);
+
+    let thrown: unknown;
+    try {
+      openEngineStore(path.join(dir, "unrelated-open-error.db"), DIMS);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBe(unrelated);
+    },
+  );
+});
 
 describe("openEngineStore — upsert + queryLex", () => {
   it("upserts rows without throwing", async () => {

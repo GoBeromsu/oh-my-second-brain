@@ -24,7 +24,7 @@ import {
   type EmbeddingModelDescriptor,
 } from "./embed/model.js";
 import { buildGraph, loadCachedGraph, saveCachedGraph } from "./graph/builder.js";
-import { loadResolvedTemplates } from "../templates/resolver.js";
+import { readSearchTemplateSource } from "./retrieval/template-source.js";
 import { engineStorePath } from "./paths.js";
 import { buildAdjacency, traverseGraph } from "./graph/traverse.js";
 import { retrieve, createCancelToken } from "./retrieval/index.js";
@@ -220,12 +220,12 @@ export async function runTracer(
     }
 
     // ── Step 3: load or build graph ─────────────────────────────────────────
-    const convention = await loadResolvedTemplates(vaultPath);
+    const meta = await readSearchTemplateSource(vaultPath);
     const graphCachePath = path.join(cacheDir, "engine", "graph.json");
-    let edges = await loadCachedGraph(graphCachePath, convention.inputSignature);
+    let edges = await loadCachedGraph(graphCachePath, meta.digest);
     if (edges === null) {
-      edges = await buildGraph({ vaultPath, convention, files });
-      await saveCachedGraph(graphCachePath, edges, convention.inputSignature);
+      edges = await buildGraph({ vaultPath, meta, files });
+      await saveCachedGraph(graphCachePath, edges, meta.digest);
     }
     const adj = buildAdjacency(edges);
 

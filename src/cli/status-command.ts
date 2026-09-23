@@ -62,7 +62,20 @@ export async function runStatusCommand(argv: readonly string[]): Promise<void> {
       };
     } else {
       try {
-        convention = await loadResolvedTemplates(resolved.vault);
+        const snapshot = await loadResolvedTemplates(resolved.vault);
+        // Status is an observation, not a control dump: report identities and
+        // digests, never the raw control bytes.
+        convention = {
+          status: "approved",
+          generationDigest: snapshot.generationDigest,
+          default: { contractDigest: snapshot.defaultContract.contractDigest },
+          templates: Object.fromEntries(Object.entries(snapshot.templates)
+            .map(([templateId, contract]) => [templateId, { contractDigest: contract.contractDigest }])),
+          placement: snapshot.placement,
+          sources: snapshot.sources.map(freshness => ({ templateId: freshness.templateId, path: freshness.source.path, drift: freshness.drift })),
+          drafts: snapshot.drafts.map(freshness => ({ templateId: freshness.templateId, path: freshness.templatePath, drift: freshness.drift })),
+          diagnostics: snapshot.diagnostics,
+        };
       } catch (error: unknown) {
         convention = { status: "invalid", diagnostics: [diagnostic(error)] };
       }

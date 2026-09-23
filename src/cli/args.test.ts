@@ -26,14 +26,12 @@ describe("CLI argument parser", () => {
     );
   });
 
-  it("appends distinct explicitly selected setup template folders in argument order", () => {
-    const parsed = parseCliArgs([
-      "setup", "--template-folder", "Meta/Templates", "--template-folder", "Team/Templates",
-      "--template-folder", "Meta/Templates", "--dry-run", "--models-no-default",
-    ]);
-    expect(parsed.templateFolders).toEqual(["Meta/Templates", "Team/Templates"]);
-    expect(parsed.dryRun).toBe(true);
-    expect(parsed.modelsNoDefault).toBe(true);
+  it("refuses the retired setup template-folder selection instead of ignoring it", () => {
+    // Setup proposes an empty contract, so selecting a folder here would do
+    // nothing; accepting the flag silently would mislead the caller.
+    const parsed = parseCliArgs(["setup", "--template-folder", "Meta/Templates", "--dry-run"]);
+    expect(parsed.error).toBeDefined();
+    expect(parsed.error?.message).toContain("--template-folder was removed");
   });
 
   it("accepts setup's shared facade flags", () => {

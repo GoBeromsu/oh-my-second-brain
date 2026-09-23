@@ -1,428 +1,595 @@
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { deriveContentFormatContract } from "./content-contract.js";
-import { serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
-import { composeResolvedTemplateFields, deriveFolderOntologyAxis, loadResolvedTemplates, loadResolvedTemplatesIfPresent, requireTaxonomyPlacement, resolveClassifiedTemplateSource, sharedAuthoritySignature, sourceSignature, taxonomyRouting } from "./resolver.js";
-import type { DerivedProjection, Digest, SourceDescriptor, TemplatePolicy } from "./types.js";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { digestBytes, hashCanonical, outputDigest } from "./canonical.js";
+import { composeTemplateContract } from "./defaults.js";
+import { parseTemplatePolicy, serializeDerivedProjection } from "./policy.js";
+import {
+  assertStableControlRead,
+  controlGenerationDigest,
+  deriveFolderOntologyAxis,
+  expectedProjectionManaged,
+  composeTemplateRetrievalSource,
+  loadResolvedTemplates,
+  loadResolvedTemplatesIfPresent,
+  requireTaxonomyPlacement,
+  taxonomyRouting,
+} from "./resolver.js";
 
-const roots: string[] = [];
-const digest = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
-afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+const encoder = new TextEncoder();
 
-async function fixture(options: { readonly placement?: boolean; readonly dateExample?: boolean; readonly renderer?: "obsidian-core" | "templater" | "none"; readonly second?: boolean } = {}): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-"));
-  roots.push(root);
+async function writePublication(root: string, status: "complete" | "in-progress", options?: { readonly plan?: boolean }): Promise<string> {
+  const approvalDigest = digestBytes("approval");
+  const published = outputDigest([]);
+  const transactionId = digestBytes(`${approvalDigest}\0${published}`).slice("sha256:".length, "sha256:".length + 32);
+  const plan = {
+    version: 1 as const,
+    transactionId,
+    approvalDigest,
+    outputDigest: published,
+    boundaries: [],
+    outputs: [],
+  };
+  const planDigest = hashCanonical("oms.contract-publish.plan.v1", plan);
+  const material = { status, transactionId, approvalDigest, outputDigest: published, planDigest };
+  const markerText = JSON.stringify({ ...material, checksum: hashCanonical("oms.contract-publish.marker.v1", material) });
   await mkdir(join(root, ".oms"), { recursive: true });
-  await mkdir(join(root, ".obsidian"), { recursive: true });
-  await mkdir(join(root, "Templates", "OMS"), { recursive: true });
-  const renderer = options.renderer ?? "obsidian-core";
-  const secondTemplate = "---\ntitle: reference\n---\nReference body\n";
-  const policyValue = {
-    version: 3,
-    templateFolders: [{ path: "Templates/OMS", default: true }],
-    base: { fields: {} },
-    contracts: { note: { intent: "A note.", fields: options.dateExample ? { date: { type: "date" } } : {}, views: [] } },
-    templates: {
-      note: {
-        templateId: "note",
-        destinationClass: "managed-default",
-        renderer,
-        sourceFolder: "Templates/OMS",
-        sourcePath: "Templates/OMS/note.md",
-        contract: "note",
-        naming: "{{title}}",
-      },
-      ...(options.second === true ? {
-        reference: {
-          templateId: "reference",
-          destinationClass: "managed-default",
-          renderer: "obsidian-core",
-          sourceFolder: "Templates/OMS",
-          sourcePath: "Templates/OMS/reference.md",
-          contract: "note",
-          naming: "{{title}}",
-        },
-      } : {}),
-    },
-  } as unknown as TemplatePolicy;
-  const policy = serializeTemplatePolicy(policyValue);
-  const taxonomy = JSON.stringify(options.placement === false
-    ? { folders: {} }
-    : { folders: { "Notes/Published": { templates: options.second === true ? ["note", "reference"] : ["note"] } } });
-  const types = JSON.stringify({ types: { title: "text", ...(options.dateExample || renderer === "templater" ? { date: "date" } : {}) } });
-  const template = renderer === "templater"
-    ? "---\ntitle: literal\ndate: '<% tp.date.now(\"YYYY-MM-DD\") %>'\n---\nBody\n"
-    : renderer === "none" ? "<%* tR += 'Synthetic external template'; %>\n"
-    : options.dateExample ? "---\ntitle: literal\ndate: \"{{date}}\"\n---\nBody\n" : "---\ntitle: literal\n---\nBody\n";
-  const noteBody = renderer === "none" ? "" : "Body\n";
-  const noteContent = deriveContentFormatContract(noteBody, { templateId: "note", finalNewline: true }).contract;
-  const referenceContent = deriveContentFormatContract("Reference body\n", { templateId: "reference", finalNewline: true }).contract;
-  const keyOrder = renderer === "none" ? [] : renderer === "templater" || options.dateExample ? ["title", "date"] : ["title"];
-  const projectedFields = renderer === "none"
-    ? options.dateExample ? { date: { type: "date" } } : {}
-    : { title: { type: "text" }, ...(renderer === "templater" ? { date: { type: "date", filledBy: "obsidian" } } : options.dateExample ? { date: { type: "date" } } : {}) };
-  const sources: SourceDescriptor[] = [
-    { logicalId: "template-policy", signature: digest(policy) },
-    { logicalId: "taxonomy", signature: digest(taxonomy) },
-    { logicalId: "obsidian-types", signature: digest(types) },
-    { path: "Templates/OMS/note.md", signature: digest(template) },
-    ...(options.second === true ? [{ path: "Templates/OMS/reference.md", signature: digest(secondTemplate) }] : []),
-  ];
-  const projectionValue = {
-    version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources },
-    managed: {
-      base: { fields: {} },
-      globalAxes: {},
-      templates: {
-        note: {
-          templateId: "note",
-          destinationClass: "managed-default",
-          renderer,
-          sourcePath: "Templates/OMS/note.md",
-          ...(options.placement === false ? {} : { targetFolder: "Notes/Published" }),
-          keyOrder,
-          fields: projectedFields,
-          views: [],
-          naming: "{{title}}",
-          bodySignature: digest(noteBody),
-          content: noteContent,
-        },
-        ...(options.second === true ? {
-          reference: {
-            templateId: "reference",
-            destinationClass: "managed-default",
-            renderer: "obsidian-core",
-            sourcePath: "Templates/OMS/reference.md",
-            ...(options.placement === false ? {} : { targetFolder: "Notes/Published" }),
-            keyOrder: ["title"],
-            fields: { title: { type: "text" } },
-            views: [],
-            naming: "{{title}}",
-            bodySignature: digest("Reference body\n"),
-            content: referenceContent,
-          },
-        } : {}),
-      },
-    },
-  } as unknown as DerivedProjection;
-  const projection = serializeDerivedProjection(projectionValue);
-  await Promise.all([
-    writeFile(join(root, ".oms", "template-policy.json"), policy),
-    writeFile(join(root, ".oms", "taxonomy.json"), taxonomy),
-    writeFile(join(root, ".obsidian", "types.json"), types),
-    writeFile(join(root, "Templates", "OMS", "note.md"), template),
-    ...(options.second === true ? [writeFile(join(root, "Templates", "OMS", "reference.md"), secondTemplate)] : []),
-    writeFile(join(root, ".oms", "types.json"), projection),
-  ]);
-  return root;
+  await writeFile(join(root, ".oms", "template-transaction.json"), markerText);
+  const planPath = join(root, ".oms", ".template-transactions", transactionId, "plan.json");
+  if (options?.plan === false) {
+    await rm(planPath, { force: true });
+  } else {
+    await mkdir(join(root, ".oms", ".template-transactions", transactionId), { recursive: true });
+    await writeFile(planPath, JSON.stringify({ ...plan, planDigest }));
+  }
+  return markerText;
+}
+const SOURCE_TEXT = "Source body\n";
+const LITERATURE_MARKDOWN = "Body\n";
+const OTHER_MARKDOWN = "Other\n";
+const DEFAULT_MARKDOWN = "";
+const roots: string[] = [];
+
+interface Fixture {
+  readonly root: string;
+  readonly policyText: string;
+  readonly taxonomyText: string;
+  readonly projectionText: string;
 }
 
-describe("loadResolvedTemplates", () => {
-  it("separates the whole logical authority signature from per-template source signatures", () => {
-    const controls: SourceDescriptor[] = [
-      { logicalId: "template-policy", signature: digest("policy") },
-      { logicalId: "taxonomy", signature: digest("taxonomy") },
-      { logicalId: "obsidian-types", signature: digest("types") },
-    ];
-    const withTemplate = [...controls, { path: "Templates/note.md", signature: digest("source") }];
-    expect(sharedAuthoritySignature(withTemplate)).toBe(sharedAuthoritySignature(controls));
-    expect(sharedAuthoritySignature([
-      { ...controls[0]!, signature: digest("changed") },
-      controls[1]!,
-      controls[2]!,
-    ])).not.toBe(sharedAuthoritySignature(controls));
-    expect(sourceSignature(withTemplate)).not.toBe(sourceSignature(controls));
+function layer(templatePath: string, markdown: string, extra: Record<string, unknown> = {}) {
+  return {
+    templatePath,
+    approvedMarkdown: markdown,
+    approvedMarkdownDigest: digestBytes(markdown),
+    fields: {},
+    headings: [],
+    semanticCriteria: [],
+    ...extra,
+  };
+}
+
+function policyDocument() {
+  return {
+    version: 4,
+    properties: {
+      status: { type: "select", intent: "Publication status.", allowedValues: ["open", "closed"] },
+      alias: { type: "text", intent: "Free note." },
+    },
+    default: layer(".oms/templates/default.md", DEFAULT_MARKDOWN, {
+      fields: { status: { property: "status", required: true } },
+      headings: [{ headingId: "summary", title: "Summary", level: 2, required: true }],
+    }),
+    templates: {
+      literature: layer(".oms/templates/literature.md", LITERATURE_MARKDOWN, {
+        templateId: "literature",
+        fields: { status: { property: "status", allowedValues: ["open"] } },
+        headings: [{ headingId: "sources", title: "Sources", level: 2, required: true }],
+        source: {
+          path: "Sources/literature.md",
+          identity: "literature-source",
+          rawDigest: digestBytes(SOURCE_TEXT),
+        },
+      }),
+      other: layer(".oms/templates/other.md", OTHER_MARKDOWN, { templateId: "other" }),
+    },
+  };
+}
+
+function taxonomyDocument() {
+  return {
+    templates: { literature: { templateFolder: "Notes/Literature" } },
+    folders: { "Notes/Literature": { intent: "Published literature." } },
+  };
+}
+
+function bytes(value: unknown): Uint8Array {
+  return encoder.encode(JSON.stringify(value));
+}
+
+async function vaultSignature(root: string): Promise<string> {
+  const rows: string[] = [];
+  async function walk(directory: string): Promise<void> {
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    for (const entry of entries) {
+      const full = join(directory, entry.name);
+      const name = relative(root, full);
+      if (entry.isDirectory()) {
+        rows.push(`dir ${name}`);
+        await walk(full);
+      } else if (entry.isFile()) rows.push(`file ${name} ${digestBytes(await readFile(full))}`);
+      else rows.push(`other ${name}`);
+    }
+  }
+  await walk(root);
+  return rows.join("\n");
+}
+
+async function installVault(): Promise<Fixture> {
+  const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-"));
+  roots.push(root);
+  const policyText = JSON.stringify(policyDocument());
+  const taxonomyText = JSON.stringify(taxonomyDocument());
+  const policyBytes = encoder.encode(policyText);
+  const taxonomyBytes = encoder.encode(taxonomyText);
+  const projectionText = serializeDerivedProjection({
+    version: "oms.types.v2",
+    generatedFrom: controlGenerationDigest(policyBytes, taxonomyBytes),
+    managed: expectedProjectionManaged(parseTemplatePolicy(policyText), taxonomyRouting(".oms/taxonomy.json", taxonomyBytes), controlGenerationDigest(policyBytes, taxonomyBytes)),
+  });
+  await mkdir(join(root, ".oms", "templates"), { recursive: true });
+  await mkdir(join(root, "Sources"), { recursive: true });
+  await mkdir(join(root, ".obsidian"), { recursive: true });
+  await writeFile(join(root, ".oms", "template-policy.json"), policyText);
+  await writeFile(join(root, ".oms", "taxonomy.json"), taxonomyText);
+  await writeFile(join(root, ".oms", "types.json"), projectionText);
+  await writeFile(join(root, ".oms", "templates", "default.md"), DEFAULT_MARKDOWN);
+  await writeFile(join(root, ".oms", "templates", "literature.md"), LITERATURE_MARKDOWN);
+  await writeFile(join(root, ".oms", "templates", "other.md"), OTHER_MARKDOWN);
+  await writeFile(join(root, "Sources", "literature.md"), SOURCE_TEXT);
+  await writeFile(join(root, ".obsidian", "types.json"), JSON.stringify({ types: { status: "select", alias: "input" } }));
+  return { root, policyText, taxonomyText, projectionText };
+}
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
+
+describe("control generation", () => {
+  it("hashes policy and taxonomy bytes only", () => {
+    const policy = encoder.encode("policy");
+    const taxonomy = encoder.encode("taxonomy");
+    expect(controlGenerationDigest(policy, taxonomy)).toBe(hashCanonical("oms.template-control.generation.v4", {
+      policy: digestBytes(policy),
+      taxonomy: digestBytes(taxonomy),
+    }));
+    expect(controlGenerationDigest(policy, taxonomy)).not.toBe(controlGenerationDigest(encoder.encode("policy\n"), taxonomy));
+  });
+});
+
+describe("torn control reads", () => {
+  it("accepts two identical control generations", () => {
+    const policy = encoder.encode("policy");
+    const taxonomy = encoder.encode("taxonomy");
+    expect(() => assertStableControlRead(
+      { policy, taxonomy, projection: null, marker: null },
+      { policy: new Uint8Array(policy), taxonomy: new Uint8Array(taxonomy), projection: null, marker: null },
+    )).not.toThrow();
   });
 
-  it.each(["create", "update"])("rejects an oversize %s source proposal before composition", mode => {
-    const source = new TextEncoder().encode(`---\ntitle: note\n---\n${"x".repeat(262_145)}`);
-    expect(() => resolveClassifiedTemplateSource(`Templates/OMS/${mode}.md`, source, "obsidian-core"))
-      .toThrow(/TEMPLATE_PROPOSAL_OVERSIZE/);
+  it("stops when a control changes between the pre and post read", () => {
+    const left = encoder.encode("left");
+    const right = encoder.encode("right");
+    expect(() => assertStableControlRead(
+      { policy: left, taxonomy: left, projection: left, marker: left },
+      { policy: right, taxonomy: left, projection: right, marker: null },
+    )).toThrow("CONTRACT_TRANSACTION_IN_PROGRESS: marker, policy, projection changed while reading controls");
   });
+});
 
-  it("rejects requested renderer mismatch and invalid Core expressions inside Templater sources", () => {
-    const core = new TextEncoder().encode("---\ntitle: note\n---\nBody\n");
-    expect(() => resolveClassifiedTemplateSource("Templates/OMS/note.md", core, "templater"))
-      .toThrow(/TEMPLATE_SOURCE_INVALID.*renderer obsidian-core does not match requested renderer templater/);
-    const invalidMixed = new TextEncoder().encode("---\ncreated: '<% tp.date.now() %>'\n---\n{{date:YYYY[year]}}\n");
-    expect(() => resolveClassifiedTemplateSource("Templates/OMS/note.md", invalidMixed, "templater"))
-      .toThrow(/TEMPLATE_EXPRESSION_UNSUPPORTED/);
-  });
-
-  it("accepts script-first renderer-none sources without fabricating an observed body", () => {
-    const source = new TextEncoder().encode("<%* await host.propose() %>\n");
-    expect(resolveClassifiedTemplateSource("Templates/OMS/script.md", source, "none")).toMatchObject({
-      keyOrder: [],
-      frontmatter: {},
-      body: "",
-      bodyExternal: true,
-    });
-  });
-
-  it("bounds host proposal source paths to sixteen segments", () => {
-    const source = new TextEncoder().encode("---\ntitle: note\n---\nBody\n");
-    const path = `${Array.from({ length: 16 }, (_, index) => `folder-${index}`).join("/")}/note.md`;
-    expect(() => resolveClassifiedTemplateSource(path, source, "obsidian-core"))
-      .toThrow(/TEMPLATE_SOURCE_INVALID.*maximum source path depth of 16/);
-  });
-
-  it("returns null only when every OMS template control is absent", async () => {
-    const empty = await mkdtemp(join(tmpdir(), "oms-template-resolver-empty-"));
-    roots.push(empty);
-    await mkdir(join(empty, ".oms"));
-
-    await expect(loadResolvedTemplatesIfPresent(empty)).resolves.toBeNull();
-  });
-
-  it.each([
-    [".oms/template-migration.json", "MIGRATION_INCOMPLETE"],
-    [".oms/template-policy.json", "TEMPLATE_SOURCE_INVALID"],
-    [".oms/types.json", "TEMPLATE_SOURCE_INVALID"],
-    [".oms/taxonomy.json", "TEMPLATE_SOURCE_INVALID"],
-  ])("rejects a vault with only %s", async (control, code) => {
-    const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-partial-"));
-    roots.push(root);
-    await mkdir(join(root, ".oms"), { recursive: true });
-    await writeFile(join(root, control), "{}\n");
-
-    await expect(loadResolvedTemplatesIfPresent(root)).rejects.toThrow(code);
-  });
-
-  it.each([
-    [".oms/template-policy.json", ".oms/taxonomy.json"],
-    [".oms/template-policy.json", ".oms/types.json"],
-    [".oms/types.json", ".oms/taxonomy.json"],
-  ])("rejects representative partial control sets: %s and %s", async (first, second) => {
-    const root = await mkdtemp(join(tmpdir(), "oms-template-resolver-partial-"));
-    roots.push(root);
-    await mkdir(join(root, ".oms"), { recursive: true });
-    await Promise.all([
-      writeFile(join(root, first), "{}\n"),
-      writeFile(join(root, second), "{}\n"),
-    ]);
-
-    await expect(loadResolvedTemplatesIfPresent(root)).rejects.toThrow("TEMPLATE_SOURCE_INVALID");
-  });
-
-  it("derives deterministic folder ontology only from authored folder intents", () => {
-    expect(deriveFolderOntologyAxis({ notes: { template: "note" } })).toBeNull();
+describe("taxonomy routing", () => {
+  it("derives folder ontology from declared intents and invents no members", () => {
+    expect(deriveFolderOntologyAxis(undefined)).toBeNull();
+    expect(deriveFolderOntologyAxis({ "Notes/A": { templateId: "literature" }, "Notes/B": {} })).toBeNull();
     expect(deriveFolderOntologyAxis({
-      references: { intent: "Processed sources." },
-      inbox: { intent: "Unprocessed captures." },
+      "Notes/B": { intent: "Second." },
+      "Notes/A": { intent: "  First.  " },
     })).toEqual({
       kind: "folder",
       key: "folder",
       type: "text",
       intent: "Semantic meanings of vault folders.",
-      members: ["inbox", "references"],
-      extensions: { intents: { inbox: "Unprocessed captures.", references: "Processed sources." } },
+      members: ["Notes/A", "Notes/B"],
+      extensions: { intents: { "Notes/A": "First.", "Notes/B": "Second." } },
     });
-    expect(() => deriveFolderOntologyAxis({ notes: { intent: " " } })).toThrow(/TEMPLATE_SOURCE_INVALID/);
   });
 
-  it("routes notes from taxonomy outside every template source folder", async () => {
-    const root = await fixture();
+  it("rejects an empty intent or a non-mapping", () => {
+    expect(() => deriveFolderOntologyAxis({ Notes: { intent: "   " } })).toThrow("taxonomy.folders.Notes.intent must be a non-empty string");
+    expect(() => deriveFolderOntologyAxis([], "custom.folders")).toThrow("custom.folders must be a mapping");
+    expect(() => deriveFolderOntologyAxis({ Notes: "Keep." })).toThrow("taxonomy.folders.Notes must be a mapping");
+  });
 
-    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
-      templates: {
-        note: {
-          sourcePath: "Templates/OMS/note.md",
-          targetFolder: "Notes/Published",
-        },
+  it("keeps declared placement and lets folder entries overlay template entries", () => {
+    const direct = taxonomyRouting("taxonomy.json", bytes({
+      templates: { literature: { templateFolder: "Notes/./Literature" } },
+    }));
+    expect(requireTaxonomyPlacement(direct, "literature")).toBe("Notes/Literature");
+    expect(() => requireTaxonomyPlacement(direct, "other")).toThrow("TEMPLATE_PLACEMENT_UNDECLARED: taxonomy placement is undeclared for template other");
+    expect(direct.targetFolders.has("Inbox")).toBe(false);
+
+    const overlaid = taxonomyRouting("taxonomy.json", bytes({
+      templates: { literature: { templateFolder: "Notes/FromTemplate" } },
+      folders: { "Notes/FromFolder": { template: "literature", templateFolder: "Notes/Override" } },
+    }));
+    expect(overlaid.targetFolders.get("literature")).toBe("Notes/Override");
+
+    const listed = taxonomyRouting("taxonomy.json", bytes({
+      folders: {
+        "Notes/Published": { templateId: "literature" },
+        "Notes/Shared": { templates: ["other"] },
       },
-    });
+    }));
+    expect(listed.targetFolders.get("literature")).toBe("Notes/Published");
+    expect(listed.targetFolders.get("other")).toBe("Notes/Shared");
   });
 
-  it("resolves Templater frontmatter as caller-filled contract without evaluating external tags", async () => {
-    const root = await fixture({ renderer: "templater" });
-
-    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
-      templates: {
-        note: {
-          renderer: "templater",
-          fields: { date: { filledBy: "obsidian" } },
-          frontmatterTemplate: { date: "<% tp.date.now(\"YYYY-MM-DD\") %>" },
-          body: "Body\n",
-        },
+  it("preserves explicit axes, skips malformed axes, and reserves folder-ontology", () => {
+    const routing = taxonomyRouting("taxonomy.json", bytes({
+      globalAxes: {
+        broken: { kind: "widget" },
+        weight: { kind: "link", key: " weight", type: "number", intent: "  Weight. ", members: [1, "two"] },
       },
+      axes: { ignored: { kind: "link", key: "ignored", type: "text", members: ["no"] } },
+    }));
+    expect(Object.keys(routing.globalAxes)).toEqual(["weight"]);
+    expect(routing.globalAxes["weight"]).toEqual({
+      kind: "link",
+      key: " weight",
+      type: "number",
+      intent: "Weight.",
+      members: [1, "two"],
     });
+
+    const alias = taxonomyRouting("taxonomy.json", bytes({
+      axes: { topic: { kind: "link", key: "topic", type: "text", members: ["a"] } },
+    }));
+    expect(alias.globalAxes["topic"]?.kind).toBe("link");
+
+    expect(() => taxonomyRouting("taxonomy.json", bytes({ templates: [] }))).toThrow("taxonomy.templates must be a mapping");
+    expect(() => taxonomyRouting("taxonomy.json", bytes({ templates: { literature: [] } }))).toThrow("taxonomy.templates.literature has invalid placement");
+    expect(() => taxonomyRouting("taxonomy.json", bytes({
+      folders: { "Notes/Shared": { templates: ["literature", 2] } },
+    }))).toThrow("taxonomy (taxonomy.json) folders.Notes/Shared.templates must contain template IDs");
+    expect(() => taxonomyRouting("taxonomy.json", bytes({
+      folders: { Notes: { templateId: "literature", templateFolder: 1 } },
+    }))).toThrow("taxonomy.folders.Notes.templateFolder must be a string");
+    expect(() => taxonomyRouting("taxonomy.json", bytes([]))).toThrow("taxonomy (taxonomy.json) must be a JSON object");
+    expect(() => taxonomyRouting("taxonomy.json", encoder.encode("{"))).toThrow("taxonomy (taxonomy.json) must be valid JSON");
+    expect(() => taxonomyRouting("taxonomy.json", bytes({
+      globalAxes: { "folder-ontology": { kind: "folder", key: "folder", type: "text", members: [] } },
+      folders: { Notes: { intent: "Keep." } },
+    }))).toThrow("taxonomy (taxonomy.json) globalAxes.folder-ontology is reserved");
+  });
+});
+
+describe("approved snapshot reader", () => {
+  let fixture: Fixture;
+
+  beforeEach(async () => {
+    fixture = await installVault();
   });
 
-  it("resolves renderer-none bindings from policy contract only while retaining signed source identity", async () => {
-    const root = await fixture({ renderer: "none", dateExample: true });
-
-    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
-      templates: {
-        note: {
-          renderer: "none",
-          sourcePath: "Templates/OMS/note.md",
-          keyOrder: [],
-          fields: { date: { type: "date" } },
-          frontmatterTemplate: {},
-          body: "",
-        },
-      },
-      managedSourcePaths: ["Templates/OMS/note.md"],
+  it("returns composed contracts, placement, and exact controls without writing", async () => {
+    const before = await vaultSignature(fixture.root);
+    const snapshot = await loadResolvedTemplates(fixture.root);
+    expect(await vaultSignature(fixture.root)).toBe(before);
+    expect(snapshot.vault).toBe(await realpath(fixture.root));
+    expect(snapshot.policy.version).toBe(4);
+    expect(snapshot.policy.completion.retryBudget).toBe(2);
+    expect(snapshot.policy.properties["status"]?.allowedValues).toEqual(["closed", "open"]);
+    expect(snapshot.defaultContract.templateId).toBeNull();
+    expect(snapshot.defaultContract.headingOrder).toBe("unordered");
+    expect(snapshot.defaultContract.contractDigest).toBe(composeTemplateContract(fixture.policyText, null, null).contractDigest);
+    const literature = snapshot.templates["literature"];
+    const other = snapshot.templates["other"];
+    expect(literature?.headings.map(heading => [heading.headingId, heading.origin])).toEqual([
+      ["summary", "default"],
+      ["sources", "template"],
+    ]);
+    expect(literature?.fields["status"]).toMatchObject({ type: "select", required: true, allowedValues: ["open"] });
+    expect(other?.fields["status"]?.allowedValues).toEqual(["closed", "open"]);
+    expect(other?.fields["alias"]).toBeUndefined();
+    expect(snapshot.placement).toEqual({ literature: "Notes/Literature" });
+    expect(literature?.contractDigest).toBe(composeTemplateContract(fixture.policyText, "literature", { templateFolder: "Notes/Literature" }).contractDigest);
+    expect(literature?.contractDigest).not.toBe(composeTemplateContract(fixture.policyText, "literature", null).contractDigest);
+    expect(other?.contractDigest).toBe(composeTemplateContract(fixture.policyText, "other", null).contractDigest);
+    expect(literature?.approved.templateLayer?.approvedMarkdown).toBe(LITERATURE_MARKDOWN);
+    expect(snapshot.globalAxes["folder-ontology"]).toEqual({
+      kind: "folder",
+      key: "folder",
+      type: "text",
+      intent: "Semantic meanings of vault folders.",
+      members: ["Notes/Literature"],
+      extensions: { intents: { "Notes/Literature": "Published literature." } },
     });
+    expect(snapshot.generationDigest).toBe(controlGenerationDigest(snapshot.controls.policy.bytes, snapshot.controls.taxonomy.bytes));
+    expect(snapshot.projection.generatedFrom).toBe(snapshot.generationDigest);
+    expect(snapshot.projection.managed.headings.map(heading => heading.headingId)).toEqual(["summary"]);
+    expect(snapshot.projection.managed.templates["literature"]?.headings.map(heading => heading.headingId)).toEqual(["summary", "sources"]);
+    expect(snapshot.projection.managed.templates["literature"]?.contractDigest).toBe(literature?.contractDigest);
+    expect(snapshot.projection.managed.templates["other"]?.fields["status"]?.allowedValues).toEqual(["closed", "open"]);
+    expect("origin" in (snapshot.projection.managed.headings[0] ?? {})).toBe(false);
+    expect(JSON.stringify(snapshot.projection)).not.toContain("Source body");
+    expect(new TextDecoder().decode(snapshot.controls.policy.bytes)).toBe(fixture.policyText);
+    expect(new TextDecoder().decode(snapshot.controls.taxonomy.bytes)).toBe(fixture.taxonomyText);
+    expect(new TextDecoder().decode(snapshot.controls.projection.bytes)).toBe(fixture.projectionText);
+    expect(snapshot.controls.marker).toBeNull();
+    expect(snapshot.obsidianTypes).toEqual({ status: "select", alias: "text" });
+    expect(snapshot.diagnostics).toEqual([]);
+    expect(snapshot.drafts.map(draft => [draft.templateId, draft.drift, draft.observedDraftDigest === draft.approvedMarkdownDigest])).toEqual([
+      [null, null, true],
+      ["literature", null, true],
+      ["other", null, true],
+    ]);
+    expect(snapshot.sources).toEqual([{
+      templateId: "literature",
+      source: { path: "Sources/literature.md", identity: "literature-source", rawDigest: digestBytes(SOURCE_TEXT) },
+      observedRawDigest: digestBytes(SOURCE_TEXT),
+      drift: null,
+    }]);
   });
 
-  it("resolves templates without a default placement", async () => {
-    const root = await fixture({ placement: false });
-    const convention = await loadResolvedTemplates(root);
-    expect(convention.templates.note?.targetFolder).toBeUndefined();
-    expect(convention.templates.note?.body).toBe("Body\n");
-  });
-
-  it("exports the shared taxonomy route and placement validation", () => {
-    const routing = taxonomyRouting(
-      ".oms/taxonomy.json",
-      new TextEncoder().encode(JSON.stringify({
-        templates: { note: { templateFolder: "Notes/Published" } },
-        folders: { references: { intent: "Processed sources." } },
-      })),
+  it("returns the shared retrieval composition, including placement", async () => {
+    const snapshot = await loadResolvedTemplates(fixture.root);
+    const policyBytes = encoder.encode(fixture.policyText);
+    const taxonomyBytes = encoder.encode(fixture.taxonomyText);
+    const routing = taxonomyRouting(".oms/taxonomy.json", taxonomyBytes);
+    const generationDigest = controlGenerationDigest(policyBytes, taxonomyBytes);
+    const source = composeTemplateRetrievalSource(snapshot.policy, routing, generationDigest);
+    expect(source.policy).toBe(snapshot.policy);
+    expect(source.generationDigest).toBe(snapshot.generationDigest);
+    expect(source.defaultContract).toEqual(snapshot.defaultContract);
+    expect(source.templates).toEqual(snapshot.templates);
+    expect(source.globalAxes).toBe(routing.globalAxes);
+    expect(source.globalAxes).toEqual(snapshot.globalAxes);
+    expect(Object.getPrototypeOf(source.templates)).toBeNull();
+    expect(source.defaultContract.contractDigest).toBe(composeTemplateContract(fixture.policyText, null, null).contractDigest);
+    expect(source.templates["literature"]?.contractDigest).toBe(
+      composeTemplateContract(fixture.policyText, "literature", { templateFolder: "Notes/Literature" }).contractDigest,
     );
-
-    expect(requireTaxonomyPlacement(routing, "note")).toBe("Notes/Published");
-    expect(routing.globalAxes["folder-ontology"]?.members).toEqual(["references"]);
-    expect(() => requireTaxonomyPlacement(routing, "missing")).toThrow(
-      /TEMPLATE_PLACEMENT_UNDECLARED.*missing/,
+    expect(source.templates["literature"]?.contractDigest).not.toBe(
+      composeTemplateContract(fixture.policyText, "literature", null).contractDigest,
     );
+    expect(source.templates["other"]?.contractDigest).toBe(composeTemplateContract(fixture.policyText, "other", null).contractDigest);
   });
 
-  it("rejects malformed taxonomy placement mappings", () => {
-    expect(() => taxonomyRouting(
-      ".oms/taxonomy.json",
-      new TextEncoder().encode(JSON.stringify({ templates: [] })),
-    )).toThrow(/taxonomy\.templates must be a mapping/);
-    expect(() => taxonomyRouting(
-      ".oms/taxonomy.json",
-      new TextEncoder().encode(JSON.stringify({ templates: { note: { templateFolder: 42 } } })),
-    )).toThrow(/taxonomy\.templates\.note has invalid placement/);
-    expect(() => taxonomyRouting(
-      ".oms/taxonomy.json",
-      new TextEncoder().encode(JSON.stringify({ folders: { notes: { templateFolder: 42 } } })),
-    )).toThrow(/taxonomy\.folders\.notes\.templateFolder must be a string/);
+  it("reports raw drift without replacing approved markdown or another contract", async () => {
+    const drifted = "CHANGED {{title}}\n<!-- oms:content -->\n";
+    await writeFile(join(fixture.root, "Sources", "literature.md"), drifted);
+    const before = await vaultSignature(fixture.root);
+    const snapshot = await loadResolvedTemplates(fixture.root);
+    expect(await vaultSignature(fixture.root)).toBe(before);
+    expect(snapshot.diagnostics).toEqual([{
+      code: "SOURCE_DRIFT",
+      templateId: "literature",
+      path: "Sources/literature.md",
+      message: "raw source Sources/literature.md does not match the approved raw digest",
+    }]);
+    expect(snapshot.sources[0]).toMatchObject({ observedRawDigest: digestBytes(drifted), drift: "SOURCE_DRIFT" });
+    expect(snapshot.templates["literature"]?.approved.templateLayer?.approvedMarkdown).toBe(LITERATURE_MARKDOWN);
+    expect(snapshot.templates["literature"]?.contractDigest).toBe(composeTemplateContract(fixture.policyText, "literature", { templateFolder: "Notes/Literature" }).contractDigest);
+    expect(snapshot.templates["other"]?.approved.templateLayer?.approvedMarkdown).toBe(OTHER_MARKDOWN);
+    expect(JSON.stringify(snapshot.policy)).not.toContain("{{title}}");
+    expect(snapshot.generationDigest).toBe(controlGenerationDigest(encoder.encode(fixture.policyText), encoder.encode(fixture.taxonomyText)));
   });
 
-  it("infers date and checkbox literals and rejects explicit type mismatches", () => {
-    expect(composeResolvedTemplateFields(
-      { fields: {} },
-      {},
-      { created: "2026-08-30", done: false },
-      {},
-    )).toMatchObject({ created: { type: "date" }, done: { type: "checkbox" } });
-    expect(() => composeResolvedTemplateFields(
-      { fields: {} },
-      {},
-      { done: "false" },
-      { done: "checkbox" },
-    )).toThrow(/OBSIDIAN_TYPE_CONFLICT/);
+  it("reports a missing raw source and still returns the other contract", async () => {
+    await rm(join(fixture.root, "Sources", "literature.md"));
+    const snapshot = await loadResolvedTemplates(fixture.root);
+    expect(snapshot.diagnostics).toEqual([{
+      code: "SOURCE_DRIFT",
+      templateId: "literature",
+      path: "Sources/literature.md",
+      message: "raw source Sources/literature.md is missing",
+    }]);
+    expect(snapshot.sources[0]?.observedRawDigest).toBeNull();
+    expect(snapshot.templates["other"]?.contractDigest).toBe(composeTemplateContract(fixture.policyText, "other", null).contractDigest);
+    expect(snapshot.drafts.every(draft => draft.drift === null)).toBe(true);
   });
 
-  it("accepts the Obsidian help date expression for a date property end to end", async () => {
-    const root = await fixture({ dateExample: true });
-    const resolved = await loadResolvedTemplates(root);
-    expect(resolved.templates.note?.frontmatterTemplate.date).toBe("{{date}}");
-    expect(resolved.templates.note?.fields.date?.type).toBe("date");
+  it("reports managed-draft drift and keeps the approved markdown", async () => {
+    await writeFile(join(fixture.root, ".oms", "templates", "literature.md"), "STALE\n");
+    const snapshot = await loadResolvedTemplates(fixture.root);
+    expect(snapshot.diagnostics).toEqual([{
+      code: "MANAGED_TEMPLATE_DRIFT",
+      templateId: "literature",
+      path: ".oms/templates/literature.md",
+      message: "managed draft .oms/templates/literature.md does not match the approved markdown digest",
+    }]);
+    expect(snapshot.templates["literature"]?.approved.templateLayer?.approvedMarkdown).toBe(LITERATURE_MARKDOWN);
+    expect(snapshot.drafts.find(draft => draft.templateId === "other")?.drift).toBeNull();
+    expect(snapshot.sources[0]?.drift).toBeNull();
   });
 
-  it("accepts formatted temporal tags without weakening conflicting literal checks", () => {
-    expect(composeResolvedTemplateFields(
-      { fields: {} },
-      { date: { type: "date" }, timestamp: { type: "datetime" } },
-      { date: "{{date:YYYY/MM/DD}}", timestamp: "{{time:HH:mm:ss}}" },
-      { date: "date", timestamp: "datetime" },
-    )).toMatchObject({ date: { type: "date" }, timestamp: { type: "datetime" } });
-    expect(() => composeResolvedTemplateFields(
-      { fields: {} },
-      { date: { type: "date" } },
-      { date: "not-a-date" },
-      { date: "date" },
-    )).toThrow(/OBSIDIAN_TYPE_CONFLICT/);
+  it("reports missing managed drafts without blocking an unrelated contract", async () => {
+    await rm(join(fixture.root, ".oms", "templates", "default.md"));
+    await rm(join(fixture.root, ".oms", "templates", "literature.md"));
+    const snapshot = await loadResolvedTemplates(fixture.root);
+    expect(snapshot.diagnostics.map(diagnostic => [diagnostic.code, diagnostic.templateId ?? null, diagnostic.message])).toEqual([
+      ["MANAGED_TEMPLATE_DRIFT", null, "managed draft .oms/templates/default.md is missing"],
+      ["MANAGED_TEMPLATE_DRIFT", "literature", "managed draft .oms/templates/literature.md is missing"],
+    ]);
+    expect(snapshot.defaultContract.approved.defaultLayer.approvedMarkdown).toBe(DEFAULT_MARKDOWN);
+    expect(snapshot.templates["literature"]?.approved.templateLayer?.approvedMarkdown).toBe(LITERATURE_MARKDOWN);
+    expect(snapshot.templates["other"]?.approved.templateLayer?.approvedMarkdown).toBe(OTHER_MARKDOWN);
+    expect(snapshot.drafts.find(draft => draft.templateId === "other")?.drift).toBeNull();
   });
 
-  it("resolves a signed actual template without writing the vault", async () => {
-    const root = await fixture();
-    const before = await Promise.all([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.json", ".obsidian/types.json", "Templates/OMS/note.md"].map(async file => [file, await readFile(join(root, file), "utf8")] as const));
-    const resolved = await loadResolvedTemplates(root);
-    expect(Object.keys(resolved.templates)).toEqual(["note"]);
-    expect(resolved.templates.note?.body).toBe("Body\n");
-    expect(resolved.templates.note?.content.bodySignature).toBe(digest("Body\n"));
-    expect(resolved.managedSourcePaths).toEqual(["Templates/OMS/note.md"]);
-    const after = await Promise.all(before.map(async ([file]) => [file, await readFile(join(root, file), "utf8")] as const));
-    expect(after).toEqual(before);
+  it("rejects a projection whose header matches but whose managed payload does not", async () => {
+    const projection = JSON.parse(await readFile(join(fixture.root, ".oms", "types.json"), "utf8")) as {
+      generatedFrom: string;
+      managed: { templates: { literature: { contractDigest: string } } };
+    };
+    const generatedFrom = projection.generatedFrom;
+    projection.managed.templates.literature.contractDigest = digestBytes("tampered");
+    await writeFile(join(fixture.root, ".oms", "types.json"), JSON.stringify(projection));
+    await expect(loadResolvedTemplates(fixture.root)).rejects.toThrow("PROJECTION_PAYLOAD_TAMPERED: managed payload does not match the derived projection");
+    const reread = JSON.parse(await readFile(join(fixture.root, ".oms", "types.json"), "utf8")) as { generatedFrom: string };
+    expect(reread.generatedFrom).toBe(generatedFrom);
   });
 
-  it("isolates an edited template as pending while resolving an unchanged sibling", async () => {
-    const root = await fixture({ second: true });
-    await writeFile(join(root, "Templates", "OMS", "note.md"), "---\ntitle: changed\n---\nBody\n");
-    const resolved = await loadResolvedTemplates(root);
-    expect(Object.keys(resolved.templates)).toEqual(["reference"]);
-    expect(resolved.pending.note).toMatchObject({ id: "note", path: "Templates/OMS/note.md", kind: "edited" });
-    expect(resolved.managedSourcePaths).toEqual(["Templates/OMS/note.md", "Templates/OMS/reference.md"]);
+  it("keeps an Obsidian type conflict beside the approved contracts", async () => {
+    await writeFile(join(fixture.root, ".obsidian", "types.json"), JSON.stringify({ types: { status: "text", alias: "input" } }));
+    const snapshot = await loadResolvedTemplates(fixture.root);
+    expect(snapshot.diagnostics).toEqual([{
+      code: "OBSIDIAN_TYPE_CONFLICT",
+      field: "status",
+      path: ".obsidian/types.json",
+      message: "property status is select in the policy pool and text in Obsidian types",
+    }]);
+    expect(snapshot.templates["literature"]?.fields["status"]?.type).toBe("select");
+    expect(snapshot.obsidianTypes?.["alias"]).toBe("text");
+    expect(snapshot.generationDigest).toBe(controlGenerationDigest(encoder.encode(fixture.policyText), encoder.encode(fixture.taxonomyText)));
   });
 
-  it("isolates a deleted template as pending while retaining a sibling", async () => {
-    const root = await fixture({ second: true });
-    await rm(join(root, "Templates", "OMS", "note.md"));
-    const resolved = await loadResolvedTemplates(root);
-    expect(Object.keys(resolved.templates)).toEqual(["reference"]);
-    expect(resolved.pending.note).toMatchObject({ id: "note", path: "Templates/OMS/note.md", kind: "deleted" });
+  it("does not fail the read when Obsidian types are absent, invalid, or not a file", async () => {
+    await rm(join(fixture.root, ".obsidian", "types.json"));
+    const absent = await loadResolvedTemplates(fixture.root);
+    expect(absent.obsidianTypes).toBeNull();
+    expect(absent.controls.obsidianTypes).toBeNull();
+    expect(absent.diagnostics).toEqual([]);
+    expect(absent.templates["literature"]?.templateId).toBe("literature");
+
+    await writeFile(join(fixture.root, ".obsidian", "types.json"), "{");
+    const invalid = await loadResolvedTemplates(fixture.root);
+    expect(invalid.diagnostics.map(diagnostic => diagnostic.code)).toEqual(["OBSIDIAN_TYPE_CONFLICT"]);
+    expect(invalid.diagnostics[0]?.message).toContain("Obsidian types could not be read");
+    expect(invalid.obsidianTypes).toBeNull();
+    expect(invalid.templates["other"]?.approved.templateLayer?.approvedMarkdown).toBe(OTHER_MARKDOWN);
+
+    await rm(join(fixture.root, ".obsidian", "types.json"));
+    await mkdir(join(fixture.root, ".obsidian", "types.json"));
+    const directory = await loadResolvedTemplates(fixture.root);
+    expect(directory.diagnostics).toEqual([{
+      code: "OBSIDIAN_TYPE_CONFLICT",
+      path: ".obsidian/types.json",
+      message: "Obsidian types could not be read: .obsidian/types.json is not a regular file",
+    }]);
+    expect(directory.defaultContract.templateId).toBeNull();
   });
 
-  it("surfaces a newly dropped source as pending without assigning it to a resolved contract", async () => {
-    const root = await fixture();
-    await writeFile(join(root, "Templates", "OMS", "new-template.md"), "---\ntitle: New\n---\nNew body\n");
-    const resolved = await loadResolvedTemplates(root);
-    expect(resolved.templates.note).toBeDefined();
-    expect(resolved.pending["new-template"]).toMatchObject({ id: "new-template", path: "Templates/OMS/new-template.md", kind: "added" });
-    expect(resolved.managedSourcePaths).toContain("Templates/OMS/new-template.md");
+  it("admits a durable complete marker without rechecking drafts and rejects an open marker", async () => {
+    const markerText = await writePublication(fixture.root, "complete");
+    const snapshot = await loadResolvedTemplates(fixture.root);
+    expect(snapshot.diagnostics).toEqual([]);
+    expect(new TextDecoder().decode(snapshot.controls.marker?.bytes ?? new Uint8Array())).toBe(markerText);
+
+    await writeFile(join(fixture.root, ".oms", "templates", "literature.md"), "STALE\n");
+    const drifted = await loadResolvedTemplates(fixture.root);
+    expect(drifted.diagnostics).toEqual([{
+      code: "MANAGED_TEMPLATE_DRIFT",
+      templateId: "literature",
+      path: ".oms/templates/literature.md",
+      message: "managed draft .oms/templates/literature.md does not match the approved markdown digest",
+    }]);
+    expect(drifted.templates["literature"]?.approved.templateLayer?.approvedMarkdown).toBe(LITERATURE_MARKDOWN);
+
+    await writePublication(fixture.root, "in-progress");
+    await expect(loadResolvedTemplates(fixture.root)).rejects.toThrow("CONTRACT_TRANSACTION_IN_PROGRESS: template transaction is in progress");
+
+    await writePublication(fixture.root, "complete", { plan: false });
+    await expect(loadResolvedTemplates(fixture.root)).rejects.toThrow("CONTRACT_TRANSACTION_IN_PROGRESS: transaction marker is invalid");
+
+    await writeFile(join(fixture.root, ".oms", "template-transaction.json"), JSON.stringify({
+      status: "complete",
+      transactionId: "tx-1",
+      approvalDigest: digestBytes("approval"),
+      outputDigest: digestBytes("output"),
+    }));
+    await expect(loadResolvedTemplates(fixture.root)).rejects.toThrow("CONTRACT_TRANSACTION_IN_PROGRESS: transaction marker is invalid");
   });
 
-  it("fails closed for a shared policy, taxonomy, or Obsidian authority change", async () => {
-    for (const control of [".oms/template-policy.json", ".oms/taxonomy.json", ".obsidian/types.json"] as const) {
-      const root = await fixture();
-      const path = join(root, control);
-      const before = await readFile(path, "utf8");
-      await writeFile(path, `${before}\n`);
-      await expect(loadResolvedTemplates(root)).rejects.toThrow(/TEMPLATE_SOURCE_DRIFT/);
+  it("fails closed for absent, invalid, unsupported, or mismatched controls", async () => {
+    const failures: Array<[(root: string) => Promise<void>, string]> = [
+      [async root => { await rm(join(root, ".oms", "template-policy.json")); }, "CONTRACT_UNVERIFIABLE: approved policy is absent"],
+      [async root => { await writeFile(join(root, ".oms", "template-policy.json"), "{"); }, "CONTRACT_UNVERIFIABLE: approved policy is not valid JSON"],
+      [async root => { await writeFile(join(root, ".oms", "template-policy.json"), Buffer.from([0xff, 0xfe])); }, "CONTRACT_UNVERIFIABLE: approved policy is not UTF-8"],
+      [async root => {
+        const policy = JSON.parse(await readFile(join(root, ".oms", "template-policy.json"), "utf8")) as { default: { approvedMarkdownDigest: string } };
+        policy.default.approvedMarkdownDigest = digestBytes("not-the-markdown");
+        await writeFile(join(root, ".oms", "template-policy.json"), JSON.stringify(policy));
+      }, "CONTRACT_UNVERIFIABLE: policy.default.approvedMarkdownDigest does not match the exact approved markdown bytes"],
+      [async root => { await writeFile(join(root, ".oms", "template-policy.json"), JSON.stringify({ version: 3 })); }, "TEMPLATE_POLICY_VERSION_UNSUPPORTED:"],
+      [async root => { await rm(join(root, ".oms", "taxonomy.json")); }, "TEMPLATE_SOURCE_INVALID: .oms/taxonomy.json is absent"],
+      [async root => { await writeFile(join(root, ".oms", "taxonomy.json"), "{"); }, "TEMPLATE_SOURCE_INVALID: taxonomy (.oms/taxonomy.json) must be valid JSON"],
+      [async root => { await rm(join(root, ".oms", "types.json")); }, "PROJECTION_INVALID: .oms/types.json is absent"],
+      [async root => { await writeFile(join(root, ".oms", "types.json"), Buffer.from([0xff])); }, "PROJECTION_INVALID: .oms/types.json is not UTF-8"],
+      [async root => { await writeFile(join(root, ".oms", "types.json"), JSON.stringify({ version: "oms.types.v1" })); }, "oms.types.v1 is not migrated"],
+      [async root => { await writeFile(join(root, ".oms", "template-policy.json"), `${fixture.policyText}\n`); }, "CONTRACT_TRANSACTION_IN_PROGRESS: projection generatedFrom does not match policy and taxonomy bytes"],
+      [async root => { await writeFile(join(root, ".oms", "template-transaction.json"), "[]"); }, "CONTRACT_TRANSACTION_IN_PROGRESS: transaction marker is invalid"],
+      [async root => { await writeFile(join(root, ".oms", "template-transaction.json"), Buffer.from([0xff])); }, "CONTRACT_TRANSACTION_IN_PROGRESS: transaction marker is invalid"],
+      [async root => {
+        await writeFile(join(root, ".oms", "template-transaction.json"), JSON.stringify({
+          status: "complete",
+          transactionId: "tx-1",
+          approvalDigest: digestBytes("approval"),
+          outputDigest: "sha256:not-a-digest",
+        }));
+      }, "CONTRACT_TRANSACTION_IN_PROGRESS: transaction marker is invalid"],
+    ];
+    for (const [mutate, message] of failures) {
+      const { root } = await installVault();
+      await mutate(root);
+      await expect(loadResolvedTemplates(root)).rejects.toThrow(message);
     }
   });
 
-  it("isolates source drift and still rejects projection payload tampering", async () => {
-    const root = await fixture();
-    await writeFile(join(root, "Templates", "OMS", "note.md"), "---\ntitle: changed\n---\nBody\n");
-    await expect(loadResolvedTemplates(root)).resolves.toMatchObject({
-      templates: {},
-      pending: { note: { id: "note", path: "Templates/OMS/note.md", kind: "edited" } },
-    });
-    const clean = await fixture();
-    const projection = JSON.parse(await readFile(join(clean, ".oms", "types.json"), "utf8")) as { managed: { templates: Record<string, { naming: string }> } };
-    projection.managed.templates.note!.naming = "tampered";
-    await writeFile(join(clean, ".oms", "types.json"), JSON.stringify(projection));
-    await expect(loadResolvedTemplates(clean)).rejects.toThrow(/PROJECTION_PAYLOAD_TAMPERED/);
-  });
+  it("returns null only when policy, taxonomy, projection, and marker are all absent", async () => {
+    const empty = await mkdtemp(join(tmpdir(), "oms-template-resolver-empty-"));
+    roots.push(empty);
+    expect(await loadResolvedTemplatesIfPresent(empty)).toBeNull();
+    await mkdir(join(empty, ".obsidian"), { recursive: true });
+    await writeFile(join(empty, ".obsidian", "types.json"), JSON.stringify({ types: { status: "select" } }));
+    expect(await loadResolvedTemplatesIfPresent(empty)).toBeNull();
 
-  it("rejects projection identity mappings that disagree with current policy paths", async () => {
-    const root = await fixture();
-    const projection = JSON.parse(await readFile(join(root, ".oms", "types.json"), "utf8")) as {
-      managed: { templates: Record<string, { sourcePath: string }> };
-    };
-    projection.managed.templates.note!.sourcePath = "Templates/renamed.md";
-    await writeFile(join(root, ".oms", "types.json"), JSON.stringify(projection));
-    await expect(loadResolvedTemplates(root)).rejects.toThrow(/PROJECTION_INVALID/);
-  });
+    const marked = await mkdtemp(join(tmpdir(), "oms-template-resolver-marker-"));
+    roots.push(marked);
+    await writePublication(marked, "in-progress");
+    await expect(loadResolvedTemplatesIfPresent(marked)).rejects.toThrow("CONTRACT_TRANSACTION_IN_PROGRESS: template transaction is in progress");
 
-  it("rejects an authored axis that collides with the derived folder ontology", async () => {
-    const root = await fixture();
-    await writeFile(join(root, ".oms", "taxonomy.json"), JSON.stringify({
-      folders: { notes: { intent: "Working notes." } },
-      globalAxes: { "folder-ontology": { kind: "folder", key: "folder", type: "text", members: ["notes"] } },
-    }));
-    await expect(loadResolvedTemplates(root)).rejects.toThrow(/globalAxes\.folder-ontology is reserved/);
+    const policyOnly = await mkdtemp(join(tmpdir(), "oms-template-resolver-policy-"));
+    roots.push(policyOnly);
+    await mkdir(join(policyOnly, ".oms"), { recursive: true });
+    await writeFile(join(policyOnly, ".oms", "template-policy.json"), fixture.policyText);
+    await expect(loadResolvedTemplatesIfPresent(policyOnly)).rejects.toThrow("TEMPLATE_SOURCE_INVALID: .oms/taxonomy.json is absent");
+    expect((await loadResolvedTemplatesIfPresent(fixture.root))?.templates["other"]?.templateId).toBe("other");
+  });
+});
+
+describe("resolver module", () => {
+  it("does not write, render, or keep retired v3 gates", async () => {
+    const source = await readFile(fileURLToPath(new URL("./resolver.ts", import.meta.url)), "utf8");
+    for (const forbidden of [
+      "writeFile",
+      "appendFile",
+      "createWriteStream",
+      "mkdir",
+      "deriveTemplateSourcePath",
+      "sourceSignature",
+      "sharedAuthoritySignature",
+      "buildTemplateCompositionManifest",
+      "approvalDigest",
+      "from \"./extract.js\"",
+      "from \"./renderer.js\"",
+      "from \"./census.js\"",
+      "from \"./interview.js\"",
+      "from \"./content-contract.js\"",
+      "templateTransactionMarkerState",
+      "oms.contract-publish.marker.v1",
+    ]) expect(source).not.toContain(forbidden);
   });
 });

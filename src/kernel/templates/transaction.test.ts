@@ -1,22 +1,18 @@
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const injectedFault = vi.hoisted(() => ({
   operation: "" as "" | "write" | "remove" | "read",
   suffix: "",
   armed: false,
   skip: 0,
-  secondaryOperation: "" as "" | "write" | "remove" | "read",
-  secondarySuffix: "",
-  secondaryArmed: false,
 }));
 
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  const target = (value: Parameters<typeof actual.writeFile>[0]): string => String(value);
   const shouldFail = (operation: typeof injectedFault.operation, value: string): boolean => {
     if (!injectedFault.armed || injectedFault.operation !== operation || !value.endsWith(injectedFault.suffix)) return false;
     if (injectedFault.skip > 0) {
@@ -26,980 +22,544 @@ vi.mock("node:fs/promises", async importOriginal => {
     injectedFault.armed = false;
     return true;
   };
-  const shouldFailSecondary = (operation: typeof injectedFault.operation, value: string): boolean => {
-    if (!injectedFault.secondaryArmed || injectedFault.secondaryOperation !== operation || !value.endsWith(injectedFault.secondarySuffix)) return false;
-    injectedFault.secondaryArmed = false;
-    return true;
-  };
   return {
     ...actual,
     writeFile: async (...args: Parameters<typeof actual.writeFile>): Promise<void> => {
-      if (shouldFail("write", target(args[0])) || shouldFailSecondary("write", target(args[0]))) throw new Error("injected write failure");
+      if (shouldFail("write", String(args[0]))) throw new Error("injected write failure");
       await actual.writeFile(...args);
     },
     rename: async (...args: Parameters<typeof actual.rename>): Promise<void> => {
-      if (shouldFail("write", String(args[1])) || shouldFailSecondary("write", String(args[1]))) throw new Error("injected rename failure");
+      if (shouldFail("write", String(args[1]))) throw new Error("injected rename failure");
       await actual.rename(...args);
     },
     rm: async (...args: Parameters<typeof actual.rm>): Promise<void> => {
-      if (shouldFail("remove", String(args[0])) || shouldFailSecondary("remove", String(args[0]))) throw new Error("injected remove failure");
+      if (shouldFail("remove", String(args[0]))) throw new Error("injected remove failure");
       await actual.rm(...args);
     },
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
       const result = await actual.readFile(...args);
-      if (shouldFail("read", String(args[0])) || shouldFailSecondary("read", String(args[0]))) return Buffer.from("injected read-back mismatch");
+      if (shouldFail("read", String(args[0]))) return Buffer.from("injected read-back mismatch");
       return result;
     },
   };
 });
 
-import { approvalDigest, inputDigest } from "./canonical.js";
-import { deriveContentFormatContract } from "./content-contract.js";
-import { normalizeTemplateSourcePath } from "./paths.js";
-import { parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "./policy.js";
-import { buildTemplateCompositionManifest, sharedAuthoritySignature, sourceSignature } from "./resolver.js";
+import { approvalDigest, digestBytes, outputDigest } from "./canonical.js";
+import * as eventJournal from "../runtime/event-journal.js";
 import { readRuntimeEvents } from "../runtime/event-read.js";
-import { completedTemplateTransaction, executeTemplateTransaction, resumeTemplateTransaction, TEMPLATE_MUTATION_MARKER_PATH } from "./transaction.js";
+import {
+  executeTemplateTransaction,
+  inspectTemplateTransactionMarker,
+  resumeTemplateTransaction,
+  TEMPLATE_TRANSACTION_MARKER_PATH,
+} from "./transaction.js";
 import type {
+  ControlTransition,
   Digest,
-  InputV2,
-  TemplateBinding,
+  FileExpectation,
+  ManagedDraftTransition,
+  ManagedTemplatePath,
+  PlannedPhysicalOutput,
   TemplateCompositionManifest,
-  TemplateCompositionOptions,
-  TemplateFolderPath,
   TemplateId,
-  TemplatePolicy,
-  TemplateSemanticChange,
-  TemplateSourcePath,
-  TemplateTransactionMarkerPath,
+  TemplateTransactionReceipt,
+  VerifiedFileState,
 } from "./types.js";
 
 const encoder = new TextEncoder();
-const TEMPLATE = "---\ntitle: literal\n---\nBody\n";
-const UPDATED = "---\ntitle: changed\n---\nChanged\n";
-const TAXONOMY = JSON.stringify({ folders: { Notes: { templates: ["note", "daily", "alpha", "beta", "external", "second", "escape"] } } });
-const OBSIDIAN = `${JSON.stringify({ types: { title: "text" } }, null, 2)}\n`;
+const POLICY = ".oms/template-policy.json" as const;
+const TAXONOMY = ".oms/taxonomy.json" as const;
+const PROJECTION = ".oms/types.json" as const;
+const DRAFT = ".oms/templates/default.md" as ManagedTemplatePath;
+const POLICY_V1 = "policy-v1";
+const POLICY_V2 = "policy-v2";
+const TAXONOMY_V1 = "taxonomy-v1";
+const TAXONOMY_V2 = "taxonomy-v2";
+const PROJECTION_V1 = "projection-v1";
+const PROJECTION_V2 = "projection-v2";
+const DRAFT_V1 = "draft-v1";
+const DRAFT_V2 = "draft-v2";
+const NOTE = "ordinary note\n";
+const SOURCE = "raw source\n";
+const OBSIDIAN = "{\"types\":{\"title\":\"text\"}}\n";
+const roots: string[] = [];
+let previousRuntime: string | undefined;
 
 beforeEach(() => {
   injectedFault.operation = "";
   injectedFault.suffix = "";
   injectedFault.armed = false;
   injectedFault.skip = 0;
-  injectedFault.secondaryOperation = "";
-  injectedFault.secondarySuffix = "";
-  injectedFault.secondaryArmed = false;
+  previousRuntime = process.env.OMS_RUNTIME_ROOT;
 });
 
-function digest(value: string | Uint8Array): Digest {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
+afterEach(async () => {
+  if (previousRuntime === undefined) delete process.env.OMS_RUNTIME_ROOT;
+  else process.env.OMS_RUNTIME_ROOT = previousRuntime;
+  vi.restoreAllMocks();
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
+
+function publicationId(approval: Digest, output: Digest): string {
+  return digestBytes(`${approval}\0${output}`).slice("sha256:".length, "sha256:".length + 32);
 }
-function id(value: string): TemplateId { return value as TemplateId; }
-function sourcePath(value: string): TemplateSourcePath { return value as TemplateSourcePath; }
-function folder(value: string): TemplateFolderPath { return value as TemplateFolderPath; }
-function binding(templateId: string, source: string, destinationClass: TemplateBinding["destinationClass"] = "managed-default"): TemplateBinding {
-  const sourceFolder = folder(source.slice(0, source.lastIndexOf("/")));
-  return { templateId: id(templateId), destinationClass, renderer: "obsidian-core", sourceFolder, sourcePath: sourcePath(source), contract: "note", naming: "{{title}}" };
+
+function present(text: string): Extract<VerifiedFileState, { readonly state: "present" }> {
+  const bytes = encoder.encode(text);
+  return { state: "present", bytes, signature: digestBytes(bytes) };
 }
-function policy(bindings: readonly TemplateBinding[], templateFolder = "Templates/OMS", registeredFolders: readonly string[] = []): TemplatePolicy {
-  const paths = new Set([templateFolder, "Moved", ...registeredFolders, ...bindings.map(item => item.sourceFolder)]);
-  return {
-    version: 3,
-    templateFolders: [...paths].map(path => ({ path: folder(path), ...(path === templateFolder ? { default: true as const } : {}) })),
-    base: { fields: {} },
-    contracts: { note: { intent: "A note.", fields: {}, views: [] } },
-    templates: Object.fromEntries(bindings.map(item => [item.templateId, item])),
-  };
+
+function expectation(state: VerifiedFileState): FileExpectation {
+  return state.state === "absent" ? { state: "absent" } : { state: "present", signature: state.signature };
 }
-function projection(bindings: readonly TemplateBinding[], policyBytes: string, sourceBytes: Readonly<Record<string, string>>, templateFolder = "Templates/OMS"): string {
-  const sources = [
-    { logicalId: "template-policy", signature: digest(policyBytes) },
-    { logicalId: "taxonomy", signature: digest(TAXONOMY) },
-    { logicalId: "obsidian-types", signature: digest(OBSIDIAN) },
-    ...bindings.map(item => ({ path: item.sourcePath, signature: digest(sourceBytes[item.templateId] ?? TEMPLATE) })),
-  ];
-  const content = deriveContentFormatContract("Body\n").contract;
-  return serializeDerivedProjection({
-    version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources },
-    managed: {
-      base: { fields: {} },
-      globalAxes: {},
-      templates: Object.fromEntries(bindings.map(item => [item.templateId, {
-        templateId: item.templateId,
-        destinationClass: item.destinationClass,
-        renderer: "obsidian-core",
-        sourcePath: item.sourcePath,
-        targetFolder: folder("Notes"),
-        keyOrder: ["title"],
-        fields: { title: { type: "text" } },
-        views: [],
-        naming: item.naming,
-        bodySignature: content.bodySignature,
-        content,
-      }])),
-    },
+
+function control<K extends "policy" | "taxonomy" | "projection", P extends ".oms/template-policy.json" | ".oms/taxonomy.json" | ".oms/types.json">(
+  kind: K,
+  controlPath: P,
+  before: string,
+  after: string,
+  action: "write" | "verify-only",
+): ControlTransition<K, P> {
+  const current = present(before);
+  const proposed = present(after);
+  return { kind, path: controlPath, expectedCurrent: expectation(current), current, proposed, action };
+}
+
+function draft(before: string | null, after: string | null, action: "write" | "verify-only", templateId: TemplateId | null = null, draftPath: ManagedTemplatePath = DRAFT): ManagedDraftTransition {
+  const current = before === null ? { state: "absent" as const } : present(before);
+  const proposed = after === null ? { state: "absent" as const } : present(after);
+  return { templateId, path: draftPath, expectedCurrent: expectation(current), current, proposed, action };
+}
+
+function seal(body: Omit<TemplateCompositionManifest, "approvalDigest" | "outputDigest">): TemplateCompositionManifest {
+  return { ...body, approvalDigest: approvalDigest(body), outputDigest: outputDigest(body.outputs) };
+}
+
+function publication(options: {
+  readonly policy?: readonly [string, string, "write" | "verify-only"];
+  readonly taxonomy?: readonly [string, string, "write" | "verify-only"];
+  readonly projection?: readonly [string, string, "write" | "verify-only"];
+  readonly drafts?: readonly ManagedDraftTransition[];
+  readonly outputs?: readonly PlannedPhysicalOutput[];
+} = {}): TemplateCompositionManifest {
+  const [policyBefore, policyAfter, policyAction] = options.policy ?? [POLICY_V1, POLICY_V2, "write"];
+  const [taxonomyBefore, taxonomyAfter, taxonomyAction] = options.taxonomy ?? [TAXONOMY_V1, TAXONOMY_V2, "write"];
+  const [projectionBefore, projectionAfter, projectionAction] = options.projection ?? [PROJECTION_V1, PROJECTION_V2, "write"];
+  const drafts = options.drafts ?? [draft(null, DRAFT_V2, "write")];
+  const controls = [
+    control("policy", POLICY, policyBefore, policyAfter, policyAction),
+    control("taxonomy", TAXONOMY, taxonomyBefore, taxonomyAfter, taxonomyAction),
+    control("projection", PROJECTION, projectionBefore, projectionAfter, projectionAction),
+  ] as TemplateCompositionManifest["controls"];
+  const transitions = [...controls, ...drafts];
+  const outputs = options.outputs ?? transitions.flatMap(transition => transition.action === "write" && transition.proposed.state === "present"
+    ? [{ finalVaultRelativePath: transition.path, payloadDigest: transition.proposed.signature }]
+    : []);
+  return seal({
+    version: 1,
+    markerPath: TEMPLATE_TRANSACTION_MARKER_PATH,
+    controls,
+    drafts,
+    operations: [{ kind: "commit-contract", templateId: null, payloadDigest: digestBytes("commit-contract") }],
+    diagnostics: [],
+    outputs,
   });
 }
 
-interface VaultFixture {
+interface Fixture {
+  readonly root: string;
   readonly vault: string;
-  readonly bindings: readonly TemplateBinding[];
-  readonly policyBytes: string;
-  readonly projectionBytes: string;
-  readonly options: TemplateCompositionOptions;
+  readonly runtime: string;
 }
 
-async function fixture(bindings: readonly TemplateBinding[] = [], sourceBytes: Readonly<Record<string, string>> = {}, registeredFolders: readonly string[] = []): Promise<VaultFixture> {
-  const vault = await mkdtemp(path.join(tmpdir(), "oms-transaction-"));
+async function fixture(draftText?: string): Promise<Fixture> {
+  const root = await mkdtemp(path.join(tmpdir(), "oms-template-publication-"));
+  roots.push(root);
+  const vault = path.join(root, "vault");
+  const runtime = path.join(root, "runtime");
+  process.env.OMS_RUNTIME_ROOT = runtime;
   await mkdir(path.join(vault, ".oms"), { recursive: true });
   await mkdir(path.join(vault, ".obsidian"), { recursive: true });
-  const policyBytes = serializeTemplatePolicy(policy(bindings, "Templates/OMS", registeredFolders));
-  const projectionBytes = projection(bindings, policyBytes, sourceBytes);
-  await Promise.all([
-    writeFile(path.join(vault, ".oms", "template-policy.json"), policyBytes),
-    writeFile(path.join(vault, ".oms", "taxonomy.json"), TAXONOMY),
-    writeFile(path.join(vault, ".oms", "types.json"), projectionBytes),
-    writeFile(path.join(vault, ".obsidian", "types.json"), OBSIDIAN),
-  ]);
-  for (const item of bindings) {
-    const content = sourceBytes[item.templateId] ?? TEMPLATE;
-    await mkdir(path.dirname(path.join(vault, item.sourcePath)), { recursive: true });
-    await writeFile(path.join(vault, item.sourcePath), content);
+  await mkdir(path.join(vault, "Notes"), { recursive: true });
+  await mkdir(path.join(vault, "Templates"), { recursive: true });
+  await writeFile(path.join(vault, POLICY), POLICY_V1);
+  await writeFile(path.join(vault, TAXONOMY), TAXONOMY_V1);
+  await writeFile(path.join(vault, PROJECTION), PROJECTION_V1);
+  await writeFile(path.join(vault, "Notes", "plain.md"), NOTE);
+  await writeFile(path.join(vault, "Templates", "source.md"), SOURCE);
+  await writeFile(path.join(vault, ".obsidian", "types.json"), OBSIDIAN);
+  if (draftText !== undefined) {
+    await mkdir(path.join(vault, ".oms", "templates"), { recursive: true });
+    await writeFile(path.join(vault, DRAFT), draftText);
   }
-  const input: InputV2 = {
-    version: 2,
-    templateFolders: policy(bindings, "Templates/OMS", registeredFolders).templateFolders,
-    authority: [
-      { kind: "policy", logicalId: "template-policy", vaultRelativePath: ".oms/template-policy.json", contentDigest: digest(policyBytes) },
-      { kind: "taxonomy", logicalId: "taxonomy", vaultRelativePath: ".oms/taxonomy.json", contentDigest: digest(TAXONOMY) },
-      { kind: "obsidian-types", logicalId: "obsidian-types", vaultRelativePath: ".obsidian/types.json", contentDigest: digest(OBSIDIAN) },
-      ...bindings.map(item => ({ kind: "template" as const, logicalId: item.templateId, vaultRelativePath: item.sourcePath, contentDigest: digest(sourceBytes[item.templateId] ?? TEMPLATE) })),
-    ],
-    placement: bindings.map(item => ({ templateId: item.templateId, destinationClass: item.destinationClass, templateFolder: item.destinationClass === "managed-default" ? item.sourceFolder : null, sourceFolder: item.sourceFolder, sourcePath: item.sourcePath })),
-  };
-  return {
-    vault,
-    bindings,
-    policyBytes,
-    projectionBytes,
-    options: {
-      expected: {
-        input: inputDigest(input),
-        controls: {
-          policy: { state: "present", signature: digest(policyBytes) },
-          taxonomy: { state: "present", signature: digest(TAXONOMY) },
-          projection: { state: "present", signature: digest(projectionBytes) },
-        },
-        sources: bindings.map(item => ({ templateId: item.templateId, path: item.sourcePath, expected: { state: "present", signature: digest(sourceBytes[item.templateId] ?? TEMPLATE) } })),
-      },
-      taxonomy: { expectedCurrent: { state: "present", signature: digest(TAXONOMY) }, proposedBytes: encoder.encode(TAXONOMY), action: "verify-only" },
-    },
-  };
+  return { root, vault, runtime };
 }
 
-async function tree(vault: string): Promise<readonly [string, string][]> {
-  const entries: Array<[string, string]> = [];
+async function files(vault: string): Promise<string[]> {
+  const found: string[] = [];
   async function walk(directory: string): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const absolute = path.join(directory, entry.name);
-      const relative = path.relative(vault, absolute).replaceAll("\\", "/");
       if (entry.isDirectory()) await walk(absolute);
-      else entries.push([relative, (await readFile(absolute)).toString("hex")]);
+      else found.push(path.relative(vault, absolute).replaceAll("\\", "/"));
     }
   }
   await walk(vault);
-  return entries.sort(([left], [right]) => left.localeCompare(right));
-}
-async function compose(item: VaultFixture, change: TemplateSemanticChange): Promise<TemplateCompositionManifest> {
-  return buildTemplateCompositionManifest(item.vault, change, item.options);
-}
-async function cleanup(item: VaultFixture): Promise<void> { await rm(item.vault, { recursive: true, force: true }); }
-function createChange(templateId = "daily"): TemplateSemanticChange {
-  const item = binding(templateId, `Templates/OMS/${templateId}.md`);
-  return { mode: "create", binding: item, source: { path: item.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" } };
-}
-function rejectedCode(receipt: Awaited<ReturnType<typeof executeTemplateTransaction>>): string | undefined {
-  return receipt.status === "rejected" || receipt.status === "inconsistent" ? receipt.diagnostics[0]?.code : undefined;
-}
-function durableDirectory(vault: string, transactionId: string, marker = "template-migration"): string {
-  return path.join(vault, ".oms", ".template-transactions", transactionId, marker);
-}
-function nextOptions(manifest: TemplateCompositionManifest): TemplateCompositionOptions {
-  const [policyControl, taxonomyControl, projectionControl] = manifest.controls;
-  return {
-    expected: {
-      input: manifest.proposed.inputDigest,
-      controls: {
-        policy: { state: "present", signature: policyControl.proposed.signature },
-        taxonomy: { state: "present", signature: taxonomyControl.proposed.signature },
-        projection: { state: "present", signature: projectionControl.proposed.signature },
-      },
-      sources: manifest.proposed.resolvedTemplates.map(template => ({
-        templateId: template.templateId,
-        path: template.sourcePath,
-        expected: { state: "present", signature: template.templateSignature },
-      })),
-    },
-    taxonomy: {
-      expectedCurrent: { state: "present", signature: taxonomyControl.proposed.signature },
-      proposedBytes: new Uint8Array(taxonomyControl.proposed.bytes),
-      action: "verify-only",
-    },
-  };
-}
-function markerTypeContract(
-  vault: string,
-  manifest: TemplateCompositionManifest,
-  request: { readonly approvedDigest: Digest },
-): void {
-  // @ts-expect-error Marker paths are a closed exported union.
-  void executeTemplateTransaction(vault, manifest, request, ".oms/arbitrary.json");
-}
-void markerTypeContract;
-function inject(operation: "write" | "remove" | "read", suffix: string, skip = 0): void {
-  injectedFault.operation = operation;
-  injectedFault.suffix = suffix;
-  injectedFault.skip = skip;
-  injectedFault.armed = true;
-}
-function injectSecondary(operation: "write" | "remove" | "read", suffix: string): void {
-  injectedFault.secondaryOperation = operation;
-  injectedFault.secondarySuffix = suffix;
-  injectedFault.secondaryArmed = true;
+  return found.sort();
 }
 
-describe("guarded template transactions", () => {
-  it("registers an explicit folder and selects an existing default through guarded policy transactions", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const item = await fixture([current]);
-    try {
-      const registered = await compose(item, { mode: "register-folder", folder: { path: folder("Imported") } });
-      expect((await executeTemplateTransaction(item.vault, registered, { approvedDigest: registered.approvalDigest })).status).toBe("applied");
-      const afterRegistration = parseTemplatePolicy(await readFile(path.join(item.vault, ".oms/template-policy.json"), "utf8"));
-      expect(afterRegistration.templateFolders).toContainEqual({ path: "Imported" });
-      const selected = await buildTemplateCompositionManifest(item.vault, { mode: "default", templateId: current.templateId }, nextOptions(registered));
-      expect((await executeTemplateTransaction(item.vault, selected, { approvedDigest: selected.approvalDigest })).status).toBe("applied");
-      expect(parseTemplatePolicy(await readFile(path.join(item.vault, ".oms/template-policy.json"), "utf8")).defaultTemplate).toBe("note");
-      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
-      expect(events).toContainEqual(expect.objectContaining({ kind: "template-folder-register", outcome: "success" }));
-      expect(events).toContainEqual(expect.objectContaining({ kind: "template-default", templateId: "note", outcome: "success" }));
-      expect(events.some(event => event.kind === "template-create")).toBe(false);
-    } finally { await cleanup(item); }
-  });
+async function text(vault: string, relativePath: string): Promise<string> {
+  return readFile(path.join(vault, relativePath), "utf8");
+}
 
-  it("removes a registered binding while preserving its source and supports exact replay", async () => {
-    const current = binding("note", "External/note.md", "registered-existing");
-    const item = await fixture([current]);
-    try {
-      const manifest = await compose(item, { mode: "remove", templateId: current.templateId, deleteSource: false });
-      const applied = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(applied.status).toBe("applied");
-      expect(await readFile(path.join(item.vault, current.sourcePath), "utf8")).toBe(TEMPLATE);
-      expect(parseTemplatePolicy(await readFile(path.join(item.vault, ".oms/template-policy.json"), "utf8")).templates).toEqual({});
-      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("already-complete");
-      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
-      expect(events.filter(event => event.kind === "template-remove")).toHaveLength(1);
-      expect(events.some(event => event.kind === "template-create")).toBe(false);
-    } finally { await cleanup(item); }
-  });
+function code(receipt: TemplateTransactionReceipt): string | undefined {
+  return receipt.status === "rejected" || receipt.status === "inconsistent" || receipt.status === "resume-required" ? receipt.diagnostics[0]?.code : undefined;
+}
 
-  it("deletes a managed source only when explicitly requested and verifies absence", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const item = await fixture([current]);
-    try {
-      const manifest = await compose(item, { mode: "remove", templateId: current.templateId, deleteSource: true });
-      const applied = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(applied.status).toBe("applied");
-      await expect(readFile(path.join(item.vault, current.sourcePath))).rejects.toMatchObject({ code: "ENOENT" });
-      if (applied.status === "applied") expect(applied.verified).toContainEqual({ path: current.sourcePath, state: "absent" });
-      expect(readRuntimeEvents({ vaultPath: item.vault }).events).toContainEqual(
-        expect.objectContaining({ kind: "template-remove", templateId: "note", outcome: "success" }),
-      );
-    } finally { await cleanup(item); }
-  });
+async function untouched(vault: string): Promise<void> {
+  expect(await text(vault, "Notes/plain.md")).toBe(NOTE);
+  expect(await text(vault, "Templates/source.md")).toBe(SOURCE);
+  expect(await text(vault, ".obsidian/types.json")).toBe(OBSIDIAN);
+}
 
-  it("refuses registered source deletion and removal of the selected default", async () => {
-    const registered = binding("note", "External/note.md", "registered-existing");
-    const item = await fixture([registered]);
-    try {
-      await expect(compose(item, { mode: "remove", templateId: registered.templateId, deleteSource: true })).rejects.toThrow(/registered-existing template sources cannot be deleted/);
-      const selected = await compose(item, { mode: "default", templateId: registered.templateId });
-      expect((await executeTemplateTransaction(item.vault, selected, { approvedDigest: selected.approvalDigest })).status).toBe("applied");
-      await expect(buildTemplateCompositionManifest(item.vault, { mode: "remove", templateId: registered.templateId, deleteSource: false }, nextOptions(selected))).rejects.toThrow(/choose a new default template/);
-      expect(await readFile(path.join(item.vault, registered.sourcePath), "utf8")).toBe(TEMPLATE);
-    } finally { await cleanup(item); }
-  });
+function events(item: Fixture) {
+  return readRuntimeEvents({ vaultPath: item.vault, runtimeRoot: item.runtime }).events;
+}
 
-  it("rejects stale approval for removal without changing policy or source", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const item = await fixture([current]);
-    try {
-      const manifest = await compose(item, { mode: "remove", templateId: current.templateId, deleteSource: true });
-      await writeFile(path.join(item.vault, ".oms/taxonomy.json"), `${TAXONOMY}\n`);
-      const beforePolicy = await readFile(path.join(item.vault, ".oms/template-policy.json"));
-      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("rejected");
-      expect(await readFile(path.join(item.vault, ".oms/template-policy.json"))).toEqual(beforePolicy);
-      expect(await readFile(path.join(item.vault, current.sourcePath), "utf8")).toBe(TEMPLATE);
-    } finally { await cleanup(item); }
-  });
+function rejectsLegacyMarker(vault: string, manifest: TemplateCompositionManifest): void {
+  // @ts-expect-error v4 publication does not accept a marker alias or migration mode.
+  void executeTemplateTransaction(vault, manifest, { approvedDigest: manifest.approvalDigest }, ".oms/template-migration.json");
+}
+void rejectsLegacyMarker;
 
-  it("records each apply invocation and actual template creation without changing the approved digest", async () => {
+describe("v4 guarded template publication", () => {
+  it("dry-run matches the approval and creates no vault, lock, journal, or staging bytes", async () => {
     const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const approved = manifest.approvalDigest;
-      const planned = await executeTemplateTransaction(item.vault, manifest, { dryRun: true });
-      expect(planned.approvalDigest).toBe(approved);
-      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: approved })).status).toBe("applied");
-      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
-      const invocations = events.filter(event => event.kind === "template-transaction-invocation");
-      expect(invocations).toHaveLength(2);
-      expect(new Set(invocations.map(event => event.invocationId)).size).toBe(2);
-      expect(events.filter(event => event.kind === "template-create" && event.outcome === "success")).toHaveLength(1);
-      expect(events.find(event => event.kind === "template-create")).toMatchObject({
-        templateId: "daily",
-        inputSignature: manifest.proposed.inputDigest,
-        templateSignature: manifest.proposed.resolvedTemplates[0]?.templateSignature,
-        packageVersion: expect.any(String),
-      });
-      expect(manifest.approvalDigest).toBe(approved);
-    } finally { await cleanup(item); }
+    const manifest = publication();
+    const before = await files(item.vault);
+    const receipt = await executeTemplateTransaction(item.vault, manifest, { dryRun: true });
+    expect(receipt).toMatchObject({ status: "planned", approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest });
+    expect(await files(item.vault)).toEqual(before);
+    expect(existsSync(item.runtime)).toBe(false);
+    expect(events(item)).toEqual([]);
+    expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({ admission: "clear", state: "absent", marker: null });
+    await untouched(item.vault);
   });
 
-  it("records dry-run and rejected calls as invocation events only", async () => {
+  it("publishes the three controls and managed draft when the approved digest matches", async () => {
     const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      await executeTemplateTransaction(item.vault, manifest, { dryRun: true });
-      await executeTemplateTransaction(item.vault, manifest, { approvedDigest: digest("wrong") });
-      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
-      expect(events.map(event => [event.kind, event.outcome])).toEqual(expect.arrayContaining([
-        ["template-transaction-invocation", "success"],
-        ["template-transaction-invocation", "rejected"],
-      ]));
-      expect(events.every(event => event.kind === "template-transaction-invocation")).toBe(true);
-    } finally { await cleanup(item); }
-  });
-
-  it("records one row for every same-kind template mutation in a transaction", async () => {
-    const bindings = [binding("alpha", "Templates/OMS/alpha.md"), binding("beta", "Templates/OMS/beta.md")];
-    const item = await fixture(bindings);
-    try {
-      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
-      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
-      const moves = readRuntimeEvents({ vaultPath: item.vault }).events.filter(event => event.kind === "template-move");
-      expect(moves).toHaveLength(2);
-      expect(moves.map(event => event.templateId).sort()).toEqual(["alpha", "beta"]);
-      expect(new Set(moves.map(event => event.eventId)).size).toBe(2);
-      expect(new Set(moves.map(event => event.invocationId)).size).toBe(1);
-    } finally { await cleanup(item); }
-  });
-
-  it("creates through dry-run, approved apply, and exact read-back", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const before = await tree(item.vault);
-      const planned = await executeTemplateTransaction(item.vault, manifest, { dryRun: true });
-      expect(planned.status).toBe("planned");
-      expect(await tree(item.vault)).toEqual(before);
-      const applied = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(applied.status).toBe("applied");
-      expect(await readFile(path.join(item.vault, "Templates/OMS/daily.md"), "utf8")).toBe(TEMPLATE);
-      if (applied.status === "applied") expect(applied.verified.every(result => result.state === "present")).toBe(true);
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects a wrong approval before lock, marker, staging, or final bytes", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const before = await tree(item.vault);
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: digest("wrong") });
-      expect(rejectedCode(receipt)).toBe("MIGRATION_APPROVAL_MISMATCH");
-      expect(await tree(item.vault)).toEqual(before);
-      await expect(readdir(path.join(item.vault, ".oms/.template-transactions"))).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(readFile(path.join(item.vault, ".oms/template-migration.json"))).rejects.toMatchObject({ code: "ENOENT" });
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects missing apply approval and dry-run carrying approval without mutation", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const before = await tree(item.vault);
-      const missing = await executeTemplateTransaction(item.vault, manifest, {} as Parameters<typeof executeTemplateTransaction>[2]);
-      const mixed = await executeTemplateTransaction(item.vault, manifest, { dryRun: true, approvedDigest: manifest.approvalDigest } as Parameters<typeof executeTemplateTransaction>[2]);
-      expect(rejectedCode(missing)).toBe("MIGRATION_APPROVAL_MISMATCH");
-      expect(rejectedCode(mixed)).toBe("MIGRATION_APPROVAL_MISMATCH");
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects malformed v3 folder input as an invalid manifest without mutation", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const before = await tree(item.vault);
-      const malformed = {
-        ...manifest,
-        current: {
-          ...manifest.current,
-          input: { ...manifest.current.input, templateFolders: [{ path: "../escape" }] },
-        },
-      } as unknown as TemplateCompositionManifest;
-      expect(rejectedCode(await executeTemplateTransaction(item.vault, malformed, { dryRun: true }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
-  });
-
-  it.each(["regenerate", "unknown"])("rejects unsupported manifest mode %s despite a valid approval digest", async mode => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const before = await tree(item.vault);
-      const unsupported = { ...manifest, mode } as unknown as TemplateCompositionManifest;
-      expect(approvalDigest(
-        unsupported.proposed.inputDigest,
-        unsupported.operations,
-        unsupported.diagnostics,
-        unsupported,
-      )).toBe(manifest.approvalDigest);
-      expect(rejectedCode(await executeTemplateTransaction(item.vault, unsupported, {
-        approvedDigest: unsupported.approvalDigest,
-      }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects a manifest whose approved current-control preimage was replaced", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const before = await tree(item.vault);
-      const [policyControl, taxonomyControl, projectionControl] = manifest.controls;
-      const tampered = {
-        ...manifest,
-        controls: [
-          { ...policyControl, expectedCurrent: { state: "present", signature: digest("different old policy") } },
-          taxonomyControl,
-          projectionControl,
-        ],
-      } as TemplateCompositionManifest;
-      expect(rejectedCode(await executeTemplateTransaction(item.vault, tampered, { approvedDigest: manifest.approvalDigest }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
-  });
-
-  it("does not steal a live transaction lock", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const id = createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32);
-      const lock = path.join(item.vault, ".oms", ".template-transactions", id, "template-migration", "lock");
-      await mkdir(lock, { recursive: true });
-      await writeFile(path.join(lock, "owner.json"), `${JSON.stringify({ pid: process.pid, token: "live-owner" })}\n`);
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(rejectedCode(receipt)).toBe("MIGRATION_RETRY_MISMATCH");
-      expect(await readFile(path.join(lock, "owner.json"), "utf8")).toContain("live-owner");
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects stale control and source CAS with whole-tree equality", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const item = await fixture([current]);
-    try {
-      const change: TemplateSemanticChange = { mode: "update", templateId: current.templateId, binding: current, source: { path: current.sourcePath, bytes: encoder.encode(UPDATED), publication: "write" } };
-      const manifest = await compose(item, change);
-      await writeFile(path.join(item.vault, "Templates/OMS/note.md"), "external\n");
-      const before = await tree(item.vault);
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(rejectedCode(receipt)).toBe("MIGRATION_APPROVAL_MISMATCH");
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects stale control CAS with whole-tree equality", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      await writeFile(path.join(item.vault, ".oms/types.json"), "{}\n");
-      const before = await tree(item.vault);
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(rejectedCode(receipt)).toBe("MIGRATION_APPROVAL_MISMATCH");
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects stale expected input during composition without mutation", async () => {
-    const item = await fixture();
-    try {
-      const before = await tree(item.vault);
-      const stale: TemplateCompositionOptions = {
-        ...item.options,
-        expected: { ...item.options.expected, input: digest("stale-input") },
-      };
-      await expect(buildTemplateCompositionManifest(item.vault, createChange(), stale)).rejects.toThrow(/input CAS does not match/);
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
-  });
-
-  it("updates content at the same path using source CAS", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const item = await fixture([current]);
-    try {
-      const manifest = await compose(item, { mode: "update", templateId: current.templateId, binding: current, source: { path: current.sourcePath, bytes: encoder.encode(UPDATED), publication: "write" } });
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(receipt.status).toBe("applied");
-      expect(await readFile(path.join(item.vault, current.sourcePath), "utf8")).toBe(UPDATED);
-    } finally { await cleanup(item); }
-  });
-
-  it("moves by oms-managed-rename and removes the old source", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const proposed = binding("note", "Archive/note.md", "registered-existing");
-    const item = await fixture([current], {}, ["Archive"]);
-    try {
-      const manifest = await compose(item, { mode: "update", templateId: current.templateId, binding: proposed, source: { path: proposed.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" }, moveStrategy: "oms-managed-rename" });
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(receipt.status).toBe("applied");
-      await expect(readFile(path.join(item.vault, current.sourcePath))).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await readFile(path.join(item.vault, proposed.sourcePath), "utf8")).toBe(TEMPLATE);
-    } finally { await cleanup(item); }
-  });
-
-  it("registers an already-moved source without rewriting it", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const proposed = binding("note", "External/note.md", "registered-existing");
-    const item = await fixture([current], {}, ["External"]);
-    try {
-      await rm(path.join(item.vault, current.sourcePath));
-      await mkdir(path.dirname(path.join(item.vault, proposed.sourcePath)), { recursive: true });
-      await writeFile(path.join(item.vault, proposed.sourcePath), TEMPLATE);
-      const options: TemplateCompositionOptions = {
-        ...item.options,
-        expected: {
-          ...item.options.expected,
-          sources: [{ templateId: current.templateId, path: current.sourcePath, expected: { state: "absent" } }],
-        },
-      };
-      const manifest = await buildTemplateCompositionManifest(item.vault, { mode: "update", templateId: current.templateId, binding: proposed, source: { path: proposed.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "verify-existing" }, moveStrategy: "register-already-moved" }, options);
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(receipt.status).toBe("applied");
-      expect(await readFile(path.join(item.vault, proposed.sourcePath), "utf8")).toBe(TEMPLATE);
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects a move collision during composition without mutation", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const proposed = binding("note", "Archive/note.md", "registered-existing");
-    const item = await fixture([current], {}, ["Archive"]);
-    try {
-      await mkdir(path.dirname(path.join(item.vault, proposed.sourcePath)), { recursive: true });
-      await writeFile(path.join(item.vault, proposed.sourcePath), "collision\n");
-      const before = await tree(item.vault);
-      await expect(compose(item, { mode: "update", templateId: current.templateId, binding: proposed, source: { path: proposed.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" }, moveStrategy: "oms-managed-rename" })).rejects.toThrow(/collides/);
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
-  });
-
-  it("reclassifies at the same path through controls only", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const item = await fixture([current]);
-    try {
-      const manifest = await compose(item, { mode: "reclassify", templateId: current.templateId, toClass: "registered-existing" });
-      const signature = manifest.current.resolvedTemplates[0]!.templateSignature;
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(receipt.status).toBe("applied");
-      if (receipt.status === "applied") expect(receipt.writtenPaths).not.toContain(current.sourcePath);
-      expect(await readFile(path.join(item.vault, current.sourcePath), "utf8")).toBe(TEMPLATE);
-      expect(manifest.proposed.resolvedTemplates[0]!.templateSignature).toBe(signature);
-      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
-      expect(events).toContainEqual(expect.objectContaining({
-        kind: "template-reclassify",
-        outcome: "success",
-        templateId: "note",
-        templateSignature: signature,
-      }));
-      expect(events.some(event => event.kind === "template-create")).toBe(false);
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects reclassify path mismatch and returns unchanged for same class", async () => {
-    const registered = binding("note", "External/custom.md", "registered-existing");
-    const item = await fixture([registered]);
-    try {
-      const before = await tree(item.vault);
-      await expect(compose(item, { mode: "reclassify", templateId: registered.templateId, toClass: "managed-default" })).rejects.toThrow(/TEMPLATE_RECLASSIFY_PATH_MISMATCH/);
-      expect(await tree(item.vault)).toEqual(before);
-      const manifest = await compose(item, { mode: "reclassify", templateId: registered.templateId, toClass: "registered-existing" });
-      expect((await executeTemplateTransaction(item.vault, manifest, { dryRun: true })).status).toBe("unchanged");
-    } finally { await cleanup(item); }
-  });
-
-  it("returns unchanged for relocate-folder N=0", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
-      expect(manifest.moves).toEqual([]);
-      expect((await executeTemplateTransaction(item.vault, manifest, { dryRun: true })).status).toBe("unchanged");
-      expect(readRuntimeEvents({ vaultPath: item.vault }).events).toContainEqual(
-        expect.objectContaining({ kind: "template-transaction-invocation", outcome: "unchanged" }),
-      );
-    } finally { await cleanup(item); }
-  });
-
-  it("relocates two managed templates in deterministic order and leaves registered-existing untouched", async () => {
-    const bindings = [binding("beta", "Templates/OMS/beta.md"), binding("alpha", "Templates/OMS/alpha.md"), binding("external", "External/external.md", "registered-existing")];
-    const item = await fixture(bindings);
-    try {
-      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
-      expect(manifest.moves.map(move => move.templateId)).toEqual(["alpha", "beta"]);
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(receipt.status).toBe("applied");
-      expect(await readFile(path.join(item.vault, "Moved/alpha.md"), "utf8")).toBe(TEMPLATE);
-      expect(await readFile(path.join(item.vault, "Moved/alpha.md"), "utf8")).toBe(TEMPLATE);
-      expect(await readFile(path.join(item.vault, "Moved/beta.md"), "utf8")).toBe(TEMPLATE);
-      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
-      expect(events.filter(event => event.kind === "template-move").map(event => event.templateId).sort()).toEqual(["alpha", "beta"]);
-      expect(events.some(event => event.kind === "template-create")).toBe(false);
-      expect(events.some(event => event.templateId === "external" && event.kind !== "template-transaction-invocation")).toBe(false);
-    } finally { await cleanup(item); }
-  });
-
-  it("retains relocation no-op moves without publishing source bytes", async () => {
-    const current = binding("note", "Templates/OMS/note.md");
-    const item = await fixture([current]);
-    try {
-      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Templates/OMS") });
-      expect(manifest.moves).toMatchObject([{ templateId: "note", strategy: "no-op" }]);
-      expect((await executeTemplateTransaction(item.vault, manifest, { dryRun: true })).status).toBe("unchanged");
-    } finally { await cleanup(item); }
-  });
-
-  it.each([
-    ["new-source publish", "write", "Moved/alpha.md", 1],
-    ["control replace", "write", ".oms/template-policy.json", 1],
-    ["old-source delete", "remove", "Templates/OMS/alpha.md", 0],
-    ["read-back", "read", "Moved/alpha.md", 0],
-  ] as const)("rolls back relocate-folder failure at %s and retries identically", async (_boundary, operation, suffix, skip) => {
-    const bindings = [binding("alpha", "Templates/OMS/alpha.md"), binding("beta", "Templates/OMS/beta.md")];
-    const item = await fixture(bindings);
-    try {
-      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
-      const before = await tree(item.vault);
-      inject(operation, suffix, skip);
-      const failed = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(rejectedCode(failed)).toBe("MIGRATION_PUBLISHED_OUTPUT_CONFLICT");
-      expect(await tree(item.vault)).toEqual(before);
-      const retried = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(retried.status).toBe("applied");
-      if (retried.status === "applied") expect(retried.outputDigest).toBe(manifest.outputDigest);
-    } finally { await cleanup(item); }
-  });
-
-  it("returns inconsistent and retains fail-closed state when rollback fails", async () => {
-    const bindings = [binding("alpha", "Templates/OMS/alpha.md"), binding("beta", "Templates/OMS/beta.md")];
-    const item = await fixture(bindings);
-    try {
-      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
-      inject("write", ".oms/template-policy.json", 1);
-      injectSecondary("remove", "Moved/beta.md");
-      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(receipt.status).toBe("inconsistent");
-      expect(await readFile(path.join(item.vault, ".oms/template-migration.json"), "utf8")).toContain('"status":"in-progress"');
-    } finally { await cleanup(item); }
-  });
-
-  it("resumes an identical in-progress relocation to the same output digest", async () => {
-    const bindings = [binding("alpha", "Templates/OMS/alpha.md"), binding("beta", "Templates/OMS/beta.md")];
-    const item = await fixture(bindings);
-    try {
-      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
-      const transactionId = createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32);
-      inject("write", ".oms/template-policy.json", 1);
-      injectSecondary("remove", "Moved/beta.md");
-      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("inconsistent");
-      const durable = durableDirectory(item.vault, transactionId);
-      expect(await readdir(path.join(durable, "staging"))).not.toHaveLength(0);
-      const receipt = await resumeTemplateTransaction(item.vault, transactionId, manifest.approvalDigest);
-      expect(receipt.status).toBe("applied");
-      if (receipt.status === "applied") {
-        expect(receipt.transactionId).toBe(transactionId);
-        expect(receipt.outputDigest).toBe(manifest.outputDigest);
-      }
-      expect(await readFile(path.join(item.vault, "Moved/beta.md"), "utf8")).toBe(TEMPLATE);
-      await expect(readdir(path.join(durable, "staging"))).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await readFile(path.join(durable, "plan.json"), "utf8")).toContain(transactionId);
-      expect(await readFile(path.join(durable, "progress.json"), "utf8")).toContain("Moved/beta.md");
-    } finally { await cleanup(item); }
-  });
-
-  it("resumes a failed current JSON control transaction while leaving legacy YAML untouched", async () => {
-    const bindings = [binding("alpha", "Templates/OMS/alpha.md"), binding("beta", "Templates/OMS/beta.md")];
-    const item = await fixture(bindings);
-    try {
-      const yamlPath = path.join(item.vault, ".oms", "taxonomy.yaml");
-      await writeFile(yamlPath, "folders: {}\n");
-      const manifest = await compose(item, { mode: "relocate-folder", templateFolder: folder("Moved") });
-      const transactionId = createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32);
-
-      inject("write", ".oms/template-policy.json", 1);
-      injectSecondary("remove", "Moved/beta.md");
-      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("inconsistent");
-      expect(await readFile(yamlPath, "utf8")).toBe("folders: {}\n");
-
-      const receipt = await resumeTemplateTransaction(item.vault, transactionId, manifest.approvalDigest);
-      expect(receipt.status).toBe("applied");
-      if (receipt.status === "applied") {
-        expect(receipt.transactionId).toBe(transactionId);
-        expect(receipt.outputDigest).toBe(manifest.outputDigest);
-        expect(receipt.markerState).toBe("complete");
-      }
-      expect(await readFile(path.join(item.vault, ".oms", "taxonomy.json"), "utf8")).toBe(TAXONOMY);
-      expect(await readFile(yamlPath, "utf8")).toBe("folders: {}\n");
-    } finally { await cleanup(item); }
-  });
-
-  it("keeps completed migration, routine mutation, and backfill marker families independent", async () => {
-    const item = await fixture();
-    try {
-      const created = await compose(item, createChange());
-      expect((await executeTemplateTransaction(item.vault, created, { approvedDigest: created.approvalDigest })).status).toBe("applied");
-      const migrationHistory = await readFile(path.join(item.vault, ".oms/template-migration.json"), "utf8");
-
-      const current = created.proposed.bindings[0]!;
-      const updated = await buildTemplateCompositionManifest(item.vault, {
-        mode: "update",
-        templateId: current.templateId,
-        binding: current,
-        source: { path: current.sourcePath, bytes: encoder.encode(UPDATED), publication: "write" },
-      }, nextOptions(created));
-      const mutationMarker: TemplateTransactionMarkerPath = TEMPLATE_MUTATION_MARKER_PATH;
-      const mutationApplied = await executeTemplateTransaction(item.vault, updated, { approvedDigest: updated.approvalDigest }, mutationMarker);
-      expect(mutationApplied.status).toBe("applied");
-      expect(await readFile(path.join(item.vault, ".oms/template-migration.json"), "utf8")).toBe(migrationHistory);
-      expect(await readFile(path.join(item.vault, mutationMarker), "utf8")).toContain('"status":"complete"');
-      if (mutationApplied.status === "applied") expect(mutationApplied.writtenPaths).not.toContain(mutationMarker);
-
-      const backfilled = await buildTemplateCompositionManifest(item.vault, {
-        mode: "update",
-        templateId: current.templateId,
-        binding: current,
-        source: { path: current.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" },
-      }, nextOptions(updated));
-      const backfillMarker: TemplateTransactionMarkerPath = ".oms/template-backfill.json";
-      expect((await executeTemplateTransaction(item.vault, backfilled, { approvedDigest: backfilled.approvalDigest }, backfillMarker)).status).toBe("applied");
-      expect(await readFile(path.join(item.vault, backfillMarker), "utf8")).toContain('"status":"complete"');
-    } finally { await cleanup(item); }
-  });
-
-  it("retries each selected marker family independently", async () => {
-    for (const marker of [
-      ".oms/template-migration.json",
-      ".oms/template-backfill.json",
+    const manifest = publication();
+    const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt).toMatchObject({
+      status: "applied",
+      transactionId: publicationId(manifest.approvalDigest, manifest.outputDigest),
+      approvalDigest: manifest.approvalDigest,
+      outputDigest: manifest.outputDigest,
+      writtenPaths: [POLICY, TAXONOMY, PROJECTION, DRAFT],
+      markerState: "complete",
+    });
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V2);
+    expect(await text(item.vault, TAXONOMY)).toBe(TAXONOMY_V2);
+    expect(await text(item.vault, PROJECTION)).toBe(PROJECTION_V2);
+    expect(await text(item.vault, DRAFT)).toBe(DRAFT_V2);
+    await untouched(item.vault);
+    const id = publicationId(manifest.approvalDigest, manifest.outputDigest);
+    expect(await files(item.vault)).toEqual([
+      ".obsidian/types.json",
+      `.oms/.template-transactions/${id}/plan.json`,
+      ".oms/taxonomy.json",
+      ".oms/template-policy.json",
       ".oms/template-transaction.json",
-    ] as const) {
-      const item = await fixture();
-      try {
-        const manifest = await compose(item, createChange());
-        const first = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest }, marker);
-        const before = await tree(item.vault);
-        const retry = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest }, marker);
-        expect(first.status).toBe("applied");
-        expect(retry.status).toBe("already-complete");
-        expect(await tree(item.vault)).toEqual(before);
-      } finally { await cleanup(item); }
-    }
+      ".oms/templates/default.md",
+      ".oms/types.json",
+      "Notes/plain.md",
+      "Templates/source.md",
+    ]);
+    expect(await inspectTemplateTransactionMarker(item.vault)).toMatchObject({ admission: "clear", state: "complete" });
+    const committed = events(item);
+    expect(committed.filter(event => event.kind === "template-contract-commit")).toHaveLength(1);
+    expect(committed.filter(event => event.kind === "template-contract-commit-control")).toHaveLength(4);
+    expect(committed.every(event => event.outcome === "success" && event.inputSignature === manifest.approvalDigest)).toBe(true);
   });
 
-  it.each([".oms/arbitrary.json", ".oms/template-regenerate.json"])("rejects unapproved marker path %s at runtime", async marker => {
+  it("rejects a changed control CAS preimage without writing", async () => {
     const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const before = await tree(item.vault);
-      await expect(executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest }, marker as unknown as TemplateTransactionMarkerPath)).rejects.toThrow(/marker path is not approved/);
-      expect(readRuntimeEvents({ vaultPath: item.vault }).events).toContainEqual(
-        expect.objectContaining({ kind: "template-transaction-invocation", outcome: "failure" }),
-      );
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
+    const manifest = publication();
+    await writeFile(path.join(item.vault, POLICY), "control-changed");
+    const before = await files(item.vault);
+    const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt.status).toBe("rejected");
+    expect(code(receipt)).toBe("CONTRACT_UNVERIFIABLE");
+    expect(await text(item.vault, POLICY)).toBe("control-changed");
+    expect(await files(item.vault)).toEqual(before);
+    expect(existsSync(item.runtime)).toBe(false);
+    await untouched(item.vault);
   });
 
-  it("returns already-complete with stable identity and zero retry mutation", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const first = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(first.status).toBe("applied");
-      if (first.status !== "applied") throw new Error("expected applied transaction");
-      const durable = durableDirectory(item.vault, first.transactionId);
-      await expect(readdir(path.join(durable, "staging"))).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await readFile(path.join(durable, "plan.json"), "utf8")).toContain(first.transactionId);
-      expect(await readFile(path.join(durable, "progress.json"), "utf8")).toContain("Templates/OMS/daily.md");
-      const before = await tree(item.vault);
-      const retry = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(retry.status).toBe("already-complete");
-      if (first.status === "applied" && retry.status === "already-complete") {
-        expect(retry.transactionId).toBe(first.transactionId);
-        expect(retry.outputDigest).toBe(first.outputDigest);
-      }
-      const events = readRuntimeEvents({ vaultPath: item.vault }).events;
-      expect(events.filter(event => event.kind === "template-create")).toHaveLength(1);
-      expect(events.filter(event => event.kind === "template-transaction-invocation")).toHaveLength(2);
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
+  it("rejects a changed managed draft CAS preimage without writing", async () => {
+    const item = await fixture(DRAFT_V1);
+    const manifest = publication({ drafts: [draft(DRAFT_V1, DRAFT_V2, "write")] });
+    await writeFile(path.join(item.vault, DRAFT), "draft-changed");
+    const before = await files(item.vault);
+    const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt.status).toBe("rejected");
+    expect(code(receipt)).toBe("MANAGED_TEMPLATE_DRIFT");
+    expect(await text(item.vault, DRAFT)).toBe("draft-changed");
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V1);
+    expect(await files(item.vault)).toEqual(before);
+    await untouched(item.vault);
   });
 
-  it("keeps a committed transaction successful when external journal append fails", async () => {
+  it("rejects a stale verify-only preimage and leaves an unchanged manifest untouched", async () => {
     const item = await fixture();
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-    const originalRuntimeRoot = process.env.OMS_RUNTIME_ROOT;
-    try {
-      process.env.OMS_RUNTIME_ROOT = item.vault;
-      const manifest = await compose(item, createChange());
+    const verified = publication({
+      policy: [POLICY_V1, POLICY_V1, "verify-only"],
+      taxonomy: [TAXONOMY_V1, TAXONOMY_V1, "verify-only"],
+      projection: [PROJECTION_V1, PROJECTION_V1, "verify-only"],
+      drafts: [],
+    });
+    const before = await files(item.vault);
+    expect((await executeTemplateTransaction(item.vault, verified, { approvedDigest: verified.approvalDigest })).status).toBe("unchanged");
+    expect(await files(item.vault)).toEqual(before);
+    expect(events(item)).toEqual([]);
+    await writeFile(path.join(item.vault, POLICY), "stale-preimage");
+    const receipt = await executeTemplateTransaction(item.vault, verified, { approvedDigest: verified.approvalDigest });
+    expect(receipt.status).toBe("rejected");
+    expect(code(receipt)).toBe("CONTRACT_UNVERIFIABLE");
+    expect(await text(item.vault, POLICY)).toBe("stale-preimage");
+    expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({ admission: "clear", state: "absent", marker: null });
+    await untouched(item.vault);
+  });
+
+  it("rejects a tampered approval digest, output digest, or proposed byte hash", async () => {
+    const item = await fixture();
+    const manifest = publication();
+    const before = await files(item.vault);
+    const tamperedApproval = { ...manifest, approvalDigest: digestBytes("tampered-approval") };
+    expect(code(await executeTemplateTransaction(item.vault, tamperedApproval, { approvedDigest: tamperedApproval.approvalDigest }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
+    const tamperedOutput = { ...manifest, outputDigest: digestBytes("tampered-output") };
+    expect(code(await executeTemplateTransaction(item.vault, tamperedOutput, { approvedDigest: manifest.approvalDigest }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
+    const tamperedBytes = {
+      ...manifest,
+      controls: [{ ...manifest.controls[0]!, proposed: { ...manifest.controls[0]!.proposed, signature: digestBytes("declared-lie") } }, manifest.controls[1]!, manifest.controls[2]!] as TemplateCompositionManifest["controls"],
+    };
+    expect(code(await executeTemplateTransaction(item.vault, tamperedBytes, { approvedDigest: manifest.approvalDigest }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
+    const incoherent = publication({ outputs: manifest.outputs.filter(output => output.finalVaultRelativePath !== POLICY) });
+    expect(code(await executeTemplateTransaction(item.vault, incoherent, { approvedDigest: incoherent.approvalDigest }))).toBe("TEMPLATE_TRANSACTION_MANIFEST_INVALID");
+    expect(await files(item.vault)).toEqual(before);
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V1);
+    await untouched(item.vault);
+  });
+
+  it("refuses ordinary notes, raw sources, and Obsidian type outputs", async () => {
+    const item = await fixture();
+    const before = await files(item.vault);
+    for (const illegal of ["Notes/plain.md", "Templates/source.md", ".obsidian/types.json"] as const) {
+      const body = publication();
+      const outputs = [...body.outputs, { finalVaultRelativePath: illegal, payloadDigest: digestBytes("illegal") }] as TemplateCompositionManifest["outputs"];
+      const { approvalDigest: _approval, outputDigest: _output, ...rest } = { ...body, outputs };
+      const manifest = seal(rest);
       const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(receipt.status).toBe("applied");
-      expect(await readFile(path.join(item.vault, "Templates/OMS/daily.md"), "utf8")).toBe(TEMPLATE);
-      expect(warning).toHaveBeenCalledWith(
-        expect.stringContaining("LEDGER_APPEND_FAILED"),
-        { code: "LEDGER_APPEND_FAILED" },
-      );
-    } finally {
-      if (originalRuntimeRoot === undefined) delete process.env.OMS_RUNTIME_ROOT;
-      else process.env.OMS_RUNTIME_ROOT = originalRuntimeRoot;
-      warning.mockRestore();
-      await cleanup(item);
+      expect(receipt.status).toBe("rejected");
+      expect(code(receipt)).toBe("TEMPLATE_SOURCE_UNSAFE");
     }
+    const sourced = publication();
+    const sourceDraft = draft(null, DRAFT_V2, "write", null, "Notes/plain.md" as ManagedTemplatePath);
+    const { approvalDigest: _approval, outputDigest: _output, ...rest } = { ...sourced, drafts: [sourceDraft] };
+    const manifest = seal(rest);
+    expect(code(await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest }))).toBe("TEMPLATE_SOURCE_UNSAFE");
+    expect(await files(item.vault)).toEqual(before);
+    await untouched(item.vault);
   });
 
-  it("surfaces committed staging cleanup failure without turning success into failure and retries cleanup on replay", async () => {
+  it("refuses a symlink in the staging path before any publication I/O", async () => {
     const item = await fixture();
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-    try {
-      const manifest = await compose(item, createChange());
-      const transactionId = createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32);
-      inject("remove", `${path.sep}staging`);
-      const applied = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(applied.status).toBe("applied");
-      expect(warning).toHaveBeenCalledWith(
-        expect.stringContaining(`Committed template transaction ${transactionId} could not remove staging payloads`),
-        { code: "TEMPLATE_TRANSACTION_STAGING_CLEANUP_FAILED" },
-      );
-      const durable = durableDirectory(item.vault, transactionId);
-      expect(await readdir(path.join(durable, "staging"))).not.toHaveLength(0);
-      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("already-complete");
-      await expect(readdir(path.join(durable, "staging"))).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await readFile(path.join(durable, "plan.json"), "utf8")).toContain(transactionId);
-    } finally {
-      warning.mockRestore();
-      await cleanup(item);
-    }
+    const manifest = publication();
+    const outside = await mkdtemp(path.join(tmpdir(), "oms-staging-outside-"));
+    roots.push(outside);
+    const sentinel = path.join(outside, "sentinel.txt");
+    await writeFile(sentinel, "SENTINEL");
+    const id = publicationId(manifest.approvalDigest, manifest.outputDigest);
+    const stagedPolicy = path.join(item.vault, ".oms", ".template-transactions", id, "staging", ".oms", "template-policy.json");
+    await mkdir(path.dirname(stagedPolicy), { recursive: true });
+    await symlink(sentinel, stagedPolicy);
+    const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt.status).toBe("rejected");
+    expect(code(receipt)).toBe("TEMPLATE_SOURCE_UNSAFE");
+    expect(await readFile(sentinel, "utf8")).toBe("SENTINEL");
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V1);
+    expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({ admission: "clear", state: "absent", marker: null });
+    await untouched(item.vault);
   });
 
-  it("materializes only a verified completed receipt for its approved digest", async () => {
+  it("leaves a reader-blocking marker when publication fails between controls", async () => {
     const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      const applied = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
-      expect(applied.status).toBe("applied");
-
-      const completed = await completedTemplateTransaction(item.vault, manifest.approvalDigest, {
-        inputDigest: manifest.proposed.inputDigest,
-        outputs: manifest.outputs.map((output) => ({ finalVaultRelativePath: output.finalVaultRelativePath })),
-      });
-
-      expect(completed?.transactionId).toBe(createHash("sha256").update(`${manifest.approvalDigest}\0${manifest.outputDigest}`).digest("hex").slice(0, 32));
-      expect(completed?.inputDigest).toBe(manifest.proposed.inputDigest);
-      expect(completed?.outputDigest).toBe(manifest.outputDigest);
-      expect(await completedTemplateTransaction(item.vault, digest("different"), {
-        inputDigest: manifest.proposed.inputDigest,
-        outputs: manifest.outputs.map((output) => ({ finalVaultRelativePath: output.finalVaultRelativePath })),
-      })).toBeNull();
-    } finally { await cleanup(item); }
+    const manifest = publication();
+    injectedFault.operation = "write";
+    injectedFault.suffix = ".oms/taxonomy.json";
+    injectedFault.skip = 1;
+    injectedFault.armed = true;
+    const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt.status).toBe("resume-required");
+    expect(code(receipt)).toBe("CONTRACT_TRANSACTION_IN_PROGRESS");
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V2);
+    expect(await text(item.vault, TAXONOMY)).toBe(TAXONOMY_V1);
+    expect(await text(item.vault, PROJECTION)).toBe(PROJECTION_V1);
+    await expect(text(item.vault, DRAFT)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await inspectTemplateTransactionMarker(item.vault)).toMatchObject({
+      admission: "blocked",
+      state: "in-progress",
+      marker: { status: "in-progress", transactionId: publicationId(manifest.approvalDigest, manifest.outputDigest), approvalDigest: manifest.approvalDigest },
+    });
+    expect(events(item)).toEqual([]);
+    await untouched(item.vault);
   });
 
-  it("rejects a completed transaction when only its input digest differs", async () => {
+  it("resumes a torn publication from the durable plan and disk hashes", async () => {
     const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
-      expect(await completedTemplateTransaction(item.vault, manifest.approvalDigest, {
-        inputDigest: digest("different-input"),
-        outputs: manifest.outputs.map((output) => ({ finalVaultRelativePath: output.finalVaultRelativePath })),
-      })).toBeNull();
-    } finally { await cleanup(item); }
+    const manifest = publication();
+    injectedFault.operation = "write";
+    injectedFault.suffix = ".oms/taxonomy.json";
+    injectedFault.skip = 1;
+    injectedFault.armed = true;
+    expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("resume-required");
+    expect(events(item)).toEqual([]);
+    const inspection = await inspectTemplateTransactionMarker(item.vault);
+    expect(inspection.state).toBe("in-progress");
+    const receipt = await resumeTemplateTransaction(item.vault, inspection.marker!.transactionId, manifest.approvalDigest);
+    expect(receipt).toMatchObject({ status: "applied", approvalDigest: manifest.approvalDigest, outputDigest: manifest.outputDigest, markerState: "complete" });
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V2);
+    expect(await text(item.vault, TAXONOMY)).toBe(TAXONOMY_V2);
+    expect(await text(item.vault, PROJECTION)).toBe(PROJECTION_V2);
+    expect(await text(item.vault, DRAFT)).toBe(DRAFT_V2);
+    expect(await inspectTemplateTransactionMarker(item.vault)).toMatchObject({ admission: "clear", state: "complete" });
+    expect(events(item).some(event => event.kind === "template-contract-commit" && event.outcome === "success")).toBe(true);
+    await untouched(item.vault);
+  });
+
+  it("refuses an external mutation during resume", async () => {
+    const item = await fixture();
+    const manifest = publication();
+    injectedFault.operation = "write";
+    injectedFault.suffix = ".oms/taxonomy.json";
+    injectedFault.skip = 1;
+    injectedFault.armed = true;
+    await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    await writeFile(path.join(item.vault, TAXONOMY), "external-mutation");
+    const inspection = await inspectTemplateTransactionMarker(item.vault);
+    const receipt = await resumeTemplateTransaction(item.vault, inspection.marker!.transactionId, manifest.approvalDigest);
+    expect(receipt.status).toBe("inconsistent");
+    expect(code(receipt)).toBe("TEMPLATE_TRANSACTION_INCONSISTENT");
+    expect(await text(item.vault, TAXONOMY)).toBe("external-mutation");
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V2);
+    expect(await text(item.vault, PROJECTION)).toBe(PROJECTION_V1);
+    expect(await inspectTemplateTransactionMarker(item.vault)).toMatchObject({ admission: "blocked", state: "in-progress" });
+    await untouched(item.vault);
+  });
+
+  it("keeps completed marker admission separate from managed draft freshness", async () => {
+    const item = await fixture();
+    const manifest = publication();
+    expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+    await writeFile(path.join(item.vault, DRAFT), "user edited draft");
+    expect(await inspectTemplateTransactionMarker(item.vault)).toMatchObject({ admission: "clear", state: "complete" });
+    expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("inconsistent");
+    expect(await text(item.vault, DRAFT)).toBe("user edited draft");
   });
 
   it.each([
-    [".oms/template-policy.json", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, ".oms/template-policy.json"), "drift"); }],
-    [".oms/taxonomy.json", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, ".oms/taxonomy.json"), "drift"); }],
-    [".oms/types.json", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, ".oms/types.json"), "drift"); }],
-    ["the requested source", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, requested), UPDATED); }],
-    ["a different registered source", async (vault: string, requested: TemplateSourcePath, other: TemplateSourcePath): Promise<void> => { await writeFile(path.join(vault, other), UPDATED); }],
-  ])("rejects a completed transaction after drift in %s", async (_name, mutate) => {
+    ["note", DRAFT],
+    ["default", DRAFT],
+    [null, ".oms/templates/note.md"],
+  ] as const)("rejects mismatched draft identity %s at %s", async (id, location) => {
     const item = await fixture();
-    try {
-      const first = await compose(item, createChange());
-      expect((await executeTemplateTransaction(item.vault, first, { approvedDigest: first.approvalDigest })).status).toBe("applied");
-      const other = first.proposed.bindings[0]!;
-      const requested = binding("second", "Templates/OMS/second.md", "managed-default");
-      const second = await buildTemplateCompositionManifest(item.vault, {
-        mode: "create",
-        binding: requested,
-        source: { path: requested.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" },
-      }, nextOptions(first));
-      expect((await executeTemplateTransaction(item.vault, second, { approvedDigest: second.approvalDigest })).status).toBe("applied");
-      await mutate(item.vault, requested.sourcePath, other.sourcePath);
-      expect(await completedTemplateTransaction(item.vault, second.approvalDigest, {
-        inputDigest: second.proposed.inputDigest,
-        outputs: second.outputs.map((output) => ({ finalVaultRelativePath: output.finalVaultRelativePath })),
-      })).toBeNull();
-    } finally { await cleanup(item); }
+    const manifest = publication({ drafts: [draft(null, DRAFT_V2, "write", id as TemplateId | null, location as ManagedTemplatePath)] });
+    expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("rejected");
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V1);
+    expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({ admission: "clear", state: "absent", marker: null });
+    await untouched(item.vault);
   });
 
-  it("replaces a completed marker with a distinct approved transaction", async () => {
+  it("rechecks outputs before returning already-complete", async () => {
     const item = await fixture();
+    const manifest = publication();
+    expect((await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest })).status).toBe("applied");
+    const afterApply = events(item).length;
+    const again = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(again).toMatchObject({ status: "already-complete", writtenPaths: [], markerState: "complete", approvalDigest: manifest.approvalDigest });
+    expect(events(item)).toHaveLength(afterApply);
+    await writeFile(path.join(item.vault, POLICY), "tampered-after-complete");
+    const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt.status).toBe("inconsistent");
+    expect(code(receipt)).toBe("TEMPLATE_TRANSACTION_INCONSISTENT");
+    expect(await text(item.vault, POLICY)).toBe("tampered-after-complete");
+    expect(events(item)).toHaveLength(afterApply);
+    await untouched(item.vault);
+  });
+
+  it("does not trust the declared current snapshot when the disk still matches expectedCurrent", async () => {
+    const item = await fixture();
+    const manifest = publication();
+    const lying = {
+      ...manifest,
+      controls: [
+        { ...manifest.controls[0]!, current: manifest.controls[0]!.proposed },
+        manifest.controls[1]!,
+        manifest.controls[2]!,
+      ] as TemplateCompositionManifest["controls"],
+    };
+    const receipt = await executeTemplateTransaction(item.vault, lying, { approvedDigest: lying.approvalDigest });
+    expect(receipt.status).toBe("applied");
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V2);
+    await untouched(item.vault);
+  });
+
+  it("does not publish while another live lock owner holds the transaction directory", async () => {
+    const item = await fixture();
+    const manifest = publication();
+    const id = publicationId(manifest.approvalDigest, manifest.outputDigest);
+    const lock = path.join(item.vault, ".oms", ".template-transactions", id, "lock");
+    await mkdir(lock, { recursive: true });
+    await writeFile(path.join(lock, "owner.json"), `${JSON.stringify({ pid: process.pid, token: "live-owner" })}\n`);
+    const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt.status).toBe("rejected");
+    expect(code(receipt)).toBe("CONTRACT_TRANSACTION_IN_PROGRESS");
+    expect(await text(item.vault, POLICY)).toBe(POLICY_V1);
+    expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({ admission: "clear", state: "absent", marker: null });
+    await untouched(item.vault);
+  });
+
+  it("blocks an invalid marker and admits only a missing marker", async () => {
+    const item = await fixture();
+    expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({ admission: "clear", state: "absent", marker: null });
+    await writeFile(path.join(item.vault, TEMPLATE_TRANSACTION_MARKER_PATH), "{\"status\":\"in-progress\"}\n");
+    expect(await inspectTemplateTransactionMarker(item.vault)).toEqual({ admission: "blocked", state: "invalid", marker: null });
+    const manifest = publication();
+    const before = await text(item.vault, POLICY);
+    const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
+    expect(receipt.status).toBe("rejected");
+    expect(code(receipt)).toBe("CONTRACT_TRANSACTION_IN_PROGRESS");
+    expect(await text(item.vault, POLICY)).toBe(before);
+    await untouched(item.vault);
+  });
+
+  it("keeps an applied publication when the external journal append fails", async () => {
+    const item = await fixture();
+    const manifest = publication();
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const append = vi.spyOn(eventJournal, "appendRuntimeEvent").mockImplementation(() => {
+      throw new Error("LEDGER_APPEND_FAILED: injected");
+    });
     try {
-      const created = await compose(item, createChange());
-      expect((await executeTemplateTransaction(item.vault, created, { approvedDigest: created.approvalDigest })).status).toBe("applied");
-      const current = created.proposed.bindings[0]!;
-      const updated = await buildTemplateCompositionManifest(item.vault, {
-        mode: "update",
-        templateId: current.templateId,
-        binding: current,
-        source: { path: current.sourcePath, bytes: encoder.encode(UPDATED), publication: "write" },
-      }, nextOptions(created));
-      const receipt = await executeTemplateTransaction(item.vault, updated, { approvedDigest: updated.approvalDigest });
+      const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });
       expect(receipt.status).toBe("applied");
-      expect(await readFile(path.join(item.vault, ".oms/template-migration.json"), "utf8")).toContain(`"transactionId":"${createHash("sha256").update(`${updated.approvalDigest}\0${updated.outputDigest}`).digest("hex").slice(0, 32)}"`);
-    } finally { await cleanup(item); }
-  });
-
-  it("fails closed for a malformed active marker before publication", async () => {
-    const item = await fixture();
-    try {
-      const manifest = await compose(item, createChange());
-      await writeFile(path.join(item.vault, ".oms/template-migration.json"), "{\"status\":\"in-progress\"}\n");
-      const before = await tree(item.vault);
-      expect(rejectedCode(await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest }))).toBe("migration-incomplete");
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); }
-  });
-
-  it("rejects symlink escape and hidden/internal template source paths", async () => {
-    const item = await fixture([], {}, ["Templates"]);
-    const outside = await mkdtemp(path.join(tmpdir(), "oms-outside-"));
-    try {
-      await writeFile(path.join(outside, "escape.md"), TEMPLATE);
-      await mkdir(path.join(item.vault, "Templates"), { recursive: true });
-      await symlink(path.join(outside, "escape.md"), path.join(item.vault, "Templates", "escape.md"));
-      const escaped = binding("escape", "Templates/escape.md", "registered-existing");
-      const before = await tree(item.vault);
-      await expect(compose(item, { mode: "create", binding: escaped, source: { path: escaped.sourcePath, bytes: encoder.encode(TEMPLATE), publication: "write" } })).rejects.toThrow(/TEMPLATE_SOURCE_UNSAFE/);
-      expect(() => normalizeTemplateSourcePath(".oms/template-policy.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
-      expect(() => normalizeTemplateSourcePath(".template-transactions/stage.md")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
-      expect(await tree(item.vault)).toEqual(before);
-    } finally { await cleanup(item); await rm(outside, { recursive: true, force: true }); }
+      expect(await text(item.vault, POLICY)).toBe(POLICY_V2);
+      expect(warning).toHaveBeenCalled();
+      expect(append).toHaveBeenCalled();
+    } finally {
+      append.mockRestore();
+      warning.mockRestore();
+    }
+    await untouched(item.vault);
   });
 });

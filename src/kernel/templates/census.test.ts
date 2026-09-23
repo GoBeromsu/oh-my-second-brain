@@ -1,648 +1,285 @@
-import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { dirname, join, relative } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
-const descriptorRead = vi.hoisted(() => ({
-  mode: "none" as "none" | "short" | "error" | "grow" | "vanish",
-  target: "",
-  reads: 0,
-  closes: 0,
-}));
+import { digestBytes } from "./canonical.js";
+import { buildTemplateInterview } from "./interview.js";
+import { parseTemplatePolicy, serializeDerivedProjection } from "./policy.js";
+import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "./resolver.js";
+import { MAX_TEMPLATE_SOURCE_BYTES, templateCensus } from "./census.js";
 
-const folderScan = vi.hoisted(() => ({
-  mode: "none" as "none" | "error",
-  target: "",
-}));
-
-vi.mock("node:fs/promises", async importOriginal => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...actual,
-    readdir: async (...args: Parameters<typeof actual.readdir>) => {
-      if (folderScan.mode === "error" && folderScan.target !== "") {
-        const openedPath = String(args[0]);
-        const canonicalOpenedPath = await actual.realpath(openedPath).catch(() => openedPath);
-        const canonicalTargetPath = await actual.realpath(folderScan.target).catch(() => folderScan.target);
-        if (canonicalOpenedPath === canonicalTargetPath) throw new Error("injected directory scan failure");
-      }
-      return actual.readdir(...args);
-    },
-    open: async (...args: Parameters<typeof actual.open>) => {
-      const handle = await actual.open(...args);
-      if (descriptorRead.target === "") return handle;
-      const openedPath = String(args[0]);
-      const canonicalOpenedPath = await actual.realpath(openedPath).catch(() => openedPath);
-      const canonicalTargetPath = await actual.realpath(descriptorRead.target).catch(() => descriptorRead.target);
-      if (canonicalTargetPath !== canonicalOpenedPath) return handle;
-      const read = async (
-        buffer: Buffer,
-        offset: number,
-        length: number,
-        position: number | null,
-      ) => {
-        descriptorRead.reads += 1;
-        if (descriptorRead.mode === "error") throw new Error("injected descriptor read failure");
-        if (descriptorRead.mode === "grow" && descriptorRead.reads === 1) {
-          const result = await handle.read(buffer, offset, length, position);
-          await actual.appendFile(String(args[0]), Buffer.from([0]));
-          return result;
-        }
-        if (descriptorRead.mode === "vanish" && descriptorRead.reads === 1) {
-          const result = await handle.read(buffer, offset, length, position);
-          await actual.unlink(String(args[0]));
-          return result;
-        }
-        if (descriptorRead.mode !== "short") return handle.read(buffer, offset, length, position);
-        return handle.read(buffer, offset, Math.max(1, Math.ceil(length / 2)), position);
-      };
-      const close = async () => {
-        descriptorRead.closes += 1;
-        return handle.close();
-      };
-      return new Proxy(handle, {
-        get(target, property) {
-          if (property === "read") return read;
-          if (property === "close") return close;
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
-    },
-  };
-});
-
-import { proposedTemplateId, templateCensus, type CensusPriorEntry } from "./census.js";
-import { deriveContentFormatContract } from "./content-contract.js";
-import { normalizeTemplateFolderPath, normalizeTemplateSourcePath } from "./paths.js";
-import { MAX_TEMPLATE_SOURCE_BYTES } from "./renderer.js";
-import type { Digest, TemplateBinding, TemplatePolicy } from "./types.js";
-
+const encoder = new TextEncoder();
 const roots: string[] = [];
-const folder = normalizeTemplateFolderPath("Templates");
 
-function policy(bindings: readonly TemplateBinding[] = []): TemplatePolicy {
+function layer(templatePath: string, markdown: string, extra: Record<string, unknown> = {}) {
   return {
-    version: 3,
-    templateFolders: [{ path: folder }],
-    base: { fields: {} },
-    contracts: {},
-    templates: Object.fromEntries(bindings.map(binding => [binding.templateId, binding])),
+    templatePath,
+    approvedMarkdown: markdown,
+    approvedMarkdownDigest: digestBytes(markdown),
+    fields: {},
+    headings: [],
+    semanticCriteria: [],
+    ...extra,
   };
 }
 
-function binding(templateId: string, sourcePath: string): TemplateBinding {
-  return {
-    templateId: templateId as TemplateBinding["templateId"],
-    destinationClass: "registered-existing",
-    renderer: "none",
-    sourceFolder: folder,
-    sourcePath: normalizeTemplateSourcePath(sourcePath),
-    contract: templateId,
-    naming: "{{slug}}.md",
-  };
+async function vault(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "oms-template-census-"));
+  roots.push(root);
+  return root;
 }
 
-async function fixture(): Promise<string> {
-  const vault = await mkdtemp(join(tmpdir(), "oms-template-census-"));
-  roots.push(vault);
-  await mkdir(join(vault, "Templates"), { recursive: true });
-  return vault;
-}
-
-async function put(vault: string, path: string, content: string | Uint8Array): Promise<void> {
-  const absolute = join(vault, path);
-  await mkdir(join(absolute, ".."), { recursive: true });
+async function put(root: string, path: string, content: string | Uint8Array): Promise<void> {
+  const absolute = join(root, path);
+  await mkdir(dirname(absolute), { recursive: true });
   await writeFile(absolute, content);
 }
 
-function priorOf(result: Awaited<ReturnType<typeof templateCensus>>): CensusPriorEntry[] {
-  return result.entries.flatMap(entry => entry.templateId === undefined
-    ? []
-    : [{ sourcePath: entry.sourcePath, templateId: entry.templateId, signature: entry.signature, signatureVerified: true }]);
+async function installApproved(sourceDigest: Uint8Array, files: Readonly<Record<string, string | Uint8Array>> = {}): Promise<string> {
+  const root = await vault();
+  const policy = {
+    version: 4,
+    properties: {},
+    default: layer(".oms/templates/default.md", ""),
+    templates: {
+      literature: layer(".oms/templates/literature.md", "", {
+        templateId: "literature",
+        source: {
+          path: "Sources/literature.md",
+          identity: "literature-source",
+          rawDigest: digestBytes(sourceDigest),
+        },
+      }),
+    },
+  };
+  const policyText = JSON.stringify(policy);
+  const taxonomyText = "{}";
+  const policyBytes = encoder.encode(policyText);
+  const taxonomyBytes = encoder.encode(taxonomyText);
+  const generation = controlGenerationDigest(policyBytes, taxonomyBytes);
+  const projection = serializeDerivedProjection({
+    version: "oms.types.v2",
+    generatedFrom: generation,
+    managed: expectedProjectionManaged(parseTemplatePolicy(policyText), taxonomyRouting(".oms/taxonomy.json", taxonomyBytes), generation),
+  });
+  await put(root, ".oms/template-policy.json", policyText);
+  await put(root, ".oms/taxonomy.json", taxonomyText);
+  await put(root, ".oms/types.json", projection);
+  await put(root, ".oms/templates/default.md", "");
+  await put(root, ".oms/templates/literature.md", "");
+  for (const [path, content] of Object.entries(files)) await put(root, path, content);
+  return root;
 }
 
-const body = "---\ntitle: Note\n---\nbody\n";
-
-function sha(value: string): Digest {
-  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}` as Digest;
+async function signature(root: string): Promise<string> {
+  const rows: string[] = [];
+  async function walk(directory: string): Promise<void> {
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    for (const entry of entries) {
+      const full = join(directory, entry.name);
+      const name = relative(root, full).replaceAll("\\", "/");
+      if (entry.isSymbolicLink()) rows.push(`link ${name}`);
+      else if (entry.isDirectory()) {
+        rows.push(`dir ${name}`);
+        await walk(full);
+      } else if (entry.isFile()) rows.push(`file ${name} ${digestBytes(new Uint8Array(await readFile(full)))}`);
+      else rows.push(`other ${name}`);
+    }
+  }
+  await walk(root);
+  return rows.join("\n");
 }
 
 afterEach(async () => {
-  descriptorRead.mode = "none";
-  descriptorRead.target = "";
-  descriptorRead.reads = 0;
-  descriptorRead.closes = 0;
-  folderScan.mode = "none";
-  folderScan.target = "";
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-describe("template census", () => {
-  it("exports the canonical stable Unicode template-id derivation", () => {
-    expect(proposedTemplateId("Templates/Daily Note.template.md")).toBe("daily-note");
-    expect(proposedTemplateId("Templates/zt-cite.eta.md")).toBe("zt-cite");
-    expect(proposedTemplateId("Templates/한글 노트.md")).toBe("한글-노트");
-    expect(proposedTemplateId("Templates/---.md")).toBeNull();
+describe("raw template census", () => {
+  it("preserves raw Templater text, a BOM, and CRLF without parsing or executing it", async () => {
+    const root = await vault();
+    const bytes = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from("line\r\n<% tp.file.title %>\r\n${Date.now()}\r\n", "utf8"),
+    ]);
+    await put(root, "Templates/raw.md", bytes);
+    const census = await templateCensus(root, {
+      includeConfiguredPaths: false,
+      selections: [{ path: "Templates", kind: "folder" }],
+    });
+    expect(census.authority).toBe("absent");
+    expect(census.sources).toHaveLength(1);
+    expect(census.sources[0]?.text).toBe("\uFEFFline\r\n<% tp.file.title %>\r\n${Date.now()}\r\n");
+    expect(census.sources[0]?.rawDigest).toBe(digestBytes(bytes));
+    expect(census.sources[0]?.text).toContain("<% tp.file.title %>");
+    expect(census.bindings).toEqual([]);
   });
 
-  it("reports add, edit, and delete transitions without writing OMS controls", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/note.md", body);
-    const added = await templateCensus(vault, policy());
-    expect(added.entries.map(entry => entry.sourcePath)).toEqual(["Templates/note.md"]);
-    expect(added.diffs).toEqual([expect.objectContaining({ kind: "added", sourcePath: "Templates/note.md", templateId: "note" })]);
-    expect(existsSync(join(vault, ".oms"))).toBe(false);
+  it("treats a missing policy as absent authority and an unreadable policy as invalid", async () => {
+    const absent = await vault();
+    await put(absent, ".oms/taxonomy.json", "{}");
+    const absentCensus = await templateCensus(absent, { includeConfiguredPaths: false });
+    expect(absentCensus.authority).toBe("absent");
+    expect(absentCensus.approvedPolicy).toBeNull();
+    expect(absentCensus.generationDigest).toBeNull();
+    expect(absentCensus.diagnostics.some(item => item.code === "CONTRACT_UNVERIFIABLE")).toBe(false);
 
-    const prior = priorOf(added);
-    await put(vault, "Templates/note.md", body.replace("Note", "Edited"));
-    const edited = await templateCensus(vault, policy(), prior);
-    expect(edited.diffs).toEqual([expect.objectContaining({ kind: "edited", sourcePath: "Templates/note.md", templateId: "note" })]);
+    const invalid = await vault();
+    await put(invalid, ".oms/template-policy.json", "{");
+    const invalidCensus = await templateCensus(invalid, { includeConfiguredPaths: false });
+    expect(invalidCensus.authority).toBe("invalid");
+    expect(invalidCensus.approvedPolicy).toBeNull();
+    expect(invalidCensus.diagnostics.some(item => item.code === "CONTRACT_UNVERIFIABLE")).toBe(true);
+    expect(invalidCensus.censusDigest).not.toBe(absentCensus.censusDigest);
 
-    await rm(join(vault, "Templates/note.md"));
-    const deleted = await templateCensus(vault, policy(), prior);
-    expect(deleted.entries).toEqual([]);
-    expect(deleted.diffs).toEqual([expect.objectContaining({ kind: "deleted", sourcePath: "Templates/note.md", templateId: "note" })]);
-    expect(existsSync(join(vault, ".oms"))).toBe(false);
-  });
+    const legacy = await vault();
+    await put(legacy, ".oms/template-policy.json", JSON.stringify({ version: 3, templates: {} }));
+    const legacyCensus = await templateCensus(legacy, { includeConfiguredPaths: false });
+    expect(legacyCensus.authority).toBe("invalid");
+    expect(legacyCensus.diagnostics.some(item => item.code === "TEMPLATE_POLICY_VERSION_UNSUPPORTED")).toBe(true);
 
-  it("treats a selected directory proven absent as empty and emits retireable binding deletion evidence", async () => {
-    const vault = await fixture();
-    const note = binding("note", "Templates/note.md");
-    await put(vault, "Templates/note.md", body);
-    await rm(join(vault, "Templates"), { recursive: true, force: true });
-
-    const result = await templateCensus(vault, policy([note]));
-
-    expect(result.entries).toEqual([]);
-    expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ code: "TEMPLATE_FOLDER_INVALID" }));
-    expect(result.diffs).toEqual([expect.objectContaining({
-      kind: "deleted",
-      sourcePath: "Templates/note.md",
-      templateId: "note",
-      confirmationRequired: false,
-    })]);
-  });
-
-  it("keeps a selected path that is not a directory as failed evidence", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/note.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    await rm(join(vault, "Templates"), { recursive: true, force: true });
-    await writeFile(join(vault, "Templates"), "not a directory");
-
-    const result = await templateCensus(vault, policy(), prior);
-
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ kind: "deleted", sourcePath: "Templates/note.md" }));
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({
-      code: "TEMPLATE_FOLDER_INVALID",
-      path: "Templates",
+    const half = await vault();
+    await put(half, ".oms/template-policy.json", JSON.stringify({
+      version: 4,
+      properties: {},
+      default: layer(".oms/templates/default.md", ""),
+      templates: {},
     }));
+    const halfCensus = await templateCensus(half, { includeConfiguredPaths: false });
+    expect(halfCensus.authority).toBe("invalid");
+    expect(halfCensus.approvedPolicy).toBeNull();
   });
 
-  it("keeps an unsafe selected directory as failed evidence", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/note.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    const outside = await mkdtemp(join(tmpdir(), "oms-template-census-folder-unsafe-"));
-    roots.push(outside);
-    await rm(join(vault, "Templates"), { recursive: true, force: true });
-    await symlink(outside, join(vault, "Templates"));
+  it("reports non-UTF8 and oversize sources without dropping the raw digest of readable bytes", async () => {
+    const root = await vault();
+    const malformed = Buffer.from([0xff, 0xfe, 0x00]);
+    await put(root, "Templates/bad.md", malformed);
+    await put(root, "Templates/huge.md", Buffer.alloc(MAX_TEMPLATE_SOURCE_BYTES + 1, 0x61));
+    const census = await templateCensus(root, {
+      includeConfiguredPaths: false,
+      selections: [{ path: "Templates", kind: "folder" }],
+    });
+    const bad = census.sources.find(source => source.path === "Templates/bad.md");
+    expect(bad?.text).toBeNull();
+    expect(bad?.rawDigest).toBe(digestBytes(malformed));
+    expect(census.sources.some(source => source.path === "Templates/huge.md")).toBe(false);
+    expect(census.diagnostics.some(item => item.code === "TEMPLATE_SOURCE_MALFORMED" && item.path === "Templates/bad.md")).toBe(true);
+    expect(census.diagnostics.some(item => item.code === "TEMPLATE_PROPOSAL_OVERSIZE" && item.path === "Templates/huge.md")).toBe(true);
+  });
 
-    const result = await templateCensus(vault, policy(), prior);
+  it("keeps configured file and folder selections raw and refuses symlink or private paths", async () => {
+    const configured = await vault();
+    await put(configured, "Notes/plain.md", "This ordinary note has an unmanaged property.\n");
+    await put(configured, "Templates/a.md", "<% tp.date.now() %>\n");
+    await put(configured, "Templates/b.txt", "not a template\n");
+    await put(configured, ".obsidian/templates.json", JSON.stringify({ folder: "Templates" }));
+    const folderCensus = await templateCensus(configured, { selections: [] });
+    expect(folderCensus.sources.map(source => source.path)).toEqual(["Templates/a.md"]);
 
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ kind: "deleted", sourcePath: "Templates/note.md" }));
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({
-      code: "TEMPLATE_SOURCE_UNSAFE",
-      path: "Templates",
+    const filesOnly = await vault();
+    await put(filesOnly, "Templates/only.md", "<% tp.file.cursor() %>\n");
+    await put(filesOnly, "Templates/sibling.md", "sibling\n");
+    await put(filesOnly, ".obsidian/plugins/templater-obsidian/data.json", JSON.stringify({
+      file_templates: [{ template: "Templates/only.md" }],
     }));
-  });
+    const fileCensus = await templateCensus(filesOnly, { selections: [] });
+    expect(fileCensus.sources.map(source => source.path)).toEqual(["Templates/only.md"]);
 
-  it("derives NFC Unicode ids and preserves policy and verified-prior identities", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/한글 노트.md", body);
-    const discovered = await templateCensus(vault, policy());
-    expect(discovered.entries[0]).toMatchObject({ sourcePath: "Templates/한글 노트.md", templateId: "한글-노트" });
-
-    const known = await templateCensus(vault, policy([binding("known-template", "Templates/한글 노트.md")]));
-    expect(known.entries[0]?.templateId).toBe("known-template");
-
-    const prior: CensusPriorEntry[] = [{
-      sourcePath: normalizeTemplateSourcePath("Templates/한글 노트.md"),
-      templateId: "verified-prior" as CensusPriorEntry["templateId"],
-      signature: discovered.entries[0]!.signature,
-      signatureVerified: true,
-    }];
-    const carried = await templateCensus(vault, policy(), prior);
-    expect(carried.entries[0]?.templateId).toBe("verified-prior");
-  });
-
-  it("rejects duplicate derived ids and case-colliding paths instead of suffixing a winner", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/a b.md", body);
-    await put(vault, "Templates/a_b.md", body);
-    const duplicate = await templateCensus(vault, policy());
-    expect(duplicate.entries.map(entry => entry.templateId)).toEqual(["a-b", "a-b"]);
-    expect(duplicate.entries.every(entry => entry.diagnostics.some(item => item.code === "TEMPLATE_ID_DUPLICATE"))).toBe(true);
-    expect(duplicate.entries.map(entry => entry.templateId)).not.toContain("a-b-2");
-
-    // Case-sensitive filesystems expose this pair; case-insensitive filesystems cannot represent it.
-    await put(vault, "Templates/Case.md", body);
-    await put(vault, "Templates/case.md", body);
-    const names = await readdir(join(vault, "Templates"));
-    if (names.includes("Case.md") && names.includes("case.md")) {
-      const collision = await templateCensus(vault, policy());
-      const colliding = collision.entries.filter(entry => entry.sourcePath.toLocaleLowerCase() === "templates/case.md");
-      expect(colliding).toHaveLength(2);
-      expect(colliding.every(entry => entry.diagnostics.some(item => item.message.includes("case")))).toBe(true);
+    const guarded = await vault();
+    await put(guarded, "Templates/real.md", "real\n");
+    const outside = join(tmpdir(), "oms-census-outside.md");
+    await writeFile(outside, "OUTSIDE-SENTINEL\n");
+    try {
+      await symlink(join(guarded, "Templates", "real.md"), join(guarded, "Templates", "link.md"));
+      await symlink(outside, join(guarded, "Templates", "outside.md"));
+      const census = await templateCensus(guarded, {
+        includeConfiguredPaths: false,
+        selections: [
+          { path: "Templates", kind: "folder" },
+          { path: ".oms/secret.md", kind: "file" },
+          { path: "../secret.md", kind: "file" },
+        ],
+      });
+      expect(census.sources.map(source => source.path)).toEqual(["Templates/real.md"]);
+      expect(JSON.stringify(census.sources)).not.toContain("OUTSIDE-SENTINEL");
+      expect(census.diagnostics.some(item => item.code === "TEMPLATE_SOURCE_UNSAFE" && item.path === "Templates/link.md")).toBe(true);
+      expect(census.diagnostics.some(item => item.code === "TEMPLATE_SOURCE_UNSAFE" && item.path === "Templates/outside.md")).toBe(true);
+      expect(census.diagnostics.some(item => item.code === "TEMPLATE_SOURCE_UNSAFE" && item.path === ".oms/secret.md")).toBe(true);
+      expect(census.diagnostics.some(item => item.code === "TEMPLATE_SOURCE_UNSAFE" && item.path === "../secret.md")).toBe(true);
+    } finally {
+      await rm(outside, { force: true });
     }
   });
 
-  it("auto-pairs only a unique one-to-one identical-byte rename", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/old.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    await rm(join(vault, "Templates/old.md"));
-    await put(vault, "Templates/new.md", body);
-    const renamed = await templateCensus(vault, policy(), prior);
-    expect(renamed.diffs).toEqual([expect.objectContaining({
-      kind: "renamed",
-      oldSourcePath: "Templates/old.md",
-      newSourcePath: "Templates/new.md",
-      templateId: "old",
-      automatic: true,
-      confirmationRequired: false,
-      strategy: "identical-bytes",
+  it("pairs only a unique exact-byte move and keeps drift, ambiguity, and body-only adds unbound", async () => {
+    const same = encoder.encode("---\nid: 1\n---\r\nBody\n");
+    const bodyOnly = encoder.encode("Body\n");
+    const drifted = await installApproved(same, { "Sources/literature.md": encoder.encode("changed\n") });
+    const drift = await templateCensus(drifted, { includeConfiguredPaths: false });
+    expect(drift.authority).toBe("approved");
+    expect(drift.bindings).toEqual([expect.objectContaining({
+      templateId: "literature",
+      status: "drift",
+      observedPath: "Sources/literature.md",
     })]);
-    expect(renamed.entries[0]?.templateId).toBe("old");
-  });
+    expect(drift.diffs).toEqual([expect.objectContaining({ kind: "edited", templateId: "literature", automatic: false })]);
+    expect(drift.diagnostics.some(item => item.code === "SOURCE_DRIFT")).toBe(true);
 
-  it("does not auto-pair ambiguous identical-byte renames or transfer old ids", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/old-a.md", body);
-    await put(vault, "Templates/old-b.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    await rm(join(vault, "Templates/old-a.md"));
-    await rm(join(vault, "Templates/old-b.md"));
-    await put(vault, "Templates/new-a.md", body);
-    await put(vault, "Templates/new-b.md", body);
-    const renamed = await templateCensus(vault, policy(), prior);
-    expect(renamed.diffs.filter(diff => diff.kind === "renamed").every(diff => diff.automatic === false && diff.confirmationRequired)).toBe(true);
-    expect(renamed.entries.map(entry => entry.templateId)).toEqual(["new-a", "new-b"]);
-    expect(renamed.entries.map(entry => entry.templateId)).not.toContain("old-a");
-    expect(renamed.entries.map(entry => entry.templateId)).not.toContain("old-b");
-  });
-
-  it("keeps unique body-only pairs in a 2x2 rename set confirmation-only", async () => {
-    const vault = await fixture();
-    const oldA = "---\ntitle: Old A\n---\nbody-a\n";
-    const oldB = "---\ntitle: Old B\n---\nbody-b\n";
-    await put(vault, "Templates/old-a.md", oldA);
-    await put(vault, "Templates/old-b.md", oldB);
-    const first = await templateCensus(vault, policy());
-    const prior: CensusPriorEntry[] = first.entries.map(entry => ({
-      sourcePath: entry.sourcePath,
-      templateId: entry.templateId!,
-      signature: entry.signature,
-      signatureVerified: false,
-      // Body signatures are policy-approved confirmation evidence; the full
-      // descriptor signatures remain intentionally unverified.
-      bodySignature: entry.sourcePath.endsWith("old-a.md") ? sha("body-a\n") : sha("body-b\n"),
-    }));
-    await rm(join(vault, "Templates/old-a.md"));
-    await rm(join(vault, "Templates/old-b.md"));
-    await put(vault, "Templates/new-a.md", "---\ntitle: New A\n---\nbody-a\n");
-    await put(vault, "Templates/new-b.md", "---\ntitle: New B\n---\nbody-b\n");
-
-    const renamed = await templateCensus(vault, policy(), prior);
-    const bodyPairs = renamed.diffs.filter(diff => diff.kind === "renamed" && diff.strategy === "body-signature");
-
-    expect(bodyPairs).toHaveLength(2);
-    expect(bodyPairs.every(diff => diff.automatic === false && diff.confirmationRequired)).toBe(true);
-    expect(renamed.entries.map(entry => entry.templateId)).toEqual(["new-a", "new-b"]);
-  });
-
-  it("prefers independently approved policy body evidence over the content fallback", async () => {
-    const vault = await fixture();
-    const old = "---\ntitle: Old\n---\nold-body\n";
-    const moved = "---\ntitle: Moved\n---\napproved-body\n";
-    const approvedBinding = {
-      ...binding("old", "Templates/old.md"),
-      approvedSourceSignature: sha(old),
-      approvedBodySignature: sha("approved-body\n"),
-      content: deriveContentFormatContract("fallback-body\n", { templateId: "old" }).contract,
-    };
-    await put(vault, "Templates/old.md", old);
-    await rm(join(vault, "Templates/old.md"));
-    await put(vault, "Templates/moved.md", moved);
-
-    const renamed = await templateCensus(vault, policy([approvedBinding]));
-
-    expect(renamed.diffs).toEqual([expect.objectContaining({
-      kind: "renamed",
-      oldSourcePath: "Templates/old.md",
-      newSourcePath: "Templates/moved.md",
-      strategy: "body-signature",
+    const moved = await installApproved(same, { "Sources/moved.md": same, "Sources/reading-note.md": bodyOnly });
+    const relocate = await templateCensus(moved, {
+      includeConfiguredPaths: false,
+      selections: [{ path: "Sources", kind: "folder" }],
+    });
+    expect(relocate.bindings).toEqual([expect.objectContaining({
+      templateId: "literature",
+      status: "relocated",
+      approvedPath: "Sources/literature.md",
+      observedPath: "Sources/moved.md",
+    })]);
+    expect(relocate.diffs.find(diff => diff.kind === "relocated")).toMatchObject({ automatic: true, templateId: "literature" });
+    expect(relocate.diffs.find(diff => diff.path === "Sources/reading-note.md")).toMatchObject({
+      kind: "added",
+      templateId: null,
       automatic: false,
-      confirmationRequired: true,
-    })]);
-    expect(renamed.entries[0]?.templateId).toBe("moved");
+    });
+    expect(relocate.bindings.every(binding => binding.templateId === "literature")).toBe(true);
+
+    const ambiguous = await installApproved(same, { "Sources/a.md": same, "Sources/b.md": same });
+    const ambiguousCensus = await templateCensus(ambiguous, {
+      includeConfiguredPaths: false,
+      selections: [{ path: "Sources", kind: "folder" }],
+    });
+    expect(ambiguousCensus.bindings[0]).toMatchObject({
+      templateId: "literature",
+      status: "ambiguous",
+      observedPath: null,
+      candidatePaths: ["Sources/a.md", "Sources/b.md"],
+    });
+    expect(ambiguousCensus.diffs.some(diff => diff.automatic)).toBe(false);
+    expect(ambiguousCensus.diffs.some(diff => diff.kind === "added")).toBe(false);
+    expect(ambiguousCensus.diagnostics.some(item => item.code === "TEMPLATE_RENAME_AMBIGUOUS")).toBe(true);
+
+    const guessed = await installApproved(same, { "Sources/body-only.md": bodyOnly });
+    const guess = await templateCensus(guessed, {
+      includeConfiguredPaths: false,
+      selections: [{ path: "Sources", kind: "folder" }],
+    });
+    expect(guess.bindings[0]).toMatchObject({ templateId: "literature", status: "missing", observedPath: null });
+    expect(guess.diffs.find(diff => diff.path === "Sources/body-only.md")).toMatchObject({ kind: "added", templateId: null, automatic: false });
+    expect(guess.diffs.some(diff => diff.kind === "relocated")).toBe(false);
   });
 
-  it("uses policy content body evidence when no independent body approval exists", async () => {
-    const vault = await fixture();
-    const old = "---\ntitle: Old\n---\nold-body\n";
-    const moved = "---\ntitle: Moved\n---\npolicy-body\n";
-    const policyBinding = {
-      ...binding("old", "Templates/old.md"),
-      approvedSourceSignature: sha(old),
-      content: deriveContentFormatContract("policy-body\n", { templateId: "old" }).contract,
-    };
-    await put(vault, "Templates/old.md", old);
-    await rm(join(vault, "Templates/old.md"));
-    await put(vault, "Templates/moved.md", moved);
-
-    const renamed = await templateCensus(vault, policy([policyBinding]));
-
-    expect(renamed.diffs).toEqual([expect.objectContaining({
-      kind: "renamed",
-      oldSourcePath: "Templates/old.md",
-      newSourcePath: "Templates/moved.md",
-      strategy: "body-signature",
-      automatic: false,
-      confirmationRequired: true,
-    })]);
-  });
-
-  it("keeps a lone changed-content move as confirmation-only", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/old.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    await rm(join(vault, "Templates/old.md"));
-    await put(vault, "Templates/new.md", "---\ntitle: Changed\n---\nother body\n");
-    const result = await templateCensus(vault, policy(), prior);
-    expect(result.diffs).toEqual([expect.objectContaining({
-      kind: "renamed",
-      strategy: "lone-delete-add",
-      automatic: false,
-      confirmationRequired: true,
-    })]);
-    expect(result.entries[0]?.templateId).toBe("new");
-  });
-
-  it("does not duplicate sources from nested selected folders", async () => {
-    const vault = await fixture();
-    await mkdir(join(vault, "Templates/nested"), { recursive: true });
-    await put(vault, "Templates/nested/note.md", body);
-    const nestedPolicy = { ...policy(), templateFolders: [
-      { path: folder },
-      { path: normalizeTemplateFolderPath("Templates/nested") },
-    ] };
-    const result = await templateCensus(vault, nestedPolicy);
-    expect(result.entries.map(entry => entry.sourcePath)).toEqual(["Templates/nested/note.md"]);
-  });
-
-  it("never follows symlinked files or directories outside the selected scope", async () => {
-    const vault = await fixture();
-    const outside = await mkdtemp(join(tmpdir(), "oms-template-census-outside-"));
-    roots.push(outside);
-    await put(outside, "outside.md", body);
-    await symlink(join(outside, "outside.md"), join(vault, "Templates/link.md"));
-    await symlink(outside, join(vault, "Templates/linked"));
-    const result = await templateCensus(vault, policy());
-    expect(result.entries).toEqual([]);
-    expect(result.diagnostics.filter(item => item.code === "TEMPLATE_SOURCE_UNSAFE")).toHaveLength(2);
-    expect(result.diagnostics.some(item => item.path?.includes("outside.md"))).toBe(false);
-  });
-
-  it("does not turn an unsafe replacement into deleted evidence", async () => {
-    const vault = await fixture();
-    const sourcePath = join(vault, "Templates/note.md");
-    await put(vault, "Templates/note.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    const outside = await mkdtemp(join(tmpdir(), "oms-template-census-unsafe-"));
-    roots.push(outside);
-    await put(outside, "outside.md", body);
-    await rm(sourcePath);
-    await symlink(join(outside, "outside.md"), sourcePath);
-
-    const result = await templateCensus(vault, policy(), prior);
-
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ kind: "deleted", sourcePath: "Templates/note.md" }));
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ oldSourcePath: "Templates/note.md" }));
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({
-      code: "TEMPLATE_SOURCE_UNSAFE",
-      path: "Templates/note.md",
-    }));
-  });
-
-  it("reports only an oversized source while retaining valid siblings", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/oversized.md", new Uint8Array(MAX_TEMPLATE_SOURCE_BYTES + 1));
-    await put(vault, "Templates/valid.md", body);
-
-    const result = await templateCensus(vault, policy());
-
-    expect(result.entries.map(entry => entry.sourcePath)).toEqual(["Templates/valid.md"]);
-    expect(result.diagnostics).toEqual([{
-      code: "TEMPLATE_PROPOSAL_OVERSIZE",
-      path: "Templates/oversized.md",
-      message: `Template source exceeds the ${MAX_TEMPLATE_SOURCE_BYTES}-byte source limit`,
-    }]);
-  });
-
-  it("does not turn an oversized replacement into deleted evidence", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/note.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    await put(vault, "Templates/note.md", new Uint8Array(MAX_TEMPLATE_SOURCE_BYTES + 1));
-
-    const result = await templateCensus(vault, policy(), prior);
-
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ kind: "deleted", sourcePath: "Templates/note.md" }));
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ oldSourcePath: "Templates/note.md" }));
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({
-      code: "TEMPLATE_PROPOSAL_OVERSIZE",
-      path: "Templates/note.md",
-    }));
-  });
-
-  it("does not turn a non-regular source replacement into deleted evidence", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/note.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    await rm(join(vault, "Templates/note.md"));
-    await mkdir(join(vault, "Templates/note.md"));
-
-    const result = await templateCensus(vault, policy(), prior);
-
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ kind: "deleted", sourcePath: "Templates/note.md" }));
-  });
-
-  it("accepts the exact byte limit and rejects the next byte", async () => {
-    const vault = await fixture();
-    await put(vault, "Templates/exact.md", new Uint8Array(MAX_TEMPLATE_SOURCE_BYTES));
-    await put(vault, "Templates/over.md", new Uint8Array(MAX_TEMPLATE_SOURCE_BYTES + 1));
-
-    const result = await templateCensus(vault, policy());
-
-    expect(result.entries.map(entry => [entry.sourcePath, entry.bytes.byteLength])).toEqual([
-      ["Templates/exact.md", MAX_TEMPLATE_SOURCE_BYTES],
-    ]);
-    expect(result.diagnostics).toEqual([expect.objectContaining({
-      code: "TEMPLATE_PROPOSAL_OVERSIZE",
-      path: "Templates/over.md",
-    })]);
-  });
-
-  it("measures the source limit in UTF-8 bytes rather than characters", async () => {
-    const vault = await fixture();
-    const source = Buffer.from("é".repeat((MAX_TEMPLATE_SOURCE_BYTES / 2) + 1), "utf8");
-    expect(source.byteLength).toBe(MAX_TEMPLATE_SOURCE_BYTES + 2);
-    await put(vault, "Templates/unicode.md", source);
-
-    const result = await templateCensus(vault, policy());
-
-    expect(result.entries).toEqual([]);
-    expect(result.diagnostics).toEqual([expect.objectContaining({
-      code: "TEMPLATE_PROPOSAL_OVERSIZE",
-      path: "Templates/unicode.md",
-    })]);
-  });
-
-  it("reconstructs exact source bytes when descriptor reads return short chunks", async () => {
-    const vault = await fixture();
-    const source = Buffer.from(body, "utf8");
-    const sourcePath = join(vault, "Templates/short-read.md");
-    await put(vault, "Templates/short-read.md", source);
-    descriptorRead.mode = "short";
-    descriptorRead.target = sourcePath;
-
-    const result = await templateCensus(vault, policy());
-
-    expect(result.entries[0]?.sourcePath).toBe("Templates/short-read.md");
-    expect(result.entries[0]?.bytes).toEqual(source);
-    expect(descriptorRead.reads).toBeGreaterThan(1);
-    expect(descriptorRead.closes).toBe(1);
-  });
-
-  it("closes a descriptor when a source read fails and preserves the read diagnostic", async () => {
-    const vault = await fixture();
-    const sourcePath = join(vault, "Templates/read-error.md");
-    await put(vault, "Templates/read-error.md", body);
-    descriptorRead.mode = "error";
-    descriptorRead.target = sourcePath;
-
-    const result = await templateCensus(vault, policy());
-
-    expect(result.entries).toEqual([]);
-    expect(result.diagnostics).toEqual([expect.objectContaining({
-      code: "TEMPLATE_SOURCE_READ_FAILED",
-      path: "Templates/read-error.md",
-      message: expect.stringContaining("injected descriptor read failure"),
-    })]);
-    expect(descriptorRead.closes).toBe(1);
-  });
-
-  it("does not turn an unreadable source into deleted evidence", async () => {
-    const vault = await fixture();
-    const sourcePath = join(vault, "Templates/read-error.md");
-    await put(vault, "Templates/read-error.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    descriptorRead.mode = "error";
-    descriptorRead.target = sourcePath;
-
-    const result = await templateCensus(vault, policy(), prior);
-
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ kind: "deleted", sourcePath: "Templates/read-error.md" }));
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({
-      code: "TEMPLATE_SOURCE_READ_FAILED",
-      path: "Templates/read-error.md",
-    }));
-  });
-
-  it("diagnoses source growth between descriptor reads without loading it as valid content", async () => {
-    const vault = await fixture();
-    const sourcePath = join(vault, "Templates/growing.md");
-    await put(vault, "Templates/growing.md", new Uint8Array(MAX_TEMPLATE_SOURCE_BYTES));
-    descriptorRead.mode = "grow";
-    descriptorRead.target = sourcePath;
-
-    const result = await templateCensus(vault, policy());
-
-    expect(result.entries).toEqual([]);
-    expect(result.diagnostics).toEqual([expect.objectContaining({
-      code: "TEMPLATE_PROPOSAL_OVERSIZE",
-      path: "Templates/growing.md",
-    })]);
-    expect(descriptorRead.reads).toBeGreaterThan(1);
-    expect(descriptorRead.closes).toBe(1);
-  });
-
-  it("does not turn a source removed during scanning into deleted evidence", async () => {
-    const vault = await fixture();
-    const sourcePath = join(vault, "Templates/raced.md");
-    await put(vault, "Templates/raced.md", body);
-    const first = await templateCensus(vault, policy());
-    const prior = priorOf(first);
-    descriptorRead.mode = "vanish";
-    descriptorRead.target = sourcePath;
-
-    const result = await templateCensus(vault, policy(), prior);
-
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ kind: "deleted", sourcePath: "Templates/raced.md" }));
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({
-      code: "TEMPLATE_SOURCE_READ_FAILED",
-      path: "Templates/raced.md",
-    }));
-  });
-
-  it("does not turn a failed directory scan into deleted evidence", async () => {
-    const vault = await fixture();
-    const note = binding("note", "Templates/raced.md");
-    await put(vault, "Templates/raced.md", body);
-    const first = await templateCensus(vault, policy([note]));
-    const prior = priorOf(first);
-    await rm(join(vault, "Templates/raced.md"));
-    folderScan.mode = "error";
-    folderScan.target = join(vault, "Templates");
-
-    const result = await templateCensus(vault, policy(), prior);
-
-    expect(result.diffs).not.toContainEqual(expect.objectContaining({ kind: "deleted", sourcePath: "Templates/raced.md" }));
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({
-      code: "TEMPLATE_SOURCE_READ_FAILED",
-      path: "Templates",
-    }));
-  });
-
-  it("accepts depth sixteen, reports deeper sources, and continues an unaffected sibling", async () => {
-    const vault = await fixture();
-    const atLimitSegments = Array.from({ length: 16 }, (_, index) => `level-${index}`);
-    const atLimitPath = `Templates/${atLimitSegments.join("/")}/at-limit.md`;
-    const tooDeepSegments = [...atLimitSegments, "level-16"];
-    const tooDeepPath = `Templates/${tooDeepSegments.join("/")}/too-deep.md`;
-    await put(vault, atLimitPath, body);
-    await put(vault, tooDeepPath, body);
-    await put(vault, "Templates/sibling.md", body);
-
-    const result = await templateCensus(vault, policy());
-
-    expect(result.entries.map(entry => entry.sourcePath)).toEqual([atLimitPath, "Templates/sibling.md"]);
-    expect(result.diagnostics).toEqual([expect.objectContaining({
-      code: "TEMPLATE_PROPOSAL_OVERSIZE",
-      path: `Templates/${tooDeepSegments.join("/")}`,
-    })]);
+  it("does not write ordinary notes or template controls", async () => {
+    const root = await vault();
+    await put(root, "Notes/plain.md", "unmanaged property status is missing\n");
+    const before = await signature(root);
+    const census = await templateCensus(root, {
+      includeConfiguredPaths: false,
+      selections: [{ path: "Notes", kind: "folder" }],
+    });
+    buildTemplateInterview(census);
+    expect(await signature(root)).toBe(before);
+    expect(census.diffs.find(diff => diff.path === "Notes/plain.md")?.templateId).toBeNull();
   });
 });

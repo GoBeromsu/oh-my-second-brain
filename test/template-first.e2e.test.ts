@@ -1,151 +1,157 @@
-import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeResolvedTemplateNote } from "../src/kernel/capture/safe.js";
-import { deriveContentFormatContract } from "../src/kernel/templates/content-contract.js";
-import {
-  buildTemplateNoteIndex,
-  loadResolvedTemplates,
-  queryTemplateAxis,
-  queryTemplateLexically,
-} from "../src/kernel/templates/index.js";
-import { sharedAuthoritySignature, sourceSignature } from "../src/kernel/templates/resolver.js";
-import type { Digest, SourceDescriptor } from "../src/kernel/templates/index.js";
+import { writeApprovedVault } from "../src/kernel/templates/approved-vault-fixture.js";
 
+/**
+ * Guide, save, check, search — end to end through the built CLI.
+ *
+ * The agent writes the note. OMS guides before the save, inspects the bytes
+ * afterwards, and keeps search working regardless of whether any note satisfies
+ * its contract.
+ */
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 const roots: string[] = [];
-const digest = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-async function snapshot(root: string, directory = root): Promise<readonly [string, string][]> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const result: [string, string][] = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) result.push(...await snapshot(root, path));
-    else result.push([path.slice(root.length + 1), await readFile(path, "utf8")]);
+function runCli(args: readonly string[]) {
+  if (!existsSync(distCli)) {
+    throw new Error("dist/cli/oms.js is missing; run npm run build before end-to-end tests.");
   }
-  return result;
+  return spawnSync(process.execPath, [distCli, ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { ...process.env, OMS_NO_UPDATE_NOTICE: "1" },
+  });
 }
 
-async function fixture(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "oms-template-first-e2e-"));
-  roots.push(root);
-  await Promise.all([
-    mkdir(join(root, ".oms"), { recursive: true }),
-    mkdir(join(root, ".obsidian"), { recursive: true }),
-    mkdir(join(root, "Templates", "OMS"), { recursive: true }),
-  ]);
+function parse(stdout: string): Record<string, unknown> {
+  return JSON.parse(stdout) as Record<string, unknown>;
+}
 
-  const policy = JSON.stringify({
-    version: 3,
-    templateFolders: [{ path: "Templates/OMS", default: true }],
-    base: { fields: {} },
-    contracts: {
-      note: {
-        intent: "A searchable note.",
-        fields: {
-          template: { type: "text", required: true },
-          title: { type: "text", required: true },
-          status: { type: "select", required: true, allowedValues: ["open", "closed"] },
-        },
-        views: [{ name: "by-status", keys: ["status"] }],
-      },
+async function vault(): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), "oms-template-first-"));
+  roots.push(root);
+  await writeApprovedVault(root, {
+    properties: {
+      title: { type: "text", intent: "Note title." },
+      status: { type: "select", intent: "Workflow state.", allowedValues: ["open", "closed"] },
     },
     templates: {
       note: {
-        templateId: "note",
-        destinationClass: "managed-default",
-        renderer: "obsidian-core",
-        sourceFolder: "Templates/OMS",
-        sourcePath: "Templates/OMS/note.md",
-        contract: "note",
-        naming: "{{slug}}.md",
+        fields: ["title", "status"],
+        approvedMarkdown: "---\ntemplate: note\ntitle: Untitled\nstatus: open\n---\n\n## Summary\n",
+        headings: [{ headingId: "summary", title: "Summary", level: 2 }],
+        targetFolder: "notes",
       },
     },
+    folders: { notes: { intent: "Working notes." } },
+    obsidianTypes: { title: "text", status: "select" },
   });
-  const taxonomy = JSON.stringify({ folders: { notes: { template: "note" } } });
-  const obsidianTypes = JSON.stringify({ types: { template: "text", title: "text", status: "select" } });
-  const template = "---\ntemplate: note\ntitle: Untitled\nstatus: open\n---\n# Note\n<!-- oms:content -->\n";
-  const sources: SourceDescriptor[] = [
-    { logicalId: "template-policy", signature: digest(policy) },
-    { logicalId: "taxonomy", signature: digest(taxonomy) },
-    { logicalId: "obsidian-types", signature: digest(obsidianTypes) },
-    { path: "Templates/OMS/note.md", signature: digest(template) },
-  ];
-  const content = deriveContentFormatContract("# Note\n<!-- oms:content -->\n", { templateId: "note" }).contract;
-  const projection = JSON.stringify({
-    version: "oms.types.v1",
-    generatedFrom: { algorithm: "sha256-lp-v1", inputSignature: sourceSignature(sources), sharedAuthoritySignature: sharedAuthoritySignature(sources), sources },
-    managed: {
-      base: { fields: {} },
-      globalAxes: {},
-      templates: {
-        note: {
-          templateId: "note",
-          destinationClass: "managed-default",
-          renderer: "obsidian-core",
-          sourcePath: "Templates/OMS/note.md",
-          targetFolder: "notes",
-          keyOrder: ["template", "title", "status"],
-          fields: {
-            template: { type: "text", required: true },
-            title: { type: "text", required: true },
-            status: { type: "select", required: true, allowedValues: ["open", "closed"] },
-          },
-          views: [{ name: "by-status", keys: ["status"] }],
-          naming: "{{slug}}.md",
-          bodySignature: content.bodySignature,
-          content,
-        },
-      },
-    },
-  });
-
-  await Promise.all([
-    writeFile(join(root, ".oms", "template-policy.json"), policy),
-    writeFile(join(root, ".oms", "taxonomy.json"), taxonomy),
-    writeFile(join(root, ".oms", "types.json"), projection),
-    writeFile(join(root, ".obsidian", "types.json"), obsidianTypes),
-    writeFile(join(root, "Templates", "OMS", "note.md"), template),
-  ]);
+  await mkdir(path.join(root, "notes"), { recursive: true });
   return root;
 }
 
-describe("template-first write to search", () => {
-  it("writes and retrieves through the same resolved template axes without search mutation", async () => {
-    const root = await fixture();
-    const convention = await loadResolvedTemplates(root);
-    const write = await writeResolvedTemplateNote({
-      target: { vault: root, source: "explicit" },
-      convention,
-      templateId: "note",
-      mode: "create",
-      dryRun: false,
-      frontmatter: { template: "note", title: "My Entry", status: "open" },
-      body: "searchable needle",
-      resolvedAt: "2026-08-30T10:00:00.000Z",
-    });
-    expect(write, JSON.stringify(write)).toMatchObject({ status: "written" });
-    expect(write.receipt).toMatchObject({ templateId: "note", notePath: "notes/my-entry.md", postconditionVerified: true });
+describe("guide, save, check, search", () => {
+  it("guides before the save, then checks the bytes the agent wrote", async () => {
+    const root = await vault();
 
-    const index = await buildTemplateNoteIndex(root, convention);
-    const beforeSearch = await snapshot(root);
-    expect(queryTemplateAxis(index, convention.inputSignature, { templateId: "note", key: "template", value: "note" }).map(note => note.path)).toEqual(["notes/my-entry.md"]);
-    expect(queryTemplateAxis(index, convention.inputSignature, { templateId: "note", key: "status", value: "open" }).map(note => note.path)).toEqual(["notes/my-entry.md"]);
-    expect((await queryTemplateLexically(root, "searchable needle")).map(note => note.path)).toEqual(["notes/my-entry.md"]);
-    expect(await snapshot(root)).toEqual(beforeSearch);
+    const guide = runCli(["note", "guide", "notes/alpha.md", "--vault", root, "--template-id", "note"]);
+    expect(guide.status).toBe(0);
+    const guidance = parse(guide.stdout);
+    expect(guidance.status).toBe("guided");
+    // Guidance never creates the note.
+    expect(await readdir(path.join(root, "notes"))).toEqual([]);
 
-    const projectionPath = join(root, ".oms", "types.json");
-    const projection = JSON.parse(await readFile(projectionPath, "utf8")) as { managed: { templates: { note: { naming: string } } } };
-    projection.managed.templates.note.naming = "tampered.md";
-    await writeFile(projectionPath, JSON.stringify(projection));
-    await expect(loadResolvedTemplates(root)).rejects.toThrow(/PROJECTION_PAYLOAD_TAMPERED/);
-    expect(() => queryTemplateAxis(index, digest("tampered projection"), { templateId: "note", key: "status", value: "open" })).toThrow(/TEMPLATE_NOTE_INDEX_STALE/);
-    expect((await queryTemplateLexically(root, "searchable needle")).map(note => note.path)).toEqual(["notes/my-entry.md"]);
+    // The agent saves an incomplete note.
+    const notePath = path.join(root, "notes", "alpha.md");
+    await writeFile(notePath, "---\ntemplate: note\ntitle: Alpha\n---\n\nBody without the required heading.\n");
+    const incomplete = runCli(["note", "check", "notes/alpha.md", "--vault", root]);
+    const failing = parse(incomplete.stdout);
+    expect(failing.status).toBe("fail");
+    const findings = (failing.machine as { readonly findings: readonly { readonly targetId: string }[] }).findings;
+    expect(findings.map(finding => finding.targetId)).toEqual(
+      expect.arrayContaining(["field/status", "heading/summary"]),
+    );
+
+    // OMS reports; it does not repair the note.
+    expect(await readFile(notePath, "utf8")).toContain("Body without the required heading.");
+
+    await writeFile(notePath, "---\ntemplate: note\ntitle: Alpha\nstatus: open\nextra: kept\n---\n\n## Summary\n\nDone.\n");
+    const complete = runCli(["note", "check", "notes/alpha.md", "--vault", root]);
+    const passing = parse(complete.stdout);
+    expect(passing.status).toBe("pass");
+    // An undeclared property is preserved and never judged.
+    expect(await readFile(notePath, "utf8")).toContain("extra: kept");
+  });
+
+  it("rejects a disallowed value without inventing one", async () => {
+    const root = await vault();
+    await writeFile(
+      path.join(root, "notes", "bad-status.md"),
+      "---\ntemplate: note\ntitle: Bad\nstatus: archived\n---\n\n## Summary\n\nBody.\n",
+    );
+
+    const checked = parse(runCli(["note", "check", "notes/bad-status.md", "--vault", root]).stdout);
+
+    expect(checked.status).toBe("fail");
+    const findings = (checked.machine as { readonly findings: readonly { readonly targetId: string }[] }).findings;
+    expect(findings.map(finding => finding.targetId)).toContain("field/status");
+    expect(await readFile(path.join(root, "notes", "bad-status.md"), "utf8")).toContain("status: archived");
+  });
+
+  it("searches unbound, unknown-template, and malformed notes alike", async () => {
+    const root = await vault();
+    await writeFile(path.join(root, "notes", "bound.md"), "---\ntemplate: note\ntitle: Bound\nstatus: open\n---\n\n## Summary\n\nIndexable prose about ataraxia.\n");
+    await writeFile(path.join(root, "notes", "unbound.md"), "Plain note about ataraxia with no frontmatter.\n");
+    await writeFile(path.join(root, "notes", "unknown.md"), "---\ntemplate: ghost\n---\n\nUnknown template, still about ataraxia.\n");
+    await writeFile(path.join(root, "notes", "malformed.md"), "---\ntitle: [unterminated\n---\n\nMalformed frontmatter, still about ataraxia.\n");
+
+    const search = runCli(["search", "query", "ataraxia", "--vault", root]);
+
+    expect(search.status).toBe(0);
+    const payload = parse(search.stdout);
+    const hits = (payload.hits ?? payload.results) as { readonly path?: string; readonly notePath?: string }[];
+    const paths = hits.map(hit => hit.path ?? hit.notePath);
+    expect(paths).toEqual(expect.arrayContaining([
+      "notes/bound.md",
+      "notes/unbound.md",
+      "notes/unknown.md",
+      "notes/malformed.md",
+    ]));
+  });
+
+  it("keeps searching when the approved contract is unreadable", async () => {
+    const root = await vault();
+    await writeFile(path.join(root, "notes", "bound.md"), "---\ntemplate: note\ntitle: Bound\nstatus: open\n---\n\n## Summary\n\nProse about ataraxia.\n");
+    await writeFile(path.join(root, ".oms", "template-policy.json"), "{");
+
+    const search = runCli(["search", "query", "ataraxia", "--vault", root]);
+
+    expect(search.status).toBe(0);
+    const payload = parse(search.stdout);
+    const hits = (payload.hits ?? payload.results) as { readonly path?: string; readonly notePath?: string }[];
+    expect(hits.map(hit => hit.path ?? hit.notePath)).toContain("notes/bound.md");
+  });
+
+  it("does not create .oms while reading a vault that has none", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oms-template-first-bare-"));
+    roots.push(root);
+    await mkdir(path.join(root, "notes"), { recursive: true });
+    await writeFile(path.join(root, "notes", "plain.md"), "Prose about ataraxia.\n");
+
+    const search = runCli(["search", "query", "ataraxia", "--vault", root]);
+
+    expect(search.status).toBe(0);
+    expect(existsSync(path.join(root, ".oms"))).toBe(false);
   });
 });

@@ -64,6 +64,25 @@ export async function computeTreeDigest(root: string): Promise<string> {
   return hash.digest("hex");
 }
 
+/** SHA-256 of exact file bytes. This is not a directory or provenance-tree digest. */
+export function digestFileBytes(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * One-file form of computeTreeDigest: relative name, NUL, bytes, NUL.
+ * Sibling files are not part of the digest. Callers pass the tree-relative
+ * name; this function does not open a path.
+ */
+export function digestOneFile(relativeName: string, bytes: Uint8Array): string {
+  const hash = createHash("sha256");
+  hash.update(relativeName);
+  hash.update("\0");
+  hash.update(bytes);
+  hash.update("\0");
+  return hash.digest("hex");
+}
+
 export type OwnershipDecision = {
   readonly action: "install" | "noop" | "replace" | "reject-foreign" | "reject-newer" | "adopt-legacy-candidate";
   readonly reason: string;

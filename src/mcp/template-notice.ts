@@ -20,12 +20,13 @@ export interface TemplateChangeNotice {
   readonly pendingDigest: Digest;
   readonly pendingCount: number;
   readonly actions: typeof TEMPLATE_CHANGE_NOTICE_ACTIONS;
+  /**
+   * Mode hint only. This is not a complete CallToolRequest: OMS never invents
+   * proposals, and a host must not replay `next` as interview-next.
+   */
   readonly next: {
-    readonly tool: "oms_write";
-    readonly arguments: {
-      readonly op: "template";
-      readonly mode: "interview-next";
-    };
+    readonly skill: "interview";
+    readonly mode: "interview-next";
   };
 }
 
@@ -40,7 +41,8 @@ function digest(value: string): Digest {
 function canonicalNoticeDigest(context: TemplateReviewContext): Digest {
   return digest(canonicalJson({
     vault: context.vault,
-    censusDigest: context.censusDigest,
+    generationDigest: context.resolved.generationDigest,
+    pending: pendingKeys(context),
   }));
 }
 
@@ -48,72 +50,30 @@ function normalizedSourcePath(value: string): string {
   return value.replaceAll("\\", "/").normalize("NFC");
 }
 
-function normalizedTemplateId(value: string): string {
-  return value.normalize("NFC");
-}
-
-function affectedSourceKey(
-  templateId: string | undefined,
-  sourcePath: string | undefined,
-  sourceById: ReadonlyMap<string, string>,
-): string | undefined {
-  if (templateId !== undefined) {
-    const mappedPath = sourceById.get(normalizedTemplateId(templateId));
-    if (mappedPath !== undefined) return `path:${normalizedSourcePath(mappedPath)}`;
-  }
-  if (sourcePath !== undefined) return `path:${normalizedSourcePath(sourcePath)}`;
-  if (templateId !== undefined) return `id:${normalizedTemplateId(templateId)}`;
-  return undefined;
-}
-
-function pendingCount(context: TemplateReviewContext): number {
+/**
+ * One pending key per affected source. Raw drift, a missing or drifted managed
+ * draft, and a contract diagnostic are all reasons to offer review; none of
+ * them is inspected for meaning here.
+ */
+function pendingKeys(context: TemplateReviewContext): readonly string[] {
   const pending = new Set<string>();
-  const sourceById = new Map<string, string>();
-  for (const entry of context.census.entries) {
-    if (entry.templateId !== undefined) {
-      sourceById.set(normalizedTemplateId(entry.templateId), entry.sourcePath);
-    }
+  for (const raw of context.raw) {
+    if (raw.drift !== null) pending.add(`path:${normalizedSourcePath(raw.path)}`);
   }
-  for (const [templateId, binding] of Object.entries(context.policy.templates)) {
-    if (!sourceById.has(normalizedTemplateId(templateId))) sourceById.set(normalizedTemplateId(templateId), binding.sourcePath);
-    if (!sourceById.has(normalizedTemplateId(binding.templateId))) sourceById.set(normalizedTemplateId(binding.templateId), binding.sourcePath);
+  for (const draft of context.resolved.drafts) {
+    // Keyed by managed path so a drift row and its diagnostic count once.
+    if (draft.drift !== null) pending.add(`path:${normalizedSourcePath(draft.templatePath)}`);
   }
-  for (const diff of context.census.diffs) {
-    const key = affectedSourceKey(
-      diff.templateId,
-      diff.newSourcePath ?? diff.sourcePath,
-      sourceById,
-    );
-    if (key !== undefined) pending.add(key);
+  for (const diagnostic of context.resolved.diagnostics) {
+    pending.add(diagnostic.path === undefined
+      ? `diagnostic:${diagnostic.code}`
+      : `path:${normalizedSourcePath(diagnostic.path)}`);
   }
-  for (const diagnostic of context.census.diagnostics) {
-    const key = affectedSourceKey(diagnostic.templateId, diagnostic.path, sourceById)
-      ?? `diagnostic:${diagnostic.code}`;
-    pending.add(key);
-  }
-  // Resolver review can remain pending even when the census has no source
-  // diff: a projection may omit a managed entry/descriptor, or its content
-  // body coverage may be stale. Fresh IDs are the per-binding coverage
-  // result, so count only policy identities absent from that set rather than
-  // invalidating fresh siblings or adding one duplicate per symptom.
-  const freshTemplateIds = new Set(context.freshTemplateIds.map(normalizedTemplateId));
-  for (const binding of Object.values(context.policy.templates)) {
-    if (freshTemplateIds.has(normalizedTemplateId(binding.templateId))) continue;
-    const key = affectedSourceKey(binding.templateId, binding.sourcePath, sourceById)
-      ?? `id:${normalizedTemplateId(binding.templateId)}`;
-    pending.add(key);
-  }
-  if (pending.size === 0 && !context.projectionUsable && Object.keys(context.policy.templates).length > 0) {
-    // A missing/unusable projection still needs the reviewed bootstrap path,
-    // even when a bound source is currently absent and therefore has no
-    // current census entry to classify.
-    pending.add("projection");
-  }
-  return pending.size;
+  return [...pending].sort();
 }
 
 export function templateNoticeFromContext(context: TemplateReviewContext): TemplateChangeNotice | null {
-  const count = pendingCount(context);
+  const count = pendingKeys(context).length;
   if (count === 0) return null;
   return {
     state: "pending",
@@ -121,11 +81,8 @@ export function templateNoticeFromContext(context: TemplateReviewContext): Templ
     pendingCount: count,
     actions: TEMPLATE_CHANGE_NOTICE_ACTIONS,
     next: {
-      tool: "oms_write",
-      arguments: {
-        op: "template",
-        mode: "interview-next",
-      },
+      skill: "interview",
+      mode: "interview-next",
     },
   };
 }

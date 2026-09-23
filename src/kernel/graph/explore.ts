@@ -1,7 +1,7 @@
 import { exploreEngineGraph, type EngineGraphConnectionReason, type EngineGraphExploreNode } from "../engine/graph/explore.js";
 import { buildGraph, buildNodeIndex, loadCachedGraph, loadNodeIndex, nodeSourceSignature } from "../engine/graph/builder.js";
 import type { AxisScalar } from "../engine/graph/node.js";
-import { loadResolvedTemplates } from "../templates/resolver.js";
+import { readSearchTemplateSource } from "../engine/retrieval/template-source.js";
 
 export type LocalGraphProvider = "cache" | "headless-scan";
 export type GraphConnectionKind = "property-value" | "wikilink" | "backlink";
@@ -30,7 +30,9 @@ export interface GraphConnectionReason {
 
 export interface GraphExploreNode {
   readonly path: string;
-  readonly template: string;
+  readonly template: string | null;
+  readonly binding: "template" | "default" | "unresolved";
+  readonly diagnostics: readonly string[];
   readonly folder: string;
   readonly axes: Readonly<Record<string, readonly AxisScalar[]>>;
   readonly wikilinks: readonly string[];
@@ -67,6 +69,8 @@ function toLocalNode(node: EngineGraphExploreNode): GraphExploreNode {
   return {
     path: node.path,
     template: node.template,
+    binding: node.binding,
+    diagnostics: node.diagnostics,
     folder: node.folder,
     axes: node.axes,
     wikilinks: node.wikilinks,
@@ -77,9 +81,9 @@ function toLocalNode(node: EngineGraphExploreNode): GraphExploreNode {
 }
 
 export async function exploreLocalGraph(opts: GraphExploreOptions): Promise<GraphExploreResult> {
-  const convention = await loadResolvedTemplates(opts.vault);
-  const sourceSignature = await nodeSourceSignature(opts.vault, convention);
-  const projectionSignature = convention.inputSignature;
+  const meta = await readSearchTemplateSource(opts.vault);
+  const sourceSignature = await nodeSourceSignature(opts.vault, meta);
+  const projectionSignature = meta.digest;
   const cacheAllowed = opts.useCache !== false;
   const cachedNodes = cacheAllowed
     ? await loadNodeIndex(engineCachePath(opts.vault, "node-index.json"), sourceSignature, projectionSignature)
@@ -87,8 +91,8 @@ export async function exploreLocalGraph(opts: GraphExploreOptions): Promise<Grap
   const cachedEdges = cacheAllowed
     ? await loadCachedGraph(engineCachePath(opts.vault, "graph.json"), projectionSignature)
     : null;
-  const nodes = cachedNodes ?? await buildNodeIndex({ vaultPath: opts.vault, convention });
-  const edges = cachedEdges ?? await buildGraph({ vaultPath: opts.vault, convention });
+  const nodes = cachedNodes ?? await buildNodeIndex({ vaultPath: opts.vault, meta });
+  const edges = cachedEdges ?? await buildGraph({ vaultPath: opts.vault, meta });
   const provider: LocalGraphProvider = cachedNodes !== null && cachedEdges !== null ? "cache" : "headless-scan";
   const explored = exploreEngineGraph(nodes, edges, {
     template: opts.template,

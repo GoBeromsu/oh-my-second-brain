@@ -1,89 +1,360 @@
-import type { ContentFormatContract } from "./content-contract.js";
-import type { CensusResult } from "./census.js";
-import type { InterviewLedgerAnswer } from "./interview-ledger.js";
+import type { CompletionCriterion } from "../conventions/completion-contract.js";
 
+export type { CompletionCriterion };
+
+/** Lowercase sha256 digest. Binding material, not an authentication secret. */
 export type Digest = `sha256:${string}`;
 export type DestinationClass = "managed-default" | "registered-existing";
 export type TemplateFolderPath = string & { readonly __kind: "TemplateFolderPath" };
 export type TemplateSourcePath = string & { readonly __kind: "TemplateSourcePath" };
 export type TemplateId = string & { readonly __kind: "TemplateId" };
-export type FieldNormalize = "lower" | "trim" | "kebab";
-export type ObsidianContractType = "text" | "string" | "select" | "number" | "boolean" | "checkbox" | "date" | "datetime" | "list" | "multitext" | "multi" | "tags" | "aliases" | "file";
+/** Approved managed draft under `.oms/templates/`. Not a user source path. */
+export type ManagedTemplatePath = string & { readonly __kind: "ManagedTemplatePath" };
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type Extensions = Readonly<Record<string, JsonValue>>;
-export type FieldDefault = { readonly kind: "literal"; readonly value: JsonValue } | { readonly kind: "token"; readonly token: "today" | "now" | "title" };
-export interface FieldPolicy { readonly type?: ObsidianContractType; readonly required?: boolean; readonly normalize?: FieldNormalize; readonly allowedValues?: readonly string[]; readonly format?: "url"; readonly default?: FieldDefault; readonly allowTemplateDefault?: boolean; readonly immutable?: boolean; readonly intent?: string; readonly filledBy?: "obsidian"; readonly extensions?: Extensions; }
-export interface BaseContract { readonly fields: Readonly<Record<string, FieldPolicy>>; readonly extensions?: Extensions; }
-export interface RetrievalView { readonly name: string; readonly keys: readonly string[]; readonly extensions?: Extensions; }
-export interface ContractDefinition extends BaseContract { readonly intent: string; readonly views: readonly RetrievalView[]; }
-export interface TemplateFolderRegistration { readonly path: TemplateFolderPath; readonly default?: true; readonly extensions?: Extensions; }
-export type TemplateRenderer = "obsidian-core" | "templater" | "none";
-export interface TemplateBinding { readonly templateId: TemplateId; readonly destinationClass: DestinationClass; readonly renderer: TemplateRenderer; readonly sourceFolder: TemplateFolderPath; readonly sourcePath: TemplateSourcePath; readonly contract: string; readonly naming: string; readonly content?: ContentFormatContract; readonly approvedSourceSignature?: Digest; readonly approvedBodySignature?: Digest; readonly extensions?: Extensions; }
-/** User-owned registry of accepted writer identifiers for the frontmatter field that records authorship. */
-export interface WriterRegistry { readonly field: string; readonly identifiers: readonly string[]; readonly extensions?: Extensions; }
-export interface TemplatePolicy { readonly version: 3; readonly templateFolders: readonly TemplateFolderRegistration[]; readonly defaultTemplate?: TemplateId; readonly base: BaseContract; readonly contracts: Readonly<Record<string, ContractDefinition>>; readonly templates: Readonly<Record<string, TemplateBinding>>; readonly writers?: WriterRegistry; readonly extensions?: Extensions; }
-export interface GlobalAxis { readonly kind: "folder" | "link"; readonly key: string; readonly type: ObsidianContractType; readonly intent?: string; readonly members: readonly JsonValue[]; readonly extensions?: Extensions; }
-export type GlobalAxes = Readonly<Record<string, GlobalAxis>>;
-export interface SourceDescriptor { readonly logicalId?: string; readonly path?: string; readonly signature: Digest; readonly extensions?: Extensions; }
-export interface SourceSignature { readonly algorithm: "sha256-lp-v1"; readonly inputSignature: Digest; readonly sharedAuthoritySignature: Digest; readonly sources: readonly SourceDescriptor[]; }
-export interface DerivedTemplateProjection { readonly templateId: TemplateId; readonly destinationClass: DestinationClass; readonly renderer: TemplateRenderer; readonly sourcePath: TemplateSourcePath; readonly targetFolder?: TemplateFolderPath; readonly keyOrder: readonly string[]; readonly fields: Readonly<Record<string, FieldPolicy>>; readonly views: readonly RetrievalView[]; readonly naming: string; readonly bodySignature: Digest; readonly content: ContentFormatContract; readonly extensions?: Extensions; }
-export interface DerivedProjection { readonly version: "oms.types.v1"; readonly generatedFrom: SourceSignature; readonly managed: { readonly base: BaseContract; readonly templates: Readonly<Record<string, DerivedTemplateProjection>>; readonly globalAxes: GlobalAxes; }; readonly extensions?: Extensions; }
-export interface ResolvedTemplate { readonly id: TemplateId; readonly destinationClass: DestinationClass; readonly renderer: TemplateRenderer; readonly sourcePath: TemplateSourcePath; readonly targetFolder?: TemplateFolderPath; readonly bom: boolean; readonly eol: "lf" | "crlf"; readonly finalNewline: boolean; readonly keyOrder: readonly string[]; readonly fields: Readonly<Record<string, FieldPolicy>>; readonly frontmatterTemplate: Readonly<Record<string, JsonValue>>; readonly body: string; readonly content: ContentFormatContract; readonly naming: string; readonly views: readonly RetrievalView[]; readonly inputSignature: Digest; readonly templateSignature: Digest; readonly managedSourcePaths: readonly TemplateSourcePath[]; }
-export type PendingTemplateKind = "added" | "edited" | "deleted" | "renamed" | "invalid";
-export interface PendingTemplate { readonly id?: TemplateId; readonly path: TemplateSourcePath; readonly kind: PendingTemplateKind; readonly diagnostics: readonly Diagnostic[]; readonly oldPath?: TemplateSourcePath; readonly newPath?: TemplateSourcePath; }
-export interface ResolvedConvention { readonly base: BaseContract; readonly templates: Readonly<Record<string, ResolvedTemplate>>; readonly pending: Readonly<Record<string, PendingTemplate>>; readonly defaultTemplate?: TemplateId; readonly globalAxes: GlobalAxes; readonly writers?: WriterRegistry; readonly managedSourcePaths: readonly TemplateSourcePath[]; readonly inputSignature: Digest; readonly sharedAuthoritySignature: Digest; }
-export interface PreparedWrite { readonly mode: "create" | "append" | "update"; readonly templateId: TemplateId; readonly resolvedAt: string; readonly notePath: string; readonly frontmatter: Readonly<Record<string, JsonValue>>; readonly body: string; readonly inputSignature: Digest; readonly templateSignature: Digest; }
-export type AuthorityKind = "template" | "policy" | "taxonomy" | "obsidian-types";
-export interface AuthorityEntry { readonly kind: AuthorityKind; readonly logicalId: string; readonly vaultRelativePath: string | null; readonly contentDigest: Digest; }
-export interface PlacementEntry { readonly templateId: TemplateId; readonly destinationClass: DestinationClass; readonly templateFolder: TemplateFolderPath | null; readonly sourceFolder: TemplateFolderPath; readonly sourcePath: TemplateSourcePath; }
-export interface InputV2 { readonly version: 2; readonly templateFolders: readonly TemplateFolderRegistration[]; readonly authority: readonly AuthorityEntry[]; readonly placement: readonly PlacementEntry[]; }
-export type DiagnosticCode = "TEMPLATE_ID_DUPLICATE" | "TEMPLATE_SOURCE_DUPLICATE" | "TEMPLATE_SOURCE_UNSAFE" | "TEMPLATE_SOURCE_INVALID" | "TEMPLATE_CANDIDATE_INCOMPATIBLE" | "TEMPLATE_FOLDER_SELECTION_REQUIRED" | "TEMPLATE_PLACEMENT_UNDECLARED" | "TEMPLATE_FOLDER_DEFAULT_UNDECLARED" | "TEMPLATE_POLICY_VERSION_UNSUPPORTED" | "FIELD_FILLED_BY_OBSIDIAN" | "TEMPLATE_RENDERER_EXTERNAL" | "TEMPLATE_CONTRACT_UNOBSERVED" | "TEMPLATE_PROPOSAL_OVERSIZE" | "MIGRATION_OUTPUT_CONFLICT" | "MIGRATION_APPROVAL_MISMATCH" | "TEMPLATE_RECLASSIFY_PATH_MISMATCH" | "TEMPLATE_SOURCE_DRIFT" | "PROJECTION_PAYLOAD_TAMPERED" | "TEMPLATE_IDENTITY_IMMUTABLE" | "TEMPLATE_EXPRESSION_UNSUPPORTED" | "TEMPLATE_TRANSACTION_INCONSISTENT" | "MIGRATION_PUBLISHED_OUTPUT_CONFLICT" | "MIGRATION_RETRY_MISMATCH" | "TEMPLATE_TRANSACTION_MANIFEST_INVALID" | "migration-incomplete" | "BASE_CONTRACT_CONFLICT" | "TEMPLATE_POLICY_DANGLING_FIELD" | "DEFAULT_TYPE_MISMATCH" | "FORMAT_URL_INVALID" | "OBSIDIAN_TYPE_CONFLICT" | "TEMPLATE_TYPE_UNRESOLVED";
-export interface Diagnostic { readonly code: DiagnosticCode; readonly templateId?: TemplateId; readonly path?: string; readonly field?: string; readonly message?: string; readonly extensions?: Extensions; }
+export type ObsidianContractType = "text" | "string" | "select" | "number" | "boolean" | "checkbox" | "date" | "datetime" | "list" | "multitext" | "multi" | "tags" | "aliases" | "file";
+export type PropertyFormat = "url";
+export type HeadingOrder = "unordered" | "strict";
+export type AgentRepairContext = "post-write" | "maintenance";
 
-export type TemplateMutationMode = "create" | "update" | "reclassify" | "relocate-folder" | "remove" | "default" | "register-folder" | "reconcile";
-export type LogicalOperationKind = TemplateMutationMode;
+export const DEFAULT_MANAGED_TEMPLATE_PATH = ".oms/templates/default.md" as ManagedTemplatePath;
+export const COMPLETION_RETRY_BUDGET_DEFAULT = 2;
+
+export interface TemplateFolderRegistration {
+  readonly path: TemplateFolderPath;
+  readonly default?: true;
+  readonly extensions?: Extensions;
+}
+
+/** User-owned property pool entry. Layers reference it; they do not restate type, intent, or format. */
+export interface PropertyDefinition {
+  readonly type: ObsidianContractType;
+  readonly intent: string;
+  readonly allowedValues?: readonly string[];
+  readonly format?: PropertyFormat;
+  readonly extensions?: Extensions;
+}
+
+/**
+ * Field use inside the default layer or one template layer.
+ * `required` may only be added, never cleared. Omitted `allowedValues` inherit the parent ceiling;
+ * a declared list must be a subset of that ceiling. Type, intent, and format stay on the pool.
+ */
+export interface LayerFieldRef {
+  readonly property: string;
+  readonly required?: true;
+  readonly allowedValues?: readonly string[];
+  readonly extensions?: Extensions;
+}
+
+export interface HeadingContract {
+  readonly headingId: string;
+  readonly title: string;
+  readonly level: number;
+  readonly required: true;
+  readonly extensions?: Extensions;
+}
+
+/** Optional link from an individual template to the raw source the agent interprets. */
+export interface TemplateSourceRef {
+  readonly path: TemplateSourcePath;
+  readonly identity: string;
+  readonly rawDigest: Digest;
+}
+
+export interface ApprovedLayerBytes {
+  readonly templatePath: ManagedTemplatePath;
+  readonly approvedMarkdown: string;
+  readonly approvedMarkdownDigest: Digest;
+}
+
+/** Always-on default layer, or the shared shape of an individual template layer. */
+export interface ContractLayer extends ApprovedLayerBytes {
+  readonly fields: Readonly<Record<string, LayerFieldRef>>;
+  readonly headings: readonly HeadingContract[];
+  /** Omitted on the default layer means unordered. Omitted on a template means inherit. */
+  readonly headingOrder?: HeadingOrder;
+  readonly semanticCriteria: readonly CompletionCriterion[];
+  readonly extensions?: Extensions;
+}
+
+export interface TemplateLayer extends ContractLayer {
+  readonly templateId: TemplateId;
+  readonly source?: TemplateSourceRef;
+}
+
+export interface AgentRepairPolicy {
+  /** Default false. Search and check never grant repair authority. */
+  readonly enabled: boolean;
+  readonly contexts?: readonly AgentRepairContext[];
+  readonly extensions?: Extensions;
+}
+
+/** Operational settings. Excluded from `contractDigest` so a budget edit does not stale an approved contract. */
+export interface CompletionPolicy {
+  readonly retryBudget: number;
+  readonly agentRepair: AgentRepairPolicy;
+  readonly extensions?: Extensions;
+}
+
+export interface TemplatePolicy {
+  readonly version: 4;
+  readonly properties: Readonly<Record<string, PropertyDefinition>>;
+  readonly default: ContractLayer;
+  readonly templates: Readonly<Record<string, TemplateLayer>>;
+  readonly completion: CompletionPolicy;
+  readonly extensions?: Extensions;
+}
+
+/**
+ * Effective field after P03 composes the pool, default layer, and optional template layer.
+ * Type, intent, and format come only from the pool. Required is true if either layer sets it.
+ * Allowed values, when declared, are the narrowed subset; omission inherits rather than clearing.
+ */
+export interface ResolvedField {
+  readonly property: string;
+  readonly type: ObsidianContractType;
+  readonly intent: string;
+  readonly required: boolean;
+  readonly allowedValues?: readonly string[];
+  readonly format?: PropertyFormat;
+}
+
+export interface ResolvedHeading extends HeadingContract {
+  /** `template` means this heading id was added by the individual layer. Default ids stay on the default layer. */
+  readonly origin: "default" | "template";
+}
+
+/**
+ * Composed contract for one note. P03 fills it from a parsed policy.
+ * `approved` carries the exact markdown snapshots; this object does not replace them.
+ */
+export interface ResolvedContract {
+  readonly templateId: TemplateId | null;
+  readonly headingOrder: HeadingOrder;
+  readonly fields: Readonly<Record<string, ResolvedField>>;
+  readonly headings: readonly ResolvedHeading[];
+  readonly semanticCriteria: readonly CompletionCriterion[];
+  readonly approved: {
+    readonly defaultLayer: ApprovedLayerBytes;
+    readonly templateLayer?: ApprovedLayerBytes;
+  };
+  readonly contractDigest: Digest;
+}
+
+export interface GlobalAxis {
+  readonly kind: "folder" | "link";
+  readonly key: string;
+  readonly type: ObsidianContractType;
+  readonly intent?: string;
+  readonly members: readonly JsonValue[];
+  readonly extensions?: Extensions;
+}
+export type GlobalAxes = Readonly<Record<string, GlobalAxis>>;
+
+export interface DerivedTemplateProjection {
+  readonly templateId: TemplateId;
+  readonly headingOrder: HeadingOrder;
+  readonly fields: Readonly<Record<string, ResolvedField>>;
+  readonly headings: readonly HeadingContract[];
+  readonly contractDigest: Digest;
+  readonly approvedMarkdownDigest: Digest;
+  readonly extensions?: Extensions;
+}
+
+/** Derivative of effective fields, headings, and axes. Not semantic or markdown authority. */
+export interface DerivedProjection {
+  readonly version: "oms.types.v2";
+  readonly generatedFrom: Digest;
+  readonly managed: {
+    readonly headingOrder: HeadingOrder;
+    readonly fields: Readonly<Record<string, ResolvedField>>;
+    readonly headings: readonly HeadingContract[];
+    readonly globalAxes: GlobalAxes;
+    readonly templates: Readonly<Record<string, DerivedTemplateProjection>>;
+    readonly extensions?: Extensions;
+  };
+  readonly extensions?: Extensions;
+}
+
+export interface SourceFreshness {
+  readonly templateId: TemplateId;
+  readonly source: TemplateSourceRef;
+  readonly observedRawDigest: Digest | null;
+  readonly drift: "SOURCE_DRIFT" | null;
+}
+
+export interface ManagedDraftFreshness {
+  readonly templateId: TemplateId | null;
+  readonly templatePath: ManagedTemplatePath;
+  readonly approvedMarkdownDigest: Digest;
+  readonly observedDraftDigest: Digest | null;
+  readonly drift: "MANAGED_TEMPLATE_DRIFT" | null;
+}
+
+export type AuthorityKind = "template" | "policy" | "taxonomy" | "obsidian-types";
+export interface AuthorityEntry {
+  readonly kind: AuthorityKind;
+  readonly logicalId: string;
+  readonly vaultRelativePath: string | null;
+  readonly contentDigest: Digest;
+}
+export interface PlacementEntry {
+  readonly templateId: TemplateId;
+  readonly destinationClass: DestinationClass;
+  readonly templateFolder: TemplateFolderPath | null;
+  readonly sourceFolder: TemplateFolderPath;
+  readonly sourcePath: TemplateSourcePath;
+}
+/** Existing canonical migration-input frame. Not a version 4 policy and not a compatibility reader. */
+export interface InputV2 {
+  readonly version: 2;
+  readonly templateFolders: readonly TemplateFolderRegistration[];
+  readonly authority: readonly AuthorityEntry[];
+  readonly placement: readonly PlacementEntry[];
+}
+
+export type DiagnosticCode =
+  | "TEMPLATE_ID_DUPLICATE"
+  | "TEMPLATE_SOURCE_DUPLICATE"
+  | "TEMPLATE_SOURCE_UNSAFE"
+  | "TEMPLATE_SOURCE_INVALID"
+  | "TEMPLATE_POLICY_INVALID"
+  | "TEMPLATE_POLICY_VERSION_UNSUPPORTED"
+  | "TEMPLATE_POLICY_DANGLING_FIELD"
+  | "TEMPLATE_EXTENSION_RESERVED"
+  | "TEMPLATE_EXTENSION_CONFLICT"
+  | "CONTRACT_COMPOSITION_CONFLICT"
+  | "CONTRACT_UNVERIFIABLE"
+  | "SOURCE_DRIFT"
+  | "MANAGED_TEMPLATE_DRIFT"
+  | "CONTRACT_TRANSACTION_IN_PROGRESS"
+  | "PROJECTION_INVALID"
+  | "PROJECTION_PAYLOAD_TAMPERED"
+  | "OBSIDIAN_TYPE_CONFLICT"
+  | "RUBRIC_INVALID"
+  | "TEMPLATE_TRANSACTION_INCONSISTENT"
+  | "TEMPLATE_TRANSACTION_MANIFEST_INVALID";
+
+export interface Diagnostic {
+  readonly code: DiagnosticCode;
+  readonly templateId?: TemplateId;
+  readonly path?: string;
+  readonly field?: string;
+  readonly message?: string;
+  readonly extensions?: Extensions;
+}
+
 export type ControlKind = "policy" | "taxonomy" | "projection";
 export type ControlPath = ".oms/template-policy.json" | ".oms/taxonomy.json" | ".oms/types.json";
-export type TransactionPath = TemplateSourcePath | ControlPath;
-export type TemplateTransactionMarkerPath = ".oms/template-migration.json" | ".oms/template-transaction.json" | ".oms/template-backfill.json";
+export type TemplateTransactionMarkerPath = ".oms/template-transaction.json";
+export type TransactionPath = ControlPath | ManagedTemplatePath;
 export type FileExpectation = { readonly state: "absent" } | { readonly state: "present"; readonly signature: Digest };
 export type VerifiedFileState = { readonly state: "absent" } | { readonly state: "present"; readonly bytes: Uint8Array; readonly signature: Digest };
-export interface ResolvedTemplateSourceSignatures { readonly templateId: TemplateId; readonly sourcePath: TemplateSourcePath; readonly inputSignature: Digest; readonly templateSignature: Digest; }
-export interface TemplateSemanticSnapshot { readonly input: InputV2; readonly inputDigest: Digest; readonly bindings: readonly TemplateBinding[]; readonly resolvedTemplates: readonly ResolvedTemplateSourceSignatures[]; }
-export interface ControlTransition<K extends ControlKind, P extends ControlPath> { readonly kind: K; readonly path: P; readonly expectedCurrent: FileExpectation; readonly current: VerifiedFileState; readonly proposed: Extract<VerifiedFileState, { readonly state: "present" }>; readonly action: "write" | "verify-only"; }
-export interface SourceTransition { readonly templateId: TemplateId; readonly path: TemplateSourcePath; readonly expectedCurrent: FileExpectation; readonly current: VerifiedFileState; readonly proposed: VerifiedFileState; readonly action: "write" | "delete" | "verify-only"; }
-export interface TemplateMove { readonly templateId: TemplateId; readonly strategy: "oms-managed-rename" | "register-already-moved" | "no-op"; readonly oldPath: TemplateSourcePath; readonly newPath: TemplateSourcePath; readonly sourceSignature: Digest; }
-export interface LogicalOperation { readonly kind: LogicalOperationKind; readonly templateId: TemplateId; readonly destinationClass: DestinationClass; readonly payloadDigest: Digest; readonly stableRelativeSuffix: null; }
-export interface PlannedPhysicalOutput { readonly finalVaultRelativePath: TransactionPath; readonly payloadDigest: Digest; }
-export interface TemplateCompositionManifest { readonly version: 1; readonly mode: TemplateMutationMode; readonly current: TemplateSemanticSnapshot; readonly proposed: TemplateSemanticSnapshot; readonly controls: readonly [ControlTransition<"policy", ".oms/template-policy.json">, ControlTransition<"taxonomy", ".oms/taxonomy.json">, ControlTransition<"projection", ".oms/types.json">]; readonly sources: readonly SourceTransition[]; readonly operations: readonly LogicalOperation[]; readonly diagnostics: readonly Diagnostic[]; readonly moves: readonly TemplateMove[]; readonly outputs: readonly PlannedPhysicalOutput[]; readonly approvalDigest: Digest; readonly outputDigest: Digest; }
-export interface SourceCasExpectation { readonly templateId: TemplateId; readonly path: TemplateSourcePath; readonly expected: FileExpectation; }
-export interface TemplateCasExpectation { readonly input: Digest; readonly controls: Readonly<{ policy: FileExpectation; taxonomy: FileExpectation; projection: FileExpectation; }>; readonly sources: readonly SourceCasExpectation[]; }
-export interface TemplateDryRunRequest { readonly dryRun: true; readonly approvedDigest?: never; }
-export interface TemplateApplyRequest { readonly dryRun?: false; readonly approvedDigest: Digest; }
-export type GuardedTemplateRequest = TemplateDryRunRequest | TemplateApplyRequest;
-export interface SourceProposal { readonly path: TemplateSourcePath; readonly bytes: Uint8Array; readonly publication: "write" | "verify-existing"; }
-export type TemplateSemanticChange =
-  | { readonly mode: "create"; readonly binding: TemplateBinding; readonly source: SourceProposal; }
-  | { readonly mode: "update"; readonly templateId: TemplateId; readonly binding: TemplateBinding; readonly source: SourceProposal; readonly moveStrategy?: "oms-managed-rename" | "register-already-moved"; }
-  | { readonly mode: "reclassify"; readonly templateId: TemplateId; readonly toClass: DestinationClass; }
-  | { readonly mode: "relocate-folder"; readonly templateFolder: TemplateFolderPath; }
-  | { readonly mode: "remove"; readonly templateId: TemplateId; readonly deleteSource: boolean; }
-  | { readonly mode: "default"; readonly templateId: TemplateId; }
-  | { readonly mode: "register-folder"; readonly folder: TemplateFolderRegistration; }
-  | {
-      readonly mode: "reconcile";
-      readonly census: CensusResult;
-      readonly ledgerDigest: Digest | null;
-      readonly answers: Readonly<Record<string, InterviewLedgerAnswer>>;
-      readonly proposedPolicy: TemplatePolicy;
-      readonly reviewedTemplateIds: readonly TemplateId[];
-    };
-export interface TaxonomyControlProposal { readonly expectedCurrent: FileExpectation; readonly proposedBytes: Uint8Array; readonly action: "write" | "verify-only"; }
-export interface TemplateCompositionOptions {
-  readonly expected: TemplateCasExpectation;
-  readonly taxonomy: TaxonomyControlProposal;
+
+export interface ControlTransition<K extends ControlKind, P extends ControlPath> {
+  readonly kind: K;
+  readonly path: P;
+  readonly expectedCurrent: FileExpectation;
+  readonly current: VerifiedFileState;
+  readonly proposed: Extract<VerifiedFileState, { readonly state: "present" }>;
+  readonly action: "write" | "verify-only";
 }
-export type TransactionVerifiedPath = { readonly path: TransactionPath; readonly state: "absent" } | { readonly path: TransactionPath; readonly state: "present"; readonly payloadDigest: Digest; };
-export type TemplateTransactionReceipt = { readonly status: "planned" | "unchanged"; readonly mode: TemplateMutationMode; readonly currentInputDigest: Digest; readonly proposedInputDigest: Digest; readonly approvalDigest: Digest; readonly outputDigest: Digest; readonly operations: readonly LogicalOperation[]; readonly moves: readonly TemplateMove[]; readonly outputs: readonly PlannedPhysicalOutput[]; readonly writtenPaths: readonly []; readonly deletedPaths: readonly []; } | { readonly status: "applied" | "already-complete"; readonly mode: TemplateMutationMode; readonly transactionId: string; readonly currentInputDigest: Digest; readonly inputDigest: Digest; readonly approvedDigest: Digest; readonly outputDigest: Digest; readonly operations: readonly LogicalOperation[]; readonly moves: readonly TemplateMove[]; readonly writtenPaths: readonly TransactionPath[]; readonly deletedPaths: readonly TransactionPath[]; readonly verified: readonly TransactionVerifiedPath[]; readonly markerState: "complete"; } | { readonly status: "rejected" | "inconsistent"; readonly mode: TemplateMutationMode; readonly currentInputDigest: Digest; readonly proposedInputDigest: Digest; readonly approvalDigest: Digest; readonly outputDigest: Digest; readonly diagnostics: readonly Diagnostic[]; readonly repair: readonly TransactionPath[]; };
-export type MigrationMarker = { readonly status: "in-progress" | "complete"; readonly migrationId: string; readonly inputDigest: Digest; readonly approvalDigest: Digest; readonly outputDigest?: Digest; readonly checksum: Digest; readonly completedAt?: string; };
-export interface MigrationReceipt { readonly status: "planned" | "applied" | "already-complete"; readonly migrationId: string; readonly inputDigest: Digest; readonly approvalDigest: Digest; readonly outputDigest?: Digest; readonly diagnostics: readonly Diagnostic[]; }
+
+export interface ManagedDraftExpectation {
+  readonly templateId: TemplateId | null;
+  readonly path: ManagedTemplatePath;
+  readonly expected: FileExpectation;
+}
+
+export interface ManagedDraftTransition {
+  readonly templateId: TemplateId | null;
+  readonly path: ManagedTemplatePath;
+  readonly expectedCurrent: FileExpectation;
+  readonly current: VerifiedFileState;
+  readonly proposed: VerifiedFileState;
+  readonly action: "write" | "verify-only";
+}
+
+export interface LogicalOperation {
+  readonly kind: "commit-contract";
+  readonly templateId: TemplateId | null;
+  readonly payloadDigest: Digest;
+}
+
+export interface PlannedPhysicalOutput {
+  readonly finalVaultRelativePath: TransactionPath;
+  readonly payloadDigest: Digest;
+}
+
+/** Approval manifest for policy, taxonomy, projection, and approved managed drafts. User sources are not outputs. */
+export interface TemplateCompositionManifest {
+  readonly version: 1;
+  readonly markerPath: TemplateTransactionMarkerPath;
+  readonly controls: readonly [
+    ControlTransition<"policy", ".oms/template-policy.json">,
+    ControlTransition<"taxonomy", ".oms/taxonomy.json">,
+    ControlTransition<"projection", ".oms/types.json">,
+  ];
+  readonly drafts: readonly ManagedDraftTransition[];
+  readonly operations: readonly LogicalOperation[];
+  readonly diagnostics: readonly Diagnostic[];
+  readonly outputs: readonly PlannedPhysicalOutput[];
+  readonly approvalDigest: Digest;
+  readonly outputDigest: Digest;
+}
+
+export interface TemplateCasExpectation {
+  readonly controls: Readonly<{
+    policy: FileExpectation;
+    taxonomy: FileExpectation;
+    projection: FileExpectation;
+  }>;
+  readonly drafts: readonly ManagedDraftExpectation[];
+}
+
+export interface TemplateDryRunRequest {
+  readonly dryRun: true;
+  readonly approvedDigest?: never;
+}
+export interface TemplateApplyRequest {
+  readonly dryRun?: false;
+  readonly approvedDigest: Digest;
+}
+export type GuardedTemplateRequest = TemplateDryRunRequest | TemplateApplyRequest;
+
+export interface TemplateTransactionMarker {
+  readonly status: "in-progress" | "complete";
+  readonly transactionId: string;
+  readonly approvalDigest: Digest;
+  readonly outputDigest?: Digest;
+}
+
+export interface TransactionVerifiedPath {
+  readonly path: TransactionPath;
+  readonly state: "absent" | "present";
+  readonly payloadDigest?: Digest;
+}
+
+export type TemplateTransactionReceipt =
+  | {
+      readonly status: "planned" | "unchanged";
+      readonly approvalDigest: Digest;
+      readonly outputDigest: Digest;
+      readonly outputs: readonly PlannedPhysicalOutput[];
+    }
+  | {
+      readonly status: "applied" | "already-complete";
+      readonly transactionId: string;
+      readonly approvalDigest: Digest;
+      readonly outputDigest: Digest;
+      readonly writtenPaths: readonly TransactionPath[];
+      readonly verified: readonly TransactionVerifiedPath[];
+      readonly markerState: "complete";
+    }
+  | {
+      readonly status: "resume-required" | "inconsistent" | "rejected";
+      readonly approvalDigest: Digest | null;
+      readonly outputDigest: Digest | null;
+      readonly diagnostics: readonly Diagnostic[];
+    };
