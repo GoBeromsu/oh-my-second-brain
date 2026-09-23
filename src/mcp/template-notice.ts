@@ -20,12 +20,13 @@ export interface TemplateChangeNotice {
   readonly pendingDigest: Digest;
   readonly pendingCount: number;
   readonly actions: typeof TEMPLATE_CHANGE_NOTICE_ACTIONS;
+  /**
+   * Mode hint only. This is not a complete CallToolRequest: OMS never invents
+   * proposals, and a host must not replay `next` as interview-next.
+   */
   readonly next: {
-    readonly tool: "oms_write";
-    readonly arguments: {
-      readonly op: "template";
-      readonly mode: "interview-next";
-    };
+    readonly skill: "interview";
+    readonly mode: "interview-next";
   };
 }
 
@@ -80,11 +81,8 @@ export function templateNoticeFromContext(context: TemplateReviewContext): Templ
     pendingCount: count,
     actions: TEMPLATE_CHANGE_NOTICE_ACTIONS,
     next: {
-      tool: "oms_write",
-      arguments: {
-        op: "template",
-        mode: "interview-next",
-      },
+      skill: "interview",
+      mode: "interview-next",
     },
   };
 }

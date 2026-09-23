@@ -42,6 +42,6 @@ Search never creates `.oms` and never mutates templates, notes, controls, indexe
 
 Search is read-only, including census and notice handling. A result may carry a machine `templateNotice` for a selected-folder source change. Surface the first notice exactly as `템플릿에 변경이 있습니다` with exactly `확인하기` and `나중에`; do not render a template name, hash, or change taxonomy. This requirement applies to long-lived sessions even when boot instructions are stale. `search` emits the notice once per process and pending digest, and again when that digest changes. `status` returns the full notice on every poll.
 
-`나중에` is host-only: it performs no server call and does not mutate the interview ledger. `확인하기` offers `/interview` and does not write source bytes or block search. Do not run interview questions or `commit-contracts` here.
+`나중에` is host-only: it performs no server call and does not mutate the interview ledger. `확인하기` offers `/interview` and does not write source bytes or block search. `templateNotice.next` is a mode hint, not a CallToolRequest: do not replay it as `interview-next`. Do not run interview questions or `commit-contracts` here.
 
 The surface is five MCP tools and eight skills.

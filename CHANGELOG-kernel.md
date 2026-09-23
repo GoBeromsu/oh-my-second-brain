@@ -3,6 +3,7 @@
 Domain logic changes belong here.
 
 ## [Unreleased]
+- Guide now binds a saved note to the template it declares when the caller omits `templateId`, matching check. Passing `templateId: null` still uses the default layer only.
 
 - Version 4 contracts compose a user-owned property pool, an always-on default layer, and optional additive template constraints. Approved Markdown remains byte-exact; raw source or managed-draft drift reports locally without replacing the approved snapshot. Full derived-projection validation and transaction-generation checks reject inconsistent writing evaluations.
 - Contract publication confines outputs to approved controls and managed drafts, checks exact approval and current-byte preconditions, and supports honest interrupted-publication recovery. A completed publication marker does not make later user draft edits a global reading failure.

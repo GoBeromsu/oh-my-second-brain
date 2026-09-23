@@ -28,7 +28,7 @@ import {
 } from "../conventions/completion-contract.js";
 import type { JsonValue } from "../templates/types.js";
 import { loadResolvedTemplates } from "../templates/resolver.js";
-import { getWriteGuidance, prepareApprovedWrite, type WritePreparation } from "./guidance.js";
+import { declaredTemplateId, getWriteGuidance, prepareApprovedWrite, type WritePreparation } from "./guidance.js";
 import { admitWriteTarget, verifyVaultNotePath, type WriteTarget } from "./safe.js";
 
 /**
@@ -281,16 +281,6 @@ function evaluateSavedNote(note: ReadSnapshot, preparation: WritePreparation): E
   return { note, machine: machineEvaluation(result.violations, binding) };
 }
 
-/** The template a saved note declares for itself, or null when it declares none. */
-async function declaredTemplateId(vault: string, notePath: string): Promise<string | null | undefined> {
-  const verified = await verifyVaultNotePath(vault, notePath);
-  // An unsafe path is refused downstream by guidance; identity stays unknown here.
-  if (!verified.ok) return undefined;
-  const parsed = parseNote(await readFile(verified.absolutePath, "utf8"));
-  const declared = parsed.frontmatter["template"];
-  if (typeof declared === "string" && declared.trim() !== "") return declared;
-  return declared === undefined ? null : undefined;
-}
 
 async function resolvePreparation(
   request: Pick<CheckRequest, "target" | "notePath" | "templateId">,

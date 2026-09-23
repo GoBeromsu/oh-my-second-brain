@@ -81,7 +81,7 @@ describe("template notice", () => {
       pendingDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       pendingCount: 1,
       actions: TEMPLATE_CHANGE_NOTICE_ACTIONS,
-      next: { tool: "oms_write", arguments: { op: "template", mode: "interview-next" } },
+      next: { skill: "interview", mode: "interview-next" },
     });
     expect(templateNoticeInstruction(notice!)).toBe(TEMPLATE_CHANGE_NOTICE_MESSAGE);
     expect(templateNoticeInstruction(notice!)).not.toContain("note");

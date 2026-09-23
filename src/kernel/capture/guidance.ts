@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { parseNote } from "../conventions/frontmatter.js";
 import { CompletionContractError, type CompletionCriterion, type CompletionDigest, type CompletionRubric, type TaskBinding, computeRubricDigest, computeTaskId, createTaskBinding, validateRubric } from "../conventions/completion-contract.js";
 import type { WriteRejection } from "../conventions/write-protocol.js";
 import { digestBytes } from "../templates/canonical.js";
@@ -174,7 +176,14 @@ export async function getWriteGuidance(request: WriteGuidanceRequest): Promise<W
 
   let templateId: string | null;
   try {
-    templateId = normalizeTemplateId(request.templateId);
+    if (request.templateId !== undefined) {
+      templateId = normalizeTemplateId(request.templateId);
+    } else if (typeof request.notePath === "string") {
+      const declared = await declaredTemplateId(request.target.vault, request.notePath);
+      templateId = declared === undefined ? normalizeTemplateId(undefined) : declared;
+    } else {
+      templateId = normalizeTemplateId(undefined);
+    }
   } catch (error: unknown) {
     const rejection = rejectionForGuidance(error);
     if (rejection === null) throw error;
@@ -217,6 +226,19 @@ export async function getWriteGuidance(request: WriteGuidanceRequest): Promise<W
     const rejection = rejectionForGuidance(error);
     if (rejection === null) throw error;
     return rejectedReport(rejection, templateId, verified?.notePath ?? null);
+  }
+}
+/** The template a saved note declares for itself, or null when it declares none. */
+export async function declaredTemplateId(vault: string, notePath: string): Promise<string | null | undefined> {
+  const verified = await verifyVaultNotePath(vault, notePath);
+  if (!verified.ok) return undefined;
+  try {
+    const parsed = parseNote(await readFile(verified.absolutePath, "utf8"));
+    const declared = parsed.frontmatter["template"];
+    if (typeof declared === "string" && declared.trim() !== "") return declared;
+    return declared === undefined ? null : undefined;
+  } catch {
+    return undefined;
   }
 }
 

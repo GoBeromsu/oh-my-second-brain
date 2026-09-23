@@ -4,6 +4,7 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 - Host-facing docs no longer show a copyable `interview-next` call without `proposals`. Confirming the template notice still starts that mode, but the same proposals array must reach review, answer, and commit.
+- The machine template notice `next` field is a mode hint (`skill: interview`, `mode: interview-next`), not a replayable CallToolRequest. OMS still does not invent proposals; `확인하기` enters `/interview`.
 
 ## [0.15.0] - 2026-09-19
 

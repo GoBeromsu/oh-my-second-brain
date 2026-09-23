@@ -169,7 +169,7 @@ describe("write guidance", () => {
     expect(report.approvedMarkdown?.templateLayer?.includes("<% tp.file.title %>")).toBe(true);
   });
 
-  it("returns the default contract only when templateId is omitted or null", async () => {
+  it("returns the default contract when templateId is omitted or null and the path is unsaved", async () => {
     const root = await installVault(true);
     const omitted = await expectUnchanged(root, () => getWriteGuidance({ target: target(root), notePath: NOTE_PATH }));
     const explicitNull = await expectUnchanged(root, () => getWriteGuidance({
@@ -191,6 +191,24 @@ describe("write guidance", () => {
       expect(report.preparation?.binding.templateId).toBeNull();
     }
     expect(omitted.contractDigest).toBe(explicitNull.contractDigest);
+  });
+
+  it("uses a saved note's declared template when templateId is omitted", async () => {
+    const root = await installVault(true);
+    await mkdir(join(root, "Custom"), { recursive: true });
+    await writeFile(join(root, NOTE_PATH), "---\ntemplate: literature\n---\n");
+    const omitted = await expectUnchanged(root, () => getWriteGuidance({ target: target(root), notePath: NOTE_PATH }));
+    const explicitNull = await expectUnchanged(root, () => getWriteGuidance({
+      target: target(root),
+      notePath: NOTE_PATH,
+      templateId: null,
+    }));
+    expect(omitted.status).toBe("guided");
+    expect(omitted.templateId).toBe("literature");
+    expect(omitted.approvedMarkdown?.templateLayer).toBe(LITERATURE_MARKDOWN);
+    expect(explicitNull.status).toBe("guided");
+    expect(explicitNull.templateId).toBeNull();
+    expect(explicitNull.approvedMarkdown?.templateLayer).toBeNull();
   });
 
   it("adds the selected template onto the default contract and binds the explicit path", async () => {
