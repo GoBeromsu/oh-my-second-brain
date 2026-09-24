@@ -9,7 +9,7 @@ mcp_args:
 
 # write
 
-The user owns meaning. The agent writes the note. OMS guides and checks; it never writes note bytes and does not judge whether the writing is good. `guide` and `check` do not write note bytes and do not render a template into a note. One exception is explicit and only about managed state: when `guide` is given the three `migration` ids for a historical version-3 or version-4 vault, it publishes that vault's version-5 contract in place — policy, settings, history, and a migration receipt — before selecting. Ordinary selection on a published vault writes nothing.
+The user owns meaning. The agent writes the note. OMS guides and checks; it never writes note bytes and does not judge whether the writing is good. `guide` and `check` do not write note bytes and do not render a template into a note. One exception is explicit and only about managed state: when `guide` is given the three `migration` ids for a historical version-3 or version-4 vault, it publishes that vault's version-5 contract in place — policy, settings, history, and a migration receipt — before selecting. Ordinary selection on a published vault writes nothing inside the vault; it does reserve a connection and open a minimal session under the external runtime root, which is where the locator you pass to `check` lives.
 
 ```text
 /write <note-path> [template-id]
