@@ -1,6 +1,6 @@
 # Harness Architecture
 
-Oh My Second Brain is an Obsidian-first convention layer over plain Markdown. Obsidian remains the command center, and the vault remains readable without OMS. The user owns meaning. The agent writes and repairs notes. OMS guides, checks saved bytes, and judges completion. A separate host reviewer judges the approved rubric.
+Oh My Second Brain is an Obsidian-first convention layer over plain Markdown. Obsidian remains the command center, and the vault remains readable without OMS. The user owns meaning. The agent writes and repairs notes. OMS guides one note path at a time and checks saved bytes; the user and agent decide whether a note is worth keeping and repair it when needed.
 
 The sequence in this page is a repository sketch. It is not the G002 Excalidraw artifact. Nothing here is a host-smoke result or a product-gate pass. [ADR-014](./decisions/ADR-014-user-owned-contract-completion-harness.md) supersedes [ADR-013](./decisions/ADR-013-folder-sourced-template-contracts.md). [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as ideas that were not ported and were not turned into a research claim.
 
@@ -8,50 +8,46 @@ The sequence in this page is a repository sketch. It is not the G002 Excalidraw 
 
 The harness does not invent a vault's fields, folders, or personas.
 
-1. `.oms/template-policy.json` version 4 is the approved structure and meaning. The property pool holds type, format, and intent. The always-on default starts empty. An individual template only adds or tightens fields, headings, and criteria.
+1. `.oms/template-policy.json` version 5 is the only structural authority. Its property pool holds declared property definitions, its always-on common contract starts empty and has no Markdown file of its own, and each template is explicitly registered. A registration inherits the common contract and may add, tighten, or relax it where the user approved that relaxation. A value set is closed only when the document declares `valuePolicy: "closed"`; `allowedValues` alone is a suggestion.
 2. `.oms/taxonomy.json` owns placement and folder and link meaning. An explicit path or folder wins, then template placement, then a question. There is no Inbox fallback.
 3. `.obsidian/types.json` is a read-only observation. A type conflict does not replace the approved contract.
-4. `.oms/types.json` is the derived `oms.types.v2` projection. It is not semantic authority.
+4. `.oms/types.json` is a historical version-4 projection. Version 5 neither reads nor derives it, and nothing regenerates it.
 
-Approved Markdown is exact UTF-8, including BOM and line endings. Managed drafts under `.oms/templates/` stay editable. Local drift does not change the approved snapshot, and guide keeps returning that snapshot. OMS never executes raw Templater, JavaScript, or a private token, and it does not infer a contract from them. Unmanaged frontmatter is preserved and unchecked.
+Each registration records the path and content hash of the user's own Markdown source. OMS never rewrites, copies, or snapshots that source, and stores no approved Markdown bytes. A changed hash is drift evidence, not approval, identity, or authentication. OMS never executes raw Templater, JavaScript, or a private token, and it does not infer a contract from them. Unmanaged frontmatter is preserved and unchecked.
 
-There is no version-3 migration, renderer, note-write, link-apply, or backfill compatibility path.
+Historical version-3 and version-4 policies remain readable. A mutating selection migrates one in place only when its recorded evidence is proved and representable without changing its meaning; held or unproved history is reported as `review-required`, never overwritten.
 
-## Guide, then the agent, then check and complete
+## Guide, then the agent, then check
 
 Note bytes are not published by a guarded OMS writer.
 
-- **Guide.** Resolve a verified target and return approved Markdown, the effective contract, and the task binding. If the path is not chosen, ask. Do not issue a check task.
+- **Guide.** Select the contract for one explicit note path, reserve a vault connection, open a minimal session, and return its locator with the effective contract.
 - **Agent write or repair.** The agent saves ordinary Markdown with the host's file tools. A save is not completion. Repair stays off unless the user enabled it for post-write or explicit maintenance.
-- **Check.** Read the saved note, controls, and declared evidence. Return the machine result and an immutable review request. Refuse an unsaved body and a caller PASS.
-- **Separate review.** The host launches another role or conversation with a non-modification instruction. OMS does not launch a model provider or a reviewer daemon.
-- **Complete.** Read the same inputs again and combine the machine result with the structured review. Stop if those inputs differ.
+- **Check.** Read the saved bytes through that locator and report declared properties and headings with `semantic: "not-evaluated"`.
 
-A matching task id after a restart only shows that the snapshot bytes are the same. It does not authenticate the caller. A machine pass alone, a self-evaluation, or a bare PASS does not complete the work. Before-and-after agreement covers the evaluation inputs, not the whole vault.
+OMS has no completion call or reviewer protocol, and no reviewer role is shipped or registered. It neither issues review requests nor binds tasks, accepts caller PASS values, or keeps completion evidence. The agent and user retain responsibility for judging, keeping, and repairing ordinary notes.
 
-Instruction-only isolation is a valid result when the separate call, the non-modification instruction, and those inputs agree. Installed asset bytes are not launch proof and not enforcement proof. The receipt does not claim that OMS verified independence. Host mechanisms and the fail-open Claude write hook are specified in the [host asset contract](./adapters.md). Codex and Hermes declare no write hook. No hook is a hard save block.
+Installed asset bytes are not launch proof and not enforcement proof. Host mechanisms and the fail-open Claude write hook are specified in the [host asset contract](./adapters.md). Codex and Hermes declare no write hook. No hook is a hard save block.
 
-`completion.retryBudget` is the user's finite nonnegative integer, default 2, including 0. The harness does not add a cap of 3. The host owns retry counting. OMS inspects the chain submitted with the request and does not treat a stateless receipt as proof about retries it was not shown. An exhausted budget or a cancellation waits for the user. The contract is not weakened to obtain a pass.
-
-Missing or tampered approved authority stops this evaluation. It does not stop search.
+Missing or unreadable authority is reported distinctly from absent or empty control state. It stops the affected typed diagnosis but does not stop search, which remains available with a named reason.
 
 ## Config interview
 
-The tool-less `interview` skill owns setup and later contract create, add, change, and update. It asks one question, confirms a free-text interpretation when the question needs it, records what is still undecided, and commits only the user-approved diff by compare-and-swap. `template` is also tool-less: it shapes the contract and does not render a note.
+The tool-less `interview` skill agrees contract decisions with the user, writes an explicit version-5 policy, and publishes it. `template` is also tool-less: it shapes the contract and does not render a note.
 
-`oms template review --proposals`, `oms template answer`, and `oms template commit` are the leaves. Callers forward the server-returned question and compare-and-swap fields, send the same `proposals` on every call, and do not invent names. Publication writes policy, taxonomy, the projection, and approved managed Markdown. It does not write original sources, Obsidian types, or ordinary notes. Several files in one publish are not claimed to be one atomic commit. A torn or in-progress transaction stops guide, check, and complete. Search continues.
+Contract publication uses `oms template publish --policy <file.json> --transaction-id <uuid> [--yes]` or MCP `write` with `op: "template"` and `mode: "publish-contract"`. Without `--yes`, publication previews; with it, the compare-and-swap is against the exact policy bytes now on disk, so a valid hand-edited policy remains revisable. The output is the policy and one history record, never original sources, Obsidian types, ordinary notes, taxonomy, or a projection. The first publication is revision 0, and OMS keeps no interview ledger, question id, census digest, or server-issued approval digest.
 
-A source or draft edit is not approval. The notice text and its two buttons are fixed in the [host asset contract](./adapters.md). Deferring makes no server call. Confirming offers the interview. A general question, an unknown value, a note error, an unmanaged property, or a search does not start it.
+Every mutating template mode requires an explicit transaction id. `review-sources` is read-only and reports drifted, missing, unreadable, and held registrations. `acknowledge-source` requires the live reviewed digest and advances only the recorded hash; `relink-source` requires a genuinely missing original and the exact candidate path the user supplies. A source edit is not approval.
 
-`oms setup` proposes an empty version-4 policy and never modifies notes. It ships no bundled note shapes. Model lifecycle stays on `oms model install|select|waive|status`.
+`oms setup` connects the vault after the user approves the digest printed by `--dry-run`: it writes portable `.oms/settings.json` identity and the host connection, and can select a model in the same pass. It publishes no contract and ships no bundled note shapes. `.oms/settings.json` includes the vault UUID; `.oms/history/contracts/<revision>.json` records publication, source acknowledgment, and relink history. Model lifecycle stays on `oms model install|select|waive|status`.
 
-Admission still applies to contract publication and to derived-state repair: verified target, safe paths, the exact approved digest, and current compare-and-swap expectations. Rejection has no side effects. The current-directory fallback cannot admit those mutations. Precedence is in [verified targets](./verified-target.md).
+Admission still applies to contract publication and other mutations: verified target, safe paths, current compare-and-swap expectations, and explicit transaction id. Rejection has no side effects. The current-directory fallback cannot admit those mutations. Precedence is in [verified targets](./verified-target.md).
 
 ## Retrieval and maintenance
 
-Lexical, vector, HyDE, and typed-axis retrieval include unbound, invalid, and incomplete notes. Search does not write, review, or repair. Managed template sources stay out of ordinary note results. Typed axes fail loudly when the projection is missing, malformed, or stale. Vector, HyDE, and rerank fail loudly when their capability pair is missing or unusable, per ADR-007, rather than returning a fake match.
+Lexical, vector, HyDE, and typed-axis retrieval include unbound, invalid, and incomplete notes. Search does not write or repair. Registered template sources stay out of ordinary note results. Typed axes come from the version-5 policy and `.oms/taxonomy.json`; a missing or unreadable contract fails an affected axis loudly with a named reason. Vector, HyDE, and rerank fail loudly when their capability pair is missing or unusable, per ADR-007, rather than returning a fake match.
 
-`status` is read-only and does not stand in for completion. `doctor` diagnoses controls and indexes. Repairs are explicit managed-state operations after admission. Note backfill is not one of them. Projection regeneration uses the same dry-run and exact approved digest as other control publication.
+`status` is read-only. `doctor`, together with `validate`, diagnoses policy, portable settings, held registrations, source state, and indexes. An unreadable control has its own state, including `CONTRACT_POLICY_UNREADABLE`, `TEMPLATE_POLICY_UNREADABLE`, and `TEMPLATE_TAXONOMY_UNREADABLE`; publication refuses rather than overwriting it. Repairs are explicit managed-state operations after admission. Note backfill is not one of them. The engine store, graph cache, and node index are outside the vault and rebuildable.
 
 The external runtime journal may store digests and outcomes. It is not validity authority. A failed journal append does not change the verdict.
 
@@ -63,7 +59,7 @@ The public sets are intentionally different:
 - five capability-only local MCP tools: `write`, `search`, `link`, `status`, `doctor`;
 - fourteen CLI families, listed only in [the CLI map](./cli-map.md).
 
-Detail capabilities remain `op` and `mode` values under the five tools. `write` is annotated as a write because the interview and contract commit change managed state. `guide`, `check`, and `complete` write no vault bytes. Link's posture is read-only: suggest and check, not apply.
+Detail capabilities remain `op` and `mode` values under the five tools. `write` is annotated as a write because contract publication changes managed state. `guide` and `check` do not write note bytes. Link's posture is read-only: suggest and check, not apply.
 
 Host adapters differ natively, but they register the same MCP runtime and stamp the selected vault into `oms serve mcp --vault`. That stamp does not change resolution precedence: explicit target, local vault controls, bridge, `OMS_VAULT`, then read-only current-directory fallback.
 

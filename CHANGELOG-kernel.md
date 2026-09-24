@@ -4,6 +4,7 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- **Two dead code paths removed.** Source discovery built and returned a `blocked` set no caller read, while diagnostics already carried every blocked result; the Codex role-removal plan carried a `role.kind !== "file"` guard that no input could reach.
 - **Retired census declarations removed.** The approved-census digest domain, authority, binding-status, diff-kind and result shapes had no consumer; source discovery keeps the scanner types it actually uses.
 - **The retired version-4 template harness is gone from the library.** The transaction subsystem, the interview ledger, the version-4 body evaluator and its write-contract wrapper, the approved-snapshot view types, the placement assertion, and the torn-read guard had no consumer outside their own tests and a stale barrel. The publication lease case now holds the lease directly and checks the one real writer instead of asserting against a module no route can reach.
 - **Source review is read-only admission and names the snapshot it read.** `reviewContractSources` no longer demands a writable target, so a deliberately read-only target such as a legacy bridge can be reviewed, while acknowledgment, relocation, and publication still require a verified writable one. The review result carries the digest of the exact policy bytes it read, so a caller can prove its output and the contract it renders came from the same snapshot instead of trusting a revision number that a same-revision rewrite would not change.

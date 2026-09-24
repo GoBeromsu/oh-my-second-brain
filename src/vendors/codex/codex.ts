@@ -245,13 +245,12 @@ async function planCodexReviewerRemoval(codexDir: string): Promise<ReviewerRemov
   if (role.kind === "foreign" || provenance.kind === "foreign") {
     return { ...none, leftUnowned: role.kind === "foreign" ? destination.rolePath : destination.provenancePath };
   }
-  if (role.kind === "absent" && provenance.kind === "absent") return none;
-  if (role.kind === "absent" && provenance.kind === "file") {
+  if (role.kind === "absent") {
+    if (provenance.kind === "absent") return none;
     return provenance.provenance !== null
       ? { ...none, removeProvenance: true }
       : { ...none, leftUnowned: destination.provenancePath };
   }
-  if (role.kind !== "file") return none;
   const digest = digestOneFile(CODEX_REVIEWER_FILENAME, role.bytes);
   if (provenance.kind === "file" && provenance.provenance !== null && digest === provenance.provenance.skillTreeDigest) {
     return { ...none, removeRole: true, removeProvenance: true };

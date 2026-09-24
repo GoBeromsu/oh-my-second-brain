@@ -287,7 +287,7 @@ async function collectSources(
   root: string,
   requested: readonly TemplateCensusSelection[],
   initialPaths: readonly string[] = [],
-): Promise<{ sources: ReadySource[]; blocked: Set<string>; missing: string[]; diagnostics: CensusDiagnostic[] }> {
+): Promise<{ sources: ReadySource[]; missing: string[]; diagnostics: CensusDiagnostic[] }> {
   const diagnostics: CensusDiagnostic[] = [];
   const files = new Set<string>(initialPaths);
   const budget: Budget = { files: files.size, directories: 0, exhausted: false };
@@ -307,7 +307,6 @@ async function collectSources(
     }
   }
   const sources: ReadySource[] = [];
-  const blocked = new Set<string>();
   const missing: string[] = [];
   for (const path of [...files].sort(compareText)) {
     const read = await readCandidate(root, path as TemplateSourcePath);
@@ -316,14 +315,13 @@ async function collectSources(
       continue;
     }
     if (read.state === "blocked") {
-      blocked.add(path);
       pushDiagnostic(diagnostics, read.diagnostic);
       continue;
     }
     sources.push(read.source);
     for (const item of read.source.diagnostics) pushDiagnostic(diagnostics, item);
   }
-  return { sources, blocked, missing, diagnostics };
+  return { sources, missing, diagnostics };
 }
 
 export interface TemplateSourceInventory {

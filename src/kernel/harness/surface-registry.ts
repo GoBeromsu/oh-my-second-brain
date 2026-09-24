@@ -103,7 +103,8 @@ export const HARNESS_CLI_COMMANDS: readonly HarnessCliCommandSurface[] = [
 ];
 
 export const HARNESS_MCP_TOOLS: readonly HarnessMcpToolSurface[] = [
-  // Mixed: guide/check/complete do not write note bytes; approved control commit mutates.
+  // Mixed: guide and check do not write note bytes; contract publication and
+  // confirmed source changes mutate.
   { name: "write", owner: "capture", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
   { name: "search", owner: "retrieval", posture: "read", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
   { name: "link", owner: "capture", posture: "read", destructive: false, idempotent: true, openWorld: false, stability: "stable" },
