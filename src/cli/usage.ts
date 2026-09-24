@@ -75,8 +75,8 @@ oh-my-second-brain — Oh My Second Brain convention layer for Obsidian vaults
 
 Usage:
   oh-my-second-brain setup [--vault <path>] [--dry-run | --yes --approved-digest <sha256:...>]
-  oh-my-second-brain template <scan|list|show|check|regenerate-types|review|answer|commit> [options]
-  oh-my-second-brain note <guide|check|complete|audit|get> [options]
+  oh-my-second-brain template <list|show|scan|check|publish|review-sources|acknowledge-source|relink-source> [options]
+  oh-my-second-brain note <guide|check|audit|get> [options]
   oh-my-second-brain link <suggest|check> [options]
   oh-my-second-brain bridge <add|remove|status> [options]
   oh-my-second-brain search <query|context> [options]

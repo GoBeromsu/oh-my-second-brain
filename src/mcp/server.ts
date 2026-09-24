@@ -150,10 +150,6 @@ const number = { type: "number" };
 const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
 const digestSchema = { type: "string", pattern: "^sha256:[0-9a-f]{64}$" };
-const nullableDigestSchema = { anyOf: [digestSchema, { type: "null" }] };
-// Explicit contract proposals. Contract meaning enters OMS only this way; it is
-// never derived from a file name or from template syntax.
-const proposalsSchema = { type: "array", items: { } };
 const jsonValue = { };
 const axisScalar = { anyOf: [string, number, boolean] };
 const axisValue = { anyOf: [axisScalar, { type: "array", items: axisScalar }] };
@@ -172,7 +168,7 @@ const operations: Record<string, readonly Operation[]> = {
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "check", name: "oms_link_check", properties: { notePath: string, folder: string }, required: ["notePath"] }],
   status: [{ name: "oms_graph_status", direct: true }, { op: "graph", name: "oms_graph_status" }],
-  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "regenerate-types", name: "oms_regenerate_types", properties: { dryRun: boolean, approvedDigest: digestSchema } }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number, repairMode: { ...string, enum: ["rebuild", "drop"] }, dryRun: boolean }, required: ["mode"] }],
+  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number, repairMode: { ...string, enum: ["rebuild", "drop"] }, dryRun: boolean }, required: ["mode"] }],
 };
 export const demotedOperationNames = [...new Set(Object.values(operations)
   .flatMap((toolOperations) => toolOperations.map((operation) => operation.name)))]
@@ -252,61 +248,26 @@ function operationSchema(tool: string): Tool["inputSchema"] {
     const base = { op: { ...string, const: op }, ...properties };
     const baseRequired = ["op", ...required];
     if (op === "template") {
+      const base = { op: { ...string, const: "template" }, transactionId: string, confirmed: boolean } as const;
       branches.push({
         additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          transactionId: string,
-          approvedDigest: digestSchema,
-        },
-        required: ["op", "transactionId", "approvedDigest"],
+        properties: { ...base, mode: { const: "publish-contract" }, policy: jsonValue },
+        required: ["op", "mode", "policy", "transactionId"],
       });
       branches.push({
         additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          mode: { const: "interview-next" },
-          proposals: proposalsSchema,
-        },
+        properties: { op: { ...string, const: "template" }, mode: { const: "review-sources" }, templateId: string },
         required: ["op", "mode"],
       });
       branches.push({
         additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          mode: { const: "interview-answer" },
-          questionId: digestSchema,
-          answer: jsonValue,
-          proposals: proposalsSchema,
-          censusDigest: digestSchema,
-          expectedLedgerDigest: nullableDigestSchema,
-        },
-        required: ["op", "mode", "questionId", "answer", "censusDigest", "expectedLedgerDigest"],
+        properties: { ...base, mode: { const: "acknowledge-source" }, templateId: string, reviewedDigest: digestSchema },
+        required: ["op", "mode", "templateId", "reviewedDigest", "transactionId"],
       });
       branches.push({
         additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          mode: { const: "commit-contracts" },
-          censusDigest: digestSchema,
-          expectedLedgerDigest: nullableDigestSchema,
-          proposals: proposalsSchema,
-          dryRun: { const: true },
-        },
-        required: ["op", "mode", "censusDigest", "expectedLedgerDigest", "dryRun"],
-      });
-      branches.push({
-        additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          mode: { const: "commit-contracts" },
-          censusDigest: digestSchema,
-          expectedLedgerDigest: nullableDigestSchema,
-          proposals: proposalsSchema,
-          dryRun: { const: false },
-          approvedDigest: digestSchema,
-        },
-        required: ["op", "mode", "censusDigest", "expectedLedgerDigest", "approvedDigest"],
+        properties: { ...base, mode: { const: "relink-source" }, templateId: string, candidatePath: string },
+        required: ["op", "mode", "templateId", "candidatePath", "transactionId"],
       });
       continue;
     }
@@ -345,15 +306,6 @@ function operationSchema(tool: string): Tool["inputSchema"] {
       branches.push({ additionalProperties: false, properties: syncProperties, required: ["op", "mode"] });
       branches.push({ additionalProperties: false, properties: embedProperties, required: ["op", "mode"] });
       branches.push({ additionalProperties: false, properties: repairProperties, required: ["op", "mode", "repairMode"] });
-      continue;
-    }
-    if (op === "regenerate-types" || op === "backfill-defaults") {
-      const unguarded: Record<string, object> = {};
-      for (const [key, value] of Object.entries(base)) {
-        if (key !== "dryRun" && key !== "approvedDigest") unguarded[key] = value;
-      }
-      branches.push({ additionalProperties: false, properties: { ...unguarded, dryRun: { const: true } }, required: [...baseRequired, "dryRun"] });
-      branches.push({ additionalProperties: false, properties: { ...unguarded, dryRun: { const: false }, approvedDigest: digestSchema }, required: [...baseRequired, "approvedDigest"] });
       continue;
     }
     branches.push({ additionalProperties: false, properties: base, required: baseRequired });

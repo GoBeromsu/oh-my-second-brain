@@ -103,9 +103,8 @@ describe("MCP detail-tool demotion", () => {
       expect(JSON.stringify(scan)).not.toContain("approvedMarkdown\":\"");
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
       // The derived projection repair is retired: the explicit contract is the
-      // authority, so there is nothing to regenerate from it and no alias.
-      const retired = await call("doctor", { op: "regenerate-types", dryRun: true });
-      expect(retired.content[0]?.type === "text" ? retired.content[0].text : "").toMatch(/does not match|Unknown operation|Unknown Oh My Second Brain tool/u);
+      // authority, so it is neither advertised nor reachable, with no alias.
+      expect(JSON.stringify(tools.get("doctor")?.inputSchema)).not.toContain("regenerate-types");
       expect(payload(await call("search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", targets: ["references/clean-architecture.md"] })).documents).toBeInstanceOf(Array);

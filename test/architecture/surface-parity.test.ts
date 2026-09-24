@@ -409,7 +409,6 @@ function assertServerOperationInventory(): void {
     "audit",
     "build-graph",
     "cleanup",
-    "regenerate-types",
     "sync-embeddings",
     "validate",
   ]);

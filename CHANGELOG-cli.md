@@ -4,6 +4,7 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms --help` lists the current template and note leaves.** The root usage advertised the retired `regenerate-types|review|answer|commit` and `complete` leaves after they were removed.
 - **`oms note audit` reports the contract diagnosis.** Its diagnostics come from the published contract's own observation instead of the historical control doctor, and the retired `invalidNotes` field is gone.
 - **`oms template` reads the explicit contract, and `regenerate-types` is retired with no alias.** `list`, `show`, and `scan` report the published registrations, their effective contracts, their source identity, and their observed source state; `check` is the contract diagnosis, reporting the policy, the portable settings, held registrations, and each registered source. Nothing derives `.oms/types.json` any more, because the explicit contract is the authority rather than something projected from it.
 - **`oms template review`, `answer`, and `commit` are removed with no alias.** The family is `scan`, `list`, `show`, `check`, `regenerate-types`, `publish`, `review-sources`, `acknowledge-source`, and `relink-source`. A retired leaf is reported as invalid arguments rather than accepted.

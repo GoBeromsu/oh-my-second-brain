@@ -38,73 +38,34 @@ describe("template-native MCP surface", () => {
     expect(validate("write", { op: "check", connectionId, sessionId, body: "unsaved" })).toBe(false);
   });
 
-  it("exposes the linear review protocol with canonical CAS and approval guards", () => {
+  it("exposes the explicit contract protocol with a transaction and confirmation", () => {
     const digest = `sha256:${"a".repeat(64)}`;
-    expect(validate("write", { op: "template", mode: "interview-next" })).toBe(true);
-    expect(validate("write", { op: "template", mode: "interview-next", dryRun: true })).toBe(false);
-    expect(validate("write", {
-      op: "template",
-      mode: "interview-answer",
-      questionId: digest,
-      answer: { required: true },
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-    })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "interview-answer",
-      questionId: digest,
-      answer: { required: true },
-      censusDigest: digest,
-      expectedLedgerDigest: "sha256:BAD",
-    })).toBe(false);
-    expect(validate("write", {
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      dryRun: true,
-    })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: digest,
-      dryRun: false,
-      approvedDigest: digest,
-    })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      dryRun: false,
-    })).toBe(false);
-    expect(validate("write", {
-      op: "template",
-      mode: "interview-answer",
-      questionId: digest,
-      answer: true,
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      question: [],
-    })).toBe(false);
+    const tx = "33333333-3333-4333-8333-333333333333";
+    // Publication carries the caller's document and one named transaction.
+    expect(validate("write", { op: "template", mode: "publish-contract", policy: { version: 5 }, transactionId: tx })).toBe(true);
+    expect(validate("write", { op: "template", mode: "publish-contract", policy: { version: 5 }, transactionId: tx, confirmed: true })).toBe(true);
+    expect(validate("write", { op: "template", mode: "publish-contract", policy: { version: 5 } })).toBe(false);
+    expect(validate("write", { op: "template", mode: "publish-contract", transactionId: tx })).toBe(false);
+    // Source review reads; both source changes need their own evidence.
+    expect(validate("write", { op: "template", mode: "review-sources" })).toBe(true);
+    expect(validate("write", { op: "template", mode: "review-sources", templateId: "note" })).toBe(true);
+    expect(validate("write", { op: "template", mode: "acknowledge-source", templateId: "note", reviewedDigest: digest, transactionId: tx, confirmed: true })).toBe(true);
+    expect(validate("write", { op: "template", mode: "acknowledge-source", templateId: "note", transactionId: tx })).toBe(false);
+    expect(validate("write", { op: "template", mode: "relink-source", templateId: "note", candidatePath: "Templates/moved.md", transactionId: tx })).toBe(true);
+    expect(validate("write", { op: "template", mode: "relink-source", templateId: "note", transactionId: tx })).toBe(false);
+    // The retired interview ledger has no schema branch at all.
+    expect(validate("write", { op: "template", mode: "acknowledge-source", templateId: "note", reviewedDigest: digest, transactionId: tx, censusDigest: digest })).toBe(false);
   });
 
   it("retires every template authoring and folder-registration mode", () => {
     const digest = `sha256:${"a".repeat(64)}`;
-    for (const mode of ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "register", "add-file", "later", "review"]) {
+    for (const mode of ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "register", "add-file", "later", "review", "interview-next", "interview-answer", "commit-contracts"]) {
       expect(validate("write", { op: "template", mode, dryRun: true }), mode).toBe(false);
+      expect(validate("write", { op: "template", mode }), mode).toBe(false);
     }
-    // Only the interview mutates contract configuration.
-    expect(validate("write", { op: "template", mode: "interview-next" })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      dryRun: true,
-    })).toBe(true);
+    // Publication and source review are the only contract mutations.
+    expect(validate("write", { op: "template", mode: "publish-contract", policy: {}, transactionId: "33333333-3333-4333-8333-333333333333", confirmed: true })).toBe(true);
+    expect(digest).toMatch(/^sha256:/u);
   });
 
   it("keeps link read-only and doctor free of note backfill", () => {

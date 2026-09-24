@@ -215,7 +215,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       search: ["context", "template-scan", "templates", "query", "index-status", "get-document"],
       link: ["suggest", "check"],
       status: ["graph"],
-      doctor: ["audit", "validate", "regenerate-types", "build-graph", "cleanup", "sync-embeddings"],
+      doctor: ["audit", "validate", "build-graph", "cleanup", "sync-embeddings"],
     };
 
     expect([...tools.keys()].sort()).toEqual(["doctor", "link", "search", "status", "write"]);
@@ -270,12 +270,16 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(mode?.enum).toBeUndefined();
     expect(mode?.const).toBeUndefined();
     expect(mode?.anyOf?.map((alternative) => alternative.const ?? alternative.enum)).toEqual([
-      "interview-next",
-      "interview-answer",
-      "commit-contracts",
+      "publish-contract",
+      "review-sources",
+      "acknowledge-source",
+      "relink-source",
     ]);
-    const dryRun = writeSchema.properties["dryRun"];
-    expect(dryRun?.anyOf).toEqual([{ const: true }, { const: false }]);
+    // A contract mutation is confirmed, not dry-run guarded: the retired
+    // dryRun/approvedDigest pair is absent from the write surface entirely.
+    expect(writeSchema.properties["dryRun"]).toBeUndefined();
+    expect(writeSchema.properties["approvedDigest"]).toBeUndefined();
+    expect(writeSchema.properties["confirmed"]).toEqual({ type: "boolean" });
 
     const write = validator.getValidator(tools.get("write")!.inputSchema);
     const search = validator.getValidator(tools.get("search")!.inputSchema);
@@ -289,16 +293,20 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(write({ op: "check", connectionId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" }).valid).toBe(true);
     expect(write({ op: "guide", notePath: "notes/a.md", binding: {} }).valid).toBe(false);
     expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(false);
-    expect(write({
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      dryRun: true,
-      approvedDigest: digest,
-    }).valid).toBe(false);
-    expect(doctor({ op: "regenerate-types", dryRun: false }).valid).toBe(false);
-    expect(doctor({ op: "regenerate-types", dryRun: false, approvedDigest: digest }).valid).toBe(true);
+    // Every retired interview-ledger payload is refused by the schema itself.
+    for (const payload of [
+      { op: "template", mode: "interview-answer", questionId: digest, answer: "required", censusDigest: digest, expectedLedgerDigest: null },
+      { op: "template", mode: "commit-contracts", censusDigest: digest, expectedLedgerDigest: null, dryRun: true },
+      { op: "template", mode: "commit-contracts", censusDigest: digest, expectedLedgerDigest: null, approvedDigest: digest },
+    ]) {
+      expect(write(payload).valid, JSON.stringify(payload)).toBe(false);
+    }
+    // Source review and relocation are what the surface accepts instead.
+    expect(write({ op: "template", mode: "acknowledge-source", templateId: "literature", reviewedDigest: digest, transactionId: "33333333-3333-4333-8333-333333333333", confirmed: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "relink-source", templateId: "literature", candidatePath: "Templates/moved.md", transactionId: "33333333-3333-4333-8333-333333333333" }).valid).toBe(true);
+    // The derived-projection repair is retired, so no branch accepts it.
+    expect(doctor({ op: "regenerate-types", dryRun: true }).valid).toBe(false);
+    expect(doctor({ op: "regenerate-types", dryRun: false, approvedDigest: digest }).valid).toBe(false);
     expect(status({}).valid).toBe(true);
     expect(status({ op: "graph", extra: true }).valid).toBe(false);
   });
@@ -504,10 +512,19 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(doctor({ op: "sync-embeddings", mode: "sync", repairMode: "drop" }).valid).toBe(false);
     expect(doctor({ op: "sync-embeddings", mode: "embed", dryRun: true }).valid).toBe(false);
     expect(doctor({ op: "sync-embeddings", mode: "sync", embed: false }).valid).toBe(false);
+    // The retired transaction resume is not a branch any more; a contract
+    // publication names its own transaction and carries the document.
     expect(write({
       op: "template",
       transactionId: "tx-resume",
       approvedDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    }).valid).toBe(false);
+    expect(write({
+      op: "template",
+      mode: "publish-contract",
+      policy: { version: 5 },
+      transactionId: "33333333-3333-4333-8333-333333333333",
+      confirmed: true,
     }).valid).toBe(true);
     const templateSource = { path: "Templates/OMS/people.md", content: "---\ntemplate: people\n---\n", publication: "write" };
     const templateBinding = { templateId: "people", destinationClass: "managed-default", renderer: "obsidian-core", sourceFolder: "Templates/OMS", sourcePath: "Templates/OMS/people.md", contract: "people", naming: "{{name}}" };
@@ -515,68 +532,23 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(write({ op: "template", mode: "regenerate", dryRun: true }).valid).toBe(false);
     const obsoleteRegistration = { op: "template", mode: "register-existing", templateId: "people", sourceFolder: "Templates/manual", sourcePath: "Templates/manual/people.template.md", renderer: "obsidian-core", filledBy: [], contract: "people", naming: "{{name}}", dryRun: true };
     expect(write(obsoleteRegistration).valid).toBe(false);
-    expect(write({ op: "template", mode: "interview-next" }).valid).toBe(true);
-    expect(write({ op: "template", mode: "interview-next", dryRun: true }).valid).toBe(false);
+    // The retired interview ledger has no branch left to validate against.
+    expect(write({ op: "template", mode: "interview-next" }).valid).toBe(false);
+    expect(write({ op: "template", mode: "review-sources" }).valid).toBe(true);
     const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-    expect(write({
-      op: "template",
-      mode: "interview-answer",
-      questionId: digest,
-      answer: "required",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-    }).valid).toBe(true);
-    expect(write({
-      op: "template",
-      mode: "interview-answer",
-      questionId: "not-a-digest",
-      answer: "required",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-    }).valid).toBe(false);
-    expect(write({
-      op: "template",
-      mode: "interview-answer",
-      questionId: digest,
-      answer: "required",
-      censusDigest: "not-a-digest",
-      expectedLedgerDigest: null,
-    }).valid).toBe(false);
-    expect(write({
-      op: "template",
-      mode: "interview-answer",
-      questionId: digest,
-      answer: "required",
-      censusDigest: digest,
-    }).valid).toBe(false);
-    expect(write({
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      dryRun: true,
-    }).valid).toBe(true);
-    expect(write({
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      approvedDigest: digest,
-    }).valid).toBe(true);
-    expect(write({
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-    }).valid).toBe(false);
-    expect(write({
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      dryRun: true,
-      approvedDigest: digest,
-    }).valid).toBe(false);
+    // Every retired interview-ledger payload is refused by the schema itself.
+    for (const payload of [
+      { op: "template", mode: "interview-next" },
+      { op: "template", mode: "interview-answer", questionId: digest, answer: "required", censusDigest: digest, expectedLedgerDigest: null },
+      { op: "template", mode: "commit-contracts", censusDigest: digest, expectedLedgerDigest: null, dryRun: true },
+      { op: "template", mode: "commit-contracts", censusDigest: digest, expectedLedgerDigest: null, approvedDigest: digest },
+    ]) {
+      expect(write(payload).valid, JSON.stringify(payload)).toBe(false);
+    }
+    // Source review and relocation are what the surface accepts instead.
+    expect(write({ op: "template", mode: "review-sources", templateId: "literature" }).valid).toBe(true);
+    expect(write({ op: "template", mode: "acknowledge-source", templateId: "literature", reviewedDigest: digest, transactionId: "33333333-3333-4333-8333-333333333333", confirmed: true }).valid).toBe(true);
+    expect(write({ op: "template", mode: "relink-source", templateId: "literature", candidatePath: "Templates/moved.md", transactionId: "33333333-3333-4333-8333-333333333333" }).valid).toBe(true);
     expect(JSON.stringify(toolByName.get("search")!.inputSchema)).not.toContain("concept");
   });
 
