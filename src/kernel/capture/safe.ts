@@ -42,7 +42,7 @@ export async function admitWriteTarget(target: WriteTarget): Promise<WriteReject
   return rejection(
     "admission",
     "target-unverified",
-    `Refusing to guide, check, or complete: ${reason}. An explicit vault target is accepted; a current-directory inference, a legacy v1 bridge, and an unexpected source are not.`,
+    `Refusing to guide or check: ${reason}. An explicit vault target is accepted; a current-directory inference, a legacy v1 bridge, and an unexpected source are not.`,
     "pass an explicit vault target, run `oms setup` in your Obsidian vault, or set OMS_VAULT, then retry",
   );
 }

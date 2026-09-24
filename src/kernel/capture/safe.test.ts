@@ -22,7 +22,8 @@ describe("write target source admission", () => {
     expect(refused?.stage).toBe("admission");
     expect(refused?.code).toBe("target-unverified");
     expect(refused?.recoverable).toBe(true);
-    expect(refused?.message).toMatch(/guide, check, or complete/);
+    expect(refused?.message).toMatch(/guide or check/);
+    expect(refused?.message).not.toMatch(/\bcomplete\b/u);
     expect(refused?.message).toMatch(origin);
     expect(refused?.message).toMatch(detail);
     expect(refused?.message).not.toMatch(/Refusing to write/);
