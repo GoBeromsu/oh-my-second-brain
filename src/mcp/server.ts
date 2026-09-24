@@ -1,5 +1,4 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -12,8 +11,6 @@ import {
 import { admitWriteTarget } from "../kernel/capture/safe.js";
 import { acknowledgeContractSource, checkContract, diagnoseContract, publishContract, relinkContractSource, reviewContractSources, selectContract, ContractServiceError } from "../kernel/templates/service.js";
 import { readVaultSettings } from "../kernel/templates/vault-settings.js";
-import { parseContractPolicyV5 } from "../kernel/templates/contract-v5.js";
-import { inspectContractSource } from "../kernel/templates/source-registry.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import { buildTemplateNoteIndex, deriveTemplateRetrievalAxes } from "../kernel/templates/index.js";
 import { readSearchTemplateSource } from "../kernel/engine/retrieval/template-source.js";
@@ -330,7 +327,7 @@ export const omsMcpTools: Tool[] = [
   {
     name: "write",
     title: "Oh My Second Brain write",
-    description: "Guide a note before the agent writes it, check the saved file, complete it with a separate review, and publish approved contract changes.",
+    description: "Select a contract before the agent writes a note, check the saved file against it, and publish explicit contract revisions or confirmed source changes.",
     inputSchema: operationSchema("write"),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
@@ -692,37 +689,29 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
     if (name === "oms_template_scan") {
       // Read-only review evidence for the explicit contract: registration
-      // identity, its source path, and drift state. Source bytes are never
-      // returned here, and Markdown is never parsed for meaning.
-      const meta = await readSearchTemplateSource(vault);
-      if (meta.source.templates === null) {
-        return jsonText({ vault, generationDigest: meta.digest, state: "unavailable", diagnostics: meta.diagnostics });
-      }
-      const policy = parseContractPolicyV5(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"));
-      const registrations = [];
-      for (const [id, entry] of Object.entries(policy.templates)) {
-        if (entry.status !== "active") {
-          registrations.push({ templateId: id, status: entry.status, reasons: entry.reasons });
-          continue;
-        }
-        const review = await inspectContractSource(vault, policy, id);
-        registrations.push({
-          templateId: id,
-          status: "active" as const,
-          sourceIdentity: review.sourceIdentity,
-          path: review.path,
-          approvedDigest: review.approvedDigest,
-          currentDigest: review.currentDigest,
-          state: review.state,
-        });
+      // identity, its source path, and drift state, all from one policy read so
+      // the revision and the registrations cannot disagree. Source bytes are
+      // never returned here, and Markdown is never parsed for meaning.
+      const review = await reviewContractSources({ target: { vault, source } }).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)));
+      if (review instanceof Error) {
+        const meta = await readSearchTemplateSource(vault);
+        return jsonText({ vault, generationDigest: meta.digest, state: "unavailable", diagnostics: [...meta.diagnostics, { code: "CONTRACT_UNVERIFIABLE", path: ".oms/template-policy.json", message: review.message }] });
       }
       return jsonText({
         vault,
-        generationDigest: meta.digest,
-        revision: policy.revision,
-        common: policy.common.status,
-        registrations,
-        diagnostics: meta.diagnostics,
+        revision: review.revision,
+        registrations: [
+          ...review.reviews.map(item => ({
+            templateId: item.templateId,
+            status: "active" as const,
+            sourceIdentity: item.sourceIdentity,
+            path: item.path,
+            approvedDigest: item.approvedDigest,
+            currentDigest: item.currentDigest,
+            state: item.state,
+          })),
+          ...review.held.map(item => ({ templateId: item.templateId, status: "review-required" as const, reasons: item.reasons })),
+        ],
       });
     }
 

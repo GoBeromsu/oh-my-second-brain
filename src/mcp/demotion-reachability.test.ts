@@ -89,8 +89,7 @@ describe("MCP detail-tool demotion", () => {
       expect(payload(await call("doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
       const scan = payload(await call("search", { op: "template-scan" }));
       expect(scan).toMatchObject({
-        generationDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
-        common: "active",
+        revision: expect.any(Number),
         registrations: [expect.objectContaining({
           templateId: "note",
           status: "active",

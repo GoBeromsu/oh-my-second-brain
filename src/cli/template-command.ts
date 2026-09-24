@@ -15,8 +15,8 @@ type Options = Record<string, string | boolean>;
 interface Parsed { readonly verb: string; readonly positional: readonly string[]; readonly options: Options; }
 type Target = { readonly vault: string; readonly source: WriteTargetSource };
 
-const VALUE_FLAGS = new Set(["vault", "approved-digest", "answer", "census-digest", "ledger-digest", "proposals", "template-id", "reviewed-digest", "candidate-path", "transaction-id", "policy"]);
-const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "help"]);
+const VALUE_FLAGS = new Set(["vault", "template-id", "reviewed-digest", "candidate-path", "transaction-id", "policy"]);
+const BOOLEAN_FLAGS = new Set(["yes", "help"]);
 
 function fail(message: string): never { throw new Error(`TEMPLATE_ARGS_INVALID: ${message}`); }
 function parse(argv: readonly string[]): Parsed {
@@ -69,25 +69,30 @@ async function run(parsed: Parsed): Promise<void> {
   if (parsed.verb === "list" || parsed.verb === "show") {
     only(parsed, ["vault"], parsed.verb === "list" ? 0 : 1);
     const resolved = await target(parsed.options);
+    // One review read supplies the revision, the registrations, and their source
+    // state, so a listed contract and its source state cannot disagree.
     const review = await reviewContractSources({ target: resolved });
+    const byTemplate = new Map(review.reviews.map(item => [item.templateId, item]));
+    const held = new Map(review.held.map(item => [item.templateId, item.reasons]));
     const policy = parseContractPolicyV5(await readFile(path.join(resolved.vault, ".oms", "template-policy.json"), "utf8"));
+    if (policy.revision !== review.revision) fail("the published contract changed while it was being read; run the command again");
     if (parsed.verb === "list") {
       const common = composeContractV5(policy, null);
       print({
-        vault: resolved.vault,
-        revision: policy.revision,
+        vault: review.vault,
+        revision: review.revision,
         common: policy.common.status === "active"
           ? { status: "active", contractDigest: common.contractDigest, fields: common.fields }
           : { status: "review-required", reasons: policy.common.reasons },
-        templates: Object.keys(policy.templates).sort().map(templateId => {
-          const entry = policy.templates[templateId]!;
-          if (entry.status !== "active") return { templateId, status: entry.status, reasons: entry.reasons };
+        templates: [...byTemplate.keys(), ...held.keys()].sort().map(templateId => {
+          const reasons = held.get(templateId);
+          if (reasons !== undefined) return { templateId, status: "review-required", reasons };
           return {
             templateId,
             status: "active",
             contractDigest: composeContractV5(policy, templateId).contractDigest,
-            source: { identity: entry.source.identity, path: entry.source.path },
-            sourceState: review.reviews.find(item => item.templateId === templateId)?.state ?? null,
+            source: { identity: byTemplate.get(templateId)!.sourceIdentity, path: byTemplate.get(templateId)!.path },
+            sourceState: byTemplate.get(templateId)!.state,
           };
         }),
         history: summarizeRuntimeHistory({ vaultPath: resolved.vault }),
@@ -95,19 +100,20 @@ async function run(parsed: Parsed): Promise<void> {
       return;
     }
     const id = validateTemplateId(parsed.positional[0]!);
-    const entry = policy.templates[id];
-    if (entry === undefined) throw new Error(`TEMPLATE_NOT_FOUND: ${id}`);
-    print(entry.status === "active"
-      ? {
-        vault: resolved.vault,
-        revision: policy.revision,
+    const reviewed = byTemplate.get(id);
+    const reasons = held.get(id);
+    if (reviewed === undefined && reasons === undefined) throw new Error(`TEMPLATE_NOT_FOUND: ${id}`);
+    print(reviewed === undefined
+      ? { vault: review.vault, revision: review.revision, templateId: id, status: "review-required", reasons }
+      : {
+        vault: review.vault,
+        revision: review.revision,
         templateId: id,
         status: "active",
         contract: composeContractV5(policy, id),
-        source: { identity: entry.source.identity, path: entry.source.path, rawDigest: entry.source.rawDigest },
-        sourceState: review.reviews.find(item => item.templateId === id)?.state ?? null,
-      }
-      : { vault: resolved.vault, revision: policy.revision, templateId: id, status: entry.status, reasons: entry.reasons });
+        source: { identity: reviewed.sourceIdentity, path: reviewed.path, rawDigest: reviewed.approvedDigest },
+        sourceState: reviewed.state,
+      });
     return;
   }
   if (parsed.verb === "scan") {
@@ -118,39 +124,6 @@ async function run(parsed: Parsed): Promise<void> {
     const discovery = await discoverRegisteredSources(resolved.vault, policy, settings?.templateRoots ?? []);
     print({ vault: resolved.vault, revision: policy.revision, roots: settings?.templateRoots ?? [], ...discovery });
     return;
-  }
-  if (parsed.verb === "publish") {
-    only(parsed, ["vault", "policy", "transaction-id", "yes"], 0);
-    const resolved = await target(parsed.options);
-    const raw = text(parsed.options, "policy");
-    const transactionId = text(parsed.options, "transaction-id");
-    if (raw === undefined || transactionId === undefined) fail("publish requires --policy and --transaction-id");
-    let policy: unknown;
-    try { policy = JSON.parse(await readFile(path.resolve(raw), "utf8")); }
-    catch { fail(`--policy must name a readable JSON contract document: ${raw}`); }
-    print(await publishContract({ target: resolved, policy, transactionId, confirmed: flag(parsed.options, "yes") })); return;
-  }
-  if (parsed.verb === "review-sources") {
-    only(parsed, ["vault", "template-id"], 0);
-    const resolved = await target(parsed.options);
-    const templateId = text(parsed.options, "template-id");
-    print(await reviewContractSources({ target: resolved, ...(templateId === undefined ? {} : { templateId }) })); return;
-  }
-  if (parsed.verb === "acknowledge-source" || parsed.verb === "relink-source") {
-    only(parsed, ["vault", "template-id", "reviewed-digest", "candidate-path", "transaction-id", "yes"], 0);
-    const resolved = await target(parsed.options);
-    const templateId = text(parsed.options, "template-id");
-    const transactionId = text(parsed.options, "transaction-id");
-    if (templateId === undefined || transactionId === undefined) fail(`${parsed.verb} requires --template-id and --transaction-id`);
-    const confirmed = flag(parsed.options, "yes");
-    if (parsed.verb === "acknowledge-source") {
-      const reviewedDigest = text(parsed.options, "reviewed-digest");
-      if (reviewedDigest === undefined) fail("acknowledge-source requires the --reviewed-digest observed during review");
-      print(await acknowledgeContractSource({ target: resolved, templateId, reviewedDigest, transactionId, confirmed })); return;
-    }
-    const candidatePath = text(parsed.options, "candidate-path");
-    if (candidatePath === undefined) fail("relink-source requires an explicit --candidate-path");
-    print(await relinkContractSource({ target: resolved, templateId, candidatePath, transactionId, confirmed })); return;
   }
   if (parsed.verb === "publish") {
     only(parsed, ["vault", "policy", "transaction-id", "yes"], 0);

@@ -247,7 +247,8 @@ async function requireSettings(vault: string): Promise<VaultSettings> {
   return settings;
 }
 
-async function readActualPolicy(vault: string): Promise<ContractPolicyV5> {
+/** Returns the parsed policy and the exact on-disk text that produced it. */
+async function readActualPolicy(vault: string): Promise<{ readonly policy: ContractPolicyV5; readonly text: string }> {
   const verified = await verifyTemplateControlPath(vault, normalizeTemplateControlPath(POLICY_PATH), { expected: "either" });
   if (verified.targetRealPath === null) fail("SELECTION_UNSAFE", "approved V5 policy is absent");
   const observed = await readNoFollow(verified.absolutePath, verified.vaultRoot, MAX_TEMPLATE_SOURCE_BYTES, "approved policy");
@@ -257,7 +258,7 @@ async function readActualPolicy(vault: string): Promise<ContractPolicyV5> {
   } catch (error) {
     fail("SELECTION_UNSAFE", "approved policy is not valid UTF-8", error);
   }
-  return parseContractPolicyV5(unambiguousPolicyValue(text));
+  return { policy: parseContractPolicyV5(unambiguousPolicyValue(text)), text };
 }
 
 function unambiguousPolicyValue(text: string): unknown {
@@ -465,12 +466,26 @@ function coordinatorOptions(options: ContractServiceOptions, runtimeRoot: string
   };
 }
 
-type PolicyObservation = { readonly state: "absent" } | { readonly state: "v5"; readonly policy: ContractPolicyV5 } | { readonly state: "legacy" } | { readonly state: "malformed"; readonly reason: string };
+type PolicyObservation =
+  | { readonly state: "absent" }
+  // `text` is the exact on-disk snapshot; a canonical re-serialization is not it.
+  | { readonly state: "v5"; readonly policy: ContractPolicyV5; readonly text: string }
+  | { readonly state: "legacy" }
+  | { readonly state: "unreadable"; readonly reason: string }
+  | { readonly state: "malformed"; readonly reason: string };
 
 async function observePolicy(vault: string): Promise<PolicyObservation> {
-  const verified = await verifyTemplateControlPath(vault, normalizeTemplateControlPath(POLICY_PATH), { expected: "either" });
-  if (verified.targetRealPath === null) return { state: "absent" };
-  const observed = await readNoFollow(verified.absolutePath, verified.vaultRoot, MAX_TEMPLATE_SOURCE_BYTES, "approved policy");
+  let verified: Awaited<ReturnType<typeof verifyTemplateControlPath>>;
+  let observed: { readonly bytes: Uint8Array };
+  try {
+    verified = await verifyTemplateControlPath(vault, normalizeTemplateControlPath(POLICY_PATH), { expected: "either" });
+    if (verified.targetRealPath === null) return { state: "absent" };
+    observed = await readNoFollow(verified.absolutePath, verified.vaultRoot, MAX_TEMPLATE_SOURCE_BYTES, "approved policy");
+  } catch (error) {
+    // A policy that exists but cannot be read is unavailable, not absent and
+    // not an empty contract.
+    return { state: "unreadable", reason: error instanceof Error ? error.message : "approved policy could not be read" };
+  }
   let text: string;
   try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(observed.bytes); }
   catch { return { state: "malformed", reason: "policy is not valid UTF-8" }; }
@@ -480,7 +495,7 @@ async function observePolicy(vault: string): Promise<PolicyObservation> {
   const version = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).version : undefined;
   if (version === 3 || version === 4) return { state: "legacy" };
   if (version !== 5) return { state: "malformed", reason: "policy version is not published V5" };
-  try { return { state: "v5", policy: parseContractPolicyV5(value) }; }
+  try { return { state: "v5", policy: parseContractPolicyV5(value), text }; }
   catch (error) { return { state: "malformed", reason: error instanceof Error ? error.message : "published policy is malformed" }; }
 }
 
@@ -512,7 +527,7 @@ export async function selectContract(input: SelectContractInput, options: Contra
   if (!["absent", "publisher-marker", "verified"].includes(admission.status)) return review(admission);
   const observed = await observePolicy(vault);
   const settings = await readVaultSettings(vault);
-  if (observed.state === "malformed") return review({ status: "legacy-invalid", markerPath: POLICY_PATH, reasons: [observed.reason], unavailableSources: [] });
+  if (observed.state === "malformed" || observed.state === "unreadable") return review({ status: observed.state === "unreadable" ? "legacy-unavailable" : "legacy-invalid", markerPath: POLICY_PATH, reasons: [observed.reason], unavailableSources: [] });
   if (observed.state === "v5" && settings !== null) return selectPublished(input, vault, settings, observed.policy, resolved);
   if (observed.state === "v5" || observed.state === "absent") return { state: "setup-required", admission: { ...admissionOf(admission), reasons: [observed.state === "v5" ? "published controls have no portable settings" : "no published contract controls"] } };
   if (admission.status !== "verified") return review(admission);
@@ -642,12 +657,12 @@ export async function checkContract(input: CheckContractInput, options: Contract
     fail("SELECTION_INVALID", "stored selection does not match its locator");
   }
   const policy = await readActualPolicy(vault);
-  const selected = await revalidateContractSelection(vault, policy, session.selection);
+  const selected = await revalidateContractSelection(vault, policy.policy, session.selection);
   const note = await readSavedNote(vault, session.notePath);
   const currentSettings = await requireSettings(vault);
   if (currentSettings.vaultId !== settings.vaultId) fail("SELECTION_UNSAFE", "published vault identity changed during check");
   const currentPolicy = await readActualPolicy(vault);
-  const confirmed = await revalidateContractSelection(vault, currentPolicy, session.selection);
+  const confirmed = await revalidateContractSelection(vault, currentPolicy.policy, session.selection);
   if (confirmed.binding.contractDigest !== selected.binding.contractDigest || confirmed.binding.sourceDigest !== selected.binding.sourceDigest || confirmed.binding.sourceIdentity !== selected.binding.sourceIdentity || confirmed.binding.sourcePath !== selected.binding.sourcePath) {
     fail("SELECTION_UNSAFE", "observed contract or source changed between revalidation and note capture");
   }
@@ -691,11 +706,12 @@ function reviewFacts(review: ContractSourceReview): ContractSourceReviewFacts {
   };
 }
 
-async function reviewTarget(target: WriteTarget): Promise<{ readonly vault: string; readonly policy: ContractPolicyV5 }> {
+async function reviewTarget(target: WriteTarget): Promise<{ readonly vault: string; readonly policy: ContractPolicyV5; readonly policyText: string }> {
   const admitted = await admitWriteTarget(target);
   if (admitted !== undefined) fail("SELECTION_INVALID", admitted.message);
   const vault = await canonicalPublicRoot(target.vault);
-  return { vault, policy: await readActualPolicy(vault) };
+  const read = await readActualPolicy(vault);
+  return { vault, policy: read.policy, policyText: read.text };
 }
 
 /**
@@ -748,7 +764,7 @@ export async function acknowledgeContractSource(input: {
   readonly transactionId: string;
   readonly confirmed: boolean;
 }): Promise<ContractSourceCommitResult> {
-  const { vault, policy } = await reviewTarget(input.target);
+  const { vault, policy, policyText } = await reviewTarget(input.target);
   assertLowercaseUuid(input.transactionId, "transactionId");
   const review = await inspectContractSource(vault, policy, input.templateId);
   if (review.currentDigest !== input.reviewedDigest) {
@@ -756,7 +772,8 @@ export async function acknowledgeContractSource(input: {
   }
   if (input.confirmed !== true) return { state: "confirmation-required", review: reviewFacts(review) };
   const locator = { transactionId: input.transactionId, kind: "source-review" as const, templateId: input.templateId };
-  const prepared = await prepareContractSourceAcknowledgment(vault, serializeContractPolicyV5(policy), locator);
+  // The claim binds the exact on-disk bytes, never a canonical re-serialization.
+  const prepared = await prepareContractSourceAcknowledgment(vault, policyText, locator);
   return publishSourceChange(vault, input.target, locator, prepared, policy.revision);
 }
 
@@ -772,13 +789,13 @@ export async function relinkContractSource(input: {
   readonly transactionId: string;
   readonly confirmed: boolean;
 }): Promise<ContractSourceCommitResult> {
-  const { vault, policy } = await reviewTarget(input.target);
+  const { vault, policy, policyText } = await reviewTarget(input.target);
   assertLowercaseUuid(input.transactionId, "transactionId");
   if (typeof input.candidatePath !== "string" || input.candidatePath.length === 0) fail("SELECTION_INVALID", "candidatePath must be an explicit vault-relative path");
   const review = await inspectContractSource(vault, policy, input.templateId);
   if (input.confirmed !== true) return { state: "confirmation-required", review: reviewFacts(review) };
   const locator = { transactionId: input.transactionId, kind: "relink" as const, templateId: input.templateId };
-  const prepared = await prepareContractSourceRelink(vault, serializeContractPolicyV5(policy), locator, input.candidatePath);
+  const prepared = await prepareContractSourceRelink(vault, policyText, locator, input.candidatePath);
   return publishSourceChange(vault, input.target, locator, prepared, policy.revision);
 }
 
@@ -849,10 +866,11 @@ export async function publishContract(input: {
   const settings = await requireSettings(vault);
   const next = parseContractPolicyV5(input.policy);
   const observed = await observePolicy(vault);
-  if (observed.state === "legacy" || observed.state === "malformed") {
-    fail("SELECTION_UNSAFE", "the published policy is not an explicit V5 contract; resolve it before publishing a revision");
+  if (observed.state === "legacy" || observed.state === "malformed" || observed.state === "unreadable") {
+    fail("SELECTION_UNSAFE", "the published policy is not a readable explicit V5 contract; resolve it before publishing a revision");
   }
   const previous = observed.state === "v5" ? observed.policy : null;
+  const previousText = observed.state === "v5" ? observed.text : null;
   // The publication kernel starts a first contract at revision 0 and then
   // advances exactly one revision per publication.
   const expectedRevision = previous === null ? 0 : previous.revision + 1;
@@ -861,7 +879,8 @@ export async function publishContract(input: {
   }
   if (!input.confirmed) return { state: "confirmation-required", plan: summarize(previous, next) };
   const content = serializeContractPolicyV5(next);
-  const expectedDigest = previous === null ? null : digestBytes(serializeContractPolicyV5(previous));
+  // Compare and swap the exact bytes on disk, not a canonical rewrite of them.
+  const expectedDigest = previousText === null ? null : digestBytes(previousText);
   const target: WriteTarget = { vault, source: input.target.source };
   const plan = await planVaultPublication(target, {
     transactionId: input.transactionId,
@@ -918,7 +937,9 @@ export async function diagnoseContract(input: { readonly target: WriteTarget }):
   }
   if (observed.state !== "v5") {
     diagnostics.push({
-      code: observed.state === "legacy" ? "CONTRACT_VERSION_UNSUPPORTED" : "CONTRACT_POLICY_INVALID",
+      code: observed.state === "legacy"
+        ? "CONTRACT_VERSION_UNSUPPORTED"
+        : observed.state === "unreadable" ? "CONTRACT_POLICY_UNREADABLE" : "CONTRACT_POLICY_INVALID",
       message: observed.state === "legacy" ? "the published policy is a historical contract and is not a V5 contract" : observed.reason,
       path: POLICY_PATH,
     });

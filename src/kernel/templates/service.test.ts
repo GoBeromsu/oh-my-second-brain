@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { connectionRegistryPath, readConnectionRegistry, reserveVaultConnection } from "../install/connection-registry.js";
 import { digestBytes } from "./canonical.js";
 import { parseContractPolicyV5, serializeContractPolicyV5, type ContractPolicyV5 } from "./contract-v5.js";
-import { acknowledgeContractSource, checkContract, publishContract, relinkContractSource, reviewContractSources, selectContract, type ContractServiceOptions, type SelectContractResult } from "./service.js";
+import { acknowledgeContractSource, checkContract, diagnoseContract, publishContract, relinkContractSource, reviewContractSources, selectContract, type ContractServiceOptions, type SelectContractResult } from "./service.js";
 import { serializeVaultSettings, type VaultSettings } from "./vault-settings.js";
 import { v3Bundle, v4Bundle, v4Policy, type HistoricalBundle } from "../../../test/fixtures/legacy-publication-builders.js";
 
@@ -885,5 +885,57 @@ describe("explicit contract publication", () => {
     await expect(publishContract({ target: { vault: bare, source: "explicit" }, policy: policy(), transactionId: PUBLISH_TX, confirmed: true }))
       .rejects.toMatchObject({ code: "VAULT_SETTINGS_MISSING" });
     expect(lstatSync(path.join(bare, ".oms"), { throwIfNoEntry: false })).toBeUndefined();
+  });
+});
+
+
+describe("exact control bytes and unreadable controls", () => {
+  it("publishes over a valid non-canonical policy instead of conflicting with its own bytes", async () => {
+    const { vault, options } = await fixture();
+    const target = { vault, source: "explicit" as const };
+    const file = path.join(vault, ".oms", "template-policy.json");
+    const current = parseContractPolicyV5(await readFile(file, "utf8"));
+    // A hand-edited but valid policy: different whitespace, same meaning.
+    await writeFile(file, `${JSON.stringify(current, null, 4)}\n\n`);
+
+    const published = await publishContract({ target, policy: { ...current, revision: current.revision + 1 }, transactionId: PUBLISH_TX, confirmed: true });
+
+    expect(published).toMatchObject({ state: "published", revision: current.revision + 1 });
+    // The published bytes are canonical; the preimage that was swapped was not.
+    expect(await readFile(file, "utf8")).toBe(serializeContractPolicyV5(parseContractPolicyV5(await readFile(file, "utf8"))));
+  });
+
+  it("acknowledges a reviewed source over a non-canonical policy", async () => {
+    const { vault, options } = await fixture();
+    const target = { vault, source: "explicit" as const };
+    const file = path.join(vault, ".oms", "template-policy.json");
+    await writeFile(file, `${JSON.stringify(parseContractPolicyV5(await readFile(file, "utf8")), null, 4)}\n`);
+    await writeFile(path.join(vault, "Templates", "flower.md"), `${markdown}\nuser edit\n`);
+    const review = (await reviewContractSources({ target, templateId: "flower" })).reviews[0]!;
+
+    const published = await acknowledgeContractSource({ target, templateId: "flower", reviewedDigest: review.currentDigest!, transactionId: SOURCE_TX, confirmed: true });
+
+    expect(published).toMatchObject({ state: "published", revision: 2 });
+  });
+
+  it("reports an unreadable policy as a typed diagnosis and refuses to publish over it", async () => {
+    const { vault, options } = await fixture();
+    const target = { vault, source: "explicit" as const };
+    const file = path.join(vault, ".oms", "template-policy.json");
+    const before = await readFile(file);
+    await chmod(file, 0o000);
+    try {
+      const diagnosis = await diagnoseContract({ target });
+      expect(diagnosis.status).toBe("needs-repair");
+      expect(diagnosis.diagnostics.map(item => item.code)).toContain("CONTRACT_POLICY_UNREADABLE");
+      // An unreadable contract is never replaced by a fresh publication.
+      await expect(publishContract({ target, policy: policy(), transactionId: PUBLISH_TX, confirmed: true }))
+        .rejects.toMatchObject({ code: "SELECTION_UNSAFE" });
+      const held = await selectContract({ target, notePath: "Notes/saved.md", templateId: null }, options);
+      expect(held.state).toBe("review-required");
+    } finally {
+      await chmod(file, 0o644);
+    }
+    expect(await readFile(file)).toEqual(before);
   });
 });

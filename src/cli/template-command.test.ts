@@ -9,7 +9,12 @@ const { publish, reviewSources, acknowledge, relink, diagnose } = vi.hoisted(() 
   publish: vi.fn(async (input: any) => (input.confirmed
     ? { state: "published", revision: 1, receipt: { status: "complete" } }
     : { state: "confirmation-required", plan: { revision: 1, addedTemplates: [], removedTemplates: [], changedTemplates: [], commonChanged: false, propertiesChanged: false } })),
-  reviewSources: vi.fn(async () => ({ vault: "/vault", revision: 1, reviews: [{ templateId: "note", state: "unchanged", path: "Templates/note.md" }], held: [] })),
+  reviewSources: vi.fn(async () => ({
+    vault: "/vault",
+    revision: 1,
+    reviews: [{ templateId: "note", sourceIdentity: "source-note", path: "Templates/note.md", approvedDigest: `sha256:${"b".repeat(64)}`, currentDigest: `sha256:${"b".repeat(64)}`, state: "unchanged" }],
+    held: [],
+  })),
   acknowledge: vi.fn(async (input: any) => (input.confirmed ? { state: "published", revision: 2 } : { state: "confirmation-required", review: { state: "drift" } })),
   relink: vi.fn(async (input: any) => (input.confirmed ? { state: "published", revision: 2 } : { state: "confirmation-required", review: { state: "missing" } })),
   diagnose: vi.fn(async () => ({ vault: "/vault", status: "needs-repair", revision: 1, settings: "verified", diagnostics: [{ code: "SOURCE_DRIFT", message: "the registered source changed", templateId: "note" }] })),
@@ -88,7 +93,8 @@ describe("template command", () => {
 
     await runTemplateCommand(["list", "--vault", root]);
     const listed = output();
-    expect(listed).toMatchObject({ vault: root, revision: 1 });
+    // The listing reports the vault and revision the review actually observed.
+    expect(listed).toMatchObject({ vault: "/vault", revision: 1 });
     expect(listed.common).toMatchObject({ status: "active" });
     expect(listed.templates).toEqual([expect.objectContaining({
       templateId: "note",

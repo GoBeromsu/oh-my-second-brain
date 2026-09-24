@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -94,6 +94,20 @@ describe("readSearchTemplateSource", () => {
     const legacy = await readSearchTemplateSource(historical);
     expect(legacy.source.templates).toBeNull();
     expect(legacy.diagnostics.map(item => item.code)).toContain("CONTRACT_VERSION_UNSUPPORTED");
+  });
+
+  it("reports an unreadable control as unavailable metadata instead of throwing", async () => {
+    const vault = await makeVault({ "template-policy.json": serializeContractPolicyV5(policy()), "taxonomy.json": TAXONOMY });
+    const file = path.join(vault, ".oms", "template-policy.json");
+    await chmod(file, 0o000);
+    try {
+      const read = await readSearchTemplateSource(vault);
+      // Search stays available: unavailable metadata plus a named reason.
+      expect(read.source).toMatchObject({ defaultFields: null, templates: null, sourcePaths: null });
+      expect(read.diagnostics.map(item => item.code)).toContain("TEMPLATE_POLICY_UNREADABLE");
+    } finally {
+      await chmod(file, 0o644);
+    }
   });
 
   it("keeps policy and taxonomy independent", async () => {

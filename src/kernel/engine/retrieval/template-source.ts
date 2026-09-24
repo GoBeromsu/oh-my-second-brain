@@ -115,13 +115,30 @@ function registeredSourcePaths(policy: ContractPolicyV5): readonly string[] {
 }
 
 export async function readSearchTemplateSource(vault: string): Promise<SearchTemplateSource> {
-  const policyBytes = await readBytes(path.join(vault, ".oms", "template-policy.json"));
-  const taxonomyBytes = await readBytes(path.join(vault, ".oms", "taxonomy.json"));
+  // A control that exists but cannot be read is unavailable metadata with a
+  // diagnostic, never a thrown route failure and never an empty contract.
+  let policyBytes: Uint8Array | null = null;
+  let policyFailure: string | null = null;
+  try {
+    policyBytes = await readBytes(path.join(vault, ".oms", "template-policy.json"));
+  } catch (error: unknown) {
+    policyFailure = message(error);
+  }
+  let taxonomyBytes: Uint8Array | null = null;
+  let taxonomyFailure: string | null = null;
+  try {
+    taxonomyBytes = await readBytes(path.join(vault, ".oms", "taxonomy.json"));
+  } catch (error: unknown) {
+    taxonomyFailure = message(error);
+  }
   const exclusions = await readSourceExclusions(vault);
   const digest = retrievalDigest(policyBytes, taxonomyBytes, exclusions);
   const diagnostics: RetrievalDiagnostic[] = exclusions.diagnostics.map(item => diagnostic(item.code, item.path, item.message));
 
-  let globalAxes: TemplateRetrievalSource["globalAxes"] = Object.create(null) as Record<string, never>;
+  if (taxonomyFailure !== null) {
+    diagnostics.push(diagnostic("TEMPLATE_TAXONOMY_UNREADABLE", TAXONOMY_FILE, `taxonomy axes are unavailable: ${taxonomyFailure}`));
+  }
+  let globalAxes: TemplateRetrievalSource["globalAxes"] = taxonomyFailure === null ? Object.create(null) as Record<string, never> : null;
   if (taxonomyBytes !== null) {
     let routing: TaxonomyRouting | null = null;
     try {
@@ -133,7 +150,9 @@ export async function readSearchTemplateSource(vault: string): Promise<SearchTem
   }
 
   if (policyBytes === null) {
-    diagnostics.push(diagnostic("TEMPLATE_POLICY_ABSENT", POLICY_FILE, "no explicit contract is published; notes stay searchable without declared field axes"));
+    diagnostics.push(policyFailure === null
+      ? diagnostic("TEMPLATE_POLICY_ABSENT", POLICY_FILE, "no explicit contract is published; notes stay searchable without declared field axes")
+      : diagnostic("TEMPLATE_POLICY_UNREADABLE", POLICY_FILE, `declared contract is unavailable: ${policyFailure}`));
     return { digest, source: { generationDigest: digest, defaultFields: null, templates: null, globalAxes, sourcePaths: null }, exclusions, diagnostics };
   }
 
