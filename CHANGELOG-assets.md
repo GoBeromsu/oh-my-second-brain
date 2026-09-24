@@ -4,6 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The `write` skill documents the source review lane.** A changed registered source does not change the contract; acknowledgment records the reviewed bytes, relocation needs a genuinely missing original and an explicit candidate, and matching bytes are evidence rather than permission.
 - **The `write` skill documents contract selection.** Guide requires an explicit note path and returns a session locator; check passes that locator instead of repeating a task binding, and the skill states that a changed contract or moved source ends the selection.
 - **The `write` skill no longer instructs a reviewer handoff.** Its review and complete sections are gone; the skill guides, tells the agent to write the file, and checks the saved bytes. The `status` skill no longer contrasts a health report with a completion call.
 ## [0.16.0] - 2026-09-23

@@ -41,6 +41,10 @@ Pass the locator guide returned. The session already holds the note path and the
 
 Source drift is reported for that template; guide and check still use the last approved contract. Other templates and search continue. Stop this check while a contract transaction is in progress. A damaged policy is unverifiable, not an empty contract.
 
+## Source review
+
+The registered source is the user's own Markdown. When it changes, the contract does not change with it: `template { mode: "review-sources" }` reports drift, and acknowledgment records the reviewed bytes without touching any rule. A relocation needs the original to be genuinely missing and an explicitly named candidate; matching bytes are evidence, never permission. Both operations require confirmation and publish exactly one revision.
+
 ## Repair
 
 Agent repair is off unless the user policy sets `agentRepair.enabled` and names post-write or explicit maintenance. A search or check call does not grant edit rights. Stay inside the explicit note scope. `completion.retryBudget` is the user's finite nonnegative integer, default 2, and 0 is allowed. Do not apply a separate cap. The host counts attempts. Do not guess missing values or weaken the contract to clear a failure. An exhausted budget or a cancellation waits for the user.

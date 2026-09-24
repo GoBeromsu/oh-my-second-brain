@@ -15,6 +15,9 @@ Agents write and repair notes. OMS `guide` supplies approved material before wri
 | `oms template scan` | `oms_search` | `template-scan` | none |
 | `oms template list` | `oms_search` | `templates` | `templateId` absent |
 | `oms template show <id>` | `oms_search` | `templates` | `templateId` required |
+| `oms template review-sources` | `oms_write` | `template` + `mode: "review-sources"` | Read-only source review: drift, missing, unreadable, and held registrations. |
+| `oms template acknowledge-source` | `oms_write` | `template` + `mode: "acknowledge-source"` | Confirms reviewed source bytes. The SHA advances by one revision; the contract rules do not change. |
+| `oms template relink-source` | `oms_write` | `template` + `mode: "relink-source"` | Confirms a relocation to an explicitly named candidate. The original must be genuinely missing. |
 | `oms template check` | `oms_doctor` | `validate` | none |
 | `oms template regenerate-types` | `oms_doctor` | `regenerate-types` | `dryRun` XOR `approvedDigest` |
 | `oms template review` | `oms_write` | `template` | `mode=interview-next`; same `proposals` as answer and commit |
@@ -35,6 +38,8 @@ The host notice text and its two buttons are fixed in the [host asset contract](
 | `oms note check` | `oms_write` | `check` | Reads the saved note through the selection locator and reports declared fields and headings. No unsaved body and no caller PASS. |
 | `oms note audit` | `oms_doctor` | `audit` | optional `folder` |
 | `oms note get` | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window) |
+
+Source review is its own lane: `review-sources` reads, and both mutating leaves publish one policy revision plus one history record through the verified-target write kernel. Without confirmation they return the review that would be confirmed and change nothing. SHA equality is candidate evidence, never permission to relink.
 
 `check` is structural and locator-bound: the session holds the note path and the selected contract, so no caller-supplied rules reach it. It reports the declared frontmatter fields and headings the saved bytes do and do not satisfy; it issues no completion verdict and consumes no reviewer result. Whether a note is finished stays with the user and the agent. Host asset details remain in the [host asset contract](./adapters.md).
 

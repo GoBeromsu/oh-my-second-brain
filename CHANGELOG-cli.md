@@ -4,6 +4,7 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms template review-sources`, `acknowledge-source`, and `relink-source`.** The first reads. The other two take `--template-id`, `--transaction-id`, and either `--reviewed-digest` or `--candidate-path`, and without `--yes` they print the review that would be confirmed and change nothing.
 - **`oms note guide` takes a required note path; `oms note check` takes the selection locator.** Guide prints the selection state, locator, and effective contract. Check accepts `--connection-id` and `--session-id` and no longer takes a note path, template id, or caller binding. `oms status` reports the published contract revision, the common contract digest, and each registration's digest and source identity.
 - **`oms status` and `oms note audit` read the explicit V5 contract.** Status reports the policy revision, the common contract digest, and each registration's digest, status, and source identity instead of managed-Markdown drafts. Audit counts registered templates and excluded original sources from the same contract and still refuses loudly — never falling back to bundled defaults — when no explicit contract is published.
 - **`oms note complete` is removed with no alias.** The note family is `guide`, `check`, `audit`, and `get`; `--checkpoint`, `--review`, and `--evidence-path` are gone, and a retired invocation is reported as invalid arguments rather than accepted. `oms note check` still reads the saved file and reports declared fields and headings.

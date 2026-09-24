@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { connectionRegistryPath, readConnectionRegistry, reserveVaultConnection } from "../install/connection-registry.js";
 import { digestBytes } from "./canonical.js";
 import { parseContractPolicyV5, serializeContractPolicyV5, type ContractPolicyV5 } from "./contract-v5.js";
-import { checkContract, selectContract, type ContractServiceOptions, type SelectContractResult } from "./service.js";
+import { acknowledgeContractSource, checkContract, relinkContractSource, reviewContractSources, selectContract, type ContractServiceOptions, type SelectContractResult } from "./service.js";
 import { serializeVaultSettings, type VaultSettings } from "./vault-settings.js";
 import { v3Bundle, v4Bundle, v4Policy, type HistoricalBundle } from "../../../test/fixtures/legacy-publication-builders.js";
 
@@ -706,5 +706,108 @@ describe("on-use legacy contract selection", () => {
     const resumed = await selectContract(migrationInput(vault), options);
     expect(resumed.state).toBe("selected");
     if (resumed.state === "selected") expect(resumed.migration).toMatchObject({ operationId: OP, transactionId: TX, vaultId: ID_A });
+  });
+});
+
+
+const SOURCE_TX = "77777777-7777-4777-8777-777777777777";
+const OTHER_SOURCE_TX = "88888888-8888-4888-8888-888888888888";
+
+describe("explicit contract source review", () => {
+  it("reports registration drift and held contracts without writing", async () => {
+    const { vault, options } = await fixture();
+    const target = { vault, source: "explicit" as const };
+    const clean = await reviewContractSources({ target });
+    expect(clean.revision).toBe(1);
+    expect(clean.reviews.map(item => [item.templateId, item.state])).toEqual([["flower", "unchanged"], ["other", "unchanged"]]);
+    expect(clean.held).toEqual([]);
+    // Review carries facts, never the source or note text it read.
+    expect(JSON.stringify(clean)).not.toContain("must not execute");
+
+    const before = await tree(vault);
+    await writeFile(path.join(vault, "Templates", "flower.md"), `${markdown}\nuser edit\n`);
+    const drifted = await reviewContractSources({ target, templateId: "flower" });
+    expect(drifted.reviews).toHaveLength(1);
+    expect(drifted.reviews[0]).toMatchObject({ templateId: "flower", state: "drift", path: "Templates/flower.md" });
+    expect(drifted.reviews[0]?.currentDigest).not.toBe(drifted.reviews[0]?.approvedDigest);
+
+    await rm(path.join(vault, "Templates", "other.md"));
+    expect((await reviewContractSources({ target, templateId: "other" })).reviews[0]).toMatchObject({ state: "missing", currentDigest: null });
+    await expect(reviewContractSources({ target, templateId: "ghost" })).rejects.toMatchObject({ code: "CONTRACT_UNKNOWN_TEMPLATE" });
+    await writeFile(path.join(vault, "Templates", "other.md"), otherMarkdown);
+    await writeFile(path.join(vault, "Templates", "flower.md"), markdown);
+    expect(await tree(vault)).toEqual(before);
+  });
+
+  it("requires confirmation and the live digest before acknowledging reviewed bytes", async () => {
+    const { vault, options } = await fixture();
+    const target = { vault, source: "explicit" as const };
+    await writeFile(path.join(vault, "Templates", "flower.md"), `${markdown}\nuser edit\n`);
+    const review = (await reviewContractSources({ target, templateId: "flower" })).reviews[0]!;
+    const before = await tree(vault);
+
+    const unconfirmed = await acknowledgeContractSource({ target, templateId: "flower", reviewedDigest: review.currentDigest!, transactionId: SOURCE_TX, confirmed: false });
+    expect(unconfirmed).toMatchObject({ state: "confirmation-required", review: { state: "drift" } });
+    expect(await tree(vault)).toEqual(before);
+
+    // A confirmation bound to bytes that are no longer live cannot publish.
+    await expect(acknowledgeContractSource({ target, templateId: "flower", reviewedDigest: review.approvedDigest, transactionId: SOURCE_TX, confirmed: true }))
+      .rejects.toMatchObject({ code: "SOURCE_DRIFT" });
+    expect(await tree(vault)).toEqual(before);
+  });
+
+  it("advances only the reviewed source digest and records one history revision", async () => {
+    const { vault, options } = await fixture();
+    const target = { vault, source: "explicit" as const };
+    const original = parseContractPolicyV5(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"));
+    await writeFile(path.join(vault, "Templates", "flower.md"), `${markdown}\nuser edit\n`);
+    const review = (await reviewContractSources({ target, templateId: "flower" })).reviews[0]!;
+
+    const published = await acknowledgeContractSource({ target, templateId: "flower", reviewedDigest: review.currentDigest!, transactionId: SOURCE_TX, confirmed: true });
+    expect(published).toMatchObject({ state: "published", templateId: "flower", revision: 2 });
+    if (published.state !== "published") throw new Error(published.state);
+    expect(published.receipt.status).toBe("complete");
+    expect(published.receipt.verified.map(item => item.path)).toEqual([".oms/template-policy.json", ".oms/history/contracts/2.json"]);
+
+    const next = parseContractPolicyV5(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"));
+    const before = original.templates.flower;
+    const after = next.templates.flower;
+    if (before.status !== "active" || after.status !== "active") throw new Error("fixture");
+    expect(next.revision).toBe(2);
+    expect(after.source.rawDigest).toBe(review.currentDigest);
+    // Only the SHA moved: rules, identity, path, and every other registration stay.
+    expect(after.fields).toEqual(before.fields);
+    expect(after.source.identity).toBe(before.source.identity);
+    expect(after.source.path).toBe(before.source.path);
+    expect(next.templates.other).toEqual(original.templates.other);
+    expect(next.properties).toEqual(original.properties);
+    const history = JSON.parse(await readFile(path.join(vault, ".oms", "history", "contracts", "2.json"), "utf8") as string) as Record<string, unknown>;
+    expect(history).toMatchObject({ kind: "source-review", transactionId: SOURCE_TX, revision: 2 });
+    expect((await reviewContractSources({ target, templateId: "flower" })).reviews[0]?.state).toBe("unchanged");
+    // A selection now binds the acknowledged bytes without further review.
+    expect((await select(vault, options)).selected.binding.sourceDigest).toBe(review.currentDigest);
+  });
+
+  it("relocates a registration only when the original is genuinely missing", async () => {
+    const { vault, options } = await fixture();
+    const target = { vault, source: "explicit" as const };
+    const before = await tree(vault);
+    await writeFile(path.join(vault, "Templates", "copy.md"), markdown);
+
+    await expect(relinkContractSource({ target, templateId: "flower", candidatePath: "Templates/copy.md", transactionId: SOURCE_TX, confirmed: true }))
+      .rejects.toMatchObject({ code: "SOURCE_NOT_MISSING" });
+
+    await rm(path.join(vault, "Templates", "flower.md"));
+    const unconfirmed = await relinkContractSource({ target, templateId: "flower", candidatePath: "Templates/copy.md", transactionId: SOURCE_TX, confirmed: false });
+    expect(unconfirmed).toMatchObject({ state: "confirmation-required", review: { state: "missing" } });
+
+    const published = await relinkContractSource({ target, templateId: "flower", candidatePath: "Templates/copy.md", transactionId: OTHER_SOURCE_TX, confirmed: true });
+    expect(published).toMatchObject({ state: "published", revision: 2 });
+    const next = parseContractPolicyV5(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"));
+    const entry = next.templates.flower;
+    if (entry.status !== "active") throw new Error("fixture");
+    expect(entry.source.path).toBe("Templates/copy.md");
+    expect(entry.source.rawDigest).toBe(digestBytes(markdown));
+    expect(Object.keys(before)).not.toContain(path.join("Templates", "copy.md"));
   });
 });

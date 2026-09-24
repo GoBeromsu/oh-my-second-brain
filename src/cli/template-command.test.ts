@@ -74,8 +74,13 @@ function output(): any { return JSON.parse(String(log.mock.calls.at(-1)?.[0])); 
 describe("template command", () => {
   it("documents every public verb and approval protocol", () => {
     const usage = templateUsage();
-    for (const verb of ["scan", "list", "show", "check", "regenerate-types", "review", "answer", "commit"]) expect(usage).toContain(verb);
-    expect(usage).toContain("Leaves: scan | list | show | check | regenerate-types | review | answer | commit");
+    for (const verb of ["scan", "list", "show", "check", "regenerate-types", "review-sources", "acknowledge-source", "relink-source", "review", "answer", "commit"]) expect(usage).toContain(verb);
+    expect(usage).toContain("Leaves: scan | list | show | check | regenerate-types | review-sources | acknowledge-source | relink-source | review | answer | commit");
+    // Source review changes a registration's source, never its rules, and both
+    // mutating leaves state their confirmation flag.
+    expect(usage).toContain("the contract rules never change");
+    expect(usage).toContain("--reviewed-digest");
+    expect(usage).toContain("--candidate-path");
     expect(usage).not.toContain("--mode");
     expect(usage).not.toMatch(/\badd\b/u);
     expect(usage).not.toMatch(/\bupdate\b/u);

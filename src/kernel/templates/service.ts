@@ -21,6 +21,9 @@ import {
   type LegacyMigrationLocator,
   type PreparedLegacyMigration,
   type LegacyVaultPublicationAdmission,
+  commitPreparedContractSourcePublication,
+  prepareContractSourcePublication,
+  type VaultPublicationReceipt,
 } from "./vault-publication.js";
 import {
   assertConnectionControlPath,
@@ -38,10 +41,23 @@ import {
 } from "../runtime/sessions.js";
 import { MAX_TEMPLATE_SOURCE_BYTES } from "./census.js";
 import { evaluateContractV5, type StructuralContractResult } from "./contract-check.js";
-import { ContractV5Error, parseContractPolicyV5, type ContractPolicyV5 } from "./contract-v5.js";
+import { ContractV5Error, parseContractPolicyV5, serializeContractPolicyV5, type ContractPolicyV5 } from "./contract-v5.js";
 import { parseLegacyJson } from "./legacy-json.js";
 import { normalizeTemplateControlPath, verifyTemplateControlPath } from "./paths.js";
-import { revalidateContractSelection, selectContractV5, SourceRegistryError, type ContractSelectionBinding, type SelectedContractV5 } from "./source-registry.js";
+import {
+  inspectContractSource,
+  prepareContractSourceAcknowledgment,
+  prepareContractSourceRelink,
+  revalidateContractSelection,
+  selectContractV5,
+  SourceRegistryError,
+  type ContractSelectionBinding,
+  type ContractSourceReview,
+  type ContractSourcePublicationLocator,
+  type PreparedContractSourceReview,
+  type SelectedContractV5,
+} from "./source-registry.js";
+import type { Digest } from "./types.js";
 import { readVaultSettings, serializeVaultSettings, type VaultSettings } from "./vault-settings.js";
 
 export interface ContractSelectionLocator {
@@ -637,4 +653,128 @@ export async function checkContract(input: CheckContractInput, options: Contract
     notePath: session.notePath,
     result: evaluateContractV5(note.frontmatter, note.body, confirmed.contract, session.selection.headingBindings),
   };
+}
+
+
+/** One registration's review facts. Source text never leaves the review call. */
+export interface ContractSourceReviewFacts {
+  readonly templateId: string;
+  readonly sourceIdentity: string;
+  readonly path: string;
+  readonly approvedDigest: Digest;
+  readonly currentDigest: Digest | null;
+  readonly state: ContractSourceReview["state"];
+}
+
+export interface ContractSourceReviewResult {
+  readonly vault: string;
+  readonly revision: number;
+  readonly reviews: readonly ContractSourceReviewFacts[];
+  readonly held: readonly { readonly templateId: string; readonly reasons: readonly string[] }[];
+}
+
+export type ContractSourceCommitResult =
+  | { readonly state: "confirmation-required"; readonly review: ContractSourceReviewFacts }
+  | { readonly state: "published"; readonly templateId: string; readonly revision: number; readonly receipt: VaultPublicationReceipt };
+
+function reviewFacts(review: ContractSourceReview): ContractSourceReviewFacts {
+  return {
+    templateId: review.templateId,
+    sourceIdentity: review.sourceIdentity,
+    path: review.path,
+    approvedDigest: review.approvedDigest,
+    currentDigest: review.currentDigest,
+    state: review.state,
+  };
+}
+
+async function reviewTarget(target: WriteTarget): Promise<{ readonly vault: string; readonly policy: ContractPolicyV5 }> {
+  const admitted = await admitWriteTarget(target);
+  if (admitted !== undefined) fail("SELECTION_INVALID", admitted.message);
+  const vault = await canonicalPublicRoot(target.vault);
+  return { vault, policy: await readActualPolicy(vault) };
+}
+
+/**
+ * Read-only source review for the published contract. It reports drift, missing,
+ * and unreadable registrations without acknowledging or relinking anything.
+ */
+export async function reviewContractSources(input: {
+  readonly target: WriteTarget;
+  readonly templateId?: string;
+}): Promise<ContractSourceReviewResult> {
+  const { vault, policy } = await reviewTarget(input.target);
+  if (input.templateId !== undefined && typeof input.templateId !== "string") fail("SELECTION_INVALID", "templateId must be an explicit string");
+  const held: { templateId: string; reasons: readonly string[] }[] = [];
+  const reviews: ContractSourceReviewFacts[] = [];
+  for (const [templateId, entry] of Object.entries(policy.templates)) {
+    if (input.templateId !== undefined && templateId !== input.templateId) continue;
+    if (entry.status !== "active") {
+      held.push({ templateId, reasons: entry.reasons });
+      continue;
+    }
+    reviews.push(reviewFacts(await inspectContractSource(vault, policy, templateId)));
+  }
+  if (input.templateId !== undefined && reviews.length === 0 && held.length === 0) {
+    throw new ContractV5Error("CONTRACT_UNKNOWN_TEMPLATE", `Unknown registered template '${input.templateId}'.`);
+  }
+  return { vault, revision: policy.revision, reviews, held };
+}
+
+async function publishSourceChange(
+  vault: string,
+  target: WriteTarget,
+  locator: ContractSourcePublicationLocator,
+  prepared: PreparedContractSourceReview,
+  revision: number,
+): Promise<ContractSourceCommitResult> {
+  const publication = await prepareContractSourcePublication({ vault, source: target.source }, locator, prepared.preparation);
+  const receipt = await commitPreparedContractSourcePublication({ vault, source: target.source }, publication);
+  return { state: "published", templateId: locator.templateId, revision: revision + 1, receipt };
+}
+
+/**
+ * Acknowledges reviewed source bytes: the SHA advances, the contract rules do
+ * not. Confirmation is required and the caller's observed digest must still be
+ * the live one, so a stale confirmation cannot publish a later change.
+ */
+export async function acknowledgeContractSource(input: {
+  readonly target: WriteTarget;
+  readonly templateId: string;
+  readonly reviewedDigest: string;
+  readonly transactionId: string;
+  readonly confirmed: boolean;
+}): Promise<ContractSourceCommitResult> {
+  const { vault, policy } = await reviewTarget(input.target);
+  assertLowercaseUuid(input.transactionId, "transactionId");
+  const review = await inspectContractSource(vault, policy, input.templateId);
+  if (review.currentDigest !== input.reviewedDigest) {
+    throw new SourceRegistryError("SOURCE_DRIFT", "The reviewed digest is not the live source digest; review the current bytes again.");
+  }
+  if (input.confirmed !== true) return { state: "confirmation-required", review: reviewFacts(review) };
+  const locator = { transactionId: input.transactionId, kind: "source-review" as const, templateId: input.templateId };
+  const prepared = await prepareContractSourceAcknowledgment(vault, serializeContractPolicyV5(policy), locator);
+  return publishSourceChange(vault, input.target, locator, prepared, policy.revision);
+}
+
+/**
+ * Relocates a registration to an explicitly named candidate path. The original
+ * source must be genuinely missing and the candidate must already carry the
+ * registered bytes; SHA equality is evidence, never permission.
+ */
+export async function relinkContractSource(input: {
+  readonly target: WriteTarget;
+  readonly templateId: string;
+  readonly candidatePath: string;
+  readonly transactionId: string;
+  readonly confirmed: boolean;
+}): Promise<ContractSourceCommitResult> {
+  const { vault, policy } = await reviewTarget(input.target);
+  assertLowercaseUuid(input.transactionId, "transactionId");
+  if (typeof input.candidatePath !== "string" || input.candidatePath.length === 0) fail("SELECTION_INVALID", "candidatePath must be an explicit vault-relative path");
+  const review = await inspectContractSource(vault, policy, input.templateId);
+  if (input.confirmed !== true) return { state: "confirmation-required", review: reviewFacts(review) };
+  const locator = { transactionId: input.transactionId, kind: "relink" as const, templateId: input.templateId };
+  const prepared = await prepareContractSourceRelink(vault, serializeContractPolicyV5(policy), locator, input.candidatePath);
+  return publishSourceChange(vault, input.target, locator, prepared, policy.revision);
 }

@@ -7,6 +7,7 @@ import { nextTemplateInterview, answerTemplateInterview, commitTemplateContracts
 import type { TemplateProposalInput } from "../kernel/templates/interview.js";
 import type { TemplateOperationTarget } from "../kernel/templates/operations.js";
 import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
+import { acknowledgeContractSource, relinkContractSource, reviewContractSources } from "../kernel/templates/service.js";
 import { validateTemplateId } from "../kernel/templates/paths.js";
 import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
 import type { Digest, GuardedTemplateRequest, JsonValue } from "../kernel/templates/types.js";
@@ -17,7 +18,7 @@ type Options = Record<string, string | boolean>;
 interface Parsed { readonly verb: string; readonly positional: readonly string[]; readonly options: Options; }
 type Target = TemplateOperationTarget;
 
-const VALUE_FLAGS = new Set(["vault", "approved-digest", "answer", "census-digest", "ledger-digest", "proposals"]);
+const VALUE_FLAGS = new Set(["vault", "approved-digest", "answer", "census-digest", "ledger-digest", "proposals", "template-id", "reviewed-digest", "candidate-path", "transaction-id"]);
 const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "help"]);
 
 function fail(message: string): never { throw new Error(`TEMPLATE_ARGS_INVALID: ${message}`); }
@@ -172,6 +173,28 @@ async function run(parsed: Parsed): Promise<void> {
     const resolved = await target(parsed.options);
     print(summarizedScan(await readTemplateReviewContext(resolved.vault))); return;
   }
+  if (parsed.verb === "review-sources") {
+    only(parsed, ["vault", "template-id"], 0);
+    const resolved = await target(parsed.options);
+    const templateId = text(parsed.options, "template-id");
+    print(await reviewContractSources({ target: resolved, ...(templateId === undefined ? {} : { templateId }) })); return;
+  }
+  if (parsed.verb === "acknowledge-source" || parsed.verb === "relink-source") {
+    only(parsed, ["vault", "template-id", "reviewed-digest", "candidate-path", "transaction-id", "yes"], 0);
+    const resolved = await target(parsed.options);
+    const templateId = text(parsed.options, "template-id");
+    const transactionId = text(parsed.options, "transaction-id");
+    if (templateId === undefined || transactionId === undefined) fail(`${parsed.verb} requires --template-id and --transaction-id`);
+    const confirmed = flag(parsed.options, "yes");
+    if (parsed.verb === "acknowledge-source") {
+      const reviewedDigest = text(parsed.options, "reviewed-digest");
+      if (reviewedDigest === undefined) fail("acknowledge-source requires the --reviewed-digest observed during review");
+      print(await acknowledgeContractSource({ target: resolved, templateId, reviewedDigest, transactionId, confirmed })); return;
+    }
+    const candidatePath = text(parsed.options, "candidate-path");
+    if (candidatePath === undefined) fail("relink-source requires an explicit --candidate-path");
+    print(await relinkContractSource({ target: resolved, templateId, candidatePath, transactionId, confirmed })); return;
+  }
   if (parsed.verb === "review") {
     only(parsed, ["vault", "proposals"], 0);
     const resolved = await target(parsed.options);
@@ -221,14 +244,21 @@ async function run(parsed: Parsed): Promise<void> {
 export function templateUsage(): string {
   return `Usage: oms template <verb> [options]
 
-Leaves: scan | list | show | check | regenerate-types | review | answer | commit
+Leaves: scan | list | show | check | regenerate-types | review-sources | acknowledge-source | relink-source | review | answer | commit
 
 Read-only:
   list
   show <id>
   scan
   check
+  review-sources [--template-id <id>] [--vault <vault>]
   review [--proposals <JSON>] [--vault <vault>]
+
+Source review (the contract rules never change):
+  acknowledge-source --template-id <id> --reviewed-digest <digest> --transaction-id <uuid> [--yes] [--vault <vault>]
+  relink-source --template-id <id> --candidate-path <path> --transaction-id <uuid> [--yes] [--vault <vault>]
+
+  Without --yes both print the review that would be confirmed and change nothing.
 
 Contract review:
   answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null> [--proposals <JSON>] [--vault <vault>]
