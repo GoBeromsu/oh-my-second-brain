@@ -70,7 +70,7 @@ The eight skills (`distill`, `doctor`, `interview`, `link`, `search`, `status`, 
 
 The five tools are a subset of those skills, and neither set is the fourteen CLI families. Detail capabilities remain `op` values under the five tools.
 
-`write` keeps a write posture because explicit contract publication and confirmed source changes mutate managed state. `guide` and `check` write no vault bytes. Contract review uses `op: "template"` with `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source` only. `status` and every search operation are read-only and do not decide completion. The `doctor` tool diagnoses controls and indexes; it does not backfill notes.
+`write` keeps a write posture because explicit contract publication and confirmed source changes mutate managed state. `guide` and `check` write no note bytes; the one managed-state exception is `guide` with the three `migration` ids, which publishes a historical vault's version-5 contract in place before selecting. Contract review uses `op: "template"` with `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source` only. `status` and every search operation are read-only and do not decide completion. The `doctor` tool diagnoses controls and indexes; it does not backfill notes.
 
 ## Install
 

@@ -1,6 +1,6 @@
 ---
 name: status
-description: Report read-only template, graph, and semantic-index health.
+description: Report read-only contract, runtime-history, and graph health.
 mcp_tool: status
 mcp_args: {}
 ---
@@ -13,7 +13,7 @@ Report vault health without changing files. Status does not validate a note, rep
 /status
 ```
 
-With `status` op absent, show the combined read-only view: the contract source it read, registration and property counts from the published policy, the derived-state status with its diagnostics, the runtime history for this host and vault, graph status, and which tools are readable or writable. It reports no semantic-index availability and no source-exclusion list. Use `status { op: "graph" }` only for graph status. Do not send `graph` when requesting the combined view.
+With `status` op absent, show the combined read-only view: the contract source it read, `counts.templates` (registered templates) and `counts.globalAxes` (taxonomy-derived axes), the generation digest, the derived-state status with its diagnostics, the runtime history for this host and vault, graph status, and which tools are readable or writable. It reports no semantic-index availability, no property count, and no source-exclusion list. Use `status { op: "graph" }` only for graph status. Do not send `graph` when requesting the combined view.
 
 A malformed or missing projection is reported as invalid. That report is not a doctor call and not a repair. Status never regenerates controls, rebuilds indexes, repairs notes, edits controls, creates `.oms`, or writes the vault.
 
