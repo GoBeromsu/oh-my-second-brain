@@ -4,6 +4,7 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms template` reads the explicit contract, and `regenerate-types` is retired with no alias.** `list`, `show`, and `scan` report the published registrations, their effective contracts, their source identity, and their observed source state; `check` is the contract diagnosis, reporting the policy, the portable settings, held registrations, and each registered source. Nothing derives `.oms/types.json` any more, because the explicit contract is the authority rather than something projected from it.
 - **`oms template review`, `answer`, and `commit` are removed with no alias.** The family is `scan`, `list`, `show`, `check`, `regenerate-types`, `publish`, `review-sources`, `acknowledge-source`, and `relink-source`. A retired leaf is reported as invalid arguments rather than accepted.
 - **`oms template publish --policy <file.json> --transaction-id <uuid>`.** Publishes an explicit V5 contract revision; without `--yes` it prints what would change and writes nothing.
 - **`oms template review-sources`, `acknowledge-source`, and `relink-source`.** The first reads. The other two take `--template-id`, `--transaction-id`, and either `--reviewed-digest` or `--candidate-path`, and without `--yes` they print the review that would be confirmed and change nothing.

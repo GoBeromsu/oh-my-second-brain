@@ -33,6 +33,8 @@ export const DEFAULT_FIXTURE_VAULT_ID = "11111111-1111-4111-8111-111111111111";
 export interface ApprovedVaultFixture {
   /** Portable identity written into `.oms/settings.json` by the V5 writer. */
   readonly vaultId?: string;
+  /** Declared source roots; the V5 writer keeps sources under `Templates/`. */
+  readonly templateRoots?: readonly string[];
   readonly properties?: Readonly<Record<string, { readonly type: string; readonly intent: string; readonly allowedValues?: readonly string[]; readonly valuePolicy?: "free" | "suggest" | "closed" }>>;
   readonly templates?: Readonly<Record<string, ApprovedTemplateFixture>>;
   readonly folders?: Readonly<Record<string, { readonly intent: string }>>;
@@ -181,7 +183,7 @@ export async function writeContractVault(root: string, fixture: ApprovedVaultFix
   await mkdir(path.join(root, ".oms"), { recursive: true });
   await mkdir(path.join(root, ".obsidian"), { recursive: true });
   // A V5 vault carries its portable identity; selection and sessions need it.
-  await writeFile(path.join(root, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: fixture.vaultId ?? DEFAULT_FIXTURE_VAULT_ID, templateRoots: [] }));
+  await writeFile(path.join(root, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: fixture.vaultId ?? DEFAULT_FIXTURE_VAULT_ID, templateRoots: [...(fixture.templateRoots ?? ["Templates"])] }));
   await writeFile(path.join(root, ".oms", "template-policy.json"), policyText);
   await writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomyText);
   await writeFile(path.join(root, ".obsidian", "types.json"), JSON.stringify({ types: fixture.obsidianTypes ?? {} }));

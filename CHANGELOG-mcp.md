@@ -4,6 +4,7 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- **`doctor { op: "validate" }` is the contract diagnosis and `doctor { op: "regenerate-types" }` is retired with no alias.** Validation reports the published policy, portable settings, held registrations, and each registered source's drift, missing, or unreadable state, and repairs nothing. The audit fallback uses the same diagnosis instead of the historical harness.
 - **The interview ledger modes are removed with no alias.** `write { op: "template" }` accepts `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source`; `interview-next`, `interview-answer`, `commit-contracts`, and the transaction resume are gone, together with `proposals`, `questionId`, `answer`, `censusDigest`, and `expectedLedgerDigest`. The template-change notice now comes from the published contract's own source review, so a V5 vault finally receives one, and its `next` hint points at `review-sources`.
 - **`write { op: "template", mode: "publish-contract" }`.** Takes the explicit V5 policy document and a transaction id, so a contract can be authored and revised without an interview deriving meaning from template syntax.
 - **`write { op: "template" }` gains `review-sources`, `acknowledge-source`, and `relink-source`.** A drifted user source can be reviewed and acknowledged, or a moved source relocated, without an interview and without changing any contract rule.

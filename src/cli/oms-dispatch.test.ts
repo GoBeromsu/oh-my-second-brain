@@ -277,10 +277,15 @@ describe("oms CLI dispatch", () => {
     expect(doctor.stderr).toBe("");
     expect(jsonObject(doctor.stdout)).toEqual(
       expect.objectContaining({
-        vault,
+        // The diagnosis reports the canonical root it actually read.
+        vault: await realpath(vault),
         status: "needs-repair",
-        transactionMarker: "absent",
-        invalidNotes: [],
+        revision: null,
+        settings: "missing",
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ code: "CONTRACT_ABSENT", path: ".oms/template-policy.json" }),
+          expect.objectContaining({ code: "VAULT_SETTINGS_MISSING", path: ".oms/settings.json" }),
+        ]),
       }),
     );
 
@@ -305,12 +310,12 @@ describe("oms CLI dispatch", () => {
     expect(doctor.status).toBe(0);
     expect(doctor.stderr).toBe("");
     expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({
-      vault,
+      vault: await realpath(vault),
       status: "needs-repair",
-      diagnostics: [expect.objectContaining({
-        code: "CONTRACT_UNVERIFIABLE",
+      diagnostics: expect.arrayContaining([expect.objectContaining({
+        code: "CONTRACT_ABSENT",
         path: ".oms/template-policy.json",
-      })],
+      })]),
     }));
     expect(doctor.stdout).not.toContain("LEGACY_TAXONOMY_YAML");
     expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(false);
@@ -340,11 +345,11 @@ describe("oms CLI dispatch", () => {
     const doctor = runCli(["template", "check", "--vault", vault]);
     expect(doctor.status).toBe(0);
     expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({
-      vault,
+      vault: await realpath(vault),
       status: "needs-repair",
       diagnostics: expect.arrayContaining([
         expect.objectContaining({
-          code: "CONTRACT_UNVERIFIABLE",
+          code: "CONTRACT_ABSENT",
           path: ".oms/template-policy.json",
         }),
       ]),

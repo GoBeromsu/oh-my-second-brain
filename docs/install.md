@@ -81,7 +81,7 @@ These are local verified acquisitions, not runtime downloads. Direct capability 
 
 ```text
 oms note guide|check|complete|audit|get
-oms template scan|list|show|check|regenerate-types|review|answer|commit
+oms template list|show|scan|check|publish|review-sources|acknowledge-source|relink-source
 oms link suggest|check
 oms search query <text> [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank]
 oms search context

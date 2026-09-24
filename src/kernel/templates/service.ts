@@ -874,3 +874,83 @@ export async function publishContract(input: {
   const receipt = await commitVaultPublication(target, plan, plan.planDigest);
   return { state: "published", revision: next.revision, receipt };
 }
+
+
+export interface ContractDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly path?: string;
+  readonly templateId?: string;
+}
+
+export interface ContractDiagnosis {
+  readonly vault: string;
+  readonly status: "healthy" | "needs-repair";
+  readonly revision: number | null;
+  readonly settings: "verified" | "missing";
+  readonly diagnostics: readonly ContractDiagnostic[];
+}
+
+/**
+ * Read-only diagnosis of the published contract. It reports what it observed and
+ * repairs nothing: an absent or historical policy, missing portable settings, a
+ * held registration, and a drifted, missing, or unreadable source are each
+ * reported as their own diagnostic.
+ */
+export async function diagnoseContract(input: { readonly target: WriteTarget }): Promise<ContractDiagnosis> {
+  const admitted = await admitWriteTarget(input.target);
+  const vault = admitted === undefined
+    ? await canonicalPublicRoot(input.target.vault)
+    : path.resolve(input.target.vault);
+  const diagnostics: ContractDiagnostic[] = [];
+  if (admitted !== undefined) {
+    return { vault, status: "needs-repair", revision: null, settings: "missing", diagnostics: [{ code: "TARGET_UNVERIFIED", message: admitted.message }] };
+  }
+  const settings = await readVaultSettings(vault).catch((error: unknown) => {
+    diagnostics.push({ code: "VAULT_SETTINGS_INVALID", message: error instanceof Error ? error.message : String(error), path: ".oms/settings.json" });
+    return null;
+  });
+  if (settings === null) diagnostics.push({ code: "VAULT_SETTINGS_MISSING", message: "no portable vault settings are published; run oms setup", path: ".oms/settings.json" });
+  const observed = await observePolicy(vault);
+  if (observed.state === "absent") {
+    diagnostics.push({ code: "CONTRACT_ABSENT", message: "no explicit contract is published", path: POLICY_PATH });
+    return { vault, status: "needs-repair", revision: null, settings: settings === null ? "missing" : "verified", diagnostics };
+  }
+  if (observed.state !== "v5") {
+    diagnostics.push({
+      code: observed.state === "legacy" ? "CONTRACT_VERSION_UNSUPPORTED" : "CONTRACT_POLICY_INVALID",
+      message: observed.state === "legacy" ? "the published policy is a historical contract and is not a V5 contract" : observed.reason,
+      path: POLICY_PATH,
+    });
+    return { vault, status: "needs-repair", revision: null, settings: settings === null ? "missing" : "verified", diagnostics };
+  }
+  const policy = observed.policy;
+  if (policy.common.status !== "active") {
+    for (const reason of policy.common.reasons) diagnostics.push({ code: "CONTRACT_REVIEW_REQUIRED", message: reason });
+  }
+  for (const [templateId, entry] of Object.entries(policy.templates)) {
+    if (entry.status !== "active") {
+      for (const reason of entry.reasons) diagnostics.push({ code: "CONTRACT_REVIEW_REQUIRED", message: reason, templateId });
+      continue;
+    }
+    const review = await inspectContractSource(vault, policy, templateId);
+    if (review.state === "unchanged") continue;
+    diagnostics.push({
+      code: review.state === "drift" ? "SOURCE_DRIFT" : review.state === "missing" ? "SOURCE_MISSING" : "SOURCE_UNREADABLE",
+      message: review.state === "drift"
+        ? "the registered source changed since it was approved; review and acknowledge it"
+        : review.state === "missing"
+          ? "the registered source is missing; relink it to its new path"
+          : "the registered source cannot be read as complete UTF-8",
+      path: review.path,
+      templateId,
+    });
+  }
+  return {
+    vault,
+    status: diagnostics.length === 0 ? "healthy" : "needs-repair",
+    revision: policy.revision,
+    settings: settings === null ? "missing" : "verified",
+    diagnostics,
+  };
+}

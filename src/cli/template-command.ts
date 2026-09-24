@@ -3,15 +3,13 @@ import { readFile } from "node:fs/promises";
 
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
-import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
 import type { TemplateOperationTarget } from "../kernel/templates/operations.js";
-import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
-import { acknowledgeContractSource, publishContract, relinkContractSource, reviewContractSources } from "../kernel/templates/service.js";
+import { composeContractV5, parseContractPolicyV5 } from "../kernel/templates/contract-v5.js";
+import { discoverRegisteredSources } from "../kernel/templates/source-registry.js";
+import { readVaultSettings } from "../kernel/templates/vault-settings.js";
+import { acknowledgeContractSource, diagnoseContract, publishContract, relinkContractSource, reviewContractSources } from "../kernel/templates/service.js";
 import { validateTemplateId } from "../kernel/templates/paths.js";
-import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
-import type { Digest, GuardedTemplateRequest } from "../kernel/templates/types.js";
 
-const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 type Options = Record<string, string | boolean>;
 interface Parsed { readonly verb: string; readonly positional: readonly string[]; readonly options: Options; }
@@ -57,20 +55,6 @@ async function target(options: Options): Promise<Target> {
   const resolved = await resolveEffectiveVault(process.cwd(), process.env);
   return { vault: resolved.vault, source: resolved.source };
 }
-function guard(options: Options): GuardedTemplateRequest {
-  const dryRun = flag(options, "dry-run");
-  const yes = flag(options, "yes");
-  const approved = text(options, "approved-digest");
-  if (dryRun) {
-    if (yes || approved !== undefined) fail("--dry-run conflicts with --yes and --approved-digest");
-    return { dryRun: true };
-  }
-  if (!yes || approved === undefined || !DIGEST.test(approved)) fail("mutation requires --dry-run or --yes --approved-digest sha256:<64hex>");
-  return { approvedDigest: approved as Digest };
-}
-function ensureMutableTarget(value: Target): void {
-  if (value.source === "cwd") fail("mutations require --vault or an existing verified vault/bridge/env target");
-}
 function print(value: unknown): void {
   if (value !== null && typeof value === "object" && "status" in value) {
     const status = (value as { readonly status?: unknown }).status;
@@ -81,47 +65,59 @@ function print(value: unknown): void {
   }
   console.log(JSON.stringify(value, null, 2));
 }
-function summarizedScan(context: Awaited<ReturnType<typeof readTemplateReviewContext>>): unknown {
-  return {
-    generationDigest: context.resolved.generationDigest,
-    // Approved Markdown is reported by digest; raw source bytes are identified,
-    // never parsed for meaning.
-    approved: context.approved.map(entry => ({
-      templateId: entry.templateId,
-      templatePath: entry.templatePath,
-      approvedMarkdownDigest: entry.approvedMarkdownDigest,
-    })),
-    raw: context.raw,
-    drafts: context.resolved.drafts,
-    diagnostics: context.resolved.diagnostics,
-  };
-}
-
 async function run(parsed: Parsed): Promise<void> {
   if (parsed.verb === "list" || parsed.verb === "show") {
     only(parsed, ["vault"], parsed.verb === "list" ? 0 : 1);
     const resolved = await target(parsed.options);
-    const convention = await loadResolvedTemplates(resolved.vault);
+    const review = await reviewContractSources({ target: resolved });
+    const policy = parseContractPolicyV5(await readFile(path.join(resolved.vault, ".oms", "template-policy.json"), "utf8"));
     if (parsed.verb === "list") {
+      const common = composeContractV5(policy, null);
       print({
-        // The always-on default layer applies to every note, so it is listed
-        // beside the optional individual templates.
-        default: convention.defaultContract,
-        templates: Object.values(convention.templates),
-        generationDigest: convention.generationDigest,
+        vault: resolved.vault,
+        revision: policy.revision,
+        common: policy.common.status === "active"
+          ? { status: "active", contractDigest: common.contractDigest, fields: common.fields }
+          : { status: "review-required", reasons: policy.common.reasons },
+        templates: Object.keys(policy.templates).sort().map(templateId => {
+          const entry = policy.templates[templateId]!;
+          if (entry.status !== "active") return { templateId, status: entry.status, reasons: entry.reasons };
+          return {
+            templateId,
+            status: "active",
+            contractDigest: composeContractV5(policy, templateId).contractDigest,
+            source: { identity: entry.source.identity, path: entry.source.path },
+            sourceState: review.reviews.find(item => item.templateId === templateId)?.state ?? null,
+          };
+        }),
         history: summarizeRuntimeHistory({ vaultPath: resolved.vault }),
       });
       return;
     }
     const id = validateTemplateId(parsed.positional[0]!);
-    const found = convention.templates[id];
-    if (found === undefined) throw new Error(`TEMPLATE_NOT_FOUND: ${id}`);
-    print({ template: found, generationDigest: convention.generationDigest }); return;
+    const entry = policy.templates[id];
+    if (entry === undefined) throw new Error(`TEMPLATE_NOT_FOUND: ${id}`);
+    print(entry.status === "active"
+      ? {
+        vault: resolved.vault,
+        revision: policy.revision,
+        templateId: id,
+        status: "active",
+        contract: composeContractV5(policy, id),
+        source: { identity: entry.source.identity, path: entry.source.path, rawDigest: entry.source.rawDigest },
+        sourceState: review.reviews.find(item => item.templateId === id)?.state ?? null,
+      }
+      : { vault: resolved.vault, revision: policy.revision, templateId: id, status: entry.status, reasons: entry.reasons });
+    return;
   }
   if (parsed.verb === "scan") {
     only(parsed, ["vault"], 0);
     const resolved = await target(parsed.options);
-    print(summarizedScan(await readTemplateReviewContext(resolved.vault))); return;
+    const policy = parseContractPolicyV5(await readFile(path.join(resolved.vault, ".oms", "template-policy.json"), "utf8"));
+    const settings = await readVaultSettings(resolved.vault);
+    const discovery = await discoverRegisteredSources(resolved.vault, policy, settings?.templateRoots ?? []);
+    print({ vault: resolved.vault, revision: policy.revision, roots: settings?.templateRoots ?? [], ...discovery });
+    return;
   }
   if (parsed.verb === "publish") {
     only(parsed, ["vault", "policy", "transaction-id", "yes"], 0);
@@ -192,12 +188,7 @@ async function run(parsed: Parsed): Promise<void> {
   if (parsed.verb === "check") {
     only(parsed, ["vault"], 0);
     const resolved = await target(parsed.options);
-    print({ ...await diagnoseTemplates(resolved), vault: resolved.vault }); return;
-  }
-  if (parsed.verb === "regenerate-types") {
-    only(parsed, ["vault", "dry-run", "yes", "approved-digest"], 0);
-    const resolved = await target(parsed.options); ensureMutableTarget(resolved);
-    print(await regenerateTypes({ target: resolved, request: guard(parsed.options) })); return;
+    print(await diagnoseContract({ target: resolved })); return;
   }
   fail(`unknown template verb ${parsed.verb}`);
 }
@@ -205,7 +196,7 @@ async function run(parsed: Parsed): Promise<void> {
 export function templateUsage(): string {
   return `Usage: oms template <verb> [options]
 
-Leaves: scan | list | show | check | regenerate-types | publish | review-sources | acknowledge-source | relink-source
+Leaves: list | show | scan | check | publish | review-sources | acknowledge-source | relink-source
 
 Read-only:
   list
@@ -224,9 +215,7 @@ Source review (the contract rules never change):
   Without --yes every mutating leaf prints what would be confirmed and changes nothing.
   Contract meaning enters OMS only as the explicit policy document you publish; it
   is never derived from a file name or from template syntax.
-
-Guarded:
-  regenerate-types (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]`;
+`;
 }
 
 export async function runTemplateCommand(argv: readonly string[]): Promise<void> {

@@ -14,7 +14,7 @@ Turn a note design into a user-owned contract. People and agents share that cont
 - The default template starts empty and always applies. An unbound note uses only that default. Do not invent required keys, headings, or criteria, and do not offer a default opt-out.
 - `.oms/taxonomy.json` owns placement and link intent. Resolve a destination from an explicit path or folder, then the template placement, then a question. There is no Inbox fallback.
 - `.obsidian/types.json` is a read-only observation. A type conflict is a separate diagnostic; the v4 contract still decides.
-- `.oms/types.json` is the derived projection. Never hand-edit it. Repair it with `oms template regenerate-types` or `/doctor`.
+- `.obsidian/types.json` is Obsidian's own read-only type file. OMS reads it and never writes it, and it is not the contract authority.
 - Approved Markdown lives in the policy snapshot. Draft or source drift does not approve new meaning. Guide and check keep using the last approved bytes and report drift for that template only. Other templates and search continue. A damaged policy snapshot is unverifiable; do not replace it with an empty contract.
 
 ## Source syntax
@@ -28,7 +28,7 @@ Census of selected sources is read-only: `search { op: "template-scan" }` or `om
 ## Reads
 
 ```text
-oms template scan|list|show|check|regenerate-types
+oms template list|show|scan|check
 ```
 
 `scan`, `list`, `show`, and `check` are read-only. `regenerate-types` republishes the derived projection only, through its dry-run and the exact returned `approvalDigest` submitted as `approvedDigest`. `review`, `answer`, and `commit` belong to `/interview`. Do not self-approve, and do not edit policy, taxonomy, or `.oms/types.json` directly.

@@ -19,8 +19,7 @@ Agents write and repair notes. OMS `guide` supplies approved material before wri
 | `oms template review-sources` | `oms_write` | `template` + `mode: "review-sources"` | Read-only source review: drift, missing, unreadable, and held registrations. |
 | `oms template acknowledge-source` | `oms_write` | `template` + `mode: "acknowledge-source"` | Confirms reviewed source bytes. The SHA advances by one revision; the contract rules do not change. |
 | `oms template relink-source` | `oms_write` | `template` + `mode: "relink-source"` | Confirms a relocation to an explicitly named candidate. The original must be genuinely missing. |
-| `oms template check` | `oms_doctor` | `validate` | none |
-| `oms template regenerate-types` | `oms_doctor` | `regenerate-types` | `dryRun` XOR `approvedDigest` |
+| `oms template check` | `oms_doctor` | `validate` | Read-only contract diagnosis: policy, portable settings, held registrations, and source state. |
 Policy version 5 is the authority. The common contract is always on and starts empty. A registration only adds constraints, and a note with no registration is valid. Publication writes the policy and one history record. It does not publish ordinary notes or the user's own template sources. The retired interview leaves `review`, `answer`, and `commit` have no aliases.
 
 `review` is read-only. `answer` records the interview draft. `commit` runs only after the user approves the exact final digest. Source drift warns for that template and leaves the last approved snapshot in place. An unverifiable policy stops the affected evaluation; it does not become an empty contract, and it does not stop search.
@@ -90,7 +89,7 @@ OMS has no host launcher and no `--runtime gjc` command path.
 
 ## Removed leaves
 
-The public note leaves are `guide`, `check`, `audit`, and `get`. Create, append, update, backfill, and complete are not note operations. The public template leaves are `scan`, `list`, `show`, `check`, `regenerate-types`, `review`, `answer`, and `commit`. Template add, update, move, remove, and default are not operations. Link leaves are `suggest` and `check`. Link apply is not an operation.
+The public note leaves are `guide`, `check`, `audit`, and `get`. Create, append, update, backfill, and complete are not note operations. The public template leaves are `list`, `show`, `scan`, `check`, `publish`, `review-sources`, `acknowledge-source`, and `relink-source`. The derived-projection repair, the interview ledger leaves, and reclassification are not operations. Template add, update, move, remove, and default are not operations. Link leaves are `suggest` and `check`. Link apply is not an operation.
 
 The former top-level `doctor`, `audit`, `reconcile`, `linkify`, `embed`, `doc`, `mcp`, `lint`, `install`, `uninstall`, and `update` commands have no compatibility aliases. The old repository-bridge meaning of a standalone `link` command is now the `bridge` family. `oms status` and `oms index embed` are retained names. `oms note audit` remains the note-family diagnosis; it is not the retired top-level `audit` command.
 

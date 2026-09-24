@@ -4,6 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The `doctor` and `template` skills drop the derived-projection repair.** `validate` is described as the contract diagnosis, and Obsidian's own type file is documented as a read-only input rather than something OMS regenerates.
 - **The `interview` skill runs on the explicit contract.** It agrees each decision with the user in ordinary conversation, writes the revision, previews it, and publishes only what the user approved. There is no interview ledger, question id, census digest, or server-issued approval digest to replay, and a changed source is reviewed rather than treated as a contract change.
 - **The `write` skill documents the source review lane.** A changed registered source does not change the contract; acknowledgment records the reviewed bytes, relocation needs a genuinely missing original and an explicit candidate, and matching bytes are evidence rather than permission.
 - **The `write` skill documents contract selection.** Guide requires an explicit note path and returns a session locator; check passes that locator instead of repeating a task binding, and the skill states that a changed contract or moved source ends the selection.

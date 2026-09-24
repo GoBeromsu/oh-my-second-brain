@@ -102,11 +102,10 @@ describe("MCP detail-tool demotion", () => {
       expect(JSON.stringify(scan)).not.toContain('"bytes"');
       expect(JSON.stringify(scan)).not.toContain("approvedMarkdown\":\"");
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
-      // The projection repair stays reachable and answers for this vault: an
-      // explicit V5 contract is the authority, so nothing is derived from it.
-      const regeneration = payload(await call("doctor", { op: "regenerate-types", dryRun: true }));
-      expect(regeneration).toMatchObject({ status: "rejected", code: "TYPES_PROJECTION_OBSOLETE" });
-      expect(regeneration.remediation).toContain("version 5");
+      // The derived projection repair is retired: the explicit contract is the
+      // authority, so there is nothing to regenerate from it and no alias.
+      const retired = await call("doctor", { op: "regenerate-types", dryRun: true });
+      expect(retired.content[0]?.type === "text" ? retired.content[0].text : "").toMatch(/does not match|Unknown operation|Unknown Oh My Second Brain tool/u);
       expect(payload(await call("search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", targets: ["references/clean-architecture.md"] })).documents).toBeInstanceOf(Array);

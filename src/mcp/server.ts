@@ -10,15 +10,13 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { admitWriteTarget } from "../kernel/capture/safe.js";
-import { acknowledgeContractSource, checkContract, publishContract, relinkContractSource, reviewContractSources, selectContract, ContractServiceError } from "../kernel/templates/service.js";
+import { acknowledgeContractSource, checkContract, diagnoseContract, publishContract, relinkContractSource, reviewContractSources, selectContract, ContractServiceError } from "../kernel/templates/service.js";
 import { readVaultSettings } from "../kernel/templates/vault-settings.js";
 import { parseContractPolicyV5 } from "../kernel/templates/contract-v5.js";
 import { inspectContractSource } from "../kernel/templates/source-registry.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import { buildTemplateNoteIndex, deriveTemplateRetrievalAxes } from "../kernel/templates/index.js";
-import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
 import { readSearchTemplateSource } from "../kernel/engine/retrieval/template-source.js";
-import type { Digest } from "../kernel/templates/types.js";
 import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../kernel/runtime/event-journal.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
@@ -107,9 +105,6 @@ function stringArg(args: Record<string, unknown> | undefined, key: string): stri
   return typeof value === "string" ? value : undefined;
 }
 
-function isDigest(value: unknown): value is Digest {
-  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
-}
 
 function runtimeHistory(vault: string): { readonly history?: ReturnType<typeof summarizeRuntimeHistory>; readonly runtimeWarnings?: readonly string[] } {
   try {
@@ -141,17 +136,6 @@ function recordTemplateList(vault: string, templates: readonly { readonly id: st
     const detail = error instanceof Error ? error.message.replace(/^LEDGER_APPEND_FAILED:\s*/, "") : String(error);
     return [`LEDGER_APPEND_FAILED: ${detail}. Template listing succeeded, but runtime history is incomplete.`];
   }
-}
-
-function guardedTemplateRequest(args: Record<string, unknown> | undefined):
-  | { readonly dryRun: true }
-  | { readonly approvedDigest: Digest }
-  | undefined {
-  if (args?.["dryRun"] === true) {
-    return args?.["approvedDigest"] === undefined ? { dryRun: true } : undefined;
-  }
-  const approvedDigest = args?.["approvedDigest"];
-  return isDigest(approvedDigest) ? { approvedDigest } : undefined;
 }
 
 type Operation = {
@@ -974,11 +958,11 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         const violations = unresolvedNotes.map(note => ({ code: "TEMPLATE_NOTE_IDENTITY_UNRESOLVED", path: note.path, reason: note.reason }));
         return jsonText({ vault, projectionSource: ".oms/types.json", folder: folder ?? null, scannedNotes: notes.length, excludedNotes: (meta.source.sourcePaths ?? []).length, unresolvedNotes, clean: violations.length === 0, violations, generationDigest: meta.digest });
       } catch {
-        const diagnosis = await diagnoseTemplates({ vault, source });
+        const diagnosis = await diagnoseContract({ target: { vault, source } });
         const violations = folder === undefined
           ? diagnosis.diagnostics
-          : diagnosis.diagnostics.filter(item => item.code !== "MIGRATION_NOTE_IDENTITY_UNRESOLVED" || item.path === undefined || item.path === folder || item.path.startsWith(`${folder}/`));
-        return jsonText({ vault, projectionSource: "vault-invalid", folder: folder ?? null, scannedNotes: 0, excludedNotes: diagnosis.managedSourceExclusions.length, clean: false, violations });
+          : diagnosis.diagnostics.filter(item => item.path === undefined || item.path === folder || item.path.startsWith(`${folder}/`));
+        return jsonText({ vault, projectionSource: "vault-invalid", folder: folder ?? null, scannedNotes: 0, excludedNotes: 0, clean: false, violations });
       }
     }
 
@@ -1041,14 +1025,8 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (name === "oms_validate_templates") {
-      return jsonText(await diagnoseTemplates({ vault, source }));
+      return jsonText(await diagnoseContract({ target: { vault, source } }));
     }
-    if (name === "oms_regenerate_types") {
-      const request = guardedTemplateRequest(args);
-      if (request === undefined) return errorText("Template repair requires dryRun:true or an approvedDigest.");
-      return jsonText(await regenerateTypes({ target: { vault, source }, request }));
-    }
-
     if (name === "write-template") {
       const admission = await admitWriteTarget({ vault, source });
       if (admission !== undefined) {
