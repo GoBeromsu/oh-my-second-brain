@@ -8,18 +8,14 @@ import {
 import type {
   DerivedProjection,
   DerivedTemplateProjection,
-  Diagnostic,
   Digest,
   GlobalAxes,
   GlobalAxis,
   HeadingContract,
   JsonValue,
-  ManagedDraftFreshness,
-  ObsidianContractType,
   ResolvedContract,
   ResolvedField,
   ResolvedHeading,
-  SourceFreshness,
   TemplateFolderPath,
   TemplatePolicy,
 } from "./types.js";
@@ -30,41 +26,6 @@ import type {
  * stays a local diagnostic and does not replace the approved markdown.
  * The derived projection is checked, not trusted as a second authority.
  */
-
-export interface ControlByteRead {
-  readonly policy: Uint8Array | null;
-  readonly taxonomy: Uint8Array | null;
-  readonly projection: Uint8Array | null;
-  readonly marker: Uint8Array | null;
-}
-
-export interface ExactControlBytes {
-  readonly path: string;
-  readonly bytes: Uint8Array;
-  readonly digest: Digest;
-}
-
-export interface ResolvedTemplateSnapshot {
-  readonly vault: string;
-  readonly policy: TemplatePolicy;
-  readonly defaultContract: ResolvedContract;
-  readonly templates: Readonly<Record<string, ResolvedContract>>;
-  readonly placement: Readonly<Record<string, TemplateFolderPath>>;
-  readonly globalAxes: GlobalAxes;
-  readonly generationDigest: Digest;
-  readonly projection: DerivedProjection;
-  readonly controls: {
-    readonly policy: ExactControlBytes;
-    readonly taxonomy: ExactControlBytes;
-    readonly projection: ExactControlBytes;
-    readonly marker: ExactControlBytes | null;
-    readonly obsidianTypes: ExactControlBytes | null;
-  };
-  readonly obsidianTypes: Readonly<Record<string, ObsidianContractType>> | null;
-  readonly sources: readonly SourceFreshness[];
-  readonly drafts: readonly ManagedDraftFreshness[];
-  readonly diagnostics: readonly Diagnostic[];
-}
 
 export interface TaxonomyRouting {
   readonly targetFolders: ReadonlyMap<string, TemplateFolderPath>;
@@ -86,14 +47,6 @@ function compareText(left: string, right: string): number {
   return a.length - b.length;
 }
 
-function sameBytes(left: Uint8Array | null, right: Uint8Array | null): boolean {
-  if (left === null || right === null) return left === right;
-  if (left.byteLength !== right.byteLength) return false;
-  for (let index = 0; index < left.byteLength; index += 1) {
-    if (left[index] !== right[index]) return false;
-  }
-  return true;
-}
 
 function jsonRecordValue(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -210,19 +163,13 @@ export function taxonomyRouting(path: string, bytes: Uint8Array): TaxonomyRoutin
   return { targetFolders, globalAxes: axes };
 }
 
-export function requireTaxonomyPlacement(routing: TaxonomyRouting, templateId: string): TemplateFolderPath {
-  const targetFolder = routing.targetFolders.get(templateId);
-  if (targetFolder === undefined) fail("TEMPLATE_PLACEMENT_UNDECLARED", `taxonomy placement is undeclared for template ${templateId}`);
-  return targetFolder;
-}
-
 function placementFor(routing: TaxonomyRouting, templateId: string): JsonValue | null {
   const folder = routing.targetFolders.get(templateId);
   return folder === undefined ? null : { templateFolder: folder };
 }
 
 /**
- * Historical contract composition for the approved-snapshot reader and the
+ * Historical contract composition for the derived projection and the
  * derived projection. Search does not use it: retrieval metadata comes from the
  * explicit V5 contract. Placement is only `placementFor`, and field records stay
  * the safe dicts from `composeTemplateContract`. It reads and admits no vault.
@@ -235,7 +182,7 @@ export interface ComposedTemplateContracts {
   readonly policy: TemplatePolicy;
 }
 
-export function composeTemplateRetrievalSource(
+function composeTemplateRetrievalSource(
   policy: TemplatePolicy,
   routing: TaxonomyRouting,
   generationDigest: Digest,
@@ -335,10 +282,4 @@ export function controlGenerationDigest(policyBytes: Uint8Array, taxonomyBytes: 
     policy: digestBytes(policyBytes),
     taxonomy: digestBytes(taxonomyBytes),
   });
-}
-
-export function assertStableControlRead(before: ControlByteRead, after: ControlByteRead): void {
-  const changed = (["marker", "policy", "taxonomy", "projection"] as const).filter(key => !sameBytes(before[key], after[key]));
-  if (changed.length === 0) return;
-  fail("CONTRACT_TRANSACTION_IN_PROGRESS", `${changed.join(", ")} changed while reading controls`);
 }

@@ -7,14 +7,9 @@ import { digestBytes, hashCanonical, outputDigest } from "./canonical.js";
 import { composeTemplateContract } from "./defaults.js";
 import { parseTemplatePolicy, serializeDerivedProjection } from "./policy.js";
 import {
-  assertStableControlRead,
   controlGenerationDigest,
   deriveFolderOntologyAxis,
   expectedProjectionManaged,
-  composeTemplateRetrievalSource,
-  loadResolvedTemplates,
-  loadResolvedTemplatesIfPresent,
-  requireTaxonomyPlacement,
   taxonomyRouting,
 } from "./resolver.js";
 
@@ -170,26 +165,6 @@ describe("control generation", () => {
   });
 });
 
-describe("torn control reads", () => {
-  it("accepts two identical control generations", () => {
-    const policy = encoder.encode("policy");
-    const taxonomy = encoder.encode("taxonomy");
-    expect(() => assertStableControlRead(
-      { policy, taxonomy, projection: null, marker: null },
-      { policy: new Uint8Array(policy), taxonomy: new Uint8Array(taxonomy), projection: null, marker: null },
-    )).not.toThrow();
-  });
-
-  it("stops when a control changes between the pre and post read", () => {
-    const left = encoder.encode("left");
-    const right = encoder.encode("right");
-    expect(() => assertStableControlRead(
-      { policy: left, taxonomy: left, projection: left, marker: left },
-      { policy: right, taxonomy: left, projection: right, marker: null },
-    )).toThrow("CONTRACT_TRANSACTION_IN_PROGRESS: marker, policy, projection changed while reading controls");
-  });
-});
-
 describe("taxonomy routing", () => {
   it("derives folder ontology from declared intents and invents no members", () => {
     expect(deriveFolderOntologyAxis(undefined)).toBeNull();
@@ -217,8 +192,8 @@ describe("taxonomy routing", () => {
     const direct = taxonomyRouting("taxonomy.json", bytes({
       templates: { literature: { templateFolder: "Notes/./Literature" } },
     }));
-    expect(requireTaxonomyPlacement(direct, "literature")).toBe("Notes/Literature");
-    expect(() => requireTaxonomyPlacement(direct, "other")).toThrow("TEMPLATE_PLACEMENT_UNDECLARED: taxonomy placement is undeclared for template other");
+    expect(direct.targetFolders.get("literature")).toBe("Notes/Literature");
+    expect(direct.targetFolders.has("other")).toBe(false);
     expect(direct.targetFolders.has("Inbox")).toBe(false);
 
     const overlaid = taxonomyRouting("taxonomy.json", bytes({

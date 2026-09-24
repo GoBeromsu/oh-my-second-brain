@@ -18,7 +18,6 @@ export type {
   TemplateNoteLayer,
   TemplateNoteUnresolved,
 } from "./note-index.js";
-export { composeTemplateContract } from "./defaults.js";
 export {
   canonicalPathKey,
   normalizeManagedTemplatePath,
@@ -44,22 +43,12 @@ export {
   validateDerivedProjection,
 } from "./policy.js";
 export {
-  assertStableControlRead,
-  composeTemplateRetrievalSource,
   controlGenerationDigest,
   deriveFolderOntologyAxis,
   expectedProjectionManaged,
-  requireTaxonomyPlacement,
   taxonomyRouting,
 } from "./resolver.js";
-export type { ControlByteRead, ExactControlBytes, TaxonomyRouting } from "./resolver.js";
-export {
-  TEMPLATE_TRANSACTION_MARKER_PATH,
-  executeTemplateTransaction,
-  inspectTemplateTransactionMarker,
-  resumeTemplateTransaction,
-} from "./transaction.js";
-export type { TemplateTransactionMarkerInspection } from "./transaction.js";
+export type { TaxonomyRouting } from "./resolver.js";
 export type {
   Diagnostic,
   DiagnosticCode,

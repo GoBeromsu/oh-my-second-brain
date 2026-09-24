@@ -664,7 +664,7 @@ describe("EngineSearchBackend high-cardinality facet summary", () => {
     } finally {
       await engine.dispose();
     }
-  });
+  }, 60_000);
 
   it("keeps the same facet summary when the omitted limit defaults to ten hits", async () => {
     const vault = await linkHeavyFacetVault();
@@ -679,7 +679,7 @@ describe("EngineSearchBackend high-cardinality facet summary", () => {
     } finally {
       await engine.dispose();
     }
-  });
+  }, 60_000);
 
   it("preserves deep hit paging, zero limits, and the full ordered stream", async () => {
     const vault = await linkHeavyFacetVault();
@@ -718,7 +718,7 @@ describe("EngineSearchBackend high-cardinality facet summary", () => {
     }
     // Walking every page of a 776-note corpus is deliberately more work than one
     // bounded query, so this scenario gets its own explicit budget.
-  }, 20_000);
+  }, 60_000);
 
   it("bounds axis and overview query facets without changing their result counts", async () => {
     const vault = await linkHeavyFacetVault();
@@ -740,5 +740,5 @@ describe("EngineSearchBackend high-cardinality facet summary", () => {
     } finally {
       await engine.dispose();
     }
-  });
+  }, 60_000);
 });

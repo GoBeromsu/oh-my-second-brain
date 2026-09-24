@@ -485,6 +485,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
     // Guide selects the contract for a saved path; check reads the selection
     // the session holds. Judging whether the note is finished is not an operation.
     expect(write({ op: "guide", notePath: "references/a.md", templateId: "literature" }).valid).toBe(true);
+    // The write skill tells callers to send an explicit null for the common
+    // contract. A string-only schema would reject the documented call, so the
+    // advertised schema has to accept the null the instructions prescribe.
+    expect(write({ op: "guide", notePath: "references/a.md", templateId: null }).valid).toBe(true);
+    expect(write({ op: "guide", notePath: "references/a.md", templateId: 7 }).valid).toBe(false);
     expect(write({ op: "check", connectionId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" }).valid).toBe(true);
     expect(write({ op: "check", notePath: "references/a.md" }).valid).toBe(false);
     expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(false);

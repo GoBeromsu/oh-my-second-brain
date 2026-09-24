@@ -9,21 +9,21 @@ Turn a note design into a user-owned contract. People and agents share that cont
 
 ## Authority
 
-- `.oms/template-policy.json` version 4 is the approved structural and semantic authority. Version 3 is unsupported; do not convert it or read it with a compatibility fallback.
-- The property pool holds type, intent, allowed values, and format. A default or individual layer only points at a pool property, adds a requirement, or narrows allowed values. It cannot override type, intent, or format, and it cannot weaken a default requirement, heading, or order. A contradiction is a contract conflict, not a silent overwrite.
-- The default template starts empty and always applies. An unbound note uses only that default. Do not invent required keys, headings, or criteria, and do not offer a default opt-out.
+- `.oms/template-policy.json` version 5 is the published contract and the only structural authority. A historical version 3 or 4 policy is still readable, and a mutating selection migrates it in place while preserving its recorded meaning; a held or unproved historical contract is reported `review-required` instead of being rewritten.
+- The property pool holds type, intent, allowed values, and format. The common contract and each registration point at pool properties. A registration inherits the common contract and may also relax it, because the user can approve a relaxation for one template; what it cannot do is invent meaning the published document does not contain.
+- A closed value set exists only when the document declares `valuePolicy: "closed"`. A list of allowed values on its own stays a suggestion and never becomes a filter.
+- The common contract always applies and has no Markdown file of its own. A note with no registered template is valid under the common contract alone. Do not invent required keys, headings, or criteria, and do not offer a common-contract opt-out.
 - `.oms/taxonomy.json` owns placement and link intent. Resolve a destination from an explicit path or folder, then the template placement, then a question. There is no Inbox fallback.
-- `.obsidian/types.json` is a read-only observation. A type conflict is a separate diagnostic; the v4 contract still decides.
-- `.obsidian/types.json` is Obsidian's own read-only type file. OMS reads it and never writes it, and it is not the contract authority.
-- Approved Markdown lives in the policy snapshot. Draft or source drift does not approve new meaning. Guide and check keep using the last approved bytes and report drift for that template only. Other templates and search continue. A damaged policy snapshot is unverifiable; do not replace it with an empty contract.
+- `.obsidian/types.json` is Obsidian's own read-only type file. OMS reads it and never writes it. A type conflict is a separate diagnostic; the published contract still decides.
+- A registered source stays the user's original Markdown file. The contract records its path and content hash; OMS never rewrites it, copies it, or keeps an approved snapshot of its bytes. A changed hash is drift evidence, not new approved meaning: guide and check keep using the published contract and report the drift for that registration only, while other registrations and search continue. A policy that cannot be read is reported unreadable, never replaced with an empty contract.
 
 ## Source syntax
 
-The agent reads Templater or any other source syntax and proposes ordinary Markdown plus an explicit contract. OMS does not parse or execute `tp`, JavaScript, or a private token language, and it has no note renderer. Keep unmanaged frontmatter. Leave original source bytes where they are; contract review verifies them and does not rewrite them. Selecting a folder is an explicit interview decision, not a setup decision, not a per-file registration, and not a contract guess. One sample value does not become a rule.
+The agent reads Templater or any other source syntax and proposes ordinary Markdown plus an explicit contract. OMS does not parse or execute `tp`, JavaScript, or a private token language, and it has no note renderer. Keep unmanaged frontmatter. Leave original source bytes where they are; source review verifies them and does not rewrite them. Selecting a folder is an explicit interview decision, not a setup decision, not a per-file registration, and not a contract guess. One sample value does not become a rule.
 
 ## Notice
 
-Census of selected sources is read-only: `search { op: "template-scan" }` or `oms template scan`. The first notice is exactly `템플릿에 변경이 있습니다`, with exactly `확인하기` and `나중에` and no template name, hash, or change list. `나중에` is host-only and does not touch the interview ledger. `확인하기` starts `/interview`. It does not write source bytes or block search. Long-lived sessions still surface a `templateNotice` on write, search, and status when boot instructions are stale.
+Discovery of candidate sources is read-only: `search { op: "template-scan" }` or `oms template scan`. Discovery is not registration and not approval. The first notice is exactly `템플릿에 변경이 있습니다`, with exactly `확인하기` and `나중에` and no template name, hash, or change list. `나중에` is host-only and makes no server call. `확인하기` starts `/interview`. It does not write source bytes or block search. Long-lived sessions still surface a `templateNotice` on write, search, and status when boot instructions are stale.
 
 ## Reads
 
@@ -31,8 +31,8 @@ Census of selected sources is read-only: `search { op: "template-scan" }` or `om
 oms template list|show|scan|check
 ```
 
-`scan`, `list`, `show`, and `check` are read-only. `regenerate-types` republishes the derived projection only, through its dry-run and the exact returned `approvalDigest` submitted as `approvedDigest`. `review`, `answer`, and `commit` belong to `/interview`. Do not self-approve, and do not edit policy, taxonomy, or `.oms/types.json` directly.
+`list`, `show`, `scan`, and `check` are read-only. `check` diagnoses the published policy, the vault settings, held registrations, and each registered source without repairing anything. A rendered contract and the source state shown beside it come from one snapshot, proven by the returned policy digest. Do not edit policy, taxonomy, or `.oms/types.json` directly, and do not self-approve.
 
 ## Surface
 
-The template modes are `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source`. Creating, updating, moving, removing, reclassifying, defaulting, and folder registration do not exist, on either MCP or the CLI, and neither does a renderer or an interview ledger. Every contract change goes through `/interview`, which agrees the document with the user and then publishes it.
+The template modes are `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source`, each requiring an explicit `transactionId`. Publication previews without `--yes` and compare-and-swaps against the exact bytes now on disk, so a valid hand-edited policy stays revisable. Acknowledgment needs the live digest and advances only the recorded hash. Relinking needs a genuinely missing original and a candidate path the user spells out exactly. Creating, updating, moving, removing, reclassifying, defaulting, and folder registration do not exist, on either MCP or the CLI, and neither does a renderer, an interview ledger, or a derived-projection republish. Every contract change goes through `/interview`, which agrees the document with the user and then publishes it.

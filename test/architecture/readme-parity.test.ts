@@ -144,13 +144,13 @@ const CLI_SURFACES = [
   "oms index sync|embed|repair|status|clean",
   "oms link suggest|check",
   "oms model install|select|waive|status",
-  "oms note guide|check|complete|audit|get",
+  "oms note guide|check|audit|get",
   "oms package check|update",
   "oms search query|context",
   "oms serve mcp|http",
   "oms setup",
   "oms status",
-  "oms template scan|list|show|check|regenerate-types|review|answer|commit",
+  "oms template list|show|scan|check|publish|review-sources|acknowledge-source|relink-source",
 ] as const;
 
 const CURRENT_CLI_SURFACES = [
@@ -158,7 +158,7 @@ const CURRENT_CLI_SURFACES = [
   "oms search context",
   "oms index sync|embed|repair|status|clean",
   "oms index status --view status|collections|contexts",
-  "oms note guide|check|complete|audit|get",
+  "oms note guide|check|audit|get",
   "oms host install|remove|sync|status",
   "oms package check|update",
   "oms serve mcp|http",

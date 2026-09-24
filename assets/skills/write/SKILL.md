@@ -55,4 +55,4 @@ A `templateNotice` uses the first display `템플릿에 변경이 있습니다` 
 
 ## Surface
 
-The write operations are `guide`, `check`, and `template`. Note creation, appending, updating, backfilling, and completion do not exist: the agent writes the note, OMS inspects what was saved, and judging whether the note is good stays with the user and the agent. Pass the task binding exactly as `guide` returned it; do not invent field names. A note with no template omits `templateId` rather than sending an empty string.
+The write operations are `guide`, `check`, and `template`. Note creation, appending, updating, backfilling, and completion do not exist: the agent writes the note, OMS inspects what was saved, and judging whether the note is good stays with the user and the agent. Pass the task binding exactly as `guide` returned it; do not invent field names. A note with no registered template either omits `templateId` or sends an explicit `null`; both select the common contract, and neither is an empty string.

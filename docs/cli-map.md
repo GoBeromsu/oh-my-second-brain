@@ -6,7 +6,7 @@ The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doct
 
 The eight skills are `distill`, `doctor`, `interview`, `link`, `search`, `status`, `template`, and `write`. `interview` and `template` are tool-less. Skills are workflows. They are not the five tools.
 
-Agents write and repair notes. OMS `guide` supplies approved material before writing; `check` and `complete` inspect the saved note. The `write` tool keeps a write posture because interview answers and approved contract publication mutate managed state. `guide` and `check` themselves write no vault bytes. Link's posture is read-only.
+Agents write and repair notes. OMS `guide` selects the contract before writing; `check` inspects the saved note. The `write` tool keeps a write posture because explicit contract publication and confirmed source changes mutate managed state. `guide` and `check` themselves write no vault bytes. Link's posture is read-only.
 
 ## Template
 
@@ -20,9 +20,9 @@ Agents write and repair notes. OMS `guide` supplies approved material before wri
 | `oms template acknowledge-source` | `oms_write` | `template` + `mode: "acknowledge-source"` | Confirms reviewed source bytes. The SHA advances by one revision; the contract rules do not change. |
 | `oms template relink-source` | `oms_write` | `template` + `mode: "relink-source"` | Confirms a relocation to an explicitly named candidate. The original must be genuinely missing. |
 | `oms template check` | `oms_doctor` | `validate` | Read-only contract diagnosis: policy, portable settings, held registrations, and source state. |
-Policy version 5 is the authority. The common contract is always on and starts empty. A registration only adds constraints, and a note with no registration is valid. Publication writes the policy and one history record. It does not publish ordinary notes or the user's own template sources. The retired interview leaves `review`, `answer`, and `commit` have no aliases.
+Policy version 5 is the authority. The common contract is always on, starts empty, and has no Markdown file of its own. A registration inherits it and may add, tighten, or — where the user approved it for that template — relax what the common contract says; a note with no registration is valid. A closed value set exists only where the document declares `valuePolicy: "closed"`. Publication writes the policy and one history record, compare-and-swapped against the exact bytes now on disk. It does not publish ordinary notes or the user's own template sources. The retired leaves `review`, `answer`, `commit`, and `regenerate-types` have no aliases.
 
-`review` is read-only. `answer` records the interview draft. `commit` runs only after the user approves the exact final digest. Source drift warns for that template and leaves the last approved snapshot in place. An unverifiable policy stops the affected evaluation; it does not become an empty contract, and it does not stop search.
+Every mutating template mode requires an explicit `transactionId`, and publication previews without `--yes`. Source drift is reported for that registration only and leaves the published contract in place. A policy that is missing, damaged, or unreadable stops the affected evaluation and names which; it does not become an empty contract, and it does not stop search.
 
 The host notice text and its two buttons are fixed in the [host asset contract](./adapters.md). Confirming starts the `interview` skill, which reviews the changed source before anything is published. Deferring makes no server call. Search, a general question, or a note error does not start it.
 
@@ -78,7 +78,7 @@ Read-only search is independent of policy validity. Lexical, vector, HyDE, and t
 
 | CLI | Purpose |
 |---|---|
-| `oms setup` | Propose an empty v4 policy and publish it only after interview approval. |
+| `oms setup` | Describe the vault and point at `oms template publish`; it publishes nothing by itself. |
 | `oms host install|remove|sync|status` | Manage host-native assets and registrations. Install is a user-run command. `remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. |
 | `oms package check|update` | Check or update the npm package without implicitly syncing hosts. |
 | `oms model install|select|waive|status` | Manage model acquisition, selection, waiver, and status. |

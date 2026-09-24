@@ -9,8 +9,7 @@ import { approvalDigest, digestBytes, hashCanonical, outputDigest } from "./cano
 import { serializeContractPolicyV5, type ContractPolicyV5 } from "./contract-v5.js";
 import { VAULT_PUBLICATION_LEASE, acquireTransactionLock, releaseTransactionLock } from "./file-lock.js";
 import { inspectLegacyPublicationMarker, legacyPublicationReadSet, verifyLegacyPublicationEvidence, type LegacyPublicationEvidenceInput } from "./legacy-publication-evidence.js";
-import { executeTemplateTransaction, TEMPLATE_TRANSACTION_MARKER_PATH } from "./transaction.js";
-import type { ManagedDraftTransition, ManagedTemplatePath, TemplateCompositionManifest, TemplateId, TemplateTransactionReceipt } from "./types.js";
+import type { ManagedTemplatePath } from "./types.js";
 import { commitVaultPublication, inspectLegacyVaultPublication, planVaultPublication, verifiedLegacyVaultSource } from "./vault-publication.js";
 
 const roots: string[] = [];
@@ -142,55 +141,6 @@ async function publicationFixture() {
   });
   return { root, target, plan };
 }
-function present(text: string) {
-  const bytes = new TextEncoder().encode(text);
-  return { state: "present" as const, bytes, signature: digestBytes(bytes) };
-}
-function manifest(): TemplateCompositionManifest {
-  const controls = [
-    { kind: "policy" as const, path: POLICY, before: "policy-v1", after: "policy-v2" },
-    { kind: "taxonomy" as const, path: TAXONOMY, before: "taxonomy-v1", after: "taxonomy-v2" },
-    { kind: "projection" as const, path: PROJECTION, before: "projection-v1", after: "projection-v2" },
-  ];
-  const mapped = controls.map(control => {
-    const current = present(control.before);
-    const proposed = present(control.after);
-    return { kind: control.kind, path: control.path, expectedCurrent: { state: "present" as const, signature: current.signature }, current, proposed, action: "write" as const };
-  }) as unknown as TemplateCompositionManifest["controls"];
-  const draft: ManagedDraftTransition = {
-    templateId: null,
-    path: DRAFT,
-    expectedCurrent: { state: "absent" },
-    current: { state: "absent" },
-    proposed: present("draft-v2"),
-    action: "write",
-  };
-  const outputs = [...mapped, draft].flatMap(transition => transition.proposed.state === "present"
-    ? [{ finalVaultRelativePath: transition.path, payloadDigest: transition.proposed.signature }]
-    : []);
-  const body = {
-    version: 1 as const,
-    markerPath: TEMPLATE_TRANSACTION_MARKER_PATH,
-    controls: mapped,
-    drafts: [draft],
-    operations: [{ kind: "commit-contract" as const, templateId: null as TemplateId | null, payloadDigest: digestBytes("commit-contract") }],
-    diagnostics: [],
-    outputs,
-  };
-  return { ...body, approvalDigest: approvalDigest(body), outputDigest: outputDigest(outputs) };
-}
-async function transactionFixture(): Promise<string> {
-  const root = await vault();
-  await mkdir(join(root, ".oms"));
-  await writeFile(join(root, POLICY), "policy-v1");
-  await writeFile(join(root, TAXONOMY), "taxonomy-v1");
-  await writeFile(join(root, PROJECTION), "projection-v1");
-  return root;
-}
-function code(receipt: TemplateTransactionReceipt): string | undefined {
-  return receipt.status === "rejected" || receipt.status === "resume-required" || receipt.status === "inconsistent" ? receipt.diagnostics[0]?.code : undefined;
-}
-
 describe("legacy publication admission", () => {
   it("keeps frozen labels as protocol evidence rather than approval or captured files", () => {
     expect(publication.classification).toBe("protocol-fixture");
@@ -435,32 +385,23 @@ function canonical(value: unknown): string {
 });
 
 describe("shared vault publication lease", () => {
-  it("blocks both real writer entrypoints until the owning token releases", async () => {
+  // There is one real writer entrypoint now. The retired v4 transaction
+  // executor used to be the second party here; asserting the lease against a
+  // module no route can reach proved nothing, so the case holds the lease
+  // directly and checks that the surviving writer respects it.
+  it("blocks the real writer until the owning token releases", async () => {
     const publisher = await publicationFixture();
-    const transaction = await transactionFixture();
-    const publisherBefore = await tree(publisher.root);
-    const transactionBefore = await tree(transaction);
-    const publisherToken = await acquireTransactionLock(join(publisher.root, ".oms/.template-transactions/vault-lock"), join(publisher.root, VAULT_PUBLICATION_LEASE));
-    const transactionToken = await acquireTransactionLock(join(transaction, ".oms/.template-transactions/vault-lock"), join(transaction, VAULT_PUBLICATION_LEASE));
-    expect(publisherToken).toEqual(expect.any(String));
-    expect(transactionToken).toEqual(expect.any(String));
-    await releaseTransactionLock(join(publisher.root, VAULT_PUBLICATION_LEASE), "wrong-token");
-    await releaseTransactionLock(join(transaction, VAULT_PUBLICATION_LEASE), "wrong-token");
-    await expect(commitVaultPublication(publisher.target, publisher.plan, publisher.plan.planDigest)).rejects.toThrow("PUBLICATION_LOCKED");
-    const approved = manifest();
-    expect(code(await executeTemplateTransaction(transaction, approved, { approvedDigest: approved.approvalDigest }))).toBe("CONTRACT_TRANSACTION_IN_PROGRESS");
-    expect(withoutLease(await tree(publisher.root))).toEqual(withoutLease(publisherBefore));
-    expect(withoutLease(await tree(transaction))).toEqual(withoutLease(transactionBefore));
-    expect(await readFile(join(publisher.root, ".oms/template-policy.json"), "utf8")).toBe(serializeContractPolicyV5(v5(0)));
-    expect(await readFile(join(transaction, POLICY), "utf8")).toBe("policy-v1");
+    const before = await tree(publisher.root);
+    const token = await acquireTransactionLock(join(publisher.root, ".oms/.template-transactions/vault-lock"), join(publisher.root, VAULT_PUBLICATION_LEASE));
+    expect(token).toEqual(expect.any(String));
 
-    await releaseTransactionLock(join(publisher.root, VAULT_PUBLICATION_LEASE), publisherToken!);
-    await releaseTransactionLock(join(transaction, VAULT_PUBLICATION_LEASE), transactionToken!);
-    const releasedPublisher = await publicationFixture();
-    await expect(commitVaultPublication(releasedPublisher.target, releasedPublisher.plan, releasedPublisher.plan.planDigest)).resolves.toMatchObject({ status: "complete" });
-    const releasedTransaction = await transactionFixture();
-    const released = manifest();
-    expect(await executeTemplateTransaction(releasedTransaction, released, { approvedDigest: released.approvalDigest })).toMatchObject({ status: "applied", markerState: "complete" });
-    expect(await readFile(join(releasedTransaction, POLICY), "utf8")).toBe("policy-v2");
+    await releaseTransactionLock(join(publisher.root, VAULT_PUBLICATION_LEASE), "wrong-token");
+    await expect(commitVaultPublication(publisher.target, publisher.plan, publisher.plan.planDigest)).rejects.toThrow("PUBLICATION_LOCKED");
+    expect(withoutLease(await tree(publisher.root))).toEqual(withoutLease(before));
+    expect(await readFile(join(publisher.root, ".oms/template-policy.json"), "utf8")).toBe(serializeContractPolicyV5(v5(0)));
+
+    await releaseTransactionLock(join(publisher.root, VAULT_PUBLICATION_LEASE), token!);
+    const released = await publicationFixture();
+    await expect(commitVaultPublication(released.target, released.plan, released.plan.planDigest)).resolves.toMatchObject({ status: "complete" });
   });
 });

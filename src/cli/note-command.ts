@@ -12,9 +12,8 @@ const VALUE_FLAGS = new Set([
   "folder", "max-per-template", "collection", "from-line", "line-count", "line-limit", "max-bytes",
 ]);
 const BOOLEAN_FLAGS = new Set(["json", "line-numbers", "full-path", "help"]);
-const REPEATABLE_FLAGS = new Set<string>();
 
-type Options = Readonly<Record<string, string | boolean | readonly string[]>>;
+type Options = Readonly<Record<string, string | boolean>>;
 interface Parsed {
   readonly verb: string;
   readonly positional: readonly string[];
@@ -28,7 +27,7 @@ function fail(message: string): never {
 function parse(argv: readonly string[]): Parsed {
   if (argv.length === 0) fail("missing note verb");
   const positional: string[] = [];
-  const options: Record<string, string | boolean | string[]> = {};
+  const options: Record<string, string | boolean> = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]!;
     if (!token.startsWith("--")) {
@@ -45,11 +44,6 @@ function parse(argv: readonly string[]): Parsed {
     }
     const value = argv[++index];
     if (value === undefined || value.startsWith("--")) fail(`--${name} requires a value`);
-    if (REPEATABLE_FLAGS.has(name)) {
-      const current = options[name];
-      options[name] = [...(Array.isArray(current) ? current : []), value];
-      continue;
-    }
     if (Object.hasOwn(options, name)) fail(`duplicate flag --${name}`);
     options[name] = value;
   }

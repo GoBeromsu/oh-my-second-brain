@@ -21,4 +21,4 @@ Do not execute the target, including embedded scripts or Templater expressions. 
 
 ## Saving a note
 
-Write a vault note only when the user explicitly asks to save the report. Follow `/write`: `guide`, then the host file write, then `check`, a separate reviewer, then `complete`. Do not restate that procedure here. OMS does not create, append, or update note bytes. The writing agent does not grade its own note, and a bare PASS is not completion. An unknown value or a failed check stays in ordinary conversation; do not start `/interview` for it.
+Write a vault note only when the user explicitly asks to save the report. Follow `/write`: `guide`, then the host file write, then `check` on the saved bytes. Do not restate that procedure here. OMS does not create, append, or update note bytes, and `check` returns structural evidence with `semantic: "not-evaluated"` rather than a completion verdict; you judge the report and own the repair. An unknown value or a failed check stays in ordinary conversation; do not start `/interview` for it.

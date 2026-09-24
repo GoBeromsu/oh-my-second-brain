@@ -1,27 +1,9 @@
-import type { ResolvedContract, ResolvedHeading } from "./types.js";
 
 /**
  * Checks required ATX headings in a note body. The scan does not derive a contract,
  * expand tokens, or treat OMS markers as structure. Headings inside fenced code are ignored.
  * Extra headings, including descendants, are legal. Unordered is the default; strict is opt-in.
  */
-
-export type TemplateBodyHeadingRuleId =
-  | "HEADING_MISSING"
-  | "HEADING_LEVEL_MISMATCH"
-  | "HEADING_ORDER_MISMATCH";
-
-/** One failed heading rule. `headingId` is set for every rule this scanner emits. */
-export interface TemplateBodyHeadingViolation {
-  readonly ruleId: TemplateBodyHeadingRuleId;
-  readonly headingId?: string;
-  readonly message: string;
-}
-
-export interface TemplateBodyContractResult {
-  readonly valid: boolean;
-  readonly violations: readonly TemplateBodyHeadingViolation[];
-}
 
 const MAX_BODY_BYTES = 1_048_576;
 const MAX_BODY_LINES = 100_000;
@@ -40,17 +22,6 @@ export interface ObservedHeading {
 interface OpenFence {
   readonly char: "`" | "~";
   readonly length: number;
-}
-
-interface Assignment {
-  readonly heading: ResolvedHeading;
-  readonly index: number;
-  readonly observed?: ObservedHeading;
-  readonly wrongLevel?: ObservedHeading;
-}
-
-function fail(message: string): never {
-  throw new Error(`CONTENT_CONTRACT_INVALID: ${message}`);
 }
 
 function sourceLines(body: string): SourceLine[] {
@@ -150,98 +121,4 @@ export function scanContractHeadings(body: string, includeSetext = false): reado
     }
   }
   return headings;
-}
-
-function readHeading(value: unknown, index: number): ResolvedHeading {
-  const where = `headings[${index}]`;
-  if (typeof value !== "object" || value === null) fail(`${where} must be an object`);
-  const heading = value as Partial<ResolvedHeading>;
-  if (typeof heading.headingId !== "string" || heading.headingId.length === 0) fail(`${where}.headingId must be a non-empty string`);
-  if (typeof heading.title !== "string" || heading.title.trim().length === 0) fail(`${where}.title must be a non-empty string`);
-  if (typeof heading.level !== "number" || !Number.isSafeInteger(heading.level) || heading.level < 1 || heading.level > 6) {
-    fail(`${where}.level must be an integer from 1 to 6`);
-  }
-  if (heading.required !== true) fail(`${where}.required must be true`);
-  return heading as ResolvedHeading;
-}
-
-function assign(headings: readonly ResolvedHeading[], observed: readonly ObservedHeading[]): readonly Assignment[] {
-  const used = new Set<number>();
-  return headings.map(heading => {
-    const title = heading.title.normalize("NFC");
-    let wrongLevel: ObservedHeading | undefined;
-    for (let index = 0; index < observed.length; index += 1) {
-      if (used.has(index)) continue;
-      const candidate = observed[index];
-      if (candidate === undefined || candidate.title !== title) continue;
-      if (candidate.level !== heading.level) {
-        if (wrongLevel === undefined) wrongLevel = candidate;
-        continue;
-      }
-      used.add(index);
-      return { heading, index, observed: candidate };
-    }
-    return wrongLevel === undefined ? { heading, index: -1 } : { heading, index: -1, wrongLevel };
-  });
-}
-
-function diagnose(
-  headings: readonly ResolvedHeading[],
-  observed: readonly ObservedHeading[],
-  headingOrder: ResolvedContract["headingOrder"],
-): readonly TemplateBodyHeadingViolation[] {
-  const assignments = assign(headings, observed);
-  const violations: TemplateBodyHeadingViolation[] = [];
-  for (const assignment of assignments) {
-    if (assignment.index >= 0) continue;
-    const { heading } = assignment;
-    const wrongLevel = assignment.wrongLevel;
-    if (wrongLevel !== undefined) {
-      violations.push({
-        ruleId: "HEADING_LEVEL_MISMATCH",
-        headingId: heading.headingId,
-        message: `Heading ${heading.headingId} (${heading.title}) must be level ${heading.level}, not ${wrongLevel.level}.`,
-      });
-      continue;
-    }
-    violations.push({
-      ruleId: "HEADING_MISSING",
-      headingId: heading.headingId,
-      message: `Required heading ${heading.headingId} (${heading.title}) at level ${heading.level} is missing.`,
-    });
-  }
-  if (headingOrder !== "strict") return violations;
-  let previous: Assignment | undefined;
-  for (const assignment of assignments) {
-    if (assignment.index < 0 || previous === undefined) {
-      if (assignment.index >= 0) previous = assignment;
-      continue;
-    }
-    if (assignment.index < previous.index) {
-      const heading = assignment.heading;
-      violations.push({
-        ruleId: "HEADING_ORDER_MISMATCH",
-        headingId: heading.headingId,
-        message: `Heading ${heading.headingId} (${heading.title}) must follow ${previous.heading.headingId} (${previous.heading.title}) when heading order is strict.`,
-      });
-      break;
-    }
-    previous = assignment;
-  }
-  return violations;
-}
-
-export function evaluateTemplateBodyContract(
-  body: string,
-  contract: Pick<ResolvedContract, "headings" | "headingOrder">,
-): TemplateBodyContractResult {
-  if (typeof body !== "string") fail("body must be a string");
-  if (typeof contract !== "object" || contract === null) fail("contract must be an object");
-  if (contract.headingOrder !== "unordered" && contract.headingOrder !== "strict") {
-    fail("headingOrder must be unordered or strict");
-  }
-  if (!Array.isArray(contract.headings)) fail("headings must be an array");
-  const headings = contract.headings.map((heading, index) => readHeading(heading, index));
-  const violations = diagnose(headings, scanContractHeadings(body), contract.headingOrder);
-  return { valid: violations.length === 0, violations };
 }

@@ -146,6 +146,7 @@ const string = { type: "string" };
 const number = { type: "number" };
 const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
+const nullableString = { anyOf: [string, { type: "null" }] };
 const digestSchema = { type: "string", pattern: "^sha256:[0-9a-f]{64}$" };
 const jsonValue = { };
 const axisScalar = { anyOf: [string, number, boolean] };
@@ -158,7 +159,7 @@ const documentProperties = { target: string, targets: stringArray, notePath: str
 const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: { type: "integer", minimum: 0 }, maxNeighbors: number, useCache: boolean, ...retrieveContextSemanticInputProperties } as const;
 const operations: Record<string, readonly Operation[]> = {
   write: [
-    { op: "guide", name: "write-guide", properties: { notePath: string, templateId: string, headingBindings: jsonValue }, required: ["notePath"] },
+    { op: "guide", name: "write-guide", properties: { notePath: string, templateId: nullableString, headingBindings: jsonValue }, required: ["notePath"] },
     { op: "check", name: "write-check", properties: { connectionId: string, sessionId: string }, required: ["connectionId", "sessionId"] },
     { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["publish-contract", "review-sources", "acknowledge-source", "relink-source"] }, policy: jsonValue, templateId: string, reviewedDigest: digestSchema, candidatePath: string, transactionId: string, confirmed: boolean }, required: ["mode"] },
   ],
@@ -755,7 +756,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       );
       return jsonText({
         vault,
-        projectionSource: ".oms/types.json",
+        projectionSource: ".oms/template-policy.json",
         ...result,
       });
     }
@@ -842,17 +843,11 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         });
         return jsonText(result);
       }
-      const useEphemeralLexicalFallback =
-        name === "oms_semantic_query" &&
-        publicName === "search" &&
-        !hasExplicitEmbeddingIntent(args) &&
-        (hasEmbeddingModel()
-          ? getReadOnlySemanticEngine() === null
-          : getReadOnlyCoreSemanticEngine() === null);
+      // Every `oms_semantic_query` path returned above, so the former ephemeral
+      // lexical fallback keyed on that name could not run. Search's model-free
+      // lexical path lives in that returning block; do not reintroduce a second
+      // copy here.
       const semanticAdapter =
-        useEphemeralLexicalFallback
-          ? await resolveReadOnlyLexicalAdapter()
-          :
         isEngineSemanticOp(name) &&
         name !== "oms_semantic_cleanup" &&
         !(name === "oms_sync_embeddings" && args?.["embed"] === false) &&
@@ -865,14 +860,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
             : publicName === "search"
               ? resolveReadOnlyIndexAdapter()
               : resolveDocumentAdapter(publicName);
-      const semanticToolResult = await handleSemanticTool(
-        name,
-        useEphemeralLexicalFallback
-          ? { ...args, lex: stringArg(args, "query") }
-          : args,
-        vault,
-        semanticAdapter,
-      );
+      const semanticToolResult = await handleSemanticTool(name, args, vault, semanticAdapter);
       if (semanticToolResult) {
         if (!semanticToolResult.ok) return errorText(semanticToolResult.message);
         return jsonText(semanticToolResult.value);
@@ -897,7 +885,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         const notes = folder === undefined ? index.notes : index.notes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
         const unresolvedNotes = folder === undefined ? index.unresolvedNotes : index.unresolvedNotes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
         const violations = unresolvedNotes.map(note => ({ code: "TEMPLATE_NOTE_IDENTITY_UNRESOLVED", path: note.path, reason: note.reason }));
-        return jsonText({ vault, projectionSource: ".oms/types.json", folder: folder ?? null, scannedNotes: notes.length, excludedNotes: (meta.source.sourcePaths ?? []).length, unresolvedNotes, clean: violations.length === 0, violations, generationDigest: meta.digest });
+        return jsonText({ vault, projectionSource: ".oms/template-policy.json", folder: folder ?? null, scannedNotes: notes.length, excludedNotes: (meta.source.sourcePaths ?? []).length, unresolvedNotes, clean: violations.length === 0, violations, generationDigest: meta.digest });
       } catch {
         const diagnosis = await diagnoseContract({ target: { vault, source } });
         const violations = folder === undefined
@@ -938,11 +926,15 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       if (bindings !== undefined && (typeof bindings !== "object" || bindings === null || Array.isArray(bindings))) {
         return errorText('Argument "headingBindings" must be an object of declared slot values.');
       }
+      const templateArg = args?.["templateId"];
+      if (templateArg !== undefined && templateArg !== null && typeof templateArg !== "string") {
+        return errorText('Argument "templateId" must be a registered template id or null for the common contract.');
+      }
       try {
         const selection = await selectContract({
           target: { vault, source },
           notePath,
-          templateId: stringArg(args, "templateId") ?? null,
+          templateId: typeof templateArg === "string" ? templateArg : null,
           ...(bindings === undefined ? {} : { headingBindings: bindings as Record<string, string> }),
         });
         return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...selection });
