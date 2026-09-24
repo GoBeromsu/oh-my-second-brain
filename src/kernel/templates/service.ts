@@ -687,6 +687,8 @@ export interface ContractSourceReviewFacts {
 export interface ContractSourceReviewResult {
   readonly vault: string;
   readonly revision: number;
+  /** Digest of the exact policy bytes this review read. */
+  readonly policyDigest: Digest;
   readonly reviews: readonly ContractSourceReviewFacts[];
   readonly held: readonly { readonly templateId: string; readonly reasons: readonly string[] }[];
 }
@@ -706,9 +708,16 @@ function reviewFacts(review: ContractSourceReview): ContractSourceReviewFacts {
   };
 }
 
-async function reviewTarget(target: WriteTarget): Promise<{ readonly vault: string; readonly policy: ContractPolicyV5; readonly policyText: string }> {
-  const admitted = await admitWriteTarget(target);
-  if (admitted !== undefined) fail("SELECTION_INVALID", admitted.message);
+/**
+ * Reads the published contract. `mutating` requires a writable verified target;
+ * a read-only review only needs a real canonical vault root, so a deliberately
+ * read-only target such as a legacy bridge can still be reviewed.
+ */
+async function reviewTarget(target: WriteTarget, mutating: boolean): Promise<{ readonly vault: string; readonly policy: ContractPolicyV5; readonly policyText: string }> {
+  if (mutating) {
+    const admitted = await admitWriteTarget(target);
+    if (admitted !== undefined) fail("SELECTION_INVALID", admitted.message);
+  }
   const vault = await canonicalPublicRoot(target.vault);
   const read = await readActualPolicy(vault);
   return { vault, policy: read.policy, policyText: read.text };
@@ -722,7 +731,7 @@ export async function reviewContractSources(input: {
   readonly target: WriteTarget;
   readonly templateId?: string;
 }): Promise<ContractSourceReviewResult> {
-  const { vault, policy } = await reviewTarget(input.target);
+  const { vault, policy, policyText } = await reviewTarget(input.target, false);
   if (input.templateId !== undefined && typeof input.templateId !== "string") fail("SELECTION_INVALID", "templateId must be an explicit string");
   const held: { templateId: string; reasons: readonly string[] }[] = [];
   const reviews: ContractSourceReviewFacts[] = [];
@@ -737,7 +746,7 @@ export async function reviewContractSources(input: {
   if (input.templateId !== undefined && reviews.length === 0 && held.length === 0) {
     throw new ContractV5Error("CONTRACT_UNKNOWN_TEMPLATE", `Unknown registered template '${input.templateId}'.`);
   }
-  return { vault, revision: policy.revision, reviews, held };
+  return { vault, revision: policy.revision, policyDigest: digestBytes(policyText), reviews, held };
 }
 
 async function publishSourceChange(
@@ -764,7 +773,7 @@ export async function acknowledgeContractSource(input: {
   readonly transactionId: string;
   readonly confirmed: boolean;
 }): Promise<ContractSourceCommitResult> {
-  const { vault, policy, policyText } = await reviewTarget(input.target);
+  const { vault, policy, policyText } = await reviewTarget(input.target, true);
   assertLowercaseUuid(input.transactionId, "transactionId");
   const review = await inspectContractSource(vault, policy, input.templateId);
   if (review.currentDigest !== input.reviewedDigest) {
@@ -789,7 +798,7 @@ export async function relinkContractSource(input: {
   readonly transactionId: string;
   readonly confirmed: boolean;
 }): Promise<ContractSourceCommitResult> {
-  const { vault, policy, policyText } = await reviewTarget(input.target);
+  const { vault, policy, policyText } = await reviewTarget(input.target, true);
   assertLowercaseUuid(input.transactionId, "transactionId");
   if (typeof input.candidatePath !== "string" || input.candidatePath.length === 0) fail("SELECTION_INVALID", "candidatePath must be an explicit vault-relative path");
   const review = await inspectContractSource(vault, policy, input.templateId);

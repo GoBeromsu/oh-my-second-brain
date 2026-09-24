@@ -719,6 +719,13 @@ describe("explicit contract source review", () => {
     const target = { vault, source: "explicit" as const };
     const clean = await reviewContractSources({ target });
     expect(clean.revision).toBe(1);
+    // The review names the exact snapshot it read, so a caller can pair its
+    // output with the same policy bytes instead of a later rewrite.
+    expect(clean.policyDigest).toBe(digestBytes(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8")));
+    // Review is read-only, so a deliberately read-only target is still reviewable.
+    expect((await reviewContractSources({ target: { vault, source: "legacy-bridge" } })).policyDigest).toBe(clean.policyDigest);
+    await expect(acknowledgeContractSource({ target: { vault, source: "legacy-bridge" }, templateId: "flower", reviewedDigest: clean.reviews[0]!.approvedDigest, transactionId: SOURCE_TX, confirmed: true }))
+      .rejects.toMatchObject({ code: "SELECTION_INVALID" });
     expect(clean.reviews.map(item => [item.templateId, item.state])).toEqual([["flower", "unchanged"], ["other", "unchanged"]]);
     expect(clean.held).toEqual([]);
     // Review carries facts, never the source or note text it read.

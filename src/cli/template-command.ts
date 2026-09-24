@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
+import { digestBytes } from "../kernel/templates/canonical.js";
 import { composeContractV5, parseContractPolicyV5 } from "../kernel/templates/contract-v5.js";
 import { discoverRegisteredSources } from "../kernel/templates/source-registry.js";
 import { readVaultSettings } from "../kernel/templates/vault-settings.js";
@@ -74,8 +75,11 @@ async function run(parsed: Parsed): Promise<void> {
     const review = await reviewContractSources({ target: resolved });
     const byTemplate = new Map(review.reviews.map(item => [item.templateId, item]));
     const held = new Map(review.held.map(item => [item.templateId, item.reasons]));
-    const policy = parseContractPolicyV5(await readFile(path.join(resolved.vault, ".oms", "template-policy.json"), "utf8"));
-    if (policy.revision !== review.revision) fail("the published contract changed while it was being read; run the command again");
+    const policyText = await readFile(path.join(review.vault, ".oms", "template-policy.json"), "utf8");
+    // The exact bytes must be the ones the review read; a same-revision rewrite
+    // would otherwise pair new contract rules with an old source state.
+    if (digestBytes(policyText) !== review.policyDigest) fail("the published contract changed while it was being read; run the command again");
+    const policy = parseContractPolicyV5(policyText);
     if (parsed.verb === "list") {
       const common = composeContractV5(policy, null);
       print({

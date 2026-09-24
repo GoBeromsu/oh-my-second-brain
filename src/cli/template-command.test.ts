@@ -3,15 +3,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { digestBytes } from "../kernel/templates/canonical.js";
 import { writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
 
 const { publish, reviewSources, acknowledge, relink, diagnose } = vi.hoisted(() => ({
   publish: vi.fn(async (input: any) => (input.confirmed
     ? { state: "published", revision: 1, receipt: { status: "complete" } }
     : { state: "confirmation-required", plan: { revision: 1, addedTemplates: [], removedTemplates: [], changedTemplates: [], commonChanged: false, propertiesChanged: false } })),
-  reviewSources: vi.fn(async () => ({
-    vault: "/vault",
+  reviewSources: vi.fn(async (input: any) => ({
+    vault: input.target.vault,
     revision: 1,
+    policyDigest: digestBytes(await (await import("node:fs/promises")).readFile(`${input.target.vault}/.oms/template-policy.json`, "utf8")),
     reviews: [{ templateId: "note", sourceIdentity: "source-note", path: "Templates/note.md", approvedDigest: `sha256:${"b".repeat(64)}`, currentDigest: `sha256:${"b".repeat(64)}`, state: "unchanged" }],
     held: [],
   })),
@@ -94,7 +96,7 @@ describe("template command", () => {
     await runTemplateCommand(["list", "--vault", root]);
     const listed = output();
     // The listing reports the vault and revision the review actually observed.
-    expect(listed).toMatchObject({ vault: "/vault", revision: 1 });
+    expect(listed).toMatchObject({ vault: root, revision: 1 });
     expect(listed.common).toMatchObject({ status: "active" });
     expect(listed.templates).toEqual([expect.objectContaining({
       templateId: "note",
