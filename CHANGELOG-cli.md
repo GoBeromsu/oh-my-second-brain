@@ -4,6 +4,7 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms --help` advertises the approval token setup actually requires.** Every published apply example showed only `--approved-digest`, while `setup` refuses any apply without both the token and the digest its dry-run printed, so the documented command could not succeed. Both READMEs carried the same incomplete command.
 - **CLI help and the removed-flag diagnostic tell the truth about setup.** Both said setup proposes an empty contract, and the `--template-folder` refusal pointed at the retired `oms template review`. Setup publishes no contract at all, and templates are registered by publishing one with `oms template publish`.
 - **`oms note` drops an empty repeatable-flag branch.** The set was permanently empty, so its accumulation path could never execute and the option type promised arrays the parser never produced.
 - **`oms template list` and `show` verify the exact snapshot.** They compare the policy bytes they render against the digest the review read and refuse when it changed, instead of comparing only the revision. The setup help now points at `oms template publish` rather than the retired review leaf.

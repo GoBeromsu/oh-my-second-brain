@@ -17,7 +17,7 @@ Suggest and check `[[wikilinks]]`. `link` does not write notes. There is no `op:
 ```
 
 - `link { op: "suggest", notePath }` returns candidates. Optional `folder` limits the target scope. The call is read-only.
-- `link { op: "check" }` validates links without writing. `oms link check` is the CLI counterpart.
+- `link { op: "check", notePath }` validates one note's links without writing. `oms link check` is the CLI counterpart, and it is the form that can check the whole vault without a path.
 
 Suggestions are surface-anchored to a term note's basename or alias, cover the first occurrence of each target only, and report an ambiguous span instead of resolving it. A suggestion is not consent. Show the candidates and insert only the links the user accepts, using the host's file tools at the reported span. If the note changed after the suggestion, suggest again rather than patching a stale span. Do not infer consent, and do not expose private note text beyond the span the user is accepting.
 

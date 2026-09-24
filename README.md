@@ -22,7 +22,7 @@ The authority model is in [architecture](./docs/architecture.md). Vault files ar
 
 ```bash
 oms setup --vault /path/to/vault --dry-run
-oms setup --vault /path/to/vault --yes --approved-digest <digest>
+oms setup --vault /path/to/vault --yes --approval-token <token> --approved-digest <digest>
 ```
 
 The interview skill agrees each decision with the user, writes the explicit contract document, previews it with `oms template publish`, and publishes only what the user approved. A changed registered source is drift evidence: `oms template review-sources` reviews it, `oms template acknowledge-source` advances only the recorded hash using the live reviewed digest, and `oms template relink-source` requires a genuinely missing original and the exact candidate path the user supplies. It does not change the contract by itself. OMS keeps no interview state, so there is no question id, census digest, or server-issued approval digest to forward. A general question, an unknown note value, a note error, an unmanaged property, or a search does not start the interview.

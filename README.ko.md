@@ -22,7 +22,7 @@ ADR-015는 ADR-014를 대체하고, ADR-014는 ADR-013을 대체했다. [ACKNOWL
 
 ```bash
 oms setup --vault /path/to/vault --dry-run
-oms setup --vault /path/to/vault --yes --approved-digest <digest>
+oms setup --vault /path/to/vault --yes --approval-token <token> --approved-digest <digest>
 ```
 
 interview 스킬은 결정을 사용자와 하나씩 합의하고, 명시적 계약 문서를 작성하고, `oms template publish`로 미리 보여준 뒤 사용자가 승인한 것만 게시한다. 변경된 등록 소스는 drift 증거다. `oms template review-sources`가 이를 검토하고, `oms template acknowledge-source`는 live reviewed digest로 기록된 hash만 전진시키며, `oms template relink-source`는 실제로 없어진 원본과 사용자가 정확히 지정한 candidate path를 요구한다. 그 자체로 계약을 바꾸지 않는다. OMS는 interview 상태를 보관하지 않으므로 전달할 question id·census digest·서버 발급 approval digest가 없다. 일반 질문, 알 수 없는 노트 값, 노트 오류, 관리되지 않는 속성, 검색은 interview를 시작하지 않는다.

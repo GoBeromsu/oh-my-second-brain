@@ -19,7 +19,7 @@ An unknown note value, a wrong note, a failed check, an unmanaged property, a se
 
 ## Before the first question
 
-Read intent that already exists: the published property intent, taxonomy placement, the user's own template sources, and instructions the user already gave. Reuse it. Ask only about a real gap. Do not turn one example into an allowed-value list or a universal rule, and do not preload a vault-specific schema. A new vault starts from an empty common contract. Model and provider setup stays on `oms setup`.
+Read intent that already exists: the published property intent, taxonomy placement, the user's own template sources, and instructions the user already gave. Reuse it. Ask only about a real gap. Do not turn one example into an allowed-value list or a universal rule, and do not preload a vault-specific schema. A new vault has no published contract at all: selection reports `setup-required` until the first revision is published, and the document published then is what the common contract becomes. Model and provider setup stays on `oms setup`.
 
 ## One decision at a time
 
@@ -72,4 +72,4 @@ The first display of a changed source is exactly `템플릿에 변경이 있습�
 
 ## Surface
 
-`publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source` are the only template mutations. Each takes an explicit `transactionId` and publishes at most one revision. There is no interview ledger, no question id, no census digest, and no server-issued approval digest to replay.
+`publish-contract`, `acknowledge-source`, and `relink-source` are the only template mutations. Each takes an explicit `transactionId` and publishes at most one revision. `review-sources` is read-only and takes no transaction id. There is no interview ledger, no question id, no census digest, and no server-issued approval digest to replay.

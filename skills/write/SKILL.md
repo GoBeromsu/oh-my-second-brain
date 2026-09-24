@@ -39,7 +39,7 @@ write { op: "check", connectionId, sessionId }
 
 Pass the locator guide returned. The session already holds the note path and the exact contract that was selected, so check takes no note path, template id, or caller-supplied rules. OMS re-reads the saved bytes and the published contract and returns `result`: `structural` (`pass`/`fail`), `semantic: "not-evaluated"`, and the violations it observed. Do not send an unsaved body or a caller PASS. A changed contract or a moved source ends the selection instead of silently adopting the new one: select again.
 
-Source drift is reported for that template; guide and check still use the last approved contract. Other templates and search continue. Stop this check while a contract transaction is in progress. A damaged policy is unverifiable, not an empty contract.
+A drifted registered source blocks selecting that template: guide refuses it with `SOURCE_DRIFT` until the user reviews and acknowledges the new bytes, or relinks a genuinely missing original. The common contract, every other registration, and search continue. Stop this check while a contract transaction is in progress. A damaged policy is unverifiable, not an empty contract.
 
 ## Source review
 
