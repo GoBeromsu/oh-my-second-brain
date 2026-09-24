@@ -34,9 +34,11 @@ note is worth keeping. There is no OMS completion call and no reviewer
 handshake: you judge the note and you own the repair. Read a reported violation,
 fix the file with your own tools, and run `check` again on the new bytes.
 
-Never weaken the contract to pass. Automatic repair defaults off, and an enabled
-repair remains agent-owned, context-scoped and bounded by the user's retry
-budget. Ordinary note questions must not silently change the contract.
+Never weaken the contract to pass. Automatic repair defaults off; `agentRepair`
+lives in the portable `.oms/settings.json`, not the contract. An enabled repair
+stays agent-owned and within the permitted contexts. OMS declares no retry budget
+and counts no attempts; ask the user rather than retrying blindly. Ordinary note
+questions must not silently change the contract.
 
 ## Configuration and read-only work
 

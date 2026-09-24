@@ -14,7 +14,7 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
     detailLines: [
       "             First run `setup --dry-run` to show an approval digest.",
       "             Apply only with `setup --yes --approved-digest <shown-digest>`.",
-      "             Setup proposes an empty contract; templates are declared through `oms template publish`.",
+      "             Setup publishes no contract; the contract is published by `oms template publish`.",
       "             --models-default          Install the pinned local model (EmbeddingGemma-300M, 768d).",
       "             --models-descriptor <path> Install an operator-supplied model descriptor instead.",
       "             --models-no-default       Waive model installation; vector search stays unavailable.",

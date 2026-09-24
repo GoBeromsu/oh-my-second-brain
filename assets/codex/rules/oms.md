@@ -27,8 +27,11 @@ that version 5 neither derives nor reads.
   handshake: you judge whether the note is worth keeping and you own the repair.
 - Read a reported violation, fix the file with your own tools, and check again.
   Never weaken the contract to pass, and never invent a missing value.
-- Automatic repair defaults off and stays within explicit scope and the user's
-  finite retry budget. Contract changes require approval, not an automatic fix.
+- Automatic repair defaults off; `agentRepair` lives in the portable
+  `.oms/settings.json`, not the contract. An enabled repair stays within the
+  contexts the user permitted. OMS declares no retry budget and counts no
+  attempts; ask the user rather than retrying blindly. Contract changes require
+  approval, not an automatic fix.
 - Search/status stay read-only; invalid, unbound and incomplete notes remain
   searchable. Preserve requested backend failure semantics without substitutes.
 - Use approved placement or ask; do not invent a folder or template requirement.

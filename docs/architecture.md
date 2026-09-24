@@ -10,7 +10,7 @@ These pages record the approved architecture. They are not a host-smoke result a
 property pool (type, format, intent)
         │
         ▼
-always-on common contract, initially empty
+always-on common contract
         │  an explicitly registered template may add, tighten, or relax
         ▼
 registered user-owned Markdown source (path and content hash)
@@ -22,7 +22,7 @@ registered user-owned Markdown source (path and content hash)
 
 Version 5 of `.oms/template-policy.json` is the published structural authority. The pool holds each property's type, intent, and any format or value policy. The always-on common contract and every explicitly registered template point at pool properties. A registration inherits the common contract and may add to it, tighten it, or relax it where that relaxation was approved for the template. A closed value set exists only when the declaration sets `valuePolicy: "closed"`; `allowedValues` alone is a suggestion. A reference to a missing pool property is a dangling field.
 
-The common contract is always on. It starts with empty fields and headings, and has no Markdown file of its own. A note that selects no registered template is valid under that common contract. A registration can add fields or headings and can adjust inherited requirements within its published contract. Extra body text and descendant headings stay free. OMS does not hardcode property names, folder names, personas, or the meaning of a heading.
+The common contract is always on and has no Markdown file of its own. OMS declares no field or heading for it, so it holds exactly what the published document says: nothing until the user writes fields into it, and whatever they write from the first revision onward. A note that selects no registered template is valid under that common contract. A registration can add fields or headings and can adjust inherited requirements within its published contract. Extra body text and descendant headings stay free. OMS does not hardcode property names, folder names, personas, or the meaning of a heading.
 
 Unmanaged frontmatter is preserved and left unchecked. OMS does not insert required values, rewrite a source into a note, or apply a naming expression on the user's behalf.
 

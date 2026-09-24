@@ -83,9 +83,9 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       approvedDigest = next;
       index += 1;
     } else if (arg === "--template-folder") {
-      // Setup proposes an empty contract and adopts no template, so selecting a
+      // Setup publishes no contract and registers no template, so selecting a
       // folder here would silently do nothing. Refuse instead of ignoring it.
-      return failure("[oms] --template-folder was removed: setup proposes an empty contract, and templates are declared through `oms template review`.");
+      return failure("[oms] --template-folder was removed: setup publishes no contract, and templates are registered by publishing one with `oms template publish`.");
     } else if (arg === "--install-claude") {
       installClaude = true;
     } else if (arg === "--runtime") {
