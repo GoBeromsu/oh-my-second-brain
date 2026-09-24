@@ -27,7 +27,7 @@ oms setup --vault /path/to/vault --yes --approved-digest <digest>
 
 interview leaf는 `oms template review --proposals`, `oms template answer`, `oms template commit`이다. 서버가 돌려준 question과 compare-and-swap 값을 그대로 전달하고, 세 호출 모두에 같은 `proposals`를 보낸다. parameter 이름을 만들어내지 않는다. 일반 질문, 알 수 없는 노트 값, 노트 오류, 관리되지 않는 속성, 검색은 그 interview를 시작하지 않는다.
 
-호스트 알림 문구는 정확히 `템플릿에 변경이 있습니다`이고 동작은 `확인하기`와 `나중에` 둘뿐이다. 처음 알림에는 템플릿 이름·hash·change class를 표시하지 않는다. `나중에`는 host-only이며 서버를 호출하지 않는다. `확인하기`는 `write { op: "template", mode: "interview-next", proposals }`로 한 번에 한 질문씩 진행하는 resumable interview를 시작한다.
+호스트 알림 문구는 정확히 `템플릿에 변경이 있습니다`이고 동작은 `확인하기`와 `나중에` 둘뿐이다. 처음 알림에는 템플릿 이름·hash·change class를 표시하지 않는다. `나중에`는 host-only이며 서버를 호출하지 않는다. `확인하기`는 interview 스킬을 시작하고, 그 스킬은 게시 전에 `write { op: "template", mode: "review-sources" }`로 변경된 소스를 먼저 검토한다.
 
 ## CLI
 
@@ -70,7 +70,7 @@ lexical, vector, HyDE, typed-axis 질의는 템플릿에 결속되지 않았거�
 
 다섯 도구는 그 skill의 부분집합이고, 어느 쪽도 열네 개 CLI family와 같지 않다. 세부 기능은 다섯 도구의 `op` 값으로 남는다.
 
-`write`는 interview 답변과 승인된 계약 게시가 관리 상태를 바꾸기 때문에 쓰기 posture를 유지한다. `guide`, `check`, `complete`는 볼트 바이트를 쓰지 않는다. 계약 review는 `op: "template"`의 `interview-next`, `interview-answer`, `commit-contracts` mode만 사용한다. `status`와 모든 검색 동작은 읽기 전용이며 완료를 대신 판정하지 않는다. `doctor` 도구는 control과 index를 진단하며 노트를 backfill하지 않는다.
+`write`는 명시적 계약 게시와 소스 검토가 관리 상태를 바꾸기 때문에 쓰기 posture를 유지한다. `guide`와 `check`는 볼트 바이트를 쓰지 않는다. 계약 변경은 `op: "template"`의 `publish-contract`, `review-sources`, `acknowledge-source`, `relink-source` mode만 사용한다. `status`와 모든 검색 동작은 읽기 전용이며 완료를 대신 판정하지 않는다. `doctor` 도구는 control과 index를 진단하며 노트를 backfill하지 않는다.
 
 ## 설치
 

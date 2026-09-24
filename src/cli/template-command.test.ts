@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { diagnose, regenerate, load, reviewContext, next, answer, commit } = vi.hoisted(() => ({
+const { diagnose, regenerate, load, reviewContext, publish, reviewSources, acknowledge, relink } = vi.hoisted(() => ({
   diagnose: vi.fn(async () => ({ status: "healthy", diagnostics: [] })),
   regenerate: vi.fn(async ({ request }: { request: { dryRun?: boolean } }) => ({ status: request.dryRun ? "planned" : "applied", mode: "reconcile" })),
   load: vi.fn(async () => ({
@@ -25,18 +25,24 @@ const { diagnose, regenerate, load, reviewContext, next, answer, commit } = vi.h
     ],
     raw: [{ templateId: "note", path: "Sources/note.md", identity: "note-source", approvedRawDigest: `sha256:${"f".repeat(64)}`, observedRawDigest: null, drift: "SOURCE_DRIFT" }],
   })),
-  next: vi.fn(async () => ({ state: "question", next: { questionId: `sha256:${"f".repeat(64)}` }, censusDigest: `sha256:${"c".repeat(64)}`, expectedLedgerDigest: null })),
-  answer: vi.fn(async (_target: any, request: any) => ({ state: "confirm", ...request, expectedLedgerDigest: `sha256:${"e".repeat(64)}` })),
-  commit: vi.fn(async (_target: any, request: any) => ({ status: request.dryRun ? "planned" : "applied", mode: "reconcile", approvalDigest: `sha256:${"a".repeat(64)}` })),
+  publish: vi.fn(async (input: any) => (input.confirmed
+    ? { state: "published", revision: 2, receipt: { status: "complete" } }
+    : { state: "confirmation-required", plan: { revision: 2, addedTemplates: [], removedTemplates: [], changedTemplates: [], commonChanged: false, propertiesChanged: false } })),
+  reviewSources: vi.fn(async () => ({ vault: "/vault", revision: 1, reviews: [], held: [] })),
+  acknowledge: vi.fn(async (input: any) => (input.confirmed ? { state: "published", revision: 2 } : { state: "confirmation-required", review: { state: "drift" } })),
+  relink: vi.fn(async (input: any) => (input.confirmed ? { state: "published", revision: 2 } : { state: "confirmation-required", review: { state: "missing" } })),
 }));
 
 vi.mock("../kernel/templates/doctor.js", () => ({ diagnoseTemplates: diagnose, regenerateTypes: regenerate }));
 vi.mock("../kernel/templates/resolver.js", () => ({ loadResolvedTemplates: load }));
 vi.mock("../kernel/templates/review-context.js", () => ({ readTemplateReviewContext: reviewContext }));
-vi.mock("../kernel/templates/interview-service.js", () => ({
-  nextTemplateInterview: next,
-  answerTemplateInterview: answer,
-  commitTemplateContracts: commit,
+const TRANSACTION = "33333333-3333-4333-8333-333333333333";
+
+vi.mock("../kernel/templates/service.js", () => ({
+  publishContract: publish,
+  reviewContractSources: reviewSources,
+  acknowledgeContractSource: acknowledge,
+  relinkContractSource: relink,
 }));
 vi.mock("../kernel/link/link.js", () => ({ resolveEffectiveVault: vi.fn(async () => ({ vault: process.cwd(), source: "cwd", scope: null })) }));
 
@@ -74,8 +80,8 @@ function output(): any { return JSON.parse(String(log.mock.calls.at(-1)?.[0])); 
 describe("template command", () => {
   it("documents every public verb and approval protocol", () => {
     const usage = templateUsage();
-    for (const verb of ["scan", "list", "show", "check", "regenerate-types", "publish", "review-sources", "acknowledge-source", "relink-source", "review", "answer", "commit"]) expect(usage).toContain(verb);
-    expect(usage).toContain("Leaves: scan | list | show | check | regenerate-types | publish | review-sources | acknowledge-source | relink-source | review | answer | commit");
+    for (const verb of ["scan", "list", "show", "check", "regenerate-types", "publish", "review-sources", "acknowledge-source", "relink-source"]) expect(usage).toContain(verb);
+    expect(usage).toContain("Leaves: scan | list | show | check | regenerate-types | publish | review-sources | acknowledge-source | relink-source");
     expect(usage).toContain("--policy <file.json>");
     // Source review changes a registration's source, never its rules, and both
     // mutating leaves state their confirmation flag.
@@ -103,48 +109,40 @@ describe("template command", () => {
     await runTemplateCommand(["check", "--vault", root]); expect(diagnose).toHaveBeenCalledWith({ vault: root, source: "explicit" });
     expect(output()).toMatchObject({ vault: root, status: "healthy", diagnostics: [] });
     expect(process.exitCode).toBe(0);
-    expect(commit).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
     expect(regenerate).not.toHaveBeenCalled();
   });
 
-  it("forwards review, answer, and commit leaves without collapsing their guards", async () => {
+  it("forwards publication and source review leaves without collapsing their confirmation", async () => {
     const root = await vault();
-    const questionId = `sha256:${"f".repeat(64)}`;
-    const censusDigest = `sha256:${"c".repeat(64)}`;
-    const ledgerDigest = `sha256:${"e".repeat(64)}`;
+    await runTemplateCommand(["review-sources", "--vault", root, "--template-id", "note"]);
+    expect(reviewSources).toHaveBeenCalledWith({ target: { vault: root, source: "explicit" }, templateId: "note" });
 
-    await runTemplateCommand(["review", "--vault", root]);
-    // review forwards an explicit-proposal slot; with no --proposals it is empty.
-    expect(next).toHaveBeenCalledWith({ vault: root, source: "explicit" }, {});
-    await runTemplateCommand(["review", "--vault", root, "--dry-run"]);
-    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
-    expect(next).toHaveBeenCalledOnce();
+    await runTemplateCommand(["acknowledge-source", "--vault", root, "--template-id", "note", "--reviewed-digest", digest, "--transaction-id", TRANSACTION]);
+    expect(acknowledge).toHaveBeenCalledWith({ target: { vault: root, source: "explicit" }, templateId: "note", reviewedDigest: digest, transactionId: TRANSACTION, confirmed: false });
+    expect(output()).toMatchObject({ state: "confirmation-required" });
 
-    await runTemplateCommand([
-      "answer", questionId, "--answer", '{"required":true}', "--census-digest", censusDigest,
-      "--ledger-digest", "null", "--vault", root,
-    ]);
-    expect(answer).toHaveBeenCalledWith(
-      { vault: root, source: "explicit" },
-      { questionId, answer: { required: true }, censusDigest, expectedLedgerDigest: null },
-    );
-    await runTemplateCommand(["answer", questionId, "--answer", "not-json", "--census-digest", censusDigest, "--ledger-digest", "null", "--vault", root]);
-    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
-    expect(answer).toHaveBeenCalledOnce();
-    await runTemplateCommand(["answer", questionId, "--answer", "true", "--census-digest", "sha256:BAD", "--ledger-digest", ledgerDigest, "--vault", root, "--yes"]);
-    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
-    expect(answer).toHaveBeenCalledOnce();
+    await runTemplateCommand(["acknowledge-source", "--vault", root, "--template-id", "note", "--reviewed-digest", digest, "--transaction-id", TRANSACTION, "--yes"]);
+    expect(acknowledge).toHaveBeenLastCalledWith(expect.objectContaining({ confirmed: true }));
 
-    await runTemplateCommand(["commit", "--census-digest", censusDigest, "--ledger-digest", "null", "--vault", root, "--dry-run"]);
-    expect(commit).toHaveBeenCalledWith(
-      { vault: root, source: "explicit" },
-      { censusDigest, expectedLedgerDigest: null, dryRun: true },
-    );
-    await runTemplateCommand(["commit", "--census-digest", censusDigest, "--ledger-digest", ledgerDigest, "--vault", root, "--yes", "--approved-digest", digest]);
-    expect(commit).toHaveBeenLastCalledWith(
-      { vault: root, source: "explicit" },
-      { censusDigest, expectedLedgerDigest: ledgerDigest, approvedDigest: digest },
-    );
+    await runTemplateCommand(["relink-source", "--vault", root, "--template-id", "note", "--candidate-path", "Templates/moved.md", "--transaction-id", TRANSACTION]);
+    expect(relink).toHaveBeenCalledWith({ target: { vault: root, source: "explicit" }, templateId: "note", candidatePath: "Templates/moved.md", transactionId: TRANSACTION, confirmed: false });
+
+    // A missing transaction id or evidence is refused before the service runs.
+    acknowledge.mockClear();
+    relink.mockClear();
+    for (const args of [
+      ["acknowledge-source", "--vault", root, "--template-id", "note", "--reviewed-digest", digest],
+      ["acknowledge-source", "--vault", root, "--template-id", "note", "--transaction-id", TRANSACTION],
+      ["relink-source", "--vault", root, "--template-id", "note", "--transaction-id", TRANSACTION],
+      ["publish", "--vault", root, "--transaction-id", TRANSACTION],
+    ]) {
+      await runTemplateCommand(args);
+      expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+    }
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(relink).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("reports needs-repair as warning-only while preserving rejected failures", async () => {
@@ -158,8 +156,8 @@ describe("template command", () => {
     });
     expect(process.exitCode).toBe(0);
 
-    commit.mockResolvedValueOnce({ status: "inconsistent", diagnostics: [] });
-    await runTemplateCommand(["commit", "--census-digest", digest, "--ledger-digest", "null", "--vault", root, "--dry-run"]);
+    regenerate.mockResolvedValueOnce({ status: "rejected", code: "TYPES_PROJECTION_OBSOLETE", remediation: "version 5 is the authority" });
+    await runTemplateCommand(["regenerate-types", "--vault", root, "--dry-run"]);
     expect(process.exitCode).toBe(1);
   });
 
@@ -175,9 +173,9 @@ describe("template command", () => {
       await runTemplateCommand(args);
       expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
     }
-    expect(commit).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
     expect(regenerate).not.toHaveBeenCalled();
-    expect(answer).not.toHaveBeenCalled();
+    expect(acknowledge).not.toHaveBeenCalled();
   });
 
   it("supports guarded regenerate-types", async () => {
@@ -191,27 +189,25 @@ describe("template command", () => {
   it("rejects self-approval, stale-shaped digests, unknown flags, and argument conflicts before mutation", async () => {
     const root = await vault();
     for (const args of [
-      ["commit", "--census-digest", digest, "--ledger-digest", "null", "--vault", root, "--yes"],
-      ["commit", "--census-digest", digest, "--ledger-digest", "null", "--vault", root, "--yes", "--approved-digest", "sha256:BAD"],
-      ["commit", "--census-digest", digest, "--ledger-digest", "null", "--vault", root, "--dry-run", "--approved-digest", digest],
+      ["regenerate-types", "--vault", root, "--yes"],
+      ["regenerate-types", "--vault", root, "--yes", "--approved-digest", "sha256:BAD"],
+      ["regenerate-types", "--vault", root, "--dry-run", "--approved-digest", digest],
       ["regenerate-types", "--vault", root, "--unknown", "x", "--dry-run"],
+      // Retired interview leaves have no alias.
+      ["review", "--vault", root],
+      ["answer", digest, "--vault", root],
+      ["commit", "--vault", root],
     ]) {
       await runTemplateCommand(args);
       expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
     }
-    expect(commit).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
     expect(regenerate).not.toHaveBeenCalled();
   });
 
-  it("rejects cwd-inferred mutation for answer, commit, and regenerate-types", async () => {
-    await runTemplateCommand(["answer", digest, "--answer", "true", "--census-digest", digest, "--ledger-digest", "null"]);
-    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
-    await runTemplateCommand(["commit", "--census-digest", digest, "--ledger-digest", "null", "--dry-run"]);
-    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
+  it("rejects cwd-inferred mutation for regenerate-types", async () => {
     await runTemplateCommand(["regenerate-types", "--dry-run"]);
     expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "TEMPLATE_ARGS_INVALID" }] });
-    expect(answer).not.toHaveBeenCalled();
-    expect(commit).not.toHaveBeenCalled();
     expect(regenerate).not.toHaveBeenCalled();
   });
 });

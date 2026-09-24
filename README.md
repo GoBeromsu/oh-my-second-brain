@@ -27,7 +27,7 @@ oms setup --vault /path/to/vault --yes --approved-digest <digest>
 
 The interview leaves are `oms template review --proposals`, `oms template answer`, and `oms template commit`. Forward the question and compare-and-swap fields the server returns, and send the same `proposals` on every call. Do not invent parameter names. A general question, an unknown note value, a note error, an unmanaged property, or a search does not start that interview.
 
-The host notice text is exactly `템플릿에 변경이 있습니다` and its actions are exactly `확인하기` and `나중에`. The first notice shows no template name, hash, or change class. `나중에` is host-only and makes no server call. `확인하기` starts a resumable one-question interview at `write { op: "template", mode: "interview-next", proposals }`.
+The host notice text is exactly `템플릿에 변경이 있습니다` and its actions are exactly `확인하기` and `나중에`. The first notice shows no template name, hash, or change class. `나중에` is host-only and makes no server call. `확인하기` starts the interview skill, which reviews the changed source with `write { op: "template", mode: "review-sources" }` before anything is published.
 
 ## CLI
 
@@ -70,7 +70,7 @@ The eight skills (`distill`, `doctor`, `interview`, `link`, `search`, `status`, 
 
 The five tools are a subset of those skills, and neither set is the fourteen CLI families. Detail capabilities remain `op` values under the five tools.
 
-`write` keeps a write posture because interview answers and approved contract publication change managed state. `guide`, `check`, and `complete` write no vault bytes. Contract review uses `op: "template"` with `interview-next`, `interview-answer`, and `commit-contracts` only. `status` and every search operation are read-only and do not decide completion. The `doctor` tool diagnoses controls and indexes; it does not backfill notes.
+`write` keeps a write posture because interview answers and approved contract publication change managed state. `guide`, `check`, and `complete` write no vault bytes. Contract review uses `op: "template"` with `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source` only. `status` and every search operation are read-only and do not decide completion. The `doctor` tool diagnoses controls and indexes; it does not backfill notes.
 
 ## Install
 

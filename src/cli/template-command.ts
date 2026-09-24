@@ -4,14 +4,12 @@ import { readFile } from "node:fs/promises";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
 import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
-import { nextTemplateInterview, answerTemplateInterview, commitTemplateContracts } from "../kernel/templates/interview-service.js";
-import type { TemplateProposalInput } from "../kernel/templates/interview.js";
 import type { TemplateOperationTarget } from "../kernel/templates/operations.js";
 import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
 import { acknowledgeContractSource, publishContract, relinkContractSource, reviewContractSources } from "../kernel/templates/service.js";
 import { validateTemplateId } from "../kernel/templates/paths.js";
 import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
-import type { Digest, GuardedTemplateRequest, JsonValue } from "../kernel/templates/types.js";
+import type { Digest, GuardedTemplateRequest } from "../kernel/templates/types.js";
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
@@ -47,55 +45,6 @@ function parse(argv: readonly string[]): Parsed {
 }
 function text(options: Options, name: string): string | undefined { const value = options[name]; return typeof value === "string" ? value : undefined; }
 function flag(options: Options, name: string): boolean { return options[name] === true; }
-function jsonValue(value: unknown): value is JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(jsonValue);
-  if (typeof value !== "object") return false;
-  return Object.values(value as Record<string, unknown>).every(jsonValue);
-}
-/**
- * Explicit contract proposals, as JSON. OMS never derives contract meaning by
- * reading template syntax, so a proposal is the only way to introduce one.
- */
-function proposalsOption(options: Options): { readonly proposals?: readonly TemplateProposalInput[] } {
-  const raw = text(options, "proposals");
-  if (raw === undefined) return {};
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    fail("--proposals must be valid JSON");
-  }
-  if (!Array.isArray(value) || !value.every(jsonValue)) fail("--proposals must be a JSON array of proposals");
-  return { proposals: value as unknown as readonly TemplateProposalInput[] };
-}
-
-function answerValue(options: Options): JsonValue {
-  const raw = text(options, "answer");
-  if (raw === undefined) fail("--answer requires a value");
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    fail("--answer must be valid JSON");
-  }
-  if (!jsonValue(value)) fail("--answer must be a JSON value");
-  return value;
-}
-function requiredDigest(options: Options, name: string): Digest {
-  const raw = text(options, name);
-  if (raw === undefined) fail(`--${name} requires a value`);
-  if (!DIGEST.test(raw)) fail(`--${name} must be sha256:<64hex>`);
-  return raw as Digest;
-}
-function expectedLedgerDigest(options: Options): Digest | null {
-  const raw = text(options, "ledger-digest");
-  if (raw === undefined) fail("--ledger-digest requires a value");
-  if (raw === "null") return null;
-  if (!DIGEST.test(raw)) fail("--ledger-digest must be null or sha256:<64hex>");
-  return raw as Digest;
-}
 function only(parsed: Parsed, allowed: readonly string[], positional: number | readonly [number, number]): void {
   const unexpected = Object.keys(parsed.options).filter(key => !allowed.includes(key));
   if (unexpected.length > 0) fail(`--${unexpected[0]} is not valid for ${parsed.verb}`);
@@ -207,38 +156,38 @@ async function run(parsed: Parsed): Promise<void> {
     if (candidatePath === undefined) fail("relink-source requires an explicit --candidate-path");
     print(await relinkContractSource({ target: resolved, templateId, candidatePath, transactionId, confirmed })); return;
   }
-  if (parsed.verb === "review") {
-    only(parsed, ["vault", "proposals"], 0);
+  if (parsed.verb === "publish") {
+    only(parsed, ["vault", "policy", "transaction-id", "yes"], 0);
     const resolved = await target(parsed.options);
-    print(await nextTemplateInterview(resolved, proposalsOption(parsed.options))); return;
+    const raw = text(parsed.options, "policy");
+    const transactionId = text(parsed.options, "transaction-id");
+    if (raw === undefined || transactionId === undefined) fail("publish requires --policy and --transaction-id");
+    let policy: unknown;
+    try { policy = JSON.parse(await readFile(path.resolve(raw), "utf8")); }
+    catch { fail(`--policy must name a readable JSON contract document: ${raw}`); }
+    print(await publishContract({ target: resolved, policy, transactionId, confirmed: flag(parsed.options, "yes") })); return;
   }
-  if (parsed.verb === "answer") {
-    only(parsed, ["vault", "answer", "census-digest", "ledger-digest", "proposals"], 1);
+  if (parsed.verb === "review-sources") {
+    only(parsed, ["vault", "template-id"], 0);
     const resolved = await target(parsed.options);
-    ensureMutableTarget(resolved);
-    const questionId = parsed.positional[0]!;
-    if (!DIGEST.test(questionId)) fail("answer requires a sha256:<64hex> question id");
-    print(await answerTemplateInterview(resolved, {
-      questionId: questionId as Digest,
-      answer: answerValue(parsed.options),
-      censusDigest: requiredDigest(parsed.options, "census-digest"),
-      expectedLedgerDigest: expectedLedgerDigest(parsed.options),
-      ...proposalsOption(parsed.options),
-    })); return;
+    const templateId = text(parsed.options, "template-id");
+    print(await reviewContractSources({ target: resolved, ...(templateId === undefined ? {} : { templateId }) })); return;
   }
-  if (parsed.verb === "commit") {
-    only(parsed, ["vault", "census-digest", "ledger-digest", "dry-run", "yes", "approved-digest", "proposals"], 0);
+  if (parsed.verb === "acknowledge-source" || parsed.verb === "relink-source") {
+    only(parsed, ["vault", "template-id", "reviewed-digest", "candidate-path", "transaction-id", "yes"], 0);
     const resolved = await target(parsed.options);
-    ensureMutableTarget(resolved);
-    // Commit rebuilds the interview, so it needs the same proposals that raised
-    // the answered questions; without them a recorded decision cannot be
-    // reproduced and publication is refused.
-    print(await commitTemplateContracts(resolved, {
-      censusDigest: requiredDigest(parsed.options, "census-digest"),
-      expectedLedgerDigest: expectedLedgerDigest(parsed.options),
-      ...proposalsOption(parsed.options),
-      ...guard(parsed.options),
-    })); return;
+    const templateId = text(parsed.options, "template-id");
+    const transactionId = text(parsed.options, "transaction-id");
+    if (templateId === undefined || transactionId === undefined) fail(`${parsed.verb} requires --template-id and --transaction-id`);
+    const confirmed = flag(parsed.options, "yes");
+    if (parsed.verb === "acknowledge-source") {
+      const reviewedDigest = text(parsed.options, "reviewed-digest");
+      if (reviewedDigest === undefined) fail("acknowledge-source requires the --reviewed-digest observed during review");
+      print(await acknowledgeContractSource({ target: resolved, templateId, reviewedDigest, transactionId, confirmed })); return;
+    }
+    const candidatePath = text(parsed.options, "candidate-path");
+    if (candidatePath === undefined) fail("relink-source requires an explicit --candidate-path");
+    print(await relinkContractSource({ target: resolved, templateId, candidatePath, transactionId, confirmed })); return;
   }
   if (parsed.verb === "check") {
     only(parsed, ["vault"], 0);
@@ -256,7 +205,7 @@ async function run(parsed: Parsed): Promise<void> {
 export function templateUsage(): string {
   return `Usage: oms template <verb> [options]
 
-Leaves: scan | list | show | check | regenerate-types | publish | review-sources | acknowledge-source | relink-source | review | answer | commit
+Leaves: scan | list | show | check | regenerate-types | publish | review-sources | acknowledge-source | relink-source
 
 Read-only:
   list
@@ -264,7 +213,6 @@ Read-only:
   scan
   check
   review-sources [--template-id <id>] [--vault <vault>]
-  review [--proposals <JSON>] [--vault <vault>]
 
 Contract publication (the document is your own contract meaning):
   publish --policy <file.json> --transaction-id <uuid> [--yes] [--vault <vault>]
@@ -273,16 +221,9 @@ Source review (the contract rules never change):
   acknowledge-source --template-id <id> --reviewed-digest <digest> --transaction-id <uuid> [--yes] [--vault <vault>]
   relink-source --template-id <id> --candidate-path <path> --transaction-id <uuid> [--yes] [--vault <vault>]
 
-  Without --yes both print the review that would be confirmed and change nothing.
-
-Contract review:
-  answer <question-id> --answer <JSON> --census-digest <digest> --ledger-digest <digest|null> [--proposals <JSON>] [--vault <vault>]
-  commit --census-digest <digest> --ledger-digest <digest|null> [--proposals <JSON>] (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]
-
-  --proposals carries the explicit contract proposals as a JSON array. Contract
-  meaning enters OMS only this way; it is never derived from a file name or from
-  template syntax. Pass the same proposals to review, answer, and commit, or a
-  recorded answer cannot be reproduced and publication is refused.
+  Without --yes every mutating leaf prints what would be confirmed and changes nothing.
+  Contract meaning enters OMS only as the explicit policy document you publish; it
+  is never derived from a file name or from template syntax.
 
 Guarded:
   regenerate-types (--dry-run | --yes --approved-digest <digest>) [--vault <vault>]`;

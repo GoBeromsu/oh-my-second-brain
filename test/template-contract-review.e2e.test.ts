@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { digestBytes } from "../src/kernel/templates/canonical.js";
+import { serializeVaultSettings } from "../src/kernel/templates/vault-settings.js";
 import { writeApprovedVault } from "../src/kernel/templates/approved-vault-fixture.js";
 import {
   answerTemplateInterview,
@@ -39,6 +40,8 @@ function cli(vault: string, args: readonly string[]) {
 
 const roots: string[] = [];
 const encoder = new TextEncoder();
+const PUBLISH_TX = "aaaaaaaa-1111-4111-8111-111111111111";
+const ACKNOWLEDGE_TX = "bbbbbbbb-2222-4222-8222-222222222222";
 const SOURCE_PATH = "Templates/Review/article.md";
 
 afterEach(async () => {
@@ -74,6 +77,19 @@ async function fixture(): Promise<string> {
   await mkdir(join(root, "Templates", "Review"), { recursive: true });
   await mkdir(join(root, "notes"), { recursive: true });
   await writeFile(join(root, ".obsidian", "templates.json"), JSON.stringify({ folder: "Templates/Review" }));
+  await writeFile(join(root, SOURCE_PATH), RAW_SOURCE);
+  await writeFile(join(root, "notes", "existing.md"), EXISTING_NOTE);
+  return root;
+}
+
+/** A vault ready for explicit publication: settings, a real source, no policy. */
+async function contractFixture(): Promise<string> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "oms-contract-publish-")));
+  roots.push(root);
+  await mkdir(join(root, "Templates", "Review"), { recursive: true });
+  await mkdir(join(root, ".oms"), { recursive: true });
+  await mkdir(join(root, "notes"), { recursive: true });
+  await writeFile(join(root, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: "11111111-1111-4111-8111-111111111111", templateRoots: ["Templates"] }));
   await writeFile(join(root, SOURCE_PATH), RAW_SOURCE);
   await writeFile(join(root, "notes", "existing.md"), EXISTING_NOTE);
   return root;
@@ -245,10 +261,16 @@ describe("contract review end to end", () => {
   });
 
   it("offers review through a notice that names nothing", async () => {
-    const root = await fixture();
-    const ready = await runInterview(root);
-    const planned = await commitTemplateContracts(target(root), { ...ready, dryRun: true, proposals: PROPOSALS as never });
-    await commitTemplateContracts(target(root), { ...ready, approvedDigest: (planned as { readonly approvalDigest: string }).approvalDigest, proposals: PROPOSALS as never });
+    const root = await contractFixture();
+    const documentPath = join(root, "contract.json");
+    await writeFile(documentPath, `${JSON.stringify({
+      version: 5,
+      revision: 0,
+      properties: { title: { type: "text", intent: "Article title." } },
+      common: { status: "active", fields: { title: { required: true } } },
+      templates: { article: { status: "active", source: { identity: "article-source", path: SOURCE_PATH, rawDigest: digestBytes(RAW_SOURCE) }, fields: {} } },
+    }, null, 2)}\n`);
+    expect(cli(root, ["template", "publish", "--policy", documentPath, "--transaction-id", PUBLISH_TX, "--yes"]).status).toBe(0);
 
     expect(await readTemplateChangeNotice(root)).toBeNull();
 
@@ -262,81 +284,60 @@ describe("contract review end to end", () => {
   });
 
 
-  it("carries proposals through the public CLI from review to publication", async () => {
-    const root = await fixture();
-    const proposals = JSON.stringify(PROPOSALS);
-
-    const review = cli(root, ["template", "review", "--proposals", proposals]);
-    expect(review.status).toBe(0);
-    const question = JSON.parse(review.stdout) as {
-      readonly state: string;
-      readonly next: { readonly questionId: string };
-      readonly censusDigest: string;
-      readonly expectedLedgerDigest: string | null;
+  it("publishes and acknowledges through the public CLI without an interview", async () => {
+    const root = await contractFixture();
+    const document = {
+      version: 5,
+      revision: 0,
+      properties: { title: { type: "text", intent: "Article title." }, language: { type: "select", intent: "Language.", valuePolicy: "closed", allowedValues: ["en", "ko"] } },
+      common: { status: "active", fields: { title: { required: true } } },
+      templates: {
+        article: {
+          status: "active",
+          source: { identity: "article-source", path: SOURCE_PATH, rawDigest: digestBytes(RAW_SOURCE) },
+          fields: { language: { required: true } },
+        },
+      },
     };
-    expect(question.state).toBe("question");
+    const documentPath = join(root, "contract.json");
+    await writeFile(documentPath, `${JSON.stringify(document, null, 2)}\n`);
 
-    const answered = cli(root, [
-      "template", "answer", question.next.questionId,
-      "--answer", JSON.stringify({ disposition: "confirm", raw: "yes" }),
-      "--census-digest", question.censusDigest,
-      "--ledger-digest", question.expectedLedgerDigest ?? "null",
-      "--proposals", proposals,
-    ]);
-    expect(answered.status).toBe(0);
-    const ready = JSON.parse(answered.stdout) as { readonly censusDigest: string; readonly expectedLedgerDigest: string | null };
+    const preview = cli(root, ["template", "publish", "--policy", documentPath, "--transaction-id", PUBLISH_TX]);
+    expect(preview.status, `${preview.stdout}\n${preview.stderr}`).toBe(0);
+    expect(JSON.parse(preview.stdout)).toMatchObject({ state: "confirmation-required", plan: { revision: 0, addedTemplates: ["article"] } });
 
-    const planned = cli(root, [
-      "template", "commit",
-      "--census-digest", ready.censusDigest,
-      "--ledger-digest", ready.expectedLedgerDigest ?? "null",
-      "--proposals", proposals,
-      "--dry-run",
-    ]);
-    expect(planned.status).toBe(0);
-    const approvalDigest = (JSON.parse(planned.stdout) as { readonly approvalDigest: string }).approvalDigest;
-
-    const applied = cli(root, [
-      "template", "commit",
-      "--census-digest", ready.censusDigest,
-      "--ledger-digest", ready.expectedLedgerDigest ?? "null",
-      "--proposals", proposals,
-      "--yes", "--approved-digest", approvalDigest,
-    ]);
-    expect(applied.status).toBe(0);
-    expect(JSON.parse(applied.stdout).status).toBe("applied");
-
-    const snapshot = await loadResolvedTemplates(root);
-    expect(Object.keys(snapshot.templates)).toEqual(["article"]);
+    const applied = cli(root, ["template", "publish", "--policy", documentPath, "--transaction-id", PUBLISH_TX, "--yes"]);
+    expect(applied.status, `${applied.stdout}\n${applied.stderr}`).toBe(0);
+    expect(JSON.parse(applied.stdout)).toMatchObject({ state: "published", revision: 0, receipt: { status: "complete" } });
+    // Publication touches controls only; the user's own source is untouched.
     expect(await bytes(root, SOURCE_PATH)).toEqual(RAW_SOURCE);
+
+    const clean = JSON.parse(cli(root, ["template", "review-sources"]).stdout) as { readonly reviews: readonly { readonly state: string; readonly currentDigest: string }[] };
+    expect(clean.reviews.map(item => item.state)).toEqual(["unchanged"]);
+
+    // The user edits their own source outside OMS.
+    await writeFile(join(root, SOURCE_PATH), encoder.encode("\ufeff---\r\ntitle: English\r\nlanguage: en\r\n---\r\n# Overview\r\nMore prose.\r\n"));
+    const drifted = JSON.parse(cli(root, ["template", "review-sources", "--template-id", "article"]).stdout) as { readonly reviews: readonly { readonly state: string; readonly currentDigest: string }[] };
+    expect(drifted.reviews[0]?.state).toBe("drift");
+
+    const acknowledged = cli(root, [
+      "template", "acknowledge-source", "--template-id", "article",
+      "--reviewed-digest", drifted.reviews[0]!.currentDigest,
+      "--transaction-id", ACKNOWLEDGE_TX, "--yes",
+    ]);
+    expect(acknowledged.status, `${acknowledged.stdout}\n${acknowledged.stderr}`).toBe(0);
+    expect(JSON.parse(acknowledged.stdout)).toMatchObject({ state: "published", revision: 1 });
+    expect(JSON.parse(cli(root, ["template", "review-sources"]).stdout).reviews[0].state).toBe("unchanged");
   });
 
-  it("refuses a public commit that omits the proposals its answers came from", async () => {
+  it("refuses the retired interview leaves with no alias", async () => {
     const root = await fixture();
-    const proposals = JSON.stringify(PROPOSALS);
-    const question = JSON.parse(cli(root, ["template", "review", "--proposals", proposals]).stdout) as {
-      readonly next: { readonly questionId: string };
-      readonly censusDigest: string;
-      readonly expectedLedgerDigest: string | null;
-    };
-    const ready = JSON.parse(cli(root, [
-      "template", "answer", question.next.questionId,
-      "--answer", JSON.stringify({ disposition: "confirm", raw: "yes" }),
-      "--census-digest", question.censusDigest,
-      "--ledger-digest", question.expectedLedgerDigest ?? "null",
-      "--proposals", proposals,
-    ]).stdout) as { readonly censusDigest: string; readonly expectedLedgerDigest: string | null };
     const before = await bytes(root, ".oms/template-policy.json");
-
-    const orphaned = cli(root, [
-      "template", "commit",
-      "--census-digest", ready.censusDigest,
-      "--ledger-digest", ready.expectedLedgerDigest ?? "null",
-      "--dry-run",
-    ]);
-
-    // Publishing here would drop the confirmed template, so it is refused.
-    expect(orphaned.status).toBe(1);
+    for (const args of [["template", "review"], ["template", "answer", "x"], ["template", "commit"]]) {
+      const refused = cli(root, args);
+      expect(refused.status, args.join(" ")).toBe(1);
+      expect(JSON.parse(refused.stdout).diagnostics[0].code).toBe("TEMPLATE_ARGS_INVALID");
+    }
     expect(await bytes(root, ".oms/template-policy.json")).toEqual(before);
   });
 

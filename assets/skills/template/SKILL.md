@@ -35,4 +35,4 @@ oms template scan|list|show|check|regenerate-types
 
 ## Surface
 
-The template modes are `interview-next`, `interview-answer`, and `commit-contracts`. Creating, updating, moving, removing, reclassifying, defaulting, and folder registration do not exist, on either MCP or the CLI, and neither does a renderer. Every contract change goes through `/interview`.
+The template modes are `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source`. Creating, updating, moving, removing, reclassifying, defaulting, and folder registration do not exist, on either MCP or the CLI, and neither does a renderer or an interview ledger. Every contract change goes through `/interview`, which agrees the document with the user and then publishes it.

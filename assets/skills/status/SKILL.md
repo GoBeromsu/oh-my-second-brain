@@ -25,6 +25,6 @@ Report runtime history separately: events live outside the vault and are scoped 
 
 `status` is the read-only polling channel for selected-folder template changes. When a machine `templateNotice` is present, return the full notice on every poll and surface the initial display exactly as `템플릿에 변경이 있습니다` with exactly `확인하기` and `나중에`. Do not render a template name, hash, or change taxonomy in that first notice. A census failure yields no notice and no tool error.
 
-`나중에` is host-only: it performs no server call and leaves the pending set and interview ledger unchanged. `확인하기` offers `/interview` and does not write source bytes or block search. `templateNotice.next` is a mode hint, not a CallToolRequest: do not replay it as `interview-next`. Do not run interview questions or `commit-contracts` here.
+`나중에` is host-only: it performs no server call and leaves the pending set and the published contract unchanged. `확인하기` offers `/interview` and does not write source bytes or block search. `templateNotice.next` is a mode hint, not a CallToolRequest: do not replay it as a tool call. Do not publish a contract or acknowledge a source here.
 
 Long-lived sessions must surface this tool-result notice even if boot instructions are stale. The surface is five MCP tools and eight skills. Status stays read-only.

@@ -15,10 +15,10 @@ import { readVaultSettings } from "../kernel/templates/vault-settings.js";
 import { parseContractPolicyV5 } from "../kernel/templates/contract-v5.js";
 import { inspectContractSource } from "../kernel/templates/source-registry.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { buildTemplateNoteIndex, deriveTemplateRetrievalAxes, resumeTemplateTransaction } from "../kernel/templates/index.js";
+import { buildTemplateNoteIndex, deriveTemplateRetrievalAxes } from "../kernel/templates/index.js";
 import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
 import { readSearchTemplateSource } from "../kernel/engine/retrieval/template-source.js";
-import type { Digest, JsonValue } from "../kernel/templates/types.js";
+import type { Digest } from "../kernel/templates/types.js";
 import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../kernel/runtime/event-journal.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
@@ -47,11 +47,6 @@ import {
   embeddingConfigPresent,
 } from "../kernel/semantic/semantic-engine.js";
 import { checkLinksForNote, linkCheckPayload, linkSuggestPayload, suggestLinksForNote } from "./link-tools.js";
-import {
-  answerTemplateInterview,
-  commitTemplateContracts,
-  nextTemplateInterview,
-} from "../kernel/templates/interview-service.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
@@ -105,12 +100,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  return isRecord(value) && Object.values(value).every(isJsonValue);
-}
 
 
 function stringArg(args: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -194,7 +183,7 @@ const operations: Record<string, readonly Operation[]> = {
   write: [
     { op: "guide", name: "write-guide", properties: { notePath: string, templateId: string, headingBindings: jsonValue }, required: ["notePath"] },
     { op: "check", name: "write-check", properties: { connectionId: string, sessionId: string }, required: ["connectionId", "sessionId"] },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["publish-contract", "review-sources", "acknowledge-source", "relink-source", "interview-next", "interview-answer", "commit-contracts"] }, policy: jsonValue, templateId: string, reviewedDigest: digestSchema, candidatePath: string, transactionId: string, confirmed: boolean, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, proposals: proposalsSchema, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["publish-contract", "review-sources", "acknowledge-source", "relink-source"] }, policy: jsonValue, templateId: string, reviewedDigest: digestSchema, candidatePath: string, transactionId: string, confirmed: boolean }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "check", name: "oms_link_check", properties: { notePath: string, folder: string }, required: ["notePath"] }],
@@ -1092,84 +1081,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         if (candidatePath === undefined) return errorText("Source relocation requires an explicit candidatePath.");
         return jsonText({ vault, ...await relinkContractSource({ target: { vault, source }, templateId, candidatePath, transactionId, confirmed }) });
       }
-      if (mode === "interview-next") {
-        if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
-          return errorText("Template interview-next does not accept a guarded request.");
-        }
-        // Proposals are the caller's explicit contract meaning. OMS never
-        // derives one by reading template syntax.
-        const proposals = args?.["proposals"];
-        if (proposals !== undefined && !Array.isArray(proposals)) {
-          return errorText('Argument "proposals" must be an array of explicit contract proposals.');
-        }
-        return jsonText(await nextTemplateInterview({ vault, source }, proposals === undefined ? {} : { proposals: proposals as never }));
-      }
-      if (mode === "interview-answer") {
-        if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
-          return errorText("Template interview-answer saves a draft and does not accept a guarded request.");
-        }
-        const questionId = args?.["questionId"];
-        const answer = args?.["answer"];
-        const censusDigest = args?.["censusDigest"];
-        const expectedLedgerDigest = args?.["expectedLedgerDigest"];
-        if (
-          !isDigest(questionId) ||
-          !isJsonValue(answer) ||
-          !isDigest(censusDigest) ||
-          !(expectedLedgerDigest === null || isDigest(expectedLedgerDigest))
-        ) {
-          return errorText("Template interview-answer requires questionId, JSON answer, censusDigest, and expectedLedgerDigest.");
-        }
-        const answerProposals = args?.["proposals"];
-        if (answerProposals !== undefined && !Array.isArray(answerProposals)) {
-          return errorText('Argument "proposals" must be an array of explicit contract proposals.');
-        }
-        return jsonText(await answerTemplateInterview({
-          vault,
-          source,
-        }, {
-          questionId,
-          answer,
-          censusDigest,
-          expectedLedgerDigest,
-          ...(answerProposals === undefined ? {} : { proposals: answerProposals as never }),
-        }));
-      }
-      if (mode === "commit-contracts") {
-        const censusDigest = args?.["censusDigest"];
-        const expectedLedgerDigest = args?.["expectedLedgerDigest"];
-        const request = guardedTemplateRequest(args);
-        if (
-          !isDigest(censusDigest) ||
-          !(expectedLedgerDigest === null || isDigest(expectedLedgerDigest)) ||
-          request === undefined
-        ) {
-          return errorText("Template commit-contracts requires censusDigest, expectedLedgerDigest, and dryRun:true or an approvedDigest.");
-        }
-        const commitProposals = args?.["proposals"];
-        if (commitProposals !== undefined && !Array.isArray(commitProposals)) {
-          return errorText('Argument "proposals" must be an array of explicit contract proposals.');
-        }
-        return jsonText(await commitTemplateContracts({
-          vault,
-          source,
-        }, {
-          censusDigest,
-          expectedLedgerDigest,
-          ...(commitProposals === undefined ? {} : { proposals: commitProposals as never }),
-          ...request,
-        }));
-      }
-      const resumeId = stringArg(args, "transactionId");
-      const resumeApproval = args?.["approvedDigest"];
-      if (resumeId !== undefined) {
-        if (!isDigest(resumeApproval) || args?.["dryRun"] === true) {
-          return errorText("Template resume requires transactionId and the exact approvedDigest.");
-        }
-        return jsonText(await resumeTemplateTransaction(vault, resumeId, resumeApproval));
-      }
-
-      return errorText("Template mutation modes are interview-next, interview-answer, and commit-contracts.");
+      return errorText("Template modes are publish-contract, review-sources, acknowledge-source, and relink-source.");
     }
 
     return errorText(`Unknown Oh My Second Brain tool: ${publicName}`);

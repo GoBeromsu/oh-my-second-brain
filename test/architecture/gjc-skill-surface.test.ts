@@ -88,23 +88,25 @@ describe("Gajae-Code skill surface", () => {
     }
   });
 
-  it("carries proposals in every executable interview payload it shows", () => {
-    // Commit rebuilds the interview from the proposals it is given, so a shown
-    // payload that omits them teaches a call that cannot publish.
+  it("carries an explicit transaction id in every mutating template payload it shows", () => {
+    // A publication or source change is one named transaction. A shown payload
+    // without it teaches a call the server refuses.
     const body = readFileSync(absolute("assets/skills/interview/SKILL.md"), "utf8");
     const payloads = [...body.matchAll(/```text\n([\s\S]*?)```/gu)]
       .map(match => match[1] ?? "")
-      .filter(block => /mode:\s*"(interview-next|interview-answer|commit-contracts)"/u.test(block));
-    expect(payloads.length, "the interview skill must show its next, answer, and commit payloads").toBeGreaterThanOrEqual(3);
+      .filter(block => /mode:\s*"(publish-contract|acknowledge-source|relink-source)"/u.test(block));
+    expect(payloads.length, "the interview skill must show its publication payloads").toBeGreaterThanOrEqual(2);
     for (const payload of payloads) {
-      expect(payload, `an interview payload omits proposals: ${payload}`).toMatch(/\bproposals\b/u);
+      expect(payload, `a mutating template payload omits transactionId: ${payload}`).toMatch(/\btransactionId\b/u);
     }
-    expect(body).toMatch(/interview-next.*interview-answer.*commit-contracts/su);
+    // The retired interview ledger must not reappear as guidance.
+    expect(body).not.toMatch(/interview-next|interview-answer|commit-contracts|censusDigest|expectedLedgerDigest/u);
+    expect(body).toMatch(/publish-contract[\s\S]*review-sources[\s\S]*acknowledge-source/u);
   });
-  it("never shows a copyable interview-next call without proposals", () => {
-    // The skill payloads already carry proposals. Live docs that still show
-    // `write { op: "template", mode: "interview-next" }` teach the same
-    // orphan-answer refusal the previous payload gap caused.
+  it("never shows a copyable call for the retired interview surface", () => {
+    // The interview ledger is gone. Live docs that still show
+    // `write { op: "template", mode: "interview-next" }` teach a call the
+    // server no longer accepts.
     const files = [
       "README.md",
       "README.ko.md",

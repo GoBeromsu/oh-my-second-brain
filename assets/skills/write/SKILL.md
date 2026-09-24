@@ -51,7 +51,7 @@ Agent repair is off unless the user policy sets `agentRepair.enabled` and names 
 
 ## Notice
 
-A `templateNotice` uses the first display `템플릿에 변경이 있습니다` and exactly `확인하기` and `나중에`, with no template name, hash, or change list. `나중에` is host-only. `확인하기` offers `/interview` and does not write source bytes or block search. `templateNotice.next` is a mode hint, not a CallToolRequest: do not replay it as `interview-next`.
+A `templateNotice` uses the first display `템플릿에 변경이 있습니다` and exactly `확인하기` and `나중에`, with no template name, hash, or change list. `나중에` is host-only. `확인하기` offers `/interview` and does not write source bytes or block search. `templateNotice.next` is a mode hint, not a CallToolRequest: do not replay it as a tool call.
 
 ## Surface
 

@@ -4,7 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../kernel/runtime/event-journal.js";
 import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { canonicalJson } from "../kernel/templates/canonical.js";
-import { readTemplateReviewContext, type TemplateReviewContext } from "../kernel/templates/review-context.js";
+import { reviewContractSources, type ContractSourceReviewResult } from "../kernel/templates/service.js";
 import type { Digest, JsonValue } from "../kernel/templates/types.js";
 
 /**
@@ -22,11 +22,11 @@ export interface TemplateChangeNotice {
   readonly actions: typeof TEMPLATE_CHANGE_NOTICE_ACTIONS;
   /**
    * Mode hint only. This is not a complete CallToolRequest: OMS never invents
-   * proposals, and a host must not replay `next` as interview-next.
+   * contract meaning, and a host must not replay `next` as a tool call.
    */
   readonly next: {
     readonly skill: "interview";
-    readonly mode: "interview-next";
+    readonly mode: "review-sources";
   };
 }
 
@@ -38,11 +38,11 @@ function digest(value: string): Digest {
   return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}` as Digest;
 }
 
-function canonicalNoticeDigest(context: TemplateReviewContext): Digest {
+function canonicalNoticeDigest(review: ContractSourceReviewResult): Digest {
   return digest(canonicalJson({
-    vault: context.vault,
-    generationDigest: context.resolved.generationDigest,
-    pending: pendingKeys(context),
+    vault: review.vault,
+    revision: review.revision,
+    pending: pendingKeys(review),
   }));
 }
 
@@ -51,38 +51,30 @@ function normalizedSourcePath(value: string): string {
 }
 
 /**
- * One pending key per affected source. Raw drift, a missing or drifted managed
- * draft, and a contract diagnostic are all reasons to offer review; none of
- * them is inspected for meaning here.
+ * One pending key per affected registration. A drifted, missing, or unreadable
+ * source and a held contract are all reasons to offer review; none of them is
+ * inspected for meaning here.
  */
-function pendingKeys(context: TemplateReviewContext): readonly string[] {
+function pendingKeys(review: ContractSourceReviewResult): readonly string[] {
   const pending = new Set<string>();
-  for (const raw of context.raw) {
-    if (raw.drift !== null) pending.add(`path:${normalizedSourcePath(raw.path)}`);
+  for (const item of review.reviews) {
+    if (item.state !== "unchanged") pending.add(`path:${normalizedSourcePath(item.path)}`);
   }
-  for (const draft of context.resolved.drafts) {
-    // Keyed by managed path so a drift row and its diagnostic count once.
-    if (draft.drift !== null) pending.add(`path:${normalizedSourcePath(draft.templatePath)}`);
-  }
-  for (const diagnostic of context.resolved.diagnostics) {
-    pending.add(diagnostic.path === undefined
-      ? `diagnostic:${diagnostic.code}`
-      : `path:${normalizedSourcePath(diagnostic.path)}`);
-  }
+  for (const held of review.held) pending.add(`template:${held.templateId}`);
   return [...pending].sort();
 }
 
-export function templateNoticeFromContext(context: TemplateReviewContext): TemplateChangeNotice | null {
-  const count = pendingKeys(context).length;
+export function templateNoticeFromReview(review: ContractSourceReviewResult): TemplateChangeNotice | null {
+  const count = pendingKeys(review).length;
   if (count === 0) return null;
   return {
     state: "pending",
-    pendingDigest: canonicalNoticeDigest(context),
+    pendingDigest: canonicalNoticeDigest(review),
     pendingCount: count,
     actions: TEMPLATE_CHANGE_NOTICE_ACTIONS,
     next: {
       skill: "interview",
-      mode: "interview-next",
+      mode: "review-sources",
     },
   };
 }
@@ -107,13 +99,13 @@ function recordNoticeFailure(vault: string): void {
 }
 
 /**
- * Reads the current folder census and turns it into the host-facing notice.
- * The read-only review context does not require a valid derived projection.
- * Any census/notice failure is isolated and logged without writing stdout.
+ * Reads the published contract's source review and turns it into the
+ * host-facing notice. The review is read-only and requires no projection. Any
+ * failure is isolated and logged without writing stdout.
  */
 export async function readTemplateChangeNotice(vault: string): Promise<TemplateChangeNotice | null> {
   try {
-    return templateNoticeFromContext(await readTemplateReviewContext(vault));
+    return templateNoticeFromReview(await reviewContractSources({ target: { vault, source: "explicit" } }));
   } catch {
     recordNoticeFailure(vault);
     return null;

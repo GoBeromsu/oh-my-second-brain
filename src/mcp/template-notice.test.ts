@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { digestBytes } from "../kernel/templates/canonical.js";
-import { parseTemplatePolicy, serializeDerivedProjection } from "../kernel/templates/policy.js";
-import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "../kernel/templates/resolver.js";
+import { serializeContractPolicyV5 } from "../kernel/templates/contract-v5.js";
+import { serializeVaultSettings } from "../kernel/templates/vault-settings.js";
 import {
   TEMPLATE_CHANGE_NOTICE_ACTIONS,
   TEMPLATE_CHANGE_NOTICE_MESSAGE,
@@ -26,47 +26,28 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-function layer(templatePath: string, markdown: string, extra: Record<string, unknown> = {}) {
-  return {
-    templatePath,
-    approvedMarkdown: markdown,
-    approvedMarkdownDigest: digestBytes(markdown),
-    fields: {},
-    headings: [],
-    semanticCriteria: [],
-    ...extra,
-  };
-}
-
-/** An approved v4 vault whose raw source is intact unless a test drifts it. */
-async function fixture(drifted = true): Promise<string> {
+async function fixture(drifted = true, held = false): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "oms-template-notice-"));
   roots.push(root);
-  await mkdir(join(root, ".oms", "templates"), { recursive: true });
+  await mkdir(join(root, ".oms"), { recursive: true });
   await mkdir(join(root, ".obsidian"), { recursive: true });
   await mkdir(join(root, "Sources"), { recursive: true });
-  const policy = JSON.stringify({
-    version: 4,
-    properties: {},
-    default: layer(".oms/templates/default.md", ""),
+  await writeFile(join(root, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: "11111111-1111-4111-8111-111111111111", templateRoots: ["Sources"] }));
+  await writeFile(join(root, ".oms", "template-policy.json"), serializeContractPolicyV5({
+    version: 5,
+    revision: 1,
+    properties: { title: { type: "text", intent: "Note title." } },
+    common: { status: "active", fields: {} },
     templates: {
-      note: layer(".oms/templates/note.md", TEMPLATE_MARKDOWN, {
-        templateId: "note",
-        source: { path: "Sources/note.md", identity: "note-source", rawDigest: digestBytes(RAW_SOURCE) },
-      }),
+      note: {
+        status: "active",
+        source: { identity: "note-source", path: "Sources/note.md", rawDigest: digestBytes(RAW_SOURCE) },
+        fields: { title: { required: true } },
+      },
+      ...(held ? { legacy: { status: "review-required" as const, reasons: ["historical semantic rule"], legacy: { note: "kept" } } } : {}),
     },
-  });
-  const taxonomy = JSON.stringify({ templates: { note: { templateFolder: "notes" } }, folders: {} });
-  const generationDigest = controlGenerationDigest(encoder.encode(policy), encoder.encode(taxonomy));
-  await writeFile(join(root, ".oms", "template-policy.json"), policy);
-  await writeFile(join(root, ".oms", "taxonomy.json"), taxonomy);
-  await writeFile(join(root, ".oms", "types.json"), serializeDerivedProjection({
-    version: "oms.types.v2",
-    generatedFrom: generationDigest,
-    managed: expectedProjectionManaged(parseTemplatePolicy(policy), taxonomyRouting(".oms/taxonomy.json", encoder.encode(taxonomy)), generationDigest),
   }));
-  await writeFile(join(root, ".oms", "templates", "default.md"), "");
-  await writeFile(join(root, ".oms", "templates", "note.md"), TEMPLATE_MARKDOWN);
+  await writeFile(join(root, ".oms", "taxonomy.json"), JSON.stringify({ templates: { note: { templateFolder: "notes" } }, folders: {} }));
   await writeFile(join(root, ".obsidian", "types.json"), JSON.stringify({ types: { title: "text" } }));
   await writeFile(join(root, "Sources", "note.md"), drifted ? "<%* edited raw template %>\n" : RAW_SOURCE);
   return root;
@@ -81,7 +62,7 @@ describe("template notice", () => {
       pendingDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       pendingCount: 1,
       actions: TEMPLATE_CHANGE_NOTICE_ACTIONS,
-      next: { skill: "interview", mode: "interview-next" },
+      next: { skill: "interview", mode: "review-sources" },
     });
     expect(templateNoticeInstruction(notice!)).toBe(TEMPLATE_CHANGE_NOTICE_MESSAGE);
     expect(templateNoticeInstruction(notice!)).not.toContain("note");
@@ -93,24 +74,28 @@ describe("template notice", () => {
     expect(await readTemplateChangeNotice(root)).toBeNull();
   });
 
-  it("counts one pending entry per affected source", async () => {
-    const root = await fixture();
-    await writeFile(join(root, ".oms", "templates", "note.md"), "---\ntemplate: note\n---\n\nEdited draft.\n");
+  it("counts one pending entry per affected registration", async () => {
+    const root = await fixture(true, true);
     const notice = await readTemplateChangeNotice(root);
-    // One drifted raw source and one drifted managed draft, counted separately.
+    // One drifted source and one held registration, counted separately.
     expect(notice?.pendingCount).toBe(2);
   });
 
-  it("deduplicates one digest across delivery and resurfaces a changed one", async () => {
+  it("deduplicates one digest across delivery and resurfaces a changed pending set", async () => {
     const root = await fixture();
     const first = await templateNoticeForTool(root, "dedupe");
     expect(first).not.toBeNull();
+    // Another edit to the same already-pending source is the same pending set,
+    // so the user is not notified twice for one unreviewed registration.
+    await writeFile(join(root, "Sources", "note.md"), "<%* edited again %>\n");
     expect(await templateNoticeForTool(root, "dedupe")).toBeNull();
 
-    await writeFile(join(root, ".oms", "templates", "note.md"), "---\ntemplate: note\n---\n\nEdited draft.\n");
+    // A second affected registration is a genuinely new pending set.
+    await writeFile(join(root, ".oms", "template-policy.json"), await readFile(join(await fixture(true, true), ".oms", "template-policy.json"), "utf8"));
     const changed = await templateNoticeForTool(root, "dedupe");
     expect(changed).not.toBeNull();
     expect(changed?.pendingDigest).not.toBe(first?.pendingDigest);
+    expect(changed?.pendingCount).toBe(2);
   });
 
   it("does not deduplicate identical content from separate vaults", async () => {

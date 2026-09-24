@@ -853,7 +853,9 @@ export async function publishContract(input: {
     fail("SELECTION_UNSAFE", "the published policy is not an explicit V5 contract; resolve it before publishing a revision");
   }
   const previous = observed.state === "v5" ? observed.policy : null;
-  const expectedRevision = previous === null ? 1 : previous.revision + 1;
+  // The publication kernel starts a first contract at revision 0 and then
+  // advances exactly one revision per publication.
+  const expectedRevision = previous === null ? 0 : previous.revision + 1;
   if (next.revision !== expectedRevision) {
     throw new ContractV5Error("CONTRACT_POLICY_INVALID", `Published contract must be revision ${expectedRevision}; received ${next.revision}.`);
   }

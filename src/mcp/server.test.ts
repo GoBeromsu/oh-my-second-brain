@@ -68,7 +68,7 @@ async function createLinkTemplateAuthority(vault: string): Promise<void> {
 }
 
 async function createMcpMetadataAuthority(vault: string): Promise<{ readonly template: string }> {
-  await writeApprovedVault(vault, {
+  await writeContractVault(vault, {
     properties: { title: { type: "text", intent: "Article title." } },
     templates: {
       article: {
@@ -586,9 +586,9 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const controlledPaths = [
       ".oms/template-policy.json",
       ".oms/taxonomy.json",
-      ".oms/types.json",
+      ".oms/settings.json",
       ".obsidian/types.json",
-      ".oms/templates/article.md",
+      "Templates/article.md",
     ] as const;
     const before = await Promise.all(controlledPaths.map(relative => readFile(path.join(tmpVault, relative))));
     const { server, client } = await connectInMemory(tmpVault);
@@ -599,16 +599,19 @@ describe("Oh My Second Brain MCP stdio server", () => {
           arguments: { op: "template", mode, dryRun: true },
         });
         const message = refused.content[0]?.type === "text" ? refused.content[0].text : "";
-        expect(message, mode).toMatch(/Template mutation modes are interview-next|Unknown operation|does not match/u);
+        expect(message, mode).toMatch(/Template modes are publish-contract|Unknown operation|does not match/u);
       }
       expect(await Promise.all(controlledPaths.map(relative => readFile(path.join(tmpVault, relative))))).toEqual(before);
 
-      // The interview is the only path that can change a contract.
+      // The retired interview ledger has no alias, and read-only source review
+      // is the reachable replacement.
+      const retired = await client.callTool({ name: "write", arguments: { op: "template", mode: "interview-next" } });
+      expect(retired.content[0]?.type === "text" ? retired.content[0].text : "").toMatch(/does not match|Template modes are publish-contract/u);
       const review = textPayload(await client.callTool({
         name: "write",
-        arguments: { op: "template", mode: "interview-next" },
+        arguments: { op: "template", mode: "review-sources" },
       }));
-      expect(typeof review.state).toBe("string");
+      expect(Array.isArray(review.reviews)).toBe(true);
       expect(await Promise.all(controlledPaths.map(relative => readFile(path.join(tmpVault, relative))))).toEqual(before);
     } finally {
       await client.close();
@@ -619,7 +622,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
 
   it("publishes a pending notice after a raw source changes, without changing the contract", async () => {
     const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-template-notice-")));
-    await writeApprovedVault(tmpVault, {
+    await writeContractVault(tmpVault, {
       properties: { title: { type: "text", intent: "Article title." } },
       templates: {
         article: {
