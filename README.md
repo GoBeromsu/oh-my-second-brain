@@ -4,7 +4,7 @@ Oh My Second Brain (`oms`) connects an existing Obsidian or Markdown vault to AI
 
 ## Template and ontology vault model
 
-Meaning stays with the user. Version 5 of `.oms/template-policy.json` is the published structure and meaning. A property pool records type, format, and intent. An always-on common contract starts empty, has no Markdown file of its own, and applies to every registered template. An explicitly registered template inherits that contract and may add to it, tighten it, or relax it where the user approved that relaxation. A note with no registered template is an ordinary note under the common contract. Unmanaged frontmatter is kept and is not checked. A value set is closed only when its document declares `valuePolicy: "closed"`; an `allowedValues` list alone is a suggestion.
+Meaning stays with the user. Version 5 of `.oms/template-policy.json` is the published structure and meaning. A property pool records type, format, and intent. An always-on common contract has no Markdown file of its own and applies to every note and every registered template. OMS declares no common field itself, so it holds exactly what the published document says. An explicitly registered template inherits that contract and may add to it, tighten it, or relax it where the user approved that relaxation. A note with no registered template is an ordinary note under the common contract. Unmanaged frontmatter is kept and is not checked. A value set is closed only when its document declares `valuePolicy: "closed"`; an `allowedValues` list alone is a suggestion.
 
 The product hardcodes no property names, folders, or personas, and it has no Inbox fallback. What was retired is `concept` as note identity and bundled runtime defaults, not ontology as the user's account of meaning. `.oms/taxonomy.json` records placement and what folders and links mean. `.obsidian/types.json` is a read-only observation. `.oms/types.json` is a historical version-4 projection: the published version-5 contract neither derives nor reads it, and nothing regenerates it. A historical version-3 or version-4 policy remains readable; only a mutating selection migrates it in place while preserving its recorded meaning. A held or unproved historical contract is reported as `review-required`, not rewritten.
 
@@ -70,7 +70,7 @@ The eight skills (`distill`, `doctor`, `interview`, `link`, `search`, `status`, 
 
 The five tools are a subset of those skills, and neither set is the fourteen CLI families. Detail capabilities remain `op` values under the five tools.
 
-`write` keeps a write posture because interview answers and approved contract publication change managed state. `guide` and `check` write no vault bytes. Contract review uses `op: "template"` with `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source` only. `status` and every search operation are read-only and do not decide completion. The `doctor` tool diagnoses controls and indexes; it does not backfill notes.
+`write` keeps a write posture because explicit contract publication and confirmed source changes mutate managed state. `guide` and `check` write no vault bytes. Contract review uses `op: "template"` with `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source` only. `status` and every search operation are read-only and do not decide completion. The `doctor` tool diagnoses controls and indexes; it does not backfill notes.
 
 ## Install
 

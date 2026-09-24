@@ -26,7 +26,7 @@ The structural check is not a claim that a note is semantically complete, that t
 
 ## Contract publication
 
-Publishing version-5 controls requires a verified target. The common contract is always on and starts empty, with no Markdown file of its own. Explicitly registered templates retain their user-owned Markdown sources by recorded path and hash; they may add to, tighten, or relax the common contract. A note with no registered template is valid under the common contract. A historical version-3 or version-4 policy is readable and migrates in place only on a mutating selection that preserves its recorded meaning; a held or unproved contract is `review-required`.
+Publishing version-5 controls requires a verified target. The common contract is always on and has no Markdown file of its own. OMS declares no common field itself; it holds exactly what the published document says, and nothing until the user writes fields into it. Explicitly registered templates retain their user-owned Markdown sources by recorded path and hash; they may add to, tighten, or relax the common contract. A note with no registered template is valid under the common contract. A historical version-3 or version-4 policy is readable and migrates in place only on a mutating selection that preserves its recorded meaning; a held or unproved contract is `review-required`.
 
 `oms template publish --policy <file.json> --transaction-id <uuid> [--yes]` previews without `--yes`, then compare-and-swaps the exact policy bytes on disk. A valid hand-edited policy remains revisable. Publication writes only the policy and one history record; ordinary notes and original template sources are not publication outputs.
 

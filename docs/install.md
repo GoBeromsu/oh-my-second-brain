@@ -55,7 +55,7 @@ The current-directory fallback is read-only. OMS does not write ordinary notes o
 
 ## Contract setup
 
-`.oms/template-policy.json` version 5 is the only structural authority. It holds the property pool, an always-on common contract that starts empty, and explicitly registered templates. A registration inherits the common contract and may add to it, tighten it, or relax it where that relaxation was approved for the template. A note with no individual template is valid under the common contract. Historical version-3 and version-4 policies remain readable; only a mutating selection migrates one in place, preserving its recorded meaning.
+`.oms/template-policy.json` version 5 is the only structural authority. It holds the property pool, an always-on common contract with no Markdown file of its own, and explicitly registered templates. A registration inherits the common contract and may add to it, tighten it, or relax it where that relaxation was approved for the template. A note with no individual template is valid under the common contract. Historical version-3 and version-4 policies remain readable; only a mutating selection migrates one in place, preserving its recorded meaning.
 
 Setup connects the vault: it writes the portable `.oms/settings.json` identity and the approved host connection. It publishes no contract and never modifies notes. After the interview agrees the contract document, publish it explicitly with `oms template publish --policy <file.json> --transaction-id <uuid> [--yes]`; publication previews without `--yes` and compares against the exact policy bytes now on disk.
 

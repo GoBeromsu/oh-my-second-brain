@@ -32,8 +32,11 @@ handshake: you decide whether the note is good, and you own the repair. Read a
 reported violation, fix the file with your own tools, and run `check` again on
 the new bytes. Never weaken the contract to pass.
 
-Automatic repair defaults off. When explicitly enabled, agent repairs stay
-within the user's permitted context and finite retry budget. Ordinary note
+Automatic repair defaults off; `agentRepair` lives in the portable
+`.oms/settings.json`, not in the contract. When the user enables it, repairs stay
+within the contexts they permitted. OMS declares no retry budget and counts no
+attempts: when you cannot fix a violation from what the user gave you, ask them
+rather than retrying blindly. Ordinary note
 questions do not change contracts or automatically start a configuration interview.
 Hooks are advisory and fail-open; they do not guarantee blocked saves or host
 termination. An explicit `check` on the saved bytes remains necessary.

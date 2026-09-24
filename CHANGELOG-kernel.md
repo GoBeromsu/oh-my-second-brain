@@ -4,6 +4,7 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- **The common contract is described by what it holds, not by a start state.** Saying it "starts empty" overstated the runtime: a first revision-0 publication may declare common fields. The published document is the only source of what the common contract requires, and OMS declares no field itself, so ADR-015 and the shipped pages now say that instead.
 - **ADR-015 records the decision this branch actually made and supersedes ADR-014, ADR-006, and ADR-003.** ADR-014 remained Accepted while requiring a separate reviewer and an OMS completion verdict, so the repository's own decision record contradicted the implemented structural-only surface. ADR-015 states the explicit version-5 contract, sources that stay the user's own files, agent-owned judgement with `semantic: "not-evaluated"`, drift as evidence rather than approval, and guarded on-use migration; it also retires the bundled ontology defaults and the `taxonomy.yaml` seed those older records assumed.
 - **Two dead code paths removed.** Source discovery built and returned a `blocked` set no caller read, while diagnostics already carried every blocked result; the Codex role-removal plan carried a `role.kind !== "file"` guard that no input could reach.
 - **Retired census declarations removed.** The approved-census digest domain, authority, binding-status, diff-kind and result shapes had no consumer; source discovery keeps the scanner types it actually uses.

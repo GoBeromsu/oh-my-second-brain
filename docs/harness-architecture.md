@@ -8,7 +8,7 @@ The sequence in this page is a repository sketch. It is not the G002 Excalidraw 
 
 The harness does not invent a vault's fields, folders, or personas.
 
-1. `.oms/template-policy.json` version 5 is the only structural authority. Its property pool holds declared property definitions, its always-on common contract starts empty and has no Markdown file of its own, and each template is explicitly registered. A registration inherits the common contract and may add, tighten, or relax it where the user approved that relaxation. A value set is closed only when the document declares `valuePolicy: "closed"`; `allowedValues` alone is a suggestion.
+1. `.oms/template-policy.json` version 5 is the only structural authority. Its property pool holds declared property definitions, its always-on common contract has no Markdown file of its own and holds exactly what the published document declares, and each template is explicitly registered. A registration inherits the common contract and may add, tighten, or relax it where the user approved that relaxation. A value set is closed only when the document declares `valuePolicy: "closed"`; `allowedValues` alone is a suggestion.
 2. `.oms/taxonomy.json` owns placement and folder and link meaning. An explicit path or folder wins, then template placement, then a question. There is no Inbox fallback.
 3. `.obsidian/types.json` is a read-only observation. A type conflict does not replace the approved contract.
 4. `.oms/types.json` is a historical version-4 projection. Version 5 neither reads nor derives it, and nothing regenerates it.

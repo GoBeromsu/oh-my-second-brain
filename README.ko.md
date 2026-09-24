@@ -4,7 +4,7 @@ Oh My Second Brain(`oms`)은 기존 Obsidian·Markdown 볼트를 AI 호스트와
 
 ## 템플릿·온톨로지 볼트 모델
 
-의미는 사용자에게 남는다. `.oms/template-policy.json` version 5가 게시된 구조이자 의미다. 속성 pool이 type, format, intent를 기록한다. 항상 켜져 있는 공통 계약은 비어 있는 상태로 시작하고 자체 Markdown 파일이 없으며, 등록된 모든 템플릿에 적용된다. 명시적으로 등록된 템플릿은 이 계약을 상속하고 필드·heading·의미 기준을 추가하거나 좁힐 수 있으며, 사용자가 승인한 완화는 약화할 수도 있다. 등록된 템플릿이 없는 노트는 공통 계약 아래의 정상 노트다. 관리되지 않는 frontmatter는 보존하며 검사하지 않는다. 값 집합은 문서에 `valuePolicy: "closed"`를 선언한 경우에만 닫혀 있으며, `allowedValues` 목록만으로는 제안에 머문다.
+의미는 사용자에게 남는다. `.oms/template-policy.json` version 5가 게시된 구조이자 의미다. 속성 pool이 type, format, intent를 기록한다. 항상 켜져 있는 공통 계약은 자체 Markdown 파일이 없고 모든 노트와 등록된 모든 템플릿에 적용된다. OMS가 공통 필드를 스스로 선언하지 않으므로, 공통 계약은 게시된 문서가 적은 것만 담는다. 명시적으로 등록된 템플릿은 이 계약을 상속하고 필드·heading·의미 기준을 추가하거나 좁힐 수 있으며, 사용자가 승인한 완화는 약화할 수도 있다. 등록된 템플릿이 없는 노트는 공통 계약 아래의 정상 노트다. 관리되지 않는 frontmatter는 보존하며 검사하지 않는다. 값 집합은 문서에 `valuePolicy: "closed"`를 선언한 경우에만 닫혀 있으며, `allowedValues` 목록만으로는 제안에 머문다.
 
 제품은 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다. 폐기된 것은 노트 정체성으로서의 `concept`와 번들 runtime 기본값이지, 사용자가 서술하는 의미 계층으로서의 온톨로지가 아니다. `.oms/taxonomy.json`은 배치와 폴더·링크의 의미를 기록한다. `.obsidian/types.json`은 읽기 전용 관측값이다. `.oms/types.json`은 version 4 시절의 파생 파일이다. 게시된 version 5 계약은 그것을 만들지도 읽지도 않으며 다시 생성하지도 않는다. version 3·4 정책은 계속 읽을 수 있으며, 값을 바꾸는 선택에서만 기록된 의미를 보존하며 제자리 이전된다. 보류되었거나 증명되지 않은 이전 계약은 다시 쓰지 않고 `review-required`로 보고한다.
 
