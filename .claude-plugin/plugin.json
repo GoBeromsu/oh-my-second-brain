@@ -23,6 +23,5 @@
     "./assets/skills/status/",
     "./assets/skills/template/",
     "./assets/skills/write/"
-  ],
-  "agents": ["./agents/oms-reviewer.md"]
+  ]
 }

@@ -11,7 +11,7 @@ import type { EmbeddingProvider, ScoredHit, VectorStore } from "../types.js";
 import type { EngineStore } from "../embed/store.js";
 import { digestBytes } from "../../templates/canonical.js";
 import { serializeContractPolicyV5 } from "../../templates/contract-v5.js";
-import { controlGenerationDigest, expectedProjectionManaged, loadResolvedTemplates, taxonomyRouting } from "../../templates/resolver.js";
+import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "../../templates/resolver.js";
 import type { Digest } from "../../templates/types.js";
 
 // ---------------------------------------------------------------------------

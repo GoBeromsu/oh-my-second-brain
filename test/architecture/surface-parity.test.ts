@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import { parseNote } from "../../src/kernel/conventions/frontmatter.js";
 import {
   HARNESS_CLI_COMMANDS,
-  HARNESS_HOST_REVIEWERS,
   HARNESS_MCP_TOOLS,
   HARNESS_SHARED_SKILLS,
   HARNESS_WRITE_HOOK,
@@ -689,8 +688,11 @@ describe("current guidance CLI spellings", () => {
   });
 });
 
-describe("host reviewer metadata", () => {
-  it("keeps write hooks and reviewer roles instruction-only, with real owned assets", () => {
+describe("host write-hook metadata", () => {
+  // The reviewer role went with the completion protocol it served: no OMS
+  // surface produces the review request it demanded or consumes its result, so
+  // the registry no longer declares a reviewer mechanism to assert about.
+  it("keeps the advisory write hook per host and registers no reviewer mechanism", () => {
     expect(harnessSurfaceRegistry.hosts.map((host) => [host.runtime, host.writeHook])).toEqual([
       ["claude", HARNESS_WRITE_HOOK.claude],
       ["codex", HARNESS_WRITE_HOOK.codex],
@@ -698,36 +700,11 @@ describe("host reviewer metadata", () => {
     ]);
     expect(HARNESS_WRITE_HOOK).toEqual({ claude: "fail-open", codex: "none", hermes: "none" });
     for (const host of harnessSurfaceRegistry.hosts) {
-      expect(host.reviewerMechanisms, host.runtime).toEqual(HARNESS_HOST_REVIEWERS[host.runtime]);
-      expect(host.reviewerMechanisms.every((mechanism) => mechanism.isolation === "instruction-only"), host.runtime).toBe(true);
-      expect(JSON.stringify(host.reviewerMechanisms), host.runtime).not.toMatch(/unavailable|unsupported/);
-      for (const mechanism of host.reviewerMechanisms) {
-        if (mechanism.assetPath === undefined) continue;
-        expect(existsSync(path.join(repoRoot, mechanism.assetPath)), mechanism.assetPath).toBe(true);
-      }
+      expect(host, host.runtime).not.toHaveProperty("reviewerMechanisms");
     }
-    expect(HARNESS_HOST_REVIEWERS.claude).toEqual([
-      {
-        id: "claude.plugin-agent",
-        selection: "primary",
-        isolation: "instruction-only",
-        assetPath: "agents/oms-reviewer.md",
-      },
-    ]);
-    expect(HARNESS_HOST_REVIEWERS.codex).toEqual([
-      { id: "codex.subagent", selection: "primary", isolation: "instruction-only" },
-      {
-        id: "codex.custom-agent",
-        selection: "optional",
-        isolation: "instruction-only",
-        assetPath: "assets/codex/agents/oms-reviewer.toml",
-      },
-    ]);
-    expect(HARNESS_HOST_REVIEWERS.hermes).toEqual([
-      { id: "hermes.delegate-task", selection: "primary", isolation: "instruction-only" },
-    ]);
-    expect(HARNESS_HOST_REVIEWERS.hermes[0]).not.toHaveProperty("assetPath");
-    expect(HARNESS_HOST_REVIEWERS.codex[0]).not.toHaveProperty("assetPath");
+    expect(JSON.stringify(harnessSurfaceRegistry)).not.toMatch(/reviewer/iu);
+    expect(existsSync(path.join(repoRoot, "assets/codex/agents/oms-reviewer.toml"))).toBe(false);
+    expect(existsSync(path.join(repoRoot, "agents/oms-reviewer.md"))).toBe(false);
   });
 });
 

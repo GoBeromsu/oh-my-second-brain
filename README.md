@@ -4,13 +4,13 @@ Oh My Second Brain (`oms`) connects an existing Obsidian or Markdown vault to AI
 
 ## Template and ontology vault model
 
-Meaning stays with the user. Version 4 of `.oms/template-policy.json` is the approved structure and meaning. A property pool records type, format, and intent. An always-on default layer starts empty and applies to every note. An optional individual template may only add or tighten fields, headings, and semantic criteria. It cannot remove or weaken the default. A note with no individual template is an ordinary note under that default. Unmanaged frontmatter is kept and is not checked.
+Meaning stays with the user. Version 5 of `.oms/template-policy.json` is the published structure and meaning. A property pool records type, format, and intent. An always-on common contract starts empty, has no Markdown file of its own, and applies to every registered template. An explicitly registered template inherits that contract and may add to it, tighten it, or relax it where the user approved that relaxation. A note with no registered template is an ordinary note under the common contract. Unmanaged frontmatter is kept and is not checked. A value set is closed only when its document declares `valuePolicy: "closed"`; an `allowedValues` list alone is a suggestion.
 
-The product hardcodes no property names, folders, or personas, and it has no Inbox fallback. What was retired is `concept` as note identity and bundled runtime defaults, not ontology as the user's account of meaning. `.oms/taxonomy.json` records placement and what folders and links mean. `.obsidian/types.json` is a read-only observation. `.oms/types.json` is a historical version-4 projection: the published version-5 contract neither derives nor reads it, and nothing regenerates it. A historical version-3 or version-4 policy is still read, and a mutating selection migrates it while preserving its recorded meaning.
+The product hardcodes no property names, folders, or personas, and it has no Inbox fallback. What was retired is `concept` as note identity and bundled runtime defaults, not ontology as the user's account of meaning. `.oms/taxonomy.json` records placement and what folders and links mean. `.obsidian/types.json` is a read-only observation. `.oms/types.json` is a historical version-4 projection: the published version-5 contract neither derives nor reads it, and nothing regenerates it. A historical version-3 or version-4 policy remains readable; only a mutating selection migrates it in place while preserving its recorded meaning. A held or unproved historical contract is reported as `review-required`, not rewritten.
 
-The agent writes and repairs note files. Before that write, OMS returns the approved Markdown, the effective contract, and a task binding. It then checks the bytes saved on disk. Completion requires a separate host review of those same inputs. A separate instruction-only review is valid. Matching reviewer-file bytes are not proof the host launched that role. A machine pass, a self-issued PASS, or a digest is not that review, and a digest is content integrity rather than authentication. Contract configuration changes only when the user approves the exact diff, by compare-and-swap. Repair is off unless the user enables it. The retry budget is that user's finite nonnegative integer, default 2, including 0, with no separate cap of 3. Search does not wait on that review.
+The agent writes and repairs note files. Before that write, `guide` selects the contract for one explicit note path and returns a session locator. It then checks the bytes saved on disk through that locator, reporting declared properties and headings with `semantic: "not-evaluated"`. OMS has no completion call and no separate reviewer conversation. Contract configuration changes only when the user approves the exact diff, by compare-and-swap. Repair is off unless the user enables it. The retry budget is that user's finite nonnegative integer, default 2, including 0, with no separate cap of 3. Search does not wait on that…
 
-Approved Markdown is the exact UTF-8 snapshot, including any BOM and the original line endings. Editing the managed draft does not replace that snapshot. OMS does not parse or execute Templater, JavaScript, or a private token language.
+Each registered source remains the user's own Markdown file, recorded by its path and content hash. OMS never rewrites, copies, or snapshots that source, has no managed drafts or `.oms/templates/` directory, and stores no approved-Markdown bytes in the policy. OMS does not parse or execute Templater, JavaScript, or a private token language.
 
 ADR-014 supersedes ADR-013. [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as design ideas. Those credits are not a copied runtime and not a research result. Diagrams in this repository are explanatory sketches. They are not the G002 Excalidraw artifact. These pages record the approved architecture. They are not a host-smoke result and not a product-gate pass.
 
@@ -18,14 +18,14 @@ The authority model is in [architecture](./docs/architecture.md). Vault files ar
 
 ## Setup
 
-`oms setup` proposes an empty version-4 policy. It ships no note-type defaults and never modifies notes. Publication goes through the config interview and writes only the user-approved diff. Model lifecycle is `oms model install|select|waive|status`, not a setup-era model flag.
+`oms setup` connects the vault: it writes the portable `.oms/settings.json` identity and the host connection after you approve the digest its dry-run printed, and it can select a model in the same pass. It publishes no contract and never modifies notes. The contract is published by `oms template publish` after the interview agrees it. Model lifecycle also stands alone as `oms model install|select|waive|status`.
 
 ```bash
 oms setup --vault /path/to/vault --dry-run
 oms setup --vault /path/to/vault --yes --approved-digest <digest>
 ```
 
-The interview skill agrees each decision with the user, writes the explicit contract document, previews it with `oms template publish`, and publishes only what the user approved. A changed registered source is reviewed with `oms template review-sources` and either acknowledged or relinked; it does not change the contract by itself. OMS keeps no interview state, so there is no question id, census digest, or server-issued approval digest to forward. A general question, an unknown note value, a note error, an unmanaged property, or a search does not start the interview.
+The interview skill agrees each decision with the user, writes the explicit contract document, previews it with `oms template publish`, and publishes only what the user approved. A changed registered source is drift evidence: `oms template review-sources` reviews it, `oms template acknowledge-source` advances only the recorded hash using the live reviewed digest, and `oms template relink-source` requires a genuinely missing original and the exact candidate path the user supplies. It does not change the contract by itself. OMS keeps no interview state, so there is no question id, census digest, or server-issued approval digest to forward. A general question, an unknown note value, a note error, an unmanaged property, or a search does not start the interview.
 
 The host notice text is exactly `템플릿에 변경이 있습니다` and its actions are exactly `확인하기` and `나중에`. The first notice shows no template name, hash, or change class. `나중에` is host-only and makes no server call. `확인하기` starts the interview skill, which reviews the changed source with `write { op: "template", mode: "review-sources" }` before anything is published.
 
@@ -43,7 +43,7 @@ oms note guide|check|audit|get                Select a contract, check a saved n
 oms package check|update                       Check or update the OMS package
 oms search query|context                       Run an explicit query or retrieve structured context
 oms serve mcp|http                             Start the stdio MCP or local HTTP server
-oms setup                                      Propose an empty version-4 policy
+oms setup                                      Connect the vault and write its portable identity
 oms status                                     Show the read-only aggregate status
 oms template list|show|scan|check|publish|review-sources|acknowledge-source|relink-source
 ```
@@ -58,7 +58,7 @@ A plain `oms search query <text>` is lexical-only. `--vec` and `--hyde` select t
 
 Lexical, vector, HyDE, and typed-axis queries still include unbound, invalid, and incomplete notes. A missing or damaged contract does not stop search. Vector search requires a complete `OMS_EMBEDDING_PROVIDER`/`OMS_EMBEDDING_MODEL` pair. HyDE also requires `OMS_GENERATE_PROVIDER`/`OMS_GENERATE_MODEL`. Reranking requires `OMS_RERANK_PROVIDER`/`OMS_RERANK_MODEL`. Missing, incomplete, or uninstalled selections fail loudly. G004 expansion is an explicit available capability; it makes no replacement, parity, or outperformance claim.
 
-`guide` does not write the note: it selects the contract and returns a session locator. After the agent saves the file, `check` reads that file through the locator and reports declared fields and headings; it issues no completion verdict. Create, append, update, backfill, and complete are not note operations. Link apply is not an operation. Template add, update, move, remove, and default are not operations. There is no version-3 migration, note renderer, or compatibility path for those retired operations.
+`guide` does not write the note: it selects the contract and returns a session locator. After the agent saves the file, `check` reads that file through the locator and reports declared fields and headings with `semantic: "not-evaluated"`; it issues no completion verdict. Create, append, update, and backfill are retired note operations. Link apply is not an operation. Template add, update, move, remove, and default are not operations. There is no note renderer or compatibility path for those retired operations.
 
 ## MCP tools
 
@@ -70,7 +70,7 @@ The eight skills (`distill`, `doctor`, `interview`, `link`, `search`, `status`, 
 
 The five tools are a subset of those skills, and neither set is the fourteen CLI families. Detail capabilities remain `op` values under the five tools.
 
-`write` keeps a write posture because interview answers and approved contract publication change managed state. `guide`, `check`, and `complete` write no vault bytes. Contract review uses `op: "template"` with `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source` only. `status` and every search operation are read-only and do not decide completion. The `doctor` tool diagnoses controls and indexes; it does not backfill notes.
+`write` keeps a write posture because interview answers and approved contract publication change managed state. `guide` and `check` write no vault bytes. Contract review uses `op: "template"` with `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source` only. `status` and every search operation are read-only and do not decide completion. The `doctor` tool diagnoses controls and indexes; it does not backfill notes.
 
 ## Install
 

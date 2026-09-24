@@ -6,10 +6,10 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
-  HARNESS_HOST_REVIEWERS,
   HARNESS_MCP_TOOLS,
   HARNESS_SHARED_SKILLS,
   HARNESS_WRITE_HOOK,
+  harnessSurfaceRegistry,
 } from "../../src/kernel/harness/surface-registry.js";
 import { absolute, pathExists, readJson } from "./repo-root.js";
 
@@ -228,53 +228,28 @@ describe("packaged vendor discovery", () => {
     }
   });
 
-  it("resolves owned reviewer assets and keeps Hermes instruction-only", async () => {
+  // The reviewer role was retired with the completion protocol it served, so the
+  // Claude manifest must declare no agents and no reviewer asset may ship.
+  it("declares no reviewer agent and keeps Hermes instruction-only", async () => {
     const claude = await readJson<ClaudeManifest>(".claude-plugin/plugin.json");
-    expect(claude.agents).toEqual(["./agents/oms-reviewer.md"]);
-    const repo = absolute(".");
-    for (const declared of claude.agents) {
-      const target = path.resolve(repo, declared);
-      const relative = path.relative(repo, target);
-      expect(relative.startsWith("..") || path.isAbsolute(relative), declared).toBe(false);
-      await expect(pathExists(relative), declared).resolves.toBe(true);
-    }
-    expect(HARNESS_HOST_REVIEWERS.claude).toEqual([
-      {
-        id: "claude.plugin-agent",
-        selection: "primary",
-        isolation: "instruction-only",
-        assetPath: "agents/oms-reviewer.md",
-      },
-    ]);
-    expect(HARNESS_HOST_REVIEWERS.codex).toEqual([
-      { id: "codex.subagent", selection: "primary", isolation: "instruction-only" },
-      {
-        id: "codex.custom-agent",
-        selection: "optional",
-        isolation: "instruction-only",
-        assetPath: "assets/codex/agents/oms-reviewer.toml",
-      },
-    ]);
-    expect(HARNESS_HOST_REVIEWERS.hermes).toEqual([
-      { id: "hermes.delegate-task", selection: "primary", isolation: "instruction-only" },
-    ]);
+    expect(claude.agents).toBeUndefined();
     expect(HARNESS_WRITE_HOOK).toEqual({ claude: "fail-open", codex: "none", hermes: "none" });
-    await expect(pathExists("agents/oms-reviewer.md")).resolves.toBe(true);
-    await expect(pathExists("assets/codex/agents/oms-reviewer.toml")).resolves.toBe(true);
+    await expect(pathExists("agents/oms-reviewer.md")).resolves.toBe(false);
+    await expect(pathExists("assets/codex/agents/oms-reviewer.toml")).resolves.toBe(false);
     const hermes = await readJson<Record<string, unknown>>("assets/hermes-manifest.json");
     expect(hermes.skills).toBeUndefined();
     expect("agents" in hermes).toBe(false);
     expect(JSON.stringify(hermes)).not.toMatch(/unavailable|unsupported|seven skills/);
-    expect(JSON.stringify(HARNESS_HOST_REVIEWERS)).not.toMatch(/unavailable|unsupported/);
+    expect(JSON.stringify(harnessSurfaceRegistry)).not.toMatch(/reviewer/iu);
   });
 
-  it("includes every canonical skill and owned reviewer asset in the npm package", async () => {
+  it("includes every canonical skill and no reviewer asset in the npm package", async () => {
     const files = await packedFiles(absolute("."));
     for (const skill of CANONICAL_SKILLS) {
       expect(files).toContain(`assets/skills/${skill}/SKILL.md`);
     }
-    expect(files).toContain("agents/oms-reviewer.md");
-    expect(files).toContain("assets/codex/agents/oms-reviewer.toml");
+    expect(files).not.toContain("agents/oms-reviewer.md");
+    expect(files).not.toContain("assets/codex/agents/oms-reviewer.toml");
   });
 
   // Negative cases. Each names a concrete bad input the gate must reject, so a

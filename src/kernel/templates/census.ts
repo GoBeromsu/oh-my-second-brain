@@ -9,7 +9,7 @@ import {
   verifyTemplateFolderPath,
   verifyTemplateSourcePath,
 } from "./paths.js";
-import type { Digest, TemplateId, TemplatePolicy, TemplateSourcePath } from "./types.js";
+import type { Digest, TemplateId, TemplateSourcePath } from "./types.js";
 
 /**
  * Read-only inventory of raw template candidates.
@@ -18,16 +18,11 @@ import type { Digest, TemplateId, TemplatePolicy, TemplateSourcePath } from "./t
  * parsed or executed. A new file name is not a template id.
  */
 
-export const TEMPLATE_CENSUS_DIGEST_DOMAIN = "oms.template-census.v4";
 /** Historical source cap previously published by the removed renderer. */
 export const MAX_TEMPLATE_SOURCE_BYTES = 262_144;
 const MAX_TEMPLATE_SOURCE_DEPTH = 16;
 const MAX_TEMPLATE_SOURCE_FILES = 10_000;
 const MAX_TEMPLATE_SOURCE_DIRECTORIES = 2_048;
-
-export type CensusAuthority = "absent" | "approved" | "invalid";
-export type CensusBindingStatus = "matched" | "drift" | "missing" | "relocated" | "ambiguous" | "unreadable" | "conflict";
-export type CensusDiffKind = "added" | "edited" | "missing" | "relocated" | "ambiguous";
 
 export interface CensusDiagnostic {
   readonly code: string;
@@ -41,16 +36,6 @@ export interface TemplateCensusSelection {
   readonly kind: "file" | "folder";
 }
 
-export interface TemplateCensusOptions {
-  /** Caller-explicit files or folders. These are not discovered from note content. */
-  readonly selections?: readonly TemplateCensusSelection[];
-  /**
-   * When omitted, configured Obsidian and Templater paths are included as raw
-   * file or folder selections. Content hints are never consulted.
-   */
-  readonly includeConfiguredPaths?: boolean;
-}
-
 export interface CensusSource {
   readonly path: TemplateSourcePath;
   readonly bytes: Uint8Array;
@@ -59,41 +44,6 @@ export interface CensusSource {
   readonly text: string | null;
   readonly diagnostics: readonly CensusDiagnostic[];
 }
-
-export interface CensusBinding {
-  readonly templateId: TemplateId;
-  readonly identity: string;
-  readonly approvedPath: TemplateSourcePath;
-  readonly approvedRawDigest: Digest;
-  readonly observedPath: TemplateSourcePath | null;
-  readonly observedRawDigest: Digest | null;
-  readonly status: CensusBindingStatus;
-  readonly candidatePaths: readonly TemplateSourcePath[];
-}
-
-export interface CensusDiff {
-  readonly kind: CensusDiffKind;
-  readonly path: TemplateSourcePath;
-  readonly fromPath: TemplateSourcePath | null;
-  readonly templateId: TemplateId | null;
-  readonly rawDigest: Digest | null;
-  readonly approvedRawDigest: Digest | null;
-  readonly candidatePaths: readonly TemplateSourcePath[];
-  readonly automatic: boolean;
-}
-
-export interface CensusResult {
-  readonly vault: string;
-  readonly authority: CensusAuthority;
-  readonly generationDigest: Digest | null;
-  readonly approvedPolicy: TemplatePolicy | null;
-  readonly sources: readonly CensusSource[];
-  readonly bindings: readonly CensusBinding[];
-  readonly diffs: readonly CensusDiff[];
-  readonly diagnostics: readonly CensusDiagnostic[];
-  readonly censusDigest: Digest;
-}
-
 
 interface ReadySource {
   readonly path: TemplateSourcePath;

@@ -4,13 +4,13 @@ Oh My Second Brain(`oms`)은 기존 Obsidian·Markdown 볼트를 AI 호스트와
 
 ## 템플릿·온톨로지 볼트 모델
 
-의미는 사용자에게 남는다. `.oms/template-policy.json` version 4가 승인된 구조이자 의미다. 속성 pool이 type, format, intent를 기록한다. 항상 켜져 있는 default 계층은 비어 있는 상태로 시작해 모든 노트에 적용된다. 선택적인 개별 템플릿은 필드·heading·의미 기준을 추가하거나 좁힐 수만 있고, default를 제거하거나 약화시킬 수 없다. 개별 템플릿이 없는 노트는 그 default 아래의 정상 노트다. 관리되지 않는 frontmatter는 보존하며 검사하지 않는다.
+의미는 사용자에게 남는다. `.oms/template-policy.json` version 5가 게시된 구조이자 의미다. 속성 pool이 type, format, intent를 기록한다. 항상 켜져 있는 공통 계약은 비어 있는 상태로 시작하고 자체 Markdown 파일이 없으며, 등록된 모든 템플릿에 적용된다. 명시적으로 등록된 템플릿은 이 계약을 상속하고 필드·heading·의미 기준을 추가하거나 좁힐 수 있으며, 사용자가 승인한 완화는 약화할 수도 있다. 등록된 템플릿이 없는 노트는 공통 계약 아래의 정상 노트다. 관리되지 않는 frontmatter는 보존하며 검사하지 않는다. 값 집합은 문서에 `valuePolicy: "closed"`를 선언한 경우에만 닫혀 있으며, `allowedValues` 목록만으로는 제안에 머문다.
 
-제품은 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다. 폐기된 것은 노트 정체성으로서의 `concept`와 번들 runtime 기본값이지, 사용자가 서술하는 의미 계층으로서의 온톨로지가 아니다. `.oms/taxonomy.json`은 배치와 폴더·링크의 의미를 기록한다. `.obsidian/types.json`은 읽기 전용 관측값이다. `.oms/types.json`은 version 4 시절의 파생 파일이다. 게시된 version 5 계약은 그것을 만들지도 읽지도 않으며 다시 생성하지도 않는다. version 3·4 정책은 계속 읽을 수 있고, 값을 바꾸는 선택이 일어날 때 기록된 의미를 보존하며 이전된다.
+제품은 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다. 폐기된 것은 노트 정체성으로서의 `concept`와 번들 runtime 기본값이지, 사용자가 서술하는 의미 계층으로서의 온톨로지가 아니다. `.oms/taxonomy.json`은 배치와 폴더·링크의 의미를 기록한다. `.obsidian/types.json`은 읽기 전용 관측값이다. `.oms/types.json`은 version 4 시절의 파생 파일이다. 게시된 version 5 계약은 그것을 만들지도 읽지도 않으며 다시 생성하지도 않는다. version 3·4 정책은 계속 읽을 수 있으며, 값을 바꾸는 선택에서만 기록된 의미를 보존하며 제자리 이전된다. 보류되었거나 증명되지 않은 이전 계약은 다시 쓰지 않고 `review-required`로 보고한다.
 
-노트 파일을 쓰고 고치는 주체는 에이전트다. 쓰기 전에 OMS는 승인된 Markdown, 유효 계약, task binding을 돌려준다. 그다음 디스크에 저장된 바이트를 검사한다. 완료 판정에는 같은 입력에 대한 호스트의 별도 리뷰가 필요하다. 지시 기반(instruction-only) 별도 리뷰도 유효하다. 리뷰어 파일의 바이트가 일치한다는 사실은 호스트가 그 역할을 실제로 실행했다는 증거가 아니다. 기계 검사 통과, 스스로 발급한 PASS, digest는 그 리뷰가 아니며, digest는 인증이 아니라 내용 무결성이다. 계약 설정은 사용자가 정확한 diff를 승인할 때만 compare-and-swap으로 바뀐다. 자동 보정은 사용자가 켜지 않는 한 꺼져 있다. 재시도 예산은 사용자가 정하는 유한한 0 이상의 정수이며 기본값은 2, 0도 허용하고 별도의 상한 3은 없다. 검색은 그 판정을 기다리지 않는다.
+노트 파일을 쓰고 고치는 주체는 에이전트다. 쓰기 전에 `guide`가 하나의 명시적 노트 경로에 적용할 계약을 선택하고 세션 locator를 돌려준다. 그다음 그 locator로 디스크에 저장된 바이트를 읽어 선언된 속성과 heading을 보고하고 `semantic: "not-evaluated"`를 돌려준다. OMS에는 완료 호출도 별도 리뷰어 대화도 없다. 계약 설정은 사용자가 정확한 diff를 승인할 때만 compare-and-swap으로 바뀐다. 자동 보정은 사용자가 켜지 않는 한 꺼져 있다. 재시도 예산은 사용자가 정하는 유한한 0 이상의 정수이며 기본값은 2, 0도 허용하고 별도의 상한 3은 없다. 검색은 그 판정을 기다리지 않는다.
 
-승인된 Markdown은 BOM과 원래 줄바꿈을 포함한 정확한 UTF-8 스냅샷이다. 관리 draft를 편집해도 그 스냅샷은 대체되지 않는다. OMS는 Templater, JavaScript, 전용 token 언어를 해석하거나 실행하지 않는다.
+등록된 각 소스는 경로와 내용 hash로 기록되는 사용자의 Markdown 파일 그대로 남는다. OMS는 그 소스를 다시 쓰거나 복사하거나 스냅샷하지 않고, 관리 draft나 `.oms/templates/` 디렉터리도 없으며 정책에 승인된 Markdown 바이트를 저장하지 않는다. OMS는 Templater, JavaScript, 전용 token 언어를 해석하거나 실행하지 않는다.
 
 ADR-014는 ADR-013을 대체한다. [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 Ouroboros와 Gajae Code의 deep-interview를 설계 아이디어로 밝힌다. 이는 runtime 복제도 연구 결과도 아니다. 저장소의 도식은 설명용 스케치이며 G002 Excalidraw 산출물이 아니다. 이 문서들은 승인된 아키텍처 기록이지 host smoke 결과나 제품 gate 통과가 아니다.
 
@@ -18,14 +18,14 @@ ADR-014는 ADR-013을 대체한다. [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 O
 
 ## 설정
 
-`oms setup`은 비어 있는 version 4 policy를 제안한다. 노트 타입 기본값을 번들로 넣지 않고 노트를 수정하지도 않는다. 게시는 설정 interview를 거쳐 사용자가 승인한 diff만 기록한다. 모델 수명주기는 setup 시절 플래그가 아니라 `oms model install|select|waive|status`다.
+`oms setup`은 저장소를 연결한다. dry-run이 출력한 digest를 승인하면 이동 가능한 `.oms/settings.json` 신원과 호스트 연결을 기록하고, 같은 흐름에서 모델을 선택할 수도 있다. 계약은 게시하지 않으며 노트도 수정하지 않는다. 계약 게시는 interview가 합의한 뒤 `oms template publish`가 한다. 모델 수명주기는 `oms model install|select|waive|status`로도 따로 존재한다.
 
 ```bash
 oms setup --vault /path/to/vault --dry-run
 oms setup --vault /path/to/vault --yes --approved-digest <digest>
 ```
 
-interview 스킬은 결정을 사용자와 하나씩 합의하고, 명시적 계약 문서를 작성하고, `oms template publish`로 미리 보여준 뒤 사용자가 승인한 것만 게시한다. 변경된 등록 소스는 `oms template review-sources`로 검토하고 승인 또는 재연결하며, 그 자체로 계약을 바꾸지 않는다. OMS는 interview 상태를 보관하지 않으므로 전달할 question id·census digest·서버 발급 approval digest가 없다. 일반 질문, 알 수 없는 노트 값, 노트 오류, 관리되지 않는 속성, 검색은 interview를 시작하지 않는다.
+interview 스킬은 결정을 사용자와 하나씩 합의하고, 명시적 계약 문서를 작성하고, `oms template publish`로 미리 보여준 뒤 사용자가 승인한 것만 게시한다. 변경된 등록 소스는 drift 증거다. `oms template review-sources`가 이를 검토하고, `oms template acknowledge-source`는 live reviewed digest로 기록된 hash만 전진시키며, `oms template relink-source`는 실제로 없어진 원본과 사용자가 정확히 지정한 candidate path를 요구한다. 그 자체로 계약을 바꾸지 않는다. OMS는 interview 상태를 보관하지 않으므로 전달할 question id·census digest·서버 발급 approval digest가 없다. 일반 질문, 알 수 없는 노트 값, 노트 오류, 관리되지 않는 속성, 검색은 interview를 시작하지 않는다.
 
 호스트 알림 문구는 정확히 `템플릿에 변경이 있습니다`이고 동작은 `확인하기`와 `나중에` 둘뿐이다. 처음 알림에는 템플릿 이름·hash·change class를 표시하지 않는다. `나중에`는 host-only이며 서버를 호출하지 않는다. `확인하기`는 interview 스킬을 시작하고, 그 스킬은 게시 전에 `write { op: "template", mode: "review-sources" }`로 변경된 소스를 먼저 검토한다.
 
@@ -43,7 +43,7 @@ oms note guide|check|audit|get                계약 선택·저장된 노트 �
 oms package check|update                       OMS 패키지 확인 또는 업데이트
 oms search query|context                       명시적 query 실행 또는 구조화 context 조회
 oms serve mcp|http                             stdio MCP 또는 로컬 HTTP 서버 시작
-oms setup                                      비어 있는 version 4 policy 제안
+oms setup                                      저장소 연결과 이동 가능한 신원 기록
 oms status                                     읽기 전용 종합 상태 표시
 oms template list|show|scan|check|publish|review-sources|acknowledge-source|relink-source
 ```
@@ -58,7 +58,7 @@ oms template list|show|scan|check|publish|review-sources|acknowledge-source|reli
 
 lexical, vector, HyDE, typed-axis 질의는 템플릿에 결속되지 않았거나 계약을 어겼거나 미완성인 노트도 계속 포함한다. 계약이 없거나 손상되어도 검색은 멈추지 않는다. Vector 검색에는 완전한 `OMS_EMBEDDING_PROVIDER`/`OMS_EMBEDDING_MODEL` 쌍이 필요하다. HyDE에는 `OMS_GENERATE_PROVIDER`/`OMS_GENERATE_MODEL`이, reranking에는 `OMS_RERANK_PROVIDER`/`OMS_RERANK_MODEL`이 추가로 필요하다. 누락되거나 불완전하거나 설치되지 않은 선택은 크게 실패한다. G004 expansion은 명시적으로 선택할 때만 쓰이며 교체·parity·outperformance를 주장하지 않는다.
 
-`guide`는 노트를 쓰지 않는다. 계약을 선택하고 세션 locator를 돌려준다. 에이전트가 파일을 저장한 뒤 `check`가 그 locator로 파일을 읽어 선언된 필드와 heading을 보고하며, 완료 판정은 내리지 않는다. create, append, update, backfill, complete는 노트 동작이 아니다. link apply도 동작이 아니다. template add, update, move, remove, default도 동작이 아니다. 폐기된 그 동작들을 위한 version 3 변환, 노트 renderer, 호환 경로는 없다.
+`guide`는 노트를 쓰지 않는다. 계약을 선택하고 세션 locator를 돌려준다. 에이전트가 파일을 저장한 뒤 `check`가 그 locator로 파일을 읽어 선언된 필드와 heading을 보고하고 `semantic: "not-evaluated"`를 돌려주며, 완료 판정은 내리지 않는다. create, append, update, backfill은 폐기된 노트 동작이다. link apply도 동작이 아니다. template add, update, move, remove, default도 동작이 아니다. 폐기된 그 동작들을 위한 노트 renderer나 호환 경로는 없다.
 
 ## MCP 도구
 
@@ -85,7 +85,7 @@ Gajae-Code에서는 npm 패키지를 marketplace plugin으로 설치한다: `gjc
 
 호스트 설치는 canonical 볼트를 `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`에 기록하고 각 관리형 등록에 `oms serve mcp --vault /path/to/vault`를 넣는다. `oms host install|remove|sync|status`만 이 서명된 포인터로 호스트 통합을 관리한다. `oms package update`는 패키지만 업데이트하고 호스트를 암묵적으로 동기화하지 않는다. `oms host sync`는 별도로 실행한다.
 
-런타임 target 해석은 호스트 관리 포인터를 읽지 않는다. 우선순위는 명시적 target, 로컬 볼트 control, bridge, `OMS_VAULT`, 그리고 읽기 전용 fallback으로서의 cwd 순서다. cwd fallback에서는 계약 게시와 파생 상태 보정을 할 수 없다.
+런타임 target 해석은 호스트 관리 포인터를 읽지 않는다. 우선순위는 명시적 target, 로컬 볼트 control, bridge, `OMS_VAULT`, 그리고 읽기 전용 fallback으로서의 cwd 순서다. control과 파생 상태 변경은 이 fallback을 사용할 수 없다. 노트 `guide`와 `check`는 일반 노트를 쓰지 않고 읽으며, 계약 게시, 확인된 소스 변경, 파생 상태 보정에는 계속 검증된 target이 필요하다.
 
 `OMS_VAULT`는 명시적·로컬·bridge target이 없을 때 사용하는 환경변수 fallback이다.
 

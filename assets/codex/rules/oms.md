@@ -1,32 +1,32 @@
 # Oh My Second Brain for Codex
 
-Use the vault's own guidelines and approved `.oms/template-policy.json` contract.
-The property pool and empty-starting, always-on default are shared; individual
-templates add constraints and never weaken the default. `.oms/taxonomy.json`
-owns placement meaning. `.obsidian/types.json` is read-only diagnostic input;
-`.oms/types.json` is derived, not an editing surface.
+Use the vault's own guidelines and the published `.oms/template-policy.json`
+contract. Its version-5 document owns the property pool, the always-on common
+contract that needs no Markdown file, and each explicitly registered template. A
+registration inherits the common contract and may also relax it where the user
+approved that. `.oms/taxonomy.json` owns placement meaning. `.obsidian/types.json`
+is read-only diagnostic input; `.oms/types.json` is a historical version-4 file
+that version 5 neither derives nor reads.
 
 | User intent | Preferred surface |
 |---|---|
 | setup or change contracts | tool-less `$oms-interview`, with an explained diff and user approval |
 | inspect templates | `$oms-template` |
 | install host integration | `oms host install --runtime codex --vault <path> --yes`, only when authorized |
-| write a note | `$oms-write`: guide → agent file write → check → separate reviewer → complete |
+| write a note | `$oms-write`: guide → agent file write → check on the saved bytes |
 | retrieve knowledge | `$oms-search`; no validation or repair side effects |
 | inspect health | `$oms-status` |
 | explicit supported control/index repair | `$oms-doctor` |
 
 ## Boundaries
 
-- Agents write and repair notes; OMS guides and verifies actual saved artifacts.
-  Do not use retired OMS note-write, link-apply, or backfill operations.
-- A separate Codex reviewer conversation evaluates approved semantic criteria.
-  Use an available custom role or a real generic subagent, never writer self-PASS.
-- Record actual invocation/results and honest isolation metadata. Definition
-  presence and a requested filesystem sandbox do not prove tool restrictions;
-  inherited MCP access is not bounded by that filesystem setting.
-- Missing evidence, unavailable review and stale snapshots are incomplete.
-  Never invent values, hashes or host IDs to manufacture completion.
+- Agents write and repair notes; OMS checks the actual saved bytes.
+  Do not use retired OMS note-write, link-apply, backfill, or complete operations.
+- `check` reports declared properties and headings and returns
+  `semantic: "not-evaluated"`. There is no OMS completion call and no reviewer
+  handshake: you judge whether the note is worth keeping and you own the repair.
+- Read a reported violation, fix the file with your own tools, and check again.
+  Never weaken the contract to pass, and never invent a missing value.
 - Automatic repair defaults off and stays within explicit scope and the user's
   finite retry budget. Contract changes require approval, not an automatic fix.
 - Search/status stay read-only; invalid, unbound and incomplete notes remain
@@ -36,5 +36,8 @@ owns placement meaning. `.obsidian/types.json` is read-only diagnostic input;
 
 A returned source-change notice initially reads exactly `템플릿에 변경이 있습니다`
 with `확인하기` and `나중에`. Deferral has no server-side effect. Explicit review
-uses `$oms-interview` and returned request/CAS fields; never self-approve a digest.
-Ordinary writing questions and search do not automatically start that interview.
+runs `review-sources`; a changed source is acknowledged with its live digest, or
+relinked only when the original is genuinely gone and the user spells out the
+candidate path. A changed hash is drift evidence, never approval, and you never
+self-approve a publication. Ordinary writing questions and search do not
+automatically start the interview.

@@ -1,6 +1,6 @@
 # Verified target admission
 
-Search and diagnosis can use the current directory, but a writing workflow cannot guess a vault. OMS separates target resolution from verified-target admission. Note `guide` / `check` / `complete` read rather than write ordinary notes, but their task binding still requires a verified target. Contract publication and derived-state repair also require an admitted target.
+Search and diagnosis can use the current directory, but a writing workflow cannot guess a vault. OMS separates target resolution from verified-target admission. Note `guide` selects a contract and `check` reads a saved note; neither writes ordinary notes, and both require a verified target. Contract publication and derived-state repair also require an admitted target.
 
 ## Resolution precedence
 
@@ -20,25 +20,25 @@ The precedence is the same for CLI and MCP runtime behavior. Host installation d
 
 Before a control or derived-state mutation, OMS resolves the target and verifies the requested path is confined to it. Admission happens before that write, so rejection does not modify controls or derived state.
 
-OMS does not write ordinary notes. `guide` returns approved contract material for a chosen new or existing path; an unset path is a question and does not issue a check. The agent writes and repairs the file. `check` reads the saved note, controls, and declared evidence. `complete` re-reads those inputs after a separate review.
+OMS does not write ordinary notes. `guide` selects the contract for one explicit new or existing path and returns a session locator; an unset path is a question and does not issue a session. The agent writes and repairs the file. `check` reads the saved bytes through that locator, reports declared properties and headings, and returns `semantic: "not-evaluated"`. There is no `complete` operation or separate reviewer handshake.
 
-Agreement of the evaluation inputs before and after review is the scope of that observation. It is not a claim that the whole vault stayed unchanged, that a hook blocked a save, or that the host enforced a tool sandbox. A definition byte match is a file comparison, not a launch or enforcement proof. Claude's write hook is fail-open. Codex and Hermes have no write hook.
+The structural check is not a claim that a note is semantically complete, that the whole vault stayed unchanged, that a hook blocked a save, or that the host enforced a tool sandbox. Claude's write hook is fail-open. Codex and Hermes have no write hook.
 
 ## Contract publication
 
-Publishing v4 controls requires a verified target. The default layer is always on and starts empty. An individual template only adds constraints. A note with no individual template is valid under the default. Version 3 is not converted automatically.
+Publishing version-5 controls requires a verified target. The common contract is always on and starts empty, with no Markdown file of its own. Explicitly registered templates retain their user-owned Markdown sources by recorded path and hash; they may add to, tighten, or relax the common contract. A note with no registered template is valid under the common contract. A historical version-3 or version-4 policy is readable and migrates in place only on a mutating selection that preserves its recorded meaning; a held or unproved contract is `review-required`.
 
-The publication path is a dry run, then apply with the exact approved digest from that review. Apply is compare-and-swap of the approved diff and returns a transaction receipt. A stale approval cannot apply after the reviewed control state changes. Ordinary notes and original template sources are not publication outputs.
+`oms template publish --policy <file.json> --transaction-id <uuid> [--yes]` previews without `--yes`, then compare-and-swaps the exact policy bytes on disk. A valid hand-edited policy remains revisable. Publication writes only the policy and one history record; ordinary notes and original template sources are not publication outputs.
 
-Setup follows this approval model: it proposes an empty v4 policy and never modifies notes. It has no bundled note-type defaults.
+Setup writes portable `.oms/settings.json` identity and the approved host connection after the user approves the digest from `--dry-run`; it can select a model in the same pass. It publishes no contract and never modifies ordinary notes.
 
-An unverifiable policy or a contract transaction still in progress stops the affected `guide`, `check`, or `complete` evaluation. It does not replace the contract with an empty one.
+An absent, unreadable, malformed, or historical policy, or a contract transaction still in progress, stops the affected selection or check. An unreadable control is reported as its own state, including `CONTRACT_POLICY_UNREADABLE`, `TEMPLATE_POLICY_UNREADABLE`, or `TEMPLATE_TAXONOMY_UNREADABLE`; it is never replaced with an empty contract.
 
 ## Read-only and repair operations
 
-`oms index status` has no mutation path. `oms template check` and read-only search can use the current-directory fallback. Type regeneration, index repair, index clean, and graph build require verified-target admission. Note backfill is not a repair.
+`oms index status` has no mutation path. `oms template check` and read-only search can use the current-directory fallback. Index repair, index clean, and graph build require verified-target admission. Note backfill is not a repair. Type regeneration is retired.
 
-`oms search query <text>` remains lexical and projection-independent; it can be used without generated projection state. Read-only search does not depend on policy validity. Unbound, invalid, and incomplete notes stay in lexical, vector, HyDE, and typed-axis results. Search does not write notes and does not start a review.
+`oms search query <text>` remains lexical and projection-independent; it can be used without generated projection state. Read-only search does not depend on policy validity. Unbound, invalid, and incomplete notes stay in lexical, vector, HyDE, and typed-axis results. Search does not write notes and does not start a reviewer workflow.
 
 `--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit channels, and `--max-queries` accepts only integers from 1 through 32. Vector search requires the `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL` pair; HyDE additionally requires `OMS_GENERATE_PROVIDER` and `OMS_GENERATE_MODEL`, and reranking requires `OMS_RERANK_PROVIDER` and `OMS_RERANK_MODEL`. Missing or incomplete pairs fail loudly. G004 expansion is available when explicitly selected and makes no replacement, parity, or outperformance claim.
 

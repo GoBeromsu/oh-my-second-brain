@@ -27,8 +27,6 @@ Installation writes host-native guidance and skill assets, then stamps the host 
 oms serve mcp --vault /path/to/vault
 ```
 
-Codex installation also copies the optional owned role `~/.codex/agents/oms-reviewer.toml` and its provenance sidecar. That file is not required. A generic separate Codex reviewer remains valid when the custom role is absent. See [host assets](./adapters.md) for what a definition file does and does not prove.
-
 It also writes a strict signed host-maintenance pointer at `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`. Only `host install`, `host sync`, and `host remove` use this record. Installing or explicitly syncing another vault uses compare-and-swap and updates every owned host stamp; removal deletes the pointer last after host cleanup succeeds.
 
 This is an installation detail, not a target-resolution rule. Installing or uninstalling a host does not alter runtime precedence.
@@ -57,18 +55,18 @@ The current-directory fallback is read-only. OMS does not write ordinary notes o
 
 ## Contract setup
 
-`.oms/template-policy.json` version 4 is the only approved structure and meaning authority. Version 3 is unsupported and is not converted automatically. The default layer is always on and starts empty. An individual template only adds constraints. A note with no individual template is valid under that default.
+`.oms/template-policy.json` version 5 is the only structural authority. It holds the property pool, an always-on common contract that starts empty, and explicitly registered templates. A registration inherits the common contract and may add to it, tighten it, or relax it where that relaxation was approved for the template. A note with no individual template is valid under the common contract. Historical version-3 and version-4 policies remain readable; only a mutating selection migrates one in place, preserving its recorded meaning.
 
-Setup proposes that empty v4 policy and publishes it only through the config interview, after the user approves the exact digest. It never modifies notes and it ships no bundled note-type defaults. Model lifecycle stays on `oms model install|select|waive|status`, not on setup-era model flags.
+Setup connects the vault: it writes the portable `.oms/settings.json` identity and the approved host connection. It publishes no contract and never modifies notes. After the interview agrees the contract document, publish it explicitly with `oms template publish --policy <file.json> --transaction-id <uuid> [--yes]`; publication previews without `--yes` and compares against the exact policy bytes now on disk.
 
-Inspect the proposal, then authorize publication with the digest that proposal showed:
+Inspect the connection proposal, then approve the digest and token it showed:
 
 ```bash
 oms setup --vault /path/to/vault --dry-run
-oms setup --vault /path/to/vault --yes --approved-digest <digest>
+oms setup --vault /path/to/vault --yes --approval-token <token> --approved-digest <digest>
 ```
 
-Choose model lifecycle explicitly after setup:
+Setup can select a model in the same approved pass. Model lifecycle is also available explicitly:
 
 - `oms model install`: acquire and verify a model.
 - `oms model select`: select an installed model.
@@ -80,7 +78,7 @@ These are local verified acquisitions, not runtime downloads. Direct capability 
 ## Notes, search, index, and serving
 
 ```text
-oms note guide|check|complete|audit|get
+oms note guide|check|audit|get
 oms template list|show|scan|check|publish|review-sources|acknowledge-source|relink-source
 oms link suggest|check
 oms search query <text> [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank]
@@ -90,9 +88,9 @@ oms graph build|status
 oms serve mcp|http
 ```
 
-`guide` returns the chosen new or existing note path, approved Markdown, effective contract, and task binding. After the agent saves the file, `check` reads the note, controls, and declared evidence. `complete` re-reads those same inputs against the separate reviewer's structured result. None of the three writes the note. The agent writes and repairs the file. The command table is [the CLI map](./cli-map.md).
+`guide` selects the contract for one explicit note path and returns a session locator. The agent writes the file with its own tools. After the file is saved, `check` reads those saved bytes through that locator and reports declared properties and headings with `semantic: "not-evaluated"`. Neither command writes the note, and there is no completion command or reviewer handshake. The agent and user decide whether the note is worth keeping and repair it. The command table is [the CLI map](./cli-map.md).
 
-`template review`, `answer`, and `commit` are the config interview. `commit` publishes only the approved contract diff, using compare-and-swap. It does not write ordinary notes.
+`oms template` leaves are `list`, `show`, `scan`, `check`, `publish`, `review-sources`, `acknowledge-source`, and `relink-source`. `publish`, `acknowledge-source`, and `relink-source` require an explicit transaction ID; `review-sources` is read-only. `acknowledge-source` needs the live reviewed digest, and `relink-source` requires a genuinely missing original source plus the exact candidate path supplied by the user. None of these operations writes ordinary notes.
 
 A plain `oms search query <text>` is lexical-only. Every non-lexical channel is explicit: `--vec`, `--hyde`, G004 `--expand`, and `--rerank`. G004 expansion is available only when selected; no replacement, parity, or outperformance claim is made. Read-only search still returns unbound, invalid, and incomplete notes. Policy validity does not gate it.
 
@@ -104,7 +102,7 @@ A plain `oms search query <text>` is lexical-only. Every non-lexical channel is 
 
 ## Host, package, and model lifecycle
 
-Use `oms host install|remove|sync|status` for host integrations. `oms package check|update` manages the npm package only; package update never performs host sync implicitly. Use `oms model install|select|waive|status` for model lifecycle instead of setup-era model flags. Hook entrypoints are `oms hook pre|post`; post-tool-use records the tool result and is not a graph-build alias. Claude's write hook is fail-open. Codex and Hermes declare no write hook. A hook entrypoint is not a hard save block.
+Use `oms host install|remove|sync|status` for host integrations. `oms package check|update` manages the npm package only; package update never performs host sync implicitly. Use `oms model install|select|waive|status` for model lifecycle outside setup. Hook entrypoints are `oms hook pre|post`; post-tool-use records the tool result and is not a graph-build alias. Claude's write hook is fail-open. Codex and Hermes declare no write hook. A hook entrypoint is not a hard save block.
 
 ## Skills and MCP tools
 
@@ -126,4 +124,4 @@ oms host remove --runtime all --yes
 
 For Hermes, removal deletes only an installation with valid OMS npm provenance, or an older unrecorded tree that still passes the installer's legacy ownership check. It refuses to delete a foreign or tampered skill tree.
 
-For Codex, the optional `oms-reviewer.toml` is deleted only when OMS owns it. An unowned role file stays in place and does not stop the rest of Codex cleanup.
+OMS no longer installs a Codex reviewer role. Removal still deletes `~/.codex/agents/oms-reviewer.toml` and its provenance sidecar left by an earlier version, and only when the OMS-written provenance record proves ownership. An unowned role file stays in place and does not stop the rest of Codex cleanup.

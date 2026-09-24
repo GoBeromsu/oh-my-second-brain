@@ -224,71 +224,17 @@ describe("validateHarnessRegistry", () => {
     expect(validateHarnessRegistry(aliased).some((violation) => violation.value === "true")).toBe(false);
   });
 
-  it("reports a missing reviewer mechanism and an unregistered inherited-tool denial", () => {
-    const claude = harnessSurfaceRegistry.hosts.find((host) => host.runtime === "claude");
-    const missingAsset = withHost("claude", {
-      reviewerMechanisms: [
-        {
-          id: "claude.plugin-agent",
-          selection: "primary",
-          isolation: "instruction-only",
-        },
-      ],
-    });
-    const unsupported = withHost("hermes", {
-      reviewerMechanisms: [
-        {
-          id: "hermes.unsupported",
-          selection: "primary",
-          isolation: "instruction-only",
-        } as unknown as HarnessSurfaceRegistry["hosts"][number]["reviewerMechanisms"][number],
-      ],
-    });
-    const hermesAsset = withHost("hermes", {
-      reviewerMechanisms: [
-        {
-          ...harnessSurfaceRegistry.hosts.find((host) => host.runtime === "hermes")!.reviewerMechanisms[0]!,
-          assetPath: "assets/hermes/README.md",
-        },
-      ],
-    });
-
-    expect(claude?.reviewerMechanisms[0]?.assetPath).toBe("agents/oms-reviewer.md");
-    expect(validateHarnessRegistry(missingAsset)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "missing_surface",
-          surface: "hosts.claude.reviewerMechanisms.claude.plugin-agent",
-          value: "agents/oms-reviewer.md",
-        }),
-      ]),
-    );
-    expect(validateHarnessRegistry(unsupported)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "missing_surface",
-          surface: "hosts.hermes.reviewerMechanisms",
-          value: "hermes.delegate-task",
-        }),
-        expect.objectContaining({
-          code: "unregistered_surface",
-          surface: "hosts.hermes.reviewerMechanisms",
-          value: "hermes.unsupported",
-        }),
-      ]),
-    );
-    expect(validateHarnessRegistry(hermesAsset)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "unregistered_surface",
-          surface: "hosts.hermes.reviewerMechanisms.hermes.delegate-task",
-          value: "assets/hermes/README.md",
-        }),
-      ]),
-    );
+  // The reviewer role served the deleted completion protocol. Nothing in the
+  // registry may declare a mechanism, ship an asset for one, or require one in
+  // the release list; the validator has no reviewer surface left to check.
+  it("declares no reviewer mechanism, asset, or release requirement", () => {
+    expect(harnessSurfaceRegistry.hosts.every((host) => !("reviewerMechanisms" in host))).toBe(true);
+    expect(JSON.stringify(harnessSurfaceRegistry)).not.toMatch(/reviewer/iu);
+    expect(harnessSurfaceRegistry.packageAssets.npmFiles).not.toContain("agents");
+    expect(validateHarnessRegistry(cloneRegistry())).toEqual([]);
   });
 
-  it("reports a shipped skill or reviewer asset dropped from the release list", () => {
+  it("reports a shipped skill dropped from the release list", () => {
     const base = cloneRegistry();
     const droppedSkill: HarnessSurfaceRegistry = {
       ...base,
@@ -303,7 +249,7 @@ describe("validateHarnessRegistry", () => {
       ...base,
       packageAssets: {
         ...base.packageAssets,
-        npmFiles: base.packageAssets.npmFiles.filter((npmFile) => npmFile !== "agents"),
+        npmFiles: base.packageAssets.npmFiles.filter((npmFile) => npmFile !== "skills"),
       },
     };
 
@@ -321,7 +267,7 @@ describe("validateHarnessRegistry", () => {
         expect.objectContaining({
           code: "missing_surface",
           surface: "packageAssets.npmFiles",
-          value: "agents/oms-reviewer.md",
+          value: "skills/interview/SKILL.md",
         }),
       ]),
     );

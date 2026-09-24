@@ -174,7 +174,7 @@ function placementFor(routing: TaxonomyRouting, templateId: string): JsonValue |
  * explicit V5 contract. Placement is only `placementFor`, and field records stay
  * the safe dicts from `composeTemplateContract`. It reads and admits no vault.
  */
-export interface ComposedTemplateContracts {
+interface ComposedTemplateContracts {
   readonly defaultContract: ResolvedContract;
   readonly templates: Readonly<Record<string, ResolvedContract>>;
   readonly globalAxes: GlobalAxes;

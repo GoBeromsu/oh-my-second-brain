@@ -20,7 +20,6 @@
     ".mcp.json",
     ".mcp.codex.json",
     "assets",
-    "agents",
     "skills",
     "docs/adapters.md",
     "docs/install.md",

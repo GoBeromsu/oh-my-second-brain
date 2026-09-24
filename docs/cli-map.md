@@ -78,7 +78,7 @@ Read-only search is independent of policy validity. Lexical, vector, HyDE, and t
 
 | CLI | Purpose |
 |---|---|
-| `oms setup` | Describe the vault and point at `oms template publish`; it publishes nothing by itself. |
+| `oms setup` | Connect the vault: write its portable `.oms/settings.json` identity and the host connection after a dry-run approval digest, optionally selecting a model. It publishes no contract; that is `oms template publish`. |
 | `oms host install|remove|sync|status` | Manage host-native assets and registrations. Install is a user-run command. `remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. |
 | `oms package check|update` | Check or update the npm package without implicitly syncing hosts. |
 | `oms model install|select|waive|status` | Manage model acquisition, selection, waiver, and status. |

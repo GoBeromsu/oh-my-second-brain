@@ -131,55 +131,19 @@ describe("harness registry parity", () => {
     await expect(fileExists("assets/skills/interview/SKILL.md"), "authored interview skill").resolves.toBe(true);
   });
 
-  it("declares fail-open or no write hook and instruction-only reviewer mechanisms", async () => {
+  it("declares fail-open or no write hook and no reviewer mechanism", async () => {
     expect(harnessSurfaceRegistry.hosts.map((host) => [host.runtime, host.writeHook])).toEqual([
       ["claude", "fail-open"],
       ["codex", "none"],
       ["hermes", "none"],
     ]);
     expect(harnessSurfaceRegistry.hosts.every((host) => !("hardHookGuarantee" in host))).toBe(true);
-    for (const host of harnessSurfaceRegistry.hosts) {
-      if (host.writeHook === "fail-open") {
-        expect(host.hookFiles.length, host.runtime).toBeGreaterThan(0);
-      } else {
-        expect(host.hookFiles, host.runtime).toEqual([]);
-      }
-      expect(host.reviewerMechanisms.every((mechanism) => mechanism.isolation === "instruction-only")).toBe(true);
-    }
-
-    const claude = harnessSurfaceRegistry.hosts.find((host) => host.runtime === "claude");
-    const codex = harnessSurfaceRegistry.hosts.find((host) => host.runtime === "codex");
-    const hermes = harnessSurfaceRegistry.hosts.find((host) => host.runtime === "hermes");
-    expect(claude?.reviewerMechanisms).toEqual([
-      {
-        id: "claude.plugin-agent",
-        selection: "primary",
-        isolation: "instruction-only",
-        assetPath: "agents/oms-reviewer.md",
-      },
-    ]);
-    expect(codex?.reviewerMechanisms).toEqual([
-      {
-        id: "codex.subagent",
-        selection: "primary",
-        isolation: "instruction-only",
-      },
-      {
-        id: "codex.custom-agent",
-        selection: "optional",
-        isolation: "instruction-only",
-        assetPath: "assets/codex/agents/oms-reviewer.toml",
-      },
-    ]);
-    expect(hermes?.reviewerMechanisms).toEqual([
-      {
-        id: "hermes.delegate-task",
-        selection: "primary",
-        isolation: "instruction-only",
-      },
-    ]);
-    expect(JSON.stringify(harnessSurfaceRegistry.hosts)).not.toMatch(/unsupported|unavailable/);
-    await expect(fileExists("agents/oms-reviewer.md"), "owned claude reviewer").resolves.toBe(true);
+    // The reviewer role served the deleted completion protocol, so no host may
+    // declare a mechanism and no reviewer asset may ship.
+    expect(harnessSurfaceRegistry.hosts.every((host) => !("reviewerMechanisms" in host))).toBe(true);
+    expect(JSON.stringify(harnessSurfaceRegistry.hosts)).not.toMatch(/unsupported|unavailable|reviewer/iu);
+    await expect(fileExists("agents/oms-reviewer.md"), "retired claude reviewer").resolves.toBe(false);
+    await expect(fileExists("assets/codex/agents/oms-reviewer.toml"), "retired codex reviewer").resolves.toBe(false);
   });
 
   it("declares host manifest, guidance, hook, rule, and MCP config files that exist", async () => {
@@ -205,7 +169,6 @@ describe("harness registry parity", () => {
 
     const registryFiles = harnessSurfaceRegistry.packageAssets.npmFiles;
     const packageFiles = packageJson.files;
-    expect(registryFiles).toContain("agents");
     expect([...packageFiles].sort()).toEqual(
       [...registryFiles].sort(),
     );
@@ -226,6 +189,8 @@ describe("harness registry parity", () => {
     expect(harnessSurfaceRegistry.packageAssets.releaseRequiredPaths).toEqual(expect.arrayContaining([
       "assets/skills/interview/SKILL.md",
       "skills/interview/SKILL.md",
+    ]));
+    expect(harnessSurfaceRegistry.packageAssets.releaseRequiredPaths).not.toEqual(expect.arrayContaining([
       "agents/oms-reviewer.md",
       "assets/codex/agents/oms-reviewer.toml",
     ]));
