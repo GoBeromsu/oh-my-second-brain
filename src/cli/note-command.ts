@@ -1,20 +1,18 @@
 import path from "node:path";
 
-import { checkSavedNote } from "../kernel/capture/check.js";
-import { getWriteGuidance, prepareApprovedWrite } from "../kernel/capture/guidance.js";
-import { admitWriteTarget, verifyVaultNotePath, type WriteTarget } from "../kernel/capture/safe.js";
+import { admitWriteTarget, type WriteTarget } from "../kernel/capture/safe.js";
+import { checkContract, selectContract, ContractServiceError } from "../kernel/templates/service.js";
 import type { WriteRejection } from "../kernel/conventions/write-protocol.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
-import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
 import { runAudit } from "./audit.js";
 import { getNoteDocuments } from "./doc-command.js";
 
 const VALUE_FLAGS = new Set([
-  "vault", "note-path", "template-id", "binding", "checkpoint", "review", "evidence-path",
+  "vault", "note-path", "template-id", "heading-binding", "connection-id", "session-id",
   "folder", "max-per-template", "collection", "from-line", "line-count", "line-limit", "max-bytes",
 ]);
 const BOOLEAN_FLAGS = new Set(["json", "line-numbers", "full-path", "help"]);
-const REPEATABLE_FLAGS = new Set(["evidence-path"]);
+const REPEATABLE_FLAGS = new Set<string>();
 
 type Options = Readonly<Record<string, string | boolean | readonly string[]>>;
 interface Parsed {
@@ -120,17 +118,6 @@ function admissionReport(admission: WriteRejection): unknown {
   };
 }
 
-function pathReport(rejection: WriteRejection): unknown {
-  return {
-    status: "rejected",
-    rejection: {
-      code: rejection.code === "target-invalid" ? "TARGET_INVALID" : "PATH_UNSAFE",
-      message: rejection.message,
-      remediation: rejection.remediation,
-    },
-  };
-}
-
 function print(value: unknown): void {
   const status = value !== null && typeof value === "object" && "status" in value
     ? (value as { readonly status?: unknown }).status
@@ -142,61 +129,51 @@ function print(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
-async function prepareGuide(resolved: WriteTarget, notePath: string, templateId: string | null): Promise<void> {
-  const verified = await verifyVaultNotePath(resolved.vault, notePath);
-  if (!verified.ok) return;
-  try {
-    const snapshot = await loadResolvedTemplates(verified.vaultRoot);
-    prepareApprovedWrite({
-      vaultRealPath: snapshot.vault,
-      notePath: verified.notePath,
-      snapshot,
-      templateId,
-    });
-  } catch {
-    // getWriteGuidance maps the same load and contract failures into the printed report.
-  }
-}
-
 async function runGuide(parsed: Parsed): Promise<void> {
-  only(parsed, ["vault", "note-path", "template-id"], [0, 1]);
+  only(parsed, ["vault", "note-path", "template-id", "heading-binding"], [0, 1]);
   const notePath = notePathArg(parsed);
+  if (notePath === undefined) fail("guide requires a note path");
   const templateId = text(parsed.options, "template-id");
-  const resolved = await target(parsed.options);
-  const admission = await admitWriteTarget(resolved);
-  if (admission === undefined && notePath !== undefined) {
-    await prepareGuide(resolved, notePath, templateId ?? null);
+  const bindings = jsonOption(parsed.options, "heading-binding");
+  if (bindings !== undefined && (typeof bindings !== "object" || bindings === null || Array.isArray(bindings))) {
+    fail("--heading-binding must be a JSON object of declared slot values");
   }
-  print(await getWriteGuidance({
-    target: resolved,
-    ...(notePath === undefined ? {} : { notePath }),
-    ...(templateId === undefined ? {} : { templateId }),
-  }));
-}
-
-async function runCheck(parsed: Parsed): Promise<void> {
-  only(parsed, ["vault", "note-path", "template-id", "binding"], [0, 1]);
-  const notePath = notePathArg(parsed);
-  if (notePath === undefined) fail("check requires a note path");
   const resolved = await target(parsed.options);
   const admission = await admitWriteTarget(resolved);
   if (admission !== undefined) {
     print(admissionReport(admission));
     return;
   }
-  const verified = await verifyVaultNotePath(resolved.vault, notePath);
-  if (!verified.ok) {
-    print(pathReport(verified.rejection));
+  try {
+    print(await selectContract({
+      target: resolved,
+      notePath,
+      templateId: templateId ?? null,
+      ...(bindings === undefined ? {} : { headingBindings: bindings as Record<string, string> }),
+    }));
+  } catch (error: unknown) {
+    if (!(error instanceof ContractServiceError)) throw error;
+    print({ status: "rejected", rejection: { code: error.code, message: error.message } });
+  }
+}
+
+async function runCheck(parsed: Parsed): Promise<void> {
+  only(parsed, ["vault", "connection-id", "session-id"], 0);
+  const connectionId = text(parsed.options, "connection-id");
+  const sessionId = text(parsed.options, "session-id");
+  if (connectionId === undefined || sessionId === undefined) fail("check requires --connection-id and --session-id from guide");
+  const resolved = await target(parsed.options);
+  const admission = await admitWriteTarget(resolved);
+  if (admission !== undefined) {
+    print(admissionReport(admission));
     return;
   }
-  const binding = jsonOption(parsed.options, "binding");
-  const templateId = text(parsed.options, "template-id");
-  print(await checkSavedNote({
-    target: resolved,
-    notePath: verified.notePath,
-    ...(templateId === undefined ? {} : { templateId }),
-    ...(binding === undefined ? {} : { binding }),
-  }));
+  try {
+    print(await checkContract({ vault: resolved.vault, locator: { connectionId, sessionId } }));
+  } catch (error: unknown) {
+    if (!(error instanceof ContractServiceError)) throw error;
+    print({ status: "rejected", rejection: { code: error.code, message: error.message } });
+  }
 }
 
 async function runGet(parsed: Parsed): Promise<void> {
@@ -263,8 +240,8 @@ export function noteUsage(): string {
 
 Leaves: guide | check | audit | get
 
-  guide [--note-path <path>] [--template-id <id>] [--vault <vault>]
-  check <note-path> [--template-id <id>] [--binding <json>] [--vault <vault>]
+  guide <note-path> [--template-id <id>] [--heading-binding <json>] [--vault <vault>]
+  check --connection-id <id> --session-id <id> [--vault <vault>]
   audit [--folder <folder>] [--max-per-template <count>] [--json] [--vault <vault>]
   get <target...> | get --note-path <path> (--from-line <line>|--line-count <count>)`;
 }

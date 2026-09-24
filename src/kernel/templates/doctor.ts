@@ -241,6 +241,16 @@ export async function diagnoseTemplates(target: TemplateDoctorTarget): Promise<T
   }
 }
 
+/** True when the published policy declares the explicit V5 contract. */
+async function publishesExplicitContract(root: string): Promise<boolean> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(root, ".oms", "template-policy.json"), "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && (parsed as { version?: unknown }).version === 5;
+  } catch {
+    return false;
+  }
+}
+
 function reviewRequired(remediation = REVIEW_REMEDIATION): TemplateDoctorRepair {
   return rejected("TEMPLATE_REVIEW_REQUIRED", remediation);
 }
@@ -256,6 +266,14 @@ export async function regenerateTypes(input: RegenerateTypesRequest): Promise<Te
     return rejected("TEMPLATE_REQUEST_INVALID", "pass dryRun:true for a proposal or the exact approvalDigest returned by the reviewed dry-run");
   }
   const root = resolve(input.target.vault);
+  // A vault on the explicit contract has no derived projection to maintain:
+  // the contract itself is the authority and Obsidian reads its own types file.
+  if (await publishesExplicitContract(root)) {
+    return rejected(
+      "TYPES_PROJECTION_OBSOLETE",
+      "this vault publishes .oms/template-policy.json version 5, which is the authority itself; no derived .oms/types.json is generated from it",
+    );
+  }
   try {
     const target = { vault: root, source: input.target.source };
     const review = await nextTemplateInterview(target);

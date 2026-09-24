@@ -4,16 +4,28 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { checkSavedNote, resolveVault } = vi.hoisted(() => ({
-  checkSavedNote: vi.fn(async (request: { readonly evidencePaths?: readonly string[] }) => ({
-    status: "pass",
-    checkpoint: { evidencePaths: request.evidencePaths ?? [] },
-    rejection: null,
+const { checkContract, selectContract, resolveVault } = vi.hoisted(() => ({
+  checkContract: vi.fn(async (input: { readonly locator: { readonly connectionId: string; readonly sessionId: string } }) => ({
+    locator: input.locator,
+    notePath: "notes/one.md",
+    result: { valid: true, structural: "pass", semantic: "not-evaluated", violations: [] },
+  })),
+  selectContract: vi.fn(async (input: { readonly notePath: string; readonly templateId: string | null }) => ({
+    state: "selected",
+    locator: { connectionId: "c", sessionId: "s" },
+    notePath: input.notePath,
+    selected: { binding: { templateId: input.templateId } },
   })),
   resolveVault: vi.fn(async () => ({ vault: process.cwd(), source: "cwd" as const, scope: null })),
 }));
 
-vi.mock("../kernel/capture/check.js", () => ({ checkSavedNote }));
+vi.mock("../kernel/templates/service.js", () => ({
+  checkContract,
+  selectContract,
+  ContractServiceError: class extends Error {
+    constructor(readonly code: string, message: string) { super(`${code}: ${message}`); }
+  },
+}));
 vi.mock("../kernel/link/link.js", () => ({ resolveEffectiveVault: resolveVault }));
 
 import { noteUsage, runNoteCommand } from "./note-command.js";
@@ -64,48 +76,45 @@ describe("note command", () => {
       await runNoteCommand(args);
       expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "NOTE_ARGS_INVALID" }] });
     }
-    expect(checkSavedNote).not.toHaveBeenCalled();
+    expect(checkContract).not.toHaveBeenCalled();
+    expect(selectContract).not.toHaveBeenCalled();
   });
 
-  it("guides without writing vault bytes", async () => {
+  it("selects a contract for the saved path without writing vault bytes", async () => {
     const root = await vault();
     await writeFile(path.join(root, "notes", "kept.md"), "unchanged\n");
     const before = await readdir(root, { recursive: true });
-    await runNoteCommand(["guide", "--vault", root]);
-    expect(["guided", "needs-path", "rejected"]).toContain(output().status);
-    expect(await readdir(root, { recursive: true })).toEqual(before);
-    expect(await import("node:fs/promises").then(fs => fs.readFile(path.join(root, "notes", "kept.md"), "utf8"))).toBe("unchanged\n");
-    expect(checkSavedNote).not.toHaveBeenCalled();
-  });
-
-  it("forwards the note path, template, and binding on check without evidence arguments", async () => {
-    const root = await vault();
-    const binding = { schemaVersion: 1, notePath: "notes/one.md" };
-    await runNoteCommand([
-      "check", "notes/one.md", "--vault", root, "--template-id", "note",
-      "--binding", JSON.stringify(binding),
-    ]);
-    expect(checkSavedNote).toHaveBeenCalledWith({
+    await runNoteCommand(["guide", "notes/one.md", "--vault", root, "--template-id", "note"]);
+    expect(output()).toMatchObject({ state: "selected", notePath: "notes/one.md" });
+    expect(selectContract).toHaveBeenCalledWith({
       target: { vault: root, source: "explicit" },
       notePath: "notes/one.md",
       templateId: "note",
-      binding,
     });
+    expect(await readdir(root, { recursive: true })).toEqual(before);
+    expect(await import("node:fs/promises").then(fs => fs.readFile(path.join(root, "notes", "kept.md"), "utf8"))).toBe("unchanged\n");
+    expect(checkContract).not.toHaveBeenCalled();
+  });
 
-    checkSavedNote.mockClear();
-    await runNoteCommand([
-      "check", "notes/one.md", "--vault", root, "--evidence-path", "notes/a.md",
-    ]);
+  it("checks through the selection locator and refuses retired check arguments", async () => {
+    const root = await vault();
+    await runNoteCommand(["check", "--vault", root, "--connection-id", "c", "--session-id", "s"]);
+    expect(checkContract).toHaveBeenCalledWith({ vault: root, locator: { connectionId: "c", sessionId: "s" } });
+    expect(output()).toMatchObject({ result: { structural: "pass", semantic: "not-evaluated" } });
+
+    checkContract.mockClear();
+    await runNoteCommand(["check", "notes/one.md", "--vault", root, "--template-id", "note"]);
     expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "NOTE_ARGS_INVALID" }] });
-    expect(checkSavedNote).not.toHaveBeenCalled();
+    expect(checkContract).not.toHaveBeenCalled();
   });
 
   it("refuses a cwd-inferred vault for guide and check", async () => {
-    await runNoteCommand(["guide"]);
+    await runNoteCommand(["guide", "notes/one.md"]);
     expect(output()).toMatchObject({ status: "rejected", rejection: { code: "TARGET_UNVERIFIED" } });
-    await runNoteCommand(["check", "notes/one.md"]);
+    await runNoteCommand(["check", "--connection-id", "c", "--session-id", "s"]);
     expect(output()).toMatchObject({ status: "rejected", rejection: { code: "TARGET_UNVERIFIED" } });
-    expect(checkSavedNote).not.toHaveBeenCalled();
+    expect(checkContract).not.toHaveBeenCalled();
+    expect(selectContract).not.toHaveBeenCalled();
   });
 
   it("reads single, multi, and window documents without creating the engine store", async () => {

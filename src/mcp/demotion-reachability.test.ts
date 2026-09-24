@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
 import { demotedOperationNames } from "./server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,7 +15,7 @@ const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
 async function createTemplateAuthority(vault: string): Promise<void> {
-  await writeApprovedVault(vault, {
+  await writeContractVault(vault, {
     properties: {
       title: { type: "text", intent: "Note title." },
       status: { type: "select", intent: "Workflow state.", allowedValues: ["open", "closed"] },
@@ -90,19 +90,23 @@ describe("MCP detail-tool demotion", () => {
       const scan = payload(await call("search", { op: "template-scan" }));
       expect(scan).toMatchObject({
         generationDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
-        approved: expect.arrayContaining([
-          expect.objectContaining({ templateId: null }),
-          expect.objectContaining({ templateId: "note", approvedMarkdownDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) }),
-        ]),
-        raw: [expect.objectContaining({ templateId: "note", path: "Templates/OMS/note.md", drift: null })],
+        common: "active",
+        registrations: [expect.objectContaining({
+          templateId: "note",
+          status: "active",
+          path: "Templates/OMS/note.md",
+          state: "unchanged",
+        })],
       });
       // Review evidence carries digests, never raw bytes or approved Markdown.
       expect(JSON.stringify(scan)).not.toContain('"bytes"');
       expect(JSON.stringify(scan)).not.toContain("approvedMarkdown\":\"");
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
+      // The projection repair stays reachable and answers for this vault: an
+      // explicit V5 contract is the authority, so nothing is derived from it.
       const regeneration = payload(await call("doctor", { op: "regenerate-types", dryRun: true }));
-      expect(regeneration.status).toMatch(/planned|unchanged/);
-      expect(regeneration).not.toHaveProperty("rejection");
+      expect(regeneration).toMatchObject({ status: "rejected", code: "TYPES_PROJECTION_OBSOLETE" });
+      expect(regeneration.remediation).toContain("version 5");
       expect(payload(await call("search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", targets: ["references/clean-architecture.md"] })).documents).toBeInstanceOf(Array);

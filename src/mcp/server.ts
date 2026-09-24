@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -9,10 +10,12 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { admitWriteTarget } from "../kernel/capture/safe.js";
-import { getWriteGuidance } from "../kernel/capture/guidance.js";
-import { checkSavedNote } from "../kernel/capture/check.js";
+import { checkContract, selectContract, ContractServiceError } from "../kernel/templates/service.js";
+import { readVaultSettings } from "../kernel/templates/vault-settings.js";
+import { parseContractPolicyV5 } from "../kernel/templates/contract-v5.js";
+import { inspectContractSource } from "../kernel/templates/source-registry.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { buildTemplateNoteIndex, deriveTemplateRetrievalAxes, loadResolvedTemplates, resumeTemplateTransaction } from "../kernel/templates/index.js";
+import { buildTemplateNoteIndex, deriveTemplateRetrievalAxes, resumeTemplateTransaction } from "../kernel/templates/index.js";
 import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
 import { readSearchTemplateSource } from "../kernel/engine/retrieval/template-source.js";
 import type { Digest, JsonValue } from "../kernel/templates/types.js";
@@ -49,7 +52,6 @@ import {
   commitTemplateContracts,
   nextTemplateInterview,
 } from "../kernel/templates/interview-service.js";
-import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
@@ -190,8 +192,8 @@ const documentProperties = { target: string, targets: stringArray, notePath: str
 const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: { type: "integer", minimum: 0 }, maxNeighbors: number, useCache: boolean, ...retrieveContextSemanticInputProperties } as const;
 const operations: Record<string, readonly Operation[]> = {
   write: [
-    { op: "guide", name: "write-guide", properties: { notePath: string, templateId: string } },
-    { op: "check", name: "write-check", properties: { notePath: string, templateId: string, binding: jsonValue }, required: ["notePath"] },
+    { op: "guide", name: "write-guide", properties: { notePath: string, templateId: string, headingBindings: jsonValue }, required: ["notePath"] },
+    { op: "check", name: "write-check", properties: { connectionId: string, sessionId: string }, required: ["connectionId", "sessionId"] },
     { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["interview-next", "interview-answer", "commit-contracts"] }, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, proposals: proposalsSchema, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
@@ -652,38 +654,37 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
     if (name === "oms_graph_status") {
       const engineGraph = await engine.adapter.graphStatus(vault).catch(() => null);
-      try {
-        const convention = await loadResolvedTemplates(vault);
-        const diagnosis = await diagnoseTemplates({ vault, source });
-        return jsonText({
-          vault,
-          projectionSource: ".oms/types.json",
-          sourceOfTruth: ["markdown notes", "actual Obsidian templates", ".obsidian/types.json", ".oms/template-policy.json", ".oms/taxonomy.json"],
-          counts: {
-            templates: Object.keys(convention.templates).length,
-            globalAxes: Object.keys(convention.globalAxes).length,
-          },
-          generationDigest: convention.generationDigest,
-          derivedState: diagnosis,
-          ...runtimeHistory(vault),
-          engineGraph,
-          writeTools: source === "cwd" ? "write-disabled-target-unverified" : "write-gated-by-verified-target-and-contract",
-          readTools: omsMcpTools.map(tool => tool.name),
-        });
-      } catch (error) {
-        return jsonText({
-          vault,
-          projectionSource: "vault-invalid",
-          sourceOfTruth: ["actual Obsidian templates", ".obsidian/types.json", ".oms/template-policy.json", ".oms/types.json"],
-          error: error instanceof Error ? error.message : String(error),
-          counts: null,
-          derivedState: { status: "invalid", remediation: "run doctor validate, then regenerate-types with an approved digest" },
-          ...runtimeHistory(vault),
-          engineGraph,
-          writeTools: source === "cwd" ? "write-disabled-target-unverified" : "write-disabled-invalid-template-projection",
-          readTools: ["status"],
-        });
-      }
+      // Posture follows the explicit contract the write surface actually uses:
+      // the declared V5 policy plus the portable settings that carry identity.
+      const meta = await readSearchTemplateSource(vault);
+      const declared = meta.source.templates !== null || meta.source.defaultFields !== null;
+      const settings = declared ? await readVaultSettings(vault).catch(() => null) : null;
+      const writable = declared && settings !== null;
+      return jsonText({
+        vault,
+        projectionSource: declared ? ".oms/template-policy.json" : "vault-invalid",
+        sourceOfTruth: ["markdown notes", "the user's own template sources", ".oms/template-policy.json", ".oms/taxonomy.json", ".oms/settings.json"],
+        counts: declared
+          ? {
+            templates: Object.keys(meta.source.templates ?? {}).length,
+            globalAxes: Object.keys(meta.source.globalAxes ?? {}).length,
+          }
+          : null,
+        generationDigest: meta.digest,
+        derivedState: declared
+          ? {
+            status: writable ? "approved" : "setup-required",
+            ...(writable ? {} : { remediation: "run oms setup to publish portable vault settings" }),
+            diagnostics: meta.diagnostics,
+          }
+          : { status: "invalid", remediation: "restore or publish .oms/template-policy.json, then retry", diagnostics: meta.diagnostics },
+        ...runtimeHistory(vault),
+        engineGraph,
+        writeTools: source === "cwd"
+          ? "write-disabled-target-unverified"
+          : writable ? "write-gated-by-verified-target-and-contract" : "write-disabled-invalid-template-projection",
+        readTools: declared ? omsMcpTools.map(tool => tool.name) : ["status"],
+      });
     }
 
     try {
@@ -734,54 +735,69 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (name === "oms_list_templates") {
-      const snapshot = await loadResolvedTemplates(vault);
+      // The declared V5 contract is the authority; approved Markdown does not exist.
+      const meta = await readSearchTemplateSource(vault);
+      const axes = deriveTemplateRetrievalAxes(meta.source);
+      if (meta.source.templates === null && meta.source.defaultFields === null) {
+        return jsonText({ vault, generationDigest: meta.digest, state: "unavailable", diagnostics: meta.diagnostics, ...runtimeHistory(vault) });
+      }
       const templateId = stringArg(args, "templateId");
-      const contracts = Object.values(snapshot.templates)
-        .filter(contract => templateId === undefined || contract.templateId === templateId);
+      const listed = axes.templates.filter(entry => templateId === undefined || entry.templateId === templateId);
       const runtimeWarnings = recordTemplateList(
         vault,
-        contracts.map(contract => ({ id: contract.templateId ?? "", contractDigest: contract.contractDigest })),
+        listed.map(entry => ({ id: entry.templateId, contractDigest: meta.digest })),
       );
       return jsonText({
         vault,
-        generationDigest: snapshot.generationDigest,
-        // The always-on default layer is reported beside the individual
-        // templates, because an unbound note is checked against it alone.
-        default: {
-          contractDigest: snapshot.defaultContract.contractDigest,
-          fields: snapshot.defaultContract.fields,
-          headings: snapshot.defaultContract.headings,
-        },
-        templates: contracts.map(contract => ({
-          templateId: contract.templateId,
-          contractDigest: contract.contractDigest,
-          targetFolder: snapshot.placement[contract.templateId ?? ""] ?? null,
-          fields: contract.fields,
-          headings: contract.headings,
-          semanticCriteria: contract.semanticCriteria,
+        generationDigest: meta.digest,
+        // The always-on common contract is reported beside the registrations,
+        // because an unbound note is checked against it alone.
+        default: { fields: axes.defaultAxes },
+        templates: listed.map(entry => ({
+          templateId: entry.templateId,
+          fields: entry.axes.filter(axis => axis.kind === "field"),
+          rulesAvailable: meta.source.templates?.[entry.templateId] !== null,
         })),
-        axes: deriveTemplateRetrievalAxes((await readSearchTemplateSource(vault)).source),
+        axes,
+        diagnostics: meta.diagnostics,
         ...runtimeHistory(vault),
         ...(runtimeWarnings.length === 0 ? {} : { runtimeWarnings }),
       });
     }
 
     if (name === "oms_template_scan") {
-      // Read-only review evidence: approved Markdown by digest and raw-source
-      // identity. Raw bytes are never parsed for meaning.
-      const context = await readTemplateReviewContext(vault);
+      // Read-only review evidence for the explicit contract: registration
+      // identity, its source path, and drift state. Source bytes are never
+      // returned here, and Markdown is never parsed for meaning.
+      const meta = await readSearchTemplateSource(vault);
+      if (meta.source.templates === null) {
+        return jsonText({ vault, generationDigest: meta.digest, state: "unavailable", diagnostics: meta.diagnostics });
+      }
+      const policy = parseContractPolicyV5(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"));
+      const registrations = [];
+      for (const [id, entry] of Object.entries(policy.templates)) {
+        if (entry.status !== "active") {
+          registrations.push({ templateId: id, status: entry.status, reasons: entry.reasons });
+          continue;
+        }
+        const review = await inspectContractSource(vault, policy, id);
+        registrations.push({
+          templateId: id,
+          status: "active" as const,
+          sourceIdentity: review.sourceIdentity,
+          path: review.path,
+          approvedDigest: review.approvedDigest,
+          currentDigest: review.currentDigest,
+          state: review.state,
+        });
+      }
       return jsonText({
-        vault: context.vault,
-        generationDigest: context.resolved.generationDigest,
-        approved: context.approved.map(entry => ({
-          templateId: entry.templateId,
-          templatePath: entry.templatePath,
-          approvedMarkdownDigest: entry.approvedMarkdownDigest,
-        })),
-        raw: context.raw,
-        drafts: context.resolved.drafts,
-        sources: context.resolved.sources,
-        diagnostics: context.resolved.diagnostics,
+        vault,
+        generationDigest: meta.digest,
+        revision: policy.revision,
+        common: policy.common.status,
+        registrations,
+        diagnostics: meta.diagnostics,
       });
     }
 
@@ -1002,24 +1018,37 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (name === "write-guide") {
-      const report = await getWriteGuidance({
-        target: { vault, source },
-        notePath: stringArg(args, "notePath") ?? null,
-        templateId: stringArg(args, "templateId") ?? null,
-      });
-      return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...report });
+      const notePath = stringArg(args, "notePath");
+      if (!notePath) return errorText('Missing required string argument "notePath".');
+      const bindings = args?.["headingBindings"];
+      if (bindings !== undefined && (typeof bindings !== "object" || bindings === null || Array.isArray(bindings))) {
+        return errorText('Argument "headingBindings" must be an object of declared slot values.');
+      }
+      try {
+        const selection = await selectContract({
+          target: { vault, source },
+          notePath,
+          templateId: stringArg(args, "templateId") ?? null,
+          ...(bindings === undefined ? {} : { headingBindings: bindings as Record<string, string> }),
+        });
+        return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...selection });
+      } catch (error) {
+        if (error instanceof ContractServiceError) return jsonText({ vault, state: "rejected", rejection: { code: error.code, message: error.message } });
+        throw error;
+      }
     }
 
     if (name === "write-check") {
-      const notePath = stringArg(args, "notePath");
-      if (!notePath) return errorText('Missing required string argument "notePath".');
-      const report = await checkSavedNote({
-        target: { vault, source },
-        notePath,
-        templateId: stringArg(args, "templateId") ?? null,
-        ...(args?.["binding"] === undefined ? {} : { binding: args["binding"] }),
-      });
-      return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...report });
+      const connectionId = stringArg(args, "connectionId");
+      const sessionId = stringArg(args, "sessionId");
+      if (!connectionId || !sessionId) return errorText('Missing required string arguments "connectionId" and "sessionId".');
+      try {
+        const checked = await checkContract({ vault, locator: { connectionId, sessionId } });
+        return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...checked });
+      } catch (error) {
+        if (error instanceof ContractServiceError) return jsonText({ vault, state: "rejected", rejection: { code: error.code, message: error.message } });
+        throw error;
+      }
     }
 
     if (name === "oms_validate_templates") {

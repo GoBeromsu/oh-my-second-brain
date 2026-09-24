@@ -4,6 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The `write` skill documents contract selection.** Guide requires an explicit note path and returns a session locator; check passes that locator instead of repeating a task binding, and the skill states that a changed contract or moved source ends the selection.
 - **The `write` skill no longer instructs a reviewer handoff.** Its review and complete sections are gone; the skill guides, tells the agent to write the file, and checks the saved bytes. The `status` skill no longer contrasts a health report with a completion call.
 ## [0.16.0] - 2026-09-23
 - Live host-facing docs no longer show a copyable `interview-next` call without `proposals`. Confirming the template notice still starts that mode, but the same proposals array must reach review, answer, and commit.

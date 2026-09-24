@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,7 +15,7 @@ const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 const LITERATURE_MARKDOWN = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n\n# Literature\n";
 
 async function createTemplateAuthority(vault: string): Promise<void> {
-  await writeApprovedVault(vault, {
+  await writeContractVault(vault, {
     properties: {
       title: { type: "text", intent: "Note title." },
       "source-url": { type: "text", intent: "Where the source came from." },
@@ -53,7 +53,7 @@ describe("Issue #58: Verified-target admission", () => {
   });
 
   it("refuses a current-directory inference and writes nothing", async () => {
-    tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
+    tmpHome = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-home-")));
     tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
 
     const transport = new StdioClientTransport({
@@ -73,16 +73,16 @@ describe("Issue #58: Verified-target admission", () => {
         name: "write",
         arguments: { op: "guide", notePath: "references/rejected-note.md", templateId: "literature" },
       }));
-      expect(guide.status).toBe("rejected");
-      expect((guide.rejection as Record<string, unknown>).code).toBe("TARGET_UNVERIFIED");
-      expect((guide.rejection as Record<string, unknown>).remediation).toContain("oms setup");
+      expect(guide.state).toBe("rejected");
+      expect((guide.rejection as Record<string, unknown>).code).toBe("SELECTION_INVALID");
+      expect((guide.rejection as Record<string, unknown>).message).toContain("current directory");
 
       const check = textPayload(await client.callTool({
         name: "write",
-        arguments: { op: "check", notePath: "references/rejected-note.md" },
+        arguments: { op: "check", connectionId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" },
       }));
-      expect(check.status).toBe("rejected");
-      expect((check.rejection as Record<string, unknown>).code).toBe("TARGET_UNVERIFIED");
+      expect(check.state).toBe("rejected");
+      expect(typeof check.rejection).toBe("object");
 
       // The inferred directory gained nothing.
       expect((await readdir(tmpDocuments)).length).toBe(0);
@@ -92,7 +92,7 @@ describe("Issue #58: Verified-target admission", () => {
   });
 
   it("guides an environment-resolved vault and reports its resolution source", async () => {
-    tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
+    tmpHome = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-home-")));
     tmpDocuments = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-docs-")));
     tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-vault-")));
     await createTemplateAuthority(tmpVault);
@@ -113,12 +113,15 @@ describe("Issue #58: Verified-target admission", () => {
         name: "write",
         arguments: { op: "guide", notePath: "references/new-note.md", templateId: "literature" },
       }));
-      expect(guide.status).toBe("guided");
+      expect(guide.state).toBe("selected");
       expect(guide.resolvedVault).toBe(tmpVault);
       expect(guide.resolutionSource).toBe("env");
-      // Guidance returns the approved bytes and a binding; it writes nothing.
-      expect((guide.approvedMarkdown as Record<string, unknown>).templateLayer).toBe(LITERATURE_MARKDOWN);
-      expect(guide.contractDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+      // Selection returns the user's own source text and an effective contract;
+      // it writes no note bytes.
+      const selected = guide.selected as { readonly source: { readonly text: string } | null; readonly binding: { readonly contractDigest: string } };
+      expect(selected.source?.text).toBe(LITERATURE_MARKDOWN);
+      expect(selected.binding.contractDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+      const locator = guide.locator as { readonly connectionId: string; readonly sessionId: string };
       await expect(readFile(path.join(tmpVault, "references", "new-note.md"), "utf8"))
         .rejects.toMatchObject({ code: "ENOENT" });
 
@@ -129,20 +132,21 @@ describe("Issue #58: Verified-target admission", () => {
       );
       const check = textPayload(await client.callTool({
         name: "write",
-        arguments: { op: "check", notePath: "references/new-note.md", templateId: "literature" },
+        arguments: { op: "check", connectionId: locator.connectionId, sessionId: locator.sessionId },
       }));
-      expect(check.status).toBe("fail");
       expect(check.resolvedVault).toBe(tmpVault);
       expect(check.resolutionSource).toBe("env");
-      const findings = (check.machine as { readonly findings: readonly { readonly targetId: string }[] }).findings;
-      expect(findings.map(finding => finding.targetId)).toContain("field/source-url");
+      const result = check.result as { readonly structural: string; readonly semantic: string; readonly violations: readonly { readonly field?: string }[] };
+      expect(result.structural).toBe("fail");
+      expect(result.semantic).toBe("not-evaluated");
+      expect(result.violations.map(violation => violation.field)).toContain("source-url");
     } finally {
       await client.close();
     }
   });
 
   it("does not advertise a retired note-write operation", async () => {
-    tmpHome = await mkdtemp(path.join(tmpdir(), "oms-test-home-"));
+    tmpHome = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-home-")));
     tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-test-vault-")));
     await createTemplateAuthority(tmpVault);
 

@@ -20,17 +20,22 @@ describe("template-native MCP surface", () => {
     expect(validate("search", { op: "get-document", target: "notes/a.md", targets: ["notes/a.md"] })).toBe(false);
   });
 
-  it("advertises guide and check over a saved note", () => {
-    // guide may ask for a path; check always needs the saved note it reads.
-    expect(validate("write", { op: "guide" })).toBe(true);
+  it("advertises contract selection and a locator-bound check", () => {
+    const connectionId = "11111111-1111-4111-8111-111111111111";
+    const sessionId = "22222222-2222-4222-8222-222222222222";
+    // Guide selects a contract for one explicit saved path.
     expect(validate("write", { op: "guide", notePath: "notes/a.md", templateId: "note" })).toBe(true);
-    expect(validate("write", { op: "check", notePath: "notes/a.md" })).toBe(true);
-    expect(validate("write", { op: "check" })).toBe(false);
+    expect(validate("write", { op: "guide", notePath: "notes/a.md", headingBindings: { summary: "Summary" } })).toBe(true);
+    expect(validate("write", { op: "guide" })).toBe(false);
+    // Check reads the selection the session already holds, not caller-supplied rules.
+    expect(validate("write", { op: "check", connectionId, sessionId })).toBe(true);
+    expect(validate("write", { op: "check", connectionId })).toBe(false);
+    expect(validate("write", { op: "check", notePath: "notes/a.md" })).toBe(false);
     // Completion is not an operation: OMS reports mechanics, not a verdict.
     expect(validate("write", { op: "complete", checkpoint: { schemaVersion: 1 }, review: {} })).toBe(false);
     // OMS does not write ordinary notes, so no note-write branch exists.
     expect(validate("write", { op: "note", mode: "create", templateId: "note", body: "body" })).toBe(false);
-    expect(validate("write", { op: "check", notePath: "notes/a.md", body: "unsaved" })).toBe(false);
+    expect(validate("write", { op: "check", connectionId, sessionId, body: "unsaved" })).toBe(false);
   });
 
   it("exposes the linear review protocol with canonical CAS and approval guards", () => {

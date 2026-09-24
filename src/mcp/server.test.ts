@@ -19,6 +19,21 @@ const LITERATURE_MARKDOWN = "---\ntemplate: literature\ntitle: Untitled\nsource-
 const NOTE_MARKDOWN = "---\ntemplate: note\ntitle: Untitled\n---\n\nBody\n";
 const ARTICLE_MARKDOWN = "---\ntemplate: article\ntitle: Untitled\n---\n\n# Required heading\n";
 
+/** The explicit V5 authority the write and retrieval surfaces read. */
+async function createMcpContractAuthority(vault: string): Promise<void> {
+  await writeContractVault(vault, {
+    properties: {
+      title: { type: "text", intent: "Note title." },
+      "source-url": { type: "text", intent: "Where the source came from." },
+    },
+    templates: {
+      literature: { fields: ["title", "source-url"], approvedMarkdown: LITERATURE_MARKDOWN, targetFolder: "references" },
+    },
+    folders: { references: { intent: "Processed sources." } },
+    obsidianTypes: { title: "text", "source-url": "text" },
+  });
+}
+
 async function createMcpTemplateAuthority(vault: string): Promise<void> {
   await writeApprovedVault(vault, {
     properties: {
@@ -130,7 +145,9 @@ let realOmsBefore: string | null = null;
 
 beforeAll(async () => {
   realOmsBefore = snapshotDir(realOmsDir);
-  smokeHome = await mkdtemp(path.join(tmpdir(), "oms-mcp-server-home-"));
+  // A canonical fixture home keeps the kernel's symlink refusal for private
+  // control paths intact instead of relaxing it for /var on macOS.
+  smokeHome = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-server-home-")));
 });
 
 afterAll(async () => {
@@ -242,8 +259,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
       readonly properties: Record<string, { readonly const?: unknown; readonly enum?: readonly string[]; readonly anyOf?: readonly { readonly const?: unknown; readonly enum?: readonly string[] }[] }>;
     };
     expect(writeSchema.properties["notePath"]).toEqual({ type: "string" });
-    expect(writeSchema.properties["binding"]).toEqual({});
-    // Retired completion arguments are absent from the projected properties.
+    expect(writeSchema.properties["connectionId"]).toEqual({ type: "string" });
+    expect(writeSchema.properties["sessionId"]).toEqual({ type: "string" });
+    expect(writeSchema.properties["headingBindings"]).toEqual({});
+    // Retired completion and caller-binding arguments are absent.
+    expect(writeSchema.properties["binding"]).toBeUndefined();
     expect(writeSchema.properties["checkpoint"]).toBeUndefined();
     expect(writeSchema.properties["review"]).toBeUndefined();
     const mode = writeSchema.properties["mode"];
@@ -266,8 +286,8 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(search({ op: "query", limit: 10 }).valid).toBe(false);
     expect(search({ op: "guide", notePath: "notes/a.md" }).valid).toBe(false);
     expect(write({ op: "guide", notePath: "notes/a.md" }).valid).toBe(true);
-    expect(write({ op: "check", notePath: "notes/a.md" }).valid).toBe(true);
-    expect(write({ op: "guide", binding: {}, notePath: "notes/a.md", extra: true }).valid).toBe(false);
+    expect(write({ op: "check", connectionId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" }).valid).toBe(true);
+    expect(write({ op: "guide", notePath: "notes/a.md", binding: {} }).valid).toBe(false);
     expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(false);
     expect(write({
       op: "template",
@@ -454,10 +474,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const doctor = validator.getValidator(toolByName.get("doctor")!.inputSchema);
     const status = validator.getValidator(toolByName.get("status")!.inputSchema);
 
-    // The write tool guides and checks a note the agent saves. Judging whether
-    // the note is finished is not an operation.
+    // Guide selects the contract for a saved path; check reads the selection
+    // the session holds. Judging whether the note is finished is not an operation.
     expect(write({ op: "guide", notePath: "references/a.md", templateId: "literature" }).valid).toBe(true);
-    expect(write({ op: "check", notePath: "references/a.md" }).valid).toBe(true);
+    expect(write({ op: "check", connectionId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" }).valid).toBe(true);
+    expect(write({ op: "check", notePath: "references/a.md" }).valid).toBe(false);
     expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(false);
     expect(write({ op: "note", mode: "create", body: "Retired." }).valid).toBe(false);
     expect(status({}).valid).toBe(true);
@@ -839,10 +860,10 @@ Valid frontmatter remains available to retrieve.
         name: "write",
         arguments: { op: "guide", notePath: "references/unsafe.md", templateId: "literature" },
       }));
-      // An unreadable contract is reported as unverifiable, never silently
-      // replaced by a bundled default.
-      expect(write.status).toBe("rejected");
-      expect((write.rejection as Record<string, unknown>).code).toBe("CONTRACT_UNVERIFIABLE");
+      // An unreadable contract is reported, never silently replaced by a
+      // bundled default.
+      expect(write.state).toBe("review-required");
+      expect(JSON.stringify(write.reasons)).toMatch(/policy|contract/i);
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
@@ -954,9 +975,9 @@ Valid frontmatter remains available to retrieve.
     }
   });
 
-  it("guides, then checks the note the agent saved", async () => {
+  it("selects a contract, then checks the note the agent saved", async () => {
     const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-write-")));
-    await createMcpTemplateAuthority(tmpVault);
+    await createMcpContractAuthority(tmpVault);
     await mkdir(path.join(tmpVault, "references"), { recursive: true });
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -974,11 +995,13 @@ Valid frontmatter remains available to retrieve.
         name: "write",
         arguments: { op: "guide", notePath: "references/kernel-note.md", templateId: "literature" },
       }));
-      expect(guided.status).toBe("guided");
+      expect(guided.state).toBe("selected");
       expect(guided.resolvedVault).toBe(tmpVault);
       expect(guided.resolutionSource).toBe("explicit");
-      expect((guided.approvedMarkdown as Record<string, unknown>).templateLayer).toBe(LITERATURE_MARKDOWN);
-      // Guidance writes nothing; the agent owns the file.
+      const selected = guided.selected as { readonly source: { readonly text: string } | null };
+      expect(selected.source?.text).toBe(LITERATURE_MARKDOWN);
+      const locator = guided.locator as { readonly connectionId: string; readonly sessionId: string };
+      // Selection writes no note bytes; the agent owns the file.
       expect(existsSync(path.join(tmpVault, "references", "kernel-note.md"))).toBe(false);
 
       await writeFile(
@@ -987,11 +1010,11 @@ Valid frontmatter remains available to retrieve.
       );
       const incomplete = textPayload(await client.callTool({
         name: "write",
-        arguments: { op: "check", notePath: "references/kernel-note.md", templateId: "literature" },
+        arguments: { op: "check", connectionId: locator.connectionId, sessionId: locator.sessionId },
       }));
-      expect(incomplete.status).toBe("fail");
-      const findings = (incomplete.machine as { readonly findings: readonly { readonly targetId: string }[] }).findings;
-      expect(findings.map(finding => finding.targetId)).toContain("field/source-url");
+      const incompleteResult = incomplete.result as { readonly structural: string; readonly violations: readonly { readonly field?: string }[] };
+      expect(incompleteResult.structural).toBe("fail");
+      expect(incompleteResult.violations.map(violation => violation.field)).toContain("source-url");
 
       await writeFile(
         path.join(tmpVault, "references", "kernel-note.md"),
@@ -999,12 +1022,12 @@ Valid frontmatter remains available to retrieve.
       );
       const passing = textPayload(await client.callTool({
         name: "write",
-        arguments: { op: "check", notePath: "references/kernel-note.md", templateId: "literature" },
+        arguments: { op: "check", connectionId: locator.connectionId, sessionId: locator.sessionId },
       }));
-      expect(passing.status).toBe("pass");
+      expect(passing.result).toMatchObject({ valid: true, structural: "pass", semantic: "not-evaluated", violations: [] });
+      expect(passing.notePath).toBe("references/kernel-note.md");
       // An unmanaged property is preserved and never checked.
       expect(await readFile(path.join(tmpVault, "references", "kernel-note.md"), "utf8")).toContain("extra: kept");
-      expect(passing.binding).toMatchObject({ schemaVersion: 1, notePath: "references/kernel-note.md" });
       expect(passing.checkpoint).toBeUndefined();
     } finally {
       await client.close();
@@ -1148,10 +1171,9 @@ Valid frontmatter remains available to retrieve.
           arguments: { op: "guide", notePath: "references/misrouted.md", templateId: "literature" },
         }),
       );
-      expect(write.status).toBe("rejected");
-      expect(write.rejection).toMatchObject({ code: "TARGET_UNVERIFIED" });
-      expect(write.resolvedVault).toBe(tmpCwd);
-      expect(write.resolutionSource).toBe("cwd");
+      expect(write.state).toBe("rejected");
+      expect(write.rejection).toMatchObject({ code: "SELECTION_INVALID" });
+      expect((write.rejection as Record<string, string>).message).toContain("current directory");
 
       // Link is read-only, so an unverified target changes nothing about it:
       // there is no apply to reject, and the booting directory stays empty.
@@ -1396,9 +1418,9 @@ Valid frontmatter remains available to retrieve.
   it("keeps writing normally when `oms mcp` boots inside a real vault", async () => {
     // Regression guard: local `.oms` resolution (source "vault") stays a trusted
     // write target even though `cwd` resolution is now rejected.
-    const tmpHome = await mkdtemp(path.join(tmpdir(), "oms-mcp-vault-home-"));
+    const tmpHome = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-vault-home-")));
     const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-local-vault-")));
-    await createMcpTemplateAuthority(tmpVault);
+    await createMcpContractAuthority(tmpVault);
 
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -1432,9 +1454,10 @@ Valid frontmatter remains available to retrieve.
         name: "write",
         arguments: { op: "guide", notePath: "references/local-vault-note.md", templateId: "literature" },
       }));
-      expect(guided.status).toBe("guided");
+      expect(guided.state).toBe("selected");
       expect(guided.resolutionSource).toBe("vault");
       expect(guided.resolvedVault).toBe(tmpVault);
+      const localLocator = guided.locator as { readonly connectionId: string; readonly sessionId: string };
 
       await mkdir(path.join(tmpVault, "references"), { recursive: true });
       await writeFile(
@@ -1443,9 +1466,9 @@ Valid frontmatter remains available to retrieve.
       );
       const checked = textPayload(await client.callTool({
         name: "write",
-        arguments: { op: "check", notePath: "references/local-vault-note.md", templateId: "literature" },
+        arguments: { op: "check", connectionId: localLocator.connectionId, sessionId: localLocator.sessionId },
       }));
-      expect(checked.status).toBe("pass");
+      expect(checked.result).toMatchObject({ valid: true, structural: "pass" });
       expect(checked.resolutionSource).toBe("vault");
       expect(await readdir(path.join(tmpVault, "references"))).toEqual(["local-vault-note.md"]);
     } finally {

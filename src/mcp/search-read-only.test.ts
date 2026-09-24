@@ -17,7 +17,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import Database from "better-sqlite3";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile, stat } from "node:fs/promises";
@@ -145,7 +145,7 @@ async function makeTemplateVault(): Promise<string> {
     mkdir(path.join(vault, ".obsidian"), { recursive: true }),
     mkdir(path.join(vault, "Templates", "OMS"), { recursive: true }),
   ]);
-  await writeApprovedVault(vault, {
+  await writeContractVault(vault, {
     properties: { title: { type: "text", intent: "Note title." } },
     templates: {
       note: {
@@ -230,10 +230,11 @@ describe("search read-only guarantee", () => {
     const payload = textPayload(result);
     expect(payload["templates"]).toMatchObject([{
       templateId: "note",
-      fields: { title: { property: "title", intent: "Note title." } },
+      rulesAvailable: true,
+      fields: [{ kind: "field", key: "title", property: "title", intent: "Note title." }],
     }]);
-    // The always-on default layer is reported beside the individual templates.
-    expect(payload["default"]).toMatchObject({ contractDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) });
+    // The always-on common contract is reported beside the registrations.
+    expect(payload["default"]).toMatchObject({ fields: expect.any(Array) });
     expect(payload["axes"]).toMatchObject({
       globalAxes: [{
         key: "folder",

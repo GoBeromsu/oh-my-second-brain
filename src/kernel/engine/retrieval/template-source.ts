@@ -38,8 +38,10 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isEnoent(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+/** An absent control includes a `.oms` that is not a directory at all. */
+function isAbsent(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return error.code === "ENOENT" || error.code === "ENOTDIR";
 }
 
 function decodeUtf8(bytes: Uint8Array): string {
@@ -50,7 +52,7 @@ async function readBytes(file: string): Promise<Uint8Array | null> {
   try {
     return Uint8Array.from(await readFile(file));
   } catch (error: unknown) {
-    if (isEnoent(error)) return null;
+    if (isAbsent(error)) return null;
     throw error;
   }
 }

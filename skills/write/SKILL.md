@@ -20,12 +20,12 @@ Document reads stay on `search { op: "get-document" }`. Approved CLI names are `
 ## Guide
 
 ```text
-write { op: "guide", notePath, templateId }
+write { op: "guide", notePath, templateId, headingBindings }
 ```
 
-For the default contract only, omit `templateId` or pass null. Never send `""`. An unbound note is normal. Take ids from `search { op: "templates" }`; never guess one. `guide` has no folder argument. Fix the path first: an explicit path, otherwise the taxonomy placement, otherwise ask. There is no Inbox fallback. If the path is not fixed, guide asks and does not issue a check task. Settle that in ordinary conversation. Switch to `/interview` only when the user is changing placement policy or the contract itself.
+`notePath` is required: selection binds one explicit saved path. For the common contract only, pass `templateId: null`; never send `""`. An unbound note is normal. Take ids from `search { op: "templates" }`; never guess one. `guide` has no folder argument. Fix the path first: an explicit path, otherwise the taxonomy placement, otherwise ask. There is no Inbox fallback. Settle that in ordinary conversation. Switch to `/interview` only when the user is changing placement policy or the contract itself.
 
-Use the returned approved Markdown, effective contract, and task binding. Pass that binding back unchanged on check. Do not invent digests or extra field names.
+Guide returns `state`. `selected` carries a `locator` (`connectionId`, `sessionId`), the effective contract, and the user's own registered source text. `review-required`, `setup-required`, and `migration-pending` are not failures to retry blindly: report the reasons and let the user decide. Keep the locator; check needs it. Do not invent digests, template ids, or extra field names.
 
 ## Agent write
 
@@ -34,10 +34,10 @@ Write the vault file with the host's file tools, following the approved Markdown
 ## Check
 
 ```text
-write { op: "check" }
+write { op: "check", connectionId, sessionId }
 ```
 
-Repeat the task binding from guide. OMS reads the saved note and the approved controls and reports declared frontmatter fields and headings. Do not send an unsaved body or a caller PASS. Check is structural: it reports what the saved bytes do and do not satisfy, and it never issues a completion verdict.
+Pass the locator guide returned. The session already holds the note path and the exact contract that was selected, so check takes no note path, template id, or caller-supplied rules. OMS re-reads the saved bytes and the published contract and returns `result`: `structural` (`pass`/`fail`), `semantic: "not-evaluated"`, and the violations it observed. Do not send an unsaved body or a caller PASS. A changed contract or a moved source ends the selection instead of silently adopting the new one: select again.
 
 Source drift is reported for that template; guide and check still use the last approved contract. Other templates and search continue. Stop this check while a contract transaction is in progress. A damaged policy is unverifiable, not an empty contract.
 

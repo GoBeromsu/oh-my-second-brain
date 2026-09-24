@@ -31,12 +31,12 @@ The host notice text and its two buttons are fixed in the [host asset contract](
 
 | CLI | MCP tool | `op` | Required discriminator |
 |---|---|---|---|
-| `oms note guide` | `oms_write` | `guide` | New or existing note path. Returns approved Markdown, the effective contract, and the task binding. An unset path asks and does not issue a check. |
-| `oms note check` | `oms_write` | `check` | Reads the saved note and the approved controls and reports declared fields and headings. No unsaved body and no caller PASS. |
+| `oms note guide` | `oms_write` | `guide` | Selects the contract for one explicit saved path. Returns a session locator, the effective contract, and the registered source text. |
+| `oms note check` | `oms_write` | `check` | Reads the saved note through the selection locator and reports declared fields and headings. No unsaved body and no caller PASS. |
 | `oms note audit` | `oms_doctor` | `audit` | optional `folder` |
 | `oms note get` | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window) |
 
-`check` is structural. It reports the declared frontmatter fields and headings the saved bytes do and do not satisfy; it issues no completion verdict and consumes no reviewer result. Whether a note is finished stays with the user and the agent. Host asset details remain in the [host asset contract](./adapters.md).
+`check` is structural and locator-bound: the session holds the note path and the selected contract, so no caller-supplied rules reach it. It reports the declared frontmatter fields and headings the saved bytes do and do not satisfy; it issues no completion verdict and consumes no reviewer result. Whether a note is finished stays with the user and the agent. Host asset details remain in the [host asset contract](./adapters.md).
 
 `note get` replaces the retired document aliases without changing single-target, multi-target, or windowed retrieval.
 

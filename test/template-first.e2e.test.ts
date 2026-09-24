@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
-import { writeApprovedVault } from "../src/kernel/templates/approved-vault-fixture.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { writeContractVault } from "../src/kernel/templates/approved-vault-fixture.js";
 
 /**
  * Guide, save, check, search — end to end through the built CLI.
@@ -19,9 +19,16 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 const roots: string[] = [];
 
+beforeEach(async () => {
+  runtimeHome = await realpath(await mkdtemp(path.join(tmpdir(), "oms-template-first-home-")));
+  roots.push(runtimeHome);
+});
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
+
+let runtimeHome = "";
 
 function runCli(args: readonly string[]) {
   if (!existsSync(distCli)) {
@@ -30,7 +37,9 @@ function runCli(args: readonly string[]) {
   return spawnSync(process.execPath, [distCli, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
-    env: { ...process.env, OMS_NO_UPDATE_NOTICE: "1" },
+    // The connection registry and sessions live outside the vault, so the test
+    // gives them their own canonical home instead of the developer's.
+    env: { ...process.env, OMS_NO_UPDATE_NOTICE: "1", HOME: runtimeHome, USERPROFILE: runtimeHome },
   });
 }
 
@@ -39,12 +48,12 @@ function parse(stdout: string): Record<string, unknown> {
 }
 
 async function vault(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "oms-template-first-"));
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "oms-template-first-")));
   roots.push(root);
-  await writeApprovedVault(root, {
+  await writeContractVault(root, {
     properties: {
       title: { type: "text", intent: "Note title." },
-      status: { type: "select", intent: "Workflow state.", allowedValues: ["open", "closed"] },
+      status: { type: "select", intent: "Workflow state.", allowedValues: ["open", "closed"], valuePolicy: "closed" },
     },
     templates: {
       note: {
@@ -66,30 +75,31 @@ describe("guide, save, check, search", () => {
     const root = await vault();
 
     const guide = runCli(["note", "guide", "notes/alpha.md", "--vault", root, "--template-id", "note"]);
-    expect(guide.status).toBe(0);
+    expect(guide.status, `${guide.stdout}\n${guide.stderr}`).toBe(0);
     const guidance = parse(guide.stdout);
-    expect(guidance.status).toBe("guided");
-    // Guidance never creates the note.
+    expect(guidance.state).toBe("selected");
+    const locator = guidance.locator as { readonly connectionId: string; readonly sessionId: string };
+    // Selection never creates the note.
     expect(await readdir(path.join(root, "notes"))).toEqual([]);
 
     // The agent saves an incomplete note.
     const notePath = path.join(root, "notes", "alpha.md");
     await writeFile(notePath, "---\ntemplate: note\ntitle: Alpha\n---\n\nBody without the required heading.\n");
-    const incomplete = runCli(["note", "check", "notes/alpha.md", "--vault", root]);
+    const incomplete = runCli(["note", "check", "--vault", root, "--connection-id", locator.connectionId, "--session-id", locator.sessionId]);
     const failing = parse(incomplete.stdout);
-    expect(failing.status).toBe("fail");
-    const findings = (failing.machine as { readonly findings: readonly { readonly targetId: string }[] }).findings;
-    expect(findings.map(finding => finding.targetId)).toEqual(
-      expect.arrayContaining(["field/status", "heading/summary"]),
+    const failingResult = failing.result as { readonly structural: string; readonly violations: readonly { readonly field?: string; readonly rule?: string }[] };
+    expect(failingResult.structural).toBe("fail");
+    expect(failingResult.violations.map(violation => violation.field)).toEqual(
+      expect.arrayContaining(["status", "body:summary"]),
     );
 
     // OMS reports; it does not repair the note.
     expect(await readFile(notePath, "utf8")).toContain("Body without the required heading.");
 
     await writeFile(notePath, "---\ntemplate: note\ntitle: Alpha\nstatus: open\nextra: kept\n---\n\n## Summary\n\nDone.\n");
-    const complete = runCli(["note", "check", "notes/alpha.md", "--vault", root]);
+    const complete = runCli(["note", "check", "--vault", root, "--connection-id", locator.connectionId, "--session-id", locator.sessionId]);
     const passing = parse(complete.stdout);
-    expect(passing.status).toBe("pass");
+    expect(passing.result).toMatchObject({ valid: true, structural: "pass", semantic: "not-evaluated" });
     // An undeclared property is preserved and never judged.
     expect(await readFile(notePath, "utf8")).toContain("extra: kept");
   });
@@ -100,12 +110,14 @@ describe("guide, save, check, search", () => {
       path.join(root, "notes", "bad-status.md"),
       "---\ntemplate: note\ntitle: Bad\nstatus: archived\n---\n\n## Summary\n\nBody.\n",
     );
+    const guidance = parse(runCli(["note", "guide", "notes/bad-status.md", "--vault", root, "--template-id", "note"]).stdout);
+    const locator = guidance.locator as { readonly connectionId: string; readonly sessionId: string };
 
-    const checked = parse(runCli(["note", "check", "notes/bad-status.md", "--vault", root]).stdout);
+    const checked = parse(runCli(["note", "check", "--vault", root, "--connection-id", locator.connectionId, "--session-id", locator.sessionId]).stdout);
 
-    expect(checked.status).toBe("fail");
-    const findings = (checked.machine as { readonly findings: readonly { readonly targetId: string }[] }).findings;
-    expect(findings.map(finding => finding.targetId)).toContain("field/status");
+    const result = checked.result as { readonly structural: string; readonly violations: readonly { readonly field?: string }[] };
+    expect(result.structural).toBe("fail");
+    expect(result.violations.map(violation => violation.field)).toContain("status");
     expect(await readFile(path.join(root, "notes", "bad-status.md"), "utf8")).toContain("status: archived");
   });
 
