@@ -2,7 +2,7 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import { buildTemplateNoteIndex } from "../kernel/templates/index.js";
 import { readSearchTemplateSource } from "../kernel/engine/retrieval/template-source.js";
-import { diagnoseTemplates, type TemplateDoctorDiagnostic } from "../kernel/templates/doctor.js";
+import { diagnoseContract, type ContractDiagnostic } from "../kernel/templates/service.js";
 
 function validatedFolder(folder: string | undefined): string | undefined {
   if (folder === undefined) return undefined;
@@ -13,9 +13,9 @@ function validatedFolder(folder: string | undefined): string | undefined {
 }
 
 function boundedDiagnostics(
-  diagnostics: readonly TemplateDoctorDiagnostic[],
+  diagnostics: readonly ContractDiagnostic[],
   maxPerTemplate: number | undefined,
-): readonly TemplateDoctorDiagnostic[] {
+): readonly ContractDiagnostic[] {
   if (maxPerTemplate === undefined) return diagnostics;
   const counts = new Map<string, number>();
   return diagnostics.filter(item => {
@@ -44,13 +44,13 @@ export async function runAudit(opts: {
       throw new Error(`CONTRACT_UNVERIFIABLE: ${convention.diagnostics.map(item => `${item.code}: ${item.message}`).join("; ") || "no explicit contract is published"}`);
     }
     const index = await buildTemplateNoteIndex(opts.vault, convention.source);
-    const diagnosis = await diagnoseTemplates({ vault: opts.vault, source: "explicit" });
+    const diagnosis = await diagnoseContract({ target: { vault: opts.vault, source: "explicit" } });
     const notes = folder === undefined ? index.notes : index.notes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
     const unresolvedNotes = folder === undefined ? index.unresolvedNotes : index.unresolvedNotes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
-    const identityDiagnostics: readonly TemplateDoctorDiagnostic[] = unresolvedNotes.map(note => ({
+    const identityDiagnostics: readonly ContractDiagnostic[] = unresolvedNotes.map(note => ({
       code: "TEMPLATE_NOTE_IDENTITY_UNRESOLVED",
       path: note.path,
-      remediation: `persist a valid template identity (${note.reason})`,
+      message: `persist a valid template identity (${note.reason})`,
     }));
     const scopedDiagnosis = folder === undefined
       ? diagnosis.diagnostics
@@ -63,9 +63,6 @@ export async function runAudit(opts: {
       const key = note.templateId ?? "<default>";
       templateCounts[key] = (templateCounts[key] ?? 0) + 1;
     }
-    const invalidNotes = folder === undefined
-      ? diagnosis.invalidNotes
-      : diagnosis.invalidNotes.filter(notePath => notePath === folder || notePath.startsWith(`${folder}/`));
     const result = {
       vault: opts.vault,
       folder: folder ?? null,
@@ -77,13 +74,12 @@ export async function runAudit(opts: {
       status: scopedDiagnosis.length === 0 && unresolvedNotes.length === 0 ? "healthy" : "needs-repair",
       diagnostics,
       unresolvedNotes,
-      invalidNotes,
       clean: scopedDiagnosis.length === 0 && unresolvedNotes.length === 0,
     };
     if (opts.json) console.log(JSON.stringify(result, null, 2));
     else {
       console.log(`\nOh My Second Brain audit: ${result.scannedNotes} note(s), ${result.templates} template(s), status ${result.status}.`);
-      for (const item of result.diagnostics) console.log(`  [${item.code}]${item.path === undefined ? "" : ` ${item.path}`} — ${item.remediation}`);
+      for (const item of result.diagnostics) console.log(`  [${item.code}]${item.path === undefined ? "" : ` ${item.path}`} — ${item.message}`);
       console.log("");
     }
     return result.clean ? 0 : 1;

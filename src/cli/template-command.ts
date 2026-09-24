@@ -1,9 +1,9 @@
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 
+import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
-import type { TemplateOperationTarget } from "../kernel/templates/operations.js";
 import { composeContractV5, parseContractPolicyV5 } from "../kernel/templates/contract-v5.js";
 import { discoverRegisteredSources } from "../kernel/templates/source-registry.js";
 import { readVaultSettings } from "../kernel/templates/vault-settings.js";
@@ -13,7 +13,7 @@ import { validateTemplateId } from "../kernel/templates/paths.js";
 
 type Options = Record<string, string | boolean>;
 interface Parsed { readonly verb: string; readonly positional: readonly string[]; readonly options: Options; }
-type Target = TemplateOperationTarget;
+type Target = { readonly vault: string; readonly source: WriteTargetSource };
 
 const VALUE_FLAGS = new Set(["vault", "approved-digest", "answer", "census-digest", "ledger-digest", "proposals", "template-id", "reviewed-digest", "candidate-path", "transaction-id", "policy"]);
 const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "help"]);

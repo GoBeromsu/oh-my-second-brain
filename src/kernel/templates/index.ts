@@ -55,8 +55,6 @@ export {
   taxonomyRouting,
 } from "./resolver.js";
 export type { ControlByteRead, ExactControlBytes, ResolvedTemplateSnapshot, TaxonomyRouting } from "./resolver.js";
-export { readTemplateReviewContext } from "./review-context.js";
-export { templateCensus } from "./census.js";
 export {
   TEMPLATE_TRANSACTION_MARKER_PATH,
   executeTemplateTransaction,

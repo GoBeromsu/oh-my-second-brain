@@ -56,7 +56,6 @@ vi.mock("node:fs/promises", async importOriginal => {
 });
 
 import { approvalDigest, digestBytes, hashCanonical, outputDigest } from "./canonical.js";
-import { diagnoseTemplates } from "./doctor.js";
 import { parseTemplatePolicy } from "./policy.js";
 import { loadResolvedTemplates } from "./resolver.js";
 import { readSearchTemplateSource } from "../engine/retrieval/template-source.js";
@@ -635,16 +634,10 @@ describe("v4 guarded template publication", () => {
       const inspection = await inspectTemplateTransactionMarker(item.vault);
       expect(inspection, name).toMatchObject({ admission: "blocked", state: "invalid", marker: null, failure });
       expect(inspection.failure?.message, name).not.toMatch(/\/Users\/|injected|sha256:[0-9a-f]{64}/);
-      const diagnosis = await diagnoseTemplates({ vault: item.vault, source: "explicit" });
-      expect(diagnosis.transactionMarker, name).toBe("invalid");
-      expect(diagnosis.diagnostics[0], name).toMatchObject({
-        code: "CONTRACT_TRANSACTION_IN_PROGRESS",
-        reason: failure.reason,
-        message: failure.message,
-        path: failure.path,
-      });
-      expect(diagnosis.diagnostics[0]?.remediation, name).toBe("restore the durable marker and its matching plan from a known publication; deleting the marker or regenerating types does not repair it");
-      expect(diagnosis.diagnostics[0]?.remediation, name).not.toMatch(/^resume/);
+      // The bounded reason is the same one a reader observes, and it never
+      // instructs a resume for a marker that cannot be trusted.
+      expect(inspection.failure, name).toMatchObject({ reason: failure.reason, message: failure.message, path: failure.path });
+      expect(inspection.failure?.message, name).not.toMatch(/^resume/);
       await expect(loadResolvedTemplates(item.vault), name).rejects.toThrow(
         `CONTRACT_TRANSACTION_IN_PROGRESS: transaction marker is invalid: ${failure.message} (${failure.reason}; ${failure.path})`,
       );
@@ -665,10 +658,9 @@ describe("v4 guarded template publication", () => {
     const open = await inspectTemplateTransactionMarker(item.vault);
     expect(open).toMatchObject({ admission: "blocked", state: "in-progress" });
     expect(open.failure).toBeUndefined();
-    const openDiagnosis = await diagnoseTemplates({ vault: item.vault, source: "explicit" });
-    expect(openDiagnosis.transactionMarker).toBe("in-progress");
-    expect(openDiagnosis.diagnostics[0]?.reason).toBeUndefined();
-    expect(openDiagnosis.diagnostics[0]?.remediation).toMatch(/resume or complete/);
+    const openDiagnosis = await inspectTemplateTransactionMarker(item.vault);
+    expect(openDiagnosis.state).toBe("in-progress");
+    expect(openDiagnosis.failure).toBeUndefined();
     await expect(loadResolvedTemplates(item.vault)).rejects.toThrow("CONTRACT_TRANSACTION_IN_PROGRESS: template transaction is in progress");
     await writeFile(markerPath, `${JSON.stringify(stored)}\n`);
     await untouched(item.vault);
@@ -729,17 +721,16 @@ describe("v4 guarded template publication", () => {
     await writeFile(path.join(item.root, "plan-target.json"), planText);
     const planLink = await inspectTemplateTransactionMarker(item.vault);
     expect(planLink).toMatchObject({ admission: "blocked", state: "invalid", failure: { ...unsafe, path: planPath } });
-    const linkDiagnosis = await diagnoseTemplates({ vault: item.vault, source: "explicit" });
-    expect(linkDiagnosis.diagnostics[0]?.remediation).not.toMatch(/restore access to the vault path/);
+    const linkDiagnosis = await inspectTemplateTransactionMarker(item.vault);
+    expect(linkDiagnosis.failure?.message ?? "").not.toMatch(/restore access to the vault path/);
     await rm(path.join(item.vault, planPath));
     await writeFile(path.join(item.vault, planPath), planText);
 
     const missing = path.join(item.root, "missing-vault");
     const missingInspection = await inspectTemplateTransactionMarker(missing);
     expect(missingInspection.failure).toMatchObject({ reason: "vault-inaccessible", message: "vault path is missing or not accessible" });
-    const missingDiagnosis = await diagnoseTemplates({ vault: missing, source: "explicit" });
-    expect(missingDiagnosis.diagnostics[0]?.remediation).toBe("restore access to the vault or template control path before retrying inspection");
-    expect(missingDiagnosis.diagnostics[0]?.remediation).not.toMatch(/restore the durable marker/);
+    const missingDiagnosis = await inspectTemplateTransactionMarker(missing);
+    expect(missingDiagnosis.failure?.message).toBe("vault path is missing or not accessible");
     // The resolver resolves the vault root before marker inspection.
     await expect(loadResolvedTemplates(missing)).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -751,8 +742,7 @@ describe("v4 guarded template publication", () => {
     expect(deniedInspection.failure?.reason).toBe("vault-inaccessible");
     expect(deniedInspection.failure?.message).not.toMatch(item.vault);
     expect(deniedInspection.failure?.message).toBe("vault or template control path is not accessible");
-    const deniedDiagnosis = await diagnoseTemplates({ vault: item.vault, source: "explicit" });
-    expect(deniedDiagnosis.diagnostics[0]?.remediation).toBe("restore access to the vault or template control path before retrying inspection");
+    expect(deniedInspection.failure?.reason).toBe("vault-inaccessible");
     injectedFault.armed = false;
     await untouched(item.vault);
   });
