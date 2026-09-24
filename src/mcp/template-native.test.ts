@@ -20,16 +20,14 @@ describe("template-native MCP surface", () => {
     expect(validate("search", { op: "get-document", target: "notes/a.md", targets: ["notes/a.md"] })).toBe(false);
   });
 
-  it("advertises guide, check, and complete over a saved note", () => {
-    const digest = `sha256:${"a".repeat(64)}`;
+  it("advertises guide and check over a saved note", () => {
     // guide may ask for a path; check always needs the saved note it reads.
     expect(validate("write", { op: "guide" })).toBe(true);
     expect(validate("write", { op: "guide", notePath: "notes/a.md", templateId: "note" })).toBe(true);
     expect(validate("write", { op: "check", notePath: "notes/a.md" })).toBe(true);
-    expect(validate("write", { op: "check", notePath: "notes/a.md", evidencePaths: ["notes/source.md"] })).toBe(true);
     expect(validate("write", { op: "check" })).toBe(false);
-    expect(validate("write", { op: "complete", checkpoint: { schemaVersion: 1 }, review: { requestDigest: digest } })).toBe(true);
-    expect(validate("write", { op: "complete", checkpoint: { schemaVersion: 1 } })).toBe(false);
+    // Completion is not an operation: OMS reports mechanics, not a verdict.
+    expect(validate("write", { op: "complete", checkpoint: { schemaVersion: 1 }, review: {} })).toBe(false);
     // OMS does not write ordinary notes, so no note-write branch exists.
     expect(validate("write", { op: "note", mode: "create", templateId: "note", body: "body" })).toBe(false);
     expect(validate("write", { op: "check", notePath: "notes/a.md", body: "unsaved" })).toBe(false);

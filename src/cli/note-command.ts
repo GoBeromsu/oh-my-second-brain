@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { checkSavedNote, completeSavedNote } from "../kernel/capture/check.js";
+import { checkSavedNote } from "../kernel/capture/check.js";
 import { getWriteGuidance, prepareApprovedWrite } from "../kernel/capture/guidance.js";
 import { admitWriteTarget, verifyVaultNotePath, type WriteTarget } from "../kernel/capture/safe.js";
 import type { WriteRejection } from "../kernel/conventions/write-protocol.js";
@@ -63,11 +63,6 @@ function text(options: Options, name: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function values(options: Options, name: string): readonly string[] {
-  const value = options[name];
-  return Array.isArray(value) ? value : [];
-}
-
 function flag(options: Options, name: string): boolean {
   return options[name] === true;
 }
@@ -112,18 +107,6 @@ function notePathArg(parsed: Parsed): string | undefined {
   const positional = parsed.positional[0];
   if (flagged !== undefined && positional !== undefined) fail("--note-path conflicts with a positional path");
   return flagged ?? positional;
-}
-
-function evidencePaths(options: Options): readonly string[] {
-  return values(options, "evidence-path");
-}
-
-function overlayEvidence(checkpoint: unknown, paths: readonly string[]): unknown {
-  if (paths.length === 0) return checkpoint;
-  if (checkpoint === null || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
-    fail("--checkpoint must be a JSON object when --evidence-path is set");
-  }
-  return { ...(checkpoint as Record<string, unknown>), evidencePaths: paths };
 }
 
 function admissionReport(admission: WriteRejection): unknown {
@@ -192,7 +175,7 @@ async function runGuide(parsed: Parsed): Promise<void> {
 }
 
 async function runCheck(parsed: Parsed): Promise<void> {
-  only(parsed, ["vault", "note-path", "template-id", "binding", "evidence-path"], [0, 1]);
+  only(parsed, ["vault", "note-path", "template-id", "binding"], [0, 1]);
   const notePath = notePathArg(parsed);
   if (notePath === undefined) fail("check requires a note path");
   const resolved = await target(parsed.options);
@@ -213,26 +196,6 @@ async function runCheck(parsed: Parsed): Promise<void> {
     notePath: verified.notePath,
     ...(templateId === undefined ? {} : { templateId }),
     ...(binding === undefined ? {} : { binding }),
-    evidencePaths: evidencePaths(parsed.options),
-  }));
-}
-
-async function runComplete(parsed: Parsed): Promise<void> {
-  only(parsed, ["vault", "checkpoint", "review", "evidence-path"], 0);
-  const checkpoint = jsonOption(parsed.options, "checkpoint");
-  const review = jsonOption(parsed.options, "review");
-  if (checkpoint === undefined) fail("complete requires --checkpoint");
-  if (review === undefined) fail("complete requires --review");
-  const resolved = await target(parsed.options);
-  const admission = await admitWriteTarget(resolved);
-  if (admission !== undefined) {
-    print(admissionReport(admission));
-    return;
-  }
-  print(await completeSavedNote({
-    target: resolved,
-    checkpoint: overlayEvidence(checkpoint, evidencePaths(parsed.options)),
-    review,
   }));
 }
 
@@ -277,10 +240,6 @@ async function run(parsed: Parsed): Promise<void> {
     await runCheck(parsed);
     return;
   }
-  if (parsed.verb === "complete") {
-    await runComplete(parsed);
-    return;
-  }
   if (parsed.verb === "audit") {
     only(parsed, ["vault", "folder", "max-per-template", "json"], 0);
     const resolved = await target(parsed.options);
@@ -302,11 +261,10 @@ async function run(parsed: Parsed): Promise<void> {
 export function noteUsage(): string {
   return `Usage: oms note <verb> [options]
 
-Leaves: guide | check | complete | audit | get
+Leaves: guide | check | audit | get
 
   guide [--note-path <path>] [--template-id <id>] [--vault <vault>]
-  check <note-path> [--template-id <id>] [--binding <json>] [--evidence-path <path>] [--vault <vault>]
-  complete --checkpoint <json> --review <json> [--evidence-path <path>] [--vault <vault>]
+  check <note-path> [--template-id <id>] [--binding <json>] [--vault <vault>]
   audit [--folder <folder>] [--max-per-template <count>] [--json] [--vault <vault>]
   get <target...> | get --note-path <path> (--from-line <line>|--line-count <count>)`;
 }

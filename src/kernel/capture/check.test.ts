@@ -5,9 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { digestBytes } from "../templates/canonical.js";
 import { parseTemplatePolicy, serializeDerivedProjection } from "../templates/policy.js";
 import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "../templates/resolver.js";
-import type { CriterionResult, ReviewRequest, SemanticReview } from "../conventions/completion-contract.js";
-import { normalizeHostReview, type HostReviewInvocation } from "../harness/reviewer.js";
-import { checkSavedNote, completeSavedNote, type CompletionCheckpoint } from "./check.js";
+import { checkSavedNote } from "./check.js";
 
 const roots: string[] = [];
 const encoder = new TextEncoder();
@@ -85,31 +83,8 @@ function target(root: string) {
   return { vault: root, source: "explicit" as const };
 }
 
-async function passingCheck(root: string, evidencePaths: readonly string[] = []) {
-  return checkSavedNote({ target: target(root), notePath: "notes/one.md", templateId: "note", evidencePaths });
-}
-
-const INVOCATION: HostReviewInvocation = {
-  runtime: "codex",
-  mechanism: "codex.subagent",
-  invocationRef: "thread-42",
-  status: "completed",
-  reviewerRole: "separate",
-  isolationLevel: "instruction-only",
-  enforcementEvidenceSource: "none",
-  claimSource: "agent-transcribed",
-  writerSessionId: "writer-1",
-  reviewerSessionId: "reviewer-2",
-};
-
-/** A real separate review is normalized by the same adapter the hosts use. */
-function separateReview(request: ReviewRequest, criteria?: readonly CriterionResult[], invocation: HostReviewInvocation = INVOCATION): SemanticReview {
-  const results = criteria ?? (request.rubric?.criteria ?? []).map(criterion => ({
-    criterionId: criterion.criterionId,
-    verdict: "pass" as const,
-    evidence: criterion.sourceRefs,
-  }));
-  return normalizeHostReview(request.requestDigest, invocation, { requestDigest: request.requestDigest, criteria: results });
+async function passingCheck(root: string) {
+  return checkSavedNote({ target: target(root), notePath: "notes/one.md", templateId: "note" });
 }
 
 async function vaultSignature(root: string): Promise<string> {
@@ -125,18 +100,19 @@ async function vaultSignature(root: string): Promise<string> {
 }
 
 describe("checkSavedNote", () => {
-  it("reads the saved file and returns machine findings with an immutable review request", async () => {
+  it("reads the saved file and reports only observed mechanics", async () => {
     const root = await vault();
     const before = await vaultSignature(root);
     const report = await passingCheck(root);
     expect(report.status).toBe("pass");
     expect(report.machine?.status).toBe("pass");
-    expect(report.request?.notePath).toBe("notes/one.md");
-    expect(report.request?.noteDigest).toBe(digestBytes(NOTE));
-    expect(report.checkpoint?.requestDigest).toBe(report.request?.requestDigest);
-    expect(report.request?.targetIds).toContain("field/status");
-    expect(report.request?.targetIds).toContain("heading/summary");
-    expect(report.request?.targetIds).toContain("criterion/summary-supported");
+    expect(report.machine?.noteDigest).toBe(digestBytes(NOTE));
+    expect(report.notePath).toBe("notes/one.md");
+    expect(report.binding?.notePath).toBe("notes/one.md");
+    expect(report.machine?.findings).toEqual([]);
+    // Check is structural. It carries no rubric, reviewer prompt, review
+    // request, or completion checkpoint.
+    expect(Object.keys(report).sort()).toEqual(["binding", "machine", "notePath", "rejection", "status", "taskId", "templateId"]);
     expect(await vaultSignature(root)).toBe(before);
   });
 
@@ -187,17 +163,6 @@ describe("checkSavedNote", () => {
     expect(stale.rejection?.code).toBe("SNAPSHOT_STALE");
   });
 
-  it("binds declared evidence files and refuses unsafe or missing ones", async () => {
-    const root = await vault();
-    await writeFile(join(root, "notes", "evidence.md"), "Supporting source.\n");
-    const withEvidence = await passingCheck(root, ["notes/evidence.md"]);
-    expect(withEvidence.request?.evidenceManifest).toContainEqual(
-      expect.objectContaining({ kind: "vault-file", path: "notes/evidence.md" }),
-    );
-    expect((await passingCheck(root, ["../outside.md"])).rejection?.code).toBe("EVIDENCE_INVALID");
-    expect((await passingCheck(root, ["notes/absent.md"])).rejection?.code).toBe("EVIDENCE_MISSING");
-  });
-
   it("stops the evaluation while a contract publication is in progress", async () => {
     const root = await vault();
     await writeFile(join(root, ".oms", "template-transaction.json"), JSON.stringify({ status: "in-progress" }));
@@ -210,95 +175,13 @@ describe("checkSavedNote", () => {
     expect((await passingCheck(root)).rejection?.code).toBe("CONTRACT_UNVERIFIABLE");
   });
 
-  it("survives a JSON round trip of the checkpoint", async () => {
+  it("survives a JSON round trip of the binding it returns", async () => {
     const root = await vault();
     const report = await passingCheck(root);
-    const restored = JSON.parse(JSON.stringify(report.checkpoint)) as CompletionCheckpoint;
-    expect(restored.requestDigest).toBe(report.checkpoint?.requestDigest);
-    expect(restored.noteDigest).toBe(report.checkpoint?.noteDigest);
-    expect(restored.binding.notePath).toBe("notes/one.md");
-  });
-});
-
-describe("completeSavedNote", () => {
-  it("completes only with mechanics plus a real separate review of the same inputs", async () => {
-    const root = await vault();
-    const checked = await passingCheck(root);
-    const before = await vaultSignature(root);
-    const report = await completeSavedNote({
-      target: target(root),
-      checkpoint: JSON.parse(JSON.stringify(checked.checkpoint)) as unknown,
-      review: separateReview(checked.request!),
-    });
-    expect(report.failures).toEqual([]);
-    expect(report.status).toBe("complete");
-    expect(report.evaluation?.complete).toBe(true);
-    expect(await vaultSignature(root)).toBe(before);
-  });
-
-  it("refuses a writer-authored self review", async () => {
-    const root = await vault();
-    const checked = await passingCheck(root);
-    // The adapter refuses a writer-authored verdict before OMS evaluates it.
-    expect(() => separateReview(checked.request!, undefined, { ...INVOCATION, reviewerRole: "writer" }))
-      .toThrow(/writer-only review is not admissible/);
-    const report = await completeSavedNote({
-      target: target(root),
-      checkpoint: checked.checkpoint,
-      review: { ...separateReview(checked.request!), claim: { ...separateReview(checked.request!).claim, reviewerRole: "writer" } },
-    });
-    expect(report.status).toBe("rejected");
-    expect(report.rejection?.code).toBe("REVIEW_SCHEMA_INVALID");
-  });
-
-  it("refuses a review whose writer and reviewer are the same exposed session", async () => {
-    const root = await vault();
-    const checked = await passingCheck(root);
-    expect(() => separateReview(checked.request!, undefined, { ...INVOCATION, reviewerSessionId: "writer-1" }))
-      .toThrow(/writer and reviewer sessions must be separate/);
-    const forged = separateReview(checked.request!);
-    const report = await completeSavedNote({
-      target: target(root),
-      checkpoint: checked.checkpoint,
-      review: { ...forged, claim: { ...forged.claim, reviewerSessionId: "writer-1" } },
-    });
-    expect(report.status).toBe("rejected");
-  });
-
-  it("does not complete when the note changed after check", async () => {
-    const root = await vault();
-    const checked = await passingCheck(root);
-    await writeFile(join(root, "notes/one.md"), `${NOTE}\nEdited after the check.\n`);
-    const report = await completeSavedNote({
-      target: target(root),
-      checkpoint: checked.checkpoint,
-      review: separateReview(checked.request!),
-    });
-    expect(report.status).toBe("incomplete");
-    expect(report.failures.map(failure => failure.code)).toContain("SNAPSHOT_STALE");
-  });
-
-  it("treats an unavailable reviewer as incomplete rather than a pass", async () => {
-    const root = await vault();
-    const checked = await passingCheck(root);
-    const report = await completeSavedNote({
-      target: target(root),
-      checkpoint: checked.checkpoint,
-      review: normalizeHostReview(checked.request!.requestDigest, { ...INVOCATION, status: "unavailable" }, null),
-    });
-    expect(report.status).not.toBe("complete");
-  });
-
-  it("does not complete a note whose rubric has no approved criteria", async () => {
-    const root = await vault({ criteria: [] });
-    const checked = await passingCheck(root);
-    expect(checked.rubric).toBeNull();
-    const report = await completeSavedNote({
-      target: target(root),
-      checkpoint: checked.checkpoint,
-      review: separateReview(checked.request!, []),
-    });
-    expect(report.status).not.toBe("complete");
-    expect(report.failures.map(failure => failure.code)).toContain("RUBRIC_MISSING");
+    const restored = JSON.parse(JSON.stringify(report.binding)) as NonNullable<typeof report.binding>;
+    expect(restored).toEqual(report.binding);
+    const again = await checkSavedNote({ target: target(root), notePath: "notes/one.md", templateId: "note", binding: restored });
+    expect(again.status).toBe("pass");
+    expect(again.rejection).toBeNull();
   });
 });

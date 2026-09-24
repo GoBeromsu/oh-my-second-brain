@@ -4,6 +4,7 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- **`write { op: "complete" }` is removed with no alias.** OMS no longer accepts a reviewer result, re-reads snapshots around it, or issues a completion verdict; deciding whether a note is finished belongs to the user and the writing agent. `write { op: "check" }` remains the structural report and no longer takes `evidencePaths`, so the tool schema advertises `guide`, `check`, and `template` only. A call that still sends `complete`, `checkpoint`, or `review` is refused by schema validation instead of silently ignored.
 - Tool schemas expose operation names and arguments at the top level so hosts can discover them without unpacking branch schemas. Strict operation-specific validation and approval requirements remain enforced. (#144)
 
 ## [0.16.0] - 2026-09-23

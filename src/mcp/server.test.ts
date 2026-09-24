@@ -194,7 +194,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const validator = new AjvJsonSchemaValidator();
     const tools = new Map(omsMcpTools.map((tool) => [tool.name, tool]));
     const expectedOps: Record<string, readonly string[]> = {
-      write: ["guide", "check", "complete", "template"],
+      write: ["guide", "check", "template"],
       search: ["context", "template-scan", "templates", "query", "index-status", "get-document"],
       link: ["suggest", "check"],
       status: ["graph"],
@@ -242,8 +242,10 @@ describe("Oh My Second Brain MCP stdio server", () => {
       readonly properties: Record<string, { readonly const?: unknown; readonly enum?: readonly string[]; readonly anyOf?: readonly { readonly const?: unknown; readonly enum?: readonly string[] }[] }>;
     };
     expect(writeSchema.properties["notePath"]).toEqual({ type: "string" });
-    expect(writeSchema.properties["checkpoint"]).toEqual({});
-    expect(writeSchema.properties["review"]).toEqual({});
+    expect(writeSchema.properties["binding"]).toEqual({});
+    // Retired completion arguments are absent from the projected properties.
+    expect(writeSchema.properties["checkpoint"]).toBeUndefined();
+    expect(writeSchema.properties["review"]).toBeUndefined();
     const mode = writeSchema.properties["mode"];
     expect(mode?.enum).toBeUndefined();
     expect(mode?.const).toBeUndefined();
@@ -265,8 +267,8 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(search({ op: "guide", notePath: "notes/a.md" }).valid).toBe(false);
     expect(write({ op: "guide", notePath: "notes/a.md" }).valid).toBe(true);
     expect(write({ op: "check", notePath: "notes/a.md" }).valid).toBe(true);
-    expect(write({ op: "guide", checkpoint: {}, review: {} }).valid).toBe(false);
-    expect(write({ op: "complete", notePath: "notes/a.md" }).valid).toBe(false);
+    expect(write({ op: "guide", binding: {}, notePath: "notes/a.md", extra: true }).valid).toBe(false);
+    expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(false);
     expect(write({
       op: "template",
       mode: "commit-contracts",
@@ -444,7 +446,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     }).valid).toBe(false);
   });
 
-  it("advertises the complete write payload and zero-argument status contract", () => {
+  it("advertises the approved write payload and zero-argument status contract", () => {
     const validator = new AjvJsonSchemaValidator();
     const toolByName = new Map(omsMcpTools.map((tool) => [tool.name, tool]));
     const write = validator.getValidator(toolByName.get("write")!.inputSchema);
@@ -452,10 +454,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const doctor = validator.getValidator(toolByName.get("doctor")!.inputSchema);
     const status = validator.getValidator(toolByName.get("status")!.inputSchema);
 
-    // The write tool guides, checks, and completes a note the agent saves.
+    // The write tool guides and checks a note the agent saves. Judging whether
+    // the note is finished is not an operation.
     expect(write({ op: "guide", notePath: "references/a.md", templateId: "literature" }).valid).toBe(true);
     expect(write({ op: "check", notePath: "references/a.md" }).valid).toBe(true);
-    expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(true);
+    expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(false);
     expect(write({ op: "note", mode: "create", body: "Retired." }).valid).toBe(false);
     expect(status({}).valid).toBe(true);
     expect(status({ op: "graph" }).valid).toBe(true);
@@ -685,7 +688,8 @@ describe("Oh My Second Brain MCP stdio server", () => {
       // The write tool stays advertised with its approved branches even when the
       // local contract is invalid; admission is what refuses, not discovery.
       expect(JSON.stringify(writeTool?.inputSchema)).toContain("guide");
-      expect(JSON.stringify(writeTool?.inputSchema)).toContain("complete");
+      expect(JSON.stringify(writeTool?.inputSchema)).toContain("check");
+      expect(JSON.stringify(writeTool?.inputSchema)).not.toContain("complete");
       expect(parsedStatus.counts).toBeNull();
       expect(parsedStatus.projectionSource).toBe("vault-invalid");
       const derivedState = parsedStatus.derivedState as Record<string, unknown>;
@@ -989,7 +993,8 @@ Valid frontmatter remains available to retrieve.
       expect(passing.status).toBe("pass");
       // An unmanaged property is preserved and never checked.
       expect(await readFile(path.join(tmpVault, "references", "kernel-note.md"), "utf8")).toContain("extra: kept");
-      expect(passing.checkpoint).toMatchObject({ schemaVersion: 1, notePath: "references/kernel-note.md" });
+      expect(passing.binding).toMatchObject({ schemaVersion: 1, notePath: "references/kernel-note.md" });
+      expect(passing.checkpoint).toBeUndefined();
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });

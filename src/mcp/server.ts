@@ -10,7 +10,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { admitWriteTarget } from "../kernel/capture/safe.js";
 import { getWriteGuidance } from "../kernel/capture/guidance.js";
-import { checkSavedNote, completeSavedNote } from "../kernel/capture/check.js";
+import { checkSavedNote } from "../kernel/capture/check.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import { buildTemplateNoteIndex, deriveTemplateRetrievalAxes, loadResolvedTemplates, resumeTemplateTransaction } from "../kernel/templates/index.js";
 import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
@@ -191,8 +191,7 @@ const contextProperties = { template: string, folder: string, property: string, 
 const operations: Record<string, readonly Operation[]> = {
   write: [
     { op: "guide", name: "write-guide", properties: { notePath: string, templateId: string } },
-    { op: "check", name: "write-check", properties: { notePath: string, templateId: string, binding: jsonValue, evidencePaths: stringArray }, required: ["notePath"] },
-    { op: "complete", name: "write-complete", properties: { checkpoint: jsonValue, review: jsonValue }, required: ["checkpoint", "review"] },
+    { op: "check", name: "write-check", properties: { notePath: string, templateId: string, binding: jsonValue }, required: ["notePath"] },
     { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["interview-next", "interview-answer", "commit-contracts"] }, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, proposals: proposalsSchema, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
@@ -1012,25 +1011,11 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     if (name === "write-check") {
       const notePath = stringArg(args, "notePath");
       if (!notePath) return errorText('Missing required string argument "notePath".');
-      const evidenceArg = args?.["evidencePaths"];
-      if (evidenceArg !== undefined && (!Array.isArray(evidenceArg) || evidenceArg.some(entry => typeof entry !== "string"))) {
-        return errorText('Argument "evidencePaths" must be an array of vault-relative paths.');
-      }
       const report = await checkSavedNote({
         target: { vault, source },
         notePath,
         templateId: stringArg(args, "templateId") ?? null,
         ...(args?.["binding"] === undefined ? {} : { binding: args["binding"] }),
-        ...(evidenceArg === undefined ? {} : { evidencePaths: (evidenceArg as string[]) }),
-      });
-      return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...report });
-    }
-
-    if (name === "write-complete") {
-      const report = await completeSavedNote({
-        target: { vault, source },
-        checkpoint: args?.["checkpoint"],
-        review: args?.["review"],
       });
       return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...report });
     }

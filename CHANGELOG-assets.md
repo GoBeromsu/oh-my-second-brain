@@ -4,6 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The `write` skill no longer instructs a reviewer handoff.** Its review and complete sections are gone; the skill guides, tells the agent to write the file, and checks the saved bytes. The `status` skill no longer contrasts a health report with a completion call.
 ## [0.16.0] - 2026-09-23
 - Live host-facing docs no longer show a copyable `interview-next` call without `proposals`. Confirming the template notice still starts that mode, but the same proposals array must reach review, answer, and commit.
 - Search, status, and write skills now say `templateNotice.next` is a mode hint, not a replayable `interview-next` CallToolRequest.

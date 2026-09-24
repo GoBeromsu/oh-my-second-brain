@@ -17,7 +17,7 @@ With `status` op absent, show the combined read-only view: resolved template cou
 
 A malformed or missing projection is reported as invalid. That report is not a doctor call and not a repair. Status never regenerates controls, rebuilds indexes, repairs notes, edits controls, creates `.oms`, or writes the vault.
 
-Report source, contract, and reviewer observations separately when the tool returns them. Do not fold those into one completion verdict. A health report is not `write { op: "complete" }`.
+Report source and contract observations separately when the tool returns them. Do not fold those into one verdict, and do not turn a health report into a claim that a note is finished.
 
 Report runtime history separately: events live outside the vault and are scoped to the current host and vault. A missing event means unobserved, never unused. Distinguish actual mutation time from observation time; external drift gives a changed-between interval, not an invented modification timestamp. Every use/check verifies current authority instead of applying an age-based expiry rule. Surface `LEDGER_APPEND_FAILED` explicitly without claiming a successful vault write failed.
 

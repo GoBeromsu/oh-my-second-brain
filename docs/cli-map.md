@@ -6,7 +6,7 @@ The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doct
 
 The eight skills are `distill`, `doctor`, `interview`, `link`, `search`, `status`, `template`, and `write`. `interview` and `template` are tool-less. Skills are workflows. They are not the five tools.
 
-Agents write and repair notes. OMS `guide` supplies approved material before writing; `check` and `complete` inspect the saved note. The `write` tool keeps a write posture because interview answers and approved contract publication mutate managed state. `guide`, `check`, and `complete` themselves write no vault bytes. Link's posture is read-only.
+Agents write and repair notes. OMS `guide` supplies approved material before writing; `check` and `complete` inspect the saved note. The `write` tool keeps a write posture because interview answers and approved contract publication mutate managed state. `guide` and `check` themselves write no vault bytes. Link's posture is read-only.
 
 ## Template
 
@@ -32,12 +32,11 @@ The host notice text and its two buttons are fixed in the [host asset contract](
 | CLI | MCP tool | `op` | Required discriminator |
 |---|---|---|---|
 | `oms note guide` | `oms_write` | `guide` | New or existing note path. Returns approved Markdown, the effective contract, and the task binding. An unset path asks and does not issue a check. |
-| `oms note check` | `oms_write` | `check` | Reads the saved note, controls, and declared evidence. No unsaved body and no caller PASS. |
-| `oms note complete` | `oms_write` | `complete` | Structured result from a separate reviewer, then a fresh read of the same inputs. |
+| `oms note check` | `oms_write` | `check` | Reads the saved note and the approved controls and reports declared fields and headings. No unsaved body and no caller PASS. |
 | `oms note audit` | `oms_doctor` | `audit` | optional `folder` |
 | `oms note get` | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window) |
 
-`complete` accepts the host's separate review. A value from a host tool or event is H. Transcribed into the completion request, that value is T. A definition byte match is not launch or enforcement proof. Instruction-only review is valid when the separate call, the non-modification instruction, and the input snapshot agree. Details are in the [host asset contract](./adapters.md).
+`check` is structural. It reports the declared frontmatter fields and headings the saved bytes do and do not satisfy; it issues no completion verdict and consumes no reviewer result. Whether a note is finished stays with the user and the agent. Host asset details remain in the [host asset contract](./adapters.md).
 
 `note get` replaces the retired document aliases without changing single-target, multi-target, or windowed retrieval.
 
@@ -70,7 +69,7 @@ Link suggest and check do not edit notes. Bridge operations manage target resolu
 
 Index sync, embed, and repair are exclusive modes, not combinable `embed` or `force` booleans. Repair performs the same verified store backup and rebuild/drop through CLI and MCP; it is not forced embedding. The collections and contexts capabilities are views of `index-status`, not standalone search operations. Graph status returns graph-only health; the zero-argument status tool returns the aggregate view.
 
-Read-only search is independent of policy validity. Lexical, vector, HyDE, and typed-axis queries still include unbound, invalid, and incomplete notes. Search does not write notes and does not start a review. `oms status` reports observation, including separate source, contract, and reviewer state. It does not decide completion.
+Read-only search is independent of policy validity. Lexical, vector, HyDE, and typed-axis queries still include unbound, invalid, and incomplete notes. Search does not write notes. `oms status` reports observation, including separate source and contract state. It does not decide whether a note is finished.
 
 ## CLI-only lifecycle and servers
 
@@ -87,8 +86,8 @@ OMS has no host launcher and no `--runtime gjc` command path.
 
 ## Removed leaves
 
-The public note leaves are `guide`, `check`, `complete`, `audit`, and `get`. Create, append, update, and backfill are not note operations. The public template leaves are `scan`, `list`, `show`, `check`, `regenerate-types`, `review`, `answer`, and `commit`. Template add, update, move, remove, and default are not operations. Link leaves are `suggest` and `check`. Link apply is not an operation.
+The public note leaves are `guide`, `check`, `audit`, and `get`. Create, append, update, backfill, and complete are not note operations. The public template leaves are `scan`, `list`, `show`, `check`, `regenerate-types`, `review`, `answer`, and `commit`. Template add, update, move, remove, and default are not operations. Link leaves are `suggest` and `check`. Link apply is not an operation.
 
 The former top-level `doctor`, `audit`, `reconcile`, `linkify`, `embed`, `doc`, `mcp`, `lint`, `install`, `uninstall`, and `update` commands have no compatibility aliases. The old repository-bridge meaning of a standalone `link` command is now the `bridge` family. `oms status` and `oms index embed` are retained names. `oms note audit` remains the note-family diagnosis; it is not the retired top-level `audit` command.
 
-Removed MCP operation aliases are `lazy-load`, `multi-get-documents`, and the standalone search operations `collections`, `contexts`, and `status`; their capabilities remain reachable through `get-document` and `index-status` views as mapped above. Note-write modes, link apply, and note backfill are not MCP operations.
+Removed MCP operation aliases are `lazy-load`, `multi-get-documents`, and the standalone search operations `collections`, `contexts`, and `status`; their capabilities remain reachable through `get-document` and `index-status` views as mapped above. Note-write modes, link apply, note backfill, and note completion are not MCP operations.
