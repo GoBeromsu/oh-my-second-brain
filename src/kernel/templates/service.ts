@@ -22,6 +22,8 @@ import {
   type PreparedLegacyMigration,
   type LegacyVaultPublicationAdmission,
   commitPreparedContractSourcePublication,
+  commitVaultPublication,
+  planVaultPublication,
   prepareContractSourcePublication,
   type VaultPublicationReceipt,
 } from "./vault-publication.js";
@@ -40,6 +42,7 @@ import {
   validateOmsSelectionSessionInput,
 } from "../runtime/sessions.js";
 import { MAX_TEMPLATE_SOURCE_BYTES } from "./census.js";
+import { digestBytes } from "./canonical.js";
 import { evaluateContractV5, type StructuralContractResult } from "./contract-check.js";
 import { ContractV5Error, parseContractPolicyV5, serializeContractPolicyV5, type ContractPolicyV5 } from "./contract-v5.js";
 import { parseLegacyJson } from "./legacy-json.js";
@@ -777,4 +780,95 @@ export async function relinkContractSource(input: {
   const locator = { transactionId: input.transactionId, kind: "relink" as const, templateId: input.templateId };
   const prepared = await prepareContractSourceRelink(vault, serializeContractPolicyV5(policy), locator, input.candidatePath);
   return publishSourceChange(vault, input.target, locator, prepared, policy.revision);
+}
+
+
+export interface ContractPublicationPlanSummary {
+  readonly revision: number;
+  readonly addedTemplates: readonly string[];
+  readonly removedTemplates: readonly string[];
+  readonly changedTemplates: readonly string[];
+  readonly commonChanged: boolean;
+  readonly propertiesChanged: boolean;
+}
+
+export type PublishContractResult =
+  | { readonly state: "confirmation-required"; readonly plan: ContractPublicationPlanSummary }
+  | { readonly state: "published"; readonly revision: number; readonly receipt: VaultPublicationReceipt };
+
+const CONTRACT_PUBLICATION_DECISION = "published an explicit contract revision";
+
+function summarize(previous: ContractPolicyV5 | null, next: ContractPolicyV5): ContractPublicationPlanSummary {
+  const before = previous === null ? {} : previous.templates;
+  const ids = new Set([...Object.keys(before), ...Object.keys(next.templates)]);
+  const added: string[] = [];
+  const removed: string[] = [];
+  const changed: string[] = [];
+  for (const id of [...ids].sort()) {
+    const left = before[id];
+    const right = next.templates[id];
+    if (left === undefined) added.push(id);
+    else if (right === undefined) removed.push(id);
+    else if (JSON.stringify(left) !== JSON.stringify(right)) changed.push(id);
+  }
+  return {
+    revision: next.revision,
+    addedTemplates: added,
+    removedTemplates: removed,
+    changedTemplates: changed,
+    commonChanged: previous === null || JSON.stringify(previous.common) !== JSON.stringify(next.common),
+    propertiesChanged: previous === null || JSON.stringify(previous.properties) !== JSON.stringify(next.properties),
+  };
+}
+
+/** Declared sources are verified live by the publication kernel before any write. */
+function declaredSources(policy: ContractPolicyV5): readonly { readonly path: string; readonly digest: Digest }[] {
+  const sources: { path: string; digest: Digest }[] = [];
+  for (const entry of Object.values(policy.templates)) {
+    if (entry.status === "active") sources.push({ path: entry.source.path, digest: entry.source.rawDigest });
+  }
+  return sources.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+}
+
+/**
+ * Publishes one explicit contract revision. The document is the caller's own
+ * contract meaning: OMS validates, compare-and-swaps it against the exact bytes
+ * on disk, and records one history revision. It never derives a rule from a file
+ * name, from Markdown syntax, or from an interview it ran itself.
+ */
+export async function publishContract(input: {
+  readonly target: WriteTarget;
+  readonly policy: unknown;
+  readonly transactionId: string;
+  readonly confirmed: boolean;
+}): Promise<PublishContractResult> {
+  const admitted = await admitWriteTarget(input.target);
+  if (admitted !== undefined) fail("SELECTION_INVALID", admitted.message);
+  const vault = await canonicalPublicRoot(input.target.vault);
+  assertLowercaseUuid(input.transactionId, "transactionId");
+  const settings = await requireSettings(vault);
+  const next = parseContractPolicyV5(input.policy);
+  const observed = await observePolicy(vault);
+  if (observed.state === "legacy" || observed.state === "malformed") {
+    fail("SELECTION_UNSAFE", "the published policy is not an explicit V5 contract; resolve it before publishing a revision");
+  }
+  const previous = observed.state === "v5" ? observed.policy : null;
+  const expectedRevision = previous === null ? 1 : previous.revision + 1;
+  if (next.revision !== expectedRevision) {
+    throw new ContractV5Error("CONTRACT_POLICY_INVALID", `Published contract must be revision ${expectedRevision}; received ${next.revision}.`);
+  }
+  if (!input.confirmed) return { state: "confirmation-required", plan: summarize(previous, next) };
+  const content = serializeContractPolicyV5(next);
+  const expectedDigest = previous === null ? null : digestBytes(serializeContractPolicyV5(previous));
+  const target: WriteTarget = { vault, source: input.target.source };
+  const plan = await planVaultPublication(target, {
+    transactionId: input.transactionId,
+    kind: "contract-publication",
+    vaultId: settings.vaultId,
+    outputs: [{ path: ".oms/template-policy.json", expectedDigest, content }],
+    sources: declaredSources(next),
+    history: { kind: "publication", decision: CONTRACT_PUBLICATION_DECISION },
+  });
+  const receipt = await commitVaultPublication(target, plan, plan.planDigest);
+  return { state: "published", revision: next.revision, receipt };
 }

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { connectionRegistryPath, readConnectionRegistry, reserveVaultConnection } from "../install/connection-registry.js";
 import { digestBytes } from "./canonical.js";
 import { parseContractPolicyV5, serializeContractPolicyV5, type ContractPolicyV5 } from "./contract-v5.js";
-import { acknowledgeContractSource, checkContract, relinkContractSource, reviewContractSources, selectContract, type ContractServiceOptions, type SelectContractResult } from "./service.js";
+import { acknowledgeContractSource, checkContract, publishContract, relinkContractSource, reviewContractSources, selectContract, type ContractServiceOptions, type SelectContractResult } from "./service.js";
 import { serializeVaultSettings, type VaultSettings } from "./vault-settings.js";
 import { v3Bundle, v4Bundle, v4Policy, type HistoricalBundle } from "../../../test/fixtures/legacy-publication-builders.js";
 
@@ -809,5 +809,81 @@ describe("explicit contract source review", () => {
     expect(entry.source.path).toBe("Templates/copy.md");
     expect(entry.source.rawDigest).toBe(digestBytes(markdown));
     expect(Object.keys(before)).not.toContain(path.join("Templates", "copy.md"));
+  });
+});
+
+
+const PUBLISH_TX = "99999999-9999-4999-8999-999999999999";
+
+describe("explicit contract publication", () => {
+  it("previews a revision, publishes it, and refuses a stale or malformed document", async () => {
+    const { vault, options } = await fixture();
+    const target = { vault, source: "explicit" as const };
+    const current = parseContractPolicyV5(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"));
+    const flower = current.templates.flower;
+    if (flower.status !== "active") throw new Error("fixture");
+    const next: ContractPolicyV5 = {
+      ...current,
+      revision: 2,
+      properties: { ...current.properties, note: { type: "text", intent: "Free note." } },
+      templates: { ...current.templates, flower: { ...flower, fields: { ...flower.fields, note: {} } } },
+    };
+
+    const preview = await publishContract({ target, policy: next, transactionId: PUBLISH_TX, confirmed: false });
+    expect(preview).toMatchObject({
+      state: "confirmation-required",
+      plan: { revision: 2, addedTemplates: [], removedTemplates: [], changedTemplates: ["flower"], propertiesChanged: true, commonChanged: false },
+    });
+    const before = await tree(vault);
+    expect(await tree(vault)).toEqual(before);
+
+    const published = await publishContract({ target, policy: next, transactionId: PUBLISH_TX, confirmed: true });
+    expect(published).toMatchObject({ state: "published", revision: 2 });
+    if (published.state !== "published") throw new Error(published.state);
+    expect(published.receipt.status).toBe("complete");
+    expect(published.receipt.verified.map(item => item.path)).toEqual([".oms/template-policy.json", ".oms/history/contracts/2.json"]);
+    expect(JSON.parse(await readFile(path.join(vault, ".oms", "history", "contracts", "2.json"), "utf8") as string)).toMatchObject({ kind: "publication", transactionId: PUBLISH_TX, revision: 2 });
+    // The published document is exactly the caller's contract, canonicalized.
+    expect(parseContractPolicyV5(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"))).toEqual(next);
+
+    // A second publication of the same revision is refused: the revision must advance.
+    await expect(publishContract({ target, policy: next, transactionId: "aaaaaaaa-9999-4999-8999-999999999999", confirmed: true }))
+      .rejects.toMatchObject({ code: "CONTRACT_POLICY_INVALID" });
+    await expect(publishContract({ target, policy: { version: 5, revision: 3 }, transactionId: "bbbbbbbb-9999-4999-8999-999999999999", confirmed: true }))
+      .rejects.toBeInstanceOf(Error);
+  });
+
+  it("refuses a document whose declared source bytes are not the live ones", async () => {
+    const { vault, options } = await fixture();
+    const target = { vault, source: "explicit" as const };
+    const current = parseContractPolicyV5(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"));
+    const flower = current.templates.flower;
+    if (flower.status !== "active") throw new Error("fixture");
+    const forged: ContractPolicyV5 = {
+      ...current,
+      revision: 2,
+      templates: { ...current.templates, flower: { ...flower, source: { ...flower.source, rawDigest: digestBytes("not the live source") } } },
+    };
+    const before = await tree(vault);
+    await expect(publishContract({ target, policy: forged, transactionId: PUBLISH_TX, confirmed: true })).rejects.toThrow(/Source changed before publication/);
+    expect(await tree(vault)).toEqual(before);
+  });
+
+  it("refuses to publish over a historical policy or without portable settings", async () => {
+    const { root, options } = await fixture();
+    const legacy = path.join(root, "legacy-publish");
+    await mkdir(path.join(legacy, ".oms"), { recursive: true });
+    await writeFile(path.join(legacy, ".oms", "settings.json"), serializeVaultSettings(settings(ID_B)));
+    await writeFile(path.join(legacy, ".oms", "template-policy.json"), JSON.stringify({ version: 4, properties: {}, templates: {} }));
+    const before = await tree(legacy);
+    await expect(publishContract({ target: { vault: legacy, source: "explicit" }, policy: policy(), transactionId: PUBLISH_TX, confirmed: true }))
+      .rejects.toMatchObject({ code: "SELECTION_UNSAFE" });
+    expect(await tree(legacy)).toEqual(before);
+
+    const bare = path.join(root, "bare-publish");
+    await mkdir(bare, { recursive: true });
+    await expect(publishContract({ target: { vault: bare, source: "explicit" }, policy: policy(), transactionId: PUBLISH_TX, confirmed: true }))
+      .rejects.toMatchObject({ code: "VAULT_SETTINGS_MISSING" });
+    expect(lstatSync(path.join(bare, ".oms"), { throwIfNoEntry: false })).toBeUndefined();
   });
 });

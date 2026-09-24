@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
@@ -7,7 +8,7 @@ import { nextTemplateInterview, answerTemplateInterview, commitTemplateContracts
 import type { TemplateProposalInput } from "../kernel/templates/interview.js";
 import type { TemplateOperationTarget } from "../kernel/templates/operations.js";
 import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
-import { acknowledgeContractSource, relinkContractSource, reviewContractSources } from "../kernel/templates/service.js";
+import { acknowledgeContractSource, publishContract, relinkContractSource, reviewContractSources } from "../kernel/templates/service.js";
 import { validateTemplateId } from "../kernel/templates/paths.js";
 import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
 import type { Digest, GuardedTemplateRequest, JsonValue } from "../kernel/templates/types.js";
@@ -18,7 +19,7 @@ type Options = Record<string, string | boolean>;
 interface Parsed { readonly verb: string; readonly positional: readonly string[]; readonly options: Options; }
 type Target = TemplateOperationTarget;
 
-const VALUE_FLAGS = new Set(["vault", "approved-digest", "answer", "census-digest", "ledger-digest", "proposals", "template-id", "reviewed-digest", "candidate-path", "transaction-id"]);
+const VALUE_FLAGS = new Set(["vault", "approved-digest", "answer", "census-digest", "ledger-digest", "proposals", "template-id", "reviewed-digest", "candidate-path", "transaction-id", "policy"]);
 const BOOLEAN_FLAGS = new Set(["dry-run", "yes", "help"]);
 
 function fail(message: string): never { throw new Error(`TEMPLATE_ARGS_INVALID: ${message}`); }
@@ -173,6 +174,17 @@ async function run(parsed: Parsed): Promise<void> {
     const resolved = await target(parsed.options);
     print(summarizedScan(await readTemplateReviewContext(resolved.vault))); return;
   }
+  if (parsed.verb === "publish") {
+    only(parsed, ["vault", "policy", "transaction-id", "yes"], 0);
+    const resolved = await target(parsed.options);
+    const raw = text(parsed.options, "policy");
+    const transactionId = text(parsed.options, "transaction-id");
+    if (raw === undefined || transactionId === undefined) fail("publish requires --policy and --transaction-id");
+    let policy: unknown;
+    try { policy = JSON.parse(await readFile(path.resolve(raw), "utf8")); }
+    catch { fail(`--policy must name a readable JSON contract document: ${raw}`); }
+    print(await publishContract({ target: resolved, policy, transactionId, confirmed: flag(parsed.options, "yes") })); return;
+  }
   if (parsed.verb === "review-sources") {
     only(parsed, ["vault", "template-id"], 0);
     const resolved = await target(parsed.options);
@@ -244,7 +256,7 @@ async function run(parsed: Parsed): Promise<void> {
 export function templateUsage(): string {
   return `Usage: oms template <verb> [options]
 
-Leaves: scan | list | show | check | regenerate-types | review-sources | acknowledge-source | relink-source | review | answer | commit
+Leaves: scan | list | show | check | regenerate-types | publish | review-sources | acknowledge-source | relink-source | review | answer | commit
 
 Read-only:
   list
@@ -253,6 +265,9 @@ Read-only:
   check
   review-sources [--template-id <id>] [--vault <vault>]
   review [--proposals <JSON>] [--vault <vault>]
+
+Contract publication (the document is your own contract meaning):
+  publish --policy <file.json> --transaction-id <uuid> [--yes] [--vault <vault>]
 
 Source review (the contract rules never change):
   acknowledge-source --template-id <id> --reviewed-digest <digest> --transaction-id <uuid> [--yes] [--vault <vault>]

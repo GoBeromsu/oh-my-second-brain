@@ -10,7 +10,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { admitWriteTarget } from "../kernel/capture/safe.js";
-import { acknowledgeContractSource, checkContract, relinkContractSource, reviewContractSources, selectContract, ContractServiceError } from "../kernel/templates/service.js";
+import { acknowledgeContractSource, checkContract, publishContract, relinkContractSource, reviewContractSources, selectContract, ContractServiceError } from "../kernel/templates/service.js";
 import { readVaultSettings } from "../kernel/templates/vault-settings.js";
 import { parseContractPolicyV5 } from "../kernel/templates/contract-v5.js";
 import { inspectContractSource } from "../kernel/templates/source-registry.js";
@@ -194,7 +194,7 @@ const operations: Record<string, readonly Operation[]> = {
   write: [
     { op: "guide", name: "write-guide", properties: { notePath: string, templateId: string, headingBindings: jsonValue }, required: ["notePath"] },
     { op: "check", name: "write-check", properties: { connectionId: string, sessionId: string }, required: ["connectionId", "sessionId"] },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["review-sources", "acknowledge-source", "relink-source", "interview-next", "interview-answer", "commit-contracts"] }, templateId: string, reviewedDigest: digestSchema, candidatePath: string, transactionId: string, confirmed: boolean, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, proposals: proposalsSchema, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
+    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["publish-contract", "review-sources", "acknowledge-source", "relink-source", "interview-next", "interview-answer", "commit-contracts"] }, policy: jsonValue, templateId: string, reviewedDigest: digestSchema, candidatePath: string, transactionId: string, confirmed: boolean, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, proposals: proposalsSchema, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
   ],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "check", name: "oms_link_check", properties: { notePath: string, folder: string }, required: ["notePath"] }],
@@ -1066,6 +1066,12 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         return jsonText({ vault, status: "rejected", rejection: admission });
       }
       const mode = stringArg(args, "mode");
+      if (mode === "publish-contract") {
+        const transactionId = stringArg(args, "transactionId");
+        if (transactionId === undefined) return errorText("Contract publication requires an explicit transactionId.");
+        if (args?.["policy"] === undefined) return errorText("Contract publication requires the explicit V5 policy document.");
+        return jsonText({ vault, ...await publishContract({ target: { vault, source }, policy: args["policy"], transactionId, confirmed: args["confirmed"] === true }) });
+      }
       if (mode === "review-sources") {
         const templateId = stringArg(args, "templateId");
         return jsonText(await reviewContractSources({ target: { vault, source }, ...(templateId === undefined ? {} : { templateId }) }));

@@ -15,6 +15,7 @@ Agents write and repair notes. OMS `guide` supplies approved material before wri
 | `oms template scan` | `oms_search` | `template-scan` | none |
 | `oms template list` | `oms_search` | `templates` | `templateId` absent |
 | `oms template show <id>` | `oms_search` | `templates` | `templateId` required |
+| `oms template publish` | `oms_write` | `template` + `mode: "publish-contract"` | Publishes one explicit V5 contract revision. The document is the caller's own contract meaning. |
 | `oms template review-sources` | `oms_write` | `template` + `mode: "review-sources"` | Read-only source review: drift, missing, unreadable, and held registrations. |
 | `oms template acknowledge-source` | `oms_write` | `template` + `mode: "acknowledge-source"` | Confirms reviewed source bytes. The SHA advances by one revision; the contract rules do not change. |
 | `oms template relink-source` | `oms_write` | `template` + `mode: "relink-source"` | Confirms a relocation to an explicitly named candidate. The original must be genuinely missing. |
@@ -38,6 +39,8 @@ The host notice text and its two buttons are fixed in the [host asset contract](
 | `oms note check` | `oms_write` | `check` | Reads the saved note through the selection locator and reports declared fields and headings. No unsaved body and no caller PASS. |
 | `oms note audit` | `oms_doctor` | `audit` | optional `folder` |
 | `oms note get` | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window) |
+
+`publish` compare-and-swaps the exact policy bytes on disk, requires the next revision number, verifies every declared source against its live bytes, and records one history revision. Without `--yes` it prints the revision, added, removed, and changed registrations and writes nothing. OMS never derives a rule from a file name or from template syntax.
 
 Source review is its own lane: `review-sources` reads, and both mutating leaves publish one policy revision plus one history record through the verified-target write kernel. Without confirmation they return the review that would be confirmed and change nothing. SHA equality is candidate evidence, never permission to relink.
 

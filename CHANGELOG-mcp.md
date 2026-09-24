@@ -4,6 +4,7 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- **`write { op: "template", mode: "publish-contract" }`.** Takes the explicit V5 policy document and a transaction id, so a contract can be authored and revised without an interview deriving meaning from template syntax.
 - **`write { op: "template" }` gains `review-sources`, `acknowledge-source`, and `relink-source`.** A drifted user source can be reviewed and acknowledged, or a moved source relocated, without an interview and without changing any contract rule.
 - **`write { op: "guide" }` selects a contract and `write { op: "check" }` is locator-bound.** Guide requires `notePath` and accepts `headingBindings`; check requires `connectionId` and `sessionId`. `search { op: "templates" }` and `search { op: "template-scan" }` now report the declared V5 registrations, their effective fields, and their source review state instead of approved Markdown. The aggregate `status` posture follows the published contract and portable settings, and `doctor { op: "regenerate-types" }` answers `TYPES_PROJECTION_OBSOLETE` for a V5 vault instead of instructing a downgrade.
 - **`doctor { op: "audit" }` reports the explicit contract's registered sources.** The audit route reads the V5 contract for its note index and excluded-source count, and falls back to diagnosis only when that contract cannot be established.
