@@ -3,7 +3,7 @@
 Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
-
+- **Shipped host instructions describe the published version-5 contract.** The vault-authority block named the version-4 policy with its always-on additive default; it now names the published document, the common contract that needs no Markdown file, per-registration relaxation the user approved, and `.oms/types.json` as a historical artifact version 5 neither derives nor reads.
 - **The Claude PostToolUse hook reads the published V5 contract.** After a save it composes the common contract or the named registration from `.oms/template-policy.json` and reports the observed frontmatter and heading violations. On a V5 vault the hook previously failed its read and printed a misleading "cannot read the approved contract" line after every write; it also now points a changed registered source at `oms template review-sources`.
 ## [0.16.0] - 2026-09-23
 
