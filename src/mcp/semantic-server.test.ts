@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeMorningVaultFixture } from "../kernel/search/morning-test-fixtures.js";
+import { engineStorePath } from "../kernel/engine/paths.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,7 +25,7 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 describe("Oh My Second Brain MCP semantic stdio server", () => {
   it("reopens the read-only index on every request in one MCP session", async () => {
     const vault = await writeMorningVaultFixture();
-    const testCache = path.join(vault, ".test-cache");
+    const testCache = await mkdtemp(path.join(tmpdir(), "oms-semantic-cache-"));
     await mkdir(testCache, { recursive: true });
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -68,7 +70,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       }));
       expect(rebuilt.receipt).toMatchObject({
         operation: "repair-index",
-        postcondition: { kind: "engine-store", mode: "rebuild", databasePath: path.join(vault, ".oms", "engine-store.sqlite") },
+        postcondition: { kind: "engine-store", mode: "rebuild", databasePath: engineStorePath(vault, { env: { XDG_CACHE_HOME: testCache } }) },
       });
       const resynced = textPayload(await client.callTool({
         name: "doctor",
@@ -76,11 +78,12 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       }));
       expect(resynced.receipt).toMatchObject({
         operation: "sync-embeddings",
-        postcondition: { kind: "semantic-index", databasePath: path.join(vault, ".oms", "engine-store.sqlite") },
+        postcondition: { kind: "semantic-index", databasePath: engineStorePath(vault, { env: { XDG_CACHE_HOME: testCache } }) },
       });
     } finally {
       await client.close();
       await rm(vault, { recursive: true, force: true });
+      await rm(testCache, { recursive: true, force: true });
     }
   }, 120_000);
 
@@ -97,6 +100,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       typeof embeddingProvider === "string" && embeddingProvider.length > 0 &&
       typeof embeddingModel === "string" && embeddingModel.length > 0;
     const tmpVault = await writeMorningVaultFixture();
+    const testCache = await mkdtemp(path.join(tmpdir(), "oms-semantic-cache-"));
 
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -105,16 +109,16 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       stderr: "pipe",
       // StdioClientTransport sandboxes the child env to a safe default subset,
       // so the canonical embedding config must be forwarded for the engine path.
-      env: hasModel
-        ? {
-            ...getDefaultEnvironment(),
-            OMS_EMBEDDING_PROVIDER: embeddingProvider!,
-            OMS_EMBEDDING_MODEL: embeddingModel!,
-          }
-        : {
-            ...getDefaultEnvironment(),
-            XDG_CACHE_HOME: path.join(tmpVault, ".test-cache"),
-          },
+      env: {
+        ...getDefaultEnvironment(),
+        XDG_CACHE_HOME: testCache,
+        ...(hasModel
+          ? {
+              OMS_EMBEDDING_PROVIDER: embeddingProvider!,
+              OMS_EMBEDDING_MODEL: embeddingModel!,
+            }
+          : {}),
+      },
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
 
@@ -253,6 +257,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
+      await rm(testCache, { recursive: true, force: true });
     }
   }, 120_000);
 });

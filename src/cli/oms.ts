@@ -4,12 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPostToolUse } from "../vendors/claude/hook/post-tool-use.js";
 import { runPreToolUse } from "../vendors/claude/hook/pre-tool-use.js";
-import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
+import type { WriteTarget } from "../kernel/capture/safe.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { runMcpServer } from "../mcp/server.js";
 import {
   PINNED_DEFAULT_EMBEDDING_MODEL,
-  type ModelSetAcquisitionManifest,
 } from "../kernel/engine/embed/model.js";
 import { parseCliArgs } from "./args.js";
 import { runGraphCommand } from "./graph-command.js";
@@ -29,7 +28,6 @@ export { buildClaudeInstallPlan } from "./claude-install-plan.js";
 export type { ClaudeInstallPlan } from "./claude-install-plan.js";
 export {
   runSetup,
-  type SetupPrompt,
 } from "./setup-command.js";
 export { maybePrintUpdateNotice } from "./update-notice.js";
 
@@ -64,10 +62,7 @@ function parseVaultFlag(argv: readonly string[]): string | undefined {
   return vault;
 }
 
-async function effectiveTarget(explicitVault: string | undefined): Promise<{
-  readonly vault: string;
-  readonly source: WriteTargetSource;
-}> {
+async function effectiveTarget(explicitVault: string | undefined): Promise<WriteTarget> {
   if (explicitVault !== undefined) return { vault: explicitVault, source: "explicit" };
   const resolved = await resolveEffectiveVault(process.cwd(), process.env);
   return { vault: resolved.vault, source: resolved.source };
@@ -180,6 +175,7 @@ async function main(): Promise<void> {
     command,
     vault,
     yes,
+    approvalToken,
     approvedDigest,
     installClaude,
     dryRun,
@@ -213,7 +209,7 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    let modelSetManifest: ModelSetAcquisitionManifest | unknown;
+    let modelSetManifest: unknown;
     if (modelsDescriptorPath !== undefined) {
       modelSetManifest = JSON.parse(readFileSync(modelsDescriptorPath, "utf8")) as unknown;
     } else if (modelsDefault) {
@@ -234,11 +230,15 @@ async function main(): Promise<void> {
         },
       };
     }
+    const target = parsedArgs.vaultExplicit
+      ? { vault, source: "explicit" as const }
+      : await effectiveTarget(undefined);
     const outcome = await runSetup({
-      vault,
+      target,
       yes,
+      approvalToken,
       approvedDigest: approvedDigest as `sha256:${string}` | undefined,
-        installClaude,
+      installClaude,
       dryRun,
       modelSetManifest,
       modelsNoDefault,

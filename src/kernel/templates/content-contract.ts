@@ -31,7 +31,7 @@ interface SourceLine {
   readonly number: number;
 }
 
-interface ObservedHeading {
+export interface ObservedHeading {
   readonly title: string;
   readonly level: number;
   readonly line: number;
@@ -101,7 +101,7 @@ function atxHeading(line: string): { readonly level: number; readonly title: str
   return { level: marks.length, title };
 }
 
-function scanHeadings(body: string): readonly ObservedHeading[] {
+export function scanContractHeadings(body: string, includeSetext = false): readonly ObservedHeading[] {
   const source = body.startsWith("\uFEFF") ? body.slice(1) : body;
   if (Buffer.byteLength(source, "utf8") > MAX_BODY_BYTES) {
     throw new Error(`CONTENT_CONTRACT_OVERSIZE: body exceeds ${MAX_BODY_BYTES} UTF-8 bytes`);
@@ -112,6 +112,7 @@ function scanHeadings(body: string): readonly ObservedHeading[] {
   }
   const headings: ObservedHeading[] = [];
   let fence: OpenFence | undefined;
+  let paragraph: SourceLine[] = [];
   for (const line of lines) {
     if (fence !== undefined) {
       if (closesFence(line.text, fence)) fence = undefined;
@@ -120,11 +121,33 @@ function scanHeadings(body: string): readonly ObservedHeading[] {
     const opening = openFence(line.text);
     if (opening !== undefined) {
       fence = opening;
+      paragraph = [];
       continue;
     }
     const heading = atxHeading(line.text);
-    if (heading === undefined) continue;
-    headings.push({ title: heading.title.normalize("NFC"), level: heading.level, line: line.number });
+    if (heading !== undefined) {
+      headings.push({ title: heading.title.normalize("NFC"), level: heading.level, line: line.number });
+      paragraph = [];
+      continue;
+    }
+    if (!includeSetext) continue;
+    const underline = /^ {0,3}(=+|-+)[ \t]*$/.exec(line.text);
+    if (underline !== null) {
+      if (paragraph.length > 0) {
+        headings.push({
+          title: paragraph.map(member => member.text.trim()).join(" ").normalize("NFC"),
+          level: underline[1]!.startsWith("=") ? 1 : 2,
+          line: paragraph[0]!.number,
+        });
+      }
+      paragraph = [];
+      continue;
+    }
+    if (line.text.trim() === "" || /^(?: {4}|\t| {0,3}(?:>|[-+*][ \t]|\d+[.)][ \t]|<))/.test(line.text)) {
+      paragraph = [];
+    } else {
+      paragraph.push(line);
+    }
   }
   return headings;
 }
@@ -219,6 +242,6 @@ export function evaluateTemplateBodyContract(
   }
   if (!Array.isArray(contract.headings)) fail("headings must be an array");
   const headings = contract.headings.map((heading, index) => readHeading(heading, index));
-  const violations = diagnose(headings, scanHeadings(body), contract.headingOrder);
+  const violations = diagnose(headings, scanContractHeadings(body), contract.headingOrder);
   return { valid: violations.length === 0, violations };
 }

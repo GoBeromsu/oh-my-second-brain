@@ -14,6 +14,7 @@ export interface ParsedCliArgs {
   readonly vault: string;
   readonly vaultExplicit: boolean;
   readonly yes: boolean;
+  readonly approvalToken?: string;
   readonly approvedDigest?: string;
   readonly installClaude: boolean;
   readonly runtime: RuntimeSelection | undefined;
@@ -37,6 +38,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
   let vault = cwd;
   let vaultExplicit = false;
   let yes = false;
+  let approvalToken: string | undefined;
   let approvedDigest: string | undefined;
   let installClaude = false;
   let runtime: RuntimeSelection | undefined;
@@ -59,14 +61,23 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
     if (arg === "--help" || arg === "-h") {
       help = true;
     } else if (arg === "--vault") {
-      if (next === undefined || next.startsWith("--")) return failure("[oms] Missing value for --vault.");
+      if (vaultExplicit) return failure("[oms] Duplicate option: --vault.");
+      if (next === undefined || next === "" || next.startsWith("--")) return failure("[oms] Missing value for --vault.");
       vault = path.resolve(cwd, next);
       vaultExplicit = true;
       index += 1;
     } else if (arg === "--yes") {
       yes = true;
+    } else if (arg === "--approval-token") {
+      if (approvalToken !== undefined) return failure("[oms] Duplicate option: --approval-token.");
+      if (next === undefined || next === "" || next.startsWith("--")) {
+        return failure("[oms] Missing value for --approval-token.");
+      }
+      approvalToken = next;
+      index += 1;
     } else if (arg === "--approved-digest") {
-      if (next === undefined || next.startsWith("--")) {
+      if (approvedDigest !== undefined) return failure("[oms] Duplicate option: --approved-digest.");
+      if (next === undefined || next === "" || next.startsWith("--")) {
         return failure("[oms] Missing value for --approved-digest.");
       }
       approvedDigest = next;
@@ -132,6 +143,7 @@ export function parseCliArgs(argv: readonly string[], cwd = process.cwd()): Pars
       vault,
       vaultExplicit,
       yes,
+      approvalToken,
       approvedDigest,
       installClaude,
       runtime,

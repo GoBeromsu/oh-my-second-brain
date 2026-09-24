@@ -43,7 +43,7 @@ import { syncEngineStore } from "./embed/sync.js";
 import { McpEngineAdapter } from "./mcp/facade.js";
 import type { McpSemanticModelCapabilityStatus } from "./mcp/types.js";
 import { makeDeferredProvider, makeDeferredStore } from "./embed/deferred.js";
-import { engineStorePath } from "./paths.js";
+import { assertExternalDatabasePath, engineStorePath } from "./paths.js";
 import type { DispatcherDeps, DispatcherPolicy } from "./retrieval/dispatcher.js";
 import type { EngineStore } from "./embed/store.js";
 import type { EmbeddingProvider } from "./types.js";
@@ -98,7 +98,7 @@ export interface AssembleConfig {
   modelRequests?: Readonly<Partial<Record<ModelCapability, PortableModelSelection>>>;
   modelEnv?: Readonly<Record<string, string | undefined>>;
 
-  /** Absolute path to the SQLite engine store database file. Default: <vault>/.oms/engine-store.sqlite */
+  /** Absolute path to the SQLite engine store database file. Default: external cache from engineStorePath. */
   dbPath?: string;
 
   /** RRF smoothing constant passed to DispatcherDeps (default 60). */
@@ -540,15 +540,22 @@ function disposal(
   };
 }
 
+function resolveAssembleDbPath(config: AssembleConfig): string {
+  return config.dbPath === undefined
+    ? engineStorePath(config.vault)
+    : assertExternalDatabasePath(config.vault, config.dbPath);
+}
+
 /**
  * Assemble a semantic-capable engine with a REAL embedding provider.
  *
  * This is the production semantic engine. It requires explicit embedding
  * configuration and never fabricates vectors.
  */
+
 export function assembleEngine(config: AssembleConfig): AssembledEngine {
   const vault = config.vault;
-  const dbPath = config.dbPath ?? engineStorePath(vault);
+  const dbPath = resolveAssembleDbPath(config);
   const embedding = resolvedEmbeddingConfig(config);
   const owned = ownedReranker(config);
   const reranker = config.reranker ?? owned;
@@ -668,7 +675,7 @@ export function assembleEngine(config: AssembleConfig): AssembledEngine {
  */
 export function assembleCoreSemanticEngine(config: AssembleConfig): AssembledEngine {
   const vault = config.vault;
-  const dbPath = config.dbPath ?? engineStorePath(vault);
+  const dbPath = resolveAssembleDbPath(config);
 
   const provider = makeDeferredProvider();
   const store = openEngineStoreCore(dbPath);
@@ -822,7 +829,7 @@ export function assembleEphemeralCoreSemanticEngine(config: AssembleConfig): Ass
  */
 export function assembleCoreSemanticEngineReadOnly(config: AssembleConfig): AssembledEngine | null {
   const vault = config.vault;
-  const dbPath = config.dbPath ?? engineStorePath(vault);
+  const dbPath = resolveAssembleDbPath(config);
   const provider = makeDeferredProvider();
   const owned = ownedReranker(config);
   const reranker = config.reranker ?? owned;
@@ -879,7 +886,7 @@ export function assembleCoreSemanticEngineReadOnly(config: AssembleConfig): Asse
  */
 export function assembleEngineReadOnly(config: AssembleConfig): AssembledEngine | null {
   const vault = config.vault;
-  const dbPath = config.dbPath ?? engineStorePath(vault);
+  const dbPath = resolveAssembleDbPath(config);
   const embedding = resolvedEmbeddingConfig(config);
   const owned = ownedReranker(config);
   const reranker = config.reranker ?? owned;

@@ -78,11 +78,17 @@ describe("template path contract", () => {
     expect(normalizeTemplateControlPath(".oms/template-policy.json")).toBe(".oms/template-policy.json");
     expect(normalizeTemplateControlPath(".oms/types.json")).toBe(".oms/types.json");
     expect(normalizeTemplateControlPath(".oms/template-interview.json")).toBe(".oms/template-interview.json");
+    expect(normalizeTemplateControlPath(".oms/history/contracts/0.json")).toBe(".oms/history/contracts/0.json");
+    expect(normalizeTemplateControlPath(".oms/history/contracts/12.json")).toBe(".oms/history/contracts/12.json");
     expect(() => normalizeTemplateControlPath(".oms/taxonomy.yaml")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
     expect(() => normalizeTemplateControlPath(".oms/other.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
     expect(() => normalizeTemplateControlPath(".oms/template-migration.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
+    expect(() => normalizeTemplateControlPath(".oms/history/contracts/01.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
+    expect(() => normalizeTemplateControlPath(".oms/history/contracts/-1.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
+    expect(() => normalizeTemplateControlPath(".oms/history/notes/1.json")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
     expect(() => normalizeTemplateControlPath(".oms/.template-transactions/task/../../note.md")).toThrow(/TEMPLATE_SOURCE_UNSAFE/);
     expect(normalizeTemplateControlPath(".oms/.template-transactions/task/policy.json")).toBe(".oms/.template-transactions/task/policy.json");
+    expect(normalizeTemplateControlPath(".oms/migrations/task/receipt.json")).toBe(".oms/migrations/task/receipt.json");
   });
 
   it("confines managed drafts to the approved internal namespace", () => {

@@ -1,3 +1,5 @@
+import path from "node:path";
+import { engineGraphCachePath, engineNodeCachePath } from "../engine/paths.js";
 import { exploreEngineGraph, type EngineGraphConnectionReason, type EngineGraphExploreNode } from "../engine/graph/explore.js";
 import { buildGraph, buildNodeIndex, loadCachedGraph, loadNodeIndex, nodeSourceSignature } from "../engine/graph/builder.js";
 import type { AxisScalar } from "../engine/graph/node.js";
@@ -51,7 +53,9 @@ export interface GraphExploreResult {
 }
 
 function engineCachePath(vault: string, file: string): string {
-  return `${vault}/.oms/cache/engine/${file}`;
+  if (file === "graph.json") return engineGraphCachePath(vault);
+  if (file === "node-index.json") return engineNodeCachePath(vault);
+  return path.dirname(engineGraphCachePath(vault));
 }
 
 function remapReason(reason: EngineGraphConnectionReason): GraphConnectionReason {

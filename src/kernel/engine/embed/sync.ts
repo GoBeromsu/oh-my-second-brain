@@ -26,7 +26,7 @@ import { capabilityGuidance } from "./config.js";
 import { requireRealEmbeddingProvider } from "./provider.js";
 import { openEngineStore, openEngineStoreCore } from "./store.js";
 import { makeEmbeddingIdentity } from "./identity.js";
-import { engineStorePath } from "../paths.js";
+import { assertExternalDatabasePath, engineStorePath } from "../paths.js";
 import type { EmbeddingProvider } from "../types.js";
 import type { ChunkerOptions, Chunk } from "../types.js";
 import { parseEmbeddingModelDescriptor, type EmbeddingModelDescriptor } from "./model.js";
@@ -49,7 +49,7 @@ export interface EngineSyncOptions {
    * selection replaces recursive walking of collectionPath.
    */
   files?: readonly string[];
-  /** Absolute path to the SQLite engine store database file. Default: <vault>/.oms/engine-store.sqlite */
+  /** Absolute path to the SQLite engine store database file. Default: external cache from engineStorePath. */
   dbPath?: string;
   /** When false, updates lexical index only (no vectors). Default: true. */
   embed?: boolean;
@@ -759,8 +759,16 @@ function renameGeneration(shadowPath: string, activePath: string): void {
 // Public entry point
 // ---------------------------------------------------------------------------
 
+function resolveSyncDbPath(opts: EngineSyncOptions, vault: string): string {
+  if (opts.persist === false) return opts.dbPath ?? ":memory:";
+  return opts.dbPath === undefined
+    ? engineStorePath(vault)
+    : assertExternalDatabasePath(vault, opts.dbPath);
+}
+
 export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSyncResult> {
   const vault = path.resolve(opts.vault);
+  const dbPath = resolveSyncDbPath(opts, vault);
   const isExcluded = await managedSourceExclusionMatcher(vault);
   const collection = opts.collection ?? "vault";
   const collectionRoot = opts.collectionPath ? path.resolve(vault, opts.collectionPath) : vault;
@@ -769,7 +777,6 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
     path.isAbsolute(collectionRelative) ||
     collectionRelative === ".." ||
     collectionRelative.startsWith("../");
-  const dbPath = opts.dbPath ?? engineStorePath(vault);
   const shouldEmbed = opts.embed !== false;
   const force = opts.force === true;
   const persist = opts.persist !== false;

@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 
 import { syncEngineStore } from "../kernel/engine/embed/sync.js";
-import { engineStorePath } from "../kernel/engine/paths.js";
+import { engineGraphCachePath, engineNodeCachePath, engineStorePath, vaultCacheRoot } from "../kernel/engine/paths.js";
 import * as engineAssembly from "../kernel/engine/assemble.js";
 import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
 import { runGraphCommand } from "./graph-command.js";
@@ -75,10 +76,13 @@ describe("graph command", () => {
     vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
 
     const before = await fileSnapshot(vault);
+    const cacheRoot = vaultCacheRoot(vault);
+    const externalBefore = existsSync(cacheRoot) ? await fileSnapshot(cacheRoot) : {};
     await runGraphCommand(["status", "--vault", vault]);
     expect(output.pop()).toEqual({ available: false, reason: "Graph cache not built" });
     expect(process.exitCode).toBe(1);
     expect(await fileSnapshot(vault)).toEqual(before);
+    expect(existsSync(cacheRoot) ? await fileSnapshot(cacheRoot) : {}).toEqual(externalBefore);
 
     await runGraphCommand(["build", "--vault", vault]);
     const built = output.pop() as Record<string, unknown>;
@@ -101,7 +105,12 @@ describe("graph command", () => {
     expect(output.pop()).toMatchObject({ available: true, notes: 2, edges: 3 });
     expect(process.exitCode).toBe(0);
     expect(await fileSnapshot(vault)).toEqual(afterBuild);
-    expect(afterBuild).not.toEqual(before);
+    const externalAfter = await fileSnapshot(cacheRoot);
+    expect(afterBuild).toEqual(before);
+    expect(externalAfter).not.toEqual(externalBefore);
+    expect(externalAfter).toHaveProperty(path.relative(vaultCacheRoot(vault), engineGraphCachePath(vault)));
+    expect(externalAfter).toHaveProperty(path.relative(vaultCacheRoot(vault), engineNodeCachePath(vault)));
+    expect(externalAfter).not.toHaveProperty(path.basename(engineStorePath(vault)));
   });
 
   it("reports current convention, runtime history, and ephemeral engine availability without a store", async () => {
@@ -200,6 +209,7 @@ describe("graph command", () => {
 
   it("retains convention, history, and graph evidence when the engine store is invalid", async () => {
     const vault = await freshVault();
+    mkdirSync(path.dirname(engineStorePath(vault)), { recursive: true });
     await writeFile(engineStorePath(vault), "not sqlite");
     const output: unknown[] = [];
     vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
@@ -257,8 +267,10 @@ describe("graph command", () => {
         "2026-09-06T00:00:00.000Z",
       );
       const before = await fileSnapshot(vault);
-      expect(before).toHaveProperty(".oms/engine-store.sqlite-wal");
-      expect(before).toHaveProperty(".oms/engine-store.sqlite-shm");
+      const storeRoot = path.dirname(engineStorePath(vault));
+      const externalBefore = await fileSnapshot(storeRoot);
+      expect(externalBefore).toHaveProperty(`${path.basename(engineStorePath(vault))}-wal`);
+      expect(externalBefore).toHaveProperty(`${path.basename(engineStorePath(vault))}-shm`);
       const output: unknown[] = [];
       vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
 
@@ -273,6 +285,7 @@ describe("graph command", () => {
       });
       expect(process.exitCode).toBe(0);
       expect(await fileSnapshot(vault)).toEqual(before);
+      expect(await fileSnapshot(storeRoot)).toEqual(externalBefore);
     } finally {
       writer.close();
     }

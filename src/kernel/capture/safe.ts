@@ -26,16 +26,24 @@ export function safeVaultNotePath(vault: string, notePath: string): string {
 }
 
 /**
- * A current-directory inference is refused. Explicit, env, bridge, and vault
- * sources stay admitted: an explicit target wins over cwd because only cwd is rejected.
+ * Admit only an explicit, local-vault, verified v2 bridge, or OMS_VAULT target.
+ * Current-directory inference, a diagnosed v1 bridge, and any unexpected source
+ * are refused. Origin stays truthful: a legacy bridge is never relabeled as cwd.
  */
+const ADMITTED_WRITE_SOURCES = new Set<WriteTargetSource>(["explicit", "vault", "bridge", "env"]);
+
 export async function admitWriteTarget(target: WriteTarget): Promise<WriteRejection | undefined> {
-  if (target.source !== "cwd") return undefined;
+  if (ADMITTED_WRITE_SOURCES.has(target.source)) return undefined;
+  const reason = target.source === "cwd"
+    ? `the target vault was inferred from the current directory (${target.vault}), which is not a verified Oh My Second Brain vault`
+    : target.source === "legacy-bridge"
+      ? `the target vault (${target.vault}) was resolved from a v1 bridge, which is read-only and was not converted`
+      : `the target vault (${target.vault}) was resolved from an unexpected source (${String(target.source)}), which is not a verified write origin`;
   return rejection(
     "admission",
     "target-unverified",
-    `Refusing to guide, check, or complete: the target vault was inferred from the current directory (${target.vault}), which is not a verified Oh My Second Brain vault. An explicit vault target is accepted; a current-directory inference is not.`,
-    "run `oms setup` in your Obsidian vault (or set OMS_VAULT), then retry",
+    `Refusing to guide, check, or complete: ${reason}. An explicit vault target is accepted; a current-directory inference, a legacy v1 bridge, and an unexpected source are not.`,
+    "pass an explicit vault target, run `oms setup` in your Obsidian vault, or set OMS_VAULT, then retry",
   );
 }
 

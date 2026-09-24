@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { syncEngineStore } from "./sync.js";
@@ -154,6 +154,40 @@ describe("syncEngineStore — embed=false (lex-only)", () => {
     });
     expect(explicit.available).toBe(false);
     expect(explicit.reason).toMatch(/ignored vault directory/);
+  });
+  it("rejects an inside-vault override before creating a store or lock", async () => {
+    const inside = path.join(vault, ".oms", "engine-store.sqlite");
+    await expect(syncEngineStore({ vault, dbPath: inside, embed: false })).rejects.toThrow(/inside the vault/);
+    expect(existsSync(path.join(vault, ".oms"))).toBe(false);
+    expect(readdirSync(vault)).toEqual([]);
+  });
+
+  it("rejects a dangling external leaf that targets the vault without creating it", async () => {
+    const dangling = path.join(dbDir, "dangling.sqlite");
+    symlinkSync(path.join(vault, "captured.sqlite"), dangling);
+    await expect(syncEngineStore({ vault, dbPath: dangling, embed: false })).rejects.toThrow(/inside the vault/);
+    expect(existsSync(path.join(vault, "captured.sqlite"))).toBe(false);
+    expect(lstatSync(dangling).isSymbolicLink()).toBe(true);
+    expect(existsSync(`${dangling}.lock`)).toBe(false);
+  });
+
+  it("rejects an alias whose resolved SHM companion escapes into the vault before locking", async () => {
+    const alias = path.join(dbDir, "store-alias");
+    symlinkSync(dbPath, alias);
+    const sentinel = path.join(vault, "sentinel.md");
+    writeFileSync(sentinel, "sync shm sentinel\n");
+    writeFileSync(dbPath, "external base\n");
+    symlinkSync(path.join(vault, "captured.sqlite-shm"), `${dbPath}-shm`);
+    const vaultBefore = readFileSync(sentinel);
+    await expect(syncEngineStore({ vault, dbPath: alias, embed: false })).rejects.toThrow(/symlink/);
+    expect(existsSync(path.join(vault, "captured.sqlite-shm"))).toBe(false);
+    expect(lstatSync(alias).isSymbolicLink()).toBe(true);
+    expect(lstatSync(`${dbPath}-shm`).isSymbolicLink()).toBe(true);
+    expect(readFileSync(dbPath).toString()).toBe("external base\n");
+    expect(readFileSync(sentinel)).toEqual(vaultBefore);
+    expect(readdirSync(vault)).toEqual(["sentinel.md"]);
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    expect(existsSync(`${alias}.lock`)).toBe(false);
   });
 });
 

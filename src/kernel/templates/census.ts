@@ -305,7 +305,12 @@ async function scanFolder(root: string, folder: string, budget: Budget, files: S
         pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_UNSAFE", "Symlink template entry is skipped", rawPath));
         continue;
       }
-      if (child.name.startsWith(".")) continue;
+      if (child.name.startsWith(".")) {
+        if (child.isDirectory() || child.name.endsWith(".md")) {
+          pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_UNSAFE", "Hidden template subtree or Markdown leaf is excluded from discovery", rawPath));
+        }
+        continue;
+      }
       if (child.isDirectory()) {
         if (child.name.endsWith(".md")) {
           pushDiagnostic(diagnostics, diagnostic("TEMPLATE_SOURCE_INVALID", "Template directory leaf is not a markdown file", rawPath));
@@ -613,13 +618,13 @@ function censusDigest(result: Omit<CensusResult, "censusDigest">): Digest {
  * settings, and approved source refs. Invalid policy stays unverifiable.
  * Exact-byte identity pairing is the only automatic match.
  */
-export async function templateCensus(vault: string, options: TemplateCensusOptions = {}): Promise<CensusResult> {
-  const root = await realpath(vault);
+async function collectSources(
+  root: string,
+  requested: readonly TemplateCensusSelection[],
+  initialPaths: readonly string[] = [],
+): Promise<{ sources: ReadySource[]; blocked: Set<string>; missing: string[]; diagnostics: CensusDiagnostic[] }> {
   const diagnostics: CensusDiagnostic[] = [];
-  const authority = await readAuthority(root, diagnostics);
-  const requested: TemplateCensusSelection[] = [...(options.selections ?? [])];
-  if (options.includeConfiguredPaths !== false) requested.push(...await configuredSelections(root, diagnostics));
-  const files = new Set<string>(authority.approved.map(ref => ref.path));
+  const files = new Set<string>(initialPaths);
   const budget: Budget = { files: files.size, directories: 0, exhausted: false };
   for (const selection of requested) {
     if (selection.kind === "folder") {
@@ -638,9 +643,13 @@ export async function templateCensus(vault: string, options: TemplateCensusOptio
   }
   const sources: ReadySource[] = [];
   const blocked = new Set<string>();
+  const missing: string[] = [];
   for (const path of [...files].sort(compareText)) {
     const read = await readCandidate(root, path as TemplateSourcePath);
-    if (read.state === "absent") continue;
+    if (read.state === "absent") {
+      missing.push(path);
+      continue;
+    }
     if (read.state === "blocked") {
       blocked.add(path);
       pushDiagnostic(diagnostics, read.diagnostic);
@@ -649,6 +658,32 @@ export async function templateCensus(vault: string, options: TemplateCensusOptio
     sources.push(read.source);
     for (const item of read.source.diagnostics) pushDiagnostic(diagnostics, item);
   }
+  return { sources, blocked, missing, diagnostics };
+}
+
+export interface TemplateSourceInventory {
+  readonly sources: readonly CensusSource[];
+  readonly complete: boolean;
+  readonly diagnostics: readonly CensusDiagnostic[];
+}
+
+/** Explicit raw discovery only: no policy, approval, configured hints or registration side effects. */
+export async function scanTemplateSources(vault: string, selections: readonly TemplateCensusSelection[]): Promise<TemplateSourceInventory> {
+  const root = await realpath(vault);
+  const { sources, diagnostics, missing } = await collectSources(root, selections);
+  for (const path of missing) diagnostics.push(diagnostic("TEMPLATE_SOURCE_MISSING", "Selected source is absent or disappeared during discovery", path));
+  return { sources, complete: diagnostics.length === 0, diagnostics };
+}
+
+export async function templateCensus(vault: string, options: TemplateCensusOptions = {}): Promise<CensusResult> {
+  const root = await realpath(vault);
+  const diagnostics: CensusDiagnostic[] = [];
+  const authority = await readAuthority(root, diagnostics);
+  const requested: TemplateCensusSelection[] = [...(options.selections ?? [])];
+  if (options.includeConfiguredPaths !== false) requested.push(...await configuredSelections(root, diagnostics));
+  const inventory = await collectSources(root, requested, authority.approved.map(ref => ref.path));
+  const { sources, blocked } = inventory;
+  for (const item of inventory.diagnostics) pushDiagnostic(diagnostics, item);
   const paired = pair(authority.approved, sources, blocked, diagnostics);
   diagnostics.sort((left, right) => compareText(left.path ?? "", right.path ?? "") || compareText(left.code, right.code) || compareText(left.message, right.message));
   const result: Omit<CensusResult, "censusDigest"> = {

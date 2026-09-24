@@ -3,7 +3,9 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { DestinationClass, ManagedTemplatePath, TemplateFolderPath, TemplateFolderRegistration, TemplateId, TemplateSourcePath } from "./types.js";
 const ID = /^[\p{L}\p{N}]+(?:-{1,2}[\p{L}\p{N}]+)*$/u;
 const INTERNAL = new Set([".oms", ".gjc", ".git", ".obsidian", ".template-transactions"]);
-const CONTROLS = new Set([".oms/template-policy.json", ".oms/types.json", ".oms/taxonomy.json", ".oms/template-transaction.json", ".oms/template-interview.json"]);
+const CONTROLS = new Set([".oms/template-policy.json", ".oms/settings.json", ".oms/types.json", ".oms/taxonomy.json", ".oms/template-transaction.json", ".oms/template-interview.json"]);
+const CONTROL_NAMESPACE = /^\.oms\/(?:\.template-transactions|migrations)\/[a-z0-9-]+(?:\/[a-z0-9._-]+)*$/;
+const HISTORY_RECORD = /^\.oms\/history\/contracts\/(?:0|[1-9][0-9]{0,15})\.json$/;
 export type TemplateControlPath = string & { readonly __kind: "TemplateControlPath" };
 export interface VerifiedVaultPath<T extends TemplateFolderPath | TemplateSourcePath | TemplateControlPath | ManagedTemplatePath> { readonly vaultRoot: string; readonly vaultRelativePath: T; readonly absolutePath: string; readonly targetRealPath: string | null; }
 export interface VaultPathVerificationOptions { readonly expected: "existing-file" | "absent" | "either"; }
@@ -13,11 +15,11 @@ function segments(value: string): string[] { if (value.includes("\0")) unsafe("N
 export function validateTemplateId(value: string): TemplateId { const canonical = value.normalize("NFC"); if (!ID.test(canonical)) invalid("templateId must contain Unicode letters or digits with internal hyphens"); return canonical as TemplateId; }
 export function normalizeTemplateFolderPath(value: string): TemplateFolderPath { return segments(value).join("/") as TemplateFolderPath; }
 export function normalizeTemplateSourcePath(value: string): TemplateSourcePath { const parts = segments(value); const leaf = parts[parts.length - 1]!; if (!leaf.endsWith(".md") || leaf.length === 3) invalid("source path must end in a non-empty lowercase .md leaf"); return parts.join("/") as TemplateSourcePath; }
-/** Only convention controls and per-transaction hidden staging are internal paths. */
+/** Only convention controls, approved history records, and per-transaction staging are internal paths. */
 export function normalizeTemplateControlPath(value: string): TemplateControlPath {
   const path = value.normalize("NFC").replaceAll("\\", "/");
-  if (CONTROLS.has(path)) return path as TemplateControlPath;
-  if (/^\.oms\/\.template-transactions\/[a-z0-9-]+(?:\/[a-z0-9._-]+)*$/.test(path) && !path.split("/").some(segment => segment === "." || segment === "..")) return path as TemplateControlPath;
+  if (CONTROLS.has(path) || HISTORY_RECORD.test(path)) return path as TemplateControlPath;
+  if (CONTROL_NAMESPACE.test(path) && !path.split("/").some(segment => segment === "." || segment === "..")) return path as TemplateControlPath;
   unsafe("path is not an approved template control or staging path");
 }
 /** Only the approved default/individual draft namespace, never an ordinary source or arbitrary control. */

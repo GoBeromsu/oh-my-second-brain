@@ -1,8 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants, readFileSync, statSync, type Stats } from "node:fs";
+import { link, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { open, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { admitWriteTarget, type WriteTarget } from "../../capture/safe.js";
+import {
+  assertConnectionControlTarget,
+  connectionBytes,
+  connectionBytesEqual,
+  connectionDigest,
+  connectionText,
+} from "../../install/connection-registry.js";
+import type { Digest } from "../../templates/types.js";
+import { readVaultSettings } from "../../templates/vault-settings.js";
 import {
   canonicalModelIdentityKey,
   MODEL_CAPABILITY_ENV_PAIRS,
@@ -831,4 +842,431 @@ export async function applyModelSelection(options: {
   } finally {
     await rm(lock, { recursive: true, force: true });
   }
+}
+
+export type FreshModelSelectionReason =
+  | "target-unverified"
+  | "unsafe-target"
+  | "missing-parent"
+  | "missing-identity"
+  | "identity-mismatch"
+  | "malformed"
+  | "stale"
+  | "conflict"
+  | "external-change"
+  | "reconciliation-uncertain"
+  | "readback-failed"
+  | "io";
+
+export class FreshModelSelectionError extends Error {
+  readonly reason: FreshModelSelectionReason;
+  readonly code: string | undefined;
+
+  constructor(reason: FreshModelSelectionReason, message: string, code?: string) {
+    super(message);
+    this.name = "FreshModelSelectionError";
+    this.reason = reason;
+    this.code = code;
+  }
+}
+
+export interface FreshModelSelectionPrepared {
+  readonly canonicalVault: string;
+  readonly config: ModelsConfigV1;
+  readonly configDigest: Digest;
+  readonly expectedCurrent: Digest | "sha256:absent";
+  readonly disposition: "create" | "unchanged" | "conflict";
+}
+
+export interface FreshModelSelectionCommitted {
+  readonly status: "written" | "unchanged";
+  readonly path: string;
+  readonly configDigest: Digest;
+  readonly verified: true;
+}
+
+const FRESH_MODEL_LABEL = "Fresh model selection";
+const FRESH_MODEL_FILE = "models.json";
+const MAX_FRESH_MODEL_BYTES = 256 * 1024;
+const freshModelFaults = new Map<string, FreshModelSelectionFault>();
+
+export type FreshModelSelectionFault = "after-staging" | "after-publish";
+
+
+/** Void-only fault observer. It cannot replace the settings reader or authorize a write. */
+export function observeFreshModelSelectionFault(token: string, fault: FreshModelSelectionFault | undefined): void {
+  if (fault === undefined) freshModelFaults.delete(token);
+  else freshModelFaults.set(token, fault);
+}
+
+function takeFreshModelFault(token: string | undefined, boundary: FreshModelSelectionFault): void {
+  if (token !== undefined && freshModelFaults.get(token) === boundary) {
+    freshModelFaults.delete(token);
+    throw freshModelError("io", `Injected fresh model selection fault: ${boundary}.`, "injected-fault");
+  }
+}
+
+function freshModelError(reason: FreshModelSelectionReason, message: string, code?: string): FreshModelSelectionError {
+  return new FreshModelSelectionError(reason, message, code);
+}
+
+function freshModelCode(error: unknown): string | undefined {
+  return isRecord(error) && typeof error.code === "string" ? error.code : undefined;
+}
+
+function rethrowFreshModel(error: unknown, fallback: FreshModelSelectionReason): never {
+  if (error instanceof FreshModelSelectionError) throw error;
+  const code = freshModelCode(error);
+  const message = error instanceof Error ? error.message : "Fresh model selection failed.";
+  if (code === "EACCES" || code === "EPERM" || code === "EISDIR" || code === "ENOTDIR") throw freshModelError("io", message, code);
+  if (code === "ENOENT") throw freshModelError("missing-parent", message, code);
+  throw freshModelError(fallback, message, code);
+}
+
+function canonicalModelBytes(config: ModelsConfigV1): Uint8Array {
+  const bytes = connectionBytes(selectionBytes(config));
+  if (bytes.length > MAX_FRESH_MODEL_BYTES) throw freshModelError("malformed", "Model selection exceeds the 256 KiB limit.");
+  return bytes;
+}
+
+function modelDigest(bytes: Uint8Array): Digest {
+  const digest = connectionDigest(bytes);
+  if (!digest.startsWith("sha256:") || digest.length !== "sha256:".length + 64) {
+    throw freshModelError("malformed", `Model selection digest is not sha256: ${digest}.`);
+  }
+  return digest as Digest;
+}
+
+async function admitFreshModelTarget(target: WriteTarget): Promise<void> {
+  const admission = await admitWriteTarget(target);
+  if (admission !== undefined) throw freshModelError("target-unverified", admission.message);
+}
+
+async function canonicalFreshVault(vault: string): Promise<string> {
+  if (vault.includes("\0") || !path.isAbsolute(vault)) {
+    throw freshModelError("unsafe-target", "Fresh model selection vault must be an absolute path without NUL.");
+  }
+  let canonical: string;
+  try {
+    canonical = path.resolve(await realpath(path.resolve(vault)));
+  } catch (error: unknown) {
+    if (freshModelCode(error) === "ENOENT") {
+      throw freshModelError("missing-parent", `Fresh model selection vault does not exist: ${vault}.`, "ENOENT");
+    }
+    rethrowFreshModel(error, "unsafe-target");
+  }
+  const info = await lstat(canonical).catch((error: unknown) => rethrowFreshModel(error, "unsafe-target"));
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw freshModelError("unsafe-target", `Fresh model selection vault must be a real directory: ${canonical}.`);
+  }
+  return canonical;
+}
+
+async function inspectFreshModel(canonicalVault: string, requireParent: boolean): Promise<{ readonly path: string; readonly raw: Uint8Array | undefined; readonly parents: FreshModelParents | null }> {
+  const oms = path.join(canonicalVault, ".oms");
+  const models = path.join(oms, FRESH_MODEL_FILE);
+  const rootStat = await lstat(canonicalVault);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw freshModelError("unsafe-target", "Model vault root is not a real directory.");
+  let omsStat;
+  try {
+    omsStat = await lstat(oms);
+  } catch (error: unknown) {
+    if (freshModelCode(error) === "ENOENT") {
+      if (!requireParent) return { path: models, raw: undefined, parents: null };
+      throw freshModelError("missing-parent", `Fresh model selection parent does not exist: ${oms}.`, "ENOENT");
+    }
+    rethrowFreshModel(error, "io");
+  }
+  if (omsStat.isSymbolicLink() || !omsStat.isDirectory()) {
+    throw freshModelError("unsafe-target", `Fresh model selection parent must be a real directory: ${oms}.`);
+  }
+  try {
+    await assertConnectionControlTarget(oms, `${FRESH_MODEL_LABEL} directory`, "directory");
+    await assertConnectionControlTarget(models, `${FRESH_MODEL_LABEL} file`, "absent-file");
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Fresh model selection target is unsafe.";
+    if (/hard-linked|symbolic link|regular file|real directory|escapes|invalid-path|unsafe-target/i.test(message)) {
+      throw freshModelError("unsafe-target", message, freshModelCode(error));
+    }
+    rethrowFreshModel(error, "unsafe-target");
+  }
+  const parents = { root: rootStat, parent: omsStat };
+  let raw: Uint8Array | undefined;
+  try {
+    raw = await readFreshModelControl(canonicalVault, parents);
+  } catch (error: unknown) {
+    rethrowFreshModel(error, "io");
+  }
+  return { path: models, raw, parents };
+}
+
+function classifyFreshModelBytes(raw: Uint8Array | undefined, proposed: Uint8Array): {
+  readonly expectedCurrent: Digest | "sha256:absent";
+  readonly disposition: "create" | "unchanged" | "conflict";
+} {
+  if (raw === undefined) return { expectedCurrent: "sha256:absent", disposition: "create" };
+  const expectedCurrent = modelDigest(raw);
+  return connectionBytesEqual(raw, proposed)
+    ? { expectedCurrent, disposition: "unchanged" }
+    : { expectedCurrent, disposition: "conflict" };
+}
+
+async function requireFreshIdentity(canonicalVault: string, expectedVaultId: string): Promise<void> {
+  let settings;
+  try {
+    settings = await readVaultSettings(canonicalVault);
+  } catch (error: unknown) {
+    const code = freshModelCode(error);
+    const message = error instanceof Error ? error.message : "Vault settings are unreadable.";
+    if (code === "ENOENT") throw freshModelError("missing-identity", message, code);
+    if (/VAULT_SETTINGS|hardlinked|symlink|regular|UTF-8|control file/i.test(message)) throw freshModelError("malformed", message, code);
+    rethrowFreshModel(error, "io");
+  }
+  if (settings === null) throw freshModelError("missing-identity", `Selected vault has no published portable identity: ${canonicalVault}.`);
+  if (settings.vaultId !== expectedVaultId) {
+    throw freshModelError("identity-mismatch", `Portable vault identity ${settings.vaultId} does not match expected ${expectedVaultId}.`);
+  }
+}
+
+interface FreshModelParents {
+  readonly root: Stats;
+  readonly parent: Stats;
+}
+
+function sameModelInode(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+async function assertFreshModelParents(root: string, parent: string, expected: FreshModelParents): Promise<void> {
+  await assertConnectionControlTarget(parent, `${FRESH_MODEL_LABEL} directory`, "directory");
+  if (!sameModelInode(await lstat(root), expected.root) || !sameModelInode(await lstat(parent), expected.parent)) {
+    throw freshModelError("external-change", "Model publication directory identity changed.");
+  }
+}
+
+async function readFreshModelControl(root: string, parents: FreshModelParents, expectedVaultId?: string): Promise<Uint8Array | undefined> {
+  const parent = path.join(root, ".oms");
+  const filename = path.join(parent, FRESH_MODEL_FILE);
+  await assertFreshModelParents(root, parent, parents);
+  const initial = await lstat(filename).catch((error: unknown) => {
+    if (freshModelCode(error) === "ENOENT") return undefined;
+    throw error;
+  });
+  if (initial === undefined) {
+    if (expectedVaultId !== undefined) await requireFreshIdentity(root, expectedVaultId);
+    await assertFreshModelParents(root, parent, parents);
+    return undefined;
+  }
+  if (initial.isSymbolicLink() || !initial.isFile() || initial.nlink !== 1) throw freshModelError("unsafe-target", "Model selection must be a regular single-link file.");
+  const handle = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.nlink !== 1 || !sameModelInode(before, initial)) throw freshModelError("external-change", "Model selection changed while opening.");
+    if (before.size > MAX_FRESH_MODEL_BYTES) throw freshModelError("malformed", "Model selection exceeds the 256 KiB limit.");
+    const bytes = Buffer.alloc(before.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    const after = await handle.stat();
+    if (length !== before.size || after.size !== before.size || after.nlink !== 1
+      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+      throw freshModelError("external-change", "Model selection changed while reading.");
+    }
+    if (expectedVaultId !== undefined) await requireFreshIdentity(root, expectedVaultId);
+    await assertFreshModelParents(root, parent, parents);
+    const leaf = await lstat(filename);
+    if (leaf.isSymbolicLink() || !leaf.isFile() || leaf.nlink !== 1 || !sameModelInode(leaf, after)
+      || leaf.size !== after.size || leaf.mtimeMs !== after.mtimeMs || leaf.ctimeMs !== after.ctimeMs) {
+      throw freshModelError("external-change", "Model selection path changed after reading.");
+    }
+    return bytes.subarray(0, length);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function inspectOwnedModelStage(handle: FileHandle, proposed: Uint8Array, allowPartial: boolean): Promise<Stats> {
+  const before = await handle.stat();
+  const observed = Buffer.alloc(proposed.length + 1);
+  let length = 0;
+  while (length < observed.length) {
+    const { bytesRead } = await handle.read(observed, length, observed.length - length, length);
+    if (bytesRead === 0) break;
+    length += bytesRead;
+  }
+  const after = await handle.stat();
+  if (!after.isFile() || !sameModelInode(before, after) || after.size !== length
+    || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+    || length > proposed.length || (!allowPartial && length !== proposed.length)
+    || !connectionBytesEqual(observed.subarray(0, length), proposed.subarray(0, length))) {
+    throw freshModelError("external-change", "Owned model staging bytes changed.");
+  }
+  return after;
+}
+
+async function discardOwnedStaging(staging: string, handle: FileHandle, models: string, root: string, parents: FreshModelParents, proposed: Uint8Array, linked: boolean): Promise<void> {
+  try {
+    const parent = path.dirname(staging);
+    await assertFreshModelParents(root, parent, parents);
+    const owned = await inspectOwnedModelStage(handle, proposed, true);
+    const current = await lstat(staging).catch((error: unknown) => {
+      if (freshModelCode(error) === "ENOENT") return undefined;
+      throw error;
+    });
+    if (current === undefined) return;
+    if (current.isSymbolicLink() || !current.isFile() || !sameModelInode(current, owned)) {
+      throw new Error("Model staging was replaced.");
+    }
+    if (owned.nlink !== 1) {
+      if (!linked || owned.nlink !== 2 || !sameModelInode(await lstat(models), owned)) {
+        throw new Error("Model staging has an unowned hardlink.");
+      }
+    }
+    await assertFreshModelParents(root, parent, parents);
+    const last = await lstat(staging);
+    if (last.isSymbolicLink() || !last.isFile() || !sameModelInode(last, owned) || last.nlink !== owned.nlink
+      || last.size !== owned.size || last.mtimeMs !== owned.mtimeMs || last.ctimeMs !== owned.ctimeMs) {
+      throw new Error("Model staging identity changed before cleanup.");
+    }
+    await rm(staging);
+  } catch (error: unknown) {
+    // A typed refusal already names what changed; only an unclassified cleanup
+    // failure is genuine ownership uncertainty.
+    if (error instanceof FreshModelSelectionError) throw error;
+    throw freshModelError("reconciliation-uncertain", error instanceof Error ? error.message : "Model staging ownership could not be reconciled.", freshModelCode(error));
+  }
+}
+
+async function publishFreshModelExclusive(models: string, proposed: Uint8Array, token: string | undefined, canonicalVault: string, expectedVaultId: string, expectedCurrent: Digest | "sha256:absent", parents: FreshModelParents): Promise<"written" | "unchanged"> {
+  const parent = path.dirname(models);
+  await assertFreshModelParents(canonicalVault, parent, parents);
+  const staging = path.join(parent, `.models.json.oms-${process.pid}-${randomUUID()}.tmp`);
+  const handle = await open(staging, "wx+", 0o600);
+  let linked = false;
+  let status: "written" | "unchanged" = "unchanged";
+  try {
+    await handle.writeFile(proposed);
+    await handle.sync();
+    takeFreshModelFault(token, "after-staging");
+    await requireFreshIdentity(canonicalVault, expectedVaultId);
+    const current = await readFreshModelControl(canonicalVault, parents);
+    if (current !== undefined) {
+      if (expectedCurrent !== "sha256:absent" || !connectionBytesEqual(current, proposed)) {
+        throw freshModelError("conflict", "Model selection changed after staging; user bytes were preserved.");
+      }
+    } else {
+      const owned = await inspectOwnedModelStage(handle, proposed, false);
+      await requireFreshIdentity(canonicalVault, expectedVaultId);
+      await assertFreshModelParents(canonicalVault, parent, parents);
+      const leaf = await lstat(staging);
+      if (leaf.isSymbolicLink() || !leaf.isFile() || !sameModelInode(leaf, owned) || leaf.nlink !== 1
+        || leaf.size !== owned.size || leaf.mtimeMs !== owned.mtimeMs || leaf.ctimeMs !== owned.ctimeMs) {
+        throw freshModelError("external-change", "Model staging changed before exclusive publication.");
+      }
+      try {
+        await link(staging, models);
+        linked = true;
+        status = "written";
+      } catch (error: unknown) {
+        if (freshModelCode(error) !== "EEXIST") throw error;
+        const raced = await readFreshModelControl(canonicalVault, parents);
+        if (raced === undefined || !connectionBytesEqual(raced, proposed)) {
+          throw freshModelError("conflict", "Exclusive model publication lost a race to different bytes; user bytes were preserved.", "EEXIST");
+        }
+      }
+    }
+  } catch (error: unknown) {
+    rethrowFreshModel(error, "io");
+  } finally {
+    try { await discardOwnedStaging(staging, handle, models, canonicalVault, parents, proposed, linked); }
+    finally { await handle.close(); }
+  }
+  takeFreshModelFault(token, "after-publish");
+  return status;
+}
+
+/** Read-only fresh selection. Missing `.oms` is create and is not created here. */
+export async function prepareFreshModelSelection(input: {
+  readonly target: WriteTarget;
+  readonly config: ModelsConfigV1 | unknown;
+}): Promise<FreshModelSelectionPrepared> {
+  const target = { vault: input.target.vault, source: input.target.source };
+  const proposedConfig = parseModelsConfig(structuredClone(input.config));
+  const proposed = canonicalModelBytes(proposedConfig);
+  await admitFreshModelTarget(target);
+  const canonicalVault = await canonicalFreshVault(target.vault);
+  const inspected = await inspectFreshModel(canonicalVault, false);
+  const classified = classifyFreshModelBytes(inspected.raw, proposed);
+  return {
+    canonicalVault,
+    config: proposedConfig,
+    configDigest: modelDigest(proposed),
+    expectedCurrent: classified.expectedCurrent,
+    disposition: classified.disposition,
+  };
+}
+
+/** Absent-only exclusive publication. Never calls applyModelSelection and never creates missing settings or `.oms`. */
+export async function commitFreshModelSelection(input: {
+  readonly target: WriteTarget;
+  readonly config: ModelsConfigV1 | unknown;
+  readonly expectedCurrent: Digest | "sha256:absent";
+  readonly expectedConfigDigest: Digest;
+  readonly expectedVaultId: string;
+  readonly faultToken?: string;
+}): Promise<FreshModelSelectionCommitted> {
+  const target = { vault: input.target.vault, source: input.target.source };
+  const expectedCurrent = input.expectedCurrent;
+  const expectedConfigDigest = input.expectedConfigDigest;
+  const expectedVaultId = input.expectedVaultId;
+  const faultToken = input.faultToken;
+  const proposedConfig = parseModelsConfig(structuredClone(input.config));
+  const proposed = canonicalModelBytes(proposedConfig);
+  const configDigest = modelDigest(proposed);
+  if (configDigest !== expectedConfigDigest) {
+    throw freshModelError("stale", `Model selection config digest ${configDigest} does not match expected ${expectedConfigDigest}.`);
+  }
+  await admitFreshModelTarget(target);
+  const canonicalVault = await canonicalFreshVault(target.vault);
+  const inspected = await inspectFreshModel(canonicalVault, true);
+  if (inspected.parents === null) throw freshModelError("missing-parent", "Model selection parent is missing.");
+  const models = inspected.path;
+  await requireFreshIdentity(canonicalVault, expectedVaultId);
+  const current = inspected.raw;
+  const absentRetry = expectedCurrent === "sha256:absent" && current !== undefined && connectionBytesEqual(current, proposed);
+  if (!absentRetry) {
+    const currentDigest: Digest | "sha256:absent" = current === undefined ? "sha256:absent" : modelDigest(current);
+    if (currentDigest !== expectedCurrent) {
+      throw freshModelError("stale", `Model selection precondition ${currentDigest} does not match expected ${expectedCurrent}.`);
+    }
+    if (current !== undefined && !connectionBytesEqual(current, proposed)) {
+      throw freshModelError("conflict", "Existing model selection bytes differ from the canonical proposal and were preserved.");
+    }
+  }
+  const status = current === undefined
+    ? await publishFreshModelExclusive(models, proposed, faultToken, canonicalVault, expectedVaultId, expectedCurrent, inspected.parents)
+    : "unchanged";
+  await requireFreshIdentity(canonicalVault, expectedVaultId);
+  try {
+    await assertConnectionControlTarget(models, `${FRESH_MODEL_LABEL} file`, "file");
+  } catch (error: unknown) {
+    rethrowFreshModel(error, "external-change");
+  }
+  const persisted = await readFreshModelControl(canonicalVault, inspected.parents, expectedVaultId).catch((error: unknown) => rethrowFreshModel(error, "readback-failed"));
+  if (persisted === undefined || !connectionBytesEqual(persisted, proposed) || modelDigest(persisted) !== configDigest) {
+    throw freshModelError("readback-failed", "Committed model selection bytes do not match the approved canonical config.");
+  }
+  let parsed: ModelsConfigV1;
+  try {
+    parsed = parseModelsConfig(connectionText(persisted));
+  } catch (error: unknown) {
+    throw freshModelError("readback-failed", error instanceof Error ? error.message : "Committed model selection is unreadable.");
+  }
+  if (JSON.stringify(parsed) !== JSON.stringify(proposedConfig)) {
+    throw freshModelError("readback-failed", "Committed model selection identity does not match the approved config.");
+  }
+  return { status, path: models, configDigest, verified: true };
 }

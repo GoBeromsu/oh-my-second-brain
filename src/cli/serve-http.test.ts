@@ -148,7 +148,10 @@ describe("serve HTTP transport", () => {
       });
       insert();
       const before = await vaultSnapshot(tmpVault);
-      expect(Object.keys(before)).toContain(".oms/engine-store.sqlite-wal");
+      const storeRoot = path.dirname(engineStorePath(tmpVault));
+      const externalBefore = await vaultSnapshot(storeRoot);
+      expect(Object.keys(externalBefore)).toContain(`${path.basename(engineStorePath(tmpVault))}-wal`);
+      expect(Object.keys(externalBefore)).toContain(`${path.basename(engineStorePath(tmpVault))}-shm`);
 
       httpServer = await runServeHttp({
         vault: tmpVault,
@@ -159,6 +162,7 @@ describe("serve HTTP transport", () => {
       const health = await fetch(`${httpServer.url}/health`);
       expect(health.status).toBe(200);
       expect(await vaultSnapshot(tmpVault)).toEqual(before);
+      expect(await vaultSnapshot(storeRoot)).toEqual(externalBefore);
 
       const search = await jsonFetch(`${httpServer.url}/search`, {
         query: "walexclusive",
@@ -169,6 +173,7 @@ describe("serve HTTP transport", () => {
         expect.objectContaining({ path: "references/WAL Only.md" }),
       ]);
       expect(await vaultSnapshot(tmpVault)).toEqual(before);
+      expect(await vaultSnapshot(storeRoot)).toEqual(externalBefore);
     } finally {
       await httpServer?.close();
       httpServer = undefined;

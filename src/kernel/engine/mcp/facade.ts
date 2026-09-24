@@ -40,7 +40,7 @@ import {
   walkMarkdown,
 } from "../embed/sync.js";
 import { openEngineStore } from "../embed/store.js";
-import { engineStorePath } from "../paths.js";
+import { assertExternalDatabasePath, engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../paths.js";
 import type { EngineStore } from "../embed/store.js";
 import type { EmbeddingModelDescriptor } from "../embed/model.js";
 import { capabilityGuidance } from "../embed/config.js";
@@ -460,16 +460,24 @@ export class McpEngineAdapter {
     private readonly persistLexicalSync = true,
   ) {}
 
+  /** Constrain an explicit store override to the selected vault before any lock or open. */
+  private externalStorePath(vault: string): string {
+    const resolvedVault = path.resolve(vault);
+    return this.config?.dbPath === undefined
+      ? engineStorePath(resolvedVault)
+      : assertExternalDatabasePath(resolvedVault, this.config.dbPath);
+  }
+
   // -------------------------------------------------------------------------
   // Cache-path + node-index helpers
   // -------------------------------------------------------------------------
 
   private graphCachePath(vault: string): string {
-    return path.join(vault, ".oms", "cache", "engine", "graph.json");
+    return engineGraphCachePath(vault);
   }
 
   private nodeCachePath(vault: string): string {
-    return path.join(vault, ".oms", "cache", "engine", "node-index.json");
+    return engineNodeCachePath(vault);
   }
 
   /** Load a projection-matched node index, scanning notes without writing on a cache miss. */
@@ -824,10 +832,9 @@ export class McpEngineAdapter {
   async syncEmbeddings(
     opts: McpSemanticEmbeddingSyncOptions,
   ): Promise<McpSemanticEmbeddingSyncResult> {
-    const activeDbPath = this.config?.dbPath ??
-      engineStorePath(path.resolve(opts.vault));
     let swapHandleClosed = false;
     try {
+      const activeDbPath = this.externalStorePath(opts.vault);
       const syncResult = await syncEngineStore({
         vault: opts.vault,
         collection: opts.collection,
@@ -846,7 +853,7 @@ export class McpEngineAdapter {
         embeddingMrlDim: this.config?.embeddingMrlDim,
         embeddingNormalization: this.config?.embeddingNormalization,
         embeddingPrefixScheme: this.config?.embeddingPrefixScheme,
-        dbPath: this.config?.dbPath,
+        dbPath: activeDbPath,
         embed: opts.embed ?? true,
         force: opts.force ?? false,
         onGenerationSwapPrepare: () => {
@@ -1018,8 +1025,7 @@ export class McpEngineAdapter {
   async cleanup(_opts: McpStatusOptions): Promise<McpSemanticCleanupResult> {
     let releaseLock: (() => void) | undefined;
     try {
-      const dbPath = this.config?.dbPath ??
-        engineStorePath(path.resolve(this.vaultPath));
+      const dbPath = this.externalStorePath(this.vaultPath);
       releaseLock = acquireEngineStoreWriterLock(dbPath);
       const store = this.deps.store as EngineStore;
       const livePaths = new Set<string>();
@@ -1053,7 +1059,7 @@ export class McpEngineAdapter {
   // -------------------------------------------------------------------------
 
   /**
-   * Build the edge graph + node index and persist both to .oms/cache/engine/.
+   * Build the edge graph + node index and persist both to the external engine cache.
    * On dryRun, report stats from the existing cache without rebuilding.
    */
   async graphBuild(opts: McpGraphBuildOptions, vaultPath: string): Promise<McpGraphBuildResult> {

@@ -50,19 +50,22 @@ describe("template file lock", () => {
     await expect(readdir(item.directory)).resolves.toEqual([]);
   });
 
-  it("takes over a lock whose owner is dead", async () => {
+  it("never steals a shared lease using only a dead local PID", async () => {
     const item = await fixture();
     roots.push(item.root);
     await mkdir(item.lock, { recursive: true, mode: 0o700 });
-    await writeFile(join(item.lock, "owner.json"), JSON.stringify({ pid: 12345, token: "dead-owner" }));
+    const ownerBytes = JSON.stringify({ pid: 12345, token: "remote-owner" });
+    await writeFile(join(item.lock, "owner.json"), ownerBytes);
     const kill = vi.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("owner is gone"), { code: "ESRCH" });
     });
     try {
       const token = await acquireTransactionLock(item.directory, item.lock);
-      expect(token).toEqual(expect.any(String));
-      await expect(readFile(join(item.lock, "owner.json"), "utf8")).resolves.toContain(token!);
-      await releaseTransactionLock(item.lock, token!);
+      expect(token).toBeNull();
+      expect(kill).not.toHaveBeenCalled();
+      await expect(readFile(join(item.lock, "owner.json"), "utf8")).resolves.toBe(ownerBytes);
+      await expect(readdir(item.directory)).resolves.toEqual(["lock"]);
+      await expect(readdir(item.lock)).resolves.toEqual(["owner.json"]);
     } finally {
       kill.mockRestore();
     }
@@ -75,8 +78,16 @@ describe("template file lock", () => {
     await writeFile(join(item.lock, "owner.json"), "{malformed");
 
     await expect(acquireTransactionLock(item.directory, item.lock)).resolves.toBeNull();
+    await expect(releaseTransactionLock(item.lock, "unverifiable-owner")).rejects.toThrow();
     await expect(readFile(join(item.lock, "owner.json"), "utf8")).resolves.toBe("{malformed");
     await expect(readdir(item.directory)).resolves.toEqual(["lock"]);
+  });
+
+  it("treats an already absent lease as released without creating anything", async () => {
+    const item = await fixture();
+    roots.push(item.root);
+    await expect(releaseTransactionLock(item.lock, "absent-owner")).resolves.toBeUndefined();
+    expect(await readdir(item.root)).toEqual([]);
   });
 
   it("publishes atomic writes and cleans up each temporary file", async () => {
@@ -91,5 +102,16 @@ describe("template file lock", () => {
     await Promise.all([atomicWrite(target, "second"), atomicWrite(target, "third")]);
     await expect(readFile(target, "utf8")).resolves.toMatch(/^(second|third)$/);
     await expect(readdir(dirname(target))).resolves.toEqual(["payload.txt"]);
+  });
+
+  it("preserves a directory target and cleans staged bytes when publication fails", async () => {
+    const item = await fixture();
+    roots.push(item.root);
+    const target = join(item.root, "existing-directory");
+    await mkdir(target);
+    await writeFile(join(target, "keep.txt"), "user bytes");
+    await expect(atomicWrite(target, "replacement")).rejects.toThrow();
+    await expect(readFile(join(target, "keep.txt"), "utf8")).resolves.toBe("user bytes");
+    await expect(readdir(item.root)).resolves.toEqual(["existing-directory"]);
   });
 });

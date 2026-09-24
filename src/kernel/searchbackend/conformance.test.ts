@@ -716,7 +716,9 @@ describe("EngineSearchBackend high-cardinality facet summary", () => {
     } finally {
       await engine.dispose();
     }
-  });
+    // Walking every page of a 776-note corpus is deliberately more work than one
+    // bounded query, so this scenario gets its own explicit budget.
+  }, 20_000);
 
   it("bounds axis and overview query facets without changing their result counts", async () => {
     const vault = await linkHeavyFacetVault();

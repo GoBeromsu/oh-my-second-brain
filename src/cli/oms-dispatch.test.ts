@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { mainUsageCommandNames } from "./usage.js";
+import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,7 +60,7 @@ let tempRoots: string[] = [];
 
 beforeAll(async () => {
   realOmsBefore = snapshotDir(realOmsDir);
-  smokeHome = await mkdtemp(path.join(tmpdir(), "oms-cli-dispatch-home-"));
+  smokeHome = await realpath(await mkdtemp(path.join(tmpdir(), "oms-cli-dispatch-home-")));
 });
 
 afterAll(async () => {
@@ -84,16 +85,15 @@ async function makeVault(): Promise<string> {
   return vault;
 }
 
-/** Publishes the empty v4 contract through the real dry-run then approval path. */
+/** Publishes native settings through the real dry-run token and outer digest. */
 async function approvedSetup(vault: string): Promise<ReturnType<typeof runCli>> {
-  await mkdir(path.join(vault, ".obsidian"), { recursive: true });
-  await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { title: "text" } }));
   const dryRun = runCli(["setup", "--vault", vault, "--dry-run"]);
-  expect(dryRun.status).toBe(0);
+  expect(dryRun.status, `${dryRun.stdout}\n${dryRun.stderr}`).toBe(0);
   expect(existsSync(path.join(vault, ".oms", "template-policy.json"))).toBe(false);
-  const match = /"approvalDigest":\s*"(sha256:[0-9a-f]{64})"/u.exec(dryRun.stdout);
-  expect(match?.[1]).toBeDefined();
-  return runCli(["setup", "--vault", vault, "--yes", "--approved-digest", match![1]!]);
+  const proposal = JSON.parse(dryRun.stdout) as { readonly approvalToken?: string; readonly approvalDigest?: string };
+  expect(proposal.approvalToken).toEqual(expect.any(String));
+  expect(proposal.approvalDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  return runCli(["setup", "--vault", vault, "--yes", "--approval-token", proposal.approvalToken!, "--approved-digest", proposal.approvalDigest!]);
 }
 
 function runCli(
@@ -254,7 +254,7 @@ describe("oms CLI dispatch", () => {
     // A forged approval digest must fail, and a failed setup must not turn into
     // an update advertisement.
     const result = runCli(
-      ["setup", "--vault", vault, "--yes", "--approved-digest", `sha256:${"0".repeat(64)}`],
+      ["setup", "--vault", vault, "--yes", "--approval-token", "e30", "--approved-digest", `sha256:${"0".repeat(64)}`],
       undefined,
       {
         OMS_UPDATE_NOTICE: "1",
@@ -367,13 +367,13 @@ describe("oms CLI dispatch", () => {
     await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf8")).resolves.toBe(yaml);
   });
 
-  it("emits audit JSON and exits 0 for an approved empty contract", async () => {
+  it("emits audit JSON and exits 0 for an existing approved contract", async () => {
     const vault = await makeVault();
-    expect((await approvedSetup(vault)).status).toBe(0);
+    await writeApprovedVault(vault);
     await mkdir(path.join(vault, "notes"), { recursive: true });
     await writeFile(path.join(vault, "notes", "Alpha.md"), "---\ntitle: Alpha\n---\nAlpha.\n");
     const audit = runCli(["note", "audit", "--vault", vault, "--folder", "notes", "--json"]);
-    expect(audit.status).toBe(0);
+    expect(audit.status, `${audit.stdout}\n${audit.stderr}`).toBe(0);
     expect(audit.stderr).toBe("");
     // An unbound note is governed by the always-on default layer, not a defect.
     expect(jsonObject(audit.stdout)).toEqual(expect.objectContaining({
@@ -466,14 +466,14 @@ describe("oms CLI dispatch", () => {
     expect(setup.status).toBe(0);
 
     const link = runCli(["bridge", "add", "--vault", vault, "--folder", "notes"], undefined, undefined, repo);
-    expect(link.status).toBe(0);
+    expect(link.status, `${link.stdout}\n${link.stderr}`).toBe(0);
     expect(link.stderr).toBe("");
     expect(link.stdout).toContain("Oh My Second Brain vault bridge ready.");
     expect(link.stdout).toContain("Convention: wrote");
 
     const linkPath = path.join(repo, ".oms", "linked", "notes");
     expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
-    expect(path.resolve(path.dirname(linkPath), await readlink(linkPath))).toBe(path.join(vault, "notes"));
+    expect(await realpath(path.resolve(path.dirname(linkPath), await readlink(linkPath)))).toBe(await realpath(path.join(vault, "notes")));
     expect(await readFile(path.join(repo, ".gitignore"), "utf-8")).toContain(".oms/linked/");
     const agents = await readFile(path.join(repo, "AGENTS.md"), "utf-8");
     expect(agents).toContain("<!-- oms:begin -->");

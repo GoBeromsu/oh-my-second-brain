@@ -1,218 +1,335 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { parseModelsConfig, type ModelsConfigV1 } from "../engine/embed/config.js";
-import { proposeTemplateFolders, type TemplateFolderCandidate, type TemplateHintDiagnostic } from "../templates/hints.js";
-import { approvalDigest, digestBytes, outputDigest } from "../templates/canonical.js";
-import { parseTemplatePolicy, serializeDerivedProjection, serializeTemplatePolicy } from "../templates/policy.js";
-import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "../templates/resolver.js";
-import { executeTemplateTransaction, TEMPLATE_TRANSACTION_MARKER_PATH } from "../templates/transaction.js";
+import { constants } from "node:fs";
+import { open, realpath } from "node:fs/promises";
+import { admitWriteTarget, type WriteTarget } from "../capture/safe.js";
 import {
-  DEFAULT_MANAGED_TEMPLATE_PATH,
-  type FileExpectation,
-  type GuardedTemplateRequest,
-  type ManagedTemplatePath,
-  type TemplateCompositionManifest,
-  type TemplatePolicy,
-  type TemplateTransactionReceipt,
-  type VerifiedFileState,
-} from "../templates/types.js";
-import { describeTemplateSetup, type TemplateSetupDocument } from "./documents.js";
+  ConnectionCoordinatorError,
+  prepareConnection,
+  settingsPublicationRequest,
+  type ConnectionCoordinatorOptions,
+  type PreparedConnection,
+} from "../install/connection-coordinator.js";
+import { ContractV5Error, parseContractPolicyV5, type ContractPolicyV5 } from "../templates/contract-v5.js";
+import { proposeTemplateFolders, type TemplateFolderHintResult } from "../templates/hints.js";
+import { parseLegacyJson } from "../templates/legacy-json.js";
+import { normalizeTemplateControlPath, verifyTemplateControlPath } from "../templates/paths.js";
+import type { Digest } from "../templates/types.js";
+import { VaultSettingsError, parseVaultSettings } from "../templates/vault-settings.js";
+import {
+  inspectLegacyVaultMigrationRetry,
+  inspectLegacyVaultPublication,
+  inspectVaultPublication,
+  type LegacyVaultPublicationAdmission,
+} from "../templates/vault-publication.js";
+import {
+  describeFreshSetup,
+  type FreshSetupDocument,
+  type FreshSetupMigrationRetryAnchor,
+  type FreshSetupPolicySummary,
+} from "./documents.js";
 
 /**
- * Setup proposes an empty version 4 policy and publishes it only through the
- * approved transaction. It ships no note-type defaults, discovers no templates,
- * and never writes a note.
+ * Fresh setup classifies an existing canonical vault and prepares one explicit
+ * connection. Inspection and preparation create no root, `.oms`, registry,
+ * reservation, policy, model selection, or Markdown.
  */
 
-const encoder = new TextEncoder();
-const POLICY_PATH = ".oms/template-policy.json" as const;
-const TAXONOMY_PATH = ".oms/taxonomy.json" as const;
-const PROJECTION_PATH = ".oms/types.json" as const;
+const POLICY_PATH = ".oms/template-policy.json";
+const SETTINGS_PATH = ".oms/settings.json";
+const MAX_CONTROL_BYTES = 8 * 1024 * 1024;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-export interface SetupState {
+export type FreshSetupState = "contract-configured" | "contract-setup-required" | "held-legacy" | "blocked";
+
+export type FreshSetupIdentity =
+  | { readonly kind: "settings-root"; readonly operationId: string; readonly transactionId: string; readonly vaultId: string }
+  | { readonly kind: "verified-target"; readonly operationId: string };
+
+export interface SetupDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly path?: string;
+}
+
+export interface FreshSetupInspection {
   readonly vault: string;
-  readonly policy: TemplatePolicy;
-  readonly document: TemplateSetupDocument;
-  readonly templateFolderCandidates: readonly TemplateFolderCandidate[];
-  readonly templateFolderHintDiagnostics: readonly TemplateHintDiagnostic[];
+  readonly state: FreshSetupState;
+  readonly settings: { readonly state: "missing" } | { readonly state: "verified"; readonly vaultId: string };
+  readonly document: FreshSetupDocument;
+  readonly hints: TemplateFolderHintResult;
+  readonly diagnostics: readonly SetupDiagnostic[];
 }
 
-export interface SetupInputs {
-  /** Reserved for the interview; setup itself selects nothing. */
-  readonly templateFolders?: readonly { readonly path: string }[];
+export type FreshSetupPreparation =
+  | { readonly state: "ready"; readonly inspection: FreshSetupInspection; readonly identity: FreshSetupIdentity; readonly connection: PreparedConnection }
+  | { readonly state: "held-legacy" | "blocked"; readonly inspection: FreshSetupInspection; readonly diagnostics: readonly SetupDiagnostic[] };
+
+type ControlBytes = { readonly state: "absent" } | { readonly state: "present"; readonly bytes: Uint8Array };
+
+type SettingsObservation =
+  | { readonly state: "missing"; readonly diagnostic: null }
+  | { readonly state: "verified"; readonly vaultId: string; readonly diagnostic: null }
+  | { readonly state: "malformed"; readonly diagnostic: SetupDiagnostic };
+
+type PolicyObservation =
+  | { readonly state: "absent" }
+  | { readonly state: "legacy" }
+  | { readonly state: "v5"; readonly policy: ContractPolicyV5 }
+  | { readonly state: "malformed"; readonly diagnostic: SetupDiagnostic };
+
+/** Read-only. A valid manual V5 policy needs neither a native marker nor settings. */
+export async function inspectFreshSetup(input: { readonly vault: string }): Promise<FreshSetupInspection> {
+  if (typeof input.vault !== "string" || input.vault.trim() === "") fail("vault must be an existing canonical root");
+  const vault = await realpath(input.vault);
+  const [settings, policy, hints] = await Promise.all([
+    observeSettings(vault),
+    observePolicy(vault),
+    proposeTemplateFolders(vault, { selected: [] }),
+  ]);
+  const settingsView = settings.state === "verified" ? { state: "verified" as const, vaultId: settings.vaultId } : { state: "missing" as const };
+  const target: WriteTarget = { vault, source: "explicit" };
+  const admission = await inspectLegacyVaultPublication(target);
+  const held = legacyHold(admission);
+  if (held !== null) return compose(vault, "held-legacy", settingsView, policy, hints, [held]);
+  if (admission.status === "legacy-invalid" || admission.status === "legacy-ambiguous" || admission.status === "legacy-unavailable") {
+    return compose(vault, "blocked", settingsView, policy, hints, [admissionDiagnostic(admission)]);
+  }
+  if (admission.status === "publisher-marker") {
+    const native = await nativeDisposition(target);
+    if (native.state !== "clear") return compose(vault, native.state, settingsView, policy, hints, native.diagnostics, native.anchor);
+  }
+  const diagnostics: SetupDiagnostic[] = [];
+  if (settings.state === "malformed") diagnostics.push(settings.diagnostic);
+  if (policy.state === "malformed") diagnostics.push(policy.diagnostic);
+  if (diagnostics.length > 0) return compose(vault, "blocked", settingsView, policy, hints, diagnostics);
+  if (policy.state === "legacy") return compose(vault, "held-legacy", settingsView, policy, hints, [diagnostic("legacy-policy", "Published policy is a historical contract and is not a V5 setup contract.", POLICY_PATH)]);
+  return compose(vault, policy.state === "v5" ? "contract-configured" : "contract-setup-required", settingsView, policy, hints, []);
 }
 
-export type SetupDecision = SetupState;
-
-/** The empty always-on default layer every vault starts from. */
-export function emptyTemplatePolicy(): TemplatePolicy {
-  return parseTemplatePolicy(JSON.stringify({
-    version: 4,
-    properties: {},
-    default: {
-      templatePath: DEFAULT_MANAGED_TEMPLATE_PATH,
-      approvedMarkdown: "",
-      approvedMarkdownDigest: digestBytes(""),
-      fields: {},
-      headings: [],
-      semanticCriteria: [],
-    },
-    templates: {},
-  }));
-}
-
-async function setupState(vault: string): Promise<SetupState> {
-  const policy = emptyTemplatePolicy();
-  // Folder hints stay raw observations: setup selects nothing on the user's behalf.
-  const hints = await proposeTemplateFolders(vault, { selected: [] });
-  return {
-    vault,
-    policy,
-    document: describeTemplateSetup(policy, hints),
-    templateFolderCandidates: hints.candidates,
-    templateFolderHintDiagnostics: hints.diagnostics,
-  };
-}
-
-/** Discovery is side-effect free and reads only vault-resident state. */
-export async function inspectSetup({ vault }: { readonly vault: string }): Promise<SetupState> {
-  return setupState(vault);
-}
-
-export async function decideSetup(state: SetupState, _inputs: SetupInputs = {}): Promise<SetupDecision> {
-  return setupState(state.vault);
-}
-
-export async function decideNonInteractiveSetup(state: SetupState): Promise<SetupDecision> {
-  return state;
-}
-
-async function currentState(vault: string, relative: string): Promise<VerifiedFileState> {
+/** Read-only preparation. Identity mode mismatch fails and never switches modes. */
+export async function prepareFreshSetup(input: {
+  readonly target: WriteTarget;
+  readonly identity: FreshSetupIdentity;
+  readonly coordinatorOptions?: ConnectionCoordinatorOptions;
+}): Promise<FreshSetupPreparation> {
+  const identity = strictIdentity(input.identity);
+  const admitted = await admitWriteTarget(input.target);
+  if (admitted !== undefined) {
+    const inspection = await unsupported(input.target, diagnostic(admitted.code, admitted.message));
+    return { state: "blocked", inspection, diagnostics: inspection.diagnostics };
+  }
+  const inspection = await inspectFreshSetup({ vault: input.target.vault });
+  if (inspection.state === "held-legacy" || inspection.state === "blocked") return { state: inspection.state, inspection, diagnostics: inspection.diagnostics };
+  const mismatch = modeMismatch(inspection, identity);
+  if (mismatch !== null) return blockedPreparation(inspection, mismatch);
+  const preserved: WriteTarget = { vault: inspection.vault, source: input.target.source };
+  const publication = identity.kind === "settings-root" ? settingsPublicationRequest(identity.transactionId, identity.vaultId) : null;
   try {
-    const bytes = new Uint8Array(await readFile(path.join(vault, relative)));
-    return { state: "present", bytes, signature: digestBytes(bytes) };
-  } catch (error: unknown) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return { state: "absent" };
+    const connection = await prepareConnection({ operationId: identity.operationId, target: preserved, publication, select: false }, input.coordinatorOptions);
+    if (connection.input.select !== false || connection.input.project !== undefined || connection.input.target.source !== input.target.source) {
+      return blockedPreparation(inspection, diagnostic("preparation-required", "Connection preparation changed the requested target, selection, or project absence."));
+    }
+    if (connection.blockers.length > 0) return blockedPreparation(inspection, ...connection.blockers.map(issue => diagnostic(issue.code, issue.message)));
+    return { state: "ready", inspection, identity, connection };
+  } catch (error) {
+    if (error instanceof ConnectionCoordinatorError) return blockedPreparation(inspection, diagnostic(error.code, error.message));
     throw error;
   }
 }
 
-function expectation(state: VerifiedFileState): FileExpectation {
-  return state.state === "present" ? { state: "present", signature: state.signature } : { state: "absent" };
-}
-
-function present(text: string): Extract<VerifiedFileState, { readonly state: "present" }> {
-  const bytes = encoder.encode(text);
-  return { state: "present", bytes, signature: digestBytes(bytes) };
-}
-
-/**
- * Composes the approval manifest for the empty policy, its taxonomy, the
- * derived projection, and the empty managed default draft. Existing controls
- * are preserved as verify-only so setup never silently replaces a vault that
- * already has an approved contract.
- */
-export async function composeSetup(decision: SetupDecision): Promise<TemplateCompositionManifest> {
-  const vault = decision.vault;
-  const [policyCurrent, taxonomyCurrent, projectionCurrent, draftCurrent] = await Promise.all([
-    currentState(vault, POLICY_PATH),
-    currentState(vault, TAXONOMY_PATH),
-    currentState(vault, PROJECTION_PATH),
-    currentState(vault, DEFAULT_MANAGED_TEMPLATE_PATH),
-  ]);
-
-  // A present control is preserved, so the derived projection must be generated
-  // from the bytes that will actually be on disk. Generating it from the
-  // proposal would leave the vault reporting a contract it does not have.
-  const decoder = new TextDecoder();
-  const policyText = policyCurrent.state === "present"
-    ? decoder.decode(policyCurrent.bytes)
-    : serializeTemplatePolicy(decision.policy);
-  const taxonomyText = taxonomyCurrent.state === "present"
-    ? decoder.decode(taxonomyCurrent.bytes)
-    : `${JSON.stringify({ templates: {}, folders: {} }, null, 2)}\n`;
-  const effectivePolicy = policyCurrent.state === "present"
-    ? parseTemplatePolicy(policyText)
-    : decision.policy;
-  const generationDigest = controlGenerationDigest(encoder.encode(policyText), encoder.encode(taxonomyText));
-  const projectionText = serializeDerivedProjection({
-    version: "oms.types.v2",
-    generatedFrom: generationDigest,
-    managed: expectedProjectionManaged(
-      effectivePolicy,
-      taxonomyRouting(TAXONOMY_PATH, encoder.encode(taxonomyText)),
-      generationDigest,
-    ),
-  });
-
-  const controls = [
-    { kind: "policy" as const, path: POLICY_PATH, expectedCurrent: expectation(policyCurrent), current: policyCurrent, proposed: present(policyText), action: policyCurrent.state === "absent" ? "write" as const : "verify-only" as const },
-    { kind: "taxonomy" as const, path: TAXONOMY_PATH, expectedCurrent: expectation(taxonomyCurrent), current: taxonomyCurrent, proposed: present(taxonomyText), action: taxonomyCurrent.state === "absent" ? "write" as const : "verify-only" as const },
-    // The projection is derived, so a stale one is rewritten rather than kept.
-    { kind: "projection" as const, path: PROJECTION_PATH, expectedCurrent: expectation(projectionCurrent), current: projectionCurrent, proposed: present(projectionText), action: projectionCurrent.state === "present" && decoder.decode(projectionCurrent.bytes) === projectionText ? "verify-only" as const : "write" as const },
-  ] as TemplateCompositionManifest["controls"];
-
-  // A verify-only control must propose exactly the bytes already on disk.
-  const settle = <T extends TemplateCompositionManifest["controls"][number]>(control: T): T =>
-    control.action === "verify-only" && control.current.state === "present"
-      ? { ...control, proposed: control.current }
-      : control;
-  const reconciled: TemplateCompositionManifest["controls"] = [
-    settle(controls[0]),
-    settle(controls[1]),
-    settle(controls[2]),
-  ];
-
-  const draft = {
-    templateId: null,
-    path: DEFAULT_MANAGED_TEMPLATE_PATH as ManagedTemplatePath,
-    expectedCurrent: expectation(draftCurrent),
-    current: draftCurrent,
-    proposed: draftCurrent.state === "present" ? draftCurrent : present(""),
-    action: draftCurrent.state === "absent" ? "write" as const : "verify-only" as const,
+async function unsupported(target: WriteTarget, issue: SetupDiagnostic): Promise<FreshSetupInspection> {
+  let vault = target.vault;
+  try { vault = await realpath(target.vault); } catch { /* report the supplied path when it is not a canonical root */ }
+  const hints: TemplateFolderHintResult = { candidates: [], diagnostics: [] };
+  return {
+    vault,
+    state: "blocked",
+    settings: { state: "missing" },
+    document: describeFreshSetup({ state: "blocked", settingsPresent: false, hints, diagnostics: [issue] }),
+    hints,
+    diagnostics: [issue],
   };
-
-  const outputs = [...reconciled, draft].flatMap(transition => transition.action === "write" && transition.proposed.state === "present"
-    ? [{ finalVaultRelativePath: transition.path, payloadDigest: transition.proposed.signature }]
-    : []);
-  const body = {
-    version: 1 as const,
-    markerPath: TEMPLATE_TRANSACTION_MARKER_PATH,
-    controls: reconciled,
-    drafts: [draft],
-    operations: [{ kind: "commit-contract" as const, templateId: null, payloadDigest: digestBytes(policyText) }],
-    diagnostics: [],
-    outputs,
-  };
-  return { ...body, approvalDigest: approvalDigest(body), outputDigest: outputDigest(outputs) };
 }
 
-export async function applySetup(
-  decision: SetupDecision,
-  manifest: TemplateCompositionManifest,
-  request: GuardedTemplateRequest,
-): Promise<TemplateTransactionReceipt> {
-  return executeTemplateTransaction(decision.vault, manifest, request);
-}
-
-/** Publish portable selections only after their template transaction was approved and applied. */
-export async function publishSetupModels(
-  decision: SetupDecision,
-  receipt: TemplateTransactionReceipt,
-  request: GuardedTemplateRequest,
-  modelsConfig: ModelsConfigV1,
-): Promise<boolean> {
-  if (request.dryRun === true || (receipt.status !== "applied" && receipt.status !== "already-complete")) {
-    throw new Error("SETUP_APPROVAL_MISMATCH");
+function modeMismatch(inspection: FreshSetupInspection, identity: FreshSetupIdentity): SetupDiagnostic | null {
+  if (identity.kind === "settings-root") {
+    return inspection.settings.state === "missing" ? null : diagnostic("identity-conflict", "Settings-root preparation requires absent settings and cannot replace published settings.");
   }
-  const content = `${JSON.stringify(parseModelsConfig(modelsConfig), null, 2)}\n`;
-  const modelsPath = path.join(decision.vault, ".oms", "models.json");
+  return inspection.settings.state === "verified" ? null : diagnostic("identity-missing", "Verified-target preparation requires actual valid settings and no settings publication.");
+}
+
+function strictIdentity(value: FreshSetupIdentity): FreshSetupIdentity {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) fail("identity must be a concrete object");
+  const record = value as unknown as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  assertUuid(record.operationId, "operationId");
+  if (record.kind === "verified-target") {
+    if (keys.join(",") !== "kind,operationId") fail("verified-target identity contains unexpected fields");
+    return { kind: "verified-target", operationId: record.operationId };
+  }
+  if (record.kind !== "settings-root" || keys.join(",") !== "kind,operationId,transactionId,vaultId") fail("settings-root identity must contain kind, operationId, transactionId, and vaultId");
+  assertUuid(record.transactionId, "transactionId");
+  assertUuid(record.vaultId, "vaultId");
+  return { kind: "settings-root", operationId: record.operationId, transactionId: record.transactionId, vaultId: record.vaultId };
+}
+
+function assertUuid(value: unknown, label: string): asserts value is string {
+  if (typeof value !== "string" || !UUID.test(value)) fail(`${label} must be a lowercase UUID`);
+}
+
+function fail(message: string): never {
+  throw new ConnectionCoordinatorError("invalid-input", message);
+}
+
+function legacyHold(admission: LegacyVaultPublicationAdmission): SetupDiagnostic | null {
+  if (admission.status !== "verified" && admission.status !== "legacy-inconsistent" && admission.status !== "legacy-in-progress") return null;
+  return admissionDiagnostic(admission);
+}
+
+function admissionDiagnostic(admission: LegacyVaultPublicationAdmission): SetupDiagnostic {
+  return diagnostic(admission.status, admission.reasons[0] ?? `Historical publication admission is ${admission.status}.`, admission.markerPath ?? undefined);
+}
+
+async function nativeDisposition(target: WriteTarget): Promise<{ readonly state: "clear" } | { readonly state: "held-legacy" | "blocked"; readonly diagnostics: readonly SetupDiagnostic[]; readonly anchor?: FreshSetupMigrationRetryAnchor }> {
+  let inspected: Awaited<ReturnType<typeof inspectVaultPublication>>;
+  try { inspected = await inspectVaultPublication(target.vault); }
+  catch (error) { return { state: "blocked", diagnostics: [diagnostic("publication-blocked", error instanceof Error ? error.message : "Publisher marker could not be inspected.")] }; }
+  if (inspected.status === "absent" || inspected.status === "complete" || inspected.marker === undefined) return { state: "clear" };
+  if (inspected.status === "in-progress" || inspected.status === "rolling-back") {
+    return { state: "blocked", diagnostics: [diagnostic(inspected.status, `Publisher marker is ${inspected.status} and must be recovered before setup.`, ".oms/template-transaction.json")] };
+  }
+  if (inspected.marker.kind !== "schema-migration") {
+    return { state: "blocked", diagnostics: [diagnostic("rolled-back", "Only a rolled-back schema migration is a setup retry anchor.", ".oms/template-transaction.json")] };
+  }
+  const retry = await inspectLegacyVaultMigrationRetry(target);
+  if (retry.status === "migration-retry") {
+    return {
+      state: "held-legacy",
+      diagnostics: [diagnostic("migration-retry", "Rolled-back schema migration remains unchanged as the retry anchor.", ".oms/template-transaction.json")],
+      anchor: anchorFrom(inspected.marker.transactionId, inspected.marker.planDigest),
+    };
+  }
+  return { state: retry.status === "legacy-inconsistent" ? "held-legacy" : "blocked", diagnostics: [admissionDiagnostic(retry)] };
+}
+
+function anchorFrom(transactionId: string, planDigest: Digest): FreshSetupMigrationRetryAnchor {
+  return { kind: "schema-migration", status: "rolled-back", transactionId, planDigest };
+}
+
+async function observeSettings(vault: string): Promise<SettingsObservation> {
+  let bytes: Uint8Array;
+  try { const read = await readControl(vault, SETTINGS_PATH); if (read.state === "absent") return { state: "missing", diagnostic: null }; bytes = read.bytes; }
+  catch (error) { return { state: "malformed", diagnostic: controlDiagnostic(error, "settings", SETTINGS_PATH) }; }
+  const text = utf8(bytes);
+  if (typeof text !== "string") return { state: "malformed", diagnostic: diagnostic("settings-invalid-utf8", "settings are not exact UTF-8", SETTINGS_PATH) };
   try {
-    if (await readFile(modelsPath, "utf8") === content) return false;
-  } catch (error: unknown) {
-    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const parsed = parseLegacyJson(text);
+    if (parsed.members !== "unique") return { state: "malformed", diagnostic: diagnostic("settings-duplicate-json", `settings JSON members are ${parsed.members}`, SETTINGS_PATH) };
+    return { state: "verified", vaultId: parseVaultSettings(text).vaultId, diagnostic: null };
+  } catch (error) {
+    return { state: "malformed", diagnostic: controlDiagnostic(error, "settings", SETTINGS_PATH) };
   }
-  await mkdir(path.dirname(modelsPath), { recursive: true });
-  await writeFile(modelsPath, content, "utf8");
-  return true;
 }
+
+async function observePolicy(vault: string): Promise<PolicyObservation> {
+  let bytes: Uint8Array;
+  try { const read = await readControl(vault, POLICY_PATH); if (read.state === "absent") return { state: "absent" }; bytes = read.bytes; }
+  catch (error) { return { state: "malformed", diagnostic: controlDiagnostic(error, "policy", POLICY_PATH) }; }
+  const text = utf8(bytes);
+  if (typeof text !== "string") return { state: "malformed", diagnostic: diagnostic("policy-invalid-utf8", "policy is not exact UTF-8", POLICY_PATH) };
+  let parsed: ReturnType<typeof parseLegacyJson>;
+  try { parsed = parseLegacyJson(text); }
+  catch (error) { return { state: "malformed", diagnostic: controlDiagnostic(error, "policy", POLICY_PATH) }; }
+  if (parsed.members !== "unique") return { state: "malformed", diagnostic: diagnostic("policy-duplicate-json", `policy JSON members are ${parsed.members}`, POLICY_PATH) };
+  const version = versionOf(parsed.value);
+  if (version === 3 || version === 4) return { state: "legacy" };
+  if (version !== 5) return { state: "malformed", diagnostic: diagnostic("policy-malformed", "policy version is not a published V5 contract", POLICY_PATH) };
+  try { return { state: "v5", policy: parseContractPolicyV5(parsed.value) }; }
+  catch (error) { return { state: "malformed", diagnostic: controlDiagnostic(error, "policy", POLICY_PATH) }; }
+}
+
+function versionOf(value: unknown): unknown {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).version : undefined;
+}
+
+async function readControl(vault: string, relative: string): Promise<ControlBytes> {
+  const verified = await verifyTemplateControlPath(vault, normalizeTemplateControlPath(relative), { expected: "either" });
+  if (verified.targetRealPath === null) return { state: "absent" };
+  const handle = await open(verified.absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.nlink !== 1 || !Number.isSafeInteger(stat.size) || stat.size > MAX_CONTROL_BYTES) {
+      throw Object.assign(new Error(`${relative} is not one bounded regular control file`), { code: "control-malformed" });
+    }
+    const bytes = new Uint8Array(await handle.readFile());
+    if (bytes.byteLength !== stat.size) throw Object.assign(new Error(`${relative} changed while reading`), { code: "control-malformed" });
+    return { state: "present", bytes };
+  } finally { await handle.close(); }
+}
+
+function utf8(bytes: Uint8Array): string | null {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    const encoded = new TextEncoder().encode(text);
+    return encoded.byteLength === bytes.byteLength && encoded.every((byte, index) => byte === bytes[index]) ? text : null;
+  } catch { return null; }
+}
+
+function controlDiagnostic(error: unknown, label: string, path: string): SetupDiagnostic {
+  if (error instanceof ContractV5Error || error instanceof VaultSettingsError) return diagnostic(error.code, error.message, path);
+  const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : `${label}-malformed`;
+  return diagnostic(code, error instanceof Error ? error.message : `${label} is malformed`, path);
+}
+
+function diagnostic(code: string, message: string, path?: string): SetupDiagnostic {
+  return path === undefined ? { code, message } : { code, message, path };
+}
+
+function summary(policy: ContractPolicyV5): FreshSetupPolicySummary {
+  return { version: 5, revision: policy.revision, commonStatus: policy.common.status };
+}
+
+function compose(
+  vault: string,
+  state: FreshSetupState,
+  settings: FreshSetupInspection["settings"],
+  policy: PolicyObservation,
+  hints: TemplateFolderHintResult,
+  diagnostics: readonly SetupDiagnostic[],
+  anchor?: FreshSetupMigrationRetryAnchor,
+): FreshSetupInspection {
+  const actual = policy.state === "v5" ? summary(policy.policy) : undefined;
+  return {
+    vault,
+    state,
+    settings,
+    document: describeFreshSetup({
+      state,
+      settingsPresent: settings.state === "verified",
+      ...(actual === undefined ? {} : { policy: actual }),
+      ...(anchor === undefined ? {} : { migrationRetryAnchor: anchor }),
+      hints,
+      diagnostics,
+    }),
+    hints,
+    diagnostics,
+  };
+}
+
+function blockedPreparation(inspection: FreshSetupInspection, ...issues: readonly SetupDiagnostic[]): FreshSetupPreparation {
+  const diagnostics = [...inspection.diagnostics, ...issues];
+  const next: FreshSetupInspection = {
+    ...inspection,
+    state: "blocked",
+    diagnostics,
+    document: describeFreshSetup({
+      state: "blocked",
+      settingsPresent: inspection.settings.state === "verified",
+      ...(inspection.document.policy === undefined ? {} : { policy: inspection.document.policy }),
+      ...(inspection.document.migrationRetryAnchor === undefined ? {} : { migrationRetryAnchor: inspection.document.migrationRetryAnchor }),
+      hints: inspection.hints,
+      diagnostics,
+    }),
+  };
+  return { state: "blocked", inspection: next, diagnostics };
+}
+

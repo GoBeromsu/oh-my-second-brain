@@ -21,6 +21,7 @@ import { parseTemplatePolicy, serializeDerivedProjection } from "./policy.js";
 import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "./resolver.js";
 
 const roots: string[] = [];
+const runtimes: string[] = [];
 const encoder = new TextEncoder();
 const RAW = "---\nstatus: open\ntype: literature\n---\n<% tp.file.title %>\n# Summary\n# Sources\n";
 const target = (vault: string, source: WriteTarget["source"] = "explicit"): WriteTarget => ({ vault, source });
@@ -47,9 +48,9 @@ async function put(root: string, path: string, content: string | Uint8Array): Pr
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "oms-template-interview-service-"));
   roots.push(root);
-  const runtime = join(root, "runtime");
+  const runtime = await mkdtemp(join(tmpdir(), "oms-template-interview-runtime-"));
+  runtimes.push(runtime);
   process.env.OMS_RUNTIME_ROOT = runtime;
-  await mkdir(runtime, { recursive: true });
   await put(root, ".obsidian/templates.json", JSON.stringify({ folder: "Templates" }));
   await put(root, "Templates/reading-note.md", RAW);
   return root;
@@ -109,6 +110,7 @@ afterEach(async () => {
   if (initialRuntimeRoot === undefined) delete process.env.OMS_RUNTIME_ROOT;
   else process.env.OMS_RUNTIME_ROOT = initialRuntimeRoot;
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+  await Promise.all(runtimes.splice(0).map(runtime => rm(runtime, { recursive: true, force: true })));
 });
 
 function proposals(): readonly TemplateProposalInput[] {

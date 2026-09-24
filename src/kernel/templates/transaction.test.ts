@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VAULT_PUBLICATION_LEASE } from "./file-lock.js";
 
 const injectedFault = vi.hoisted(() => ({
   operation: "" as "" | "write" | "remove" | "read" | "realpath",
@@ -531,11 +532,10 @@ describe("v4 guarded template publication", () => {
     await untouched(item.vault);
   });
 
-  it("does not publish while another live lock owner holds the transaction directory", async () => {
+  it("does not publish while another live lock owner holds the shared vault lease", async () => {
     const item = await fixture();
     const manifest = publication();
-    const id = publicationId(manifest.approvalDigest, manifest.outputDigest);
-    const lock = path.join(item.vault, ".oms", ".template-transactions", id, "lock");
+    const lock = path.join(item.vault, VAULT_PUBLICATION_LEASE);
     await mkdir(lock, { recursive: true });
     await writeFile(path.join(lock, "owner.json"), `${JSON.stringify({ pid: process.pid, token: "live-owner" })}\n`);
     const receipt = await executeTemplateTransaction(item.vault, manifest, { approvedDigest: manifest.approvalDigest });

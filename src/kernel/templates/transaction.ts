@@ -1,8 +1,9 @@
-import { mkdir, lstat, readFile, rename, rm } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { approvalDigest, canonicalJson, digestBytes, hashCanonical, outputDigest, parseDigest } from "./canonical.js";
-import { acquireTransactionLock, atomicWrite, releaseTransactionLock } from "./file-lock.js";
+import { VAULT_PUBLICATION_LEASE, acquireTransactionLock, atomicWrite, releaseTransactionLock } from "./file-lock.js";
 import { normalizeManagedTemplatePath, normalizeTemplateControlPath, validateTemplateId, verifyManagedTemplatePath, verifyTemplateControlPath } from "./paths.js";
 import { readBundledPackageVersion } from "../runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../runtime/event-journal.js";
@@ -746,9 +747,29 @@ async function publishPrepared(root: string, plan: DurablePlan, boundaries: read
   return finishPublication(root, plan, boundaries, operation, written);
 }
 
+async function confineLeaseDirectory(root: string): Promise<void> {
+  let current = root;
+  for (const segment of dirname(VAULT_PUBLICATION_LEASE).split("/")) {
+    current = join(current, segment);
+    try {
+      const stat = await lstat(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new TypeError("TEMPLATE_SOURCE_UNSAFE: publication lock directory was replaced");
+    } catch (error: unknown) {
+      if (errorCode(error) !== "ENOENT") throw error;
+      await mkdir(current, { mode: 0o700 });
+      const handle = await open(dirname(current), constants.O_RDONLY | constants.O_DIRECTORY);
+      try { await handle.sync(); } finally { await handle.close(); }
+      const created = await lstat(current);
+      if (created.isSymbolicLink() || !created.isDirectory()) throw new TypeError("TEMPLATE_SOURCE_UNSAFE: publication lock directory was replaced");
+    }
+  }
+}
+
 async function withPublicationLock(root: string, id: string, approval: Digest, output: Digest, body: () => Promise<TemplateTransactionReceipt>): Promise<TemplateTransactionReceipt> {
-  const directory = (await openControl(root, transactionRelative(id), { expected: "either" })).absolutePath;
-  const lock = join(directory, "lock");
+  const directory = join(root, dirname(VAULT_PUBLICATION_LEASE));
+  const lock = join(root, VAULT_PUBLICATION_LEASE);
+  await confineLeaseDirectory(root);
+  await openControl(root, transactionRelative(id), { expected: "either" });
   const token = await acquireTransactionLock(directory, lock);
   if (token === null) return rejected(approval, output, diagnostic("CONTRACT_TRANSACTION_IN_PROGRESS", "template transaction lock is held"));
   try {

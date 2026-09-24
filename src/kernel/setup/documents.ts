@@ -1,64 +1,58 @@
 import type { TemplateFolderCandidate, TemplateHintDiagnostic } from "../templates/hints.js";
-import type { TemplatePolicy } from "../templates/types.js";
+import type { Digest } from "../templates/types.js";
 
 /**
- * Setup proposes an empty version 4 policy and nothing else.
- *
- * It discovers no templates, adopts no note types, and reads no template syntax.
- * Folder hints are raw observations the user may act on during the interview;
- * they are not selections and not contract meaning.
+ * Fresh setup reports the actual contract and raw folder observations.
+ * It invents no policy body, active flag, physical default, placement, or selected root.
  */
-export interface TemplateSetupQuestionnaire {
-  readonly policyVersion: 4;
-  /** The always-on default layer starts empty; individual templates are added by interview. */
-  readonly defaultLayer: {
-    readonly templatePath: string;
-    readonly fields: readonly string[];
-    readonly headings: readonly string[];
-    readonly semanticCriteria: readonly string[];
-  };
-  readonly properties: readonly string[];
-  readonly templates: readonly string[];
-  /** Raw folder observations, with no syntax or contract inference. */
-  readonly templateFolderHints: readonly { readonly path: string; readonly provenance: readonly string[] }[];
-  readonly diagnostics: readonly { readonly code: string; readonly message: string; readonly path: string }[];
-  readonly nextStep: "interview";
+export interface FreshSetupPolicySummary {
+  readonly version: 5;
+  readonly revision: number;
+  readonly commonStatus: "active" | "review-required";
 }
 
-export interface TemplateSetupDocument {
-  readonly questionnaire: TemplateSetupQuestionnaire;
-  readonly policy: TemplatePolicy;
+/** Diagnostic metadata copied from the actual rolled-back marker. It authorizes nothing. */
+export interface FreshSetupMigrationRetryAnchor {
+  readonly kind: "schema-migration";
+  readonly status: "rolled-back";
+  readonly transactionId: string;
+  readonly planDigest: Digest;
 }
 
-export function describeTemplateSetup(
-  policy: TemplatePolicy,
-  hints: {
-    readonly candidates: readonly TemplateFolderCandidate[];
-    readonly diagnostics: readonly TemplateHintDiagnostic[];
-  },
-): TemplateSetupDocument {
+export type FreshSetupNextStep = "configure-contract" | "identity-setup-required" | "review-contract" | "select-contract" | "resolve-blocker";
+
+export interface FreshSetupDocument {
+  readonly state: "contract-configured" | "contract-setup-required" | "held-legacy" | "blocked";
+  readonly nextStep: FreshSetupNextStep;
+  readonly policy?: FreshSetupPolicySummary;
+  readonly migrationRetryAnchor?: FreshSetupMigrationRetryAnchor;
+  readonly templateFolderHints: readonly TemplateFolderCandidate[];
+  readonly hintDiagnostics: readonly TemplateHintDiagnostic[];
+  readonly diagnostics: readonly { readonly code: string; readonly message: string }[];
+}
+
+export function describeFreshSetup(input: {
+  readonly state: FreshSetupDocument["state"];
+  readonly settingsPresent: boolean;
+  readonly policy?: FreshSetupPolicySummary;
+  readonly migrationRetryAnchor?: FreshSetupMigrationRetryAnchor;
+  readonly hints: { readonly candidates: readonly TemplateFolderCandidate[]; readonly diagnostics: readonly TemplateHintDiagnostic[] };
+  readonly diagnostics: readonly { readonly code: string; readonly message: string }[];
+}): FreshSetupDocument {
   return {
-    questionnaire: {
-      policyVersion: 4,
-      defaultLayer: {
-        templatePath: policy.default.templatePath,
-        fields: Object.keys(policy.default.fields).sort(),
-        headings: policy.default.headings.map(heading => heading.headingId),
-        semanticCriteria: policy.default.semanticCriteria.map(criterion => criterion.criterionId),
-      },
-      properties: Object.keys(policy.properties).sort(),
-      templates: Object.keys(policy.templates).sort(),
-      templateFolderHints: hints.candidates.map(candidate => ({
-        path: candidate.path,
-        provenance: candidate.provenance.map(entry => String(entry)),
-      })),
-      diagnostics: hints.diagnostics.map(diagnostic => ({
-        code: diagnostic.code,
-        message: diagnostic.message,
-        path: diagnostic.path,
-      })),
-      nextStep: "interview",
-    },
-    policy,
+    state: input.state,
+    nextStep: nextStep(input.state, input.settingsPresent, input.policy),
+    ...(input.policy === undefined ? {} : { policy: input.policy }),
+    ...(input.migrationRetryAnchor === undefined ? {} : { migrationRetryAnchor: input.migrationRetryAnchor }),
+    templateFolderHints: input.hints.candidates,
+    hintDiagnostics: input.hints.diagnostics,
+    diagnostics: input.diagnostics,
   };
+}
+
+function nextStep(state: FreshSetupDocument["state"], settingsPresent: boolean, policy: FreshSetupPolicySummary | undefined): FreshSetupNextStep {
+  if (state === "held-legacy" || state === "blocked") return "resolve-blocker";
+  if (policy?.commonStatus === "review-required") return "review-contract";
+  if (state === "contract-setup-required" || policy === undefined) return "configure-contract";
+  return settingsPresent ? "select-contract" : "identity-setup-required";
 }

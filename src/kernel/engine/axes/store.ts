@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { parseNote } from "../../conventions/frontmatter.js";
+import { engineAxisCachePath } from "../paths.js";
 import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
 
 export type AxisKind = "folder" | "field" | "link";
@@ -339,7 +340,7 @@ export const openAxisStore = (
 ): AxisObservationStore => new AxisObservationStore(dbPath, options);
 
 export function axisStorePath(vault: string): string {
-  return path.resolve(vault, ".oms", "cache", "axes.sqlite");
+  return engineAxisCachePath(vault);
 }
 
 export function openVaultAxisStore(

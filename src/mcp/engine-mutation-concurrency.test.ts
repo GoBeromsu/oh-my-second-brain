@@ -87,6 +87,7 @@ vi.mock("../kernel/doctor/service.js", async (importOriginal) => {
 });
 
 import { writeMorningVaultFixture } from "../kernel/search/morning-test-fixtures.js";
+import { engineStorePath } from "../kernel/engine/paths.js";
 import { createOMSMcpServer } from "./server.js";
 
 const disposable: string[] = [];
@@ -150,7 +151,7 @@ describe("MCP engine mutation coordination", () => {
       expect(postcondition.backupPaths.length).toBeGreaterThan(0);
       const backupBefore = await Promise.all(postcondition.backupPaths.map(file => readFile(file)));
       const later = payload(await client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "sync" } }));
-      expect(later.receipt).toMatchObject({ postcondition: { databasePath: path.join(vault, ".oms", "engine-store.sqlite") } });
+      expect(later.receipt).toMatchObject({ postcondition: { databasePath: engineStorePath(vault) } });
       expect(await Promise.all(postcondition.backupPaths.map(file => readFile(file)))).toEqual(backupBefore);
     } finally {
       boundary.releaseDispose();

@@ -18,17 +18,22 @@
  */
 
 import { describe, it, expect, afterAll, beforeAll } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import {
   assembleCoreSemanticEngine,
+  assembleCoreSemanticEngineReadOnly,
   assembleEngine,
+  assembleEngineReadOnly,
   assembleEphemeralCoreSemanticEngine,
+  assembleGraphOnlyEngine,
 } from "./assemble.js";
 import { requireRealEmbeddingProvider } from "./embed/provider.js";
+import { makeEmbeddingIdentity } from "./embed/identity.js";
+import { openEngineStore } from "./embed/store.js";
 import {
   INSTALLED_MODELS_RECEIPT,
   type EmbeddingModelDescriptor,
@@ -299,6 +304,120 @@ describe("assembleEngine — strict descriptor wiring", () => {
     } finally {
       if (tmpVault) rmSync(tmpVault, { recursive: true, force: true });
       if (tmpDb) rmSync(path.dirname(tmpDb), { recursive: true, force: true });
+    }
+  });
+  it("rejects an inside-vault dbPath override before creating it", () => {
+    const vault = mkdtempSync(path.join(tmpdir(), "oms-assemble-confine-"));
+    const inside = path.join(vault, ".oms", "engine-store.sqlite");
+    try {
+      expect(() => assembleEngine({
+        vault,
+        dbPath: inside,
+        ...NOTHING_CONFIGURED,
+      })).toThrow(/inside the vault/);
+      expect(existsSync(path.join(vault, ".oms"))).toBe(false);
+      expect(readdirSync(vault)).toEqual([]);
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a dangling store-leaf symlink before any provider or directory side effect", () => {
+    const vault = mkdtempSync(path.join(tmpdir(), "oms-assemble-dangling-"));
+    const outside = mkdtempSync(path.join(tmpdir(), "oms-assemble-dangling-db-"));
+    const dangling = path.join(outside, "engine-store.sqlite");
+    symlinkSync(path.join(vault, "not-yet.sqlite"), dangling);
+    try {
+      expect(() => assembleCoreSemanticEngine({ vault, dbPath: dangling })).toThrow(/inside the vault/);
+      expect(existsSync(path.join(vault, "not-yet.sqlite"))).toBe(false);
+      expect(lstatSync(dangling).isSymbolicLink()).toBe(true);
+      expect(readdirSync(outside)).toEqual(["engine-store.sqlite"]);
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an external store whose WAL companion symlinks into the vault before opening it", () => {
+    const vault = mkdtempSync(path.join(tmpdir(), "oms-assemble-wal-"));
+    const outside = mkdtempSync(path.join(tmpdir(), "oms-assemble-wal-db-"));
+    const dbPath = path.join(outside, "engine-store.sqlite");
+    const sentinel = path.join(vault, "sentinel.md");
+    writeFileSync(sentinel, "assemble wal sentinel\n");
+    writeFileSync(dbPath, "external base\n");
+    symlinkSync(path.join(vault, "captured.sqlite-wal"), `${dbPath}-wal`);
+    const vaultBefore = readFileSync(sentinel);
+    try {
+      expect(() => assembleCoreSemanticEngineReadOnly({ vault, dbPath })).toThrow(/symlink/);
+      expect(existsSync(path.join(vault, "captured.sqlite-wal"))).toBe(false);
+      expect(lstatSync(`${dbPath}-wal`).isSymbolicLink()).toBe(true);
+      expect(readFileSync(dbPath).toString()).toBe("external base\n");
+      expect(readFileSync(sentinel)).toEqual(vaultBefore);
+      expect(readdirSync(vault)).toEqual(["sentinel.md"]);
+      expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a valid external override usable for create, read-only, and graph-only paths", async () => {
+    const vault = mkdtempSync(path.join(tmpdir(), "oms-assemble-external-"));
+    const outside = mkdtempSync(path.join(tmpdir(), "oms-assemble-external-db-"));
+    const vectorOutside = mkdtempSync(path.join(tmpdir(), "oms-assemble-vector-db-"));
+    const dbPath = path.join(outside, "engine-store.sqlite");
+    const vectorDb = path.join(vectorOutside, "engine-store.sqlite");
+    writeFileSync(path.join(vault, "note.md"), "# Note\nexternal override phrase\n");
+    try {
+      const created = assembleCoreSemanticEngine({ vault, dbPath });
+      try {
+        expect((await created.syncVault({ embed: false })).available).toBe(true);
+        expect(created.store.queryLex("external", 5).map((hit) => hit.docPath)).toContain("note.md");
+      } finally {
+        await created.dispose();
+      }
+
+      const readOnly = assembleCoreSemanticEngineReadOnly({ vault, dbPath });
+      expect(readOnly).not.toBeNull();
+      try {
+        expect(readOnly!.store.queryLex("override", 5).map((hit) => hit.docPath)).toContain("note.md");
+      } finally {
+        await readOnly!.dispose();
+      }
+
+      const seeded = openEngineStore(vectorDb, 768);
+      seeded.writeEmbeddingIdentity(makeEmbeddingIdentity({
+        provider: "gguf",
+        model: "missing-model.gguf",
+        revision: "test-revision",
+        sha256: TEST_SHA256,
+        dimensions: 768,
+        contextLength: 2048,
+        mrlDim: 0,
+        normalization: "l2",
+        prefixScheme: "embeddinggemma-v1",
+      }));
+      seeded.close();
+      const vectorReadOnly = assembleEngineReadOnly({
+        vault,
+        dbPath: vectorDb,
+        embeddingDescriptor: embeddingDescriptor(path.join(vectorOutside, "missing-model.gguf")),
+      });
+      expect(vectorReadOnly).not.toBeNull();
+      await vectorReadOnly!.dispose();
+      expect(existsSync(path.join(vectorOutside, "missing-model.gguf"))).toBe(false);
+
+      const graphOnly = assembleGraphOnlyEngine({ vault, dbPath });
+      try {
+        expect((await graphOnly.syncVault()).available).toBe(false);
+        expect(existsSync(dbPath)).toBe(true);
+      } finally {
+        await graphOnly.dispose();
+      }
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+      rmSync(vectorOutside, { recursive: true, force: true });
     }
   });
 });

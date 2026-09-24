@@ -1,9 +1,11 @@
 import { describe, expect, it, vi, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpEngineAdapter } from "./facade.js";
+import { engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../paths.js";
+import { exploreLocalGraph } from "../../graph/explore.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import type { EmbeddingProvider, ScoredHit, VectorStore } from "../types.js";
 import type { EngineStore } from "../embed/store.js";
@@ -941,7 +943,7 @@ describe("McpEngineAdapter.cleanup", () => {
 
   it("rejects cleanup while another writer holds the engine lock", async () => {
     const v = freshVault();
-    const dbPath = path.join(v, ".oms", "engine-store.sqlite");
+    const dbPath = engineStorePath(v);
     mkdirSync(path.dirname(dbPath), { recursive: true });
     writeFileSync(`${dbPath}.lock`, `${process.pid}\n`, "utf8");
     const store = makeEngineStore(["ghost/removed.md"]);
@@ -960,7 +962,7 @@ describe("McpEngineAdapter.cleanup", () => {
 // ---------------------------------------------------------------------------
 
 describe("McpEngineAdapter.graphBuild", () => {
-  it("builds the edge graph + node index and persists both to .oms/cache/engine", async () => {
+  it("builds the edge graph + node index and persists both to the external engine cache", async () => {
     const v = freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
     const result = await adapter.graphBuild({}, v);
@@ -968,8 +970,9 @@ describe("McpEngineAdapter.graphBuild", () => {
     expect(typeof result.notes).toBe("number");
     expect(typeof result.edges).toBe("number");
     expect(typeof result.generatedAt).toBe("string");
-    expect(existsSync(path.join(v, ".oms", "cache", "engine", "graph.json"))).toBe(true);
-    const nodeIndexPath = path.join(v, ".oms", "cache", "engine", "node-index.json");
+    expect(existsSync(path.join(v, ".oms", "cache"))).toBe(false);
+    expect(existsSync(engineGraphCachePath(v))).toBe(true);
+    const nodeIndexPath = engineNodeCachePath(v);
     expect(existsSync(nodeIndexPath)).toBe(true);
     const cached = JSON.parse(readFileSync(nodeIndexPath, "utf8")) as { nodes: readonly { path: string }[] };
     expect(cached.nodes.some((node) => node.path.startsWith("Templates/OMS/"))).toBe(false);
@@ -983,6 +986,9 @@ describe("McpEngineAdapter.graphBuild", () => {
     expect(dry.available).toBe(true);
     expect(dry.notes).toBe(built.notes);
     expect(dry.edges).toBe(built.edges);
+    expect(existsSync(path.join(v, ".oms", "cache"))).toBe(false);
+    const before = readFileSync(engineGraphCachePath(v), "utf8");
+    expect(readFileSync(engineGraphCachePath(v), "utf8")).toBe(before);
   });
 });
 
@@ -992,18 +998,21 @@ describe("McpEngineAdapter.graphStatus", () => {
     const adapter = new McpEngineAdapter(makeDeps(), v);
     const result = await adapter.graphStatus(v);
     expect(result.available).toBe(false);
-    expect(existsSync(path.join(v, ".oms", "cache", "engine"))).toBe(false);
+    expect(existsSync(path.join(v, ".oms", "cache"))).toBe(false);
+    expect(existsSync(engineGraphCachePath(v))).toBe(false);
+    expect(existsSync(engineNodeCachePath(v))).toBe(false);
   });
 
   it("rejects a stale graph projection cache without rebuilding it", async () => {
     const v = freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
     await adapter.graphBuild({}, v);
-    const graphPath = path.join(v, ".oms", "cache", "engine", "graph.json");
+    const graphPath = engineGraphCachePath(v);
     const cached = JSON.parse(readFileSync(graphPath, "utf8")) as Record<string, unknown>;
     cached.projectionSignature = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
     writeFileSync(graphPath, `${JSON.stringify(cached)}\n`);
     expect((await adapter.graphStatus(v)).available).toBe(false);
+    expect(existsSync(path.join(v, ".oms", "cache"))).toBe(false);
   });
 
   it("returns available=true after graphBuild", async () => {
@@ -1015,6 +1024,9 @@ describe("McpEngineAdapter.graphStatus", () => {
     if (!result.available) return;
     expect(typeof result.notes).toBe("number");
     expect(typeof result.edges).toBe("number");
+    const explored = await exploreLocalGraph({ vault: v, limit: 5, maxNeighbors: 5 });
+    expect(explored.provider).toBe("cache");
+    expect(existsSync(path.join(v, ".oms", "cache"))).toBe(false);
   });
 });
 
@@ -1055,4 +1067,93 @@ describe("McpEngineAdapter.retrieveByAxis", () => {
     expect(result.available).toBe(false);
     if (!result.available) expect(result.reason).toContain("TEMPLATE_SNAPSHOT_UNAVAILABLE");
   });
+
+describe("McpEngineAdapter explicit store confinement", () => {
+  function image(root: string): ReadonlyArray<readonly [string, string]> {
+    const entries: Array<readonly [string, string]> = [];
+    const visit = (directory: string): void => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const filename = path.join(directory, entry.name);
+        const relative = path.relative(root, filename);
+        if (entry.isSymbolicLink()) {
+          entries.push([relative, "symlink"]);
+          continue;
+        }
+        if (entry.isDirectory()) {
+          entries.push([`${relative}/`, "directory"]);
+          visit(filename);
+          continue;
+        }
+        entries.push([relative, readFileSync(filename).toString("base64")]);
+      }
+    };
+    visit(root);
+    return entries.sort(([left], [right]) => left.localeCompare(right));
+  }
+
+  it("rejects a direct or aliased inside-vault store before locking or syncing", async () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "oms-facade-store-"));
+    tempDirs.push(parent);
+    const vault = path.join(parent, "vault");
+    const outside = path.join(parent, "outside");
+    mkdirSync(vault);
+    mkdirSync(outside);
+    const direct = path.join(vault, "engine-store.sqlite");
+    const alias = path.join(outside, "store-alias");
+    symlinkSync(direct, alias);
+    const before = image(parent);
+    const embed = makeEmbed();
+
+    for (const dbPath of [direct, alias]) {
+      const adapter = new McpEngineAdapter({ store: makeEngineStore(["ghost.md"]), embed }, vault, { dbPath });
+      const cleaned = await adapter.cleanup({});
+      const synced = await adapter.syncEmbeddings({ vault, embed: false });
+      expect(cleaned.available).toBe(false);
+      expect(synced.available).toBe(false);
+      if (!cleaned.available) expect(cleaned.reason).toMatch(/inside the vault/);
+      if (!synced.available) expect(synced.reason).toMatch(/inside the vault/);
+    }
+
+    expect(embed.embed).not.toHaveBeenCalled();
+    expect(image(parent)).toEqual(before);
+    expect(existsSync(direct)).toBe(false);
+    expect(existsSync(`${direct}.lock`)).toBe(false);
+    expect(lstatSync(alias).isSymbolicLink()).toBe(true);
+    expect(existsSync(path.join(outside, "engine"))).toBe(false);
+  });
+
+  it("rejects an external store whose journal companion symlinks into the vault before cleanup or sync", async () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "oms-facade-journal-"));
+    tempDirs.push(parent);
+    const vault = path.join(parent, "vault");
+    const outside = path.join(parent, "outside");
+    mkdirSync(vault);
+    mkdirSync(outside);
+    const sentinel = path.join(vault, "sentinel.md");
+    writeFileSync(sentinel, "facade journal sentinel\n");
+    const dbPath = path.join(outside, "engine-store.sqlite");
+    writeFileSync(dbPath, "external base\n");
+    symlinkSync(path.join(vault, "captured.sqlite-journal"), `${dbPath}-journal`);
+    const before = image(parent);
+    const embed = makeEmbed();
+    const store = makeEngineStore(["ghost.md"]);
+    const adapter = new McpEngineAdapter({ store, embed }, vault, { dbPath });
+
+    const cleaned = await adapter.cleanup({});
+    const synced = await adapter.syncEmbeddings({ vault, embed: false });
+
+    expect(cleaned.available).toBe(false);
+    expect(synced.available).toBe(false);
+    if (!cleaned.available) expect(cleaned.reason).toMatch(/symlink/);
+    if (!synced.available) expect(synced.reason).toMatch(/symlink/);
+    expect(embed.embed).not.toHaveBeenCalled();
+    expect(store.listDocPaths).not.toHaveBeenCalled();
+    expect(store.clearDocument).not.toHaveBeenCalled();
+    expect(image(parent)).toEqual(before);
+    expect(readFileSync(sentinel).toString()).toBe("facade journal sentinel\n");
+    expect(readFileSync(dbPath).toString()).toBe("external base\n");
+    expect(lstatSync(`${dbPath}-journal`).isSymbolicLink()).toBe(true);
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
+  });
+});
 });

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,7 +19,9 @@ async function makeVault(): Promise<string> {
 }
 
 function createCorruptStore(vault: string): void {
-  const db = new Database(engineStorePath(vault));
+  const dbPath = engineStorePath(vault);
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath);
   try {
     db.exec("CREATE TABLE engine_meta (id INTEGER PRIMARY KEY);");
   } finally {
