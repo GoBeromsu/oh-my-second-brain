@@ -27,4 +27,4 @@ After the edit, run `link` check. When the edit belongs to a note task, also run
 
 ## Surface
 
-Link is read-only: `op: "suggest"` and `op: "check"`. There is no `apply`, and no `baseContentHash` or `candidateIds`. Applying a suggested link is the agent's own edit to the note.
+Link is read-only: `op: "suggest"` and `op: "check"`. There is no `apply` and no `candidateIds` input. A suggestion does return `baseContentHash` and a stable `id` per candidate so you can tell which note state they describe, but neither is an input to anything: applying a suggested link is the agent's own edit to the note.

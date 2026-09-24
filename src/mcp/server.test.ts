@@ -490,6 +490,15 @@ describe("Oh My Second Brain MCP stdio server", () => {
     // advertised schema has to accept the null the instructions prescribe.
     expect(write({ op: "guide", notePath: "references/a.md", templateId: null }).valid).toBe(true);
     expect(write({ op: "guide", notePath: "references/a.md", templateId: 7 }).valid).toBe(false);
+    // Selecting a historical contract migrates it, and without these three
+    // stable ids selectContract answers review-required by design. A schema that
+    // rejected them would make on-use migration unreachable over MCP.
+    expect(write({
+      op: "guide",
+      notePath: "references/a.md",
+      migration: { operationId: "11111111-1111-4111-8111-111111111111", transactionId: "22222222-2222-4222-8222-222222222222", vaultId: "33333333-3333-4333-8333-333333333333" },
+    }).valid).toBe(true);
+    expect(write({ op: "guide", notePath: "references/a.md", migration: { operationId: "only-one" } }).valid).toBe(false);
     expect(write({ op: "check", connectionId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" }).valid).toBe(true);
     expect(write({ op: "check", notePath: "references/a.md" }).valid).toBe(false);
     expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(false);

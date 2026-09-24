@@ -147,6 +147,15 @@ const number = { type: "number" };
 const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
 const nullableString = { anyOf: [string, { type: "null" }] };
+// Selecting a historical version-3 or version-4 contract migrates it in place,
+// and a fault has to be resumable against the same operation, so the caller owns
+// the three stable ids rather than the server minting new ones per attempt.
+const migrationSchema = {
+  type: "object",
+  properties: { operationId: string, transactionId: string, vaultId: string },
+  required: ["operationId", "transactionId", "vaultId"],
+  additionalProperties: false,
+};
 const digestSchema = { type: "string", pattern: "^sha256:[0-9a-f]{64}$" };
 const jsonValue = { };
 const axisScalar = { anyOf: [string, number, boolean] };
@@ -159,7 +168,7 @@ const documentProperties = { target: string, targets: stringArray, notePath: str
 const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: { type: "integer", minimum: 0 }, maxNeighbors: number, useCache: boolean, ...retrieveContextSemanticInputProperties } as const;
 const operations: Record<string, readonly Operation[]> = {
   write: [
-    { op: "guide", name: "write-guide", properties: { notePath: string, templateId: nullableString, headingBindings: jsonValue }, required: ["notePath"] },
+    { op: "guide", name: "write-guide", properties: { notePath: string, templateId: nullableString, headingBindings: jsonValue, migration: migrationSchema }, required: ["notePath"] },
     { op: "check", name: "write-check", properties: { connectionId: string, sessionId: string }, required: ["connectionId", "sessionId"] },
     { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["publish-contract", "review-sources", "acknowledge-source", "relink-source"] }, policy: jsonValue, templateId: string, reviewedDigest: digestSchema, candidatePath: string, transactionId: string, confirmed: boolean }, required: ["mode"] },
   ],
@@ -930,12 +939,25 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       if (templateArg !== undefined && templateArg !== null && typeof templateArg !== "string") {
         return errorText('Argument "templateId" must be a registered template id or null for the common contract.');
       }
+      const migrationArg = args?.["migration"];
+      let migration: { operationId: string; transactionId: string; vaultId: string } | undefined;
+      if (migrationArg !== undefined) {
+        if (!isRecord(migrationArg)) return errorText('Argument "migration" must be an object of stable migration ids.');
+        const operationId = migrationArg["operationId"];
+        const transactionId = migrationArg["transactionId"];
+        const vaultId = migrationArg["vaultId"];
+        if (typeof operationId !== "string" || typeof transactionId !== "string" || typeof vaultId !== "string") {
+          return errorText('Argument "migration" requires string "operationId", "transactionId", and "vaultId".');
+        }
+        migration = { operationId, transactionId, vaultId };
+      }
       try {
         const selection = await selectContract({
           target: { vault, source },
           notePath,
           templateId: typeof templateArg === "string" ? templateArg : null,
           ...(bindings === undefined ? {} : { headingBindings: bindings as Record<string, string> }),
+          ...(migration === undefined ? {} : { migration }),
         });
         return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...selection });
       } catch (error) {

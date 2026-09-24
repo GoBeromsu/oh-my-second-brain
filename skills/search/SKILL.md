@@ -18,7 +18,7 @@ Retrieve vault knowledge without changing the vault. Search does not depend on c
 /search <query|context|template-scan|templates|index-status|get-document>
 ```
 
-- `query` requires `mode: "query" | "search" | "vsearch"` and exactly one of `query` or `searches`. Plain `mode: "query"` is projection-independent lexical retrieval and remains available when no embedding provider is configured.
+- `query` accepts three shapes. `mode: "query" | "search" | "vsearch"` with a `query` string; a bare `query` string with no `mode`; or typed retrieval with `searches`, `vec`, or `hyde` and no `mode` or `query`. `mode` never combines with `searches`. Lexical retrieval reads no contract and stays available when no embedding provider is configured.
 - `context` retrieves the declared search context.
 - `template-scan` is a read-only census and pending view; it never registers or writes a source.
 - `templates` lists templates when `templateId` is absent and shows one template when `templateId` is present.

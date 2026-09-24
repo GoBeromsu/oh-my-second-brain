@@ -38,7 +38,7 @@ Changing placement policy is a contract change. It goes through the config inter
 
 The tool-less `interview` skill reads intent the user already wrote, asks one question at a time, writes the explicit version-5 document, and publishes only what the user approved. Publication compare-and-swaps against the exact bytes now on disk, so a valid hand-edited policy stays revisable while a concurrent change is refused. OMS keeps no interview ledger: there is no question id, census digest, or server-issued approval digest. The tool-less `template` skill shapes that contract. It does not render a note.
 
-`oms setup` describes the vault and points at `oms template publish` for a vault that has no published contract yet. It ships no bundled note shape and never modifies notes. Model install, selection, waiver, and status are `oms model` leaves, not setup-era model flags.
+`oms setup` describes the vault and points at `oms template publish` for a vault that has no published contract yet. It ships no bundled note shape and never modifies notes. Model install, selection, waiver, and status are `oms model` leaves. Setup can also select a model in the same approved pass through `--models-default`, `--models-descriptor`, or `--models-no-default`.
 
 The leaves are `oms template list`, `show`, `scan`, `check`, `publish`, `review-sources`, `acknowledge-source`, and `relink-source`. The first four and `review-sources` read. `publish` runs only after the user approves the revision it previewed, and the source leaves run only with explicit confirmation. Publish outputs are the policy and one history record. The user's own template sources, `.obsidian/types.json`, and ordinary notes are not outputs.
 

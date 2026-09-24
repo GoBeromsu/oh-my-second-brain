@@ -96,6 +96,33 @@ describe("note command", () => {
     expect(checkContract).not.toHaveBeenCalled();
   });
 
+  it("forwards the three migration ids together so a legacy vault can be selected at all", async () => {
+    const root = await vault();
+    // Without these ids selectContract answers review-required by design, so a
+    // surface that cannot pass them makes on-use migration unreachable.
+    await runNoteCommand([
+      "guide", "notes/one.md", "--vault", root,
+      "--migration-operation-id", "11111111-1111-4111-8111-111111111111",
+      "--migration-transaction-id", "22222222-2222-4222-8222-222222222222",
+      "--migration-vault-id", "33333333-3333-4333-8333-333333333333",
+    ]);
+    expect(selectContract).toHaveBeenCalledWith({
+      target: { vault: root, source: "explicit" },
+      notePath: "notes/one.md",
+      templateId: null,
+      migration: {
+        operationId: "11111111-1111-4111-8111-111111111111",
+        transactionId: "22222222-2222-4222-8222-222222222222",
+        vaultId: "33333333-3333-4333-8333-333333333333",
+      },
+    });
+
+    selectContract.mockClear();
+    await runNoteCommand(["guide", "notes/one.md", "--vault", root, "--migration-operation-id", "11111111-1111-4111-8111-111111111111"]);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "NOTE_ARGS_INVALID" }] });
+    expect(selectContract).not.toHaveBeenCalled();
+  });
+
   it("checks through the selection locator and refuses retired check arguments", async () => {
     const root = await vault();
     await runNoteCommand(["check", "--vault", root, "--connection-id", "c", "--session-id", "s"]);

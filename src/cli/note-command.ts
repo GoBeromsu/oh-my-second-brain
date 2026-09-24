@@ -9,6 +9,7 @@ import { getNoteDocuments } from "./doc-command.js";
 
 const VALUE_FLAGS = new Set([
   "vault", "note-path", "template-id", "heading-binding", "connection-id", "session-id",
+  "migration-operation-id", "migration-transaction-id", "migration-vault-id",
   "folder", "max-per-template", "collection", "from-line", "line-count", "line-limit", "max-bytes",
 ]);
 const BOOLEAN_FLAGS = new Set(["json", "line-numbers", "full-path", "help"]);
@@ -124,7 +125,7 @@ function print(value: unknown): void {
 }
 
 async function runGuide(parsed: Parsed): Promise<void> {
-  only(parsed, ["vault", "note-path", "template-id", "heading-binding"], [0, 1]);
+  only(parsed, ["vault", "note-path", "template-id", "heading-binding", "migration-operation-id", "migration-transaction-id", "migration-vault-id"], [0, 1]);
   const notePath = notePathArg(parsed);
   if (notePath === undefined) fail("guide requires a note path");
   const templateId = text(parsed.options, "template-id");
@@ -138,12 +139,28 @@ async function runGuide(parsed: Parsed): Promise<void> {
     print(admissionReport(admission));
     return;
   }
+  // Selecting a historical version-3 or version-4 contract migrates it in place.
+  // A fault must resume against the same operation, so the caller owns the three
+  // stable ids; without them selection stays review-required by design.
+  const migrationIds = {
+    operationId: text(parsed.options, "migration-operation-id"),
+    transactionId: text(parsed.options, "migration-transaction-id"),
+    vaultId: text(parsed.options, "migration-vault-id"),
+  };
+  const suppliedIds = Object.values(migrationIds).filter(value => value !== undefined).length;
+  if (suppliedIds !== 0 && suppliedIds !== 3) {
+    fail("--migration-operation-id, --migration-transaction-id, and --migration-vault-id must be supplied together");
+  }
+  const migration = suppliedIds === 3
+    ? { operationId: migrationIds.operationId!, transactionId: migrationIds.transactionId!, vaultId: migrationIds.vaultId! }
+    : undefined;
   try {
     print(await selectContract({
       target: resolved,
       notePath,
       templateId: templateId ?? null,
       ...(bindings === undefined ? {} : { headingBindings: bindings as Record<string, string> }),
+      ...(migration === undefined ? {} : { migration }),
     }));
   } catch (error: unknown) {
     if (!(error instanceof ContractServiceError)) throw error;
@@ -235,6 +252,10 @@ export function noteUsage(): string {
 Leaves: guide | check | audit | get
 
   guide <note-path> [--template-id <id>] [--heading-binding <json>] [--vault <vault>]
+        [--migration-operation-id <uuid> --migration-transaction-id <uuid> --migration-vault-id <uuid>]
+        The three migration ids are required together, and only to select a
+        historical version-3 or version-4 contract: they let a faulted migration
+        resume against the same operation instead of starting a new one.
   check --connection-id <id> --session-id <id> [--vault <vault>]
   audit [--folder <folder>] [--max-per-template <count>] [--json] [--vault <vault>]
   get <target...> | get --note-path <path> (--from-line <line>|--line-count <count>)`;

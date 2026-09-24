@@ -43,7 +43,7 @@ A drifted registered source blocks selecting that template: guide refuses it wit
 
 ## Source review
 
-The registered source is the user's own Markdown. When it changes, the contract does not change with it: `template { mode: "review-sources" }` reports drift, and acknowledgment records the reviewed bytes without touching any rule. A relocation needs the original to be genuinely missing and an explicitly named candidate; matching bytes are evidence, never permission. Both operations require confirmation and publish exactly one revision.
+The registered source is the user's own Markdown. When it changes, the contract does not change with it: `write { op: "template", mode: "review-sources" }` reports drift, and acknowledgment records the reviewed bytes without touching any rule. A relocation needs the original to be genuinely missing and an explicitly named candidate; matching bytes are evidence, never permission. Review itself is read-only and takes no transaction id. Acknowledgment and relocation each require confirmation and an explicit `transactionId`, and each publishes exactly one revision.
 
 ## Repair
 

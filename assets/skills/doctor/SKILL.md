@@ -14,7 +14,7 @@ Diagnose `.oms` controls and derived indexes, then run only the repair the user 
 /doctor <validate|build-graph|cleanup|sync-embeddings>
 ```
 
-- `validate` is read-only. It reports policy, projection, and source-signature drift, the contract transaction marker, and managed-source exclusions. Unobserved is not healthy. A damaged policy is unverifiable; do not substitute an empty contract. Version 3 is unsupported and is not migrated here.
+- `validate` is read-only. It reports the published policy, the portable settings, held registrations, and each registered source's state, including drift, a missing original, and a source that cannot be read. Unobserved is not healthy. A policy that is missing, damaged, or unreadable is reported as that; do not substitute an empty contract. A historical version-3 or version-4 policy is diagnosed here, never migrated here: migration happens only when a mutating selection asks for it.
 - `build-graph` and `cleanup` repair the derived graph or semantic index the user named.
 - `sync-embeddings` takes exactly one `mode`: `sync`, `embed`, or `repair`. `repair` also requires `repairMode: "rebuild"` or `"drop"` and may set `dryRun`. It backs up the engine store and checks the rebuilt or absent result. It is not forced embedding. Do not send retired boolean `embed` or `force` switches, and do not send repair-only fields with `sync` or `embed`.
 

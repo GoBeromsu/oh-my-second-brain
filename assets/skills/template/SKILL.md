@@ -31,7 +31,7 @@ Discovery of candidate sources is read-only: `search { op: "template-scan" }` or
 oms template list|show|scan|check
 ```
 
-`list`, `show`, `scan`, and `check` are read-only. `check` diagnoses the published policy, the vault settings, held registrations, and each registered source without repairing anything. A rendered contract and the source state shown beside it come from one snapshot, proven by the returned policy digest. Do not edit policy, taxonomy, or `.oms/types.json` directly, and do not self-approve.
+`list`, `show`, `scan`, and `check` are read-only. `check` diagnoses the published policy, the vault settings, held registrations, and each registered source without repairing anything. A rendered contract and the source state shown beside it come from one snapshot: the command re-reads the policy and refuses when the bytes it rendered are no longer the bytes on disk. Do not edit policy, taxonomy, or `.oms/types.json` directly, and do not self-approve.
 
 ## Surface
 

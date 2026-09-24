@@ -3,6 +3,8 @@
 MCP server tools and resources belong here.
 
 ## [Unreleased]
+
+- **On-use migration is reachable from the public surface.** `selectContract` migrates a historical version-3 or version-4 contract only when the caller supplies stable `operationId`, `transactionId`, and `vaultId` so a faulted attempt resumes against the same operation — but neither the MCP guide route nor the CLI leaf accepted or forwarded them, so every legacy vault got `review-required` forever and the migration kernel was unreachable outside its own tests. `write { op: "guide" }` now takes a `migration` object with those three ids, and the route forwards them.
 - **`write { op: "guide" }` accepts the explicit `null` its own instructions prescribe.** The advertised schema allowed only a string template id, so the documented common-contract call was rejected before it reached the kernel. It now accepts an explicit null and reads it as a deliberate common-contract selection rather than coercing an absent argument.
 - **Two responses no longer claim a provenance they do not read.** Morning context and the vault audit reported `projectionSource: ".oms/types.json"` while their metadata came from the version-5 policy and taxonomy. They now name the file actually read.
 - **An unreachable search fallback is gone.** Every `oms_semantic_query` path returns inside its own block, so the later ephemeral-lexical branch keyed on that tool name could never run. Search's model-free lexical path stays where it actually executes.
