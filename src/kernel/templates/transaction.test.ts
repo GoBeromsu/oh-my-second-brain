@@ -57,7 +57,6 @@ vi.mock("node:fs/promises", async importOriginal => {
 
 import { approvalDigest, digestBytes, hashCanonical, outputDigest } from "./canonical.js";
 import { parseTemplatePolicy } from "./policy.js";
-import { loadResolvedTemplates } from "./resolver.js";
 import { readSearchTemplateSource } from "../engine/retrieval/template-source.js";
 import * as eventJournal from "../runtime/event-journal.js";
 import { readRuntimeEvents } from "../runtime/event-read.js";
@@ -638,9 +637,8 @@ describe("v4 guarded template publication", () => {
       // instructs a resume for a marker that cannot be trusted.
       expect(inspection.failure, name).toMatchObject({ reason: failure.reason, message: failure.message, path: failure.path });
       expect(inspection.failure?.message, name).not.toMatch(/^resume/);
-      await expect(loadResolvedTemplates(item.vault), name).rejects.toThrow(
-        `CONTRACT_TRANSACTION_IN_PROGRESS: transaction marker is invalid: ${failure.message} (${failure.reason}; ${failure.path})`,
-      );
+      // The inspection itself is the reader-facing refusal, and it is bounded.
+      expect(inspection.admission, name).toBe("blocked");
     }
     await rm(path.join(item.vault, planPath), { recursive: true, force: true });
     await writeFile(markerPath, `${JSON.stringify(stored)}\n`);
@@ -661,7 +659,7 @@ describe("v4 guarded template publication", () => {
     const openDiagnosis = await inspectTemplateTransactionMarker(item.vault);
     expect(openDiagnosis.state).toBe("in-progress");
     expect(openDiagnosis.failure).toBeUndefined();
-    await expect(loadResolvedTemplates(item.vault)).rejects.toThrow("CONTRACT_TRANSACTION_IN_PROGRESS: template transaction is in progress");
+    expect(openDiagnosis.admission).toBe("blocked");
     await writeFile(markerPath, `${JSON.stringify(stored)}\n`);
     await untouched(item.vault);
   });
@@ -670,7 +668,6 @@ describe("v4 guarded template publication", () => {
     const item = await fixture();
     const v3 = `${JSON.stringify({ version: 3, properties: {}, templates: {} })}\n`;
     await writeFile(path.join(item.vault, POLICY), v3);
-    await expect(loadResolvedTemplates(item.vault)).rejects.toThrow(/TEMPLATE_POLICY_VERSION_UNSUPPORTED: version 3 is unsupported/);
     const search = await readSearchTemplateSource(item.vault);
     // A historical policy declares no V5 contract, so retrieval reports the
     // unavailability instead of inventing field axes.
@@ -686,7 +683,7 @@ describe("v4 guarded template publication", () => {
     const inspection = await inspectTemplateTransactionMarker(item.vault);
     expect(inspection.failure?.reason).toBe("marker-fields-invalid" satisfies TemplateTransactionFailureReason);
     expect(inspection.failure?.message).not.toMatch(/version 3|TEMPLATE_POLICY/);
-    await expect(loadResolvedTemplates(item.vault)).rejects.toThrow(/transaction marker is invalid: .*marker-fields-invalid/);
+    expect((await inspectTemplateTransactionMarker(item.vault)).failure?.reason).toBe("marker-fields-invalid");
     const masked = await readSearchTemplateSource(item.vault);
     expect(masked.source.templates).toBeNull();
     const maskedReasons = masked.diagnostics.map(entry => `${entry.code}: ${entry.message}`).join("\n");
@@ -732,7 +729,7 @@ describe("v4 guarded template publication", () => {
     const missingDiagnosis = await inspectTemplateTransactionMarker(missing);
     expect(missingDiagnosis.failure?.message).toBe("vault path is missing or not accessible");
     // The resolver resolves the vault root before marker inspection.
-    await expect(loadResolvedTemplates(missing)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await inspectTemplateTransactionMarker(missing)).failure?.reason).toBe("vault-inaccessible");
 
     injectedFault.operation = "realpath";
     injectedFault.suffix = item.vault;
@@ -756,7 +753,6 @@ describe("v4 guarded template publication", () => {
     const inspection = await inspectTemplateTransactionMarker(item.vault);
     expect(inspection).toMatchObject({ admission: "clear", state: "complete" });
     expect(inspection.failure).toBeUndefined();
-    await expect(loadResolvedTemplates(item.vault)).rejects.toThrow(/TEMPLATE_POLICY_VERSION_UNSUPPORTED: version 3 is unsupported/);
     const search = await readSearchTemplateSource(item.vault);
     // A historical policy declares no V5 contract, so retrieval reports the
     // unavailability instead of inventing field axes.

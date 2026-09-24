@@ -49,12 +49,10 @@ export {
   controlGenerationDigest,
   deriveFolderOntologyAxis,
   expectedProjectionManaged,
-  loadResolvedTemplates,
-  loadResolvedTemplatesIfPresent,
   requireTaxonomyPlacement,
   taxonomyRouting,
 } from "./resolver.js";
-export type { ControlByteRead, ExactControlBytes, ResolvedTemplateSnapshot, TaxonomyRouting } from "./resolver.js";
+export type { ControlByteRead, ExactControlBytes, TaxonomyRouting } from "./resolver.js";
 export {
   TEMPLATE_TRANSACTION_MARKER_PATH,
   executeTemplateTransaction,
