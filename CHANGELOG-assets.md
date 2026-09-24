@@ -3,6 +3,8 @@
 Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
+
+- **The `write` skill stops promising a retry budget that does not exist.** It advertised `completion.retryBudget` with a default of 2 and called `agentRepair` a policy control. Version 5 declares no completion contract and counts no attempts; repair configuration lives in the portable `.oms/settings.json`. Both READMEs carried the same claim and now name the real authority.
 - **Host guidance stops prescribing the removed completion route.** Claude, Codex, and Hermes instructions described an end-to-end workflow ending in an OMS `complete` call and a reviewer handshake. Those operations no longer exist with no alias, so installed callers were being sent at something that cannot succeed. Each host now describes writing the file, checking the saved bytes, reading the structural report, and owning the repair.
 - **The `template` skill teaches version 5 instead of version 4.** It declared the superseded authority, denied the guarded historical migration, described approved Markdown snapshots that version 5 does not keep, and advertised the retired `regenerate-types`, `review`, `answer`, and `commit` leaves. It now states the published authority, declared closedness, per-registration relaxation, drift-as-evidence, and the four real modes with their required transaction id.
 - **The `write` skill no longer contradicts the schema.** It said to send `templateId: null` in one place and to omit the property in another; both now select the common contract, and neither is an empty string. The `distill` skill no longer routes through a reviewer and a completion call.

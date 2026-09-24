@@ -2,7 +2,7 @@
 
 Oh My Second Brain is an Obsidian-first convention layer over plain Markdown. Obsidian remains the command center, and the vault remains readable without OMS. The user owns meaning. The agent writes and repairs notes. OMS guides one note path at a time and checks saved bytes; the user and agent decide whether a note is worth keeping and repair it when needed.
 
-The sequence in this page is a repository sketch. It is not the G002 Excalidraw artifact. Nothing here is a host-smoke result or a product-gate pass. [ADR-014](./decisions/ADR-014-user-owned-contract-completion-harness.md) supersedes [ADR-013](./decisions/ADR-013-folder-sourced-template-contracts.md). [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as ideas that were not ported and were not turned into a research claim.
+The sequence in this page is a repository sketch. It is not the G002 Excalidraw artifact. Nothing here is a host-smoke result or a product-gate pass. [ADR-015](./decisions/ADR-015-explicit-vault-contract-and-agent-owned-judgement.md) supersedes [ADR-014](./decisions/ADR-014-user-owned-contract-completion-harness.md), which superseded [ADR-013](./decisions/ADR-013-folder-sourced-template-contracts.md). [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as ideas that were not ported and were not turned into a research claim.
 
 ## Authority the harness enforces
 

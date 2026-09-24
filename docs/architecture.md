@@ -38,7 +38,7 @@ The selected-contract binding records the published contract revision, the selec
 
 A historical version-3 or version-4 policy remains readable. Only a mutating selection migrates it in place, preserving its recorded meaning. A held or unproved historical contract is reported as `review-required`, rather than rewritten. The retired `concept` identity and bundled defaults are not a reason to drop ontology: meaning remains data the user owns.
 
-ADR-014 is the successor of ADR-013. [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) records the debt to Ouroboros for an explicit contract and a split between writing and evaluation, and to Gajae Code's deep-interview for one confirmed question at a time. Neither credit is a code port or a measured research claim.
+ADR-015 is the successor of ADR-014, which superseded ADR-013. [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) records the debt to Ouroboros for an explicit contract and a split between writing and evaluation, and to Gajae Code's deep-interview for one confirmed question at a time. Neither credit is a code port or a measured research claim.
 
 ## Guide, write, and check
 

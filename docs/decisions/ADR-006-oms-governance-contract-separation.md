@@ -1,10 +1,12 @@
 ---
 title: .oms 거버넌스 — 기계검증 계약(yaml) ↔ 의도 기록(documents)의 명시적 분리
-status: Accepted
+status: Superseded
+superseded_by: ./ADR-015-explicit-vault-contract-and-agent-owned-judgement.md
 date: 2026-06-13
 created_by: claude-code
 deciders: [beomsu]
 relates_to:
+  - ./ADR-015-explicit-vault-contract-and-agent-owned-judgement.md
   - ./ADR-003-oms-vault-convention-asset.md
   - ../exec-plan/archived/self-owned-second-brain/spec.md §10
   - ../exec-plan/archived/self-owned-second-brain/spec.md §11

@@ -6,10 +6,10 @@ oh-my-secondbrain 프로젝트의 주요 설계 결정을 기록한다.
 |-----|-------|--------|
 | [0001](./0001-validate-returns-result.md) | validateFrontmatter Returns a Result, Never Throws | Accepted |
 | [0002](./ADR-002-vector-embedding-backend.md) | Vector Embedding Backend — pgvector + 상용 임베딩 | Accepted |
-| [ADR-003](./ADR-003-oms-vault-convention-asset.md) | oms = Vault-Convention 자산 — Default 온톨로지 + Vault-ADR 투명성 | Accepted |
+| [ADR-003](./ADR-003-oms-vault-convention-asset.md) | oms = Vault-Convention 자산 — Default 온톨로지 + Vault-ADR 투명성 | Superseded (ADR-015) |
 | [ADR-004](./ADR-004-config-secrets-access-topology.md) | Config · Secrets · Access Topology — 3-tier global/vault/per-repo 구성 | Proposed |
 | [ADR-005](./ADR-005-graph-access-model.md) | 그래프 접근 모델 — 엣지 계층 · 운영 모드 · MCP tools | Proposed |
-| [ADR-006](./ADR-006-oms-governance-contract-separation.md) | .oms 거버넌스 — 기계검증 계약(yaml) ↔ 의도 기록(documents) 명시적 분리 | Accepted |
+| [ADR-006](./ADR-006-oms-governance-contract-separation.md) | .oms 거버넌스 — 기계검증 계약(yaml) ↔ 의도 기록(documents) 명시적 분리 | Superseded (ADR-015) |
 | [ADR-007](./ADR-007-no-fake-embedder-fallback-native-dim-integrity.md) | 임베딩 무결성 불변 — 네이티브 차원 보존 & 가짜 임베더 폴백 금지 | Accepted |
 | [ADR-008](./ADR-008-note-identity-real-path-ssot-no-slug.md) | 노트 식별자 모델 — 실경로 SSOT, 슬러그 비도입 | Accepted |
 | [ADR-009](./ADR-009-qmd-compatible-global-collection-bridge.md) | qmd-호환 전역 컬렉션 브릿지 — link 기반 vault 해석과 product interface 계약 | Superseded (ADR-010; D1/D3/D4 remain in force) |
@@ -17,7 +17,8 @@ oh-my-secondbrain 프로젝트의 주요 설계 결정을 기록한다.
 | [ADR-011](./ADR-011-search-reranking-opt-in.md) | Search reranking — explicit opt-in until a production reranker exists | Accepted |
 | [ADR-012](./ADR-012-portable-model-contract-and-lifecycle.md) | Portable strict model contract and kernel lifecycle — verified local identity and immutable embedding lineage (0.10.0) | Accepted |
 | [ADR-013](./ADR-013-folder-sourced-template-contracts.md) | 선택 폴더 원본 템플릿 계약 — 인터뷰로 확인하는 파생 controls | Superseded (ADR-014) |
-| [ADR-014](./ADR-014-user-owned-contract-completion-harness.md) | 사용자 소유 계약과 독립 평가 기반 완료 하네스 | Accepted |
+| [ADR-014](./ADR-014-user-owned-contract-completion-harness.md) | 사용자 소유 계약과 독립 평가 기반 완료 하네스 | Superseded (ADR-015) |
+| [ADR-015](./ADR-015-explicit-vault-contract-and-agent-owned-judgement.md) | 명시적 저장소 계약과 에이전트가 소유하는 판단 — 완료 하네스 철회 | Accepted |
 
 ## 작성 규칙
 

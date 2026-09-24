@@ -1,10 +1,12 @@
 ---
 title: oms = Vault-Convention 자산 — Default 온톨로지 + Vault-ADR 투명성
-status: Accepted
+status: Superseded
+superseded_by: ./ADR-015-explicit-vault-contract-and-agent-owned-judgement.md
 date: 2026-06-13
 created_by: claude-code
 deciders: [beomsu]
 relates_to:
+  - ./ADR-015-explicit-vault-contract-and-agent-owned-judgement.md
   - ../exec-plan/archived/self-owned-second-brain/spec.md §10
   - ../exec-plan/archived/self-owned-second-brain/spec.md §11
   - craft-skills `documents` 스킬 (ADR/research/spec/rule 규율 대칭)

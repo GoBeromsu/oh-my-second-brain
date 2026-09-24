@@ -47,7 +47,7 @@ The registered source is the user's own Markdown. When it changes, the contract 
 
 ## Repair
 
-Agent repair is off unless the user policy sets `agentRepair.enabled` and names post-write or explicit maintenance. A search or check call does not grant edit rights. Stay inside the explicit note scope. `completion.retryBudget` is the user's finite nonnegative integer, default 2, and 0 is allowed. Do not apply a separate cap. The host counts attempts. Do not guess missing values or weaken the contract to clear a failure. An exhausted budget or a cancellation waits for the user.
+Agent repair is off unless the user's `.oms/settings.json` sets `agentRepair.enabled` and names post-write or maintenance; that is portable vault settings, not the contract. A search or check call does not grant edit rights. Stay inside the explicit note scope. OMS declares no retry budget and counts no attempts. Do not guess missing values or weaken the contract to clear a failure; when you cannot fix a violation from what the user gave you, ask.
 
 ## Notice
 

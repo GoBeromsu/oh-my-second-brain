@@ -1,11 +1,13 @@
 ---
 slug: ADR-014-user-owned-contract-completion-harness
 title: "사용자 소유 계약과 독립 평가 기반 완료 하네스"
-status: Accepted
+status: Superseded
+superseded_by: ./ADR-015-explicit-vault-contract-and-agent-owned-judgement.md
 date: 2026-09-22
 created_by: gjc
 deciders: [beomsu]
 relates_to:
+  - ./ADR-015-explicit-vault-contract-and-agent-owned-judgement.md
   - ./ADR-006-oms-governance-contract-separation.md
   - ./ADR-007-no-fake-embedder-fallback-native-dim-integrity.md
   - ./ADR-013-folder-sourced-template-contracts.md

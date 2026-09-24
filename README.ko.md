@@ -8,11 +8,11 @@ Oh My Second Brain(`oms`)은 기존 Obsidian·Markdown 볼트를 AI 호스트와
 
 제품은 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다. 폐기된 것은 노트 정체성으로서의 `concept`와 번들 runtime 기본값이지, 사용자가 서술하는 의미 계층으로서의 온톨로지가 아니다. `.oms/taxonomy.json`은 배치와 폴더·링크의 의미를 기록한다. `.obsidian/types.json`은 읽기 전용 관측값이다. `.oms/types.json`은 version 4 시절의 파생 파일이다. 게시된 version 5 계약은 그것을 만들지도 읽지도 않으며 다시 생성하지도 않는다. version 3·4 정책은 계속 읽을 수 있으며, 값을 바꾸는 선택에서만 기록된 의미를 보존하며 제자리 이전된다. 보류되었거나 증명되지 않은 이전 계약은 다시 쓰지 않고 `review-required`로 보고한다.
 
-노트 파일을 쓰고 고치는 주체는 에이전트다. 쓰기 전에 `guide`가 하나의 명시적 노트 경로에 적용할 계약을 선택하고 세션 locator를 돌려준다. 그다음 그 locator로 디스크에 저장된 바이트를 읽어 선언된 속성과 heading을 보고하고 `semantic: "not-evaluated"`를 돌려준다. OMS에는 완료 호출도 별도 리뷰어 대화도 없다. 계약 설정은 사용자가 정확한 diff를 승인할 때만 compare-and-swap으로 바뀐다. 자동 보정은 사용자가 켜지 않는 한 꺼져 있다. 재시도 예산은 사용자가 정하는 유한한 0 이상의 정수이며 기본값은 2, 0도 허용하고 별도의 상한 3은 없다. 검색은 그 판정을 기다리지 않는다.
+노트 파일을 쓰고 고치는 주체는 에이전트다. 쓰기 전에 `guide`가 하나의 명시적 노트 경로에 적용할 계약을 선택하고 세션 locator를 돌려준다. 그다음 그 locator로 디스크에 저장된 바이트를 읽어 선언된 속성과 heading을 보고하고 `semantic: "not-evaluated"`를 돌려준다. OMS에는 완료 호출도 별도 리뷰어 대화도 없다. 계약 설정은 사용자가 정확한 diff를 승인할 때만 compare-and-swap으로 바뀐다. 자동 보정은 사용자가 `.oms/settings.json`에서 켜지 않는 한 꺼져 있다. 그 파일은 계약이 아니라 이동 가능한 저장소 설정이다. OMS는 재시도 예산을 선언하지 않고 시도 횟수도 세지 않는다. 검색은 그 판정을 기다리지 않는다.
 
 등록된 각 소스는 경로와 내용 hash로 기록되는 사용자의 Markdown 파일 그대로 남는다. OMS는 그 소스를 다시 쓰거나 복사하거나 스냅샷하지 않고, 관리 draft나 `.oms/templates/` 디렉터리도 없으며 정책에 승인된 Markdown 바이트를 저장하지 않는다. OMS는 Templater, JavaScript, 전용 token 언어를 해석하거나 실행하지 않는다.
 
-ADR-014는 ADR-013을 대체한다. [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 Ouroboros와 Gajae Code의 deep-interview를 설계 아이디어로 밝힌다. 이는 runtime 복제도 연구 결과도 아니다. 저장소의 도식은 설명용 스케치이며 G002 Excalidraw 산출물이 아니다. 이 문서들은 승인된 아키텍처 기록이지 host smoke 결과나 제품 gate 통과가 아니다.
+ADR-015는 ADR-014를 대체하고, ADR-014는 ADR-013을 대체했다. [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 Ouroboros와 Gajae Code의 deep-interview를 설계 아이디어로 밝힌다. 이는 runtime 복제도 연구 결과도 아니다. 저장소의 도식은 설명용 스케치이며 G002 Excalidraw 산출물이 아니다. 이 문서들은 승인된 아키텍처 기록이지 host smoke 결과나 제품 gate 통과가 아니다.
 
 권위 모델은 [아키텍처](./docs/architecture.md), 볼트 파일은 [컨벤션](./docs/conventions.md), leaf 목록은 [CLI 맵](./docs/cli-map.md)에 있다.
 
