@@ -4,7 +4,7 @@ oh-my-secondbrain 프로젝트의 주요 설계 결정을 기록한다.
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [0001](./0001-validate-returns-result.md) | validateFrontmatter Returns a Result, Never Throws | Accepted |
+| [0001](./0001-validate-returns-result.md) | validateFrontmatter Returns a Result, Never Throws | Superseded (ADR-015) |
 | [0002](./ADR-002-vector-embedding-backend.md) | Vector Embedding Backend — pgvector + 상용 임베딩 | Accepted |
 | [ADR-003](./ADR-003-oms-vault-convention-asset.md) | oms = Vault-Convention 자산 — Default 온톨로지 + Vault-ADR 투명성 | Superseded (ADR-015) |
 | [ADR-004](./ADR-004-config-secrets-access-topology.md) | Config · Secrets · Access Topology — 3-tier global/vault/per-repo 구성 | Proposed |

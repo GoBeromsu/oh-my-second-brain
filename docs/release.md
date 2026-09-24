@@ -56,7 +56,7 @@ Codex and Hermes host assets are packaged as host-native skill/rule bundles plus
 ## Operator flow
 
 ```bash
-npm run release -- 0.14.0
+npm run release -- <next-version>
 ```
 
 That's the whole release. `scripts/release.mjs` runs these stages in order and aborts at the first failure.
@@ -88,7 +88,7 @@ Released sections pass through byte-identical. The immutability guard identifies
 An empty `## [Unreleased]` body is a hard error: *empty [Unreleased] - write release notes before releasing*. Write the notes, or pass the escape hatch when a release genuinely carries nothing user-facing:
 
 ```bash
-npm run release -- 0.14.0 --allow-empty-changelog
+npm run release -- <next-version> --allow-empty-changelog
 ```
 
 With that flag the version heading is inserted below an intact empty `## [Unreleased]`, giving the GitHub Release an empty section. Use it sparingly; the flag exists for mechanical releases, not for skipping the write-up.
@@ -183,7 +183,7 @@ finishes its own workflow by invoking the retired `reconcile` command, but only
 not a public compatibility promise in v0.14.
 
 `release:artifact-smoke` rehearses the supported boundary without invoking the
-old updater. It installs published `0.13.0` globally into a disposable prefix,
+old updater. It installs the published predecessor version globally into a disposable prefix,
 uses that old binary's `install --runtime hermes` to create legitimate prior
 OMS ownership, externally installs the candidate tarball globally into the same
 prefix, then invokes the new binary's canonical `host sync`:
@@ -195,9 +195,9 @@ export USERPROFILE="$HOME"
 export XDG_CONFIG_HOME="$HOME/xdg-config"
 export XDG_CACHE_HOME="$HOME/xdg-cache"
 export OMS_HERMES_HOME="$HOME/hermes"
-npm install -g oh-my-second-brain@0.13.0
+npm install -g oh-my-second-brain@<published-predecessor>
 "$npm_config_prefix/bin/oms" install --runtime hermes --vault "$HOME/vault" --yes
-npm install -g ./oh-my-second-brain-0.14.0.tgz
+npm install -g ./oh-my-second-brain-<next-version>.tgz
 "$npm_config_prefix/bin/oms" host sync --runtime hermes --vault "$HOME/vault"
 ```
 
@@ -209,11 +209,11 @@ binary. It does not scan active Hermes logs, databases, unrelated profiles, or
 profile home links, which may change concurrently. It never accesses a private
 vault or upgrades a real host application.
 
-Until the prescribed release command bumps the repository to `0.14.0`, the
-candidate tarball still reports `0.13.0`. The gate therefore labels this
-`old release 0.13.0 -> candidate artifact`; the exact same procedure becomes a
-true `0.13.0 -> 0.14.0` rehearsal automatically after
-`npm run release -- 0.14.0`. No version carrier is edited by hand.
+Until the prescribed release command bumps the repository, the candidate tarball
+still reports the current version. The gate therefore labels this
+`old release <published-predecessor> -> candidate artifact`; the same procedure
+becomes a true predecessor-to-successor rehearsal automatically after
+`npm run release -- <next-version>`. No version carrier is edited by hand.
 
 A successful test proves package-to-package replacement and the new `host sync`
 surface; it does not justify keeping retired reconciliation or top-level update

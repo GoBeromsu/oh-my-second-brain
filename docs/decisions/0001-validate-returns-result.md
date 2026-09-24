@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-015](./ADR-015-explicit-vault-contract-and-agent-owned-judgement.md). The
+`validateFrontmatter(Concept)` API and the top-level `oms doctor` command it
+describes were both retired; version-5 admission is `evaluateContractV5` and
+diagnosis is `oms template check` / `doctor` + `validate`. The result-not-throw
+principle it argued for still holds wherever a caller receives a report.
 
 ## Context
 

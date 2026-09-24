@@ -4,6 +4,7 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms --help` describes real vault resolution.** It said an omitted `--vault` defaults to the current directory, hiding that resolution checks local vault controls, a bridge link, and `OMS_VAULT` first and treats the current directory as a read-only fallback that cannot admit a mutation.
 - **`oms note guide` can select a historical contract.** It accepts `--migration-operation-id`, `--migration-transaction-id`, and `--migration-vault-id`, which must be supplied together, and explains in help why the caller owns them. Without them a legacy vault could never be selected at all.
 - **`oms --help` advertises the approval token setup actually requires.** Every published apply example showed only `--approved-digest`, while `setup` refuses any apply without both the token and the digest its dry-run printed, so the documented command could not succeed. Both READMEs carried the same incomplete command.
 - **CLI help and the removed-flag diagnostic tell the truth about setup.** Both said setup proposes an empty contract, and the `--template-folder` refusal pointed at the retired `oms template review`. Setup publishes no contract at all, and templates are registered by publishing one with `oms template publish`.

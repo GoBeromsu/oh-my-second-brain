@@ -95,7 +95,7 @@ Commands:
 ${commandLines(registry)}
 
 Options:
-  --vault <path>   Path to the vault root (default: current directory).
+  --vault <path>   Vault root. When omitted, resolution is local vault controls, then a\n                   bridge link, then OMS_VAULT, and only then the current directory as a\n                   read-only fallback that cannot admit a mutation.
   --yes            setup: apply only with the --approval-token and --approved-digest an earlier dry-run printed.
   --approval-token <token>
                   setup: exact approval token shown by \`setup --dry-run\`; required with --yes.
