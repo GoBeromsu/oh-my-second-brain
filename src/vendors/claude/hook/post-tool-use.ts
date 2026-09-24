@@ -2,9 +2,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { safeVaultNotePath } from "../../../kernel/capture/safe.js";
 import { parseNote } from "../../../kernel/conventions/frontmatter.js";
-import { evaluateResolvedTemplateContract } from "../../../kernel/conventions/write-contract.js";
-import { loadResolvedTemplates } from "../../../kernel/templates/resolver.js";
-import type { JsonValue } from "../../../kernel/templates/types.js";
+import { evaluateContractV5 } from "../../../kernel/templates/contract-check.js";
+import { composeContractV5, parseContractPolicyV5 } from "../../../kernel/templates/contract-v5.js";
 import { readStdinTimeout } from "./stdin.js";
 
 interface PostToolUsePayload {
@@ -24,18 +23,19 @@ function guidance(lines: readonly string[]): string[] {
 /**
  * Advisory check of a note the agent just saved.
  *
- * The hook never blocks or repairs a save: it reports what the approved
- * contract says about the bytes on disk. An unbound note is checked against the
- * always-on default layer, which is the correct contract for it.
+ * The hook never blocks or repairs a save: it reports what the published
+ * contract says about the bytes on disk. A note with no registration is checked
+ * against the always-on common contract, which is the correct contract for it.
  */
 export async function auditNote(vault: string, relPath: string): Promise<string[]> {
   try {
-    const snapshot = await loadResolvedTemplates(vault);
+    const policy = parseContractPolicyV5(await readFile(path.join(vault, ".oms", "template-policy.json"), "utf8"));
     const normalizedPath = relPath.replaceAll("\\", "/");
-    const managedSource = snapshot.sources.find(freshness => freshness.source.path === normalizedPath);
-    if (managedSource !== undefined) {
+    const registered = Object.values(policy.templates)
+      .some(entry => entry.status === "active" && entry.source.path === normalizedPath);
+    if (registered) {
       return guidance([
-        `${normalizedPath} is a raw template source; review it with oms template review before publishing a contract change.`,
+        `${normalizedPath} is a registered template source; review it with oms template review-sources before changing the contract.`,
       ]);
     }
 
@@ -46,20 +46,20 @@ export async function auditNote(vault: string, relPath: string): Promise<string[
       return guidance([`${normalizedPath} declares a non-string template identity; use template: <id> or omit it.`]);
     }
     const templateId = typeof identity === "string" && identity.trim() !== "" ? identity : null;
-    if (templateId !== null && snapshot.templates[templateId] === undefined) {
+    if (templateId !== null && policy.templates[templateId] === undefined) {
       return guidance([`${normalizedPath} references unknown template "${templateId}"; use a registered template id or omit the field.`]);
     }
-    const contract = templateId === null ? snapshot.defaultContract : snapshot.templates[templateId]!;
+    const contract = composeContractV5(policy, templateId);
 
-    const result = evaluateResolvedTemplateContract(frontmatter as Record<string, JsonValue>, contract, body);
+    const result = evaluateContractV5(frontmatter, body, contract);
     if (result.valid) return [];
-    const label = templateId === null ? "the default contract" : `template "${templateId}"`;
+    const label = templateId === null ? "the common contract" : `template "${templateId}"`;
     return guidance([
       `${normalizedPath} does not yet satisfy ${label}: ${result.violations.map(violation => `${violation.field} (${violation.rule})`).join(", ")}.`,
     ]);
   } catch (error) {
     return guidance([
-      `Cannot read the approved contract for ${relPath}: ${diagnostic(error)}. Run oms template check, then publish the reviewed contract.`,
+      `Cannot read the published contract for ${relPath}: ${diagnostic(error)}. Run oms template check, then publish the reviewed contract.`,
     ]);
   }
 }

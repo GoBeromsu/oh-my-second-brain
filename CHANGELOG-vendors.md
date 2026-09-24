@@ -4,6 +4,7 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- **The Claude PostToolUse hook reads the published V5 contract.** After a save it composes the common contract or the named registration from `.oms/template-policy.json` and reports the observed frontmatter and heading violations. On a V5 vault the hook previously failed its read and printed a misleading "cannot read the approved contract" line after every write; it also now points a changed registered source at `oms template review-sources`.
 ## [0.16.0] - 2026-09-23
 
 - Codex installs an optional provenance-owned reviewer role while preserving unowned collisions; a genuine generic separate subagent remains valid without custom-role discovery. Dry-run skill paths now match the eight installed shared skills.

@@ -3,8 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { digestBytes } from "../../../kernel/templates/canonical.js";
-import { parseTemplatePolicy, serializeDerivedProjection } from "../../../kernel/templates/policy.js";
-import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "../../../kernel/templates/resolver.js";
+import { serializeContractPolicyV5 } from "../../../kernel/templates/contract-v5.js";
 import { auditNote } from "./post-tool-use.js";
 
 const roots: string[] = [];
@@ -12,48 +11,28 @@ const encoder = new TextEncoder();
 const TEMPLATE_MARKDOWN = "---\ntemplate: note\ntitle: template\n---\nbody\n";
 const RAW_SOURCE = "<%* raw template %>\n";
 
-function layer(templatePath: string, markdown: string, extra: Record<string, unknown> = {}) {
-  return {
-    templatePath,
-    approvedMarkdown: markdown,
-    approvedMarkdownDigest: digestBytes(markdown),
-    fields: {},
-    headings: [],
-    semanticCriteria: [],
-    ...extra,
-  };
-}
-
 async function vault(notes: Record<string, string> = {}): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "oms-claude-hook-"));
   roots.push(root);
-  await Promise.all([".oms/templates", ".obsidian", "Sources", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
-  const policy = JSON.stringify({
-    version: 4,
+  await Promise.all([".oms", ".obsidian", "Sources", "notes"].map(dir => mkdir(path.join(root, dir), { recursive: true })));
+  const policy = serializeContractPolicyV5({
+    version: 5,
+    revision: 1,
     properties: { title: { type: "text", intent: "Note title." } },
-    default: layer(".oms/templates/default.md", ""),
+    common: { status: "active", fields: {} },
     templates: {
-      note: layer(".oms/templates/note.md", TEMPLATE_MARKDOWN, {
-        templateId: "note",
-        fields: { title: { property: "title", required: true } },
-        source: { path: "Sources/note.md", identity: "note-source", rawDigest: digestBytes(RAW_SOURCE) },
-      }),
+      note: {
+        status: "active",
+        source: { identity: "note-source", path: "Sources/note.md", rawDigest: digestBytes(RAW_SOURCE) },
+        fields: { title: { required: true } },
+      },
     },
   });
   const taxonomy = JSON.stringify({ templates: { note: { templateFolder: "notes" } }, folders: { notes: { intent: "Notes." } } });
-  const obsidian = "{\"types\":{\"title\":\"text\"}}\n";
-  const generationDigest = controlGenerationDigest(encoder.encode(policy), encoder.encode(taxonomy));
   await Promise.all([
     writeFile(path.join(root, ".oms", "template-policy.json"), policy, "utf8"),
     writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomy, "utf8"),
-    writeFile(path.join(root, ".oms", "types.json"), serializeDerivedProjection({
-      version: "oms.types.v2",
-      generatedFrom: generationDigest,
-      managed: expectedProjectionManaged(parseTemplatePolicy(policy), taxonomyRouting(".oms/taxonomy.json", encoder.encode(taxonomy)), generationDigest),
-    }), "utf8"),
-    writeFile(path.join(root, ".oms", "templates", "default.md"), "", "utf8"),
-    writeFile(path.join(root, ".oms", "templates", "note.md"), TEMPLATE_MARKDOWN, "utf8"),
-    writeFile(path.join(root, ".obsidian", "types.json"), obsidian, "utf8"),
+    writeFile(path.join(root, ".obsidian", "types.json"), "{\"types\":{\"title\":\"text\"}}\n", "utf8"),
     writeFile(path.join(root, "Sources", "note.md"), RAW_SOURCE, "utf8"),
     ...Object.entries(notes).map(([relative, content]) => writeFile(path.join(root, relative), content, "utf8")),
   ]);
@@ -89,7 +68,7 @@ describe("Claude PostToolUse template audit", () => {
     await expect(auditNote(root, "notes/one.md")).resolves.toEqual([]);
   });
 
-  it("accepts an unbound note under the always-on default layer", async () => {
+  it("accepts an unbound note under the always-on common contract", async () => {
     const root = await vault({ "notes/plain.md": "Ordinary note with no frontmatter.\n" });
     await expect(auditNote(root, "notes/plain.md")).resolves.toEqual([]);
   });
@@ -119,16 +98,16 @@ describe("Claude PostToolUse template audit", () => {
   it("points a raw template source at contract review", async () => {
     const root = await vault();
     await expect(auditNote(root, "Sources/note.md")).resolves.toEqual([
-      expect.stringContaining("oms template review"),
+      expect.stringContaining("oms template review-sources"),
     ]);
   });
 
   it("reports an unreadable contract without throwing", async () => {
     const root = await vault({ "notes/one.md": "---\ntemplate: note\ntitle: One\n---\nBody\n" });
-    await writeFile(path.join(root, ".oms", "types.json"), "{", "utf8");
+    await writeFile(path.join(root, ".oms", "template-policy.json"), "{", "utf8");
 
     await expect(auditNote(root, "notes/one.md")).resolves.toEqual([
-      expect.stringContaining("Cannot read the approved contract"),
+      expect.stringContaining("Cannot read the published contract"),
     ]);
   });
 
