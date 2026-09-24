@@ -680,10 +680,11 @@ describe("v4 guarded template publication", () => {
     await writeFile(path.join(item.vault, POLICY), v3);
     await expect(loadResolvedTemplates(item.vault)).rejects.toThrow(/TEMPLATE_POLICY_VERSION_UNSUPPORTED: version 3 is unsupported/);
     const search = await readSearchTemplateSource(item.vault);
-    expect(search.available).toBe(false);
-    if (search.available) throw new Error("v3 policy must stay unavailable to search");
-    expect(search.reason).toMatch(/TEMPLATE_POLICY_VERSION_UNSUPPORTED/);
-    expect(search.reason).not.toMatch(/marker|transaction/);
+    // A historical policy declares no V5 contract, so retrieval reports the
+    // unavailability instead of inventing field axes.
+    expect(search.source.templates).toBeNull();
+    expect(search.diagnostics.map(item => item.code)).toContain("CONTRACT_VERSION_UNSUPPORTED");
+    expect(search.diagnostics.map(entry => `${entry.code}: ${entry.message}`).join("\n")).not.toMatch(/marker|transaction/);
     expect(() => parseTemplatePolicy(v3)).toThrow(/TEMPLATE_POLICY_VERSION_UNSUPPORTED/);
 
     const manifest = publication({ policy: [v3, POLICY_V2, "write"] });
@@ -695,11 +696,10 @@ describe("v4 guarded template publication", () => {
     expect(inspection.failure?.message).not.toMatch(/version 3|TEMPLATE_POLICY/);
     await expect(loadResolvedTemplates(item.vault)).rejects.toThrow(/transaction marker is invalid: .*marker-fields-invalid/);
     const masked = await readSearchTemplateSource(item.vault);
-    expect(masked.available).toBe(false);
-    if (!masked.available) {
-      expect(masked.reason).toMatch(/TEMPLATE_POLICY_VERSION_UNSUPPORTED/);
-      expect(masked.reason).not.toMatch(/marker-fields-invalid/);
-    }
+    expect(masked.source.templates).toBeNull();
+    const maskedReasons = masked.diagnostics.map(entry => `${entry.code}: ${entry.message}`).join("\n");
+    expect(maskedReasons).toMatch(/CONTRACT_VERSION_UNSUPPORTED/);
+    expect(maskedReasons).not.toMatch(/marker-fields-invalid/);
     await untouched(item.vault);
   });
 
@@ -768,10 +768,11 @@ describe("v4 guarded template publication", () => {
     expect(inspection.failure).toBeUndefined();
     await expect(loadResolvedTemplates(item.vault)).rejects.toThrow(/TEMPLATE_POLICY_VERSION_UNSUPPORTED: version 3 is unsupported/);
     const search = await readSearchTemplateSource(item.vault);
-    expect(search.available).toBe(false);
-    if (search.available) throw new Error("v3 policy must stay unavailable to search");
-    expect(search.reason).toMatch(/TEMPLATE_POLICY_VERSION_UNSUPPORTED/);
-    expect(search.reason).not.toMatch(/marker|transaction/);
+    // A historical policy declares no V5 contract, so retrieval reports the
+    // unavailability instead of inventing field axes.
+    expect(search.source.templates).toBeNull();
+    expect(search.diagnostics.map(item => item.code)).toContain("CONTRACT_VERSION_UNSUPPORTED");
+    expect(search.diagnostics.map(entry => `${entry.code}: ${entry.message}`).join("\n")).not.toMatch(/marker|transaction/);
     await untouched(item.vault);
   });
 

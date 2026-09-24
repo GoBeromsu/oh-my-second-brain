@@ -1,41 +1,38 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { TemplateRetrievalSource } from "../../templates/axes.js";
+import { readSourceExclusions, type SourceExclusionInventory } from "../../conventions/note-exclude.js";
+import type { RetrievalFields, TemplateRetrievalSource } from "../../templates/axes.js";
 import { digestBytes, hashCanonical } from "../../templates/canonical.js";
-import { parseTemplatePolicy } from "../../templates/policy.js";
-import {
-  composeTemplateRetrievalSource,
-  controlGenerationDigest,
-  taxonomyRouting,
-  type TaxonomyRouting,
-} from "../../templates/resolver.js";
-import type { Digest, TemplateFolderPath, TemplatePolicy } from "../../templates/types.js";
+import { composeContractV5, parseContractPolicyV5, ContractV5Error, type ContractPolicyV5 } from "../../templates/contract-v5.js";
+import { taxonomyRouting, type TaxonomyRouting } from "../../templates/resolver.js";
+import type { Digest } from "../../templates/types.js";
 
 /**
- * Search-side read of policy and taxonomy bytes.
- * Missing or invalid policy, invalid taxonomy, and composition failure stay
- * unavailable. This reader does not admit a vault, open a projection, consult
- * a publication marker, or write.
+ * Search-side read of the explicit V5 contract and the user taxonomy.
+ *
+ * Policy, taxonomy, and source exclusions are independent channels: an invalid
+ * policy leaves ordinary notes searchable with the taxonomy still in force, and
+ * unreadable taxonomy does not erase valid registrations. The reader admits no
+ * vault, opens no projection, consults no publication marker, and writes
+ * nothing. `null` metadata means unavailable, never an empty contract.
  */
 
 const POLICY_FILE = ".oms/template-policy.json";
 const TAXONOMY_FILE = ".oms/taxonomy.json";
-const ABSENT_DOMAIN = "oms.search-template-source.absent.v1";
-const NO_PATHS = [] as const;
+const RETRIEVAL_DOMAIN = "oms.search-template-source.v5";
 
-export type SearchTemplateSource =
-  | {
-      readonly available: true;
-      readonly digest: Digest;
-      readonly source: TemplateRetrievalSource;
-      readonly managedSourcePaths: readonly string[];
-    }
-  | {
-      readonly available: false;
-      readonly digest: Digest;
-      readonly reason: string;
-      readonly managedSourcePaths: readonly [];
-    };
+export interface RetrievalDiagnostic {
+  readonly code: string;
+  readonly path: string;
+  readonly message: string;
+}
+
+export interface SearchTemplateSource {
+  readonly digest: Digest;
+  readonly source: TemplateRetrievalSource;
+  readonly exclusions: SourceExclusionInventory;
+  readonly diagnostics: readonly RetrievalDiagnostic[];
+}
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -43,25 +40,6 @@ function message(error: unknown): string {
 
 function isEnoent(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
-
-function unavailable(digest: Digest, reason: string): SearchTemplateSource {
-  return { available: false, digest, reason, managedSourcePaths: NO_PATHS };
-}
-
-function emptyRouting(): TaxonomyRouting {
-  const targetFolders = new Map<string, TemplateFolderPath>();
-  const globalAxes: TaxonomyRouting["globalAxes"] = Object.create(null);
-  return { targetFolders, globalAxes };
-}
-
-/** Both control files use the P05 generation digest. A missing file stays null, so empty bytes are a different input. */
-function presenceDigest(policy: Uint8Array | null, taxonomy: Uint8Array | null): Digest {
-  if (policy !== null && taxonomy !== null) return controlGenerationDigest(policy, taxonomy);
-  return hashCanonical(ABSENT_DOMAIN, {
-    policy: policy === null ? null : digestBytes(policy),
-    taxonomy: taxonomy === null ? null : digestBytes(taxonomy),
-  });
 }
 
 function decodeUtf8(bytes: Uint8Array): string {
@@ -77,43 +55,105 @@ async function readBytes(file: string): Promise<Uint8Array | null> {
   }
 }
 
-function listedSourcePaths(source: TemplateRetrievalSource): readonly string[] {
-  const paths: string[] = [];
-  for (const templateId of Object.keys(source.templates)) {
-    const sourcePath = source.policy.templates[templateId]?.source?.path;
-    if (sourcePath !== undefined) paths.push(sourcePath);
+/**
+ * Presence and content of each channel. Absent, empty, invalid, and unreadable
+ * inputs stay distinguishable, and the exclusion inventory participates so a
+ * changed settings root invalidates a cached graph.
+ */
+function retrievalDigest(
+  policy: Uint8Array | null,
+  taxonomy: Uint8Array | null,
+  exclusions: SourceExclusionInventory,
+): Digest {
+  return hashCanonical(RETRIEVAL_DOMAIN, {
+    policy: policy === null ? null : digestBytes(policy),
+    taxonomy: taxonomy === null ? null : digestBytes(taxonomy),
+    exclusions: exclusions.digest,
+  });
+}
+
+function diagnostic(code: string, file: string, detail: string): RetrievalDiagnostic {
+  return { code, path: file, message: detail };
+}
+
+function contractCode(error: unknown): string {
+  return error instanceof ContractV5Error ? error.code : "TEMPLATE_POLICY_UNREADABLE";
+}
+
+/** Effective fields per registration. A review-required or uncomposable layer stays null. */
+function composedFields(
+  policy: ContractPolicyV5,
+  diagnostics: RetrievalDiagnostic[],
+): { readonly defaultFields: RetrievalFields | null; readonly templates: Readonly<Record<string, RetrievalFields | null>> } {
+  let defaultFields: RetrievalFields | null = null;
+  try {
+    defaultFields = composeContractV5(policy, null).fields;
+  } catch (error: unknown) {
+    diagnostics.push(diagnostic(contractCode(error), POLICY_FILE, `common contract rules are unavailable: ${message(error)}`));
   }
-  return paths;
+  const templates: Record<string, RetrievalFields | null> = Object.create(null) as Record<string, RetrievalFields | null>;
+  for (const templateId of Object.keys(policy.templates)) {
+    try {
+      templates[templateId] = composeContractV5(policy, templateId).fields;
+    } catch (error: unknown) {
+      templates[templateId] = null;
+      diagnostics.push(diagnostic(contractCode(error), POLICY_FILE, `template ${templateId} rules are unavailable: ${message(error)}`));
+    }
+  }
+  return { defaultFields, templates };
+}
+
+/** Registered original-source paths. They are exclusion facts, never contract authority. */
+function registeredSourcePaths(policy: ContractPolicyV5): readonly string[] {
+  const paths: string[] = [];
+  for (const entry of Object.values(policy.templates)) {
+    if (entry.status === "active") paths.push(entry.source.path);
+  }
+  return paths.sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
 }
 
 export async function readSearchTemplateSource(vault: string): Promise<SearchTemplateSource> {
   const policyBytes = await readBytes(path.join(vault, ".oms", "template-policy.json"));
   const taxonomyBytes = await readBytes(path.join(vault, ".oms", "taxonomy.json"));
-  const digest = presenceDigest(policyBytes, taxonomyBytes);
-  if (policyBytes === null) return unavailable(digest, `template policy missing (${POLICY_FILE})`);
+  const exclusions = await readSourceExclusions(vault);
+  const digest = retrievalDigest(policyBytes, taxonomyBytes, exclusions);
+  const diagnostics: RetrievalDiagnostic[] = exclusions.diagnostics.map(item => diagnostic(item.code, item.path, item.message));
 
-  let policy: TemplatePolicy;
-  try {
-    policy = parseTemplatePolicy(decodeUtf8(policyBytes));
-  } catch (error: unknown) {
-    return unavailable(digest, `template policy invalid: ${message(error)}`);
-  }
-
-  let routing: TaxonomyRouting;
-  if (taxonomyBytes === null) {
-    routing = emptyRouting();
-  } else {
+  let globalAxes: TemplateRetrievalSource["globalAxes"] = Object.create(null) as Record<string, never>;
+  if (taxonomyBytes !== null) {
+    let routing: TaxonomyRouting | null = null;
     try {
       routing = taxonomyRouting(TAXONOMY_FILE, taxonomyBytes);
     } catch (error: unknown) {
-      return unavailable(digest, `template taxonomy invalid: ${message(error)}`);
+      diagnostics.push(diagnostic("TEMPLATE_TAXONOMY_UNREADABLE", TAXONOMY_FILE, `taxonomy axes are unavailable: ${message(error)}`));
     }
+    globalAxes = routing === null ? null : routing.globalAxes;
   }
 
-  try {
-    const source = composeTemplateRetrievalSource(policy, routing, digest);
-    return { available: true, digest, source, managedSourcePaths: listedSourcePaths(source) };
-  } catch (error: unknown) {
-    return unavailable(digest, `template composition failed: ${message(error)}`);
+  if (policyBytes === null) {
+    diagnostics.push(diagnostic("TEMPLATE_POLICY_ABSENT", POLICY_FILE, "no explicit contract is published; notes stay searchable without declared field axes"));
+    return { digest, source: { generationDigest: digest, defaultFields: null, templates: null, globalAxes, sourcePaths: null }, exclusions, diagnostics };
   }
+
+  let policy: ContractPolicyV5;
+  try {
+    policy = parseContractPolicyV5(decodeUtf8(policyBytes));
+  } catch (error: unknown) {
+    diagnostics.push(diagnostic(contractCode(error), POLICY_FILE, `declared contract is unavailable: ${message(error)}`));
+    return { digest, source: { generationDigest: digest, defaultFields: null, templates: null, globalAxes, sourcePaths: null }, exclusions, diagnostics };
+  }
+
+  const composed = composedFields(policy, diagnostics);
+  return {
+    digest,
+    source: {
+      generationDigest: digest,
+      defaultFields: composed.defaultFields,
+      templates: composed.templates,
+      globalAxes,
+      sourcePaths: registeredSourcePaths(policy),
+    },
+    exclusions,
+    diagnostics,
+  };
 }

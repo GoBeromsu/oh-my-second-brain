@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
-import { buildTemplateNoteIndex, loadResolvedTemplates } from "../kernel/templates/index.js";
+import { buildTemplateNoteIndex } from "../kernel/templates/index.js";
+import { readSearchTemplateSource } from "../kernel/engine/retrieval/template-source.js";
 import { diagnoseTemplates, type TemplateDoctorDiagnostic } from "../kernel/templates/doctor.js";
 
 function validatedFolder(folder: string | undefined): string | undefined {
@@ -37,8 +38,12 @@ export async function runAudit(opts: {
     }
     const folder = validatedFolder(opts.folder);
     if (folder !== undefined) await access(path.join(opts.vault, folder));
-    const convention = await loadResolvedTemplates(opts.vault);
-    const index = await buildTemplateNoteIndex(opts.vault, convention);
+    const convention = await readSearchTemplateSource(opts.vault);
+    if (convention.source.templates === null && convention.source.defaultFields === null) {
+      // An unavailable contract is reported, never replaced with bundled defaults.
+      throw new Error(`CONTRACT_UNVERIFIABLE: ${convention.diagnostics.map(item => `${item.code}: ${item.message}`).join("; ") || "no explicit contract is published"}`);
+    }
+    const index = await buildTemplateNoteIndex(opts.vault, convention.source);
     const diagnosis = await diagnoseTemplates({ vault: opts.vault, source: "explicit" });
     const notes = folder === undefined ? index.notes : index.notes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
     const unresolvedNotes = folder === undefined ? index.unresolvedNotes : index.unresolvedNotes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
@@ -64,10 +69,10 @@ export async function runAudit(opts: {
     const result = {
       vault: opts.vault,
       folder: folder ?? null,
-      generationDigest: convention.generationDigest,
-      templates: Object.keys(convention.templates).length,
+      generationDigest: convention.digest,
+      templates: Object.keys(convention.source.templates ?? {}).length,
       scannedNotes: notes.length,
-      excludedTemplateSources: convention.sources.map(freshness => freshness.source.path),
+      excludedTemplateSources: [...(convention.source.sourcePaths ?? [])],
       templateCounts,
       status: scopedDiagnosis.length === 0 && unresolvedNotes.length === 0 ? "healthy" : "needs-repair",
       diagnostics,

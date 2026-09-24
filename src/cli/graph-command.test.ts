@@ -9,7 +9,7 @@ import Database from "better-sqlite3";
 import { syncEngineStore } from "../kernel/engine/embed/sync.js";
 import { engineGraphCachePath, engineNodeCachePath, engineStorePath, vaultCacheRoot } from "../kernel/engine/paths.js";
 import * as engineAssembly from "../kernel/engine/assemble.js";
-import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
 import { runGraphCommand } from "./graph-command.js";
 import { runStatusCommand } from "./status-command.js";
 
@@ -20,7 +20,7 @@ const digest = (value: string): `sha256:${string}` =>
 async function freshVault(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-graph-command-"));
   roots.push(vault);
-  await writeApprovedVault(vault, {
+  await writeContractVault(vault, {
     properties: { status: { type: "text", intent: "Workflow state." } },
     templates: {
       note: {
@@ -176,7 +176,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "invalid", diagnostics: [{ code: "CONTRACT_UNVERIFIABLE" }] },
+      convention: { status: "invalid", diagnostics: [{ code: "CONTRACT_POLICY_INVALID" }] },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },

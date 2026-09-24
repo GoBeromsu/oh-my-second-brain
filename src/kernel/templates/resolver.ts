@@ -1,7 +1,6 @@
 import { readFile, realpath, lstat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { parseObsidianTypes } from "../contracts/index.js";
-import type { TemplateRetrievalSource } from "./axes.js";
 import { digestBytes, hashCanonical } from "./canonical.js";
 import { composeTemplateContract } from "./defaults.js";
 import { parseDerivedProjection, parseTemplatePolicy, validateDerivedProjection } from "./policy.js";
@@ -246,15 +245,24 @@ function placementFor(routing: TaxonomyRouting, templateId: string): JsonValue |
 }
 
 /**
- * Pure contract composition shared by the approved snapshot reader and search.
- * Placement is only `placementFor`. Field records stay the safe dicts from
- * `composeTemplateContract`. This function does not read or admit a vault.
+ * Historical contract composition for the approved-snapshot reader and the
+ * derived projection. Search does not use it: retrieval metadata comes from the
+ * explicit V5 contract. Placement is only `placementFor`, and field records stay
+ * the safe dicts from `composeTemplateContract`. It reads and admits no vault.
  */
+export interface ComposedTemplateContracts {
+  readonly defaultContract: ResolvedContract;
+  readonly templates: Readonly<Record<string, ResolvedContract>>;
+  readonly globalAxes: GlobalAxes;
+  readonly generationDigest: Digest;
+  readonly policy: TemplatePolicy;
+}
+
 export function composeTemplateRetrievalSource(
   policy: TemplatePolicy,
   routing: TaxonomyRouting,
   generationDigest: Digest,
-): TemplateRetrievalSource {
+): ComposedTemplateContracts {
   const templates: Record<string, ResolvedContract> = Object.create(null);
   for (const templateId of Object.keys(policy.templates).sort(compareText)) {
     templates[templateId] = composeTemplateContract(policy, templateId, placementFor(routing, templateId));

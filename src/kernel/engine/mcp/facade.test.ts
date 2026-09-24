@@ -10,7 +10,7 @@ import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import type { EmbeddingProvider, ScoredHit, VectorStore } from "../types.js";
 import type { EngineStore } from "../embed/store.js";
 import { digestBytes } from "../../templates/canonical.js";
-import { parseTemplatePolicy, serializeDerivedProjection } from "../../templates/policy.js";
+import { serializeContractPolicyV5 } from "../../templates/contract-v5.js";
 import { controlGenerationDigest, expectedProjectionManaged, loadResolvedTemplates, taxonomyRouting } from "../../templates/resolver.js";
 import type { Digest } from "../../templates/types.js";
 
@@ -82,32 +82,28 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
   mkdirSync(path.join(dir, ".oms"), { recursive: true });
   mkdirSync(path.join(dir, ".obsidian"), { recursive: true });
   mkdirSync(path.join(dir, "Templates", "OMS"), { recursive: true });
-  const layer = (templatePath: string, markdown: string, extra: Record<string, unknown> = {}) => ({
-    templatePath,
-    approvedMarkdown: markdown,
-    approvedMarkdownDigest: digestBytes(markdown),
-    fields: {},
-    headings: [],
-    semanticCriteria: [],
-    ...extra,
-  });
-  const policy = JSON.stringify({
-    version: 4,
+  // The retrieval reader consumes the explicit V5 contract. Approved Markdown
+  // and the derived projection stay out of search metadata entirely.
+  const policy = serializeContractPolicyV5({
+    version: 5,
+    revision: 1,
     properties: {
       status: { type: "text", intent: "Workflow state." },
       rating: { type: "number", intent: "Numeric rating." },
       done: { type: "boolean", intent: "Completion flag." },
     },
-    default: layer(".oms/templates/default.md", ""),
+    common: { status: "active", fields: {} },
     templates: {
-      project: layer(".oms/templates/project.md", "---\nstatus: active\nrating: 1\ndone: false\n---\nBody\n", {
-        templateId: "project",
-        fields: { status: { property: "status" }, rating: { property: "rating" }, done: { property: "done" } },
-      }),
-      reference: layer(".oms/templates/reference.md", "---\nrating: 1\ndone: false\n---\nBody\n", {
-        templateId: "reference",
-        fields: { rating: { property: "rating" }, done: { property: "done" } },
-      }),
+      project: {
+        status: "active",
+        source: { identity: "source-project", path: "Templates/OMS/project.md", rawDigest: digestBytes("project source") },
+        fields: { status: {}, rating: {}, done: {} },
+      },
+      reference: {
+        status: "active",
+        source: { identity: "source-reference", path: "Templates/OMS/reference.md", rawDigest: digestBytes("reference source") },
+        fields: { rating: {}, done: {} },
+      },
     },
   });
   const intentEntries = Object.entries(intents).sort(([left], [right]) => left.localeCompare(right));
@@ -120,24 +116,14 @@ function freshVault(intents: Readonly<Record<string, string>> = {}): string {
   });
   const types = JSON.stringify({ types: { status: "text", rating: "number", done: "boolean" } });
   const encoder = new TextEncoder();
-  const generationDigest = controlGenerationDigest(encoder.encode(policy), encoder.encode(taxonomy));
-  const projection = serializeDerivedProjection({
-    version: "oms.types.v2",
-    generatedFrom: generationDigest,
-    managed: expectedProjectionManaged(
-      parseTemplatePolicy(policy),
-      taxonomyRouting(".oms/taxonomy.json", encoder.encode(taxonomy)),
-      generationDigest,
-    ),
-  });
   mkdirSync(path.join(dir, ".oms", "templates"), { recursive: true });
   writeFileSync(path.join(dir, ".oms", "template-policy.json"), policy);
   writeFileSync(path.join(dir, ".oms", "taxonomy.json"), taxonomy);
   writeFileSync(path.join(dir, ".obsidian", "types.json"), types);
-  writeFileSync(path.join(dir, ".oms", "types.json"), projection);
-  writeFileSync(path.join(dir, ".oms", "templates", "default.md"), "");
-  writeFileSync(path.join(dir, ".oms", "templates", "project.md"), "---\nstatus: active\nrating: 1\ndone: false\n---\nBody\n");
-  writeFileSync(path.join(dir, ".oms", "templates", "reference.md"), "---\nrating: 1\ndone: false\n---\nBody\n");
+  // Registered originals are the user's own Markdown; they are excluded from
+  // ordinary note scans rather than copied into a managed location.
+  writeFileSync(path.join(dir, "Templates", "OMS", "project.md"), "project source");
+  writeFileSync(path.join(dir, "Templates", "OMS", "reference.md"), "reference source");
   writeFileSync(path.join(dir, "notes", "alpha.md"), "---\ntemplate: project\nstatus: active\n---\n# Alpha\n\nLinks to [[beta]].\n");
   writeFileSync(path.join(dir, "notes", "beta.md"), "---\ntemplate: reference\n---\n# Beta\n\nreferenced by alpha.\n");
   tempDirs.push(dir);
@@ -251,9 +237,9 @@ folders:
     ]);
   });
 
-  it("keeps expansion available when the derived projection is missing", async () => {
+  it("keeps expansion available when the read-only Obsidian projection is missing", async () => {
     const vault = freshVault();
-    rmSync(path.join(vault, ".oms", "types.json"));
+    rmSync(path.join(vault, ".obsidian", "types.json"));
     const adapter = new McpEngineAdapter(
       { store: makeEngineStore(["notes/alpha.md"]), embed: makeEmbed(), queryExpander: vi.fn() },
       vault,

@@ -1,26 +1,30 @@
+import type { EffectiveFieldV5 } from "./contract-v5.js";
 import type {
   Digest,
   GlobalAxis,
   GlobalAxes,
   JsonValue,
-  ObsidianContractType,
-  PropertyFormat,
-  ResolvedContract,
-  ResolvedField,
   TemplateId,
-  TemplatePolicy,
 } from "./types.js";
 
 /**
- * Structural slice of the P05 resolved snapshot.
- * Callers may pass the snapshot itself. This module does not load or refresh it.
+ * Field semantics for retrieval. This carries no policy document, source bytes,
+ * or approved Markdown: a query needs the effective rules and the template
+ * identities, nothing else.
+ *
+ * `null` means unavailable, not empty. A null field map keeps a known template
+ * identity whose rules could not be established; an empty map is an observed
+ * empty declaration. Retrieval never fabricates a declaration it did not read.
  */
+export type RetrievalFields = Readonly<Record<string, EffectiveFieldV5>>;
+
 export interface TemplateRetrievalSource {
-  readonly defaultContract: ResolvedContract;
-  readonly templates: Readonly<Record<string, ResolvedContract>>;
-  readonly globalAxes: GlobalAxes;
   readonly generationDigest: Digest;
-  readonly policy: TemplatePolicy;
+  readonly defaultFields: RetrievalFields | null;
+  readonly templates: Readonly<Record<string, RetrievalFields | null>> | null;
+  readonly globalAxes: GlobalAxes | null;
+  /** Registered original-source paths from the same policy read. */
+  readonly sourcePaths: readonly string[] | null;
 }
 
 export interface TemplateIdentityAxis {
@@ -30,15 +34,8 @@ export interface TemplateIdentityAxis {
   readonly templateId: TemplateId;
 }
 
-export interface TemplateFieldAxis {
-  readonly kind: "field";
-  readonly key: string;
-  readonly type: ObsidianContractType;
-  readonly intent: string;
-  readonly required: boolean;
-  readonly allowedValues?: readonly string[];
-  readonly format?: PropertyFormat;
-}
+/** The note key plus every effective rule, copied without coercion. */
+export type TemplateFieldAxis = { readonly kind: "field"; readonly key: string } & EffectiveFieldV5;
 
 export type SearchableAxis = TemplateIdentityAxis | TemplateFieldAxis | GlobalAxis;
 
@@ -84,37 +81,33 @@ function isMapping(value: unknown): value is Readonly<Record<string, unknown>> {
 function assertSnapshot(snapshot: TemplateRetrievalSource): void {
   if (
     !isMapping(snapshot)
-    || !Object.hasOwn(snapshot, "defaultContract")
-    || !isMapping(snapshot.defaultContract)
-    || !Object.hasOwn(snapshot, "templates")
-    || !isMapping(snapshot.templates)
-    || !Object.hasOwn(snapshot, "globalAxes")
-    || !isMapping(snapshot.globalAxes)
     || typeof snapshot.generationDigest !== "string"
-    || !Object.hasOwn(snapshot, "policy")
-    || !isMapping(snapshot.policy)
+    || !Object.hasOwn(snapshot, "defaultFields")
+    || (snapshot.defaultFields !== null && !isMapping(snapshot.defaultFields))
+    || !Object.hasOwn(snapshot, "templates")
+    || (snapshot.templates !== null && !isMapping(snapshot.templates))
+    || !Object.hasOwn(snapshot, "globalAxes")
+    || (snapshot.globalAxes !== null && !isMapping(snapshot.globalAxes))
+    || !Object.hasOwn(snapshot, "sourcePaths")
+    || (snapshot.sourcePaths !== null && !Array.isArray(snapshot.sourcePaths))
   ) {
-    fail("snapshot must include defaultContract, templates, globalAxes, generationDigest, and policy");
+    fail("snapshot must include generationDigest, defaultFields, templates, globalAxes, and sourcePaths");
   }
 }
 
-function fieldAxis(key: string, field: ResolvedField, label: string): TemplateFieldAxis {
-  if (field.property !== key || typeof field.type !== "string" || typeof field.intent !== "string" || typeof field.required !== "boolean") {
+function fieldAxis(key: string, field: EffectiveFieldV5, label: string): TemplateFieldAxis {
+  if (!isMapping(field) || typeof field.property !== "string" || typeof field.type !== "string"
+    || typeof field.required !== "boolean" || typeof field.valuePolicy !== "string") {
     fail(`${label}:${key}`);
   }
-  return {
-    kind: "field",
-    key,
-    type: field.type,
-    intent: field.intent,
-    required: field.required,
-    ...(field.allowedValues === undefined ? {} : { allowedValues: [...field.allowedValues] }),
-    ...(field.format === undefined ? {} : { format: field.format }),
-  };
+  // Every effective rule survives: a suggested list never becomes a closed
+  // filter, and numeric or cardinality metadata is not dropped.
+  return { kind: "field", key, ...field };
 }
 
 /** Effective-field order is the contract's own key order, not an invented alphabetical order. */
-function fieldAxes(fields: Readonly<Record<string, ResolvedField>>, label: string): readonly TemplateFieldAxis[] {
+function fieldAxes(fields: RetrievalFields | null, label: string): readonly TemplateFieldAxis[] {
+  if (fields === null) return [];
   if (!isMapping(fields)) fail(`${label}:fields`);
   return ownEntries(fields).map(([key, field]) => fieldAxis(key, field, label));
 }
@@ -154,24 +147,24 @@ function copyGlobalAxis(name: string, axis: GlobalAxis): GlobalAxis {
  */
 export function deriveTemplateRetrievalAxes(snapshot: TemplateRetrievalSource): TemplateRetrievalAxes {
   assertSnapshot(snapshot);
-  if (snapshot.defaultContract.templateId !== null) fail("default:templateId");
-  const defaultAxes = fieldAxes(snapshot.defaultContract.fields, "default");
+  const defaultAxes = fieldAxes(snapshot.defaultFields, "default");
   const seen = new Set<string>();
-  const templates: TemplateAxisSet[] = [...ownEntries(snapshot.templates)]
-    .map(([key, contract]) => {
+  const templates: TemplateAxisSet[] = (snapshot.templates === null ? [] : [...ownEntries(snapshot.templates)])
+    .map(([key, fields]) => {
       const templateId = key.normalize("NFC") as TemplateId;
-      if (seen.has(templateId) || !isMapping(contract) || contract.templateId !== templateId) fail(`${templateId}:templateId`);
+      if (seen.has(templateId)) fail(`${templateId}:templateId`);
       seen.add(templateId);
       return {
         templateId,
+        // A known identity stays queryable even when its rules are unavailable.
         axes: [
           { kind: "identity" as const, key: "template" as const, type: "string" as const, templateId },
-          ...fieldAxes(contract.fields, templateId),
+          ...fieldAxes(fields, templateId),
         ],
       };
     })
     .sort((left, right) => compareText(left.templateId, right.templateId));
-  const globalAxes = [...ownEntries(snapshot.globalAxes)]
+  const globalAxes = (snapshot.globalAxes === null ? [] : [...ownEntries(snapshot.globalAxes)])
     .sort((left, right) => compareText(left[0], right[0]))
     .map(([name, axis]) => copyGlobalAxis(name, axis));
   return { defaultAxes, templates, globalAxes };

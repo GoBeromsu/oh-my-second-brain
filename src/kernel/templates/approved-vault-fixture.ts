@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { digestBytes } from "./canonical.js";
+import { parseContractPolicyV5, serializeContractPolicyV5 } from "./contract-v5.js";
 import { parseTemplatePolicy, serializeDerivedProjection } from "./policy.js";
 import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "./resolver.js";
 import type { JsonValue } from "./types.js";
@@ -119,4 +120,67 @@ export async function writeApprovedVault(root: string, fixture: ApprovedVaultFix
     await writeFile(absolute, content);
   }
   return { policyText, taxonomyText, projectionText, generationDigest };
+}
+
+/**
+ * Writes an explicit version 5 vault: a user-owned property pool, an always-on
+ * common contract with no physical Markdown, and registered templates whose
+ * sources are the user's own files. Search and graph read this contract.
+ */
+export async function writeContractVault(root: string, fixture: ApprovedVaultFixture = {}): Promise<{
+  readonly policyText: string;
+  readonly taxonomyText: string;
+}> {
+  const properties: Record<string, unknown> = {};
+  for (const [name, definition] of Object.entries(fixture.properties ?? {})) {
+    properties[name] = { type: definition.type, ...(definition.intent === undefined ? {} : { intent: definition.intent }), ...(definition.allowedValues === undefined ? {} : { allowedValues: [...definition.allowedValues] }) };
+  }
+  const templates: Record<string, unknown> = {};
+  const sources: { path: string; bytes: string }[] = [];
+  for (const [templateId, template] of Object.entries(fixture.templates ?? {})) {
+    const optional = new Set(template.optionalFields ?? []);
+    const fields: Record<string, unknown> = {};
+    for (const name of template.fields ?? []) fields[name] = optional.has(name) ? {} : { required: true };
+    const source = template.rawSource ?? {
+      path: `Templates/${templateId}.md`,
+      identity: `source-${templateId}`,
+      bytes: template.approvedMarkdown ?? "",
+    };
+    sources.push({ path: source.path, bytes: source.bytes });
+    templates[templateId] = {
+      status: "active",
+      source: { identity: source.identity, path: source.path, rawDigest: digestBytes(source.bytes) },
+      fields,
+      ...(template.headings === undefined ? {} : { headings: template.headings.map(heading => ({ ...heading, required: true })) }),
+    };
+  }
+  const policyText = serializeContractPolicyV5(parseContractPolicyV5({
+    version: 5,
+    revision: 1,
+    properties,
+    common: { status: "active", fields: {} },
+    templates,
+  }));
+  const taxonomyText = JSON.stringify({
+    templates: Object.fromEntries(Object.entries(fixture.templates ?? {}).flatMap(([templateId, template]) =>
+      template.targetFolder === undefined ? [] : [[templateId, { templateFolder: template.targetFolder }]])),
+    folders: fixture.folders ?? {},
+  });
+
+  await mkdir(path.join(root, ".oms"), { recursive: true });
+  await mkdir(path.join(root, ".obsidian"), { recursive: true });
+  await writeFile(path.join(root, ".oms", "template-policy.json"), policyText);
+  await writeFile(path.join(root, ".oms", "taxonomy.json"), taxonomyText);
+  await writeFile(path.join(root, ".obsidian", "types.json"), JSON.stringify({ types: fixture.obsidianTypes ?? {} }));
+  for (const source of sources) {
+    const absolute = path.join(root, source.path);
+    await mkdir(path.dirname(absolute), { recursive: true });
+    await writeFile(absolute, source.bytes);
+  }
+  for (const [notePath, content] of Object.entries(fixture.notes ?? {})) {
+    const absolute = path.join(root, notePath);
+    await mkdir(path.dirname(absolute), { recursive: true });
+    await writeFile(absolute, content);
+  }
+  return { policyText, taxonomyText };
 }

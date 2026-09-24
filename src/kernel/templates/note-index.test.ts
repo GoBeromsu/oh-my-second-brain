@@ -12,7 +12,9 @@ import {
   TEMPLATE_NOTE_INDEX_VERSION,
 } from "./note-index.js";
 import type { TemplateIndexedNote, TemplateNoteIndex } from "./note-index.js";
-import type { Digest, ManagedTemplatePath, ResolvedContract, ResolvedField, TemplateId, TemplatePolicy, TemplateSourcePath } from "./types.js";
+import type { RetrievalFields } from "./axes.js";
+import type { EffectiveFieldV5 } from "./contract-v5.js";
+import type { Digest } from "./types.js";
 
 const DIGEST = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Digest;
 const STALE = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as Digest;
@@ -49,99 +51,42 @@ function mapping<T>(entries: readonly (readonly [string, T])[]): Record<string, 
   return record;
 }
 
-function field(property: string, overrides: Record<string, unknown> = {}): ResolvedField {
-  return { property, type: "string", intent: property, required: false, ...overrides } as ResolvedField;
+function field(property: string, overrides: Partial<EffectiveFieldV5> = {}): EffectiveFieldV5 {
+  return { property, type: "string", required: false, valuePolicy: "free", ...overrides };
 }
 
-function contract(templateId: string | null, fields: Record<string, ResolvedField>): ResolvedContract {
-  return {
-    templateId: templateId as TemplateId | null,
-    headingOrder: "unordered",
-    fields,
-    headings: [],
-    semanticCriteria: [],
-    approved: {
-      defaultLayer: {
-        templatePath: ".oms/templates/default.md" as ManagedTemplatePath,
-        approvedMarkdown: "",
-        approvedMarkdownDigest: DIGEST,
-      },
-    },
-    contractDigest: DIGEST,
-  };
-}
-
-function policy(): TemplatePolicy {
-  return {
-    version: 4,
-    properties: {},
-    default: {
-      templatePath: ".oms/templates/default.md" as ManagedTemplatePath,
-      approvedMarkdown: "",
-      approvedMarkdownDigest: DIGEST,
-      fields: {},
-      headings: [],
-      semanticCriteria: [],
-    },
-    templates: {
-      note: {
-        templateId: "note" as TemplateId,
-        templatePath: ".oms/templates/note.md" as ManagedTemplatePath,
-        approvedMarkdown: "",
-        approvedMarkdownDigest: DIGEST,
-        fields: {},
-        headings: [],
-        semanticCriteria: [],
-        source: {
-          path: "Templates/OMS/note.md" as TemplateSourcePath,
-          identity: "source",
-          rawDigest: DIGEST,
-        },
-      },
-      missing: {
-        templateId: "missing" as TemplateId,
-        templatePath: ".oms/templates/missing.md" as ManagedTemplatePath,
-        approvedMarkdown: "",
-        approvedMarkdownDigest: DIGEST,
-        fields: {},
-        headings: [],
-        semanticCriteria: [],
-        source: {
-          path: "Sources/deleted.md" as TemplateSourcePath,
-          identity: "missing",
-          rawDigest: DIGEST,
-        },
-      },
-    },
-    completion: { retryBudget: 2, agentRepair: { enabled: false } },
-  };
+function fields(entries: readonly (readonly [string, EffectiveFieldV5])[]): RetrievalFields {
+  const record = Object.create(null) as Record<string, EffectiveFieldV5>;
+  for (const [key, value] of entries) record[key] = value;
+  return record;
 }
 
 function retrieval(): TemplateRetrievalSource {
   return {
     generationDigest: DIGEST,
-    policy: policy(),
-    defaultContract: contract(null, mapping([
+    defaultFields: fields([
       ["title", field("title", { intent: "Default title.", required: true })],
-      ["status", field("status", { type: "select", intent: "Default status.", allowedValues: ["open", "closed"] })],
-    ])),
+      ["status", field("status", { type: "select", intent: "Default status.", valuePolicy: "closed", allowedValues: ["open", "closed"] })],
+    ]),
     templates: {
-      note: contract("note", mapping([
-        ["status", field("status", { type: "select", intent: "Workflow state.", allowedValues: ["open", "closed"] })],
+      note: fields([
+        ["status", field("status", { type: "select", intent: "Workflow state.", valuePolicy: "closed", allowedValues: ["open", "closed"] })],
         ["title", field("title", { intent: "Title.", required: true, format: "url" })],
         ["constructor", field("constructor", { intent: "Prototype name." })],
         ["__proto__", field("__proto__", { intent: "Prototype key." })],
-        ["tags", field("tags", { type: "list", intent: "Tags.", allowedValues: ["a"] })],
+        ["tags", field("tags", { type: "list", intent: "Tags.", valuePolicy: "suggest", allowedValues: ["a"] })],
         ["count", field("count", { type: "number", intent: "Count." })],
-      ])),
-      task: contract("task", mapping([
-        ["status", field("status", { type: "select", intent: "Task state.", allowedValues: ["open", "closed"] })],
-      ])),
+      ]),
+      task: fields([
+        ["status", field("status", { type: "select", intent: "Task state.", valuePolicy: "closed", allowedValues: ["open", "closed"] })],
+      ]),
     },
     globalAxes: {
       links: { kind: "link", key: "related", type: "list", members: ["parent", "child"] },
       folders: { kind: "folder", key: "folder", type: "select", intent: "Placement.", members: ["notes", "archive"] },
     },
+    // Registered originals the index must not treat as ordinary notes.
+    sourcePaths: ["Templates/OMS/note.md", "Sources/deleted.md"],
   };
 }
 

@@ -13,7 +13,7 @@ import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv
 import { parse } from "yaml";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import { createOMSMcpServer, omsMcpTools } from "./server.js";
-import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeApprovedVault, writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
 
 const LITERATURE_MARKDOWN = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n\n# Literature\n";
 const NOTE_MARKDOWN = "---\ntemplate: note\ntitle: Untitled\n---\n\nBody\n";
@@ -728,7 +728,18 @@ describe("Oh My Second Brain MCP stdio server", () => {
 
   it("retrieves live graph context without requiring a warm cache or semantic backend", async () => {
     const tmpVault = await mkdtemp(path.join(tmpdir(), "oms-mcp-retrieve-"));
-    await createMcpTemplateAuthority(tmpVault);
+    // Retrieval reads the explicit contract, so this vault publishes V5.
+    await writeContractVault(tmpVault, {
+      properties: {
+        title: { type: "text", intent: "Note title." },
+        "source-url": { type: "text", intent: "Where the source came from." },
+      },
+      templates: {
+        literature: { fields: ["title", "source-url"], approvedMarkdown: LITERATURE_MARKDOWN, targetFolder: "references" },
+      },
+      folders: { references: { intent: "Processed sources." } },
+      obsidianTypes: { title: "text", "source-url": "text" },
+    });
     await mkdir(path.join(tmpVault, "references"), { recursive: true });
     await writeFile(
       path.join(tmpVault, "references", "Agent Retrieval.md"),
@@ -1244,7 +1255,17 @@ Valid frontmatter remains available to retrieve.
 
   it("emits a type-affinity cap warning through the build-graph MCP response", async () => {
     const tmpVault = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-graph-cap-")));
-    await createMcpTemplateAuthority(tmpVault);
+    await writeContractVault(tmpVault, {
+      properties: {
+        title: { type: "text", intent: "Note title." },
+        "source-url": { type: "text", intent: "Where the source came from." },
+      },
+      templates: {
+        literature: { fields: ["title", "source-url"], approvedMarkdown: LITERATURE_MARKDOWN, targetFolder: "references" },
+      },
+      folders: { references: { intent: "Processed sources." } },
+      obsidianTypes: { title: "text", "source-url": "text" },
+    });
     await mkdir(path.join(tmpVault, "notes"), { recursive: true });
     await Promise.all(Array.from({ length: 65 }, (_, index) =>
       writeFile(

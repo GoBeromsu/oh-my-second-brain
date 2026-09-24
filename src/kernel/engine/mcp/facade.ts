@@ -330,6 +330,17 @@ function deferFacetSummary(opts: McpSemanticQueryOptions): boolean {
   return opts.collectionPath !== undefined && opts.limit === undefined;
 }
 
+/** Human-readable reason text for metadata the reader could not establish. */
+function metadataReason(meta: SearchTemplateSource): string {
+  const reasons = meta.diagnostics.map(item => `${item.code}: ${item.message}`);
+  return reasons.length === 0 ? "the declared contract is unavailable" : reasons.join("; ");
+}
+
+/** True when declared field or template axes could be established. */
+function declaredMetadataAvailable(meta: SearchTemplateSource): boolean {
+  return meta.source.templates !== null || meta.source.defaultFields !== null;
+}
+
 function templateFieldKeys(source: TemplateRetrievalSource): ReadonlySet<string> {
   const keys = new Set<string>();
   const axes = deriveTemplateRetrievalAxes(source);
@@ -504,12 +515,12 @@ export class McpEngineAdapter {
   ): Promise<McpSemanticQueryResult> {
     const vault = opts.vault ?? this.vaultPath;
     const meta = await readSearchTemplateSource(vault);
-    if (!meta.available && requestsDeclaredAxes(opts.axes as QueryAxes | undefined)) {
-      return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field axis requires the template snapshot: ${meta.reason}`);
+    if (!declaredMetadataAvailable(meta) && requestsDeclaredAxes(opts.axes as QueryAxes | undefined)) {
+      return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field axis requires the template snapshot: ${metadataReason(meta)}`);
     }
     const baseNodes = await this.loadOrBuildNodes(vault, meta);
     const indexDrift = false;
-    if (meta.available) validateKnownFieldAxes(opts.axes as QueryAxes | undefined, templateFieldKeys(meta.source));
+    if (declaredMetadataAvailable(meta)) validateKnownFieldAxes(opts.axes as QueryAxes | undefined, templateFieldKeys(meta.source));
     const nodes = baseNodes;
     const axisFiltered = opts.axes === undefined
       ? nodes
@@ -767,7 +778,7 @@ export class McpEngineAdapter {
       // does not turn store-backed retrieval into an unavailable result.
       try {
         const facetMeta = await readSearchTemplateSource(vault);
-        if (!facetMeta.available) facetWarnings.push(`Template metadata unavailable: ${facetMeta.reason}`);
+        if (!declaredMetadataAvailable(facetMeta)) facetWarnings.push(`Template metadata unavailable: ${metadataReason(facetMeta)}`);
         const facetNodes = await this.loadOrBuildNodes(vault, facetMeta);
         const scoped = opts.collectionPath === undefined
           ? facetNodes
@@ -1066,7 +1077,7 @@ export class McpEngineAdapter {
     const args = graphBuildOptionsToEngineArgs(opts, vaultPath);
     const meta = await readSearchTemplateSource(args.vaultPath);
     const graphCachePath = this.graphCachePath(args.vaultPath);
-    const metadataWarnings = meta.available ? [] : [`Template metadata unavailable: ${meta.reason}`];
+    const metadataWarnings = declaredMetadataAvailable(meta) ? [] : [`Template metadata unavailable: ${metadataReason(meta)}`];
 
     if (args.dryRun) {
       const cached = await loadCachedGraphMeta(graphCachePath, meta.digest);
@@ -1126,8 +1137,8 @@ export class McpEngineAdapter {
   async retrieveByAxis(filters: McpAxisFilters): Promise<McpSemanticQueryResult> {
     try {
       const meta = await readSearchTemplateSource(this.vaultPath);
-      if (!meta.available && (filters.template !== undefined || filters.property !== undefined)) {
-        return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field filter requires the template snapshot: ${meta.reason}`);
+      if (!declaredMetadataAvailable(meta) && (filters.template !== undefined || filters.property !== undefined)) {
+        return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field filter requires the template snapshot: ${metadataReason(meta)}`);
       }
       const baseNodes = await this.loadOrBuildNodes(this.vaultPath, meta);
       const nodes = baseNodes;

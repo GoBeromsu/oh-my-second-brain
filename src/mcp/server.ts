@@ -760,7 +760,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
           headings: contract.headings,
           semanticCriteria: contract.semanticCriteria,
         })),
-        axes: deriveTemplateRetrievalAxes(snapshot),
+        axes: deriveTemplateRetrievalAxes((await readSearchTemplateSource(vault)).source),
         ...runtimeHistory(vault),
         ...(runtimeWarnings.length === 0 ? {} : { runtimeWarnings }),
       });
@@ -960,12 +960,14 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       const folder = stringArg(args, "folder");
       try {
         const meta = await readSearchTemplateSource(vault);
-        if (!meta.available) throw new Error(meta.reason);
+        if (meta.source.templates === null && meta.source.defaultFields === null) {
+          throw new Error(meta.diagnostics.map(item => `${item.code}: ${item.message}`).join("; ") || "the declared contract is unavailable");
+        }
         const index = await buildTemplateNoteIndex(vault, meta.source);
         const notes = folder === undefined ? index.notes : index.notes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
         const unresolvedNotes = folder === undefined ? index.unresolvedNotes : index.unresolvedNotes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
         const violations = unresolvedNotes.map(note => ({ code: "TEMPLATE_NOTE_IDENTITY_UNRESOLVED", path: note.path, reason: note.reason }));
-        return jsonText({ vault, projectionSource: ".oms/types.json", folder: folder ?? null, scannedNotes: notes.length, excludedNotes: meta.managedSourcePaths.length, unresolvedNotes, clean: violations.length === 0, violations, generationDigest: meta.digest });
+        return jsonText({ vault, projectionSource: ".oms/types.json", folder: folder ?? null, scannedNotes: notes.length, excludedNotes: (meta.source.sourcePaths ?? []).length, unresolvedNotes, clean: violations.length === 0, violations, generationDigest: meta.digest });
       } catch {
         const diagnosis = await diagnoseTemplates({ vault, source });
         const violations = folder === undefined

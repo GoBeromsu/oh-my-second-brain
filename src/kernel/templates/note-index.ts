@@ -6,7 +6,7 @@ import { axisValueEquals, deriveTemplateRetrievalAxes } from "./axes.js";
 import type { TemplateFieldAxis, TemplateIdentityAxis, TemplateRetrievalAxes, TemplateRetrievalSource } from "./axes.js";
 import { digestBytes } from "./canonical.js";
 import { normalizeTemplateSourcePath, verifyTemplateSourcePath } from "./paths.js";
-import type { Digest, JsonValue, ResolvedContract, TemplateId, TemplatePolicy } from "./types.js";
+import type { Digest, JsonValue, TemplateId } from "./types.js";
 
 export const TEMPLATE_NOTE_INDEX_VERSION = "oms.template-note-index.v4" as const;
 
@@ -105,15 +105,12 @@ function relativePath(root: string, target: string): string {
   return value.replaceAll("\\", "/").normalize("NFC");
 }
 
-function approvedSourcePaths(policy: TemplatePolicy): ReadonlySet<string> {
-  if (!isMapping(policy) || !isMapping(policy.templates)) fail("TEMPLATE_AXIS_UNDECLARED_FIELD", "policy.templates must be a mapping");
+/** Registered original sources are the only index exclusions; built-in globs belong to the walkers. */
+function registeredSourcePaths(snapshot: TemplateRetrievalSource): ReadonlySet<string> {
   const excluded = new Set<string>();
-  for (const key of Object.keys(policy.templates)) {
-    const template = ownValue(policy.templates, key);
-    if (!isMapping(template) || template.source === undefined) continue;
-    const source = template.source;
-    if (!isMapping(source) || typeof source.path !== "string") continue;
-    excluded.add(source.path.normalize("NFC"));
+  for (const sourcePath of snapshot.sourcePaths ?? []) {
+    if (typeof sourcePath !== "string") fail("TEMPLATE_AXIS_UNDECLARED_FIELD", "sourcePaths must contain vault-relative strings");
+    excluded.add(sourcePath.normalize("NFC"));
   }
   return excluded;
 }
@@ -149,16 +146,16 @@ async function markdownPaths(vault: string, excluded: ReadonlySet<string>): Prom
   return paths.sort(compareText);
 }
 
-function contractsById(templates: Readonly<Record<string, ResolvedContract>>): ReadonlyMap<string, ResolvedContract> {
-  const map = new Map<string, ResolvedContract>();
-  for (const key of Object.keys(templates)) {
-    const contract = ownValue(templates, key);
-    if (contract === undefined) continue;
+/** Known template identities, including a registration whose rules are unavailable. */
+function templateIdentities(snapshot: TemplateRetrievalSource): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (snapshot.templates === null) return ids;
+  for (const key of Object.keys(snapshot.templates)) {
     const templateId = key.normalize("NFC");
-    if (map.has(templateId) || contract.templateId !== templateId) fail("TEMPLATE_AXIS_UNDECLARED_FIELD", `${templateId}:templateId`);
-    map.set(templateId, contract);
+    if (ids.has(templateId)) fail("TEMPLATE_AXIS_UNDECLARED_FIELD", `${templateId}:templateId`);
+    ids.add(templateId);
   }
-  return map;
+  return ids;
 }
 
 export type NoteTemplateIdentity =
@@ -217,13 +214,12 @@ function declaredAxis(axes: TemplateRetrievalAxes, query: TemplateAxisQuery): Te
 
 /**
  * Explicit index construction. It reads note bytes and writes nothing.
- * Approved `policy.templates[].source.path` values are the only source exclusions.
+ * Registered `source.path` values are the only source exclusions it applies.
  */
 export async function buildTemplateNoteIndex(vault: string, snapshot: TemplateRetrievalSource): Promise<TemplateNoteIndex> {
   const axes = deriveTemplateRetrievalAxes(snapshot);
-  const excluded = approvedSourcePaths(snapshot.policy);
-  const contracts = contractsById(snapshot.templates);
-  const templateIds = new Set(contracts.keys());
+  const excluded = registeredSourcePaths(snapshot);
+  const templateIds = templateIdentities(snapshot);
   const notes: TemplateIndexedNote[] = [];
   const unresolvedNotes: TemplateNoteUnresolved[] = [];
   const diagnostics: TemplateNoteDiagnostic[] = [];

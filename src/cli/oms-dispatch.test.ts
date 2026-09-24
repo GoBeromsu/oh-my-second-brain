@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { mainUsageCommandNames } from "./usage.js";
-import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeApprovedVault, writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -369,7 +369,7 @@ describe("oms CLI dispatch", () => {
 
   it("emits audit JSON and exits 0 for an existing approved contract", async () => {
     const vault = await makeVault();
-    await writeApprovedVault(vault);
+    await writeContractVault(vault);
     await mkdir(path.join(vault, "notes"), { recursive: true });
     await writeFile(path.join(vault, "notes", "Alpha.md"), "---\ntitle: Alpha\n---\nAlpha.\n");
     const audit = runCli(["note", "audit", "--vault", vault, "--folder", "notes", "--json"]);
