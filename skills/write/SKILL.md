@@ -1,58 +1,40 @@
 ---
 name: write
-description: Guide a vault note, then check the file the agent saved against its contract.
+description: Write a vault note through the contract judge; a denied write names each violation.
 mcp_tool: write
 mcp_args:
-  op: "guide"
-  notePath: "$1"
+  path: "$1"
+  content: "$2"
 ---
 
 # write
 
-The user owns meaning. The agent writes the note. OMS guides and checks; it never writes note bytes and does not judge whether the writing is good. `guide` and `check` do not write note bytes and do not render a template into a note. One exception is explicit and only about managed state: when `guide` is given the three `migration` ids for a historical version-3 or version-4 vault, it publishes that vault's version-5 contract in place — policy, settings, history, and a migration receipt — before selecting. Ordinary selection on a published vault writes nothing inside the vault; it does reserve a connection and open a minimal session under the external runtime root, which is where the locator you pass to `check` lives.
+The user owns meaning. The agent writes the note. OMS judges the bytes against the vault's sealed contract before they reach disk and does not judge whether the writing is good.
 
 ```text
-/write <note-path> [template-id]
+/write <note-path> [template]
 ```
 
-Document reads stay on `search { op: "get-document" }`. Approved CLI names are `oms note guide|check|audit|get`.
+Write vault notes with MCP `write {path, content, template?}`. A denial gives only `{field, kind}` and a guidance command. Never ask about or guess the contract's location or values.
 
-## Guide
+Document reads stay on `search { op: "get-document" }`.
+
+## Write
 
 ```text
-write { op: "guide", notePath, templateId, headingBindings }
+write { path, content, template? }
 ```
 
-`notePath` is required: selection binds one explicit saved path. For the common contract only, pass `templateId: null`; never send `""`. An unbound note is normal. Take ids from `search { op: "templates" }`; never guess one. `guide` has no folder argument. Fix the path first: an explicit path, otherwise the taxonomy placement, otherwise ask. There is no Inbox fallback. Settle that in ordinary conversation. Switch to `/interview` only when the user is changing placement policy or the contract itself.
+`path` is vault-relative. `content` is the whole note. `template` names a sealed template when the note follows one; omit it otherwise. There are no other fields.
 
-Guide returns `state`. `selected` carries a `locator` (`connectionId`, `sessionId`), the effective contract, and the user's own registered source text. `review-required`, `setup-required`, and `migration-pending` are not failures to retry blindly: report the reasons and let the user decide. Keep the locator; check needs it. Do not invent digests, template ids, or extra field names.
+The judge answers allow or deny. Allow writes the note atomically and returns `{ ok: true, path }`. Deny writes nothing and returns `{ ok: false, violations: [{ field, kind }], reason }`. A violation names a field and a kind only; it never quotes a rule. Read the kinds, fix the note, and write again. Do not guess missing values and do not weaken the contract so the note passes; when you cannot fix a violation from what the user gave you, ask.
 
-## Agent write
+Placement is explicit: an explicit path, otherwise the folder meaning the user approved, otherwise ask. There is no Inbox fallback.
 
-Write the vault file with the host's file tools, following the approved Markdown and contract. Preserve unmanaged frontmatter. Do not insert guessed required values, and do not weaken the contract so the note will pass. The saved note is ordinary Markdown. Leave Templater or other source syntax in the source; do not ask OMS to execute it. A saved file is not a completed task. An incomplete note remains searchable.
+A vault with no sealed contract accepts any note inside it. A contract that cannot be read denies writes until the user restores it with `oms setup`; you never run it. Paths outside the vault and the vault's control paths are always denied.
 
-## Check
+## Host file tools
 
-```text
-write { op: "check", connectionId, sessionId }
-```
+In Claude Code, native writes into the vault go through the same judge in the PreToolUse hook. When the hook cannot reach the judge, it allows the write with one warning and records the failure for `oms contract doctor`. Codex and Hermes declare no write hook, so use MCP `write` for vault notes there.
 
-Pass the locator guide returned. The session already holds the note path and the exact contract that was selected, so check takes no note path, template id, or caller-supplied rules. OMS re-reads the saved bytes and the published contract and returns `result`: `structural` (`pass`/`fail`), `semantic: "not-evaluated"`, and the violations it observed. Do not send an unsaved body or a caller PASS. A changed contract or a moved source ends the selection instead of silently adopting the new one: select again.
-
-A drifted registered source blocks selecting that template: guide refuses it with `SOURCE_DRIFT` until the user reviews and acknowledges the new bytes, or relinks a genuinely missing original. The common contract, every other registration, and search continue. Stop this check while a contract transaction is in progress. A damaged policy is unverifiable, not an empty contract.
-
-## Source review
-
-The registered source is the user's own Markdown. When it changes, the contract does not change with it: `write { op: "template", mode: "review-sources" }` reports drift, and acknowledgment records the reviewed bytes without touching any rule. A relocation needs the original to be genuinely missing and an explicitly named candidate; matching bytes are evidence, never permission. Review itself is read-only and takes no transaction id. Acknowledgment and relocation each require confirmation and an explicit `transactionId`, and each publishes exactly one revision.
-
-## Repair
-
-Agent repair is off unless the user's `.oms/settings.json` sets `agentRepair.enabled` and names post-write or maintenance; that is portable vault settings, not the contract. A search or check call does not grant edit rights. Stay inside the explicit note scope. OMS declares no retry budget and counts no attempts. Do not guess missing values or weaken the contract to clear a failure; when you cannot fix a violation from what the user gave you, ask.
-
-## Notice
-
-A `templateNotice` uses the first display `템플릿에 변경이 있습니다` and exactly `확인하기` and `나중에`, with no template name, hash, or change list. `나중에` is host-only. `확인하기` offers `/interview` and does not write source bytes or block search. `templateNotice.next` is a mode hint, not a CallToolRequest: do not replay it as a tool call.
-
-## Surface
-
-The write operations are `guide`, `check`, and `template`. Note creation, appending, updating, backfilling, and completion do not exist: the agent writes the note, OMS inspects what was saved, and judging whether the note is good stays with the user and the agent. Pass the task binding exactly as `guide` returned it; do not invent field names. A note with no registered template either omits `templateId` or sends an explicit `null`; both select the common contract, and neither is an empty string.
+The surface is five MCP tools and six skills.

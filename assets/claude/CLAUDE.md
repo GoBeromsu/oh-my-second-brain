@@ -1,67 +1,42 @@
 # Oh My Second Brain — Claude Code
 
-The vault owns its conventions. Read existing guidelines and intent before
-interpreting properties, folders, or headings.
+The vault owns its conventions. The user seals folders, properties, and
+templates once, in an interactive `oms setup` they run themselves at a terminal.
+You never run it. The sealed contract lives outside the vault, and it is not
+yours to read.
 
-- `.oms/template-policy.json` is the published contract. Its version-5 document
-  owns the property pool, the common contract, and each explicitly registered
-  template. The common contract always applies and has no Markdown file of its
-  own; a registration inherits it and may also relax what the user approved.
-  Notes with no registered template are valid under the common contract alone.
-- `.oms/taxonomy.json` owns folder/link meaning and placement.
-- `.obsidian/types.json` is read-only diagnostic input, not an override of the
-  published contract. `.oms/types.json` is a historical version-4 projection:
-  version 5 neither derives nor reads it, and nothing regenerates it.
-- Agents interpret raw template syntax; OMS does not execute or render it. A
-  registered Markdown source stays the user's own file: OMS records its path and
-  content hash and never rewrites, copies, or manages a shadow snapshot.
+## Writing
 
-## Writing and checking
+Write vault notes with MCP `write {path, content, template?}` (the `/write`
+skill). A denial gives only `{field, kind}` and a guidance command. Never ask
+about or guess the contract's location or values.
 
-Use `/write`: OMS `guide` resolves the verified vault, target path and contract
-and returns a session locator; the agent uses its file tools to write; OMS
-`check` inspects the saved bytes through that locator. Preserve unmanaged
-properties and do not invent missing values. Placement is explicit caller
-choice, then approved taxonomy, otherwise a question—not an invented Inbox.
-OMS is not the author or repair engine.
+- `template` is optional. Pass it only when the user names the template a note
+  follows.
+- An allowed note is saved whole. A denied write leaves the file unchanged. Read
+  each `{field, kind}`, fix the content from what the user gave you, and write
+  again. When you cannot fix it, ask the user. Never invent a value.
+- Native Write, Edit, MultiEdit, and NotebookEdit inside the vault reach the
+  same judge through the Claude write hook. The hook denies a write that breaks
+  the contract. When the hook itself cannot run, it allows the write and prints
+  a warning.
+- `~/.oms` is off-limits. The hook denies reads, searches, and writes there as
+  `control-path`. Inside the vault, `.oms/settings.json` is the only OMS file.
+- OMS is not the author or repair engine. An allowed write means the note fits
+  the sealed structure, not that it is worth keeping. That judgement is yours
+  and the user's.
 
-`check` reports declared properties and headings and returns
-`semantic: "not-evaluated"`. It is a structural result, not a judgement that the
-note is worth keeping. There is no OMS completion call and no reviewer
-handshake: you decide whether the note is good, and you own the repair. Read a
-reported violation, fix the file with your own tools, and run `check` again on
-the new bytes. Never weaken the contract to pass.
+## Retrieval and health
 
-Automatic repair defaults off; `agentRepair` lives in the portable
-`.oms/settings.json`, not in the contract. When the user enables it, repairs stay
-within the contexts they permitted. OMS declares no retry budget and counts no
-attempts: when you cannot fix a violation from what the user gave you, ask them
-rather than retrying blindly. Ordinary note
-questions do not change contracts or automatically start a configuration interview.
-Hooks are advisory and fail-open; they do not guarantee blocked saves or host
-termination. An explicit `check` on the saved bytes remains necessary.
+- `/search` is read-only across lexical, vector, HyDE, and axis retrieval. It
+  also returns notes that would fail the contract. It never writes or repairs.
+  Unavailable backends fail loudly and are never replaced with a fake match.
+- `/status` reads health. `oms contract status` and `oms contract doctor` are
+  for diagnosis. They report the seal's posture and template drift without
+  printing any value.
+- `/doctor` runs explicit, supported index and control repairs. It never
+  backfills notes. A broken or missing seal is fixed by the user running
+  `oms setup`.
 
-## Configuration and retrieval
-
-Use tool-less `/interview` for setup and contract creation/addition/change/update;
-`/template` routes configuration work through that same approval lifecycle.
-Reuse known intent, ask one question at a time, and obtain approval of the
-explained final document. OMS keeps no interview state: agree the decisions in
-conversation, write the version-5 contract document, and publish it with
-`oms template publish`, which previews without `--yes` and compare-and-swaps
-against the exact bytes now on disk. Never self-approve.
-
-Initially show a returned source-change notice exactly as
-`템플릿에 변경이 있습니다` with `확인하기` and `나중에`. Deferral makes no
-server call. Explicit review runs `review-sources`; a changed source is then
-acknowledged with its live digest, or relinked only when the original file is
-genuinely gone and the user spells out the candidate path. A changed hash is
-evidence of drift, never approval, and must not block unrelated templates or
-search.
-
-`/search` remains read-only across lexical/vector/HyDE/declared axes, including
-invalid, unbound and incomplete notes. It never launches review, interview or
-repair. Unavailable backends fail loudly without fake substitutes.
-`/status` reads health; `/doctor` performs explicit supported control/index
-repairs, not note backfill. Eight skills share five MCP tools: write, search,
-link, distill, status, doctor, and tool-less template and interview.
+Six skills share five MCP tools: `write`, `search`, `link`, `distill`,
+`status`, and `doctor`.

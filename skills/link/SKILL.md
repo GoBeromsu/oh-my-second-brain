@@ -21,7 +21,7 @@ Suggest and check `[[wikilinks]]`. `link` does not write notes. There is no `op:
 
 Suggestions are surface-anchored to a term note's basename or alias, cover the first occurrence of each target only, and report an ambiguous span instead of resolving it. A suggestion is not consent. Show the candidates and insert only the links the user accepts, using the host's file tools at the reported span. If the note changed after the suggestion, suggest again rather than patching a stale span. Do not infer consent, and do not expose private note text beyond the span the user is accepting.
 
-After the edit, run `link` check. When the edit belongs to a note task, also run `write` check on the saved file. Neither call grants repair rights.
+After the edit, run `link` check. When the edit belongs to a note task, save the note through MCP `write {path, content, template?}` so the contract judges it. A `link` check grants no repair rights.
 
 `oms bridge add|remove|status` manages repository bridges and has no `link` operation. Do not route bridge work through `link`.
 

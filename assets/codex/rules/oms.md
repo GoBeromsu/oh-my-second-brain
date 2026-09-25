@@ -1,46 +1,31 @@
 # Oh My Second Brain for Codex
 
-Use the vault's own guidelines and the published `.oms/template-policy.json`
-contract. Its version-5 document owns the property pool, the always-on common
-contract that needs no Markdown file, and each explicitly registered template. A
-registration inherits the common contract and may also relax it where the user
-approved that. `.oms/taxonomy.json` owns placement meaning. `.obsidian/types.json`
-is read-only diagnostic input; `.oms/types.json` is a historical version-4 file
-that version 5 neither derives nor reads.
+The vault owns its conventions. The user seals them once with an interactive
+`oms setup` they run themselves. You never run it, and the sealed contract is
+not yours to read.
 
 | User intent | Preferred surface |
 |---|---|
-| setup or change contracts | tool-less `$oms-interview`, with an explained diff and user approval |
-| inspect templates | `$oms-template` |
+| seal or change the vault contract | ask the user to run `oms setup` in a terminal |
 | install host integration | `oms host install --runtime codex --vault <path> --yes`, only when authorized |
-| write a note | `$oms-write`: guide → agent file write → check on the saved bytes |
-| retrieve knowledge | `$oms-search`; no validation or repair side effects |
-| inspect health | `$oms-status` |
+| write a note | `$oms-write`: MCP `write {path, content, template?}` |
+| retrieve knowledge | `$oms-search`; read-only, with no validation or repair side effects |
+| inspect health | `$oms-status`; `oms contract status` for the seal and template drift |
+| diagnose the seal | `oms contract doctor` |
 | explicit supported control/index repair | `$oms-doctor` |
 
 ## Boundaries
 
-- Agents write and repair notes; OMS checks the actual saved bytes.
-  Do not use retired OMS note-write, link-apply, backfill, or complete operations.
-- `check` reports declared properties and headings and returns
-  `semantic: "not-evaluated"`. There is no OMS completion call and no reviewer
-  handshake: you judge whether the note is worth keeping and you own the repair.
-- Read a reported violation, fix the file with your own tools, and check again.
-  Never weaken the contract to pass, and never invent a missing value.
-- Automatic repair defaults off; `agentRepair` lives in the portable
-  `.oms/settings.json`, not the contract. An enabled repair stays within the
-  contexts the user permitted. OMS declares no retry budget and counts no
-  attempts; ask the user rather than retrying blindly. Contract changes require
-  approval, not an automatic fix.
-- Search/status stay read-only; invalid, unbound and incomplete notes remain
-  searchable. Preserve requested backend failure semantics without substitutes.
-- Use approved placement or ask; do not invent a folder or template requirement.
-- Uninstall removes only owned integration assets, never vault notes or `.oms/`.
-
-A returned source-change notice initially reads exactly `템플릿에 변경이 있습니다`
-with `확인하기` and `나중에`. Deferral has no server-side effect. Explicit review
-runs `review-sources`; a changed source is acknowledged with its live digest, or
-relinked only when the original is genuinely gone and the user spells out the
-candidate path. A changed hash is drift evidence, never approval, and you never
-self-approve a publication. Ordinary writing questions and search do not
-automatically start the interview.
+- Write vault notes with MCP `write {path, content, template?}`. A denial gives
+  only `{field, kind}` and a guidance command. Never ask about or guess the
+  contract's location or values.
+- A denied write leaves the file unchanged. Fix the content from what the user
+  gave you and write again, or ask the user. Never invent a missing value.
+- Codex has no write hook. Notes written with host file tools are not judged.
+- `~/.oms` is off-limits. Inside the vault, `.oms/settings.json` is the only
+  OMS file.
+- Search and status stay read-only. Notes that would fail the contract remain
+  searchable. Keep the requested backend's failure semantics, with no
+  substitutes.
+- Uninstall removes only the integration assets OMS owns, never vault notes or
+  `.oms/settings.json`.
