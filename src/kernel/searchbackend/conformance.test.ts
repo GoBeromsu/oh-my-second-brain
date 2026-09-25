@@ -65,6 +65,43 @@ async function collectionOrderingFixtureVault(): Promise<string> {
   return vault;
 }
 
+async function linkHeavyFacetVault(): Promise<string> {
+  const vault = await mkdtemp(path.join(tmpdir(), "oms-search-backend-link-facets-"));
+  vaults.push(vault);
+  await mkdir(path.join(vault, "corpus"), { recursive: true });
+  await mkdir(path.join(vault, "targets"), { recursive: true });
+  const linkTargets = Array.from({ length: 611 }, (_, index) => `targets/link-${String(index).padStart(3, "0")}.md`);
+  await Promise.all(linkTargets.map((target) => writeFile(
+    path.join(vault, target),
+    "# Link target\nresolved outgoing link only\n",
+    "utf8",
+  )));
+  const links = linkTargets.map((target) => `[[${target}]]`).join(" ");
+  await Promise.all(Array.from({ length: 165 }, (_, index) => writeFile(
+    path.join(vault, "corpus", `match-${String(index).padStart(3, "0")}.md`),
+    `# Match ${index}\nshared facet token\n${links}\n`,
+    "utf8",
+  )));
+  return vault;
+}
+
+function expectFacetSummary(
+  result: { readonly facets: readonly { readonly axis: string; readonly value: string; readonly count: number }[]; readonly receipt: { readonly warnings: readonly string[] } },
+  total: number,
+): void {
+  expect(result.facets).toHaveLength(Math.min(20, total));
+  const warning = result.receipt.warnings.find((entry) => entry.startsWith("Facets truncated:"));
+  if (total <= 20) {
+    expect(warning).toBeUndefined();
+    return;
+  }
+  expect(warning).toBe(`Facets truncated: showing 20 of ${total} distinct values.`);
+}
+const CORPUS_MATCH_QUERY = {
+  query: "shared facet token",
+  collectionPath: "corpus",
+} as const;
+
 function searchBackendConformance(
   name: string,
   create: (vault: string) => { backend: SearchBackend; dispose(): Promise<void> },
@@ -254,7 +291,7 @@ function searchBackendConformance(
         try {
           const result = await backend.search(request);
 
-          // ADR-007 locks no-fake-fallback: an explicitly requested strategy that
+          // ADR-005 locks no-fake-fallback: an explicitly requested strategy that
           // cannot run must say so, not silently return lexical results dressed
           // up as vector ones. The reason has to name what to configure.
           expect(result.available).toBe(false);
@@ -317,8 +354,8 @@ function searchBackendConformance(
         expect(result.available).toBe(false);
         expect(result.reason ?? "").toMatch(/OMS_EMBEDDING_PROVIDER/);
         expect(result.reason ?? "").toMatch(/OMS_EMBEDDING_MODEL/);
-        expect(result.reason ?? "").toMatch(/\.oms\/models\.json/);
-        expect(result.reason ?? "").toMatch(/oms setup --models-default/);
+        expect(result.reason ?? "").toMatch(/\.oms\/settings\.json/);
+        expect(result.reason ?? "").toMatch(/oms model install --default/);
         expect(result.receipt.requestedStrategy).toBe("expand");
       } finally {
         await dispose();
@@ -459,6 +496,65 @@ describe("EngineSearchBackend collection envelope", () => {
   });
 });
 
+describe("EngineSearchBackend merged facet summary", () => {
+  it("caps merged collection facets after combining complete child inputs", async () => {
+    const childFacets = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({
+      axis: "link" as const,
+      value: `${prefix}-${String(index).padStart(3, "0")}`,
+      count: 1,
+      intent: `Link axis: ${prefix}-${index}`,
+    }));
+    const shared = {
+      axis: "folder" as const,
+      value: "shared",
+      count: 4,
+      intent: "Folder axis: shared",
+    };
+    const adapter = {
+      semanticQuery: vi.fn(async ({ collectionPath, limit }: { readonly collectionPath?: string; readonly limit?: number }) => {
+        expect(limit).toBeUndefined();
+        const prefix = collectionPath ?? "missing";
+        return {
+          available: true as const,
+          hits: [{
+            docid: `${prefix}.md`,
+            score: prefix === "zeta" ? 0.2 : 0.8,
+            uri: `vault://${prefix}.md`,
+            path: `${prefix}.md`,
+            snippet: "",
+            evidence: { lexical: true, vector: false },
+          }],
+          totalCount: 1,
+          facets: [shared, ...childFacets(prefix, 21)],
+          cursor: null,
+          receipt: {
+            usedChannels: ["lex" as const],
+            approximated: false,
+            indexDrift: false,
+            warnings: [`${prefix} warning`],
+          },
+        };
+      }),
+    } as unknown as McpEngineAdapter;
+    const backend = new EngineSearchBackend(adapter, "/vault");
+    const forward = await backend.search({ query: "query", collections: ["alpha", "zeta"], limit: 1 });
+    const reverse = await backend.search({ query: "query", collections: ["zeta", "alpha"], limit: 1 });
+
+    expect(adapter.semanticQuery).toHaveBeenCalledTimes(4);
+    expect(forward).toMatchObject({ available: true, totalCount: 2, cursor: "1" });
+    expect(forward.facets).toHaveLength(20);
+    expect(forward.facets[0]).toMatchObject({ axis: "folder", value: "shared", count: 8 });
+    expect(forward.receipt.warnings).toEqual([
+      "alpha warning",
+      "zeta warning",
+      "Facets truncated: showing 20 of 43 distinct values.",
+    ]);
+    expect(reverse.facets).toEqual(forward.facets);
+    expect(reverse.receipt.warnings).toEqual(forward.receipt.warnings);
+    expect(reverse).toMatchObject({ totalCount: 2, cursor: "1", hits: forward.hits });
+  });
+});
+
 searchBackendConformance("in-repository engine", (vault) => {
   const engine: AssembledEngine = assembleCoreSemanticEngine({ vault });
   return {
@@ -548,4 +644,101 @@ describe("EngineSearchBackend reranking", () => {
       await engine.dispose();
     }
   });
+});
+describe("EngineSearchBackend high-cardinality facet summary", () => {
+  it("returns five hits, the full count, and 20 of 612 facets", async () => {
+    const vault = await linkHeavyFacetVault();
+    const engine = assembleCoreSemanticEngine({ vault });
+    const backend = new EngineSearchBackend(engine.adapter, vault);
+    try {
+      const result = await backend.search({ ...CORPUS_MATCH_QUERY, limit: 5 });
+      expect(result).toMatchObject({ available: true, totalCount: 165, cursor: "5" });
+      expect(result.hits).toHaveLength(5);
+      expect(result.hits.every((hit) => hit.path.startsWith("corpus/"))).toBe(true);
+      expectFacetSummary(result, 612);
+      expect(result.facets.filter((facet) => facet.axis === "folder")).toEqual([
+        { axis: "folder", value: "corpus", count: 165, intent: "Folder axis: corpus" },
+      ]);
+      expect(result.facets.filter((facet) => facet.axis === "link")).toHaveLength(19);
+      expect(result.facets.every((facet) => facet.count === 165)).toBe(true);
+    } finally {
+      await engine.dispose();
+    }
+  }, 60_000);
+
+  it("keeps the same facet summary when the omitted limit defaults to ten hits", async () => {
+    const vault = await linkHeavyFacetVault();
+    const engine = assembleCoreSemanticEngine({ vault });
+    const backend = new EngineSearchBackend(engine.adapter, vault);
+    try {
+      const result = await backend.search(CORPUS_MATCH_QUERY);
+      expect(result).toMatchObject({ available: true, totalCount: 165, cursor: "10" });
+      expect(result.hits).toHaveLength(10);
+      expect(result.hits.every((hit) => hit.path.startsWith("corpus/"))).toBe(true);
+      expectFacetSummary(result, 612);
+    } finally {
+      await engine.dispose();
+    }
+  }, 60_000);
+
+  it("preserves deep hit paging, zero limits, and the full ordered stream", async () => {
+    const vault = await linkHeavyFacetVault();
+    const engine = assembleCoreSemanticEngine({ vault });
+    const backend = new EngineSearchBackend(engine.adapter, vault);
+    try {
+      const all = await backend.search({ ...CORPUS_MATCH_QUERY, limit: 75 });
+      const deep = await backend.search({ ...CORPUS_MATCH_QUERY, limit: 10, cursor: "60" });
+      const emptyPage = await backend.search({ ...CORPUS_MATCH_QUERY, limit: 0 });
+      expect(all).toMatchObject({ available: true, totalCount: 165, cursor: "75" });
+      expect(all.hits).toHaveLength(75);
+      expect(all.hits.every((hit) => hit.path.startsWith("corpus/"))).toBe(true);
+      expect(deep).toMatchObject({ totalCount: 165, cursor: "70" });
+      expect(deep.hits.map((hit) => hit.path)).toEqual(all.hits.slice(60, 70).map((hit) => hit.path));
+      expect(emptyPage).toMatchObject({ totalCount: 165, cursor: "0", hits: [] });
+      expectFacetSummary(all, 612);
+      expect(deep.facets).toEqual(all.facets);
+      expect(emptyPage.facets).toEqual(all.facets);
+      expect(deep.receipt.warnings).toEqual(all.receipt.warnings);
+
+      const pages = [];
+      let cursor: string | null | undefined;
+      do {
+        const page = await backend.search({
+          ...CORPUS_MATCH_QUERY,
+          limit: 50,
+          ...(cursor === undefined || cursor === null ? {} : { cursor }),
+        });
+        pages.push(...page.hits.map((hit) => hit.path));
+        cursor = page.cursor;
+      } while (cursor !== null && cursor !== undefined);
+      expect(pages).toHaveLength(165);
+      expect(pages.slice(0, 75)).toEqual(all.hits.map((hit) => hit.path));
+    } finally {
+      await engine.dispose();
+    }
+    // Walking every page of a 776-note corpus is deliberately more work than one
+    // bounded query, so this scenario gets its own explicit budget.
+  }, 60_000);
+
+  it("bounds axis and overview query facets without changing their result counts", async () => {
+    const vault = await linkHeavyFacetVault();
+    const engine = assembleCoreSemanticEngine({ vault });
+    const backend = new EngineSearchBackend(engine.adapter, vault);
+    try {
+      const axis = await backend.search({
+        query: "shared facet token",
+        axes: { folder: "corpus" },
+        limit: 5,
+      });
+      const overview = await backend.search({ query: "", limit: 5 });
+      expect(axis).toMatchObject({ available: true, totalCount: 165, cursor: "5" });
+      expect(axis.hits).toHaveLength(5);
+      expectFacetSummary(axis, 612);
+      expect(overview).toMatchObject({ available: true, totalCount: 776, cursor: "5" });
+      expectFacetSummary(overview, 613);
+      expect(overview.facets.some((facet) => facet.axis === "folder" && facet.value === "targets")).toBe(true);
+    } finally {
+      await engine.dispose();
+    }
+  }, 60_000);
 });

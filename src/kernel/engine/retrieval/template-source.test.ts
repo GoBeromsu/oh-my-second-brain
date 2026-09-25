@@ -1,289 +1,180 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { digestBytes, hashCanonical } from "../../templates/canonical.js";
-import { composeTemplateContract } from "../../templates/defaults.js";
-import { parseTemplatePolicy } from "../../templates/policy.js";
-import {
-  composeTemplateRetrievalSource,
-  controlGenerationDigest,
-  taxonomyRouting,
-} from "../../templates/resolver.js";
-import { readSearchTemplateSource, type SearchTemplateSource } from "./template-source.js";
+import { sealContract, storeRoot } from "../../contract/store.js";
+import type { PropertyContract, VaultContract } from "../../contract/types.js";
+import { serializeVaultSettings } from "../../vault/settings.js";
+import { readSearchTemplateSource } from "./template-source.js";
 
-const encoder = new TextEncoder();
+const SECRET = "SECRET-RULE-VALUE-42";
+const SOURCE_HASH = `sha256:${"0".repeat(64)}` as const;
 const roots: string[] = [];
-const MISSING_POLICY = "template policy missing (.oms/template-policy.json)";
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-function absentDigest(policy: Uint8Array | null, taxonomy: Uint8Array | null) {
-  return hashCanonical("oms.search-template-source.absent.v1", {
-    policy: policy === null ? null : digestBytes(policy),
-    taxonomy: taxonomy === null ? null : digestBytes(taxonomy),
-  });
+async function makeVault(files: Record<string, string> = {}): Promise<string> {
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "oms-search-source-")));
+  roots.push(root);
+  for (const [relative, content] of Object.entries(files)) {
+    await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+    await writeFile(path.join(root, relative), content);
+  }
+  return root;
 }
 
-function asAvailable(value: SearchTemplateSource): Extract<SearchTemplateSource, { available: true }> {
-  if (value.available) return value;
-  throw new Error(value.reason);
+function property(overrides: Partial<PropertyContract> = {}): PropertyContract {
+  return { meaning: "a property", type: "text", default: false, required: false, rules: [], ...overrides };
 }
 
-async function makeVault(): Promise<string> {
-  const vault = await mkdtemp(path.join(tmpdir(), "oms-search-template-"));
-  roots.push(vault);
-  return vault;
-}
-
-function layer(templatePath: string, markdown: string, extra: Record<string, unknown> = {}) {
+function contract(): VaultContract {
   return {
-    templatePath,
-    approvedMarkdown: markdown,
-    approvedMarkdownDigest: digestBytes(markdown),
-    fields: {},
-    headings: [],
-    semanticCriteria: [],
-    ...extra,
+    folders: {
+      Notes: { meaning: "Working notes.", searchExclude: false },
+      Drafts: { meaning: "Unfinished drafts.", searchExclude: true },
+    },
+    properties: {
+      title: property({ required: true }),
+      status: property({ rules: [{ kind: "allowed", values: [SECRET, "done"] }] }),
+      tags: property({ type: "tags", rules: [{ kind: "fixed", value: SECRET }] }),
+    },
+    templates: {
+      zeta: { source: "Sources/z.md", sourceHash: SOURCE_HASH, requiredProperties: ["status"], narrowedRules: { status: [{ kind: "fixed", value: SECRET }] }, requiredHeadings: [] },
+      alpha: { source: "Sources/a.md", sourceHash: SOURCE_HASH, applyFolder: "Notes", requiredProperties: [], narrowedRules: {}, requiredHeadings: ["Summary"] },
+    },
   };
 }
 
-function policyText(): string {
-  return JSON.stringify({
-    version: 4,
-    properties: {
-      status: { type: "select", intent: "Publication status.", allowedValues: ["open", "closed"] },
-    },
-    default: layer(".oms/templates/default.md", "", {
-      fields: { status: { property: "status", required: true } },
-    }),
-    templates: {
-      zeta: layer(".oms/templates/zeta.md", "Zeta\n", {
-        templateId: "zeta",
-        source: { path: "Sources/z.md", identity: "zeta-source", rawDigest: digestBytes("z") },
-      }),
-      alpha: layer(".oms/templates/alpha.md", "Alpha\n", {
-        templateId: "alpha",
-        fields: { status: { property: "status", allowedValues: ["open"] } },
-        source: { path: "Sources/a.md", identity: "alpha-source", rawDigest: digestBytes("a") },
-      }),
-      note: layer(".oms/templates/note.md", "", { templateId: "note" }),
-    },
-  });
-}
-
-function taxonomyText(): string {
-  return JSON.stringify({
-    templates: {
-      alpha: { templateFolder: "Notes/Alpha" },
-      zeta: { templateFolder: "Notes/Zeta" },
-    },
-    folders: { "Notes/Alpha": { intent: "Alpha notes." } },
-  });
-}
-
-async function writeControl(vault: string, name: string, contents: string | Uint8Array): Promise<void> {
+async function seal(vault: string, sealed: VaultContract): Promise<string> {
+  const vaultId = randomUUID();
   await mkdir(path.join(vault, ".oms"), { recursive: true });
-  await writeFile(path.join(vault, ".oms", name), contents);
+  await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId }));
+  await sealContract({ vaultRealPath: vault, vaultId, contract: sealed });
+  return vaultId;
 }
+
+const SOURCES = { "Sources/a.md": "# alpha\n", "Sources/z.md": "# zeta\n" };
 
 describe("readSearchTemplateSource", () => {
-  it("reports absent and malformed policy without inventing a contract or creating .oms", async () => {
-    const emptyVault = await makeVault();
-    const missing = await readSearchTemplateSource(emptyVault);
-    expect(missing).toEqual({
-      available: false,
-      digest: absentDigest(null, null),
-      reason: MISSING_POLICY,
-      managedSourcePaths: [],
+  it("projects the sealed acceptance surface into retrieval fields and the folder axis", async () => {
+    const vault = await makeVault(SOURCES);
+    await seal(vault, contract());
+    const read = await readSearchTemplateSource(vault);
+    expect(read.source.generationDigest).toBe(read.digest);
+    expect(read.source.defaultFields).toEqual({
+      status: { property: "status", type: "text", required: false, valuePolicy: "free" },
+      tags: { property: "tags", type: "tags", required: false, valuePolicy: "free" },
+      title: { property: "title", type: "text", required: true, valuePolicy: "free" },
     });
-    expect("source" in missing).toBe(false);
-    expect(existsSync(path.join(emptyVault, ".oms"))).toBe(false);
-
-    const taxonomyOnly = await makeVault();
-    const taxonomy = encoder.encode("{}");
-    await writeControl(taxonomyOnly, "taxonomy.json", taxonomy);
-    const policyMissing = await readSearchTemplateSource(taxonomyOnly);
-    expect(policyMissing).toEqual({
-      available: false,
-      digest: absentDigest(null, taxonomy),
-      reason: MISSING_POLICY,
-      managedSourcePaths: [],
+    expect(Object.keys(read.source.templates ?? {}).sort()).toEqual(["alpha", "zeta"]);
+    // A template's required properties are required in its own field set only.
+    expect(read.source.templates?.["zeta"]?.["status"]?.required).toBe(true);
+    expect(read.source.templates?.["alpha"]?.["status"]?.required).toBe(false);
+    expect(read.source.globalAxes?.["folder-ontology"]).toMatchObject({
+      kind: "folder",
+      members: ["Drafts", "Notes"],
+      extensions: { intents: { Drafts: "Unfinished drafts.", Notes: "Working notes." } },
     });
-    expect(policyMissing.digest).not.toBe(missing.digest);
-
-    const emptyPolicyVault = await makeVault();
-    const emptyPolicy = new Uint8Array();
-    await writeControl(emptyPolicyVault, "template-policy.json", emptyPolicy);
-    const emptyRead = await readSearchTemplateSource(emptyPolicyVault);
-    expect(emptyRead).toEqual({
-      available: false,
-      digest: absentDigest(emptyPolicy, null),
-      reason: "template policy invalid: TEMPLATE_POLICY_INVALID: JSON parse failed",
-      managedSourcePaths: [],
-    });
-    expect(emptyRead.digest).not.toBe(missing.digest);
-
-    const malformedVault = await makeVault();
-    const malformed = encoder.encode("{");
-    const taxonomyObject = encoder.encode("{}");
-    await writeControl(malformedVault, "template-policy.json", malformed);
-    await writeControl(malformedVault, "taxonomy.json", taxonomyObject);
-    const malformedRead = await readSearchTemplateSource(malformedVault);
-    expect(malformedRead).toEqual({
-      available: false,
-      digest: controlGenerationDigest(malformed, taxonomyObject),
-      reason: "template policy invalid: TEMPLATE_POLICY_INVALID: JSON parse failed",
-      managedSourcePaths: [],
-    });
-    expect(malformedRead.digest).not.toBe(absentDigest(malformed, taxonomyObject));
-
-    const versionVault = await makeVault();
-    const version3 = encoder.encode(JSON.stringify({ version: 3 }));
-    await writeControl(versionVault, "template-policy.json", version3);
-    await writeControl(versionVault, "taxonomy.json", taxonomyObject);
-    const unsupported = await readSearchTemplateSource(versionVault);
-    expect(unsupported.available).toBe(false);
-    if (unsupported.available) return;
-    expect(unsupported.reason).toContain("template policy invalid: TEMPLATE_POLICY_VERSION_UNSUPPORTED:");
-    expect(unsupported.digest).toBe(controlGenerationDigest(version3, taxonomyObject));
-    expect(unsupported.managedSourcePaths).toEqual([]);
-    expect("source" in unsupported).toBe(false);
+    expect(read.source.sourcePaths).toEqual(["Sources/a.md", "Sources/z.md"]);
+    expect(read.diagnostics).toEqual([]);
+    expect(Object.keys(read.source).sort()).toEqual(["defaultFields", "generationDigest", "globalAxes", "sourcePaths", "templates"]);
   });
 
-  it("composes the default and templates with P05 placement and lists source paths", async () => {
-    const vault = await makeVault();
-    const policy = policyText();
-    const taxonomy = taxonomyText();
-    await writeControl(vault, "template-policy.json", policy);
-    await writeControl(vault, "taxonomy.json", taxonomy);
-    const policyBytes = encoder.encode(policy);
-    const taxonomyBytes = encoder.encode(taxonomy);
-    const found = asAvailable(await readSearchTemplateSource(vault));
-    const digest = controlGenerationDigest(policyBytes, taxonomyBytes);
-    const composed = composeTemplateRetrievalSource(
-      parseTemplatePolicy(policy),
-      taxonomyRouting(".oms/taxonomy.json", taxonomyBytes),
-      digest,
-    );
-    expect(found.digest).toBe(digest);
-    expect(found.source.generationDigest).toBe(found.digest);
-    expect(found.source).toEqual(composed);
-    expect(found.managedSourcePaths).toEqual(["Sources/a.md", "Sources/z.md"]);
-    expect(found.source.defaultContract.templateId).toBeNull();
-    expect(found.source.defaultContract.contractDigest).toBe(composeTemplateContract(policy, null, null).contractDigest);
-    expect(found.source.defaultContract.fields["status"]).toMatchObject({ required: true, allowedValues: ["closed", "open"] });
-    expect(found.source.templates["alpha"]?.contractDigest).toBe(
-      composeTemplateContract(policy, "alpha", { templateFolder: "Notes/Alpha" }).contractDigest,
-    );
-    expect(found.source.templates["alpha"]?.contractDigest).not.toBe(composeTemplateContract(policy, "alpha", null).contractDigest);
-    expect(found.source.templates["alpha"]?.fields["status"]).toMatchObject({ required: true, allowedValues: ["open"] });
-    expect(found.source.templates["zeta"]?.contractDigest).toBe(
-      composeTemplateContract(policy, "zeta", { templateFolder: "Notes/Zeta" }).contractDigest,
-    );
-    expect(found.source.templates["note"]?.contractDigest).toBe(composeTemplateContract(policy, "note", null).contractDigest);
-    expect(found.source.globalAxes["folder-ontology"]).toMatchObject({ kind: "folder", members: ["Notes/Alpha"] });
-    expect(existsSync(path.join(vault, "Sources"))).toBe(false);
-    expect((await readdir(path.join(vault, ".oms"))).sort()).toEqual(["taxonomy.json", "template-policy.json"]);
+  it("never exposes a rule value or narrowed rule", async () => {
+    const vault = await makeVault(SOURCES);
+    await seal(vault, contract());
+    const read = await readSearchTemplateSource(vault);
+    expect(JSON.stringify(read)).not.toContain(SECRET);
   });
 
-  it("treats a missing taxonomy as empty routing and keeps empty bytes distinct", async () => {
-    const vault = await makeVault();
-    const policy = policyText();
-    await writeControl(vault, "template-policy.json", policy);
-    const policyBytes = encoder.encode(policy);
-    const found = asAvailable(await readSearchTemplateSource(vault));
-    expect(found.digest).toBe(absentDigest(policyBytes, null));
-    expect(found.digest).not.toBe(controlGenerationDigest(policyBytes, new Uint8Array()));
-    expect(found.digest).not.toBe(controlGenerationDigest(policyBytes, encoder.encode("{}")));
-    expect(found.source.generationDigest).toBe(found.digest);
-    expect(Object.keys(found.source.globalAxes)).toEqual([]);
-    expect(Object.getPrototypeOf(found.source.globalAxes)).toBeNull();
-    expect(found.managedSourcePaths).toEqual(["Sources/a.md", "Sources/z.md"]);
-    for (const templateId of ["alpha", "zeta", "note"] as const) {
-      expect(found.source.templates[templateId]?.contractDigest).toBe(composeTemplateContract(policy, templateId, null).contractDigest);
-      expect(found.source.templates[templateId]?.contractDigest).not.toBe(
-        composeTemplateContract(policy, templateId, { templateFolder: "Notes/Alpha" }).contractDigest,
-      );
-    }
-
-    const emptyTaxonomy = new Uint8Array();
-    await writeControl(vault, "taxonomy.json", emptyTaxonomy);
-    const invalidTaxonomy = await readSearchTemplateSource(vault);
-    expect(invalidTaxonomy).toEqual({
-      available: false,
-      digest: controlGenerationDigest(policyBytes, emptyTaxonomy),
-      reason: "template taxonomy invalid: TEMPLATE_SOURCE_INVALID: taxonomy (.oms/taxonomy.json) must be valid JSON",
-      managedSourcePaths: [],
-    });
-    expect(invalidTaxonomy.digest).not.toBe(found.digest);
+  it("keeps the digest independent of rule values", async () => {
+    const first = await makeVault(SOURCES);
+    await seal(first, contract());
+    const second = await makeVault(SOURCES);
+    const changed = contract();
+    await seal(second, { ...changed, properties: { ...changed.properties, status: property({ rules: [{ kind: "allowed", values: ["other"] }] }) } });
+    expect((await readSearchTemplateSource(second)).source.defaultFields)
+      .toEqual((await readSearchTemplateSource(first)).source.defaultFields);
   });
 
-  it("invalidates on control bytes and does not read projection or marker", async () => {
+  it("reports an open vault without inventing a contract or creating .oms", async () => {
     const vault = await makeVault();
-    const policy = policyText();
-    const taxonomy = taxonomyText();
-    await writeControl(vault, "template-policy.json", policy);
-    await writeControl(vault, "taxonomy.json", taxonomy);
-    const taxonomyBytes = encoder.encode(taxonomy);
-    const first = asAvailable(await readSearchTemplateSource(vault));
-    const typesPath = path.join(vault, ".oms", "types.json");
-    const markerPath = path.join(vault, ".oms", "template-transaction.json");
-    await writeFile(typesPath, "{not json");
-    await writeFile(markerPath, "{\"status\":\"in-progress\"}");
-    await chmod(typesPath, 0o000);
-    await chmod(markerPath, 0o000);
+    const read = await readSearchTemplateSource(vault);
+    expect(read.source).toMatchObject({ defaultFields: null, templates: null, sourcePaths: null });
+    expect(read.source.globalAxes).toEqual({});
+    expect(read.diagnostics.map(item => item.code)).toEqual(["CONTRACT_OPEN"]);
+    expect(existsSync(path.join(vault, ".oms"))).toBe(false);
+  });
+
+  it("reports a missing vault as open", async () => {
+    const vault = path.join(await makeVault(), "missing");
+    const read = await readSearchTemplateSource(vault);
+    expect(read.diagnostics.map(item => item.code)).toContain("CONTRACT_OPEN");
+  });
+
+  it("reports an unreadable seal as unavailable metadata instead of throwing", async () => {
+    const vault = await makeVault(SOURCES);
+    const vaultId = await seal(vault, contract());
+    const sealed = await readSearchTemplateSource(vault);
+    const generation = (await readdir(storeRoot())).find(entry => entry.startsWith(`.${vaultId}.`))!;
+    await writeFile(path.join(storeRoot(), generation, "folders.json"), "{\"version\":1,\"folders\":{}}\n");
+    const read = await readSearchTemplateSource(vault);
+    expect(read.source).toMatchObject({ defaultFields: null, templates: null, globalAxes: null, sourcePaths: null });
+    expect(read.diagnostics.map(item => item.code)).toContain("CONTRACT_UNREADABLE");
+    expect(read.digest).not.toBe(sealed.digest);
+  });
+
+  it("names a failed contract read by code, never by the store path", async () => {
+    const vault = await makeVault(SOURCES);
+    await seal(vault, contract());
+    await chmod(storeRoot(), 0o000);
     try {
-      const ignored = asAvailable(await readSearchTemplateSource(vault));
-      expect(ignored.digest).toBe(first.digest);
-      expect(ignored.source.generationDigest).toBe(first.digest);
+      const read = await readSearchTemplateSource(vault);
+      const unreadable = read.diagnostics.find(item => item.code === "CONTRACT_UNREADABLE");
+      expect(unreadable?.message).toMatch(/^sealed contract is unavailable: [A-Z][A-Z0-9_]*; run oms contract doctor$/);
+      expect(JSON.stringify(read)).not.toContain(storeRoot());
     } finally {
-      await chmod(typesPath, 0o644);
-      await chmod(markerPath, 0o644);
-    }
-
-    const rewritten = `${policy}\n`;
-    await writeFile(path.join(vault, ".oms", "template-policy.json"), rewritten);
-    const next = asAvailable(await readSearchTemplateSource(vault));
-    expect(next.digest).not.toBe(first.digest);
-    expect(next.digest).toBe(controlGenerationDigest(encoder.encode(rewritten), taxonomyBytes));
-    expect(next.source.generationDigest).toBe(next.digest);
-    expect(next.source.templates["note"]?.contractDigest).toBe(first.source.templates["note"]?.contractDigest);
-
-    const rewrittenTaxonomy = `${taxonomy}\n`;
-    await writeFile(path.join(vault, ".oms", "taxonomy.json"), rewrittenTaxonomy);
-    const afterTaxonomy = asAvailable(await readSearchTemplateSource(vault));
-    expect(afterTaxonomy.digest).not.toBe(next.digest);
-    expect(afterTaxonomy.digest).toBe(controlGenerationDigest(encoder.encode(rewritten), encoder.encode(rewrittenTaxonomy)));
-    expect(afterTaxonomy.source.generationDigest).toBe(afterTaxonomy.digest);
-  });
-
-  it("propagates EACCES from either control file", async () => {
-    const vault = await makeVault();
-    await writeControl(vault, "template-policy.json", policyText());
-    await writeControl(vault, "taxonomy.json", taxonomyText());
-    const policyPath = path.join(vault, ".oms", "template-policy.json");
-    const taxonomyPath = path.join(vault, ".oms", "taxonomy.json");
-    await chmod(policyPath, 0o000);
-    try {
-      await expect(readSearchTemplateSource(vault)).rejects.toMatchObject({ code: "EACCES" });
-    } finally {
-      await chmod(policyPath, 0o644);
-    }
-    await chmod(taxonomyPath, 0o000);
-    try {
-      await expect(readSearchTemplateSource(vault)).rejects.toMatchObject({ code: "EACCES" });
-    } finally {
-      await chmod(taxonomyPath, 0o644);
+      await chmod(storeRoot(), 0o700);
     }
   });
 
-  it("does not reference a projection, marker, store, or writer", async () => {
-    const source = await readFile(fileURLToPath(new URL("./template-source.ts", import.meta.url)), "utf8");
-    expect(source).not.toMatch(/writeFile|mkdir|types\.json|template-transaction|loadResolvedTemplates|sqlite|createHash/);
+  it("keeps null contract axes unavailable while other axes stay in force", async () => {
+    const vault = await makeVault(SOURCES);
+    await seal(vault, { ...contract(), properties: null });
+    const read = await readSearchTemplateSource(vault);
+    expect(read.source.defaultFields).toBeNull();
+    expect(read.source.templates).toEqual({ alpha: null, zeta: null });
+    expect(read.source.globalAxes?.["folder-ontology"]).toBeDefined();
+  });
+
+  it("carries the source exclusion inventory and changes digest with it", async () => {
+    const vault = await makeVault(SOURCES);
+    await seal(vault, contract());
+    const first = await readSearchTemplateSource(vault);
+    expect(first.exclusions.paths).toEqual(["Sources/a.md", "Sources/z.md"]);
+    expect(first.exclusions.globs).toEqual(expect.arrayContaining(["Drafts", "Drafts/**"]));
+
+    const other = await makeVault(SOURCES);
+    await seal(other, { ...contract(), folders: { ...contract().folders, Drafts: { meaning: "Unfinished drafts.", searchExclude: false } } });
+    const second = await readSearchTemplateSource(other);
+    expect(second.exclusions.globs).not.toContain("Drafts/**");
+    expect(second.digest).not.toBe(first.digest);
+  });
+
+  it("ignores retired vault control files", async () => {
+    const vault = await makeVault({
+      ...SOURCES,
+      [`.oms/${["template", "policy"].join("-")}.json`]: "{broken",
+      [`.oms/${["tax", "onomy"].join("")}.json`]: "{broken",
+    });
+    const before = await readSearchTemplateSource(vault);
+    expect(before.diagnostics.map(item => item.code)).toEqual(["CONTRACT_OPEN"]);
+    await rm(path.join(vault, ".oms"), { recursive: true });
+    const after = await readSearchTemplateSource(vault);
+    expect(after.digest).toBe(before.digest);
   });
 });

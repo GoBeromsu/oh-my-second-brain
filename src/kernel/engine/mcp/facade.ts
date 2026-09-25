@@ -21,9 +21,11 @@
  */
 
 import path from "node:path";
-import { readFileSync, statSync } from "node:fs";
-import { deriveTemplateRetrievalAxes } from "../../templates/axes.js";
-import type { TemplateRetrievalSource } from "../../templates/axes.js";
+import { readFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
+import { storeRoot } from "../../contract/store.js";
+import { resolveSealState } from "../../contract/vault-id.js";
+import { deriveTemplateRetrievalAxes, type TemplateRetrievalSource } from "../retrieval/axes.js";
 import { readSearchTemplateSource, type SearchTemplateSource } from "../retrieval/template-source.js";
 import { walkVaultMarkdown } from "../../conventions/vault-walk.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
@@ -31,16 +33,16 @@ import { retrieve } from "../retrieval/index.js";
 import type { Reranker } from "../retrieval/reranker.js";
 import { validateExpandedPlan } from "../retrieval/generator.js";
 import {
-  loadTaxonomyIntentProjection,
-  type TaxonomyIntentProjection,
-} from "../retrieval/taxonomy-context.js";
+  loadFolderIntentProjection,
+  type FolderIntentProjection,
+} from "../retrieval/folder-context.js";
 import {
   acquireEngineStoreWriterLock,
   syncEngineStore,
   walkMarkdown,
 } from "../embed/sync.js";
 import { openEngineStore } from "../embed/store.js";
-import { engineStorePath } from "../paths.js";
+import { assertExternalDatabasePath, engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../paths.js";
 import type { EngineStore } from "../embed/store.js";
 import type { EmbeddingModelDescriptor } from "../embed/model.js";
 import { capabilityGuidance } from "../embed/config.js";
@@ -116,6 +118,17 @@ interface ParsedDocTarget {
   readonly isGlob: boolean;
 }
 
+/** When the current sealed generation was written; empty when it cannot be observed. */
+async function sealedAt(vault: string): Promise<string> {
+  try {
+    const { vaultId } = await resolveSealState(vault);
+    if (vaultId === null || vaultId === undefined) return "";
+    return (await stat(path.join(storeRoot(), vaultId, "folders.json"))).mtime.toISOString();
+  } catch {
+    return "";
+  }
+}
+
 function positiveInt(value: string | undefined): number | undefined {
   if (!value || !/^\d+$/u.test(value)) return undefined;
   const parsed = Number(value);
@@ -126,7 +139,7 @@ function positiveInt(value: string | undefined): number | undefined {
  * Strip a resource scheme to a vault-relative path.
  *
  * `oms://<collection>/<path>` is URL-decoded; plain targets get backslashes and
- * a leading "./" normalized away. The `qmd://` branch was removed with ADR-009:
+ * a leading "./" normalized away. The `qmd://` branch was removed per ADR-001:
  * qmd compatibility is no longer a product contract, and keeping an input
  * tolerance for a retired scheme is a compatibility layer with no caller.
  */
@@ -321,6 +334,26 @@ function resultPageLimit(opts: McpSemanticQueryOptions): number | undefined {
   return opts.limit ?? (opts.collectionPath === undefined ? undefined : UNBOUNDED_CANDIDATE_LIMIT);
 }
 
+/**
+ * Collection children must return their complete facet set. The backend caps
+ * the public summary once, after merging. A normalized request already has an
+ * effective hit limit, so this uses the original collection/limit distinction.
+ */
+function deferFacetSummary(opts: McpSemanticQueryOptions): boolean {
+  return opts.collectionPath !== undefined && opts.limit === undefined;
+}
+
+/** Human-readable reason text for metadata the reader could not establish. */
+function metadataReason(meta: SearchTemplateSource): string {
+  const reasons = meta.diagnostics.map(item => `${item.code}: ${item.message}`);
+  return reasons.length === 0 ? "the declared contract is unavailable" : reasons.join("; ");
+}
+
+/** True when declared field or template axes could be established. */
+function declaredMetadataAvailable(meta: SearchTemplateSource): boolean {
+  return meta.source.templates !== null || meta.source.defaultFields !== null;
+}
+
 function templateFieldKeys(source: TemplateRetrievalSource): ReadonlySet<string> {
   const keys = new Set<string>();
   const axes = deriveTemplateRetrievalAxes(source);
@@ -451,16 +484,24 @@ export class McpEngineAdapter {
     private readonly persistLexicalSync = true,
   ) {}
 
+  /** Constrain an explicit store override to the selected vault before any lock or open. */
+  private externalStorePath(vault: string): string {
+    const resolvedVault = path.resolve(vault);
+    return this.config?.dbPath === undefined
+      ? engineStorePath(resolvedVault)
+      : assertExternalDatabasePath(resolvedVault, this.config.dbPath);
+  }
+
   // -------------------------------------------------------------------------
   // Cache-path + node-index helpers
   // -------------------------------------------------------------------------
 
   private graphCachePath(vault: string): string {
-    return path.join(vault, ".oms", "cache", "engine", "graph.json");
+    return engineGraphCachePath(vault);
   }
 
   private nodeCachePath(vault: string): string {
-    return path.join(vault, ".oms", "cache", "engine", "node-index.json");
+    return engineNodeCachePath(vault);
   }
 
   /** Load a projection-matched node index, scanning notes without writing on a cache miss. */
@@ -487,12 +528,12 @@ export class McpEngineAdapter {
   ): Promise<McpSemanticQueryResult> {
     const vault = opts.vault ?? this.vaultPath;
     const meta = await readSearchTemplateSource(vault);
-    if (!meta.available && requestsDeclaredAxes(opts.axes as QueryAxes | undefined)) {
-      return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field axis requires the template snapshot: ${meta.reason}`);
+    if (!declaredMetadataAvailable(meta) && requestsDeclaredAxes(opts.axes as QueryAxes | undefined)) {
+      return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field axis requires the template snapshot: ${metadataReason(meta)}`);
     }
     const baseNodes = await this.loadOrBuildNodes(vault, meta);
     const indexDrift = false;
-    if (meta.available) validateKnownFieldAxes(opts.axes as QueryAxes | undefined, templateFieldKeys(meta.source));
+    if (declaredMetadataAvailable(meta)) validateKnownFieldAxes(opts.axes as QueryAxes | undefined, templateFieldKeys(meta.source));
     const nodes = baseNodes;
     const axisFiltered = opts.axes === undefined
       ? nodes
@@ -567,6 +608,7 @@ export class McpEngineAdapter {
       cursor: opts.cursor,
       intent: opts.intent,
       facetValues: facets,
+      deferFacetSummary: deferFacetSummary(opts),
       // Axis queries are evaluated by the model-free node matcher. A vector
       // request is reported as approximated rather than falsely claiming vec
       // evidence in the receipt.
@@ -601,18 +643,18 @@ export class McpEngineAdapter {
         ? "explicit"
         : "plain";
     let generatedSearches: readonly McpSemanticTypedSearch[] = [];
-    let taxonomyProjection: TaxonomyIntentProjection | undefined;
-    const ensureTaxonomyProjection = async (): Promise<TaxonomyIntentProjection> => {
-      if (taxonomyProjection !== undefined) return taxonomyProjection;
+    let folderProjection: FolderIntentProjection | undefined;
+    const ensureFolderProjection = async (): Promise<FolderIntentProjection> => {
+      if (folderProjection !== undefined) return folderProjection;
       const indexedPaths = typeof (this.deps.store as Partial<EngineStore>).listDocPaths === "function"
         ? (this.deps.store as EngineStore).listDocPaths()
         : [];
-      taxonomyProjection = await loadTaxonomyIntentProjection(
+      folderProjection = await loadFolderIntentProjection(
         opts.vault ?? this.vaultPath,
         indexedPaths,
         opts.collectionPath,
       );
-      return taxonomyProjection;
+      return folderProjection;
     };
     const vecAvailable = typeof (this.deps.store as Partial<EngineStore>).capabilities === "function"
       ? (this.deps.store as EngineStore).capabilities().vecAvailable
@@ -630,7 +672,7 @@ export class McpEngineAdapter {
         });
       }
       try {
-        const context = await ensureTaxonomyProjection();
+        const context = await ensureFolderProjection();
         generatedSearches = validateExpandedPlan(
           await this.deps.queryExpander({
             query: opts.query!,
@@ -648,8 +690,8 @@ export class McpEngineAdapter {
         return queryResultUnavailable(err instanceof Error ? err.message : String(err), {
           requestedStrategy: "expand",
           generatedSearches,
-          taxonomyIntents: taxonomyProjection?.matched ?? [],
-          warnings: taxonomyProjection?.warnings ?? [],
+          folderIntents: folderProjection?.matched ?? [],
+          warnings: folderProjection?.warnings ?? [],
         });
       }
     }
@@ -674,7 +716,7 @@ export class McpEngineAdapter {
           for await (const docPath of walkVaultMarkdown(vault)) paths.push(docPath);
         }
         const ranked = paths.slice().sort((left, right) => left.localeCompare(right)).map(docPath => ({ docPath, score: 0 }));
-        const result = retrievalResultsToQueryResult(ranked, { limit: resultPageLimit(opts), cursor: opts.cursor, intent: opts.intent, facetValues: [], usedChannels: [], approximated: false, indexDrift: false });
+        const result = retrievalResultsToQueryResult(ranked, { limit: resultPageLimit(opts), cursor: opts.cursor, intent: opts.intent, facetValues: [], usedChannels: [], approximated: false, indexDrift: false, deferFacetSummary: deferFacetSummary(opts) });
         return enrichQueryHits(result, vault);
       }
     }
@@ -718,8 +760,8 @@ export class McpEngineAdapter {
           {
             requestedStrategy,
             generatedSearches,
-            taxonomyIntents: taxonomyProjection?.matched ?? [],
-            warnings: taxonomyProjection?.warnings ?? [],
+            folderIntents: folderProjection?.matched ?? [],
+            warnings: folderProjection?.warnings ?? [],
           },
         );
       }
@@ -728,9 +770,9 @@ export class McpEngineAdapter {
       if (shouldRerank && naturalQuery === "") {
         return queryResultUnavailable("reranking requires a non-empty natural-language query.");
       }
-      if (shouldRerank) await ensureTaxonomyProjection();
-      const modelQuery = shouldRerank && taxonomyProjection?.promptContext !== undefined
-        ? `${naturalQuery}\n\nVault folder intents:\n${taxonomyProjection.promptContext}`
+      if (shouldRerank) await ensureFolderProjection();
+      const modelQuery = shouldRerank && folderProjection?.promptContext !== undefined
+        ? `${naturalQuery}\n\nVault folder intents:\n${folderProjection.promptContext}`
         : naturalQuery || undefined;
       const results = await retrieve({
         subQueries: [...effectiveSubQueries],
@@ -749,7 +791,7 @@ export class McpEngineAdapter {
       // does not turn store-backed retrieval into an unavailable result.
       try {
         const facetMeta = await readSearchTemplateSource(vault);
-        if (!facetMeta.available) facetWarnings.push(`Template metadata unavailable: ${facetMeta.reason}`);
+        if (!declaredMetadataAvailable(facetMeta)) facetWarnings.push(`Template metadata unavailable: ${metadataReason(facetMeta)}`);
         const facetNodes = await this.loadOrBuildNodes(vault, facetMeta);
         const scoped = opts.collectionPath === undefined
           ? facetNodes
@@ -765,6 +807,7 @@ export class McpEngineAdapter {
         ...opts,
         limit: resultPageLimit(opts),
         facetValues,
+        deferFacetSummary: deferFacetSummary(opts),
         usedChannels: requestedChannels,
         approximated:
           modelLessFallback ||
@@ -773,8 +816,8 @@ export class McpEngineAdapter {
         requestedStrategy,
         generatedSearches,
         rerankApplied: shouldRerank,
-        taxonomyIntents: taxonomyProjection?.matched ?? [],
-        warnings: [...(taxonomyProjection?.warnings ?? []), ...facetWarnings],
+        folderIntents: folderProjection?.matched ?? [],
+        warnings: [...(folderProjection?.warnings ?? []), ...facetWarnings],
       });
       // Fill title + doc-head snippet from disk so engine hits reach practical
       // parity with the src/search preview (the pure mapper stays text-free).
@@ -786,9 +829,9 @@ export class McpEngineAdapter {
         // A failed response cannot claim the reranker was successfully applied,
         // but preserve its request in warnings for an auditable error receipt.
         rerankApplied: false,
-        taxonomyIntents: taxonomyProjection?.matched ?? [],
+        folderIntents: folderProjection?.matched ?? [],
         warnings: [
-          ...(taxonomyProjection?.warnings ?? []),
+          ...(folderProjection?.warnings ?? []),
           ...facetWarnings,
           ...(rerankRequested ? ["Reranking was requested but the query did not complete."] : []),
         ],
@@ -813,10 +856,9 @@ export class McpEngineAdapter {
   async syncEmbeddings(
     opts: McpSemanticEmbeddingSyncOptions,
   ): Promise<McpSemanticEmbeddingSyncResult> {
-    const activeDbPath = this.config?.dbPath ??
-      engineStorePath(path.resolve(opts.vault));
     let swapHandleClosed = false;
     try {
+      const activeDbPath = this.externalStorePath(opts.vault);
       const syncResult = await syncEngineStore({
         vault: opts.vault,
         collection: opts.collection,
@@ -824,7 +866,7 @@ export class McpEngineAdapter {
         // Embedding identity is owned by the assemble-time canonical config
         // (OMS_EMBEDDING_PROVIDER / OMS_EMBEDDING_MODEL) threaded into the
         // adapter; the MCP call no longer carries modelPath. syncEngineStore
-        // resolves the real provider and fails fast (ADR-007) if it is missing.
+        // resolves the real provider and fails fast (ADR-005) if it is missing.
         embeddingProvider: this.config?.embeddingProvider,
         embeddingModel: this.config?.embeddingModel,
         embeddingRevision: this.config?.embeddingRevision,
@@ -835,7 +877,7 @@ export class McpEngineAdapter {
         embeddingMrlDim: this.config?.embeddingMrlDim,
         embeddingNormalization: this.config?.embeddingNormalization,
         embeddingPrefixScheme: this.config?.embeddingPrefixScheme,
-        dbPath: this.config?.dbPath,
+        dbPath: activeDbPath,
         embed: opts.embed ?? true,
         force: opts.force ?? false,
         onGenerationSwapPrepare: () => {
@@ -901,22 +943,22 @@ export class McpEngineAdapter {
       const indexedPaths = typeof (this.deps.store as Partial<EngineStore>).listDocPaths === "function"
         ? (this.deps.store as EngineStore).listDocPaths()
         : [];
-      const taxonomyContext = await loadTaxonomyIntentProjection(
+      const folderContext = await loadFolderIntentProjection(
         _opts.vault ?? this.vaultPath,
         indexedPaths,
       );
-      const taxonomyStatus = {
-        matched: taxonomyContext.matched,
-        indexedWithoutIntent: taxonomyContext.indexedWithoutIntent,
-        taxonomyWithoutIndexed: taxonomyContext.taxonomyWithoutIndexed,
-        warnings: taxonomyContext.warnings,
+      const folderStatus = {
+        matched: folderContext.matched,
+        indexedWithoutIntent: folderContext.indexedWithoutIntent,
+        foldersWithoutIndexed: folderContext.foldersWithoutIndexed,
+        warnings: folderContext.warnings,
       };
       if (this.config?.modelCapabilityStatus === undefined) {
         return {
           ...status,
           models: model === undefined ? {} : { ...status.models, embedding: model },
           ...(identity === null ? {} : { storeEmbeddingFingerprint: identity.fingerprint }),
-          taxonomyContext: taxonomyStatus,
+          folderContext: folderStatus,
         };
       }
 
@@ -936,7 +978,7 @@ export class McpEngineAdapter {
         models: model === undefined ? {} : { ...status.models, embedding: model },
         capabilities,
         ...(identity === null ? {} : { storeEmbeddingFingerprint: identity.fingerprint }),
-        taxonomyContext: taxonomyStatus,
+        folderContext: folderStatus,
       };
     } catch {
       return statusResultUnavailable("Semantic status is unavailable.");
@@ -965,17 +1007,14 @@ export class McpEngineAdapter {
   // 5. oms_semantic_contexts
   // -------------------------------------------------------------------------
 
-  /** List active taxonomy contexts without creating a parallel context store. */
+  /** List sealed folder meanings without creating a parallel context store. */
   async listContexts(opts: McpStatusOptions): Promise<McpSemanticContextResult> {
     try {
       const store = this.deps.store as Partial<EngineStore>;
       const indexedPaths = typeof store.listDocPaths === "function" ? store.listDocPaths() : [];
       const vault = opts.vault ?? this.vaultPath;
-      const projection = await loadTaxonomyIntentProjection(vault, indexedPaths);
-      const taxonomyPath = path.join(vault, ".oms", "taxonomy.json");
-      const updatedAt = projection.matched.length === 0
-        ? ""
-        : statSync(taxonomyPath).mtime.toISOString();
+      const projection = await loadFolderIntentProjection(vault, indexedPaths);
+      const updatedAt = projection.matched.length === 0 ? "" : await sealedAt(vault);
       return {
         available: true,
         contexts: projection.matched.map(({ folder, intent, source }) => ({
@@ -1007,8 +1046,7 @@ export class McpEngineAdapter {
   async cleanup(_opts: McpStatusOptions): Promise<McpSemanticCleanupResult> {
     let releaseLock: (() => void) | undefined;
     try {
-      const dbPath = this.config?.dbPath ??
-        engineStorePath(path.resolve(this.vaultPath));
+      const dbPath = this.externalStorePath(this.vaultPath);
       releaseLock = acquireEngineStoreWriterLock(dbPath);
       const store = this.deps.store as EngineStore;
       const livePaths = new Set<string>();
@@ -1042,14 +1080,14 @@ export class McpEngineAdapter {
   // -------------------------------------------------------------------------
 
   /**
-   * Build the edge graph + node index and persist both to .oms/cache/engine/.
+   * Build the edge graph + node index and persist both to the external engine cache.
    * On dryRun, report stats from the existing cache without rebuilding.
    */
   async graphBuild(opts: McpGraphBuildOptions, vaultPath: string): Promise<McpGraphBuildResult> {
     const args = graphBuildOptionsToEngineArgs(opts, vaultPath);
     const meta = await readSearchTemplateSource(args.vaultPath);
     const graphCachePath = this.graphCachePath(args.vaultPath);
-    const metadataWarnings = meta.available ? [] : [`Template metadata unavailable: ${meta.reason}`];
+    const metadataWarnings = declaredMetadataAvailable(meta) ? [] : [`Template metadata unavailable: ${metadataReason(meta)}`];
 
     if (args.dryRun) {
       const cached = await loadCachedGraphMeta(graphCachePath, meta.digest);
@@ -1109,8 +1147,8 @@ export class McpEngineAdapter {
   async retrieveByAxis(filters: McpAxisFilters): Promise<McpSemanticQueryResult> {
     try {
       const meta = await readSearchTemplateSource(this.vaultPath);
-      if (!meta.available && (filters.template !== undefined || filters.property !== undefined)) {
-        return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field filter requires the template snapshot: ${meta.reason}`);
+      if (!declaredMetadataAvailable(meta) && (filters.template !== undefined || filters.property !== undefined)) {
+        return queryResultUnavailable(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field filter requires the template snapshot: ${metadataReason(meta)}`);
       }
       const baseNodes = await this.loadOrBuildNodes(this.vaultPath, meta);
       const nodes = baseNodes;
@@ -1159,7 +1197,7 @@ export class McpEngineAdapter {
           requestedStrategy: "plain",
           generatedSearches: [],
           rerankApplied: false,
-          taxonomyIntents: [],
+          folderIntents: [],
           warnings: [],
         },
       };
@@ -1173,7 +1211,7 @@ export class McpEngineAdapter {
   // -------------------------------------------------------------------------
 
   /**
-   * Hydrate one document from disk by real vault-relative path (ADR-008).
+   * Hydrate one document from disk by real vault-relative path (ADR-001).
    * Supports "file.md", "file.md:N" (single line), "file.md:N-M" (range),
    * and "#docid" (resolved via store.listDocPaths). No embedding model needed.
    */

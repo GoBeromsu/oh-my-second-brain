@@ -166,9 +166,9 @@ M5 거버넌스/컨벤션/셋업/어댑터 레이어 구현 과정에서 아이�
 
 | Pattern | Source | License | Note |
 |---------|--------|---------|------|
-| Two-layer `.oms/governance/` (decisions/ + rules/ + architecture.md) mirroring document-ontology discipline | craft-skills `documents` skill | Internal skill, no external restriction | STRUCTURE-ONLY — all YAML independently authored (ADR-003 / ADR-006) |
+| Two-layer `.oms/governance/` (decisions/ + rules/ + architecture.md) mirroring document-ontology discipline | craft-skills `documents` skill | Internal skill, no external restriction | STRUCTURE-ONLY — all YAML independently authored (구 ADR-003 / 구 ADR-006; 현재 ADR-008) |
 | Thick-router (private) + generic-leaf (public) topology; monorepo + `private/` gitignore isolation | deep-interview R19 / R20 (self) | N/A — internal | No external code; user-ratified design decisions |
-| Layer-1 CONTRACT / Layer-2 GOVERNANCE separation invariants | ADR-006 (self) | N/A — internal | User-ratified 2026-06-13 |
+| Layer-1 CONTRACT / Layer-2 GOVERNANCE separation invariants | 구 ADR-006 (self; 현재 ADR-008) | N/A — internal | User-ratified 2026-06-13 |
 
 **Shared skills** (`assets/skills/`)
 

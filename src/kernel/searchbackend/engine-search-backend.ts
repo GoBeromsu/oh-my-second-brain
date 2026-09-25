@@ -1,3 +1,4 @@
+import { summarizePublicFacets } from "../engine/mcp/query-mapper.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 import type {
   McpSemanticFacet,
@@ -111,16 +112,17 @@ export class EngineSearchBackend implements SearchBackend {
     const page = limit === undefined ? hits.slice(offset) : hits.slice(offset, offset + Math.max(0, limit));
     const facets = mergeFacets(results);
     const receipt = mergeReceipts(results);
+    const summary = summarizePublicFacets(facets, receipt.warnings);
     const intent = normalized.intent ?? results.find((result) => result.intent !== undefined)?.intent;
     const nextOffset = offset + page.length;
     return {
       available: true,
       hits: page,
       totalCount,
-      facets,
+      facets: summary.facets,
       cursor: nextOffset < totalCount ? String(nextOffset) : null,
       ...(intent === undefined ? {} : { intent }),
-      receipt,
+      receipt: { ...receipt, warnings: summary.warnings },
     };
   }
 }
@@ -175,7 +177,7 @@ function mergeFacets(results: readonly McpSemanticQueryResult[]): McpSemanticFac
 function mergeReceipts(results: readonly McpSemanticQueryResult[]): McpSemanticReceipt {
   const used = new Set<McpSemanticReceipt["usedChannels"][number]>();
   const generated = new Map<string, McpSemanticReceipt["generatedSearches"][number]>();
-  const intents = new Map<string, McpSemanticReceipt["taxonomyIntents"][number]>();
+  const intents = new Map<string, McpSemanticReceipt["folderIntents"][number]>();
   const warnings = new Set<string>();
   let approximated = false;
   let indexDrift = false;
@@ -186,7 +188,7 @@ function mergeReceipts(results: readonly McpSemanticQueryResult[]): McpSemanticR
     for (const search of result.receipt?.generatedSearches ?? []) {
       generated.set(`${search.type}\u0000${search.query}`, search);
     }
-    for (const intent of result.receipt?.taxonomyIntents ?? []) {
+    for (const intent of result.receipt?.folderIntents ?? []) {
       intents.set(intent.folder, intent);
     }
     for (const warning of result.receipt?.warnings ?? []) warnings.add(warning);
@@ -205,7 +207,7 @@ function mergeReceipts(results: readonly McpSemanticQueryResult[]): McpSemanticR
     requestedStrategy,
     generatedSearches: [...generated.values()],
     rerankApplied,
-    taxonomyIntents: [...intents.values()].sort((left, right) =>
+    folderIntents: [...intents.values()].sort((left, right) =>
       left.folder < right.folder ? -1 : left.folder > right.folder ? 1 : 0),
     warnings: [...warnings].sort(),
   };

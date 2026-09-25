@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { extractWikilinks, detectLinkIssues } from "./lint.js";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
+import { sealContract } from "../contract/store.js";
+import { serializeVaultSettings } from "../vault/settings.js";
 import path from "node:path";
 import os from "node:os";
 
@@ -62,13 +65,21 @@ async function makeVault(
 
 describe("detectLinkIssues", () => {
   it("excludes managed template sources from the lint note universe", async () => {
+    const vaultId = randomUUID();
     const { vaultPath, cleanup } = await makeVault({
-      ".oms/template-policy.json": JSON.stringify({
-        version: 4,
-        templates: { note: { source: { path: "Templates/note.md" } } },
-      }),
+      ".oms/settings.json": serializeVaultSettings({ version: 1, vaultId }),
       "Templates/note.md": "---\ntemplate: note\n---\n[[Missing]]",
       "notes/live.md": "---\ntemplate: note\n---\nlive",
+    });
+    // The sealed contract names the template source that lint must skip.
+    await sealContract({
+      vaultRealPath: await realpath(vaultPath),
+      vaultId,
+      contract: {
+        folders: { notes: { meaning: "notes", searchExclude: false } },
+        properties: {},
+        templates: { note: { source: "Templates/note.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] } },
+      },
     });
     try {
       const result = await detectLinkIssues(vaultPath);

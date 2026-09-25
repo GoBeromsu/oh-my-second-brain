@@ -6,7 +6,7 @@
  *
  * Design constraints (R2):
  *   - NO daemon, NO watcher, NO setInterval, NO persistent process.
- *   - Every call is a pure function: disk + .oms/cache are the only persistence.
+ *   - Every call is a pure function: disk and the external engine cache are the only persistence.
  *
  * Pipeline:
  *   vault slice → chunk (C1) → embed (C1) → upsert store (C1)
@@ -25,7 +25,7 @@ import {
 } from "./embed/model.js";
 import { buildGraph, loadCachedGraph, saveCachedGraph } from "./graph/builder.js";
 import { readSearchTemplateSource } from "./retrieval/template-source.js";
-import { engineStorePath } from "./paths.js";
+import { assertExternalCachePath, assertExternalDatabasePath, engineGraphCachePath, engineStorePath } from "./paths.js";
 import { buildAdjacency, traverseGraph } from "./graph/traverse.js";
 import { retrieve, createCancelToken } from "./retrieval/index.js";
 
@@ -54,8 +54,9 @@ export interface TracerConfig extends EngineConfig {
    */
   files?: readonly string[];
   /**
-   * Directory for `.oms/cache` artifacts (graph.json, etc.).
-   * Defaults to `<vaultPath>/.oms/cache`.
+   * Directory for external engine cache artifacts (graph.json).
+   * Defaults to the shared external vault cache root. An explicit override is
+   * confined, including its derived graph leaf, before any cache write.
    */
   cacheDir?: string;
   /** Number of top results to return (default 10). */
@@ -89,6 +90,16 @@ async function resolveFiles(vaultPath: string, explicit?: readonly string[]): Pr
   const collected: string[] = [];
   for await (const f of walkMd(vaultPath, vaultPath)) collected.push(f);
   return collected;
+}
+
+function externalStorePath(vaultPath: string, dbPath: string): string {
+  return assertExternalDatabasePath(vaultPath, dbPath);
+}
+
+function externalGraphCachePath(vaultPath: string, cacheDir: string | undefined): string {
+  return cacheDir === undefined
+    ? engineGraphCachePath(vaultPath)
+    : assertExternalCachePath(vaultPath, path.join(cacheDir, "engine", "graph.json"));
 }
 
 function rejectContradictoryOverride(
@@ -155,7 +166,7 @@ function resolveDescriptor(
  * Steps:
  *   1. Resolve vault files (explicit list or full walk).
  *   2. Chunk + embed each document, upsert into the SQLite VectorStore.
- *   3. Load or build the document link graph; cache it under cacheDir.
+ *   3. Load or build the document link graph; cache it in the external engine cache.
  *   4. Construct DispatcherDeps wiring store + embed + graphTraverse.
  *   5. Dispatch the TypedSubQuery[] through the C3 retrieval pipeline.
  *   6. Return the top-k RetrievalResult[] sorted descending by score.
@@ -168,7 +179,8 @@ export async function runTracer(
   queries: TypedSubQuery[],
 ): Promise<RetrievalResult[]> {
   const vaultPath = path.resolve(config.vaultPath);
-  const cacheDir = config.cacheDir ?? path.join(vaultPath, ".oms", "cache");
+  const dbPath = externalStorePath(vaultPath, config.dbPath);
+  const graphCachePath = externalGraphCachePath(vaultPath, config.cacheDir);
   const topK = config.topK ?? 10;
 
   // ── Step 1: resolve vault files ───────────────────────────────────────────
@@ -188,11 +200,11 @@ export async function runTracer(
     normalization: descriptor?.normalization ?? config.embeddingNormalization,
     prefixScheme: descriptor?.prefixScheme ?? config.embeddingPrefixScheme,
   });
-  await mkdir(path.dirname(config.dbPath), { recursive: true });
+  await mkdir(path.dirname(dbPath), { recursive: true });
   // The descriptor is authoritative for its vector width. Falling back to the
   // provider width keeps custom providers usable without inventing a dimension.
   const dimensions = descriptor?.dimensions ?? config.embeddingDimensions ?? embedProvider.dimensions;
-  const store = openEngineStore(config.dbPath, dimensions);
+  const store = openEngineStore(dbPath, dimensions);
 
   try {
     // Chunk + embed + upsert every resolved file
@@ -221,7 +233,6 @@ export async function runTracer(
 
     // ── Step 3: load or build graph ─────────────────────────────────────────
     const meta = await readSearchTemplateSource(vaultPath);
-    const graphCachePath = path.join(cacheDir, "engine", "graph.json");
     let edges = await loadCachedGraph(graphCachePath, meta.digest);
     if (edges === null) {
       edges = await buildGraph({ vaultPath, meta, files });

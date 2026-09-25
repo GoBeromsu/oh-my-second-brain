@@ -1,60 +1,52 @@
 # Vault conventions
 
-The vault is the user's plain Markdown. Obsidian can open it with no OMS process. OMS does not own the notes, and it does not hardcode property names, folders, or personas. Ontology is the user's statement of what a field, folder, or link means. The retired piece is `concept` as note identity and a bundled default shape, not that statement of meaning.
+The vault is the user's plain Markdown. Obsidian can open it with no OMS process. OMS does not own the notes, and it does not hardcode property names, folders, or personas. Ontology is the user's statement of what a folder, a property, or a template means; the user states it once by sealing the vault contract.
 
-ADR-014 is the successor of ADR-013. [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as acknowledged design ideas, not ported code and not a research result. This page is approved architecture. It is not a host-smoke result.
+The vault contract is recorded in ADR-007 (`docs/decisions/` in the source repository), which replaces the former ADR-013 through ADR-016. [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as acknowledged design ideas, not ported code and not a research result. This page is approved architecture. It is not a host-smoke result.
 
 ## Where meaning lives
 
 | Path | Role |
 | --- | --- |
-| Vault Markdown notes | User-owned plain Markdown. The agent writes and repairs them. OMS does not write note bytes. |
-| `.obsidian/types.json` | Read-only Obsidian observation. OMS never writes it. A type conflict is a diagnostic. The version-4 contract still decides. |
-| `.oms/template-policy.json` | Version 4, the only approved structure and meaning. Holds the property pool, the always-on default, optional individual templates, approved Markdown, and completion policy. |
-| `.oms/templates/default.md` | Editable managed draft of the default layer. It starts empty. Approved bytes live in the policy snapshot, not in whatever the draft says today. |
-| `.oms/templates/<id>.md` | Editable managed draft of one individual template. |
-| `.oms/taxonomy.json` | Placement, folder meaning, and link meaning. Not a property-type file and not the list of template keys. |
-| `.oms/types.json` | Derived `oms.types.v2` projection (`generatedFrom` names the snapshot). Not semantic authority. Never hand-edit it. |
-| `.oms/template-transaction.json` | Marker for contract publication. Not a note and not a second policy. |
-| `.oms/engine-store.sqlite` | Runtime index. Do not commit it. |
-| Runtime journal | Outside the vault, under `~/.oms/runtime/v1` unless `OMS_RUNTIME_ROOT` is set. Digests and outcomes only. Not completion authority. Do not commit it. |
+| Vault Markdown notes | User-owned plain Markdown. The agent writes them through MCP `write` or, in Claude Code, through native tools that the guard hook judges. |
+| Template files in `templateFolder` | The user's own Markdown. Sealing records what each one declares; OMS never rewrites, copies, or applies them. |
+| `.oms/settings.json` | The only OMS file inside the vault. Holds `version`, `vaultId`, `templateFolder`, `embedding`, and `agentRepair`. It is not the contract. |
+| `.obsidian/types.json` | Read-only Obsidian observation. OMS never writes it and it never overrides the seal. |
+| `~/.oms/vaults/<vault-id>/` | The sealed contract, outside the vault. Agents never read or write it. |
+| Engine store, graph cache, node index | Rebuildable caches outside the vault. Do not commit them. |
 
-These files are not interchangeable. The pool says what a property is and what it means. The default layer says which of those properties, headings, and criteria apply to every note. An individual template may add more, or tighten allowed values and heading order. It may not remove or weaken the default. Taxonomy says where a note goes and what a folder or wikilink means. Obsidian's type file is evidence OMS may read. The derived projection is a cache of the effective contract for retrieval and maintenance.
+Any other entry under `.oms/` is ignored by OMS and reported by `oms contract doctor` as an unexpected control file. Files left there by an older OMS version, such as a published template policy, a taxonomy, or a type projection, are no longer read. A `templateRoots` key in `.oms/settings.json` is rejected; the setting is now `templateFolder`.
 
-A note with no individual template is valid. Unmanaged frontmatter is preserved and is not checked. OMS does not fill in required values, convert a source file into the note, or expand a naming expression.
+## What the seal holds
 
-Approved Markdown is stored as exact UTF-8, including a BOM and the file's line endings. A later edit to the managed draft or to an original template source is local drift. Guide and check keep the last approved snapshot and warn for that template only. The edit is not a new approval. OMS does not parse or execute Templater, JavaScript, or a private token, and it does not infer headings or fields from those tokens. The agent may interpret a source. The approved policy is the contract.
+The contract has three axes, sealed together in one interview:
 
-Version 3 fields are unsupported. There is no migration, no compatibility reader, no note renderer, and no note-write, link-apply, or backfill path that keeps the old contract alive.
+- **Folders.** Each registered folder carries a meaning and whether search should exclude it. When folders are sealed, a note written outside every registered folder is denied as `unregistered-folder`.
+- **Property pool.** Each property carries a meaning, an Obsidian type, whether it is required, and optional rules: an allowed set, a fixed value, a pattern, or a range. When the pool is sealed, a frontmatter key outside it is denied as `unknown-property`.
+- **Templates.** Each template records its source path and content hash, an optional apply folder, and the properties, narrowed rules, and headings it requires.
 
-## Placement
+An axis the user did not seal stays open: nothing is judged for it. A vault with no seal on this machine is not judged at all. Extra body text and descendant headings stay free. OMS does not fill in required values, apply a template to a note, or expand a naming expression, and it does not parse or execute Templater, JavaScript, or a private token language. A value that still holds a template variable is denied as `unsubstituted-variable`.
 
-Taxonomy does not choose a template's keys. Resolve a destination from an explicit note path or folder, then the template's placement, then a question. There is no Inbox fallback. A taxonomy folder is a note destination. It does not have to sit inside a template source folder. Folder and wikilink relationships remain global axes, so retrieval is not limited to one placement rule.
+When a write names a `template`, the note must satisfy it and sit inside its apply folder. When a write names none, an edit to a note that already satisfied a template must keep satisfying one of the templates it satisfied.
 
-Changing placement policy is a contract change. It goes through the config interview, not through a note write.
+## Sealing and drift
 
-## How a contract change is approved
+`oms setup` (the same command as `oms contract setup`) interviews the whole vault at an interactive terminal and seals the contract. It refuses to run without a TTY or under `OMS_NON_INTERACTIVE=1`, so an agent never seals. It writes only `.oms/settings.json` inside the vault and never modifies notes. Model install, selection, waiver, and status are separate `oms model` leaves.
 
-Do not hand-edit policy, taxonomy, or `.oms/types.json` to change meaning. The tool-less `interview` skill reads intent the user already wrote, asks one question at a time, and publishes only the approved diff by compare-and-swap. The tool-less `template` skill shapes that contract. It does not render a note.
+A later edit to a sealed template file is drift. `oms contract status` reports each sealed template as `active`, `drift`, or `missing` against the live file. Drift is reported, never re-sealed silently; the user re-seals by running `oms setup` again. `oms contract extract --template <path>` shows what one template declares without printing values.
 
-`oms setup` proposes an empty version-4 policy for a vault that does not have one yet. It ships no bundled note shape and never modifies notes. Model install, selection, waiver, and status are `oms model` leaves, not setup-era model flags.
-
-The leaves are `oms template scan`, `list`, `show`, `check`, `regenerate-types`, `review`, `answer`, and `commit`. `review` reads. `answer` records the interview. `commit` runs only after the user approves the exact final digest. Callers forward the question and compare-and-swap fields the server returns and do not invent parameter names. Publish outputs are policy, taxonomy, the derived projection, and approved managed Markdown. Original sources, `.obsidian/types.json`, and ordinary notes are not outputs. A managed draft is overwritten only when its current digest is still the one the approval named.
-
-The first host notice for a selected-source change names no template and shows no hash or change class. The exact sentence and the two buttons are in the [host asset contract](./adapters.md). Deferring does not call the server. Confirming starts the interview. It does not rewrite source bytes and it does not block search. A general question, an unknown note value, a failed check, an unmanaged property, or a search does not start the interview.
-
-If the approved snapshot is missing, damaged, or its digest does not match, that evaluation stops. OMS does not replace it with an empty contract. An in-progress publication stops guide, check, and complete for the affected work and leaves search running. Interrupted publication is distinguished from the bytes actually staged or published. Notes are not rolled back. Multi-file publication is not claimed to be atomic.
-
-`completion.retryBudget` and `agentRepair` live on the policy as operation settings. They are not part of the contract digest. Repair is off by default. The budget is a finite nonnegative integer the user sets, default 2, and 0 is allowed. There is no fixed product cap of 3.
+When this machine holds seal evidence that no longer matches the vault, every write is refused as `contract-unreadable` until the user runs `oms setup` again. OMS never substitutes an empty contract for an unreadable one. `oms contract doctor` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures; `--fix` only re-indexes a moved or unindexed vault.
 
 ## Notes, search, and what may be committed
 
-The agent writes the note after `guide` and before `check`. `complete` follows a separate review of the saved inputs. Those three operations read the note. They do not render it and they do not backfill it. Create, append, update, and backfill are not note operations. Link leaves are suggest and check. Link apply is not an operation.
+The agent writes the whole note. A denied write leaves the file unchanged and returns only `{field, kind}` violations and one guidance command, never a rule value, a store path, or the contract body. An allowed write means the note fits the sealed structure, not that it is worth keeping; that judgement stays with the user and the agent. OMS has no completion call and no reviewer conversation. Create, append, update, backfill, and complete are not note operations. Link leaves are suggest and check. Link apply is not an operation.
 
-`oms search query <text>` is plain lexical search and does not need `.oms/types.json`. `--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit channels. `--max-queries` accepts only integers from 1 through 32. Lexical, vector, HyDE, and typed-axis queries include unbound, invalid, and incomplete notes. Managed sources do not appear as ordinary note results. A missing or stale projection fails a typed axis loudly. Vector search requires `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL`. HyDE also requires `OMS_GENERATE_PROVIDER` and `OMS_GENERATE_MODEL`. Reranking requires `OMS_RERANK_PROVIDER` and `OMS_RERANK_MODEL`. An incomplete pair fails loudly. G004 expansion makes no replacement, parity, or outperformance claim. Search does not write notes and does not start a review. This is the ADR-007 rule, not a new backend.
+`oms note audit` judges existing notes against the seal and reports `{path, field, kind}` entries. It never rewrites a note.
 
-`oms template check` validates template authority. `oms note audit` reports note-contract diagnosis. `oms template regenerate-types` republishes the derived projection only, after a verified target and the exact approved digest. Index and graph maintenance are `oms index sync`, `oms index embed`, `oms index repair`, `oms index clean`, and `oms graph build`. `oms index status` is read-only. The `status` skill, `oms status`, and the `status` MCP tool are read-only and do not decide completion. Note backfill is not a repair.
+`oms search query <text>` is plain lexical search and reads no contract. `--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit channels. `--max-queries` accepts only integers from 1 through 32. Lexical, vector, HyDE, and typed-axis queries include notes that would fail the contract, and a missing or damaged contract does not stop search. Vector search requires `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL`. HyDE also requires `OMS_GENERATE_PROVIDER` and `OMS_GENERATE_MODEL`. Reranking requires `OMS_RERANK_PROVIDER` and `OMS_RERANK_MODEL`. An incomplete pair fails loudly. G004 expansion makes no replacement, parity, or outperformance claim. Search does not write notes. This is the ADR-005 rule, not a new backend.
+
+Index and graph maintenance are `oms index sync`, `oms index embed`, `oms index repair`, `oms index clean`, and `oms graph build`. `oms index status` is read-only. The `status` skill, `oms status`, and the `status` MCP tool are read-only. Note backfill is not a repair.
 
 Every leaf and discriminator is in [the CLI map](./cli-map.md). Admission is in [verified targets](./verified-target.md). The authority rationale is in [architecture](./architecture.md).
 
-`.oms/template-policy.json`, `.oms/taxonomy.json`, approved managed drafts, and the derived `.oms/types.json` may be committed with the notes they govern. Commit the policy if you want the approved meaning in git. Do not treat a dirty managed draft as that approval. `.oms/engine-store.sqlite` and the external runtime journal must not be committed.
+`.oms/settings.json` may be committed with the notes it governs. The sealed contract lives outside the vault and is per machine. The engine store, the graph and node caches, and the external runtime journal are rebuildable and must not be committed.

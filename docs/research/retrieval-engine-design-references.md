@@ -6,9 +6,9 @@ date: 2026-06-13
 created_by: claude-code
 type: research
 relates_to:
-  - docs/decisions/ADR-002-vector-embedding-backend.md
-  - docs/decisions/ADR-004-config-secrets-access-topology.md
-  - docs/decisions/ADR-005-graph-access-model.md
+  - docs/decisions/ADR-003-local-index-storage-and-fusion.md
+  - docs/decisions/ADR-002-config-secrets-host-state-roots.md
+  - docs/decisions/ADR-006-graph-access.md
   - docs/exec-plan/archived/self-owned-second-brain/spec.md §6
 ---
 
@@ -16,7 +16,7 @@ relates_to:
 
 > 목적: 자체 소유 검색 + 그래프 엔진 구축을 위해 qmd와 gbrain의 설계를 흡수하는 과정에서 도출된 사실과 옵션을 정리한다.
 > 이 문서는 **사실 · 옵션 · 트레이드오프**를 제시하며, 결정을 선언하지 않는다.
-> 결정은 [ADR-002](../decisions/ADR-002-vector-embedding-backend.md), [ADR-004](../decisions/ADR-004-config-secrets-access-topology.md), [ADR-005](../decisions/ADR-005-graph-access-model.md)에 기록한다.
+> 결정은 [ADR-003](../decisions/ADR-003-local-index-storage-and-fusion.md), [ADR-002](../decisions/ADR-002-config-secrets-host-state-roots.md), [ADR-006](../decisions/ADR-006-graph-access.md)에 기록한다.
 
 ---
 
@@ -69,7 +69,7 @@ qmd는 단일 SQLite 파일로 FTS5 BM25 어휘 검색, 1,024-dim 벡터 검색,
 
 ### C. gbrain 로직 흡수 대상
 
-gbrain 도구 자체는 사용하지 않는다([ACKNOWLEDGMENTS.md](../../ACKNOWLEDGMENTS.md), [ADR-002](../decisions/ADR-002-vector-embedding-backend.md) 탈종속 단서 참조). 아키텍처 로직만 흡수한다.
+gbrain 도구 자체는 사용하지 않는다([ACKNOWLEDGMENTS.md](../../ACKNOWLEDGMENTS.md), [ADR-003](../decisions/ADR-003-local-index-storage-and-fusion.md) 탈종속 단서 참조). 아키텍처 로직만 흡수한다.
 
 | 흡수 항목 | 내용 |
 |-----------|------|
@@ -222,4 +222,4 @@ RRF_score(d) = Σ_i  1 / (k + rank_i(d))
 - HNSW 알고리즘 원논문: [`references/hnsw-paper-malkov-yashunin.md`](./references/hnsw-paper-malkov-yashunin.md) — Malkov & Yashunin, IEEE TPAMI 2020, arXiv:1603.09320
 - Upstage Solar Embedding API: [`references/upstage-solar-embedding-api.md`](./references/upstage-solar-embedding-api.md)
 - 외부 기여자 감사 및 흡수 출처: [`ACKNOWLEDGMENTS.md`](../../ACKNOWLEDGMENTS.md)
-- ADR-002 (벡터 임베딩 백엔드 결정): [`../decisions/ADR-002-vector-embedding-backend.md`](../decisions/ADR-002-vector-embedding-backend.md)
+- ADR-003 (벡터 임베딩 백엔드 결정): [`../decisions/ADR-003-local-index-storage-and-fusion.md`](../decisions/ADR-003-local-index-storage-and-fusion.md)

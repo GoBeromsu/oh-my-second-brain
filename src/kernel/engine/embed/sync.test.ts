@@ -16,7 +16,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { syncEngineStore } from "./sync.js";
@@ -24,6 +25,8 @@ import { openEngineStore, openEngineStoreCore } from "./store.js";
 import { makeEmbeddingIdentity } from "./identity.js";
 import type { Chunk, EmbeddingProvider } from "../types.js";
 import { assembleCoreSemanticEngine } from "../assemble.js";
+import { serializeVaultSettings } from "../../vault/settings.js";
+import { sealContract } from "../../contract/store.js";
 
 let vault: string;
 let dbDir: string;
@@ -103,10 +106,17 @@ describe("syncEngineStore — embed=false (lex-only)", () => {
 
   it("excludes an explicit symlink alias of a managed template source", async () => {
     writeDoc("Templates/note.md", "managed template");
-    writeDoc(".oms/template-policy.json", JSON.stringify({
-      version: 4,
-      templates: { note: { source: { path: "Templates/note.md" } } },
-    }));
+    const vaultId = randomUUID();
+    writeDoc(".oms/settings.json", serializeVaultSettings({ version: 1, vaultId }));
+    await sealContract({
+      vaultRealPath: realpathSync(vault),
+      vaultId,
+      contract: {
+        folders: null,
+        properties: null,
+        templates: { note: { source: "Templates/note.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] } },
+      },
+    });
     mkdirSync(path.join(vault, "notes"), { recursive: true });
     symlinkSync(path.join(vault, "Templates", "note.md"), path.join(vault, "notes", "template-alias.md"));
     const result = await syncEngineStore({
@@ -154,6 +164,40 @@ describe("syncEngineStore — embed=false (lex-only)", () => {
     });
     expect(explicit.available).toBe(false);
     expect(explicit.reason).toMatch(/ignored vault directory/);
+  });
+  it("rejects an inside-vault override before creating a store or lock", async () => {
+    const inside = path.join(vault, ".oms", "engine-store.sqlite");
+    await expect(syncEngineStore({ vault, dbPath: inside, embed: false })).rejects.toThrow(/inside the vault/);
+    expect(existsSync(path.join(vault, ".oms"))).toBe(false);
+    expect(readdirSync(vault)).toEqual([]);
+  });
+
+  it("rejects a dangling external leaf that targets the vault without creating it", async () => {
+    const dangling = path.join(dbDir, "dangling.sqlite");
+    symlinkSync(path.join(vault, "captured.sqlite"), dangling);
+    await expect(syncEngineStore({ vault, dbPath: dangling, embed: false })).rejects.toThrow(/inside the vault/);
+    expect(existsSync(path.join(vault, "captured.sqlite"))).toBe(false);
+    expect(lstatSync(dangling).isSymbolicLink()).toBe(true);
+    expect(existsSync(`${dangling}.lock`)).toBe(false);
+  });
+
+  it("rejects an alias whose resolved SHM companion escapes into the vault before locking", async () => {
+    const alias = path.join(dbDir, "store-alias");
+    symlinkSync(dbPath, alias);
+    const sentinel = path.join(vault, "sentinel.md");
+    writeFileSync(sentinel, "sync shm sentinel\n");
+    writeFileSync(dbPath, "external base\n");
+    symlinkSync(path.join(vault, "captured.sqlite-shm"), `${dbPath}-shm`);
+    const vaultBefore = readFileSync(sentinel);
+    await expect(syncEngineStore({ vault, dbPath: alias, embed: false })).rejects.toThrow(/symlink/);
+    expect(existsSync(path.join(vault, "captured.sqlite-shm"))).toBe(false);
+    expect(lstatSync(alias).isSymbolicLink()).toBe(true);
+    expect(lstatSync(`${dbPath}-shm`).isSymbolicLink()).toBe(true);
+    expect(readFileSync(dbPath).toString()).toBe("external base\n");
+    expect(readFileSync(sentinel)).toEqual(vaultBefore);
+    expect(readdirSync(vault)).toEqual(["sentinel.md"]);
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    expect(existsSync(`${alias}.lock`)).toBe(false);
   });
 });
 
@@ -312,8 +356,8 @@ describe("syncEngineStore — unconfigured embedding capability", () => {
     expect(result.available).toBe(false);
     expect(result.reason).toMatch(/OMS_EMBEDDING_PROVIDER/);
     expect(result.reason).toMatch(/OMS_EMBEDDING_MODEL/);
-    expect(result.reason).toMatch(/\.oms\/models\.json/);
-    expect(result.reason).toMatch(/oms setup --models-default/);
+    expect(result.reason).toMatch(/\.oms\/settings\.json/);
+    expect(result.reason).toMatch(/oms model install --default/);
   });
 
   it("guides the same way when only the model is missing", async () => {
@@ -327,7 +371,7 @@ describe("syncEngineStore — unconfigured embedding capability", () => {
 
     expect(result.available).toBe(false);
     expect(result.reason).toMatch(/OMS_EMBEDDING_MODEL/);
-    expect(result.reason).toMatch(/oms setup --models-default/);
+    expect(result.reason).toMatch(/oms model install --default/);
   });
 
   it("does not attach capability guidance to an incomplete descriptor shape", async () => {
@@ -350,7 +394,7 @@ describe("syncEngineStore — unconfigured embedding capability", () => {
 
     expect(result.available).toBe(false);
     expect(result.reason).toMatch(/prefixScheme is required/);
-    expect(result.reason).not.toMatch(/oms setup --models-default/);
+    expect(result.reason).not.toMatch(/oms model install --default/);
   });
 
   it("still performs a lex-only sync without any embedding configuration", async () => {

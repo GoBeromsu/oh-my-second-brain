@@ -1,14 +1,14 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { publishEmbeddingModel } from "../../install/vault-settings-publish.js";
+import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH, type VaultSettings } from "../../vault/settings.js";
 import {
   canonicalModelIdentityKey,
   MODEL_CAPABILITY_ENV_PAIRS,
   parseModelsConfig,
-  readModelsConfig,
-  resolveModelCapabilities,
   resolveModelCapability,
   type InstalledModelArtifact,
   type ModelCapability,
@@ -46,7 +46,7 @@ export interface InstalledModelsReceipt {
 export interface ResolveEmbeddingModelOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly request?: PortableModelSelection;
-  readonly vaultConfig?: ModelsConfigV1 | null;
+  readonly vaultEmbeddingModel?: string | null;
   readonly installedReceipt?: InstalledModelsReceipt;
   readonly cacheDir?: string;
 }
@@ -124,8 +124,10 @@ export interface AcquiredModelSet {
 
 export interface ModelSelectionProposal {
   readonly vault: string;
-  readonly current: ModelsConfigV1 | null;
-  readonly proposed: ModelsConfigV1;
+  /** settings.json `embedding.model` before the change; null when unset. */
+  readonly current: string | null;
+  /** The embedding model name to publish into settings.json. */
+  readonly proposed: string;
   readonly approvalDigest: `sha256:${string}`;
   readonly changed: boolean;
 }
@@ -549,13 +551,13 @@ function resolutionFromCapability(result: ModelCapabilityResolution): EmbeddingM
 /** Resolve embedding through the shared strict capability resolver; this never downloads. */
 export function resolveEmbeddingModel(options: ResolveEmbeddingModelOptions = {}): EmbeddingModelResolution {
   const receipt = options.installedReceipt ?? readInstalledModelsReceiptSync({ cacheDir: options.cacheDir });
-  return resolutionFromCapability(resolveModelCapability({ capability: "embed", request: options.request, env: options.env, vaultConfig: options.vaultConfig, installedArtifacts: receipt.artifacts, setupDefaults: receipt.defaults }));
+  return resolutionFromCapability(resolveModelCapability({ capability: "embed", request: options.request, env: options.env, vaultEmbeddingModel: options.vaultEmbeddingModel, installedArtifacts: receipt.artifacts, setupDefaults: receipt.defaults }));
 }
 
 /** Async cache adapter over the shared strict capability resolver; this never downloads. */
 export async function resolveEmbeddingModelFromCache(options: ResolveEmbeddingModelOptions = {}): Promise<EmbeddingModelResolution> {
   const receipt = options.installedReceipt ?? await readInstalledModelsReceipt({ cacheDir: options.cacheDir });
-  return resolutionFromCapability(resolveModelCapability({ capability: "embed", request: options.request, env: options.env, vaultConfig: options.vaultConfig, installedArtifacts: receipt.artifacts, setupDefaults: receipt.defaults }));
+  return resolutionFromCapability(resolveModelCapability({ capability: "embed", request: options.request, env: options.env, vaultEmbeddingModel: options.vaultEmbeddingModel, installedArtifacts: receipt.artifacts, setupDefaults: receipt.defaults }));
 }
 
 function isInside(child: string, parent: string): boolean {
@@ -709,13 +711,9 @@ export async function acquireEmbeddingModel(options: AcquireEmbeddingModelOption
   return { descriptor: descriptorFromArtifact(artifact), cachePath: artifact.path };
 }
 
-function selectionBytes(config: ModelsConfigV1): string {
-  return `${JSON.stringify(parseModelsConfig(config), null, 2)}\n`;
-}
-
 function approvalDigest(current: string | null, proposed: string): `sha256:${string}` {
   return `sha256:${createHash("sha256")
-    .update("oms-model-selection-v1\n")
+    .update("oms-model-selection-v2\n")
     .update(current === null ? "absent\n" : current)
     .update("\nproposed\n")
     .update(proposed)
@@ -731,104 +729,60 @@ export function modelAcquisitionApprovalDigest(input: ModelSetAcquisitionManifes
     .digest("hex")}`;
 }
 
-async function currentSelection(vault: string): Promise<{ readonly raw: string | null; readonly config: ModelsConfigV1 | null }> {
-  const filename = path.join(vault, ".oms", "models.json");
-  try {
-    const raw = await readFile(filename, "utf8");
-    return { raw, config: parseModelsConfig(raw) };
-  } catch (error: unknown) {
-    if (isRecord(error) && error.code === "ENOENT") return { raw: null, config: null };
-    throw error;
-  }
+async function currentSettings(vault: string): Promise<VaultSettings> {
+  const settings = await readVaultSettings(vault);
+  if (settings === null) throw new Error("VAULT_SETTINGS_MISSING: run `oms setup` before selecting an embedding model.");
+  return settings;
 }
 
-async function verifiedSelectionVault(vault: string): Promise<string> {
-  const root = await realpath(vault);
-  if (!(await stat(root)).isDirectory()) throw new Error(`Model selection target is not a directory: ${root}.`);
-  const oms = path.join(root, ".oms");
-  const omsEntry = await lstat(oms);
-  if (!omsEntry.isDirectory() || omsEntry.isSymbolicLink()) {
-    throw new Error(`Model selection target is not a verified OMS vault: ${root}.`);
-  }
-  try {
-    if ((await lstat(path.join(oms, "models.json"))).isSymbolicLink()) {
-      throw new Error("Model selection target .oms/models.json must not be a symbolic link.");
-    }
-  } catch (error: unknown) {
-    if (!isRecord(error) || error.code !== "ENOENT") throw error;
-  }
-  return root;
-}
-
-/** Build a side-effect-free, verified selection proposal from installed artifacts. */
+/** Build a side-effect-free, verified proposal for settings.json `embedding.model` from installed artifacts. */
 export async function proposeModelSelection(options: {
   readonly vault: string;
-  readonly config: ModelsConfigV1 | unknown;
+  readonly model: string;
   readonly cacheDir?: string;
 }): Promise<ModelSelectionProposal> {
-  const vault = await verifiedSelectionVault(options.vault);
-  const proposed = parseModelsConfig(options.config);
+  const vault = await realpath(options.vault);
   const installed = await readInstalledModelsReceipt({ cacheDir: options.cacheDir });
-  const resolutions = resolveModelCapabilities({
+  const resolution = resolveModelCapability({
+    capability: "embed",
     env: {},
-    vaultConfig: proposed,
+    vaultEmbeddingModel: options.model,
     installedArtifacts: installed.artifacts,
     setupDefaults: installed.defaults,
   });
-  for (const capability of ["embed", "rerank", "generate"] as const) {
-    if (proposed[capability] !== undefined && (!resolutions[capability].available || resolutions[capability].source !== "vault")) {
-      throw new Error(`Model selection for ${capability} is not backed by a verified installed artifact.`);
-    }
+  if (!resolution.available || resolution.source !== "vault") {
+    throw new Error("Model selection for embed is not backed by a verified installed artifact.");
   }
-  const current = await currentSelection(vault);
-  const proposedRaw = selectionBytes(proposed);
+  const settings = await currentSettings(vault);
+  const current = settings.embedding?.model ?? null;
+  const currentRaw = serializeVaultSettings(settings);
+  const proposedRaw = serializeVaultSettings({ ...settings, embedding: { model: options.model } });
   return {
     vault,
-    current: current.config,
-    proposed,
-    approvalDigest: approvalDigest(current.raw, proposedRaw),
-    changed: current.raw !== proposedRaw,
+    current,
+    proposed: options.model,
+    approvalDigest: approvalDigest(currentRaw, proposedRaw),
+    changed: currentRaw !== proposedRaw,
   };
 }
 
-/** CAS-publish an approved model selection and verify the persisted readback. */
+/** Publish an approved embedding model into settings.json and verify the persisted readback. */
 export async function applyModelSelection(options: {
   readonly vault: string;
-  readonly config: ModelsConfigV1 | unknown;
+  readonly model: string;
   readonly approvedDigest: string;
   readonly cacheDir?: string;
 }): Promise<ModelSelectionReceipt> {
-  const vault = await verifiedSelectionVault(options.vault);
-  const lock = path.join(vault, ".oms", "models.json.lock");
-  try {
-    await mkdir(lock, { mode: 0o700 });
-  } catch (error: unknown) {
-    if (isRecord(error) && error.code === "EEXIST") {
-      throw new Error("MODEL_SELECTION_CONCURRENT_CHANGE: another model selection is in progress.");
-    }
-    throw error;
+  const proposal = await proposeModelSelection(options);
+  if (options.approvedDigest !== proposal.approvalDigest) {
+    throw new Error(`MODEL_SELECTION_APPROVAL_MISMATCH: expected ${proposal.approvalDigest}.`);
   }
-  try {
-    const proposal = await proposeModelSelection({ ...options, vault });
-    if (options.approvedDigest !== proposal.approvalDigest) {
-      throw new Error(`MODEL_SELECTION_APPROVAL_MISMATCH: expected ${proposal.approvalDigest}.`);
-    }
-    const filename = path.join(proposal.vault, ".oms", "models.json");
-    if (proposal.changed) {
-      const temporary = path.join(path.dirname(filename), `.models.json.oms-${process.pid}-${randomUUID()}`);
-      try {
-        await writeFile(temporary, selectionBytes(proposal.proposed), { encoding: "utf8", mode: 0o600, flag: "wx" });
-        await rename(temporary, filename);
-      } finally {
-        await rm(temporary, { force: true });
-      }
-    }
-    const readback = await readModelsConfig(proposal.vault);
-    if (JSON.stringify(readback) !== JSON.stringify(proposal.proposed)) {
+  const filename = path.join(proposal.vault, ...SETTINGS_PATH.split("/"));
+  if (proposal.changed) {
+    const readback = await publishEmbeddingModel(proposal.vault, proposal.proposed);
+    if (readback.embedding?.model !== proposal.proposed) {
       throw new Error("MODEL_SELECTION_READBACK_FAILED: persisted selection does not match the approved proposal.");
     }
-    return { ...proposal, status: proposal.changed ? "written" : "unchanged", path: filename, verified: true };
-  } finally {
-    await rm(lock, { recursive: true, force: true });
   }
+  return { ...proposal, status: proposal.changed ? "written" : "unchanged", path: filename, verified: true };
 }

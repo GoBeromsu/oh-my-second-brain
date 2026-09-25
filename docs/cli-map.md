@@ -1,51 +1,40 @@
 # CLI and MCP surface map
 
-OMS exposes fourteen CLI command families and exactly five MCP tools. The families are `setup`, `template`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. CLI commands that have no MCP equivalent remain first-class CLI capabilities; MCP detail operations are discriminated by `op` and never become extra tools.
+OMS exposes fourteen CLI command families and exactly five MCP tools. The families are `setup`, `contract`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. CLI commands that have no MCP equivalent remain first-class CLI capabilities; MCP detail operations are discriminated by `op` and never become extra tools.
 
 The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doctor`. The server id is `oms`; the tables below use the host-qualified spellings `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`, not additional wire tools.
 
-The eight skills are `distill`, `doctor`, `interview`, `link`, `search`, `status`, `template`, and `write`. `interview` and `template` are tool-less. Skills are workflows. They are not the five tools.
+The six skills are `distill`, `doctor`, `link`, `search`, `status`, and `write`. `distill` is tool-less. Skills are workflows. They are not the five tools.
 
-Agents write and repair notes. OMS `guide` supplies approved material before writing; `check` and `complete` inspect the saved note. The `write` tool keeps a write posture because interview answers and approved contract publication mutate managed state. `guide`, `check`, and `complete` themselves write no vault bytes. Link's posture is read-only.
+The agent writes notes. `oms_write` takes `{path, content, template?}` with no `op`: the whole note is judged against the sealed contract and saved only when it is allowed. Unknown or missing input keys are refused before any judgement. A denial leaves the file unchanged and returns only `{field, kind}` violations and one guidance command. Sealing has no MCP operation and no skill.
 
-## Template
+## Contract
 
-| CLI | MCP tool | `op` | Required discriminator |
+| CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
-| `oms template scan` | `oms_search` | `template-scan` | none |
-| `oms template list` | `oms_search` | `templates` | `templateId` absent |
-| `oms template show <id>` | `oms_search` | `templates` | `templateId` required |
-| `oms template check` | `oms_doctor` | `validate` | none |
-| `oms template regenerate-types` | `oms_doctor` | `regenerate-types` | `dryRun` XOR `approvedDigest` |
-| `oms template review` | `oms_write` | `template` | `mode=interview-next`; same `proposals` as answer and commit |
-| `oms template answer` | `oms_write` | `template` | `mode=interview-answer`; forward the server-returned question and compare-and-swap fields |
-| `oms template commit` | `oms_write` | `template` | `mode=commit-contracts`; the user's approved digest, compare-and-swap, approved diff only |
+| `oms setup` / `oms contract setup` | none | — | Interview the whole vault and seal its contract. Interactive terminal only; refused without a TTY or under `OMS_NON_INTERACTIVE=1`. Writes only `.oms/settings.json` inside the vault. |
+| `oms contract extract --template <path>` | none | — | Show what one template declares, without printing values. |
+| `oms contract status` | none | — | Report the seal's posture and each sealed template as `active`, `drift`, or `missing` against the live file. |
+| `oms contract doctor [--fix]` | `oms_doctor` | `validate` | Diagnose the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures. The CLI exits 1 when unhealthy. `--fix` only re-indexes a moved or unindexed vault; the MCP `validate` op returns the agent view and fixes nothing. |
+| none | `oms_search` | `templates` | List sealed template axes. Reports `unavailable` when no contract is sealed. |
 
-Policy version 4 is the authority. The default layer is always on and starts empty. An individual template only adds constraints, and a note with no individual template is valid. `commit` publishes policy, taxonomy, projection, and approved managed Markdown. It does not publish ordinary notes or original template sources.
-
-`review` is read-only. `answer` records the interview draft. `commit` runs only after the user approves the exact final digest. Source drift warns for that template and leaves the last approved snapshot in place. An unverifiable policy stops the affected evaluation; it does not become an empty contract, and it does not stop search.
-
-The host notice text and its two buttons are fixed in the [host asset contract](./adapters.md). Confirming starts `interview-next` with the same `proposals` the caller will send to answer and commit. Deferring makes no server call. The `interview` skill owns the one-question lifecycle. Search, a general question, or a note error does not start it.
+Every command above accepts `--vault <path>`. The sealed contract lives outside the vault under `~/.oms/vaults/<vault-id>/`. A drifted template is reported, never re-sealed silently; the user re-seals by running `oms setup` again. Any broken seal other than a moved or unindexed vault is recovered the same way.
 
 ## Note
 
 | CLI | MCP tool | `op` | Required discriminator |
 |---|---|---|---|
-| `oms note guide` | `oms_write` | `guide` | New or existing note path. Returns approved Markdown, the effective contract, and the task binding. An unset path asks and does not issue a check. |
-| `oms note check` | `oms_write` | `check` | Reads the saved note, controls, and declared evidence. No unsaved body and no caller PASS. |
-| `oms note complete` | `oms_write` | `complete` | Structured result from a separate reviewer, then a fresh read of the same inputs. |
+| none | `oms_write` | absent | `path` and `content`; optional `template` naming the sealed template the note follows. |
 | `oms note audit` | `oms_doctor` | `audit` | optional `folder` |
 | `oms note get` | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window) |
 
-`complete` accepts the host's separate review. A value from a host tool or event is H. Transcribed into the completion request, that value is T. A definition byte match is not launch or enforcement proof. Instruction-only review is valid when the separate call, the non-modification instruction, and the input snapshot agree. Details are in the [host asset contract](./adapters.md).
-
-`note get` replaces the retired document aliases without changing single-target, multi-target, or windowed retrieval.
+`note audit` judges existing notes against the seal and reports `{path, field, kind}` entries. It never rewrites a note. `note get` replaces the retired document aliases without changing single-target, multi-target, or windowed retrieval.
 
 ## Link and bridge
 
 | CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
-| `oms link suggest` | `oms_link` | `suggest` | Suggest wikilink edits without writing them. |
+| `oms link suggest` | `oms_link` | `suggest` | Suggest wikilink edits without writing them. `notePath` required, `folder` optional. |
 | `oms link check` | `oms_link` | `check` | Check wikilinks. Replaces the retired lint command. |
 | `oms bridge add` | none | — | Add repository-to-vault bridge configuration. |
 | `oms bridge remove` | none | — | Remove bridge configuration. |
@@ -70,25 +59,24 @@ Link suggest and check do not edit notes. Bridge operations manage target resolu
 
 Index sync, embed, and repair are exclusive modes, not combinable `embed` or `force` booleans. Repair performs the same verified store backup and rebuild/drop through CLI and MCP; it is not forced embedding. The collections and contexts capabilities are views of `index-status`, not standalone search operations. Graph status returns graph-only health; the zero-argument status tool returns the aggregate view.
 
-Read-only search is independent of policy validity. Lexical, vector, HyDE, and typed-axis queries still include unbound, invalid, and incomplete notes. Search does not write notes and does not start a review. `oms status` reports observation, including separate source, contract, and reviewer state. It does not decide completion.
+Search is independent of the contract. Lexical, vector, HyDE, and typed-axis queries still include notes that would fail it, and a missing or damaged contract does not stop search. Search does not write notes.
 
 ## CLI-only lifecycle and servers
 
 | CLI | Purpose |
 |---|---|
-| `oms setup` | Propose an empty v4 policy and publish it only after interview approval. |
 | `oms host install|remove|sync|status` | Manage host-native assets and registrations. Install is a user-run command. `remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. |
 | `oms package check|update` | Check or update the npm package without implicitly syncing hosts. |
 | `oms model install|select|waive|status` | Manage model acquisition, selection, waiver, and status. |
 | `oms serve mcp|http` | Start MCP or HTTP without creating a vault engine store at startup. |
-| `oms hook pre|post` | Run pre-tool-use or post-tool-use hooks. Post records the tool result and does not build the graph. Claude's write hook is fail-open; Codex and Hermes have none. |
+| `oms hook pre` | Judge a Claude write against the vault contract before it is saved. The Claude guard denies on a contract violation and allows with a warning when the judge cannot run. Codex and Hermes have no write hook. |
 
 OMS has no host launcher and no `--runtime gjc` command path.
 
-## Removed leaves
+## Removed commands and operations
 
-The public note leaves are `guide`, `check`, `complete`, `audit`, and `get`. Create, append, update, and backfill are not note operations. The public template leaves are `scan`, `list`, `show`, `check`, `regenerate-types`, `review`, `answer`, and `commit`. Template add, update, move, remove, and default are not operations. Link leaves are `suggest` and `check`. Link apply is not an operation.
+The former top-level `template`, `doctor`, `audit`, `reconcile`, `linkify`, `embed`, `doc`, `mcp`, `lint`, `install`, `uninstall`, and `update` commands have no compatibility aliases; each prints the command that replaces it. `oms template` is replaced by `oms contract setup|extract|status|doctor`. The hook leaf `pre-tool-use` is retired in favour of `oms hook pre`, and there is no post-tool-use hook. The old repository-bridge meaning of a standalone `link` command is now the `bridge` family. `oms note audit` is the note-family diagnosis; it is not the retired top-level `audit` command.
 
-The former top-level `doctor`, `audit`, `reconcile`, `linkify`, `embed`, `doc`, `mcp`, `lint`, `install`, `uninstall`, and `update` commands have no compatibility aliases. The old repository-bridge meaning of a standalone `link` command is now the `bridge` family. `oms status` and `oms index embed` are retained names. `oms note audit` remains the note-family diagnosis; it is not the retired top-level `audit` command.
+The public note leaves are `audit` and `get`. Create, append, update, backfill, guide, check, and complete are not note operations. Link leaves are `suggest` and `check`. Link apply is not an operation.
 
-Removed MCP operation aliases are `lazy-load`, `multi-get-documents`, and the standalone search operations `collections`, `contexts`, and `status`; their capabilities remain reachable through `get-document` and `index-status` views as mapped above. Note-write modes, link apply, and note backfill are not MCP operations.
+Removed MCP operation aliases are `lazy-load`, `multi-get-documents`, and the standalone search operations `collections`, `contexts`, and `status`; their capabilities remain reachable through `get-document` and `index-status` views as mapped above. The `write` tool no longer accepts `op`: the former guide, check, and template operations are gone. Note backfill and note completion are not MCP operations.

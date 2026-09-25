@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import { parseNote } from "../../src/kernel/conventions/frontmatter.js";
 import {
   HARNESS_CLI_COMMANDS,
-  HARNESS_HOST_REVIEWERS,
   HARNESS_MCP_TOOLS,
   HARNESS_SHARED_SKILLS,
   HARNESS_WRITE_HOOK,
@@ -18,13 +17,13 @@ import { SHARED_SKILLS_SOURCE } from "../../src/assets/shared-skills.js";
 /**
  * Surface-set parity gate.
  *
- * The live target set (8 skills / 5 tools / 14 CLI families) is asserted directly.
+ * The live target set (6 skills / 5 tools / 14 CLI families) is asserted directly.
  * The fixture cases below prove that the rules also fail closed when a surface drifts.
  *
  * The rule set is deliberately NOT "all three lists are equal". The three
  * surfaces are related but distinct:
  *
- *   skills      - the authored skill set, including tool-less interview
+ *   skills      - the authored skill set, including tool-less distill
  *   mcpTools    - a strict SUBSET of those skills: write, search, link, status, doctor
  *   cliCommands - an INDEPENDENT allowlist of fourteen real CLI families.
  *                 It is intentionally distinct from the skill and MCP-tool surfaces.
@@ -64,7 +63,7 @@ export interface ParityViolation {
 }
 
 const TARGET_CLI_COMMANDS = [
-  "setup", "template", "note", "link", "bridge", "search", "index",
+  "setup", "contract", "note", "link", "bridge", "search", "index",
   "graph", "host", "package", "model", "serve", "hook", "status",
 ] as const;
 
@@ -183,11 +182,11 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
   return violations;
 }
 
-const TARGET = { skills: 8, tools: 5 } as const;
+const TARGET = { skills: 6, tools: 5 } as const;
 const MCP_SERVER_ID = "oms";
 
 const CLEAN: SurfaceSets = {
-  skills: ["distill", "doctor", "interview", "link", "search", "status", "template", "write"],
+  skills: ["distill", "doctor", "link", "search", "status", "write"],
   skillsWithTool: ["write", "search", "link", "status", "doctor"],
   // In this fixture, a tool is identified by its declaring skill; the `oms_`
   // naming convention is verified separately by the registry parity suite.
@@ -300,8 +299,9 @@ describe("surface-set parity gate (rules)", () => {
   it("does NOT require CLI commands to equal the skill set", () => {
     const violations = checkSurfaceSets(CLEAN, TARGET);
     expect(violations).toEqual([]);
-    expect(CLEAN.skills).toHaveLength(8);
-    expect(CLEAN.skills).toContain("interview");
+    expect(CLEAN.skills).toHaveLength(6);
+    expect(CLEAN.skills).not.toContain("interview");
+    expect(CLEAN.skills).not.toContain("template");
     expect(CLEAN.mcpTools).toHaveLength(5);
     expect(CLEAN.mcpTools).not.toContain("interview");
     expect(CLEAN.mcpTools).not.toContain("distill");
@@ -309,7 +309,7 @@ describe("surface-set parity gate (rules)", () => {
     expect(CLEAN.cliCommands).toHaveLength(14);
     expect([...CLEAN.cliCommands].sort()).not.toEqual([...CLEAN.skills].sort());
     expect(CLEAN.cliCommands).toContain("index");
-    expect(CLEAN.cliCommands).toContain("template");
+    expect(CLEAN.cliCommands).not.toContain("template");
     expect(CLEAN.skills).not.toContain("index");
   });
 
@@ -365,8 +365,6 @@ function assertServerOperationInventory(): void {
     "query",
     "query",
     "query",
-    "template-scan",
-    "templates",
     "templates",
   ]);
   const queryBranch = (
@@ -409,7 +407,6 @@ function assertServerOperationInventory(): void {
     "audit",
     "build-graph",
     "cleanup",
-    "regenerate-types",
     "sync-embeddings",
     "validate",
   ]);
@@ -440,7 +437,7 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     expect(typeof frontmatter["mcp_tool"]).toBe("string");
     expect(frontmatter["mcp_args"]).toBeDefined();
   }
-  for (const name of ["distill", "interview", "template"] as const) {
+  for (const name of ["distill"] as const) {
     const toolLess = parsedSkills.find(({ skill }) => skill === name);
     expect(toolLess, `${name} skill must exist and stay tool-less`).toBeDefined();
     expect(toolLess!.frontmatter["mcp_tool"], name).toBeUndefined();
@@ -486,6 +483,7 @@ const CURRENT_GUIDANCE_SCANNER_CATEGORIES = [
   "shared-skills",
   "readmes",
   "top-level-docs",
+  "source-readmes",
 ] as const;
 
 type CurrentGuidanceScannerCategory = typeof CURRENT_GUIDANCE_SCANNER_CATEGORIES[number];
@@ -522,6 +520,7 @@ const RETIRED_GUIDANCE_SPELLINGS: readonly {
   { retiredSpelling: "retired note leaf", pattern: /\boms\s+note\s+(?:create|append|update|backfill)\b/g },
   { retiredSpelling: "retired link apply leaf", pattern: /\boms\s+link\s+apply\b/g },
   { retiredSpelling: "retired template authoring leaf", pattern: /\boms\s+template\s+(?:add|update|move|remove|default)\b/g },
+  { retiredSpelling: "removed setup model flag", pattern: /\boms\s+setup\s+--models-(?:default|descriptor)\b/g },
 ];
 
 function currentGuidanceViolations(files: readonly CurrentGuidanceFile[]): CurrentGuidanceViolation[] {
@@ -560,12 +559,21 @@ function currentGuidanceFiles(): CurrentGuidanceFile[] {
       category: "top-level-docs" as const,
       path: path.join("docs", entry.name),
     }));
+  // Module READMEs under src/ tell contributors which commands to run.
+  const sourceReadmes = (readdirSync(path.join(repoRoot, "src"), { recursive: true }) as string[])
+    .filter((entry) => path.basename(entry) === "README.md")
+    .sort()
+    .map((entry) => ({
+      category: "source-readmes" as const,
+      path: path.join("src", entry),
+    }));
   const files = [
     ...hostFiles,
     ...sharedSkills,
     { category: "readmes" as const, path: "README.md" },
     { category: "readmes" as const, path: "README.ko.md" },
     ...topLevelDocs,
+    ...sourceReadmes,
   ];
 
   return files.map((file) => ({
@@ -583,10 +591,10 @@ describe("current guidance CLI spellings", () => {
       { category: "shared-skills", path: "accepted-embed", content: "`oms index embed`" },
       { category: "shared-skills", path: "accepted-index-status", content: "`oms index status`" },
       { category: "shared-skills", path: "accepted-index-clean", content: "`oms index clean`" },
-      { category: "shared-skills", path: "accepted-note-guide", content: "`oms note guide|check|complete|audit|get`" },
+      { category: "shared-skills", path: "accepted-note-guide", content: "`oms note audit|get`" },
       { category: "shared-skills", path: "accepted-link", content: "`oms link suggest|check`" },
-      { category: "shared-skills", path: "accepted-template", content: "`oms template scan|list|show|check|regenerate-types|review|answer|commit`" },
-      { category: "shared-skills", path: "accepted-eight-skills", content: "eight shared skills, including tool-less interview" },
+      { category: "shared-skills", path: "accepted-contract", content: "`oms contract setup|extract|status|doctor`" },
+      { category: "shared-skills", path: "accepted-six-skills", content: "six shared skills, including tool-less distill" },
     ];
 
     expect(currentGuidanceViolations(fixtures)).toEqual([]);
@@ -634,6 +642,8 @@ describe("current guidance CLI spellings", () => {
       { category: "shared-skills", path: "template-move", content: "`oms template move --folder <folder>`" },
       { category: "shared-skills", path: "template-remove", content: "`oms template remove <id>`" },
       { category: "shared-skills", path: "template-default", content: "`oms template default <id>`" },
+      { category: "source-readmes", path: "models-default", content: "`oms setup --models-default`" },
+      { category: "source-readmes", path: "models-descriptor", content: "`oms setup --models-descriptor <path>`" },
     ];
 
     expect(currentGuidanceViolations(fixtures).map((violation) => violation.path)).toEqual([
@@ -677,6 +687,8 @@ describe("current guidance CLI spellings", () => {
       "template-move",
       "template-remove",
       "template-default",
+      "models-default",
+      "models-descriptor",
     ]);
   });
 
@@ -690,8 +702,11 @@ describe("current guidance CLI spellings", () => {
   });
 });
 
-describe("host reviewer metadata", () => {
-  it("keeps write hooks and reviewer roles instruction-only, with real owned assets", () => {
+describe("host write-hook metadata", () => {
+  // The reviewer role went with the completion protocol it served: no OMS
+  // surface produces the review request it demanded or consumes its result, so
+  // the registry no longer declares a reviewer mechanism to assert about.
+  it("keeps the advisory write hook per host and registers no reviewer mechanism", () => {
     expect(harnessSurfaceRegistry.hosts.map((host) => [host.runtime, host.writeHook])).toEqual([
       ["claude", HARNESS_WRITE_HOOK.claude],
       ["codex", HARNESS_WRITE_HOOK.codex],
@@ -699,36 +714,11 @@ describe("host reviewer metadata", () => {
     ]);
     expect(HARNESS_WRITE_HOOK).toEqual({ claude: "fail-open", codex: "none", hermes: "none" });
     for (const host of harnessSurfaceRegistry.hosts) {
-      expect(host.reviewerMechanisms, host.runtime).toEqual(HARNESS_HOST_REVIEWERS[host.runtime]);
-      expect(host.reviewerMechanisms.every((mechanism) => mechanism.isolation === "instruction-only"), host.runtime).toBe(true);
-      expect(JSON.stringify(host.reviewerMechanisms), host.runtime).not.toMatch(/unavailable|unsupported/);
-      for (const mechanism of host.reviewerMechanisms) {
-        if (mechanism.assetPath === undefined) continue;
-        expect(existsSync(path.join(repoRoot, mechanism.assetPath)), mechanism.assetPath).toBe(true);
-      }
+      expect(host, host.runtime).not.toHaveProperty("reviewerMechanisms");
     }
-    expect(HARNESS_HOST_REVIEWERS.claude).toEqual([
-      {
-        id: "claude.plugin-agent",
-        selection: "primary",
-        isolation: "instruction-only",
-        assetPath: "agents/oms-reviewer.md",
-      },
-    ]);
-    expect(HARNESS_HOST_REVIEWERS.codex).toEqual([
-      { id: "codex.subagent", selection: "primary", isolation: "instruction-only" },
-      {
-        id: "codex.custom-agent",
-        selection: "optional",
-        isolation: "instruction-only",
-        assetPath: "assets/codex/agents/oms-reviewer.toml",
-      },
-    ]);
-    expect(HARNESS_HOST_REVIEWERS.hermes).toEqual([
-      { id: "hermes.delegate-task", selection: "primary", isolation: "instruction-only" },
-    ]);
-    expect(HARNESS_HOST_REVIEWERS.hermes[0]).not.toHaveProperty("assetPath");
-    expect(HARNESS_HOST_REVIEWERS.codex[0]).not.toHaveProperty("assetPath");
+    expect(JSON.stringify(harnessSurfaceRegistry)).not.toMatch(/reviewer/iu);
+    expect(existsSync(path.join(repoRoot, "assets/codex/agents/oms-reviewer.toml"))).toBe(false);
+    expect(existsSync(path.join(repoRoot, "agents/oms-reviewer.md"))).toBe(false);
   });
 });
 
@@ -737,7 +727,7 @@ describe("surface-set parity gate (live surface)", () => {
     assertServerOperationInventory();
   });
 
-  it("reads the eight disk-authored skills, five-tool subset, and fourteen CLI families", () => {
+  it("reads the six disk-authored skills, five-tool subset, and fourteen CLI families", () => {
     const live = liveSurfaceSets();
     expect([...live.skills].sort()).toEqual([...HARNESS_SHARED_SKILLS]);
     expect(live.mcpTools).toEqual([...HARNESS_MCP_TOOLS].map((tool) => tool.name).sort());

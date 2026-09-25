@@ -30,13 +30,13 @@ vendor/reference-repos/
 .oms/cache/
 
 # oms native semantic store — built SQLite artifact, never committed
-# (.oms/ itself is committed per ADR-006; the generated store DB is not)
+# (.oms/ itself is committed per ADR-002; the generated store DB is not)
 .oms/*.sqlite
 .oms/*.sqlite-wal
 .oms/*.sqlite-shm
 
 # Private personal overlay — vault paths, names, personal recipes (R19/R20)
-# .oms/ itself is committed (ADR-006); only private/ is excluded here.
+# .oms/ itself is committed (ADR-002); only private/ is excluded here.
 private/
 
 # QA and red-team run evidence. These are produced by a gate lane at review

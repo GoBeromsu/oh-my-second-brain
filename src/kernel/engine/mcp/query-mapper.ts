@@ -32,6 +32,8 @@ export interface NormalizedQueryOptions {
 }
 
 const DEFAULT_QUERY_LIMIT = 10;
+/** Public query responses summarize at most this many distinct facet values. */
+export const PUBLIC_FACET_SUMMARY_LIMIT = 20;
 
 /**
  * Normalize every query shape once before dispatch:
@@ -205,6 +207,27 @@ export function queryOptionsToSubQueries(opts: McpSemanticQueryOptions): TypedSu
 // ---------------------------------------------------------------------------
 
 /**
+ * Bound a public facet list without changing its order or mutating the input.
+ * Collection aggregation must call this only after the global merge.
+ */
+export function summarizePublicFacets(
+  facets: readonly McpSemanticFacet[] | undefined,
+  warnings: readonly string[] = [],
+): { readonly facets: readonly McpSemanticFacet[]; readonly warnings: readonly string[] } {
+  const values = facets ?? [];
+  if (values.length <= PUBLIC_FACET_SUMMARY_LIMIT) {
+    return { facets: values, warnings };
+  }
+  return {
+    facets: values.slice(0, PUBLIC_FACET_SUMMARY_LIMIT),
+    warnings: [
+      ...warnings,
+      `Facets truncated: showing ${PUBLIC_FACET_SUMMARY_LIMIT} of ${values.length} distinct values.`,
+    ],
+  };
+}
+
+/**
  * Shape engine RetrievalResult[] into McpSemanticQueryResult.
  *
  * - Applies optional `minScore` filter (inclusive threshold).
@@ -212,6 +235,7 @@ export function queryOptionsToSubQueries(opts: McpSemanticQueryOptions): TypedSu
  * - Derives evidence flags from `perTypeScores` (lex → lexical; vec|hyde → vector).
  * - Uses `docPath` as the synthetic `docid` (engine has no separate hash id).
  * - `snippet` is empty: the engine returns ranked paths, not extracted text.
+ * - Summarizes public facets unless an internal collection child defers that cap.
  */
 export function retrievalResultsToQueryResult(
   results: readonly RetrievalResult[],
@@ -223,8 +247,13 @@ export function retrievalResultsToQueryResult(
     readonly requestedStrategy?: McpSemanticReceipt["requestedStrategy"];
     readonly generatedSearches?: McpSemanticReceipt["generatedSearches"];
     readonly rerankApplied?: boolean;
-    readonly taxonomyIntents?: McpSemanticReceipt["taxonomyIntents"];
+    readonly folderIntents?: McpSemanticReceipt["folderIntents"];
     readonly warnings?: readonly string[];
+    /**
+     * Internal collection-child queries keep every facet until the backend
+     * merges them. This is not a public query parameter.
+     */
+    readonly deferFacetSummary?: boolean;
   },
 ): McpSemanticQueryResult {
   // The engine fuses chunk hits, while the public MCP envelope is
@@ -262,6 +291,9 @@ export function retrievalResultsToQueryResult(
   });
 
   const usedChannels = [...new Set(opts.usedChannels ?? deriveChannels(results))];
+  const summary = opts.deferFacetSummary === true
+    ? { facets: opts.facetValues ?? [], warnings: opts.warnings ?? [] }
+    : summarizePublicFacets(opts.facetValues, opts.warnings ?? []);
   const receipt: McpSemanticReceipt = {
     usedChannels,
     approximated: opts.approximated ?? false,
@@ -269,14 +301,14 @@ export function retrievalResultsToQueryResult(
     requestedStrategy: opts.requestedStrategy ?? "plain",
     generatedSearches: opts.generatedSearches ?? [],
     rerankApplied: opts.rerankApplied ?? false,
-    taxonomyIntents: opts.taxonomyIntents ?? [],
-    warnings: opts.warnings ?? [],
+    folderIntents: opts.folderIntents ?? [],
+    warnings: summary.warnings,
   };
   return {
     available: true,
     hits: searchHits,
     totalCount,
-    facets: opts.facetValues ?? [],
+    facets: summary.facets,
     cursor,
     ...(opts.intent !== undefined ? { intent: opts.intent } : {}),
     receipt,
@@ -332,7 +364,7 @@ export function queryResultUnavailable(
       requestedStrategy: receipt.requestedStrategy ?? "plain",
       generatedSearches: receipt.generatedSearches ?? [],
       rerankApplied: receipt.rerankApplied ?? false,
-      taxonomyIntents: receipt.taxonomyIntents ?? [],
+      folderIntents: receipt.folderIntents ?? [],
       warnings: receipt.warnings ?? [],
     },
   };

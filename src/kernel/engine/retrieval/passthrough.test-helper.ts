@@ -9,7 +9,7 @@
  * defined, so injecting this one made an explicit `rerank: true` request report
  * **success** while returning the unchanged RRF order. The caller asked for
  * cross-encoder precision and was told it happened when it had not — the
- * "passthrough presented as success" that ADR-007's no-fake-fallback rule and the
+ * "passthrough presented as success" that ADR-005's no-fake-fallback rule and the
  * approved model-capability plan both forbid.
  *
  * It survives here because tests legitimately need a `Reranker` that reorders

@@ -2,7 +2,7 @@
  * Engine assembly helpers for the OMS semantic surface.
  *
  * After the src/search teardown there is a single semantic backend: the native
- * engine. Embedding selection is canonical and explicit (ADR-007): the engine
+ * engine. Embedding selection is canonical and explicit (ADR-005): the engine
  * never auto-detects a provider and never fabricates vectors.
  *
  *   - {@link assembleFullSemanticEngine} requires a resolved installed
@@ -22,7 +22,7 @@ import {
   assembleEngine,
   type AssembledEngine,
 } from "../engine/assemble.js";
-import { readModelsConfigSync } from "../engine/embed/config.js";
+import { readVaultEmbeddingModelSync } from "../engine/embed/config.js";
 import {
   readInstalledModelsReceiptSync,
   resolveEmbeddingModel,
@@ -43,14 +43,14 @@ function resolvedEmbedding(
   modelCacheDir?: string,
   modelEnv?: Readonly<Record<string, string | undefined>>,
 ) {
-  const vaultConfig = readModelsConfigSync(vault);
+  const vaultEmbeddingModel = readVaultEmbeddingModelSync(vault);
   const installedReceipt = readInstalledModelsReceiptSync(
     modelCacheDir === undefined ? {} : { cacheDir: modelCacheDir },
   );
   return resolveEmbeddingModel({
     ...(modelCacheDir === undefined ? {} : { cacheDir: modelCacheDir }),
     ...(modelEnv === undefined ? {} : { env: modelEnv }),
-    vaultConfig,
+    vaultEmbeddingModel,
     installedReceipt,
   });
 }
@@ -60,13 +60,13 @@ function embeddingConfig(
   modelCacheDir?: string,
   modelEnv?: Readonly<Record<string, string | undefined>>,
 ): Parameters<typeof assembleEngine>[0] {
-  const modelsConfig = readModelsConfigSync(vault);
+  const vaultEmbeddingModel = readVaultEmbeddingModelSync(vault);
   const installedModelsReceipt = readInstalledModelsReceiptSync(
     modelCacheDir === undefined ? {} : { cacheDir: modelCacheDir },
   );
   return {
     vault,
-    modelsConfig,
+    vaultEmbeddingModel,
     installedModelsReceipt,
     ...(modelCacheDir === undefined ? {} : { embeddingCacheDir: modelCacheDir }),
     ...(modelEnv === undefined ? {} : { modelEnv }),
@@ -74,7 +74,7 @@ function embeddingConfig(
 }
 
 /**
- * Vec-capable engine with a REAL embedding provider. Throws a loud ADR-007 error
+ * Vec-capable engine with a REAL embedding provider. Throws a loud ADR-005 error
  * when no installed descriptor resolves — no auto-detect, no hash/fake fallback.
  */
 export function assembleFullSemanticEngine(

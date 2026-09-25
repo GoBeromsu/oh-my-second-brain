@@ -2,11 +2,11 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 
 import { runEngineSession } from "./engine-session.js";
+import { contractStatus } from "../kernel/contract/status.js";
 import * as engineAssembly from "../kernel/engine/assemble.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
-import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
 
 function usage(): string {
   return "Usage: oms status [--vault <path>]";
@@ -50,35 +50,14 @@ export async function runStatusCommand(argv: readonly string[]): Promise<void> {
       ? await resolveEffectiveVault(process.cwd(), process.env)
       : { vault: path.resolve(explicit), source: "explicit" as const };
 
+    // Status is an observation, not a control dump: posture, findings and drift
+    // states only, never a rule value, a vault id or a store path.
     let convention: unknown;
-    const policyPath = path.join(resolved.vault, ".oms", "template-policy.json");
-    if (!existsSync(policyPath)) {
-      convention = {
-        status: "absent",
-        diagnostics: [{
-          code: "TEMPLATE_POLICY_ABSENT",
-          remediation: `No template convention exists at "${policyPath}".`,
-        }],
-      };
-    } else {
-      try {
-        const snapshot = await loadResolvedTemplates(resolved.vault);
-        // Status is an observation, not a control dump: report identities and
-        // digests, never the raw control bytes.
-        convention = {
-          status: "approved",
-          generationDigest: snapshot.generationDigest,
-          default: { contractDigest: snapshot.defaultContract.contractDigest },
-          templates: Object.fromEntries(Object.entries(snapshot.templates)
-            .map(([templateId, contract]) => [templateId, { contractDigest: contract.contractDigest }])),
-          placement: snapshot.placement,
-          sources: snapshot.sources.map(freshness => ({ templateId: freshness.templateId, path: freshness.source.path, drift: freshness.drift })),
-          drafts: snapshot.drafts.map(freshness => ({ templateId: freshness.templateId, path: freshness.templatePath, drift: freshness.drift })),
-          diagnostics: snapshot.diagnostics,
-        };
-      } catch (error: unknown) {
-        convention = { status: "invalid", diagnostics: [diagnostic(error)] };
-      }
+    try {
+      convention = await contractStatus(resolved.vault);
+    } catch {
+      // The error text may name the store; only the fixed guidance is shown.
+      convention = { contract: "unreadable", findings: [{ message: "contract status unavailable", guidance: "oms contract doctor" }] };
     }
 
     let history: unknown;

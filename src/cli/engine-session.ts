@@ -10,7 +10,7 @@ import {
   assembleSemanticEngine,
   embeddingConfigPresent,
 } from "../kernel/semantic/semantic-engine.js";
-import { readModelsConfigSync } from "../kernel/engine/embed/config.js";
+import { readVaultEmbeddingModelSync } from "../kernel/engine/embed/config.js";
 import { readInstalledModelsReceiptSync } from "../kernel/engine/embed/model.js";
 
 export interface EngineSessionOptions {
@@ -25,7 +25,7 @@ export interface EngineSession {
   dispose(): Promise<void>;
 }
 
-/** Fails loudly under ADR-007 before an operation that requires real embeddings. */
+/** Fails loudly under ADR-005 before an operation that requires real embeddings. */
 export function ensureEmbeddingCapability(
   vault: string,
   modelCacheDir?: string,
@@ -33,7 +33,7 @@ export function ensureEmbeddingCapability(
 ): void {
   if (!embeddingConfigPresent(vault, modelCacheDir, modelEnv)) {
     throw new Error(
-      `Embedding capability is unavailable for ${vault}. Configure OMS_EMBEDDING_PROVIDER and OMS_EMBEDDING_MODEL, declare embed in .oms/models.json, or run oms setup --models-default.`,
+      `Embedding capability is unavailable for ${vault}. Configure OMS_EMBEDDING_PROVIDER and OMS_EMBEDDING_MODEL, set embedding.model in .oms/settings.json, or run oms model install --default and oms model select --default.`,
     );
   }
 }
@@ -52,7 +52,7 @@ export function createEngineSession(vault: string, options: EngineSessionOptions
 
   const modelInputs = {
     vault,
-    modelsConfig: readModelsConfigSync(vault),
+    vaultEmbeddingModel: readVaultEmbeddingModelSync(vault),
     installedModelsReceipt: readInstalledModelsReceiptSync(
       options.modelCacheDir === undefined ? {} : { cacheDir: options.modelCacheDir },
     ),

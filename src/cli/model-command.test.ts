@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { serializeVaultSettings } from "../kernel/vault/settings.js";
 import { runModelCommand } from "./model-command.js";
 
 const roots: string[] = [];
+const VAULT_ID = "11111111-2222-4333-8444-555555555555";
 const originalCwd = process.cwd();
 const originalCache = process.env.XDG_CACHE_HOME;
 
@@ -25,9 +27,10 @@ async function fixture(): Promise<{ readonly root: string; readonly vault: strin
   roots.push(root);
   const vault = path.join(root, "vault");
   const source = path.join(root, "embed.gguf");
-  const descriptor = path.join(root, "models.json");
+  const descriptor = path.join(root, "descriptor.json");
   const bytes = Buffer.from("synthetic model bytes");
   await mkdir(path.join(vault, ".oms"), { recursive: true });
+  await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID }));
   await writeFile(source, bytes);
   await writeFile(descriptor, JSON.stringify({
     schemaVersion: 1,
@@ -69,19 +72,22 @@ describe("model command", () => {
     vi.restoreAllMocks();
     const selected = await invoke(["select", "--descriptor", descriptor, "--vault", vault, "--yes", "--approved-digest", String(selectionProposal.approvalDigest)]);
     expect(selected).toMatchObject({ status: "written", verified: true });
-    expect(JSON.parse(await readFile(path.join(vault, ".oms", "models.json"), "utf8"))).toMatchObject({ schemaVersion: 1, embed: { model: "synthetic.gguf" } });
+    expect(JSON.parse(await readFile(path.join(vault, ".oms", "settings.json"), "utf8"))).toEqual({ version: 1, vaultId: VAULT_ID, embedding: { model: "synthetic.gguf" } });
+    expect(await readdir(path.join(vault, ".oms"))).toEqual(["settings.json"]);
 
     vi.restoreAllMocks();
     const status = await invoke(["status", "--vault", vault]);
-    expect(status).toMatchObject({ status: "ok", modelsConfig: { embed: { model: "synthetic.gguf" } } });
+    expect(status).toMatchObject({ status: "ok", embeddingModel: "synthetic.gguf" });
   });
 
   it("keeps status read-only and does not create a vault engine store or model config", async () => {
     const { vault } = await fixture();
+    const before = await readFile(path.join(vault, ".oms", "settings.json"), "utf8");
     const status = await invoke(["status", "--vault", vault]);
-    expect(status).toMatchObject({ status: "ok", modelsConfig: null });
+    expect(status).toMatchObject({ status: "ok", embeddingModel: null });
     expect(existsSync(path.join(vault, ".oms", "engine-store.sqlite"))).toBe(false);
-    expect(existsSync(path.join(vault, ".oms", "models.json"))).toBe(false);
+    expect(await readdir(path.join(vault, ".oms"))).toEqual(["settings.json"]);
+    expect(await readFile(path.join(vault, ".oms", "settings.json"), "utf8")).toBe(before);
   });
 
   it("rejects unknown and retired leaves and flags", async () => {
@@ -94,10 +100,24 @@ describe("model command", () => {
     }
   });
 
+  it("refuses selection in a vault that oms setup has not issued settings for", async () => {
+    const { root, descriptor } = await fixture();
+    const bare = path.join(root, "bare");
+    await mkdir(bare);
+    const installProposal = await invoke(["install", "--descriptor", descriptor, "--dry-run"]);
+    vi.restoreAllMocks();
+    await invoke(["install", "--descriptor", descriptor, "--yes", "--approved-digest", String(installProposal.approvalDigest)]);
+    vi.restoreAllMocks();
+    const result = await invoke(["select", "--descriptor", descriptor, "--vault", bare, "--dry-run"]);
+    expect(process.exitCode).toBe(1);
+    expect(result).toMatchObject({ status: "rejected", diagnostics: [{ code: "VAULT_SETTINGS_MISSING" }] });
+    expect(await readdir(bare)).toEqual([]);
+  });
+
   it("reports an explicit operation-scoped waiver without inventing persisted state", async () => {
     const { vault } = await fixture();
     const result = await invoke(["waive", "--vault", vault, "--yes"]);
-    expect(result).toMatchObject({ status: "waived", scope: "this-operation", persisted: false, modelsConfigPreserved: null });
-    expect(existsSync(path.join(vault, ".oms", "models.json"))).toBe(false);
+    expect(result).toMatchObject({ status: "waived", scope: "this-operation", persisted: false, embeddingModelPreserved: null });
+    expect(await readdir(path.join(vault, ".oms"))).toEqual(["settings.json"]);
   });
 });

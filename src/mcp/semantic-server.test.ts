@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeMorningVaultFixture } from "../kernel/search/morning-test-fixtures.js";
+import { engineStorePath } from "../kernel/engine/paths.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,7 +25,7 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 describe("Oh My Second Brain MCP semantic stdio server", () => {
   it("reopens the read-only index on every request in one MCP session", async () => {
     const vault = await writeMorningVaultFixture();
-    const testCache = path.join(vault, ".test-cache");
+    const testCache = await mkdtemp(path.join(tmpdir(), "oms-semantic-cache-"));
     await mkdir(testCache, { recursive: true });
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -68,7 +70,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       }));
       expect(rebuilt.receipt).toMatchObject({
         operation: "repair-index",
-        postcondition: { kind: "engine-store", mode: "rebuild", databasePath: path.join(vault, ".oms", "engine-store.sqlite") },
+        postcondition: { kind: "engine-store", mode: "rebuild", databasePath: engineStorePath(vault, { env: { XDG_CACHE_HOME: testCache } }) },
       });
       const resynced = textPayload(await client.callTool({
         name: "doctor",
@@ -76,18 +78,19 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       }));
       expect(resynced.receipt).toMatchObject({
         operation: "sync-embeddings",
-        postcondition: { kind: "semantic-index", databasePath: path.join(vault, ".oms", "engine-store.sqlite") },
+        postcondition: { kind: "semantic-index", databasePath: engineStorePath(vault, { env: { XDG_CACHE_HOME: testCache } }) },
       });
     } finally {
       await client.close();
       await rm(vault, { recursive: true, force: true });
+      await rm(testCache, { recursive: true, force: true });
     }
   }, 120_000);
 
   it("runs typed semantic search and document rehydration through read-only MCP tools", async () => {
     // The clean swap routes oms_sync_embeddings / oms_semantic_query through the
     // native engine, which REQUIRES an explicitly configured embedding provider
-    // (ADR-007). With OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL set we assert
+    // (ADR-005). With OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL set we assert
     // real engine results end-to-end through stdio; without them we assert the
     // loud guard — a positive routing proof, since the legacy src/search hash
     // path would have returned available:true instead.
@@ -97,6 +100,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       typeof embeddingProvider === "string" && embeddingProvider.length > 0 &&
       typeof embeddingModel === "string" && embeddingModel.length > 0;
     const tmpVault = await writeMorningVaultFixture();
+    const testCache = await mkdtemp(path.join(tmpdir(), "oms-semantic-cache-"));
 
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -105,16 +109,16 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       stderr: "pipe",
       // StdioClientTransport sandboxes the child env to a safe default subset,
       // so the canonical embedding config must be forwarded for the engine path.
-      env: hasModel
-        ? {
-            ...getDefaultEnvironment(),
-            OMS_EMBEDDING_PROVIDER: embeddingProvider!,
-            OMS_EMBEDDING_MODEL: embeddingModel!,
-          }
-        : {
-            ...getDefaultEnvironment(),
-            XDG_CACHE_HOME: path.join(tmpVault, ".test-cache"),
-          },
+      env: {
+        ...getDefaultEnvironment(),
+        XDG_CACHE_HOME: testCache,
+        ...(hasModel
+          ? {
+              OMS_EMBEDDING_PROVIDER: embeddingProvider!,
+              OMS_EMBEDDING_MODEL: embeddingModel!,
+            }
+          : {}),
+      },
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
 
@@ -173,7 +177,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
         );
       } else {
         // Model-free path. Two different contracts apply here and the test
-        // asserts both, because collapsing them is how ADR-007 gets eroded.
+        // asserts both, because collapsing them is how ADR-005 gets eroded.
         //
         // Sync REQUIRES embeddings, so it must fail loudly and name what to
         // configure. A plain query does NOT: since the SearchBackend seam was
@@ -189,8 +193,8 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
         // pair, the vault contract file, and the command that installs a model.
         expect(syncText).toMatch(/OMS_EMBEDDING_PROVIDER/);
         expect(syncText).toMatch(/OMS_EMBEDDING_MODEL/);
-        expect(syncText).toMatch(/\.oms\/models\.json/);
-        expect(syncText).toMatch(/oms setup --models-default/);
+        expect(syncText).toMatch(/\.oms\/settings\.json/);
+        expect(syncText).toMatch(/oms model install --default/);
 
         const plainQuery = textPayload(await client.callTool(queryCall));
         expect(plainQuery.available).toBe(true);
@@ -211,8 +215,8 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
         const vecText = explicitVec.content[0]?.type === "text" ? explicitVec.content[0].text : "";
         expect(vecText).toMatch(/OMS_EMBEDDING_PROVIDER/);
         expect(vecText).toMatch(/OMS_EMBEDDING_MODEL/);
-        expect(vecText).toMatch(/\.oms\/models\.json/);
-        expect(vecText).toMatch(/oms setup --models-default/);
+        expect(vecText).toMatch(/\.oms\/settings\.json/);
+        expect(vecText).toMatch(/oms model install --default/);
         // The remedy must be the embed one. Naming the rerank or generate pair here
         // would send an agent to install a model that cannot serve a vector request.
         expect(vecText).not.toMatch(/OMS_RERANK_PROVIDER|OMS_GENERATE_PROVIDER/);
@@ -253,6 +257,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
+      await rm(testCache, { recursive: true, force: true });
     }
   }, 120_000);
 });

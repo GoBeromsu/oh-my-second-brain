@@ -1,12 +1,11 @@
 import { stat } from "node:fs/promises";
-import path from "node:path";
+import { engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../engine/paths.js";
 import Database from "better-sqlite3";
 import { admitWriteTarget } from "../capture/safe.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { repairEngineStore, type EngineStoreRepairPlan } from "../engine/embed/repair.js";
 import { openEngineStoreCoreReadOnly } from "../engine/embed/store.js";
 import { walkMarkdown } from "../engine/embed/sync.js";
-import { engineStorePath } from "../engine/paths.js";
 import { handleSemanticTool } from "../semantic/semantic-retrieve.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 
@@ -185,7 +184,7 @@ export async function repairDoctor(
     readonly args: Record<string, unknown> | undefined;
     /**
      * Deferred on purpose. Constructing a semantic adapter opens - and
-     * therefore creates - `<vault>/.oms/engine-store.sqlite`, so accepting an
+     * therefore creates - the external engine store, so accepting an
      * already-built adapter would let that mutation happen in the caller's
      * argument list, before this function ever runs admission. Taking a factory
      * keeps admission the first effectful step even though the caller decides
@@ -215,7 +214,7 @@ export async function repairDoctor(
     if (!status.available || typeof status.generatedAt !== "string" || status.notes !== built.notes || status.edges !== built.edges) {
       throw new Error("Template graph postcondition failed: persisted caches do not match the completed build.");
     }
-    const cachePaths = [path.join(vault, ".oms", "cache", "engine", "graph.json"), path.join(vault, ".oms", "cache", "engine", "node-index.json")];
+    const cachePaths = [engineGraphCachePath(vault), engineNodeCachePath(vault)];
     const receipt: DoctorRepairReceipt = {
       operation, resolvedVault: vault, resolutionSource: source,
       written: { paths: cachePaths, summary: { notes: status.notes, edges: status.edges } },

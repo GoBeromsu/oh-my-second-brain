@@ -1,22 +1,16 @@
 import path from "node:path";
 
-import { checkSavedNote, completeSavedNote } from "../kernel/capture/check.js";
-import { getWriteGuidance, prepareApprovedWrite } from "../kernel/capture/guidance.js";
-import { admitWriteTarget, verifyVaultNotePath, type WriteTarget } from "../kernel/capture/safe.js";
-import type { WriteRejection } from "../kernel/conventions/write-protocol.js";
+import type { WriteTarget } from "../kernel/capture/safe.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
-import { loadResolvedTemplates } from "../kernel/templates/resolver.js";
 import { runAudit } from "./audit.js";
 import { getNoteDocuments } from "./doc-command.js";
 
 const VALUE_FLAGS = new Set([
-  "vault", "note-path", "template-id", "binding", "checkpoint", "review", "evidence-path",
-  "folder", "max-per-template", "collection", "from-line", "line-count", "line-limit", "max-bytes",
+  "vault", "note-path", "folder", "max-per-template", "collection", "from-line", "line-count", "line-limit", "max-bytes",
 ]);
 const BOOLEAN_FLAGS = new Set(["json", "line-numbers", "full-path", "help"]);
-const REPEATABLE_FLAGS = new Set(["evidence-path"]);
 
-type Options = Readonly<Record<string, string | boolean | readonly string[]>>;
+type Options = Readonly<Record<string, string | boolean>>;
 interface Parsed {
   readonly verb: string;
   readonly positional: readonly string[];
@@ -30,7 +24,7 @@ function fail(message: string): never {
 function parse(argv: readonly string[]): Parsed {
   if (argv.length === 0) fail("missing note verb");
   const positional: string[] = [];
-  const options: Record<string, string | boolean | string[]> = {};
+  const options: Record<string, string | boolean> = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]!;
     if (!token.startsWith("--")) {
@@ -47,11 +41,6 @@ function parse(argv: readonly string[]): Parsed {
     }
     const value = argv[++index];
     if (value === undefined || value.startsWith("--")) fail(`--${name} requires a value`);
-    if (REPEATABLE_FLAGS.has(name)) {
-      const current = options[name];
-      options[name] = [...(Array.isArray(current) ? current : []), value];
-      continue;
-    }
     if (Object.hasOwn(options, name)) fail(`duplicate flag --${name}`);
     options[name] = value;
   }
@@ -61,11 +50,6 @@ function parse(argv: readonly string[]): Parsed {
 function text(options: Options, name: string): string | undefined {
   const value = options[name];
   return typeof value === "string" ? value : undefined;
-}
-
-function values(options: Options, name: string): readonly string[] {
-  const value = options[name];
-  return Array.isArray(value) ? value : [];
 }
 
 function flag(options: Options, name: string): boolean {
@@ -95,145 +79,6 @@ function positiveInteger(options: Options, name: string): number | undefined {
   const value = Number(raw);
   if (!Number.isSafeInteger(value)) fail(`--${name} must be a safe positive integer`);
   return value;
-}
-
-function jsonOption(options: Options, name: string): unknown | undefined {
-  const raw = text(options, name);
-  if (raw === undefined) return undefined;
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    fail(`--${name} must be valid JSON`);
-  }
-}
-
-function notePathArg(parsed: Parsed): string | undefined {
-  const flagged = text(parsed.options, "note-path");
-  const positional = parsed.positional[0];
-  if (flagged !== undefined && positional !== undefined) fail("--note-path conflicts with a positional path");
-  return flagged ?? positional;
-}
-
-function evidencePaths(options: Options): readonly string[] {
-  return values(options, "evidence-path");
-}
-
-function overlayEvidence(checkpoint: unknown, paths: readonly string[]): unknown {
-  if (paths.length === 0) return checkpoint;
-  if (checkpoint === null || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
-    fail("--checkpoint must be a JSON object when --evidence-path is set");
-  }
-  return { ...(checkpoint as Record<string, unknown>), evidencePaths: paths };
-}
-
-function admissionReport(admission: WriteRejection): unknown {
-  return {
-    status: "rejected",
-    rejection: {
-      code: "TARGET_UNVERIFIED",
-      message: admission.message,
-      remediation: admission.remediation,
-    },
-  };
-}
-
-function pathReport(rejection: WriteRejection): unknown {
-  return {
-    status: "rejected",
-    rejection: {
-      code: rejection.code === "target-invalid" ? "TARGET_INVALID" : "PATH_UNSAFE",
-      message: rejection.message,
-      remediation: rejection.remediation,
-    },
-  };
-}
-
-function print(value: unknown): void {
-  const status = value !== null && typeof value === "object" && "status" in value
-    ? (value as { readonly status?: unknown }).status
-    : undefined;
-  if (
-    status === "ask" || status === "rejected" || status === "needs-repair" || status === "needs-path"
-    || status === "fail" || status === "incomplete"
-  ) process.exitCode = 1;
-  console.log(JSON.stringify(value, null, 2));
-}
-
-async function prepareGuide(resolved: WriteTarget, notePath: string, templateId: string | null): Promise<void> {
-  const verified = await verifyVaultNotePath(resolved.vault, notePath);
-  if (!verified.ok) return;
-  try {
-    const snapshot = await loadResolvedTemplates(verified.vaultRoot);
-    prepareApprovedWrite({
-      vaultRealPath: snapshot.vault,
-      notePath: verified.notePath,
-      snapshot,
-      templateId,
-    });
-  } catch {
-    // getWriteGuidance maps the same load and contract failures into the printed report.
-  }
-}
-
-async function runGuide(parsed: Parsed): Promise<void> {
-  only(parsed, ["vault", "note-path", "template-id"], [0, 1]);
-  const notePath = notePathArg(parsed);
-  const templateId = text(parsed.options, "template-id");
-  const resolved = await target(parsed.options);
-  const admission = await admitWriteTarget(resolved);
-  if (admission === undefined && notePath !== undefined) {
-    await prepareGuide(resolved, notePath, templateId ?? null);
-  }
-  print(await getWriteGuidance({
-    target: resolved,
-    ...(notePath === undefined ? {} : { notePath }),
-    ...(templateId === undefined ? {} : { templateId }),
-  }));
-}
-
-async function runCheck(parsed: Parsed): Promise<void> {
-  only(parsed, ["vault", "note-path", "template-id", "binding", "evidence-path"], [0, 1]);
-  const notePath = notePathArg(parsed);
-  if (notePath === undefined) fail("check requires a note path");
-  const resolved = await target(parsed.options);
-  const admission = await admitWriteTarget(resolved);
-  if (admission !== undefined) {
-    print(admissionReport(admission));
-    return;
-  }
-  const verified = await verifyVaultNotePath(resolved.vault, notePath);
-  if (!verified.ok) {
-    print(pathReport(verified.rejection));
-    return;
-  }
-  const binding = jsonOption(parsed.options, "binding");
-  const templateId = text(parsed.options, "template-id");
-  print(await checkSavedNote({
-    target: resolved,
-    notePath: verified.notePath,
-    ...(templateId === undefined ? {} : { templateId }),
-    ...(binding === undefined ? {} : { binding }),
-    evidencePaths: evidencePaths(parsed.options),
-  }));
-}
-
-async function runComplete(parsed: Parsed): Promise<void> {
-  only(parsed, ["vault", "checkpoint", "review", "evidence-path"], 0);
-  const checkpoint = jsonOption(parsed.options, "checkpoint");
-  const review = jsonOption(parsed.options, "review");
-  if (checkpoint === undefined) fail("complete requires --checkpoint");
-  if (review === undefined) fail("complete requires --review");
-  const resolved = await target(parsed.options);
-  const admission = await admitWriteTarget(resolved);
-  if (admission !== undefined) {
-    print(admissionReport(admission));
-    return;
-  }
-  print(await completeSavedNote({
-    target: resolved,
-    checkpoint: overlayEvidence(checkpoint, evidencePaths(parsed.options)),
-    review,
-  }));
 }
 
 async function runGet(parsed: Parsed): Promise<void> {
@@ -269,18 +114,6 @@ async function runGet(parsed: Parsed): Promise<void> {
 }
 
 async function run(parsed: Parsed): Promise<void> {
-  if (parsed.verb === "guide") {
-    await runGuide(parsed);
-    return;
-  }
-  if (parsed.verb === "check") {
-    await runCheck(parsed);
-    return;
-  }
-  if (parsed.verb === "complete") {
-    await runComplete(parsed);
-    return;
-  }
   if (parsed.verb === "audit") {
     only(parsed, ["vault", "folder", "max-per-template", "json"], 0);
     const resolved = await target(parsed.options);
@@ -302,11 +135,8 @@ async function run(parsed: Parsed): Promise<void> {
 export function noteUsage(): string {
   return `Usage: oms note <verb> [options]
 
-Leaves: guide | check | complete | audit | get
+Leaves: audit | get
 
-  guide [--note-path <path>] [--template-id <id>] [--vault <vault>]
-  check <note-path> [--template-id <id>] [--binding <json>] [--evidence-path <path>] [--vault <vault>]
-  complete --checkpoint <json> --review <json> [--evidence-path <path>] [--vault <vault>]
   audit [--folder <folder>] [--max-per-template <count>] [--json] [--vault <vault>]
   get <target...> | get --note-path <path> (--from-line <line>|--line-count <count>)`;
 }
@@ -326,12 +156,12 @@ export async function runNoteCommand(argv: readonly string[]): Promise<void> {
     await run(parsed);
   } catch (error: unknown) {
     process.exitCode = 1;
-    print({
+    console.log(JSON.stringify({
       status: "rejected",
       diagnostics: [{
         code: error instanceof Error ? error.message.split(":", 1)[0] : "NOTE_COMMAND_FAILED",
         remediation: error instanceof Error ? error.message : String(error),
       }],
-    });
+    }, null, 2));
   }
 }

@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-Oh My Second Brain is an Obsidian-first, user-owned convention layer: Obsidian is the command center, while the vault remains plain Markdown on disk and readable without Obsidian. It ships a TypeScript runtime plus a set of markdown conventions, and is invoked from inside AI coding environments (Claude Code, Codex, Hermes). Enforcement is driven by the user's own vault configuration in `vault/.oms/`, not by hardcoded rules.
+Oh My Second Brain is an Obsidian-first, user-owned convention layer: Obsidian is the command center, while the vault remains plain Markdown on disk and readable without Obsidian. It ships a TypeScript runtime plus a set of markdown conventions, and is invoked from inside AI coding environments (Claude Code, Codex, Hermes). Enforcement is driven by the vault contract the user seals with `oms setup`, not by hardcoded rules.
 
 > This file is contributor guidance for the **repository**. The vault-convention SSOT for end users lives in `core/AGENTS.md` and is owned by a separate lane. Do not conflate them, and do not edit `core/AGENTS.md` from here.
 
@@ -18,10 +18,10 @@ Oh My Second Brain is an Obsidian-first, user-owned convention layer: Obsidian i
 
 Outside `src/`:
 
-- `assets/skills/` — the eight skills, authored **once**. There are no per-vendor copies.
+- `assets/skills/` — the six skills, authored **once**. There are no per-vendor copies.
 - `assets/{claude,codex,hermes}/` — host runtime assets (hooks, rules, guidance).
 - `.claude-plugin/`, `.codex-plugin/`, `.mcp.json`, `.mcp.codex.json` — vendor plugin manifests at the repository root.
-- `core/ontology/` — read-only default schemas. `core/AGENTS.md` — separately-owned vault SSOT.
+- `core/ontology/` — legacy default schemas; nothing reads them at runtime and the package excludes them. `core/AGENTS.md` — separately-owned vault SSOT.
 - `test/architecture/` — the CI gates. `docs/decisions/` — ADRs.
 
 ## Architecture
@@ -32,13 +32,13 @@ Outside `src/`:
 
 `cli/` and `mcp/` import `kernel/`, with one deliberate exception class: the CLI is the composition root, so it selects host adapters, invokes host hooks, and starts the MCP or HTTP server. Those edges are enumerated with reasons in `CLI_ENTRYPOINT_EXCEPTIONS` in `test/architecture/import-boundary.test.ts`, and the assertion is exact-match — a new forbidden edge fails, and so does a stale exception. Every other path in `cli/` and `mcp/` must resolve into `kernel/`.
 
-**The public surface is three distinct sets, not one.** Eight skills (`write`, `search`, `link`, `distill`, `status`, `doctor`, `template`, `interview`). Five MCP tools (`write`, `search`, `link`, `status`, `doctor`) are a strict subset. CLI command families are an independent allowlist: `setup`, `template`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. Never collapse these into equality; `test/architecture/surface-parity.test.ts` guards it.
+**The public surface is three distinct sets, not one.** Six skills (`write`, `search`, `link`, `distill`, `status`, `doctor`). Five MCP tools (`write`, `search`, `link`, `status`, `doctor`) are a strict subset. CLI command families are an independent allowlist: `setup`, `contract`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. Never collapse these into equality; `test/architecture/surface-parity.test.ts` guards it.
 
 **Detail operations are demoted, never deleted.** The 18 former detail tools route through the five public tools by an `op` parameter (`oms_doctor` + `op: "sync-embeddings"`, `oms_search` + `op: "query"`). Adding a capability means adding an `op`, not a sixth tool.
 
-**`status` reads, `doctor` writes.** `status` is read-only health and statistics. The MCP `doctor` tool diagnoses and repairs; CLI diagnosis is placed under the object it checks (`template check`, `note audit`). Every mutating repair op routes through the verified-target write kernel and returns a receipt with a server-verified postcondition; a `cwd`-inferred target rejects repair while still allowing diagnosis.
+**`status` reads, `doctor` writes.** `status` is read-only health and statistics. The MCP `doctor` tool diagnoses and repairs; CLI diagnosis is placed under the object it checks (`contract doctor`, `note audit`). Every mutating repair op routes through the verified-target write kernel and returns a receipt with a server-verified postcondition; a `cwd`-inferred target rejects repair while still allowing diagnosis.
 
-`oms_search` is annotated read-only. Its search paths resolve an existing read-only engine store or use an in-memory ephemeral core without creating `.oms/`. `oms serve mcp` and `oms serve http` also do not create a vault store merely by starting.
+`oms_search` is annotated read-only. Its search paths resolve an existing read-only engine store or use an in-memory ephemeral core without creating a store. `oms serve mcp` and `oms serve http` also do not create a vault store merely by starting.
 Index creation and embedding synchronization remain `oms_doctor` + `op: "sync-embeddings"` with the exclusive `sync`, `embed`, or `repair` mode.
 
 The complete CLI-to-MCP mapping is maintained in [docs/cli-map.md](./docs/cli-map.md).
@@ -62,8 +62,8 @@ Run all of them before opening a PR.
 `moduleResolution` is NodeNext. **Every relative import in `src/**/*.ts` must carry a `.js` extension**, even though the source is `.ts`:
 
 ```ts
-import { loadOntology } from "./ontology/loader.js";  // correct
-import { loadOntology } from "./ontology/loader";     // build fails
+import { judge } from "./contract/judge.js";  // correct
+import { judge } from "./contract/judge";     // build fails
 ```
 
 Vitest resolves the missing extension silently and will pass. Only `npm run lint` reports it. After moving or renaming any file, run lint before trusting a green test run.
@@ -72,15 +72,15 @@ Related trap: `tsconfig.json` excludes `**/*.test.ts`, so `npm run lint` does **
 
 ## Convention-as-Data
 
-The active convention is user-owned, resolved from `vault/.oms/` at runtime; `core/ontology/` ships read-only defaults. Enforcement is `onViolation: warn` for doctor and audit reporting, while MCP `write` rejects contract violations and leaves disk untouched. Schema policy is `additionalProperties: preserve` — unknown fields are kept, not stripped. Do not change these to blocking without an explicit product decision.
+The active convention is the vault contract the user seals with the interactive `oms setup`. It is stored outside the vault under `~/.oms/vaults/<vault-id>/`; the only OMS file inside the vault is `.oms/settings.json`. One judge (`src/kernel/contract/judge.ts`) decides MCP `write` and the Claude guard hook (`oms hook pre`): a violation is refused and disk stays untouched. `oms note audit` and `oms contract doctor` report without rewriting notes. Do not weaken or bypass the judge without an explicit product decision.
 
-`write` demands a verified target vault, resolved `explicit` > local `.oms` > bridge `links.yaml` > `OMS_VAULT`. A `cwd`-inferred target is read-only and writes are rejected. See [docs/verified-target.md](./docs/verified-target.md).
+`write` demands a verified target vault, resolved `explicit` > local `.oms/settings.json` > bridge `links.yaml` > `OMS_VAULT`. A `cwd`-inferred target is read-only and writes are rejected. See [docs/verified-target.md](./docs/verified-target.md).
 
 ## Search Backends
 
 `src/kernel/searchbackend/` defines `SearchBackend`; the in-repo engine is the **default** implementation. qmd is pluggable, neither default nor required. A new backend implements the interface and must pass `src/kernel/searchbackend/conformance.test.ts`.
 
-ADR-007 is permanently locked: an unavailable backend fails **loudly** with actionable guidance and never silently degrades. A plain `query` expands to lexical only; requesting `vec` without a configured provider correctly returns `available: false` naming `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL`.
+ADR-005 is permanently locked: an unavailable backend fails **loudly** with actionable guidance and never silently degrades. A plain `query` expands to lexical only; requesting `vec` without a configured provider correctly returns `available: false` naming `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL`.
 
 ## CI Gates
 
@@ -98,8 +98,8 @@ Three gates run per pull request and fail closed. A gate that scans zero files i
 - No new dependencies without explicit sign-off in the PR description.
 - No `any` without a comment explaining why.
 - Every new branch in `src/` needs a vitest case.
-- The active convention contract is JSON at `.oms/types.json`; `.obsidian/types.json` is a read-only authority. Legacy YAML is ignored without migration or a deprecation warning; `additionalProperties: preserve` remains in effect.
-- Commit user-owned `.oms/template-policy.json`, `.oms/taxonomy.json`, and derived `.oms/types.json` when they define the vault convention. Never commit `.oms/engine-store.sqlite` or runtime event journals; engine state is rebuildable and runtime history lives outside the vault.
+- The sealed contract lives outside the vault; `.obsidian/types.json` is a read-only observation. Older `.oms/*` files are ignored and reported by `oms contract doctor` as unexpected control files.
+- Commit `.oms/settings.json` with the vault when it should travel with the notes. Never commit engine stores or runtime event journals; engine state is rebuildable and runtime history lives outside the vault.
 - See [CONTRIBUTING.md](./CONTRIBUTING.md) for the source-to-doc mapping table and per-change checklists.
 
 ## Git Workflow

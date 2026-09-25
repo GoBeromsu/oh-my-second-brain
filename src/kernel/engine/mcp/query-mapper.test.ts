@@ -7,6 +7,8 @@ import {
   queryOptionsToSubQueries,
   queryResultUnavailable,
   retrievalResultsToQueryResult,
+  PUBLIC_FACET_SUMMARY_LIMIT,
+  summarizePublicFacets,
 } from "./query-mapper.js";
 import type { McpSemanticQueryOptions } from "./types.js";
 import { semanticQueryOptionsFromArgs } from "../../semantic/semantic-retrieve-args.js";
@@ -343,7 +345,7 @@ describe("retrievalResultsToQueryResult — shape", () => {
         requestedStrategy: "plain",
         generatedSearches: [],
         rerankApplied: false,
-        taxonomyIntents: [],
+        folderIntents: [],
         warnings: [],
       },
     });
@@ -365,7 +367,7 @@ describe("retrievalResultsToQueryResult — shape", () => {
         requestedStrategy: "plain",
         generatedSearches: [],
         rerankApplied: false,
-        taxonomyIntents: [],
+        folderIntents: [],
         warnings: [],
       },
     });
@@ -500,6 +502,93 @@ describe("retrievalResultsToQueryResult — filtering and limits", () => {
       facets: [{ axis: "folder", value: "notes", count: 2, intent: "Reference notes" }],
     });
     if (result.available) expect(result.hits).toHaveLength(1);
+  });
+});
+
+describe("retrievalResultsToQueryResult — public facet summary", () => {
+  const HIT_HIGH = makeResult("high.md", 0.9, { lex: 0.9 });
+  const HIT_MID = makeResult("mid.md", 0.7, { vec: 0.7 });
+
+  it("keeps 0, 19, and 20 facets unchanged without a truncation warning", () => {
+    const warning = "existing retrieval warning";
+    for (const count of [0, 19, PUBLIC_FACET_SUMMARY_LIMIT]) {
+      const facets = Array.from({ length: count }, (_, index) => ({
+        axis: "link" as const,
+        value: `target-${index}`,
+        count: 1,
+        intent: `Link axis: target-${index}`,
+      }));
+      const result = retrievalResultsToQueryResult([HIT_HIGH], {
+        limit: 0,
+        warnings: [warning],
+        facetValues: facets,
+      });
+      expect(result.facets).toEqual(facets);
+      expect(result.receipt.warnings).toEqual([warning]);
+      expect(facets).toHaveLength(count);
+    }
+  });
+
+  it("caps 21 facets at 20, discloses the total, and preserves existing warnings", () => {
+    const facets = Array.from({ length: PUBLIC_FACET_SUMMARY_LIMIT + 1 }, (_, index) => ({
+      axis: "link" as const,
+      value: `target-${String(index).padStart(2, "0")}`,
+      count: index + 1,
+      intent: `Link axis: target-${index}`,
+    }));
+    const result = retrievalResultsToQueryResult([HIT_HIGH, HIT_MID], {
+      limit: 1,
+      cursor: "1",
+      warnings: ["existing retrieval warning"],
+      facetValues: facets,
+    });
+    expect(result).toMatchObject({
+      totalCount: 2,
+      cursor: null,
+      hits: [{ path: "mid.md" }],
+      facets: facets.slice(0, PUBLIC_FACET_SUMMARY_LIMIT),
+    });
+    expect(result.receipt.warnings).toEqual([
+      "existing retrieval warning",
+      "Facets truncated: showing 20 of 21 distinct values.",
+    ]);
+    expect(facets).toHaveLength(21);
+    expect(facets[20]).toMatchObject({ value: "target-20", count: 21 });
+  });
+
+  it("keeps facet summaries independent of hit paging", () => {
+    const facets = Array.from({ length: 21 }, (_, index) => ({
+      axis: "folder" as const,
+      value: `folder-${index}`,
+      count: 3,
+      intent: "folder",
+    }));
+    const results = Array.from({ length: 4 }, (_, index) => makeResult(`note-${index}.md`, 1));
+    const first = retrievalResultsToQueryResult(results, { limit: 1, facetValues: facets });
+    const deep = retrievalResultsToQueryResult(results, { limit: 1, cursor: "3", facetValues: facets });
+    expect(first.facets).toEqual(deep.facets);
+    expect(first.receipt.warnings).toEqual(deep.receipt.warnings);
+    expect(first).toMatchObject({ totalCount: 4, cursor: "1" });
+    expect(deep).toMatchObject({ totalCount: 4, cursor: null, hits: [{ path: "note-3.md" }] });
+  });
+
+  it("defers the facet cap for internal collection-child aggregation", () => {
+    const facets = Array.from({ length: 21 }, (_, index) => ({
+      axis: "link" as const,
+      value: `child-${index}`,
+      count: 1,
+      intent: "child",
+    }));
+    const result = retrievalResultsToQueryResult([HIT_HIGH], {
+      limit: Number.MAX_SAFE_INTEGER,
+      deferFacetSummary: true,
+      facetValues: facets,
+    });
+    expect(result.facets).toEqual(facets);
+    expect(result.receipt.warnings).toEqual([]);
+    expect(summarizePublicFacets(result.facets).warnings).toEqual([
+      "Facets truncated: showing 20 of 21 distinct values.",
+    ]);
   });
 });
 

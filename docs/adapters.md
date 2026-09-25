@@ -4,42 +4,36 @@ Oh My Second Brain keeps shared skills in `assets/skills/` and host-specific run
 
 | Host | Manifest/config | Host assets | Installation destination |
 |---|---|---|---|
-| Claude Code | Root `.claude-plugin/plugin.json` and `.mcp.json` | `assets/claude/CLAUDE.md`, `assets/claude/hooks/` | Plugin root; guard hooks are installed through `~/.claude/settings.json`. |
-| Codex | Root `.codex-plugin/plugin.json` and `.mcp.codex.json` | `assets/codex/AGENTS.md`, `assets/codex/rules/oms.md`, optional `assets/codex/agents/oms-reviewer.toml` | `~/.codex/plugins/oms/AGENTS.md`, `~/.codex/rules/oms.md`, `~/.codex/skills/oms-*`, and, when that role is owned, `~/.codex/agents/oms-reviewer.toml` plus `~/.codex/agents/oms-reviewer.provenance.json`. |
+| Claude Code | Root `.claude-plugin/plugin.json` and `.mcp.json` | `assets/claude/CLAUDE.md`, `assets/claude/hooks/` | Plugin root; the guard hook is registered in `~/.claude/settings.json` as PreToolUse entries for `Write|Edit|MultiEdit|NotebookEdit` and `Read|Grep|Glob`. |
+| Codex | Root `.codex-plugin/plugin.json` and `.mcp.codex.json` | `assets/codex/AGENTS.md`, `assets/codex/rules/oms.md` | `~/.codex/plugins/oms/AGENTS.md`, `~/.codex/rules/oms.md`, and `~/.codex/skills/oms-*`. |
 | Hermes | `assets/hermes-manifest.json` | `assets/hermes/SOUL.md`, `assets/hermes/README.md` | `~/.hermes/adapters/oms/`, `~/.hermes/skills/knowledge-management/oms/`, and `~/.hermes/config.yaml`. |
 | Gajae-Code | Marketplace-plugin convention | Generated root `skills/` mirror | The installed npm package root, where GJC discovers `skills/<name>/SKILL.md`. |
 
-Claude's manifest keeps an explicit skill array. Codex's manifest keeps one shared skill-directory declaration. Both resolve `./assets/skills/` inside the repository-root plugin. The eight skills are `distill`, `doctor`, `interview`, `link`, `search`, `status`, `template`, and `write`.
+Claude's manifest keeps an explicit skill array. Codex's manifest keeps one shared skill-directory declaration. Both resolve `./assets/skills/` inside the repository-root plugin. The six skills are `distill`, `doctor`, `link`, `search`, `status`, and `write`.
 
 `assets/skills/` remains the sole authored skill source. The root `skills/` tree is a committed generated mirror for GJC only: it cannot be a symlink because npm drops that symlink from packed artifacts. `npm run sync:skills` regenerates it, and the architecture gate requires matching directories and byte-identical `SKILL.md` files.
 
 The MCP server is started with `oms serve mcp`; `oms serve http` starts the HTTP surface. Neither server creates a vault engine store merely by starting. Claude uses `.mcp.json`, Codex uses `.mcp.codex.json`, and Hermes receives its registration in `~/.hermes/config.yaml`.
 
-All hosts expose the same five MCP tools: `write`, `search`, `link`, `status`, and `doctor`. Skills are host workflows, not tool names. `interview` and `template` are tool-less. The `write` tool does not write ordinary notes. It guides a new or existing note, then checks and completes the agent's saved file. Its mutations record interview answers and publish approved contract configuration. See [the CLI map](./cli-map.md).
+All hosts expose the same five MCP tools: `write`, `search`, `link`, `status`, and `doctor`. Skills are host workflows, not tool names. `distill` is tool-less. The `write` tool takes `{path, content, template?}`: the agent supplies the whole note, and OMS judges it against the sealed contract and saves it only when it is allowed. See [the CLI map](./cli-map.md).
 
-Agents write and repair note files after receiving approved guidance. OMS checks and completes those saved notes. A path that is not yet chosen is a question, and that question does not issue a check task. Search stays read-only when policy is missing, invalid, or mid-publish. The v4 default layer is always on, individual templates only add constraints, and a note with no individual template is valid. Contract publication commits only the approved diff, by compare-and-swap.
+Agents write and repair notes. A denied write leaves the file unchanged and returns `{field, kind}` violations and one guidance command. OMS has no completion operation or reviewer handshake. Search stays read-only and does not depend on the contract. Sealing happens only through the interactive `oms setup`; no host, skill, or MCP operation seals.
 
-Status and template listings report runtime history for the current host and vault only. This history is stored outside the vault, not in the engine store or convention controls. Report logging failures and observation gaps explicitly; do not merge another host's history or treat absent events as inactivity.
+MCP input schemas expose operation names and arguments through top-level `properties`; their `oneOf` branches still enforce operation-specific combinations and approval requirements. Hosts need not guess arguments from tool descriptions.
 
-The initial host notice is exactly `템플릿에 변경이 있습니다` with exactly `확인하기` and `나중에`. It shows no template name, hash, or change class. `나중에` is host-only and makes no server call or ledger mutation. `확인하기` starts the config interview at `write { op: "template", mode: "interview-next", proposals }`. Forward the server-returned question, request, and compare-and-swap fields without inventing names, and send the same `proposals` on `interview-next`, `interview-answer`, and `commit-contracts`. Commit only after the user approves the exact final digest. Long-lived hosts surface a returned `templateNotice` even when boot guidance is stale. The `interview` skill owns that one-question lifecycle. A general question, an unknown value, a note error, an unmanaged property, or a search does not start it.
+Search query responses include at most 20 facet values, with a receipt warning when the summary omits values. Hit `limit`, `totalCount`, and cursor pagination remain independent of this summary; the hit cursor does not page facets. This bounds facet cardinality, not the byte length of arbitrary field values.
 
-OMS does not parse or execute Templater, JavaScript, or a private token language. The agent may interpret an external template. The approved v4 policy is the contract.
+Status reports runtime history for the current host and vault only. This history is stored outside the vault, not in the engine store. Report logging failures and observation gaps explicitly; do not merge another host's history or treat absent events as inactivity.
 
-## Separate reviewer
+OMS does not parse or execute Templater, JavaScript, or a private token language. Templates stay the user's own Markdown; the sealed contract records what they declare.
 
-Completion requires a real separate reviewer: another role or conversation, a non-modification instruction, the request digest, a terminal result, and the same evaluation inputs before and after that review. The host launches it. OMS adds no model provider and runs no reviewer daemon. This page states that responsibility. It is not a host-smoke result.
+## No reviewer handshake
 
-A value supplied by a host tool or event is H. When the agent transcribes or interprets that value into the completion request, the carried value is T. A digest OMS recomputes from bytes is O. Transcribed H is T.
+There is no completion operation and no reviewer protocol. An allowed `write` means the note fits the sealed structure; judging whether a note is worth keeping, and repairing it, belong to the user and the agent. OMS adds no model provider, launches no role, and runs no reviewer daemon.
 
-A definition byte match compares the shipped reviewer file with the installed file. It shows those bytes are the same. It does not show that the host loaded the file, launched the role, or enforced a tool restriction. OMS does not certify reviewer independence. The isolation these mechanisms actually support is instruction-only. Before-and-after agreement covers the evaluation inputs, not the whole vault. Claude's write hook is fail-open. Codex and Hermes declare no write hook. None of those hooks is a hard save block.
+Nothing is installed under `~/.codex/agents/` or declared as a plugin agent any more. `oms host remove` still deletes a role and provenance record an earlier version installed, and only when the OMS-written provenance record proves it owns them; a foreign agent file is left in place and reported.
 
-| Host | Separate review | Definition OMS can compare |
-|---|---|---|
-| Claude | Plugin role `agents/oms-reviewer.md`, declared by the plugin manifest as `./agents/oms-reviewer.md`. | The plugin file is the shipped role. A documented tool allowlist is not enforcement. No second install path under the Claude home is declared. |
-| Codex | A generic separate subagent is a valid review. The optional owned file `~/.codex/agents/oms-reviewer.toml` may be used when the host discovers it. | Optional shipped file `assets/codex/agents/oms-reviewer.toml`, installed only as an owned copy. Fields are `name`, `description`, `developer_instructions`, and `sandbox_mode`. |
-| Hermes | Fresh `delegate_task` conversation. Inherited tools are the supported instruction-only path. Completion waits for the terminal result. | No reviewer asset. A definition check does not apply. |
-
-Codex custom-agent discovery can fail. The valid fallback is still a real generic separate reviewer, not a review written in the same conversation. `sandbox_mode` does not cover inherited MCP access. An empty MCP server map is not a claim that inherited servers were removed. Hermes does not need a named tool-denial list for that fresh delegation to count.
+Claude's guard hook runs `oms hook pre`: it denies a write inside the configured vault when the judge finds a violation, and allows it with a warning when the judge cannot run. It also denies reads and writes under `~/.oms/`. Codex and Hermes declare no write hook; their notes are judged only when written through MCP `write`.
 
 ## Host lifecycle
 

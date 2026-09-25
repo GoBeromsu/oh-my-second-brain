@@ -58,13 +58,8 @@ const CLI_ENTRYPOINT_EXCEPTIONS = [
   },
   {
     file: "src/cli/oms.ts",
-    resolved: "src/vendors/claude/hook/post-tool-use",
-    reason: "The `oms hook post-tool-use` command invokes the Claude hook entrypoint.",
-  },
-  {
-    file: "src/cli/oms.ts",
     resolved: "src/vendors/claude/hook/pre-tool-use",
-    reason: "The `oms hook pre-tool-use` command invokes the Claude hook entrypoint.",
+    reason: "The `oms hook pre` command invokes the Claude hook entrypoint.",
   },
   {
     file: "src/cli/oms.ts",

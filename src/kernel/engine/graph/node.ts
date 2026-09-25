@@ -133,7 +133,7 @@ function comparable(value: AxisScalar): string | number | boolean {
 function equals(left: AxisScalar, right: AxisScalar): boolean {
   const a = comparable(left);
   const b = comparable(right);
-  // Finite note numbers follow axisValueEquals: decimals and large values stay, and -0 matches 0.
+  // Finite note numbers compare by value: decimals and large values stay, and -0 matches 0.
   return typeof a === typeof b && a === b;
 }
 

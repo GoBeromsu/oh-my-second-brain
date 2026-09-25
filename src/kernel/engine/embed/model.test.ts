@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import fs from "node:fs";
+import { link, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireModelSet,
   acquireEmbeddingModel,
@@ -14,13 +16,17 @@ import {
   parseModelSetAcquisitionManifest,
   parseInstalledModelsReceipt,
   PINNED_DEFAULT_EMBEDDING_MODEL,
+  applyModelSelection,
+  proposeModelSelection,
   readInstalledModelsReceipt,
   readInstalledModelsReceiptSync,
   resolveEmbeddingModel,
   resolveEmbeddingModelFromCache,
   type InstalledModelsReceipt,
 } from "./model.js";
-import { canonicalModelIdentityKey } from "./config.js";
+import { canonicalModelIdentityKey, readVaultEmbeddingModel } from "./config.js";
+import { parseModelsConfig } from "./config.js";
+import { readVaultSettings, serializeVaultSettings } from "../../vault/settings.js";
 
 const bytes = new TextEncoder().encode("verified model bytes");
 const sha256 = createHash("sha256").update(bytes).digest("hex");
@@ -294,8 +300,8 @@ describe("model-set acquisition manifest", () => {
     });
 
     it("keeps the host path out of the portable vault config", async () => {
-      // `.oms/models.json` travels with the vault, so a machine-specific path in it
-      // would break every other machine that opened the same vault.
+      // The portable selection identity can travel between machines, so a
+      // machine-specific path in it would break every other machine.
       const root = await mkdtemp(path.join(tmpdir(), "oms-local-"));
       try {
         const cache = path.join(root, "cache");
@@ -439,7 +445,7 @@ describe("strict embed adapter", () => {
       const installed = receipt(model);
       expect(resolveEmbeddingModel({ installedReceipt: installed, request: selection }).source).toBe("request");
       expect(resolveEmbeddingModel({ installedReceipt: installed, env: { [EMBEDDING_PROVIDER_ENV]: "gguf", [EMBEDDING_MODEL_ENV]: "test.gguf" } }).source).toBe("environment");
-      expect(resolveEmbeddingModel({ installedReceipt: installed, vaultConfig: { schemaVersion: 1, embed: selection } }).source).toBe("vault");
+      expect(resolveEmbeddingModel({ installedReceipt: installed, vaultEmbeddingModel: "test.gguf", env: {} }).source).toBe("vault");
       expect(resolveEmbeddingModel({ installedReceipt: installed, env: {} }).source).toBe("setup-default");
       const unavailable = resolveEmbeddingModel({ installedReceipt: { schemaVersion: 1, artifacts: [], defaults: [] }, env: {} });
       expect(unavailable).toMatchObject({ available: false, source: "unavailable" });
@@ -463,5 +469,74 @@ describe("strict embed adapter", () => {
     const result = resolveEmbeddingModel({ installedReceipt: { schemaVersion: 1, artifacts: [], defaults: [] }, env: {} });
     expect(JSON.stringify(result)).not.toContain("/Users/");
     expect(JSON.stringify(result)).not.toContain("/tmp/");
+  });
+});
+
+describe("settings.json model selection", () => {
+  const roots: string[] = [];
+  const vaultId = "11111111-1111-4111-8111-111111111111";
+
+  async function vault(withSettings = true): Promise<string> {
+    const root = await mkdtemp(path.join(tmpdir(), "oms-model-select-"));
+    roots.push(root);
+    const directory = path.join(root, "vault");
+    await mkdir(path.join(directory, ".oms"), { recursive: true });
+    if (withSettings) await writeFile(path.join(directory, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId }));
+    return realpath(directory);
+  }
+
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+  });
+
+  it("refuses to select a model before oms setup has issued settings.json, without writing", async () => {
+    const { cache } = await cacheWithArtifact();
+    roots.push(cache);
+    const bare = await vault(false);
+    await expect(proposeModelSelection({ vault: bare, model: "test.gguf", cacheDir: cache })).rejects.toThrow(/VAULT_SETTINGS_MISSING/);
+    expect(await readdir(path.join(bare, ".oms"))).toEqual([]);
+  });
+
+  it("refuses a model with no verified installed artifact", async () => {
+    const { cache } = await cacheWithArtifact();
+    roots.push(cache);
+    const present = await vault();
+    await expect(proposeModelSelection({ vault: present, model: "absent.gguf", cacheDir: cache })).rejects.toThrow();
+    expect(await readVaultSettings(present)).toEqual({ version: 1, vaultId });
+  });
+
+  it("proposes without writing, rejects a mismatched approval, then writes and reports unchanged", async () => {
+    const { cache } = await cacheWithArtifact();
+    roots.push(cache);
+    const present = await vault();
+    const before = await readFile(path.join(present, ".oms", "settings.json"), "utf8");
+    const proposal = await proposeModelSelection({ vault: present, model: "test.gguf", cacheDir: cache });
+    expect(proposal).toMatchObject({ vault: present, current: null, proposed: "test.gguf", changed: true });
+    expect(proposal.approvalDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(await readFile(path.join(present, ".oms", "settings.json"), "utf8")).toBe(before);
+
+    await expect(applyModelSelection({ vault: present, model: "test.gguf", approvedDigest: `sha256:${"0".repeat(64)}`, cacheDir: cache }))
+      .rejects.toThrow(/MODEL_SELECTION_APPROVAL_MISMATCH/);
+    expect(await readFile(path.join(present, ".oms", "settings.json"), "utf8")).toBe(before);
+
+    const written = await applyModelSelection({ vault: present, model: "test.gguf", approvedDigest: proposal.approvalDigest, cacheDir: cache });
+    expect(written).toMatchObject({ status: "written", verified: true, path: path.join(present, ".oms", "settings.json") });
+    expect(await readVaultSettings(present)).toEqual({ version: 1, vaultId, embedding: { model: "test.gguf" } });
+    expect(await readVaultEmbeddingModel(present)).toBe("test.gguf");
+
+    const again = await proposeModelSelection({ vault: present, model: "test.gguf", cacheDir: cache });
+    expect(again).toMatchObject({ current: "test.gguf", changed: false });
+    expect(again.approvalDigest).not.toBe(proposal.approvalDigest);
+    const unchanged = await applyModelSelection({ vault: present, model: "test.gguf", approvedDigest: again.approvalDigest, cacheDir: cache });
+    expect(unchanged.status).toBe("unchanged");
+  });
+
+  it("keeps settings.json as the only vault-side file and never writes a retired model file", async () => {
+    const { cache } = await cacheWithArtifact();
+    roots.push(cache);
+    const present = await vault();
+    const proposal = await proposeModelSelection({ vault: present, model: "test.gguf", cacheDir: cache });
+    await applyModelSelection({ vault: present, model: "test.gguf", approvedDigest: proposal.approvalDigest, cacheDir: cache });
+    expect(await readdir(path.join(present, ".oms"))).toEqual(["settings.json"]);
   });
 });

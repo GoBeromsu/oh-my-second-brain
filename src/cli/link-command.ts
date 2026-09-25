@@ -1,15 +1,20 @@
+import { randomUUID } from "node:crypto";
 import {
-  createVaultLink,
   LINKED_GITIGNORE_PATTERN,
   LINKED_DIR_RELATIVE,
-  readLinkRecord,
+  prepareVaultLink,
+  commitVaultLink,
+  removeVaultLink,
   resolveEffectiveVault,
-  type CreateVaultLinkResult,
+  type VaultLinkResult,
+  type VaultSource,
 } from "../kernel/link/link.js";
 import { checkLinksForNote, suggestLinksForNote } from "../kernel/link/workflow.js";
 import { writeConventionUsageSection } from "../kernel/link/convention-note.js";
-import { lstat, readlink, rm, unlink } from "node:fs/promises";
 import path from "node:path";
+import { lstat, readlink } from "node:fs/promises";
+import { readConnectionRegistry } from "../kernel/install/connection-registry.js";
+import { readProjectConnection } from "../kernel/install/project-connection.js";
 import { runLinkCheck } from "./link-check.js";
 
 type Options = Record<string, string | boolean | string[]>;
@@ -20,7 +25,7 @@ interface Parsed {
 }
 interface Target {
   readonly vault: string;
-  readonly source: "explicit" | "vault" | "bridge" | "env" | "cwd";
+  readonly source: VaultSource;
 }
 
 const VALUE_FLAGS = new Set(["vault", "folder"]);
@@ -83,8 +88,7 @@ function only(parsed: Parsed, allowed: readonly string[], positional: number): v
 
 async function target(options: Options): Promise<Target> {
   const explicit = text(options, "vault");
-  if (explicit !== undefined) return { vault: path.resolve(explicit), source: "explicit" };
-  const resolved = await resolveEffectiveVault(process.cwd(), process.env);
+  const resolved = await resolveEffectiveVault(process.cwd(), process.env, explicit === undefined ? {} : { explicitVault: explicit });
   return { vault: resolved.vault, source: resolved.source };
 }
 
@@ -107,24 +111,44 @@ function print(value: unknown, json: boolean): void {
   else console.log(JSON.stringify(value, null, 2));
 }
 
-export function formatLinkResult(
-  result: CreateVaultLinkResult,
-  conventionNotePath?: string,
-): string {
-  const lines: string[] = ["Oh My Second Brain vault bridge ready."];
-  lines.push(`  Vault:     ${result.record.vault}`);
-  lines.push(`  Scope:     ${result.record.scope.join(", ") || "(none)"}`);
-  if (result.linked.length > 0) lines.push(`  Linked:    ${result.linked.join(", ")}`);
-  if (result.unchanged.length > 0) lines.push(`  Unchanged: ${result.unchanged.join(", ")}`);
-  lines.push(`  Record:    ${result.recordPath}`);
-  lines.push(
-    result.gitignoreUpdated
-      ? `  Gitignore: added ${LINKED_GITIGNORE_PATTERN}`
-      : `  Gitignore: ${LINKED_GITIGNORE_PATTERN} already present`,
-  );
-  if (conventionNotePath !== undefined) {
-    lines.push(`  Convention: wrote ${conventionNotePath}`);
+function stageFailure(label: string, stage: { readonly state: string; readonly code?: string; readonly reason?: string }): string | undefined {
+  if (stage.code === undefined && stage.reason === undefined) return undefined;
+  if (stage.state !== "blocked" && stage.state !== "pending") return undefined;
+  const detail = [stage.code, stage.reason].filter(value => value !== undefined).join(": ");
+  return `  ${label}: ${detail}`;
+}
+
+export function formatLinkResult(result: VaultLinkResult, conventionNotePath?: string): string {
+  if (result.partial || result.projection === null) {
+    const lines = [
+      "Oh My Second Brain vault bridge is partial.",
+      `  Vault publication: ${result.connection.vault.state}`,
+      `  Global registration: ${result.connection.global.state}`,
+      `  Project reference: ${result.connection.project.state}`,
+      `  Reservation: ${result.connection.reservation?.connectionId ?? "(not reserved)"}`,
+    ];
+    for (const line of [
+      stageFailure("Vault publication", result.connection.vault),
+      stageFailure("Global registration", result.connection.global),
+      stageFailure("Project reference", result.connection.project),
+    ]) {
+      if (line !== undefined) lines.push(line);
+    }
+    if (result.connection.reservationDiagnostic !== null) {
+      lines.push(`  Reservation diagnostic: ${result.connection.reservationDiagnostic.code}: ${result.connection.reservationDiagnostic.message}`);
+    }
+    if (result.projectionDiagnostic !== null) lines.push(`  Projection: ${result.projectionDiagnostic.code}: ${result.projectionDiagnostic.message}`);
+    return lines.join("\n");
   }
+  const lines = [
+    "Oh My Second Brain vault bridge ready.",
+    `  Connection: ${result.connection.reservation?.connectionId ?? "(unreserved)"}`,
+    `  Record:     ${result.projection.recordPath}`,
+  ];
+  if (result.projection.linked.length > 0) lines.push(`  Linked:     ${result.projection.linked.join(", ")}`);
+  if (result.projection.unchanged.length > 0) lines.push(`  Unchanged:  ${result.projection.unchanged.join(", ")}`);
+  lines.push(result.projection.gitignoreUpdated ? `  Gitignore:  added ${LINKED_GITIGNORE_PATTERN}` : `  Gitignore:  ${LINKED_GITIGNORE_PATTERN} already present`);
+  if (conventionNotePath !== undefined) lines.push(`  Convention: wrote ${conventionNotePath}`);
   return lines.join("\n");
 }
 
@@ -143,17 +167,21 @@ export async function runLink(options: {
     console.error("[oms] link requires at least one --folder <name>.");
     return 1;
   }
-
   try {
-    const result = await createVaultLink({
+    const prepared = await prepareVaultLink({
       cwd: options.cwd,
       vault: options.vault,
-      folders: [...options.folders],
+      folders: options.folders,
+      operationId: randomUUID(),
+      publicationTransactionId: randomUUID(),
+      select: false,
     });
-    let conventionNotePath: string | undefined;
-    if (options.conventionNote !== false) {
-      conventionNotePath = (await writeConventionUsageSection(options.cwd, result.record.vault)).agentsPath;
+    const result = await commitVaultLink(prepared);
+    if (result.partial || result.projection === null) {
+      console.error(formatLinkResult(result));
+      return 1;
     }
+    const conventionNotePath = options.conventionNote === false ? undefined : (await writeConventionUsageSection(options.cwd, options.vault)).agentsPath;
     console.log(formatLinkResult(result, conventionNotePath));
     return 0;
   } catch (error) {
@@ -229,38 +257,51 @@ export async function runLinkFamilyCommand(argv: readonly string[]): Promise<voi
 }
 
 async function bridgeStatus(cwd: string): Promise<{
-  readonly state: "linked" | "not-linked";
+  readonly state: "linked" | "not-linked" | "legacy-readonly";
   readonly recordPath: string;
+  readonly connectionId?: string;
+  readonly portableVaultId?: string;
   readonly vault?: string;
   readonly scope?: readonly string[];
   readonly links?: readonly { folder: string; path: string; state: "linked" | "missing" | "drift" }[];
 }> {
-  const omsDir = path.join(cwd, ".oms");
-  const recordPath = path.join(omsDir, "links.yaml");
-  const record = await readLinkRecord(omsDir);
-  if (record === null) return { state: "not-linked", recordPath };
-  const links = await Promise.all(record.scope.map(async (scope) => {
-    const linkPath = path.join(cwd, LINKED_DIR_RELATIVE, path.basename(scope));
+  const recordPath = path.join(cwd, ".oms", "links.yaml");
+  const record = await readProjectConnection(cwd);
+  if (record.state === "missing") return { state: "not-linked", recordPath };
+  const scope = record.reference?.scope ?? record.pointer?.scope ?? [];
+  const vault = record.state === "v1" ? record.pointer?.vault : undefined;
+  const registered = record.reference === undefined ? undefined : (await readConnectionRegistry()).registry?.connections.find(entry => entry.connectionId === record.reference?.connectionId && entry.portableVaultId === record.reference.portableVaultId);
+  const expectedVault = vault ?? registered?.localVaultPath;
+  const links = await Promise.all(scope.map(async (entry) => {
+    const linkPath = path.join(cwd, LINKED_DIR_RELATIVE, path.basename(entry));
     try {
       const info = await lstat(linkPath);
-      if (!info.isSymbolicLink()) return { folder: scope, path: linkPath, state: "drift" as const };
+      if (!info.isSymbolicLink()) return { folder: entry, path: linkPath, state: "drift" as const };
       const actual = path.resolve(path.dirname(linkPath), await readlink(linkPath));
-      const expected = path.resolve(record.vault, scope);
-      return { folder: scope, path: linkPath, state: actual === expected ? "linked" as const : "drift" as const };
+      const expected = expectedVault === undefined ? undefined : path.resolve(expectedVault, entry);
+      return { folder: entry, path: linkPath, state: expected !== undefined && actual === expected ? "linked" as const : "drift" as const };
     } catch (error) {
       if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { folder: scope, path: linkPath, state: "missing" as const };
+        return { folder: entry, path: linkPath, state: "missing" as const };
       }
       throw error;
     }
   }));
-  return { state: "linked", recordPath, vault: record.vault, scope: record.scope, links };
+  return {
+    state: record.state === "v1" ? "legacy-readonly" : "linked",
+    recordPath,
+    ...(record.reference === undefined ? {} : { connectionId: record.reference.connectionId, portableVaultId: record.reference.portableVaultId }),
+    ...(expectedVault === undefined ? {} : { vault: expectedVault }),
+    scope,
+    links,
+  };
 }
 
 function formatBridgeStatus(status: Awaited<ReturnType<typeof bridgeStatus>>): string {
   if (status.state === "not-linked") return `No vault bridge is configured.\n  Record: ${status.recordPath}`;
   const lines = [
     "Oh My Second Brain vault bridge.",
+    ...(status.connectionId === undefined ? [] : [`  Connection: ${status.connectionId}`]),
     `  Vault:  ${status.vault}`,
     `  Scope:  ${status.scope?.join(", ") || "(none)"}`,
     `  Record: ${status.recordPath}`,
@@ -297,11 +338,7 @@ export async function runBridgeCommand(argv: readonly string[]): Promise<void> {
     if (parsed.verb === "remove") {
       only(parsed, ["json", "yes"], 0);
       if (!flag(parsed.options, "yes")) fail("bridge remove requires --yes");
-      const status = await bridgeStatus(cwd);
-      if (status.state === "not-linked") fail("no bridge is configured in this repository");
-      await rm(path.join(cwd, LINKED_DIR_RELATIVE), { recursive: true, force: true });
-      await unlink(status.recordPath);
-      const receipt = { removed: true, recordPath: status.recordPath, linkedDirectory: path.join(cwd, LINKED_DIR_RELATIVE) };
+      const receipt = await removeVaultLink(cwd);
       print(flag(parsed.options, "json") ? receipt : `Removed vault bridge registration.\n  Record: ${receipt.recordPath}\n  Linked directory: ${receipt.linkedDirectory}`, flag(parsed.options, "json"));
       process.exitCode = 0;
       return;

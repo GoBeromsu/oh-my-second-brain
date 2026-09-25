@@ -8,6 +8,7 @@ import { hostSurfaceForRuntime } from "../kernel/install/hosts.js";
 import { installCodex } from "../vendors/codex/codex.js";
 import { installHermes } from "../vendors/hermes/hermes.js";
 import { computeTreeDigest, serializeProvenance } from "../kernel/install/provenance.js";
+import { HOOK_MATCHER, READ_MATCHER } from "../vendors/claude/claude-hooks.js";
 import { discoverHostInstallAssets } from "./host-probe.js";
 
 const roots: string[] = [];
@@ -68,8 +69,10 @@ describe("discoverHostInstallAssets", () => {
     const result = await discoverHostInstallAssets();
     expect(result.assets.find(asset => asset.id === "registration:codex")?.declaredPath)
       .toBe(path.join(home.codex, "config.toml"));
-    expect(result.assets.find(asset => asset.kind === "reviewer-definition")?.declaredPath)
-      .toBe(path.join(home.codex, "agents", "oms-reviewer.toml"));
+    // A relative override still resolves under the same home; the retired
+    // reviewer role is no longer one of the declared assets.
+    expect(result.assets.every(asset => asset.declaredPath.startsWith(home.codex) || asset.host !== "codex")).toBe(true);
+    expect(result.assets.some(asset => asset.declaredPath.includes("oms-reviewer"))).toBe(false);
   });
 
   it("preserves corrupt Claude settings as inspection errors", async () => {
@@ -89,27 +92,45 @@ describe("discoverHostInstallAssets", () => {
     expect(result.hosts).toContainEqual({ host: "claude", state: "degraded" });
   });
 
-  it("rejects lookalike guard and post-guard commands", async () => {
+  it("rejects lookalike guard commands", async () => {
     const home = await homes();
     await mkdir(home.claude, { recursive: true });
     await writeFile(path.join(home.claude, "settings.json"), JSON.stringify({ hooks: {
-      PreToolUse: [{ matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: "not-owned oms-guard" }] }],
-      PostToolUse: [{ matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: "not-owned oms-post-guard" }] }],
+      PreToolUse: [
+        { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: "not-owned oms-guard" }] },
+        { matcher: READ_MATCHER, hooks: [{ type: "command", command: "not-owned oms-guard" }] },
+      ],
     } }));
     const result = await discoverHostInstallAssets();
     expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:claude", evidence: { state: "missing", cause: null } }));
     expect(result.hosts.map(host => host.host)).toEqual(["claude", "codex", "hermes"]);
   });
 
-  it("does not accept Claude hooks registered under swapped events", async () => {
+  it("does not accept a legacy or event-swapped Claude registration as complete", async () => {
     const home = await homes();
     await mkdir(home.claude, { recursive: true });
     await writeFile(path.join(home.claude, "settings.json"), JSON.stringify({ hooks: {
-      PostToolUse: [{ matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] }],
-      PreToolUse: [{ matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-post-guard' }] }],
+      PostToolUse: [{ matcher: HOOK_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] }],
+      PreToolUse: [
+        { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] },
+        { matcher: READ_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] },
+      ],
     } }));
     const result = await discoverHostInstallAssets();
     expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:claude", evidence: { state: "missing", cause: null } }));
+  });
+
+  it("accepts the write and read PreToolUse entries as a complete Claude registration", async () => {
+    const home = await homes();
+    await mkdir(home.claude, { recursive: true });
+    await writeFile(path.join(home.claude, "settings.json"), JSON.stringify({ hooks: {
+      PreToolUse: [
+        { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] },
+        { matcher: READ_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] },
+      ],
+    } }));
+    const result = await discoverHostInstallAssets();
+    expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:claude", evidence: { state: "ok", cause: null } }));
   });
 
   it.each([
@@ -214,7 +235,7 @@ describe("discoverHostInstallAssets", () => {
     expect(existsSync(home.codex)).toBe(false);
   });
 
-  it("matches installer skill paths and reports reviewer drift without hiding Codex", async () => {
+  it("matches installer skill paths and declares no reviewer asset without hiding Codex", async () => {
     const home = await homes();
     const host = hostSurfaceForRuntime("codex");
     const adapterRoot = path.resolve(new URL("../../", import.meta.url).pathname);
@@ -222,14 +243,12 @@ describe("discoverHostInstallAssets", () => {
     const expectedSkills = [
       "distill",
       "doctor",
-      "interview",
       "link",
       "search",
       "status",
-      "template",
       "write",
     ].map(skill => path.join(home.codex, "skills", `oms-${skill}`));
-    expect(host.skillDirs).toEqual(["distill", "doctor", "interview", "link", "search", "status", "template", "write"]);
+    expect(host.skillDirs).toEqual(["distill", "doctor", "link", "search", "status", "write"]);
     expect(installed.paths.filter(candidate => candidate.includes(`${path.sep}skills${path.sep}`)).sort()).toEqual([...expectedSkills].sort());
     expect(installed.paths.some(candidate => candidate.endsWith(`${path.sep}oms-setup`))).toBe(false);
 
@@ -241,42 +260,14 @@ describe("discoverHostInstallAssets", () => {
     expect(discoveredSkills).toEqual([...expectedSkills].sort());
     expect(discovered.assets.some(asset => asset.declaredPath.includes("oms-setup"))).toBe(false);
     expect(discovered.hosts).toContainEqual({ host: "codex", state: "ok" });
-    const reviewer = discovered.assets.find(asset => asset.kind === "reviewer-definition");
-    expect(reviewer).toMatchObject({
-      id: "reviewer:codex.custom-agent",
-      host: "codex",
-      kind: "reviewer-definition",
-      declaredPath: path.join(home.codex, "agents", "oms-reviewer.toml"),
-      provenancePath: path.join(home.codex, "agents", "oms-reviewer.provenance.json"),
-      oneFileRelativeName: "oms-reviewer.toml",
-    });
-    expect(reviewer?.expectedShippedBytesDigest).toMatch(/^[0-9a-f]{64}$/);
-    const matched = await inspectInstalledAssets({ assets: reviewer === undefined ? [] : [reviewer], vault: "/vault" });
-    expect(matched.assets[0]).toMatchObject({ state: "ok", digestMatch: true, cause: null, realPath: reviewer?.declaredPath });
+    // The reviewer role went with the completion protocol it served, so install
+    // discovery must not declare a reviewer asset for any host.
+    expect(discovered.assets.some(asset => asset.declaredPath.includes("oms-reviewer"))).toBe(false);
+    expect(JSON.stringify(discovered.assets)).not.toMatch(/reviewer/iu);
 
-    const role = path.join(home.codex, "agents", "oms-reviewer.toml");
-    await writeFile(role, Buffer.concat([await readFile(role), Buffer.from("\n")]));
-    const drifted = await inspectInstalledAssets(await discoverHostInstallAssets());
-    expect(drifted.assets).toContainEqual(expect.objectContaining({
-      id: "reviewer:codex.custom-agent",
-      kind: "reviewer-definition",
-      state: "provenance-mismatch",
-      cause: "installed-bytes-differ",
-      digestMatch: false,
-    }));
-
-    await rm(role);
-    const missing = await inspectInstalledAssets(await discoverHostInstallAssets());
-    expect(missing.assets).toContainEqual(expect.objectContaining({
-      id: "reviewer:codex.custom-agent",
-      kind: "reviewer-definition",
-      state: "missing",
-      cause: "ENOENT",
-    }));
     const after = await discoverHostInstallAssets();
     expect(after.hosts).toContainEqual({ host: "codex", state: "ok" });
     expect(after.assets).toContainEqual(expect.objectContaining({ id: "registration:codex", evidence: { state: "ok", cause: null } }));
     expect(after.assets.some(asset => asset.id === "codex.subagent" || asset.declaredPath.includes("oms-setup"))).toBe(false);
-    expect(existsSync(role)).toBe(false);
   });
 });

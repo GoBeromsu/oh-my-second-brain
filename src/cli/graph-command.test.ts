@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,9 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 
 import { syncEngineStore } from "../kernel/engine/embed/sync.js";
-import { engineStorePath } from "../kernel/engine/paths.js";
+import { engineGraphCachePath, engineNodeCachePath, engineStorePath, vaultCacheRoot } from "../kernel/engine/paths.js";
 import * as engineAssembly from "../kernel/engine/assemble.js";
-import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
 import { runGraphCommand } from "./graph-command.js";
 import { runStatusCommand } from "./status-command.js";
 
@@ -19,7 +20,7 @@ const digest = (value: string): `sha256:${string}` =>
 async function freshVault(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-graph-command-"));
   roots.push(vault);
-  await writeApprovedVault(vault, {
+  await writeContractVault(vault, {
     properties: { status: { type: "text", intent: "Workflow state." } },
     templates: {
       note: {
@@ -57,6 +58,7 @@ beforeEach(async () => {
   const cache = await mkdtemp(path.join(tmpdir(), "oms-status-model-cache-"));
   roots.push(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
+  vi.stubEnv("HOME", path.join(cache, "home"));
   vi.stubEnv("OMS_EMBEDDING_PROVIDER", undefined);
   vi.stubEnv("OMS_EMBEDDING_MODEL", undefined);
 });
@@ -75,10 +77,13 @@ describe("graph command", () => {
     vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
 
     const before = await fileSnapshot(vault);
+    const cacheRoot = vaultCacheRoot(vault);
+    const externalBefore = existsSync(cacheRoot) ? await fileSnapshot(cacheRoot) : {};
     await runGraphCommand(["status", "--vault", vault]);
     expect(output.pop()).toEqual({ available: false, reason: "Graph cache not built" });
     expect(process.exitCode).toBe(1);
     expect(await fileSnapshot(vault)).toEqual(before);
+    expect(existsSync(cacheRoot) ? await fileSnapshot(cacheRoot) : {}).toEqual(externalBefore);
 
     await runGraphCommand(["build", "--vault", vault]);
     const built = output.pop() as Record<string, unknown>;
@@ -101,7 +106,12 @@ describe("graph command", () => {
     expect(output.pop()).toMatchObject({ available: true, notes: 2, edges: 3 });
     expect(process.exitCode).toBe(0);
     expect(await fileSnapshot(vault)).toEqual(afterBuild);
-    expect(afterBuild).not.toEqual(before);
+    const externalAfter = await fileSnapshot(cacheRoot);
+    expect(afterBuild).toEqual(before);
+    expect(externalAfter).not.toEqual(externalBefore);
+    expect(externalAfter).toHaveProperty(path.relative(vaultCacheRoot(vault), engineGraphCachePath(vault)));
+    expect(externalAfter).toHaveProperty(path.relative(vaultCacheRoot(vault), engineNodeCachePath(vault)));
+    expect(externalAfter).not.toHaveProperty(path.basename(engineStorePath(vault)));
   });
 
   it("reports current convention, runtime history, and ephemeral engine availability without a store", async () => {
@@ -115,7 +125,7 @@ describe("graph command", () => {
     expect(output.pop()).toMatchObject({
       vault,
       source: "explicit",
-      convention: { templates: { note: {} } },
+      convention: { contract: "sealed", row: "sealed", templates: [{ name: "note", state: "active" }] },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false, reason: "Graph cache not built" },
@@ -137,11 +147,10 @@ describe("graph command", () => {
       vault,
       source: "explicit",
       convention: {
-        status: "absent",
-        diagnostics: [{
-          code: "TEMPLATE_POLICY_ABSENT",
-          remediation: `No template convention exists at "${path.join(vault, ".oms", "template-policy.json")}".`,
-        }],
+        contract: "none",
+        row: "never-sealed",
+        findings: [{ message: "contract: none", guidance: "oms setup" }],
+        templates: [],
       },
       history: {
         events: 0,
@@ -157,9 +166,9 @@ describe("graph command", () => {
     expect(await fileSnapshot(vault)).toEqual(before);
   });
 
-  it("retains history, engine, and graph evidence when the convention is invalid", async () => {
+  it("retains history, engine, and graph evidence when the vault settings are invalid", async () => {
     const vault = await freshVault();
-    await writeFile(path.join(vault, ".oms", "template-policy.json"), "{");
+    await writeFile(path.join(vault, ".oms", "settings.json"), "{");
     const output: unknown[] = [];
     vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
 
@@ -167,7 +176,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "invalid", diagnostics: [{ code: "CONTRACT_UNVERIFIABLE" }] },
+      convention: { contract: "unreadable", findings: expect.arrayContaining([{ message: "vault settings unreadable", guidance: "oms contract doctor" }]) },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },
@@ -190,7 +199,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "approved", templates: { note: {} } },
+      convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
       history: { status: "unavailable", diagnostics: [{ code: "LEDGER_ROOT_INSIDE_VAULT" }] },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },
@@ -200,6 +209,7 @@ describe("graph command", () => {
 
   it("retains convention, history, and graph evidence when the engine store is invalid", async () => {
     const vault = await freshVault();
+    mkdirSync(path.dirname(engineStorePath(vault)), { recursive: true });
     await writeFile(engineStorePath(vault), "not sqlite");
     const output: unknown[] = [];
     vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
@@ -208,7 +218,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "approved", templates: { note: {} } },
+      convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
       history: { events: 0 },
       engine: {
         available: false,
@@ -231,7 +241,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "approved", templates: { note: {} } },
+      convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: {
@@ -257,8 +267,10 @@ describe("graph command", () => {
         "2026-09-06T00:00:00.000Z",
       );
       const before = await fileSnapshot(vault);
-      expect(before).toHaveProperty(".oms/engine-store.sqlite-wal");
-      expect(before).toHaveProperty(".oms/engine-store.sqlite-shm");
+      const storeRoot = path.dirname(engineStorePath(vault));
+      const externalBefore = await fileSnapshot(storeRoot);
+      expect(externalBefore).toHaveProperty(`${path.basename(engineStorePath(vault))}-wal`);
+      expect(externalBefore).toHaveProperty(`${path.basename(engineStorePath(vault))}-shm`);
       const output: unknown[] = [];
       vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
 
@@ -266,13 +278,14 @@ describe("graph command", () => {
 
       expect(output.pop()).toMatchObject({
         vault,
-        convention: { status: "approved", templates: { note: {} } },
+        convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
         history: { events: 0 },
         engine: { available: true },
         graph: { available: false },
       });
       expect(process.exitCode).toBe(0);
       expect(await fileSnapshot(vault)).toEqual(before);
+      expect(await fileSnapshot(storeRoot)).toEqual(externalBefore);
     } finally {
       writer.close();
     }

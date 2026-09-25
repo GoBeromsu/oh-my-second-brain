@@ -17,7 +17,9 @@ import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { writeApprovedVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
+import { engineStorePath } from "../kernel/engine/paths.js";
+import Database from "better-sqlite3";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -64,7 +66,6 @@ function advertisedSearchOperations(): { op: string; args: Record<string, unknow
   // Arguments that satisfy each operation's required fields. Anything not
   // listed here takes the bare `{ op }` form.
   const argsByOp: Record<string, Record<string, unknown>> = {
-    "template-scan": {},
     templates: {},
     query: { mode: "query", query: "alpha" },
     "index-status": { view: "status" },
@@ -136,14 +137,15 @@ async function makeVault(): Promise<string> {
   return vault;
 }
 
-async function makeTemplateVault(): Promise<string> {
+async function makeTemplateVault(home: string): Promise<string> {
   const vault = await makeVault();
   await Promise.all([
     mkdir(path.join(vault, ".oms"), { recursive: true }),
     mkdir(path.join(vault, ".obsidian"), { recursive: true }),
     mkdir(path.join(vault, "Templates", "OMS"), { recursive: true }),
   ]);
-  await writeApprovedVault(vault, {
+  await writeContractVault(vault, {
+    contractStoreRoot: path.join(home, ".oms", "vaults"),
     properties: { title: { type: "text", intent: "Note title." } },
     templates: {
       note: {
@@ -173,14 +175,18 @@ async function makeTemplateVault(): Promise<string> {
  * target would have writes rejected by the admission layer anyway, so a clean
  * tree would prove nothing about `search`'s own behaviour.
  */
-async function withClient<T>(vault: string, run: (client: Client) => Promise<T>): Promise<T> {
-  const emptyHome = await mkdtemp(path.join(tmpdir(), "oms-readonly-home-"));
+async function withClient<T>(vault: string, run: (client: Client) => Promise<T>, home?: string): Promise<T> {
+  const emptyHome = home ?? await mkdtemp(path.join(tmpdir(), "oms-readonly-home-"));
   homes.push(emptyHome);
+  const cacheHome = process.env["XDG_CACHE_HOME"];
+  if (cacheHome === undefined || cacheHome.length === 0) {
+    throw new Error("XDG_CACHE_HOME must be the isolated test cache");
+  }
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [distCli, "serve", "mcp"],
     cwd: vault,
-    env: { HOME: emptyHome, OMS_VAULT: vault, PATH: process.env["PATH"] ?? "" },
+    env: { HOME: emptyHome, OMS_VAULT: vault, PATH: process.env["PATH"] ?? "", XDG_CACHE_HOME: cacheHome },
     stderr: "pipe",
   });
   const client = new Client({ name: "oms-readonly-probe", version: "0.0.0" });
@@ -190,6 +196,14 @@ async function withClient<T>(vault: string, run: (client: Client) => Promise<T>)
   } finally {
     await client.close().catch(() => undefined);
   }
+}
+
+function holdUncheckpointedWal(vault: string): Database.Database {
+  const writer = new Database(engineStorePath(vault), { fileMustExist: true });
+  writer.pragma("journal_mode = WAL");
+  writer.pragma("wal_autocheckpoint = 0");
+  writer.prepare("UPDATE engine_meta SET updated_at = ? WHERE id = 1").run("2026-09-06T00:00:00.000Z");
+  return writer;
 }
 
 const vaults: string[] = [];
@@ -207,19 +221,23 @@ describe("search read-only guarantee", () => {
   });
 
   it("lists resolved templates without mutating a valid template vault", async () => {
-    const vault = await makeTemplateVault();
+    // The child reads the sealed contract from its own HOME store.
+    const home = await mkdtemp(path.join(tmpdir(), "oms-readonly-home-"));
+    const vault = await makeTemplateVault(home);
     vaults.push(vault);
     const before = await snapshotTree(vault);
     const result = await withClient(vault, (client) =>
       client.callTool({ name: "search", arguments: { op: "templates" } }),
-    );
+    home);
     const payload = textPayload(result);
     expect(payload["templates"]).toMatchObject([{
       templateId: "note",
-      fields: { title: { property: "title", intent: "Note title." } },
+      rulesAvailable: true,
+      // The sealed contract projects field axes by property and type; meaning stays hidden.
+      fields: [{ kind: "field", key: "title", property: "title" }],
     }]);
-    // The always-on default layer is reported beside the individual templates.
-    expect(payload["default"]).toMatchObject({ contractDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) });
+    // The always-on common contract is reported beside the registrations.
+    expect(payload["default"]).toMatchObject({ fields: expect.any(Array) });
     expect(payload["axes"]).toMatchObject({
       globalAxes: [{
         key: "folder",
@@ -354,30 +372,37 @@ describe("search read-only guarantee", () => {
     const vault = await makeVault();
     vaults.push(vault);
 
-    // Serve a search first. What matters is that the search path has resolved
-    // and memoised its engine, not what it returned: the defect being guarded
-    // is a read-only engine landing in a slot the repair then reuses.
-    const served = await withClient(vault, (client) =>
-      client.callTool({ name: "search", arguments: { op: "query", mode: "query", query: "alpha" } }),
-    );
-    expect(textPayload(served)["available"]).toBe(true);
+    // Serve a search first, then repair, then search again in the same MCP
+    // session. What matters is that the search path has resolved and memoised
+    // its engine: a read-only engine must not land in the slot the repair reuses.
+    const hitPayload = await withClient(vault, async (client) => {
+      const served = await client.callTool({ name: "search", arguments: { op: "query", mode: "query", query: "alpha" } });
+      expect(textPayload(served)["available"]).toBe(true);
 
-    const repaired = await withClient(vault, (client) =>
-      client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "sync" } }),
-    );
-    // Surface the server's own message on failure. Parsing first would throw on
-    // the error path, which reports a JSON syntax error instead of the reason
-    // the repair was refused.
-    expect(repaired.isError ?? false, rawText(repaired as ToolResult)).toBe(false);
-    expect(textPayload(repaired as ToolResult)["available"]).toBe(true);
+      const repaired = await client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "sync" } });
+      // Surface the server's own message on failure. Parsing first would throw on
+      // the error path, which reports a JSON syntax error instead of the reason
+      // the repair was refused.
+      expect(repaired.isError ?? false, rawText(repaired as ToolResult)).toBe(false);
+      expect(textPayload(repaired as ToolResult)["available"]).toBe(true);
+
+      const hits = await client.callTool({ name: "search", arguments: { op: "query", mode: "query", query: "alpha" } });
+      return textPayload(hits);
+    });
 
     const tree = await snapshotTree(vault);
-    expect([...tree.keys()].some((rel) => rel.includes("engine-store.sqlite"))).toBe(true);
+    const storePath = engineStorePath(vault);
+    const writer = holdUncheckpointedWal(vault);
+    try {
+      const external = await snapshotTree(path.dirname(storePath));
+      expect([...external.keys()].some((rel) => rel.includes(path.basename(storePath)))).toBe(true);
+      expect([...external.keys()].some((rel) => rel === `${path.basename(storePath)}-wal`)).toBe(true);
+      expect([...external.keys()].some((rel) => rel === `${path.basename(storePath)}-shm`)).toBe(true);
+      expect([...tree.keys()].some((rel) => rel.includes("engine-store.sqlite"))).toBe(false);
+    } finally {
+      writer.close();
+    }
 
-    const hits = await withClient(vault, (client) =>
-      client.callTool({ name: "search", arguments: { op: "query", mode: "query", query: "alpha" } }),
-    );
-    const hitPayload = textPayload(hits);
     expect(hitPayload["available"]).toBe(true);
     expect((hitPayload["hits"] as unknown[] | undefined)?.length ?? 0).toBeGreaterThan(0);
   }, 180_000);
@@ -394,29 +419,40 @@ describe("search read-only guarantee", () => {
       });
     });
 
-    const before = await snapshotTree(vault);
-    // The index must actually exist, otherwise the read path below is being
-    // measured against the same absent-store case as the previous test.
-    expect([...before.keys()].some((rel) => rel.includes("engine-store.sqlite"))).toBe(true);
+    const storePath = engineStorePath(vault);
+    const writer = holdUncheckpointedWal(vault);
+    try {
+      const before = await snapshotTree(vault);
+      const externalBefore = await snapshotTree(path.dirname(storePath));
+      // The index must actually exist, otherwise the read path below is being
+      // measured against the same absent-store case as the previous test.
+      expect([...externalBefore.keys()].some((rel) => rel.includes(path.basename(storePath)))).toBe(true);
+      expect([...externalBefore.keys()].some((rel) => rel === `${path.basename(storePath)}-wal`)).toBe(true);
+      expect([...externalBefore.keys()].some((rel) => rel === `${path.basename(storePath)}-shm`)).toBe(true);
+      expect([...before.keys()].some((rel) => rel.includes("engine-store.sqlite"))).toBe(false);
 
-    const hits = await withClient(vault, async (client) => {
-      for (const { args } of advertisedSearchOperations()) {
-        await client.callTool({ name: "search", arguments: args });
-      }
-      return textPayload(
-        await client.callTool({
-          name: "search",
-          arguments: { op: "query", mode: "query", query: "alpha" },
-        }),
-      );
-    });
+      const hits = await withClient(vault, async (client) => {
+        for (const { args } of advertisedSearchOperations()) {
+          await client.callTool({ name: "search", arguments: args });
+        }
+        return textPayload(
+          await client.callTool({
+            name: "search",
+            arguments: { op: "query", mode: "query", query: "alpha" },
+          }),
+        );
+      });
 
-    const after = await snapshotTree(vault);
-    expect(diff(before, after)).toEqual([]);
+      const after = await snapshotTree(vault);
+      expect(diff(before, after)).toEqual([]);
+      expect(diff(externalBefore, await snapshotTree(path.dirname(storePath)))).toEqual([]);
 
-    // Without this, "make every search return unavailable" would satisfy both
-    // read-only tests while destroying the feature. Search must still answer.
-    expect(hits["available"]).toBe(true);
-    expect((hits["hits"] as unknown[] | undefined)?.length ?? 0).toBeGreaterThan(0);
+      // Without this, "make every search return unavailable" would satisfy both
+      // read-only tests while destroying the feature. Search must still answer.
+      expect(hits["available"]).toBe(true);
+      expect((hits["hits"] as unknown[] | undefined)?.length ?? 0).toBeGreaterThan(0);
+    } finally {
+      writer.close();
+    }
   }, 180_000);
 });

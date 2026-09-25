@@ -10,98 +10,26 @@ function validate(tool: string, input: Record<string, unknown>): boolean {
 }
 
 describe("template-native MCP surface", () => {
-  it("keeps template listing, showing, scanning, and document reads mutually exclusive", () => {
-    expect(validate("search", { op: "template-scan" })).toBe(true);
+  it("keeps template listing, showing, and document reads mutually exclusive", () => {
+    expect(validate("search", { op: "template-scan" })).toBe(false);
     expect(validate("search", { op: "templates" })).toBe(true);
-    expect(validate("search", { op: "templates", templateId: "note" })).toBe(true);
+    expect(validate("search", { op: "templates", templateId: "note" })).toBe(false);
     expect(validate("search", { op: "get-document", target: "notes/a.md" })).toBe(true);
     expect(validate("search", { op: "get-document", targets: ["notes/a.md"] })).toBe(true);
     expect(validate("search", { op: "get-document", notePath: "notes/a.md", fromLine: 1, lineCount: 20 })).toBe(true);
     expect(validate("search", { op: "get-document", target: "notes/a.md", targets: ["notes/a.md"] })).toBe(false);
   });
 
-  it("advertises guide, check, and complete over a saved note", () => {
-    const digest = `sha256:${"a".repeat(64)}`;
-    // guide may ask for a path; check always needs the saved note it reads.
-    expect(validate("write", { op: "guide" })).toBe(true);
-    expect(validate("write", { op: "guide", notePath: "notes/a.md", templateId: "note" })).toBe(true);
-    expect(validate("write", { op: "check", notePath: "notes/a.md" })).toBe(true);
-    expect(validate("write", { op: "check", notePath: "notes/a.md", evidencePaths: ["notes/source.md"] })).toBe(true);
-    expect(validate("write", { op: "check" })).toBe(false);
-    expect(validate("write", { op: "complete", checkpoint: { schemaVersion: 1 }, review: { requestDigest: digest } })).toBe(true);
-    expect(validate("write", { op: "complete", checkpoint: { schemaVersion: 1 } })).toBe(false);
-    // OMS does not write ordinary notes, so no note-write branch exists.
-    expect(validate("write", { op: "note", mode: "create", templateId: "note", body: "body" })).toBe(false);
-    expect(validate("write", { op: "check", notePath: "notes/a.md", body: "unsaved" })).toBe(false);
-  });
-
-  it("exposes the linear review protocol with canonical CAS and approval guards", () => {
-    const digest = `sha256:${"a".repeat(64)}`;
-    expect(validate("write", { op: "template", mode: "interview-next" })).toBe(true);
-    expect(validate("write", { op: "template", mode: "interview-next", dryRun: true })).toBe(false);
-    expect(validate("write", {
-      op: "template",
-      mode: "interview-answer",
-      questionId: digest,
-      answer: { required: true },
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-    })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "interview-answer",
-      questionId: digest,
-      answer: { required: true },
-      censusDigest: digest,
-      expectedLedgerDigest: "sha256:BAD",
-    })).toBe(false);
-    expect(validate("write", {
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      dryRun: true,
-    })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: digest,
-      dryRun: false,
-      approvedDigest: digest,
-    })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      dryRun: false,
-    })).toBe(false);
-    expect(validate("write", {
-      op: "template",
-      mode: "interview-answer",
-      questionId: digest,
-      answer: true,
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      question: [],
-    })).toBe(false);
-  });
-
-  it("retires every template authoring and folder-registration mode", () => {
-    const digest = `sha256:${"a".repeat(64)}`;
-    for (const mode of ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "register", "add-file", "later", "review"]) {
-      expect(validate("write", { op: "template", mode, dryRun: true }), mode).toBe(false);
-    }
-    // Only the interview mutates contract configuration.
-    expect(validate("write", { op: "template", mode: "interview-next" })).toBe(true);
-    expect(validate("write", {
-      op: "template",
-      mode: "commit-contracts",
-      censusDigest: digest,
-      expectedLedgerDigest: null,
-      dryRun: true,
-    })).toBe(true);
+  it("advertises one write payload: {path, content, template?}", () => {
+    expect(validate("write", { path: "notes/a.md", content: "body" })).toBe(true);
+    expect(validate("write", { path: "notes/a.md", content: "body", template: "note" })).toBe(true);
+    expect(validate("write", { path: "notes/a.md" })).toBe(false);
+    expect(validate("write", { content: "body" })).toBe(false);
+    // Retired guide/check/template branches have no schema at all.
+    expect(validate("write", { op: "guide", notePath: "notes/a.md", templateId: "note" })).toBe(false);
+    expect(validate("write", { op: "check", connectionId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" })).toBe(false);
+    expect(validate("write", { op: "template", mode: "publish-contract", policy: { version: 5 }, transactionId: "33333333-3333-4333-8333-333333333333" })).toBe(false);
+    expect(validate("write", { path: "notes/a.md", content: "body", templateId: "note" })).toBe(false);
   });
 
   it("keeps link read-only and doctor free of note backfill", () => {

@@ -15,14 +15,6 @@ export type HarnessStability = "stable" | "experimental" | "compatibility";
 export type HarnessPosture = "read" | "write";
 /** Advisory write-path hook behavior. Not a save block or process-exit guarantee. */
 export type HarnessWriteHook = "fail-open" | "none";
-export type HarnessReviewerMechanismId =
-  | "claude.plugin-agent"
-  | "codex.subagent"
-  | "codex.custom-agent"
-  | "hermes.delegate-task";
-export type HarnessReviewerSelection = "primary" | "optional";
-/** Receipt vocabulary. Registry rows below are instruction-only metadata, not enforcement. */
-export type HarnessReviewerIsolation = "instruction-only" | "tool-restricted";
 
 export interface HarnessCliCommandSurface {
   readonly name: string;
@@ -40,18 +32,6 @@ export interface HarnessMcpToolSurface {
   readonly stability: HarnessStability;
 }
 
-/**
- * Owned reviewer definition, when the host ships one.
- * Hermes delegate-task has no asset; inherited tools are not "unavailable".
- * This registry does not launch a model or prove isolation.
- */
-export interface HarnessReviewerMechanism {
-  readonly id: HarnessReviewerMechanismId;
-  readonly selection: HarnessReviewerSelection;
-  readonly isolation: HarnessReviewerIsolation;
-  readonly assetPath?: string;
-}
-
 export interface HarnessHostSurface {
   readonly runtime: HarnessHostRuntime;
   readonly adapterDir: string;
@@ -62,7 +42,6 @@ export interface HarnessHostSurface {
   readonly ruleFiles: readonly string[];
   readonly mcpConfigFiles: readonly string[];
   readonly writeHook: HarnessWriteHook;
-  readonly reviewerMechanisms: readonly HarnessReviewerMechanism[];
 }
 
 export interface HarnessHookSurface {
@@ -98,17 +77,15 @@ export interface HarnessSurfaceRegistry {
 export const HARNESS_SHARED_SKILLS: readonly string[] = [
   "distill",
   "doctor",
-  "interview",
   "link",
   "search",
   "status",
-  "template",
   "write",
 ];
 
 export const HARNESS_CLI_COMMANDS: readonly HarnessCliCommandSurface[] = [
   { name: "setup", owner: "cli", stability: "stable" },
-  { name: "template", owner: "cli", stability: "experimental" },
+  { name: "contract", owner: "cli", stability: "experimental" },
   { name: "note", owner: "capture", stability: "stable" },
   { name: "link", owner: "capture", stability: "stable" },
   { name: "bridge", owner: "install", stability: "stable" },
@@ -124,7 +101,6 @@ export const HARNESS_CLI_COMMANDS: readonly HarnessCliCommandSurface[] = [
 ];
 
 export const HARNESS_MCP_TOOLS: readonly HarnessMcpToolSurface[] = [
-  // Mixed: guide/check/complete do not write note bytes; approved control commit mutates.
   { name: "write", owner: "capture", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
   { name: "search", owner: "retrieval", posture: "read", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
   { name: "link", owner: "capture", posture: "read", destructive: false, idempotent: true, openWorld: false, stability: "stable" },
@@ -138,39 +114,6 @@ export const HARNESS_WRITE_HOOK: { readonly [runtime in HarnessHostRuntime]: Har
   hermes: "none",
 };
 
-export const HARNESS_HOST_REVIEWERS: {
-  readonly [runtime in HarnessHostRuntime]: readonly HarnessReviewerMechanism[];
-} = {
-  claude: [
-    {
-      id: "claude.plugin-agent",
-      selection: "primary",
-      isolation: "instruction-only",
-      assetPath: "agents/oms-reviewer.md",
-    },
-  ],
-  codex: [
-    {
-      id: "codex.subagent",
-      selection: "primary",
-      isolation: "instruction-only",
-    },
-    {
-      id: "codex.custom-agent",
-      selection: "optional",
-      isolation: "instruction-only",
-      assetPath: "assets/codex/agents/oms-reviewer.toml",
-    },
-  ],
-  hermes: [
-    {
-      id: "hermes.delegate-task",
-      selection: "primary",
-      isolation: "instruction-only",
-    },
-  ],
-};
-
 export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
   cliCommands: HARNESS_CLI_COMMANDS,
   mcpTools: HARNESS_MCP_TOOLS,
@@ -181,11 +124,10 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       skillDirs: HARNESS_SHARED_SKILLS,
       manifestFiles: [".claude-plugin/plugin.json"],
       guidanceFiles: ["assets/claude/CLAUDE.md"],
-      hookFiles: ["assets/claude/hooks/oms-guard.mjs", "assets/claude/hooks/oms-post-guard.mjs"],
+      hookFiles: ["assets/claude/hooks/oms-guard.mjs"],
       ruleFiles: [],
       mcpConfigFiles: [".mcp.json"],
       writeHook: HARNESS_WRITE_HOOK.claude,
-      reviewerMechanisms: HARNESS_HOST_REVIEWERS.claude,
     },
     {
       runtime: "codex",
@@ -197,7 +139,6 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       ruleFiles: ["assets/codex/rules/oms.md"],
       mcpConfigFiles: [".mcp.codex.json"],
       writeHook: HARNESS_WRITE_HOOK.codex,
-      reviewerMechanisms: HARNESS_HOST_REVIEWERS.codex,
     },
     {
       runtime: "hermes",
@@ -209,20 +150,12 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       ruleFiles: [],
       mcpConfigFiles: [],
       writeHook: HARNESS_WRITE_HOOK.hermes,
-      reviewerMechanisms: HARNESS_HOST_REVIEWERS.hermes,
     },
   ],
   hooks: [
     {
       bin: "oms-guard",
       path: "assets/claude/hooks/oms-guard.mjs",
-      owner: "hook",
-      runtime: "claude",
-      stability: "stable",
-    },
-    {
-      bin: "oms-post-guard",
-      path: "assets/claude/hooks/oms-post-guard.mjs",
       owner: "hook",
       runtime: "claude",
       stability: "stable",
@@ -234,7 +167,6 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       "core/AGENTS.md",
       ".claude-plugin",
       ".codex-plugin",
-      "agents",
       ".mcp.json",
       ".mcp.codex.json",
       "assets",
@@ -273,31 +205,24 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       "dist/kernel/harness/surface-registry.js",
       ".claude-plugin/plugin.json",
       ".codex-plugin/plugin.json",
-      "agents/oms-reviewer.md",
       ".mcp.json",
       ".mcp.codex.json",
       "assets/skills/distill/SKILL.md",
       "assets/skills/doctor/SKILL.md",
-      "assets/skills/interview/SKILL.md",
       "assets/skills/link/SKILL.md",
       "assets/skills/search/SKILL.md",
       "assets/skills/status/SKILL.md",
-      "assets/skills/template/SKILL.md",
       "assets/skills/write/SKILL.md",
       "skills/distill/SKILL.md",
       "skills/doctor/SKILL.md",
-      "skills/interview/SKILL.md",
       "skills/link/SKILL.md",
       "skills/search/SKILL.md",
       "skills/status/SKILL.md",
-      "skills/template/SKILL.md",
       "skills/write/SKILL.md",
       "assets/claude/hooks/oms-guard.mjs",
-      "assets/claude/hooks/oms-post-guard.mjs",
       "assets/claude/CLAUDE.md",
       "assets/codex/AGENTS.md",
       "assets/codex/rules/oms.md",
-      "assets/codex/agents/oms-reviewer.toml",
       "assets/hermes-manifest.json",
       "assets/hermes/SOUL.md",
       "assets/hermes/README.md",

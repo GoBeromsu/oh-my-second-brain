@@ -23,7 +23,7 @@ Keep implementation and contributor-facing documentation in the same change. The
 
 - [ ] Implement `SearchBackend` from `src/kernel/searchbackend/` rather than bypassing the contract.
 - [ ] Pass `src/kernel/searchbackend/conformance.test.ts` for the backend.
-- [ ] Follow ADR-007: an unavailable backend must fail loudly with actionable guidance. Do not silently degrade to a fake or alternate backend.
+- [ ] Follow ADR-005: an unavailable backend must fail loudly with actionable guidance. Do not silently degrade to a fake or alternate backend.
 - [ ] Update the kernel mapping documents and the unreleased `CHANGELOG-kernel.md` section.
 
 ### Load-bearing repository rules

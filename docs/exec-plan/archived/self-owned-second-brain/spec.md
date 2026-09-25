@@ -214,9 +214,9 @@ sync pipeline     →    증분 (hash-diff 방식)
 
 | ADR | 핵심 결정 |
 |-----|----------|
-| [ADR-002 벡터 임베딩 백엔드](../../../decisions/ADR-002-vector-embedding-backend.md) | 스토어: PGLite/pgvector 주, sqlite-vec 폴백, 플러그인 교체 가능. 비대칭 임베더: Upstage Solar passage/query 분리. 임베더 티어: 경량 로컬 기본 → 고품질 로컬 → commercial opt-in. HNSW dim 제한 정책: vector≤2000 / halfvec≤4000 / Solar 4096 → 양자화·차원축소·서브벡터·exact+rerank 중 선택. RRF+rerank 퓨전(qmd MCP 인터페이스 미러링, gbrain 강화). content-hash 증분 sync. **unified embed**: 벡터 + 그래프를 단일 작업으로 동시 구축. |
-| [ADR-004 설정·민감정보·접근 토폴로지](../../../decisions/ADR-004-config-secrets-access-topology.md) | 3-tier: 전역 `~/.config/vault-search/` 엔진 설정 + 단일 secrets 저장소 / vault 거주 온톨로지 / 저장소별 `.oms` 마커(포인터+권한). "설정/민감정보는 한 곳에 모여야 한다" 요구 충족 — global 설정 우선(vault 내 설정은 순환 참조가 됨). |
-| [ADR-005 그래프 접근 모델](../../../decisions/ADR-005-graph-access-model.md) | frontmatter-관계 에지(OMS 갭 해소). 4-tier 가중 에지. **두 모드**: 캐시 전체 그래프(embed 시 구축, 대규모 조회용) + 실시간 희소 로컬 그래프(온디맨드, Obsidian 방식, 항상 최신). 실시간 희소 모드가 "실시간 graph 조회" 요구를 해소. |
+| [구 ADR-002 벡터 임베딩 백엔드](../../../decisions/ADR-003-local-index-storage-and-fusion.md) | 스토어: PGLite/pgvector 주, sqlite-vec 폴백, 플러그인 교체 가능. 비대칭 임베더: Upstage Solar passage/query 분리. 임베더 티어: 경량 로컬 기본 → 고품질 로컬 → commercial opt-in. HNSW dim 제한 정책: vector≤2000 / halfvec≤4000 / Solar 4096 → 양자화·차원축소·서브벡터·exact+rerank 중 선택. RRF+rerank 퓨전(qmd MCP 인터페이스 미러링, gbrain 강화). content-hash 증분 sync. **unified embed**: 벡터 + 그래프를 단일 작업으로 동시 구축. |
+| [구 ADR-004 설정·민감정보·접근 토폴로지](../../../decisions/ADR-002-config-secrets-host-state-roots.md) | 3-tier: 전역 `~/.config/vault-search/` 엔진 설정 + 단일 secrets 저장소 / vault 거주 온톨로지 / 저장소별 `.oms` 마커(포인터+권한). "설정/민감정보는 한 곳에 모여야 한다" 요구 충족 — global 설정 우선(vault 내 설정은 순환 참조가 됨). |
+| [구 ADR-005 그래프 접근 모델](../../../decisions/ADR-006-graph-access.md) | frontmatter-관계 에지(OMS 갭 해소). 4-tier 가중 에지. **두 모드**: 캐시 전체 그래프(embed 시 구축, 대규모 조회용) + 실시간 희소 로컬 그래프(온디맨드, Obsidian 방식, 항상 최신). 실시간 희소 모드가 "실시간 graph 조회" 요구를 해소. |
 
 **참조 자료**:
 - [`docs/research/retrieval-engine-design-references.md`](../../../research/retrieval-engine-design-references.md) — 검색 엔진 설계 레퍼런스 종합
@@ -550,7 +550,7 @@ vault write
 
 ## 12. oms = Vault-Convention 자산 (default 온톨로지 + vault-ADR 투명성)
 
-oms는 단순 검색·임베딩 엔진을 넘어 vault 조직 전략 자체를 **1급 shipped asset**으로 제공한다. ([ADR-003](../../../decisions/ADR-003-oms-vault-convention-asset.md))
+oms는 단순 검색·임베딩 엔진을 넘어 vault 조직 전략 자체를 **1급 shipped asset**으로 제공한다. ([구 ADR-003](../../../decisions/ADR-008-taxonomy.md))
 
 - **의견 있는 default 폴더 온톨로지**: §10 L-coarse 층에 해당하는 `taxonomy.yaml`을 Ataraxia 구조(reference implementation)에서 추출해 제공. 신규 사용자는 검증된 구조에서 출발하며, `vault/.oms/` config로 override 가능.
 - **Vault-ADR 투명성 메커니즘**: oms가 vault를 scaffold·재구성할 때 사람이 읽는 결정 노트를 vault 안에 기록. 모든 구조 변경 = vault 내 ADR. §11 Routing Law(`created_by` + agent-writable zone) 준수.
@@ -568,6 +568,6 @@ oms는 단순 검색·임베딩 엔진을 넘어 vault 조직 전략 자체를 *
 | 2026-06-13 | audit 5건 반영, 권고 토폴로지 추가 |
 | 2026-06-13 | bstack 흡수범위를 second-brain 흐름으로 축소, gbrain은 로직만 흡수로 명확화 |
 | 2026-06-13 | §10 온톨로지 3층 전략, §11 .oms 마커+전역MCP 접근모델 추가 |
-| 2026-06-13 | §12 추가: oms를 vault-convention 자산으로(default 온톨로지 + vault-ADR 투명성), ADR-003 |
+| 2026-06-13 | §12 추가: oms를 vault-convention 자산으로(default 온톨로지 + vault-ADR 투명성), 구 ADR-003 |
 | 2026-06-13 | §10.x 추가: LLM-Wiki 레퍼런스 기반 온톨로지 구축 제안 (Karpathy→Astro-Han 골격, nashsu 4-signal graph, Louvain 진단, nvk 오케스트레이션, lucasastorian cwd-독립 접근, OMS 갭 7항목) |
-| 2026-06-13 | §10 서두 재구성: 온톨로지 = 4축(coarse·mid·synthesis·semantic) 합집합 프레이밍 추가, llm-wiki는 한 축임을 명시. §6.x 추가: 엔진 아키텍처 ADR 포인터 블록(ADR-002·004·005 + research refs) + UX 원칙("embed하면 임베딩이 된다"). |
+| 2026-06-13 | §10 서두 재구성: 온톨로지 = 4축(coarse·mid·synthesis·semantic) 합집합 프레이밍 추가, llm-wiki는 한 축임을 명시. §6.x 추가: 엔진 아키텍처 ADR 포인터 블록(구 ADR-002·004·005 + research refs) + UX 원칙("embed하면 임베딩이 된다"). |

@@ -1,40 +1,31 @@
 # Oh My Second Brain for Codex
 
-Use the vault's own guidelines and approved `.oms/template-policy.json` contract.
-The property pool and empty-starting, always-on default are shared; individual
-templates add constraints and never weaken the default. `.oms/taxonomy.json`
-owns placement meaning. `.obsidian/types.json` is read-only diagnostic input;
-`.oms/types.json` is derived, not an editing surface.
+The vault owns its conventions. The user seals them once with an interactive
+`oms setup` they run themselves. You never run it, and the sealed contract is
+not yours to read.
 
 | User intent | Preferred surface |
 |---|---|
-| setup or change contracts | tool-less `$oms-interview`, with an explained diff and user approval |
-| inspect templates | `$oms-template` |
+| seal or change the vault contract | ask the user to run `oms setup` in a terminal |
 | install host integration | `oms host install --runtime codex --vault <path> --yes`, only when authorized |
-| write a note | `$oms-write`: guide → agent file write → check → separate reviewer → complete |
-| retrieve knowledge | `$oms-search`; no validation or repair side effects |
-| inspect health | `$oms-status` |
+| write a note | `$oms-write`: MCP `write {path, content, template?}` |
+| retrieve knowledge | `$oms-search`; read-only, with no validation or repair side effects |
+| inspect health | `$oms-status`; `oms contract status` for the seal and template drift |
+| diagnose the seal | `oms contract doctor` |
 | explicit supported control/index repair | `$oms-doctor` |
 
 ## Boundaries
 
-- Agents write and repair notes; OMS guides and verifies actual saved artifacts.
-  Do not use retired OMS note-write, link-apply, or backfill operations.
-- A separate Codex reviewer conversation evaluates approved semantic criteria.
-  Use an available custom role or a real generic subagent, never writer self-PASS.
-- Record actual invocation/results and honest isolation metadata. Definition
-  presence and a requested filesystem sandbox do not prove tool restrictions;
-  inherited MCP access is not bounded by that filesystem setting.
-- Missing evidence, unavailable review and stale snapshots are incomplete.
-  Never invent values, hashes or host IDs to manufacture completion.
-- Automatic repair defaults off and stays within explicit scope and the user's
-  finite retry budget. Contract changes require approval, not an automatic fix.
-- Search/status stay read-only; invalid, unbound and incomplete notes remain
-  searchable. Preserve requested backend failure semantics without substitutes.
-- Use approved placement or ask; do not invent a folder or template requirement.
-- Uninstall removes only owned integration assets, never vault notes or `.oms/`.
-
-A returned source-change notice initially reads exactly `템플릿에 변경이 있습니다`
-with `확인하기` and `나중에`. Deferral has no server-side effect. Explicit review
-uses `$oms-interview` and returned request/CAS fields; never self-approve a digest.
-Ordinary writing questions and search do not automatically start that interview.
+- Write vault notes with MCP `write {path, content, template?}`. A denial gives
+  only `{field, kind}` and a guidance command. Never ask about or guess the
+  contract's location or values.
+- A denied write leaves the file unchanged. Fix the content from what the user
+  gave you and write again, or ask the user. Never invent a missing value.
+- Codex has no write hook. Notes written with host file tools are not judged.
+- `~/.oms` is off-limits. Inside the vault, `.oms/settings.json` is the only
+  OMS file.
+- Search and status stay read-only. Notes that would fail the contract remain
+  searchable. Keep the requested backend's failure semantics, with no
+  substitutes.
+- Uninstall removes only the integration assets OMS owns, never vault notes or
+  `.oms/settings.json`.

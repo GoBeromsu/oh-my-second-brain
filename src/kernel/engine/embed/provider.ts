@@ -42,7 +42,7 @@ const IDLE_UNLOAD_MS = 5 * 60 * 1000;
  * token-exactly truncated via the model's own tokenizer rather than thrown —
  * the engine MUST never choke on one oversized chunk the way the whole-doc
  * floor (src/search) does. This bounds INPUT LENGTH only; it is NOT a dimension
- * fold (ADR-007) — the emitted vector remains the provider width.
+ * fold (ADR-005) — the emitted vector remains the provider width.
  */
 const EMBED_INPUT_TOKEN_MARGIN = 148;
 
@@ -377,7 +377,7 @@ export function createGGUFEmbeddingProvider(
       // Token-exact truncation: never feed more than the context can hold, so a
       // single oversized chunk can never throw "Input is longer than the context
       // size". Bounds INPUT LENGTH only via the model's own tokenizer — NOT a
-      // dimension fold (ADR-007); the output stays at the provider width.
+      // dimension fold (ADR-005); the output stays at the provider width.
       let input = text;
       const tokens = p.model.tokenize(text);
       if (tokens.length > maxInputTokens) {
@@ -486,7 +486,7 @@ export function requireRealEmbeddingProvider(
   // shared capability guidance instead of a locally worded variant. These messages
   // reach the MCP surface verbatim, and they previously named the environment pair
   // alone — telling an agent one of the three ways to configure a model while
-  // omitting `.oms/models.json` and the one-step install entirely.
+  // omitting the vault setting `embedding.model` and the one-step install entirely.
   //
   // The supported-provider hint is kept: the shared guidance says where to set a
   // provider but not which values are valid, and that is the first thing someone

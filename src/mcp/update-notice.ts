@@ -241,13 +241,7 @@ export function __resetUpdateNoticeRefreshLockForTests(): void {
   refreshStarted = false;
 }
 
-/** Appends update/template nudges to the server's base instructions. */
-export function buildServerInstructions(
-  baseInstructions: string,
-  nudge: string | null,
-  templateNotice: string | null = null,
-): string {
-  return [baseInstructions, nudge, templateNotice]
-    .filter((line): line is string => typeof line === "string")
-    .join("\n");
+/** Appends the update nudge to the server's base instructions. */
+export function buildServerInstructions(baseInstructions: string, nudge: string | null): string {
+  return nudge === null ? baseInstructions : `${baseInstructions}\n${nudge}`;
 }

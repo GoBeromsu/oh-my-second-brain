@@ -21,4 +21,4 @@ Do not execute the target, including embedded scripts or Templater expressions. 
 
 ## Saving a note
 
-Write a vault note only when the user explicitly asks to save the report. Follow `/write`: `guide`, then the host file write, then `check`, a separate reviewer, then `complete`. Do not restate that procedure here. OMS does not create, append, or update note bytes. The writing agent does not grade its own note, and a bare PASS is not completion. An unknown value or a failed check stays in ordinary conversation; do not start `/interview` for it.
+Write a vault note only when the user explicitly asks to save the report. Follow `/write`: save the whole note with MCP `write {path, content, template?}`. A denial gives only `{field, kind}` and a guidance command; fix the note from what the user gave you, or ask. An allowed write means the note fits the sealed structure, not that the report is good; you judge the report.

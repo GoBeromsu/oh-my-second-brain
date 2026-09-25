@@ -3,10 +3,8 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeF
 import path from "node:path";
 import { parseNote } from "../../conventions/frontmatter.js";
 import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
-import { deriveTemplateRetrievalAxes } from "../../templates/axes.js";
-import type { TemplateRetrievalAxes } from "../../templates/axes.js";
-import { classifyNoteTemplateIdentity } from "../../templates/note-index.js";
-import type { Digest } from "../../templates/types.js";
+import type { Digest } from "../../conventions/canonical.js";
+import { classifyNoteTemplateIdentity, deriveTemplateRetrievalAxes, type TemplateRetrievalAxes } from "../retrieval/axes.js";
 import type { SearchTemplateSource } from "../retrieval/template-source.js";
 import type { GraphEdge } from "../types.js";
 import type { AxisScalar, EngineGraphNode, NodeTemplateBinding } from "./node.js";
@@ -51,14 +49,18 @@ function ownValue<T>(record: Readonly<Record<string, T>>, key: string): T | unde
   return Object.getOwnPropertyDescriptor(record, key)?.value as T | undefined;
 }
 
+/**
+ * Declared field axes, or null when the contract could not be established. A
+ * graph is still built from actual note bytes in that case; the diagnostics
+ * travel with the metadata instead of blocking the scan.
+ */
 function requireSource(meta: SearchTemplateSource): TemplateRetrievalAxes | null {
-  if (meta === null || typeof meta !== "object" || (meta.available !== true && meta.available !== false) || typeof meta.digest !== "string" || !Array.isArray(meta.managedSourcePaths)) {
+  if (meta === null || typeof meta !== "object" || typeof meta.digest !== "string"
+    || meta.source === null || typeof meta.source !== "object" || meta.exclusions === null || typeof meta.exclusions !== "object"
+    || !Array.isArray(meta.diagnostics)) {
     fail("search template source is missing or malformed");
   }
-  if (meta.available === false) {
-    if (typeof meta.reason !== "string") fail("search template source is missing or malformed");
-    return null;
-  }
+  if (meta.source.templates === null && meta.source.defaultFields === null) return null;
   return deriveTemplateRetrievalAxes(meta.source);
 }
 
@@ -110,7 +112,7 @@ async function explicitPaths(vault: string, files: readonly string[], isExcluded
 }
 
 async function graphPaths(vault: string, files: readonly string[] | undefined, meta: SearchTemplateSource): Promise<string[]> {
-  const isExcluded = await managedSourceExclusionMatcher(vault, meta.managedSourcePaths);
+  const isExcluded = await managedSourceExclusionMatcher(vault, meta.source.sourcePaths ?? []);
   return files === undefined ? markdownPaths(vault, isExcluded) : explicitPaths(vault, files, isExcluded);
 }
 
@@ -170,7 +172,7 @@ async function parseDocs(vault: string, paths: readonly string[]): Promise<Parse
 
 /** Shared identity classification. Required and allowed-value checks stay out of search. */
 function classifyIdentity(doc: ParsedDoc, meta: SearchTemplateSource, templateIds: ReadonlySet<string>): { readonly template: string | null; readonly binding: NodeTemplateBinding; readonly diagnostics: readonly string[] } {
-  if (meta.available === false) return { template: null, binding: "unresolved", diagnostics: doc.diagnostics };
+  if (meta.source.templates === null) return { template: null, binding: "unresolved", diagnostics: doc.diagnostics };
   const identity = classifyNoteTemplateIdentity(doc.frontmatter, templateIds, doc.diagnostics.length > 0);
   if (identity.layer === "unresolved") {
     return { template: null, binding: "unresolved", diagnostics: identity.reason === "invalid-frontmatter" ? doc.diagnostics : [identity.reason] };
@@ -333,14 +335,14 @@ export async function buildNodeIndex(opts: { readonly vaultPath: string; readonl
   }).sort((left, right) => left.path.localeCompare(right.path));
 }
 
-/** Hash the metadata digest, managed exclusions, and current note bytes. */
+/** Hash the metadata digest, registered source exclusions, and current note bytes. */
 export async function nodeSourceSignature(vaultPath: string, meta: SearchTemplateSource): Promise<Digest> {
   const vault = path.resolve(vaultPath);
   requireSource(meta);
   const hash = createHash("sha256");
   hash.update(meta.digest);
   hash.update("\0");
-  for (const excluded of [...new Set(meta.managedSourcePaths)].sort((left, right) => left.localeCompare(right))) {
+  for (const excluded of [...new Set(meta.source.sourcePaths ?? [])].sort((left, right) => left.localeCompare(right))) {
     hash.update(excluded);
     hash.update("\0");
   }

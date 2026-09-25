@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir, homedir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { parse as parseYaml } from "yaml";
@@ -127,59 +129,63 @@ function installRuntimeDependencies(packageRoot) {
   });
 }
 
-function makeVault(tempRoot) {
+async function makeVault(tempRoot, packageRoot, smokeHome) {
   const vault = path.join(tempRoot, "Vault");
   mkdirSync(path.join(vault, "Literature"), { recursive: true });
   mkdirSync(path.join(vault, "Template Sources"), { recursive: true });
   mkdirSync(path.join(vault, ".obsidian"), { recursive: true });
   mkdirSync(path.join(vault, ".oms"), { recursive: true });
   writeFileSync(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text", title: "text", tags: "list" } }), "utf-8");
-  writeFileSync(path.join(vault, ".oms", "taxonomy.json"), JSON.stringify({
-    folders: {},
-    templates: {
-      note: { templateFolder: "Notes" },
-      literature: { templateFolder: "Literature" },
-    },
-  }), "utf-8");
   writeFileSync(
     path.join(vault, "Literature", "semantic-retrieval.md"),
     "---\ntitle: Semantic Retrieval\ntags:\n  - smoke-semantic\n---\n# Semantic Retrieval\n\nAgent retrieval uses OMS native semantic search.\n",
     "utf-8",
   );
+  // `oms setup` seals interactively, so the smoke seals through the packaged
+  // store into the smoke HOME instead. The vault keeps only settings.json.
+  const { serializeVaultSettings } = await import(pathToFileURL(path.join(packageRoot, "dist/kernel/vault/settings.js")).href);
+  const { sealContract } = await import(pathToFileURL(path.join(packageRoot, "dist/kernel/contract/store.js")).href);
+  const vaultId = randomUUID();
+  writeFileSync(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId }), "utf-8");
+  await sealContract({
+    vaultRealPath: realpathSync(vault),
+    vaultId,
+    contract: {
+      folders: { Literature: { meaning: "Literature notes the smoke searches", searchExclude: false } },
+      properties: null,
+      templates: {},
+    },
+  }, path.join(smokeHome, ".oms", "vaults"));
   return vault;
 }
 
 function setupSmoke(packageRoot, vault, smokeHome) {
   const cli = path.join(packageRoot, "dist/cli/oms.js");
   const env = smokeEnv(smokeHome, { OMS_UPDATE_NOTICE: "0" });
-  const dryRun = run(process.execPath, [cli, "setup", "--vault", vault, "--dry-run", "--install-claude"], { cwd: packageRoot, env });
-  const approval = /"approvalDigest":\s*"(sha256:[0-9a-f]{64})"/u.exec(dryRun.stdout)?.[1];
-  if (!approval) fail("setup dry-run did not return an approval digest");
-  // Setup proposes an empty version 4 contract and adopts no template.
-  if (!dryRun.stdout.includes('"policyVersion": 4')) fail("setup dry-run did not propose a version 4 contract");
-  if (!/"templates":\s*\[\]/u.test(dryRun.stdout)) fail("setup dry-run adopted a template instead of proposing an empty contract");
-  if (existsSync(path.join(vault, ".oms/template-policy.json"))) fail("setup dry-run published its proposal");
-  const result = run(process.execPath, [cli, "setup", "--vault", vault, "--yes", "--approved-digest", approval, "--install-claude"], { cwd: packageRoot, env });
-  const output = `${result.stdout}\n${result.stderr}`;
-  assertPath(path.join(vault, ".oms/taxonomy.json"), "vault taxonomy");
-  if (existsSync(path.join(vault, ".oms/taxonomy.yaml"))) fail("setup retained retired vault taxonomy YAML");
-  assertPath(path.join(vault, ".oms/template-policy.json"), "vault template policy");
-  assertPath(path.join(vault, ".oms/types.json"), "vault derived projection");
-  assertPath(path.join(vault, ".oms/templates/default.md"), "approved default layer draft");
-  if (existsSync(path.join(vault, ".oms/concepts"))) fail("setup recreated the retired concepts directory");
-  if (!output.includes("claude plugin install")) fail("setup output did not include Claude plugin install command");
-  if (!output.includes("plugin-owned and plugin-qualified")) {
-    fail("setup output did not declare the plugin-owned Claude MCP surface");
+  const vaultBefore = snapshotPath(vault);
+  const invoke = (args) => spawnSync(process.execPath, [cli, ...args], { cwd: packageRoot, encoding: "utf-8", env, input: "" });
+  // The retired approval-token flags are refused with the command that owns each concern.
+  for (const [flag, guidance] of [
+    ["--dry-run", "no dry-run"],
+    ["--yes", "no approval flags"],
+    ["--install-claude", "oms host install"],
+    ["--models-default", "oms model install --default"],
+  ]) {
+    const result = invoke(["setup", "--vault", vault, flag]);
+    if (result.status !== 1) fail(`packaged oms setup ${flag} exited ${result.status}; expected 1`);
+    if (!result.stderr.includes(`setup option ${flag} was removed.`) || !result.stderr.includes(guidance)) {
+      fail(`packaged oms setup ${flag} did not name ${guidance}`);
+    }
   }
-  const pluginPathLine = output.split(/\r?\n/).find((line) => line.includes("Plugin path:"));
-  if (!pluginPathLine) fail("setup output did not include Plugin path line");
-  const pluginPath = pluginPathLine.replace(/^.*Plugin path:\s*/, "").trim();
-  assertPath(path.join(pluginPath, ".claude-plugin/plugin.json"), "printed Claude plugin manifest path");
-  const expectedRoot = packageRoot;
-  if (realpathSync(path.resolve(pluginPath)) !== realpathSync(path.resolve(expectedRoot))) {
-    fail(`printed plugin path must resolve inside extracted package: expected ${expectedRoot}, got ${pluginPath}`);
+  // Setup is the interactive seal; without a terminal it refuses through both spellings.
+  for (const args of [["setup", "--vault", vault], ["contract", "setup", "--vault", vault]]) {
+    const result = invoke(args);
+    if (result.status !== 1 || !result.stderr.includes("needs an interactive terminal")) {
+      fail(`packaged oms ${args.slice(0, -2).join(" ")} did not refuse a non-terminal run`);
+    }
   }
-  console.log("[release:artifact-smoke] ok: setup dry-run/approved apply works from unpacked package.");
+  if (snapshotPath(vault) !== vaultBefore) fail("a refused setup changed the vault");
+  console.log("[release:artifact-smoke] ok: setup refusals leave the unpacked-package vault untouched.");
 }
 
 function canonicalCliSmoke(packageRoot, vault, smokeHome) {
@@ -209,43 +215,17 @@ function canonicalCliSmoke(packageRoot, vault, smokeHome) {
     return expectExit([...mutationArgs, "--yes", "--approved-digest", approval], 0);
   };
 
-  // Contract configuration changes only through the reviewed interview. The
-  // retired authoring verbs must be gone, not merely discouraged.
-  for (const retired of [["template", "add"], ["template", "update"], ["template", "remove"], ["template", "default"], ["template", "move"]]) {
-    const result = invoke([...retired, "--dry-run"]);
-    if (result.status === 0) fail(`packaged oms ${retired.join(" ")} still accepts a retired authoring verb`);
+  // The sealed contract is inspected through `oms contract`; the retired
+  // template family and note guide/check leaves must be gone, not discouraged.
+  for (const retired of [["template", "list"], ["template", "check"], ["note", "guide", "Literature/semantic-retrieval.md"], ["note", "check", "Literature/semantic-retrieval.md"]]) {
+    if (invoke(retired).status === 0) fail(`packaged oms ${retired.slice(0, 2).join(" ")} still accepts a retired verb`);
   }
-  const review = expectExit(["template", "review"], 0);
-  const reviewPayload = JSON.parse(review.stdout);
-  if (typeof reviewPayload.state !== "string") fail("packaged oms template review did not return an interview state");
-  if (!existsSync(path.join(vault, ".oms/template-policy.json"))) {
-    fail("packaged oms template review lost the approved contract");
+  const status = JSON.parse(expectExit(["contract", "status"], 0).stdout);
+  if (status.contract !== "sealed") fail(`packaged oms contract status reported ${status.contract}; expected sealed`);
+  if (readdirSync(path.join(vault, ".oms")).join(",") !== "settings.json") {
+    fail("the vault gained .oms files beyond settings.json");
   }
 
-  const scan = expectExit(["template", "scan"], 0);
-  const scanPayload = JSON.parse(scan.stdout);
-  if (!Array.isArray(scanPayload.approved) || scanPayload.approved.length === 0) {
-    fail("packaged oms template scan did not report approved contract evidence");
-  }
-  if (scan.stdout.includes('"bytes"') || scan.stdout.includes('"approvedMarkdown":"')) {
-    fail("packaged oms template scan exposed source bytes");
-  }
-  const listed = expectExit(["template", "list"], 0);
-  if (!listed.stdout.includes('"generationDigest"')) fail("packaged template list omitted the contract generation digest");
-  const checked = expectExit(["template", "check"], 0);
-  if (!checked.stdout.includes('"status"')) fail("packaged template check did not report contract health");
-
-  // The note family guides and inspects; it never writes an ordinary note.
-  const guide = invoke(["note", "guide", "Literature/semantic-retrieval.md"]);
-  if (guide.status !== 0) fail("packaged oms note guide failed on an approved vault");
-  const noteBefore = readFileSync(path.join(vault, "Literature", "semantic-retrieval.md"));
-  const noteCheck = invoke(["note", "check", "Literature/semantic-retrieval.md"]);
-  if (noteCheck.status !== 0 && noteCheck.status !== 1) {
-    fail(`packaged oms note check exited ${noteCheck.status}`);
-  }
-  if (!readFileSync(path.join(vault, "Literature", "semantic-retrieval.md")).equals(noteBefore)) {
-    fail("packaged oms note check rewrote the note");
-  }
   for (const retired of [["note", "create"], ["note", "append"], ["note", "update"], ["note", "backfill"]]) {
     if (invoke(retired).status === 0) fail(`packaged oms ${retired.join(" ")} still accepts a retired note-write verb`);
   }
@@ -274,8 +254,8 @@ function canonicalCliSmoke(packageRoot, vault, smokeHome) {
   for (const expected of [
     "OMS_EMBEDDING_PROVIDER",
     "OMS_EMBEDDING_MODEL",
-    ".oms/models.json",
-    "oms setup --models-default",
+    ".oms/settings.json",
+    "oms model install --default",
   ]) {
     if (!embedOutput.includes(expected)) fail(`packaged oms index embed guidance omitted ${expected}`);
   }
@@ -290,7 +270,7 @@ function canonicalCliSmoke(packageRoot, vault, smokeHome) {
   if (!`${retiredSemantic.stdout}\n${retiredSemantic.stderr}`.includes("Unknown command: semantic")) {
     fail("packaged oms semantic did not fail through the unknown-command boundary");
   }
-  console.log("[release:artifact-smoke] ok: canonical template/search/index/note CLI works from unpacked package.");
+  console.log("[release:artifact-smoke] ok: canonical contract/search/index/note CLI works from unpacked package.");
 }
 
 function hostInstallSmoke(packageRoot, vault, smokeHome) {
@@ -476,7 +456,7 @@ async function crossVersionHostRehearsal(tarball, tempRoot) {
     fail("new binary did not load matching installed Hermes manifest/provenance identity");
   }
   const skillRoot = path.join(hermesHome, "skills", "knowledge-management", "oms");
-  const expectedSkills = ["distill", "doctor", "interview", "link", "search", "status", "template", "write"];
+  const expectedSkills = ["distill", "doctor", "link", "search", "status", "write"];
   for (const skill of expectedSkills) assertPath(path.join(skillRoot, skill, "SKILL.md"), `installed Hermes ${skill} skill`);
   const installedSkills = readdirSync(skillRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -535,7 +515,7 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
   // embedding-model path must be forwarded explicitly or the child is always
   // model-less regardless of this process's env -- which would desync it from the
   // hasModel gate below. Forward the canonical OMS_EMBEDDING_PROVIDER +
-  // OMS_EMBEDDING_MODEL pair (ADR-007: explicit config, no auto-detect),
+  // OMS_EMBEDDING_MODEL pair (ADR-005: explicit config, no auto-detect),
   // matching src/mcp/semantic-server.test.ts. HOME/USERPROFILE are likewise
   // forwarded explicitly (the sandboxed default subset drops them) so this
   // child's global write-back also lands in the isolated HOME, not the real one.
@@ -559,7 +539,7 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
     // Exercise retrieve_context the way the WITH/NO-model unit test does. On a
     // model-less host the qmd:// ReadResource and document reads below hydrate
     // from disk through the engine's core (lex + file-based) adapter, which needs
-    // no model. oms_sync_embeddings is engine-owned and loud-guards (ADR-007)
+    // no model. oms_sync_embeddings is engine-owned and loud-guards (ADR-005)
     // without a model, so retrieve_context's semantic leg simply degrades to the
     // graph leg here; with a model present the engine handles the sync just as well.
     await client.callTool({
@@ -584,14 +564,14 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
       },
     });
     // oms_sync_embeddings / oms_semantic_query route through the native engine,
-    // which REQUIRES a real embedding model (ADR-007). With a model we assert
+    // which REQUIRES a real embedding model (ADR-005). With a model we assert
     // real results; without one (the default CI runner) we assert the op
     // *refuses to falsely succeed* -- which itself proves it routed to the
     // engine and never fabricated a result. Mirrors src/mcp/semantic-server.test.ts.
     // Gate on the canonical embedding pair, mirroring semantic-server.test.ts: the
     // smoke forwards OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL to the child, so the
     // runner gate must key off the same pair to stay in sync with the forwarded child
-    // env (ADR-007: explicit config, no auto-detect).
+    // env (ADR-005: explicit config, no auto-detect).
     const hasModel = Boolean(process.env.OMS_EMBEDDING_PROVIDER && process.env.OMS_EMBEDDING_MODEL);
     const textOf = (res) => (res.content?.[0]?.type === "text" ? res.content[0].text : "");
     // The detail tools were demoted behind the five public tools during the
@@ -656,25 +636,25 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
         fail("MCP semantic query did not find packaged smoke note");
       }
     } else {
-      // sync gives the strong routing proof: the ADR-007 loud guard naming the model env.
+      // sync gives the strong routing proof: the ADR-005 loud guard naming the model env.
       const sync = await callGuarded(syncCall);
       if (!sync.guarded || !/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/.test(sync.text)) {
-        fail("MCP semantic sync did not loud-guard the missing embedding model (ADR-007)");
+        fail("MCP semantic sync did not loud-guard the missing embedding model (ADR-005)");
       }
       // Plain query expands to lexical retrieval, so a model-less packaged vault
-      // still returns the smoke note. Explicit vec remains guarded by ADR-007.
+      // still returns the smoke note. Explicit vec remains guarded by ADR-005.
       const query = await client.callTool(queryCall);
       const queryPayload = JSON.parse(textOf(query) || "{}");
       if (query.isError || queryPayload.hits?.[0]?.path !== "Literature/semantic-retrieval.md") {
         fail("MCP plain semantic query did not return the packaged smoke note without an embedding model");
       }
     }
-    // ADR-009 D2 retired the qmd-compatible surface, so the packaged server
+    // ADR-001 retired the qmd-compatible surface, so the packaged server
     // must NOT advertise it. Asserting its absence keeps a retired surface from
     // quietly reappearing in a published artifact.
     const templates = await client.listResourceTemplates().catch(() => ({ resourceTemplates: [] }));
     if (templates.resourceTemplates.some((template) => template.uriTemplate?.startsWith("qmd://"))) {
-      fail("MCP server still advertises a retired qmd:// resource template (ADR-009 D2)");
+      fail("MCP server still advertises a retired qmd:// resource template (ADR-001)");
     }
 
     // The public surface must be exactly the five tools.
@@ -716,7 +696,7 @@ try {
     assertPath(path.join(packageRoot, requiredPath), `required release asset ${requiredPath}`);
   }
   installRuntimeDependencies(packageRoot);
-  const vault = makeVault(tempRoot);
+  const vault = await makeVault(tempRoot, packageRoot, smokeHome);
   if (runSetup) {
     setupSmoke(packageRoot, vault, smokeHome);
     canonicalCliSmoke(packageRoot, vault, smokeHome);

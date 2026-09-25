@@ -3,6 +3,10 @@ import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { writeMorningVaultFixture } from "../search/morning-test-fixtures.js";
 import { exploreLocalGraph } from "./explore.js";
+import { existsSync } from "node:fs";
+import { engineGraphCachePath, engineNodeCachePath } from "../engine/paths.js";
+import { makeTracerConfig } from "../engine/tracer.js";
+import { vaultCacheRoot } from "../engine/paths.js";
 
 let vault: string | undefined;
 afterEach(async () => { if (vault !== undefined) await rm(vault, { recursive: true, force: true }); vault = undefined; });
@@ -44,5 +48,16 @@ Connected only by shared metadata.
     expect(broken?.binding).toBe("unresolved");
     expect(broken?.template).toBeNull();
     expect(broken?.diagnostics).toContain("invalid-frontmatter");
+  });
+
+  it("reads no vault cache on a miss and agrees with the external owner", async () => {
+    vault = await writeMorningVaultFixture();
+    const scanned = await exploreLocalGraph({ vault, template: "reference", limit: 1, maxNeighbors: 1, useCache: false });
+    expect(scanned.provider).toBe("headless-scan");
+    expect(existsSync(path.join(vault, ".oms", "cache"))).toBe(false);
+    expect(existsSync(engineGraphCachePath(vault))).toBe(false);
+    expect(existsSync(engineNodeCachePath(vault))).toBe(false);
+    expect(makeTracerConfig({ vaultPath: vault }).cacheDir).toBeUndefined();
+    expect(vaultCacheRoot(vault)).toBe(path.dirname(path.dirname(engineGraphCachePath(vault))));
   });
 });

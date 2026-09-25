@@ -9,19 +9,20 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { admitWriteTarget } from "../kernel/capture/safe.js";
-import { getWriteGuidance } from "../kernel/capture/guidance.js";
-import { checkSavedNote, completeSavedNote } from "../kernel/capture/check.js";
+import { judgeReadyTarget, resolveWriteTarget } from "../kernel/contract/judge-write.js";
+import { auditVault } from "../kernel/contract/audit.js";
+import { contractDoctor, contractStatus } from "../kernel/contract/status.js";
+import { formatDenyReason, type Violation } from "../kernel/contract/types.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { buildTemplateNoteIndex, deriveTemplateRetrievalAxes, loadResolvedTemplates, resumeTemplateTransaction } from "../kernel/templates/index.js";
-import { diagnoseTemplates, regenerateTypes } from "../kernel/templates/doctor.js";
+import { deriveTemplateRetrievalAxes } from "../kernel/engine/retrieval/axes.js";
 import { readSearchTemplateSource } from "../kernel/engine/retrieval/template-source.js";
-import type { Digest, JsonValue } from "../kernel/templates/types.js";
 import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../kernel/runtime/event-journal.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
 import { retrieveMorningContext } from "../kernel/search/morning.js";
 import { repairDoctor } from "../kernel/doctor/service.js";
 import { makeEngineMorningBackend } from "./engine-morning-backend.js";
+import { atomicWriteNote } from "./note-write.js";
 import {
   handleSemanticTool,
   isEngineSemanticOp,
@@ -44,12 +45,6 @@ import {
   embeddingConfigPresent,
 } from "../kernel/semantic/semantic-engine.js";
 import { checkLinksForNote, linkCheckPayload, linkSuggestPayload, suggestLinksForNote } from "./link-tools.js";
-import {
-  answerTemplateInterview,
-  commitTemplateContracts,
-  nextTemplateInterview,
-} from "../kernel/templates/interview-service.js";
-import { readTemplateReviewContext } from "../kernel/templates/review-context.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
@@ -58,17 +53,11 @@ import {
   cachedUpdateNotice,
   scheduleUpdateNoticeRefresh,
 } from "./update-notice.js";
-import {
-  attachTemplateNotice,
-  readTemplateChangeNotice,
-  templateNoticeInstruction,
-  type TemplateChangeNotice,
-} from "./template-notice.js";
 
 const SERVER_VERSION = readBundledPackageVersion();
 
-export const BASE_SERVER_INSTRUCTIONS =
-  "Oh My Second Brain exposes write, search, link, status, and doctor tools. write and doctor repair operations are gated by a verified vault target (a vault inferred from the current directory is refused); write also enforces vault confinement and contract validation.";
+const BASE_SERVER_INSTRUCTIONS =
+  "Oh My Second Brain exposes write, search, link, status, and doctor tools. write and doctor repair operations are gated by a verified vault target (a vault inferred from the current directory is refused); write {path, content, template?} is confined to the vault and saved only when the vault contract allows the note.";
 
 function jsonText(value: unknown): CallToolResult {
   return {
@@ -103,12 +92,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  return isRecord(value) && Object.values(value).every(isJsonValue);
-}
 
 
 function stringArg(args: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -116,9 +99,6 @@ function stringArg(args: Record<string, unknown> | undefined, key: string): stri
   return typeof value === "string" ? value : undefined;
 }
 
-function isDigest(value: unknown): value is Digest {
-  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
-}
 
 function runtimeHistory(vault: string): { readonly history?: ReturnType<typeof summarizeRuntimeHistory>; readonly runtimeWarnings?: readonly string[] } {
   try {
@@ -152,17 +132,6 @@ function recordTemplateList(vault: string, templates: readonly { readonly id: st
   }
 }
 
-function guardedTemplateRequest(args: Record<string, unknown> | undefined):
-  | { readonly dryRun: true }
-  | { readonly approvedDigest: Digest }
-  | undefined {
-  if (args?.["dryRun"] === true) {
-    return args?.["approvedDigest"] === undefined ? { dryRun: true } : undefined;
-  }
-  const approvedDigest = args?.["approvedDigest"];
-  return isDigest(approvedDigest) ? { approvedDigest } : undefined;
-}
-
 type Operation = {
   readonly op?: string;
   readonly name: string;
@@ -174,12 +143,6 @@ const string = { type: "string" };
 const number = { type: "number" };
 const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
-const digestSchema = { type: "string", pattern: "^sha256:[0-9a-f]{64}$" };
-const nullableDigestSchema = { anyOf: [digestSchema, { type: "null" }] };
-// Explicit contract proposals. Contract meaning enters OMS only this way; it is
-// never derived from a file name or from template syntax.
-const proposalsSchema = { type: "array", items: { } };
-const jsonValue = { };
 const axisScalar = { anyOf: [string, number, boolean] };
 const axisValue = { anyOf: [axisScalar, { type: "array", items: axisScalar }] };
 const fieldPredicate = { type: "object", additionalProperties: false, properties: { contains: axisValue, containsAll: { type: "array", items: axisScalar }, in: { type: "array", items: axisScalar }, between: { type: "array", items: axisScalar, minItems: 2, maxItems: 2 }, gte: axisScalar, gt: axisScalar, lte: axisScalar, lt: axisScalar, from: axisScalar, to: axisScalar } };
@@ -189,16 +152,11 @@ const searchProperties = { query: string, searches: { type: "array", maxItems: 1
 const documentProperties = { target: string, targets: stringArray, notePath: string, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean, collection: string, collections: stringArray, index: string } as const;
 const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: { type: "integer", minimum: 0 }, maxNeighbors: number, useCache: boolean, ...retrieveContextSemanticInputProperties } as const;
 const operations: Record<string, readonly Operation[]> = {
-  write: [
-    { op: "guide", name: "write-guide", properties: { notePath: string, templateId: string } },
-    { op: "check", name: "write-check", properties: { notePath: string, templateId: string, binding: jsonValue, evidencePaths: stringArray }, required: ["notePath"] },
-    { op: "complete", name: "write-complete", properties: { checkpoint: jsonValue, review: jsonValue }, required: ["checkpoint", "review"] },
-    { op: "template", name: "write-template", properties: { mode: { ...string, enum: ["interview-next", "interview-answer", "commit-contracts"] }, dryRun: boolean, approvedDigest: digestSchema, questionId: digestSchema, answer: jsonValue, proposals: proposalsSchema, censusDigest: digestSchema, expectedLedgerDigest: nullableDigestSchema }, required: ["mode"] },
-  ],
-  search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "template-scan", name: "oms_template_scan" }, { op: "templates", name: "oms_list_templates", properties: { templateId: string } }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
+  write: [{ name: "oms_write_note", direct: true, properties: { path: string, content: string, template: string }, required: ["path", "content"] }],
+  search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "templates", name: "oms_list_templates" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
   link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "check", name: "oms_link_check", properties: { notePath: string, folder: string }, required: ["notePath"] }],
   status: [{ name: "oms_graph_status", direct: true }, { op: "graph", name: "oms_graph_status" }],
-  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "regenerate-types", name: "oms_regenerate_types", properties: { dryRun: boolean, approvedDigest: digestSchema } }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number, repairMode: { ...string, enum: ["rebuild", "drop"] }, dryRun: boolean }, required: ["mode"] }],
+  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number, repairMode: { ...string, enum: ["rebuild", "drop"] }, dryRun: boolean }, required: ["mode"] }],
 };
 export const demotedOperationNames = [...new Set(Object.values(operations)
   .flatMap((toolOperations) => toolOperations.map((operation) => operation.name)))]
@@ -210,17 +168,63 @@ interface SchemaBranch {
   readonly anyOf?: readonly { readonly required: readonly string[] }[];
 }
 
+function schemaEqual(left: object, right: object): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+// Clients such as Hermes tool_describe read only the top-level properties
+// object and ignore oneOf. Project every field that a branch actually accepts
+// so the model can see query/limit/axes and guide/check without parsing oneOf.
+// Branch schemas stay authoritative: additionalProperties:false and required
+// constraints are not copied up, and fields whose branch schemas differ keep
+// every alternative instead of collapsing to one enum or const.
+function projectBranchProperties(
+  branches: readonly SchemaBranch[],
+  opOptional: boolean,
+): { readonly properties: Record<string, object>; readonly required: readonly string[] } {
+  const byField = new Map<string, object[]>();
+  const opValues: string[] = [];
+  for (const branch of branches) {
+    const op = branch.properties["op"] as { readonly const?: unknown } | undefined;
+    if (typeof op?.const === "string" && !opValues.includes(op.const)) opValues.push(op.const);
+    for (const [field, schema] of Object.entries(branch.properties)) {
+      if (field === "op") continue;
+      const schemas = byField.get(field) ?? [];
+      if (!schemas.some((existing) => schemaEqual(existing, schema))) schemas.push(schema);
+      byField.set(field, schemas);
+    }
+  }
+  const properties: Record<string, object> = {};
+  if (opValues.length > 0) {
+    properties["op"] = opOptional
+      ? { type: "string", enum: opValues }
+      : { ...string, enum: opValues };
+  }
+  for (const field of [...byField.keys()].sort((left, right) => left.localeCompare(right))) {
+    const schemas = byField.get(field) ?? [];
+    const only = schemas[0];
+    properties[field] = schemas.length === 1 && only !== undefined ? only : { anyOf: schemas };
+  }
+  return { properties, required: opOptional || opValues.length === 0 ? [] : ["op"] };
+}
+
+function withBranchProjection(
+  branches: readonly SchemaBranch[],
+  opOptional: boolean,
+): Tool["inputSchema"] {
+  const { properties, required } = projectBranchProperties(branches, opOptional);
+  return { type: "object", properties, required: [...required], oneOf: branches };
+}
+
 function operationSchema(tool: string): Tool["inputSchema"] {
   const toolOperations = operations[tool];
   if (!toolOperations) throw new Error(`Missing MCP operation definition for ${tool}.`);
   if (tool === "status") {
-    return {
-      type: "object",
-      oneOf: [
-        { additionalProperties: false, properties: {} },
-        { additionalProperties: false, properties: { op: { ...string, const: "graph" } }, required: ["op"] },
-      ],
-    };
+    const branches: SchemaBranch[] = [
+      { additionalProperties: false, properties: {}, required: [] },
+      { additionalProperties: false, properties: { op: { ...string, const: "graph" } }, required: ["op"] },
+    ];
+    return withBranchProjection(branches, true);
   }
   if (toolOperations.length === 1 && toolOperations[0]?.direct) {
     const { properties = {}, required = [] } = toolOperations[0];
@@ -231,68 +235,8 @@ function operationSchema(tool: string): Tool["inputSchema"] {
   for (const { op, properties = {}, required = [] } of toolOperations) {
     const base = { op: { ...string, const: op }, ...properties };
     const baseRequired = ["op", ...required];
-    if (op === "template") {
-      branches.push({
-        additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          transactionId: string,
-          approvedDigest: digestSchema,
-        },
-        required: ["op", "transactionId", "approvedDigest"],
-      });
-      branches.push({
-        additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          mode: { const: "interview-next" },
-          proposals: proposalsSchema,
-        },
-        required: ["op", "mode"],
-      });
-      branches.push({
-        additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          mode: { const: "interview-answer" },
-          questionId: digestSchema,
-          answer: jsonValue,
-          proposals: proposalsSchema,
-          censusDigest: digestSchema,
-          expectedLedgerDigest: nullableDigestSchema,
-        },
-        required: ["op", "mode", "questionId", "answer", "censusDigest", "expectedLedgerDigest"],
-      });
-      branches.push({
-        additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          mode: { const: "commit-contracts" },
-          censusDigest: digestSchema,
-          expectedLedgerDigest: nullableDigestSchema,
-          proposals: proposalsSchema,
-          dryRun: { const: true },
-        },
-        required: ["op", "mode", "censusDigest", "expectedLedgerDigest", "dryRun"],
-      });
-      branches.push({
-        additionalProperties: false,
-        properties: {
-          op: { ...string, const: "template" },
-          mode: { const: "commit-contracts" },
-          censusDigest: digestSchema,
-          expectedLedgerDigest: nullableDigestSchema,
-          proposals: proposalsSchema,
-          dryRun: { const: false },
-          approvedDigest: digestSchema,
-        },
-        required: ["op", "mode", "censusDigest", "expectedLedgerDigest", "approvedDigest"],
-      });
-      continue;
-    }
     if (op === "templates") {
       branches.push({ additionalProperties: false, properties: { op: { ...string, const: op } }, required: ["op"] });
-      branches.push({ additionalProperties: false, properties: { op: { ...string, const: op }, templateId: string }, required: ["op", "templateId"] });
       continue;
     }
     if (op === "query") {
@@ -327,19 +271,49 @@ function operationSchema(tool: string): Tool["inputSchema"] {
       branches.push({ additionalProperties: false, properties: repairProperties, required: ["op", "mode", "repairMode"] });
       continue;
     }
-    if (op === "regenerate-types" || op === "backfill-defaults") {
-      const unguarded: Record<string, object> = {};
-      for (const [key, value] of Object.entries(base)) {
-        if (key !== "dryRun" && key !== "approvedDigest") unguarded[key] = value;
-      }
-      branches.push({ additionalProperties: false, properties: { ...unguarded, dryRun: { const: true } }, required: [...baseRequired, "dryRun"] });
-      branches.push({ additionalProperties: false, properties: { ...unguarded, dryRun: { const: false }, approvedDigest: digestSchema }, required: [...baseRequired, "approvedDigest"] });
-      continue;
-    }
     branches.push({ additionalProperties: false, properties: base, required: baseRequired });
   }
-  return { type: "object", oneOf: branches };
+  return withBranchProjection(branches, false);
 }
+const WRITE_KEYS: readonly string[] = ["path", "content", "template"];
+
+function writeDenied(violations: readonly Violation[]): CallToolResult {
+  const list = violations.map(violation => ({ field: violation.field, kind: violation.kind }));
+  return { isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, violations: list, reason: formatDenyReason(list) }, null, 2) }] };
+}
+
+/**
+ * MCP `write`: the judge decides and this handler saves. Legacy and unknown keys are
+ * refused rather than ignored; a denied write leaves the target byte-for-byte unchanged.
+ */
+async function writeNote(vault: string, source: WriteTargetSource, args: Record<string, unknown>): Promise<CallToolResult> {
+  const extra = Object.keys(args).filter(key => !WRITE_KEYS.includes(key)).sort();
+  if (extra.length > 0) return writeDenied(extra.map(field => ({ field, kind: "unsupported-input" })));
+  const missing = ["path", "content"].filter(key => typeof args[key] !== "string" || (key === "path" && args[key] === ""));
+  if (missing.length > 0) return writeDenied(missing.map(field => ({ field, kind: "missing" })));
+  if (args["template"] !== undefined && typeof args["template"] !== "string") return writeDenied([{ field: "template", kind: "unsupported-input" }]);
+  const admission = await admitWriteTarget({ vault, source });
+  if (admission !== undefined) return jsonText({ ok: false, status: "rejected", rejection: admission });
+  const content = args["content"] as string;
+  const template = args["template"] as string | undefined;
+  const resolved = await resolveWriteTarget(vault, path.resolve(vault, args["path"] as string));
+  if (resolved.state === "denied") return writeDenied(resolved.verdict.violations);
+  const verdict = judgeReadyTarget(resolved, content, template);
+  if (!verdict.ok) return writeDenied(verdict.violations);
+  const written = await atomicWriteNote(resolved.absolutePath, content, resolved.previousContent);
+  if (written !== "written") return writeRetry(written);
+  return jsonText({ ok: true, path: resolved.path, missingDefaults: verdict.missingDefaults.map(field => ({ field })) });
+}
+
+/** The target moved under the judge; nothing was written and the same call can be retried. */
+function writeRetry(state: "changed" | "vanished"): CallToolResult {
+  const code = state === "changed" ? "WRITE_TARGET_CHANGED" : "WRITE_TARGET_VANISHED";
+  const reason = state === "changed"
+    ? "The note changed after it was judged; nothing was written. Read it again and retry."
+    : "The note was removed after it was judged; nothing was written. Retry the write.";
+  return { isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, code, retryable: true, reason }, null, 2) }] };
+}
+
 function resolveOperation(tool: string, op: string | undefined): string | undefined {
   return operations[tool]?.find(
     (operation) => (operation.direct && op === undefined) || operation.op === op,
@@ -358,7 +332,7 @@ export const omsMcpTools: Tool[] = [
   {
     name: "write",
     title: "Oh My Second Brain write",
-    description: "Guide a note before the agent writes it, check the saved file, complete it with a separate review, and publish approved contract changes.",
+    description: "Write one note: {path, content, template?}. The vault contract judges the note before it is saved; a denied write leaves the file unchanged and returns only {field, kind} violations.",
     inputSchema: operationSchema("write"),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
@@ -405,12 +379,6 @@ export interface OMSMcpServerOptions {
    * `cwd` (the server may have booted in an arbitrary directory - issue #58).
    */
   source: WriteTargetSource;
-  /**
-   * Read-only template census captured before boot. The synchronous factory
-   * receives this optional value so runMcpServer can include a boot line
-   * without making construction itself asynchronous.
-   */
-  templateNotice?: TemplateChangeNotice | null;
 }
 
 export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
@@ -472,7 +440,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   };
 
   // A real embedding provider is configured iff the canonical pair is set
-  // (ADR-007). The engine's model-OPTIONAL surface (document reads,
+  // (ADR-005). The engine's model-OPTIONAL surface (document reads,
   // retrieve_context's semantic leg, ReadResource) keys off this to decide
   // vec-capable vs core engine WITHOUT a no-model assembly throw.
   const hasEmbeddingModel = (): boolean => embeddingConfigPresent(vault);
@@ -480,13 +448,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   // Adapter resolver for the model-OPTIONAL paths: the vec-capable engine when
   // the canonical embedding pair is configured, else the core (lex + file-based
   // document) engine. The counterpart isEngineSemanticOp path assembles eagerly
-  // and lets the no-model error surface loudly (ADR-007). Both honor the same
+  // and lets the no-model error surface loudly (ADR-005). Both honor the same
   // invariant: query + document reads resolve on the SAME backend, so a
   // retrieve_context real-path docid always hydrates where it was produced.
   //
   // No catch here: a CONFIGURED-but-broken full engine (bad provider/model,
   // missing auth, store-open failure) must surface its error loudly rather than
-  // silently masquerade as a model-less host (ADR-007). The core fallback is
+  // silently masquerade as a model-less host (ADR-005). The core fallback is
   // strictly for the absent-config case.
   const resolveCreatingDocumentAdapter = (): McpEngineAdapter =>
     hasEmbeddingModel() ? getSemanticEngine().adapter : getCoreSemanticEngine().adapter;
@@ -524,7 +492,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   const searchBackend = new EngineSearchBackend(
     (requiresEmbeddings) => requiresEmbeddings
       ? (() => {
-        // Validate ADR-007 configuration before probing the read-only store:
+        // Validate ADR-005 configuration before probing the read-only store:
         // vector intent is actionable only after its required provider/model
         // pair is present, regardless of whether an index exists yet.
         if (!hasEmbeddingModel()) return getSemanticEngine().adapter;
@@ -543,7 +511,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       instructions: buildServerInstructions(
         BASE_SERVER_INSTRUCTIONS,
         cachedUpdateNotice({ installedVersion: SERVER_VERSION }),
-        templateNoticeInstruction(opts.templateNotice),
       ),
     },
   );
@@ -574,6 +541,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         result = await (async () => {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
+    if (publicName === "write") return await writeNote(vault, source, args ?? {});
     const op = stringArg(args, "op");
     let name = resolveOperation(publicName, op);
     if (!name) return errorText(unknownOperationMessage(publicName, op));
@@ -607,38 +575,26 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
     if (name === "oms_graph_status") {
       const engineGraph = await engine.adapter.graphStatus(vault).catch(() => null);
-      try {
-        const convention = await loadResolvedTemplates(vault);
-        const diagnosis = await diagnoseTemplates({ vault, source });
-        return jsonText({
-          vault,
-          projectionSource: ".oms/types.json",
-          sourceOfTruth: ["markdown notes", "actual Obsidian templates", ".obsidian/types.json", ".oms/template-policy.json", ".oms/taxonomy.json"],
-          counts: {
-            templates: Object.keys(convention.templates).length,
-            globalAxes: Object.keys(convention.globalAxes).length,
-          },
-          generationDigest: convention.generationDigest,
-          derivedState: diagnosis,
-          ...runtimeHistory(vault),
-          engineGraph,
-          writeTools: source === "cwd" ? "write-disabled-target-unverified" : "write-gated-by-verified-target-and-contract",
-          readTools: omsMcpTools.map(tool => tool.name),
-        });
-      } catch (error) {
-        return jsonText({
-          vault,
-          projectionSource: "vault-invalid",
-          sourceOfTruth: ["actual Obsidian templates", ".obsidian/types.json", ".oms/template-policy.json", ".oms/types.json"],
-          error: error instanceof Error ? error.message : String(error),
-          counts: null,
-          derivedState: { status: "invalid", remediation: "run doctor validate, then regenerate-types with an approved digest" },
-          ...runtimeHistory(vault),
-          engineGraph,
-          writeTools: source === "cwd" ? "write-disabled-target-unverified" : "write-disabled-invalid-template-projection",
-          readTools: ["status"],
-        });
-      }
+      // Posture follows the sealed contract the write surface judges against.
+      // An open vault (no contract sealed) stays writable; only an unreadable
+      // seal disables writes.
+      const meta = await readSearchTemplateSource(vault);
+      const contract = await contractStatus(vault);
+      return jsonText({
+        vault,
+        contract,
+        counts: meta.source.templates === null
+          ? null
+          : { templates: Object.keys(meta.source.templates).length },
+        generationDigest: meta.digest,
+        diagnostics: meta.diagnostics,
+        ...runtimeHistory(vault),
+        engineGraph,
+        writeTools: source === "cwd"
+          ? "write-disabled-target-unverified"
+          : contract.contract === "unreadable" ? "write-disabled-contract-unreadable" : "write-gated-by-verified-target-and-contract",
+        readTools: omsMcpTools.map(tool => tool.name),
+      });
     }
 
     try {
@@ -689,54 +645,32 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     }
 
     if (name === "oms_list_templates") {
-      const snapshot = await loadResolvedTemplates(vault);
-      const templateId = stringArg(args, "templateId");
-      const contracts = Object.values(snapshot.templates)
-        .filter(contract => templateId === undefined || contract.templateId === templateId);
+      // The declared V5 contract is the authority; approved Markdown does not exist.
+      const meta = await readSearchTemplateSource(vault);
+      const axes = deriveTemplateRetrievalAxes(meta.source);
+      if (meta.source.templates === null && meta.source.defaultFields === null) {
+        return jsonText({ vault, generationDigest: meta.digest, state: "unavailable", diagnostics: meta.diagnostics, ...runtimeHistory(vault) });
+      }
+      const listed = axes.templates;
       const runtimeWarnings = recordTemplateList(
         vault,
-        contracts.map(contract => ({ id: contract.templateId ?? "", contractDigest: contract.contractDigest })),
+        listed.map(entry => ({ id: entry.templateId, contractDigest: meta.digest })),
       );
       return jsonText({
         vault,
-        generationDigest: snapshot.generationDigest,
-        // The always-on default layer is reported beside the individual
-        // templates, because an unbound note is checked against it alone.
-        default: {
-          contractDigest: snapshot.defaultContract.contractDigest,
-          fields: snapshot.defaultContract.fields,
-          headings: snapshot.defaultContract.headings,
-        },
-        templates: contracts.map(contract => ({
-          templateId: contract.templateId,
-          contractDigest: contract.contractDigest,
-          targetFolder: snapshot.placement[contract.templateId ?? ""] ?? null,
-          fields: contract.fields,
-          headings: contract.headings,
-          semanticCriteria: contract.semanticCriteria,
+        generationDigest: meta.digest,
+        // The always-on common contract is reported beside the registrations,
+        // because an unbound note is checked against it alone.
+        default: { fields: axes.defaultAxes },
+        templates: listed.map(entry => ({
+          templateId: entry.templateId,
+          fields: entry.axes.filter(axis => axis.kind === "field"),
+          rulesAvailable: meta.source.templates?.[entry.templateId] !== null,
         })),
-        axes: deriveTemplateRetrievalAxes(snapshot),
+        axes,
+        diagnostics: meta.diagnostics,
         ...runtimeHistory(vault),
         ...(runtimeWarnings.length === 0 ? {} : { runtimeWarnings }),
-      });
-    }
-
-    if (name === "oms_template_scan") {
-      // Read-only review evidence: approved Markdown by digest and raw-source
-      // identity. Raw bytes are never parsed for meaning.
-      const context = await readTemplateReviewContext(vault);
-      return jsonText({
-        vault: context.vault,
-        generationDigest: context.resolved.generationDigest,
-        approved: context.approved.map(entry => ({
-          templateId: entry.templateId,
-          templatePath: entry.templatePath,
-          approvedMarkdownDigest: entry.approvedMarkdownDigest,
-        })),
-        raw: context.raw,
-        drafts: context.resolved.drafts,
-        sources: context.resolved.sources,
-        diagnostics: context.resolved.diagnostics,
       });
     }
 
@@ -780,18 +714,18 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       );
       return jsonText({
         vault,
-        projectionSource: ".oms/types.json",
+        projectionSource: "folders.json",
         ...result,
       });
     }
 
     // Semantic / sync / cleanup / document ops route to the native engine adapter:
     //   - vec/HyDE semantic ops → EAGER getSemanticEngine().adapter (vec-capable):
-    //     a model-less host throws a loud ADR-007 error (surfaces via the dispatch
+    //     a model-less host throws a loud ADR-005 error (surfaces via the dispatch
     //     catch below).
     //   - lex-only query and document ops → resolveDocumentAdapter(): vec-capable
     //     engine when a model is configured, else the core engine. Lex is a real
-    //     model-free BM25/FTS feature, not an ADR-007 fake vector fallback.
+    //     model-free BM25/FTS feature, not an ADR-005 fake vector fallback.
     // Every other tool never touches the engine here.
     if (isEngineSemanticOp(name) || isEngineDocumentOp(name)) {
       if (name === "oms_semantic_query") {
@@ -867,17 +801,11 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         });
         return jsonText(result);
       }
-      const useEphemeralLexicalFallback =
-        name === "oms_semantic_query" &&
-        publicName === "search" &&
-        !hasExplicitEmbeddingIntent(args) &&
-        (hasEmbeddingModel()
-          ? getReadOnlySemanticEngine() === null
-          : getReadOnlyCoreSemanticEngine() === null);
+      // Every `oms_semantic_query` path returned above, so the former ephemeral
+      // lexical fallback keyed on that name could not run. Search's model-free
+      // lexical path lives in that returning block; do not reintroduce a second
+      // copy here.
       const semanticAdapter =
-        useEphemeralLexicalFallback
-          ? await resolveReadOnlyLexicalAdapter()
-          :
         isEngineSemanticOp(name) &&
         name !== "oms_semantic_cleanup" &&
         !(name === "oms_sync_embeddings" && args?.["embed"] === false) &&
@@ -890,14 +818,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
             : publicName === "search"
               ? resolveReadOnlyIndexAdapter()
               : resolveDocumentAdapter(publicName);
-      const semanticToolResult = await handleSemanticTool(
-        name,
-        useEphemeralLexicalFallback
-          ? { ...args, lex: stringArg(args, "query") }
-          : args,
-        vault,
-        semanticAdapter,
-      );
+      const semanticToolResult = await handleSemanticTool(name, args, vault, semanticAdapter);
       if (semanticToolResult) {
         if (!semanticToolResult.ok) return errorText(semanticToolResult.message);
         return jsonText(semanticToolResult.value);
@@ -914,19 +835,10 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       }
       const folder = stringArg(args, "folder");
       try {
-        const meta = await readSearchTemplateSource(vault);
-        if (!meta.available) throw new Error(meta.reason);
-        const index = await buildTemplateNoteIndex(vault, meta.source);
-        const notes = folder === undefined ? index.notes : index.notes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
-        const unresolvedNotes = folder === undefined ? index.unresolvedNotes : index.unresolvedNotes.filter(note => note.path === folder || note.path.startsWith(`${folder}/`));
-        const violations = unresolvedNotes.map(note => ({ code: "TEMPLATE_NOTE_IDENTITY_UNRESOLVED", path: note.path, reason: note.reason }));
-        return jsonText({ vault, projectionSource: ".oms/types.json", folder: folder ?? null, scannedNotes: notes.length, excludedNotes: meta.managedSourcePaths.length, unresolvedNotes, clean: violations.length === 0, violations, generationDigest: meta.digest });
+        return jsonText({ vault, folder: folder ?? null, ...await auditVault(vault, folder === undefined ? {} : { folder }) });
       } catch {
-        const diagnosis = await diagnoseTemplates({ vault, source });
-        const violations = folder === undefined
-          ? diagnosis.diagnostics
-          : diagnosis.diagnostics.filter(item => item.code !== "MIGRATION_NOTE_IDENTITY_UNRESOLVED" || item.path === undefined || item.path === folder || item.path.startsWith(`${folder}/`));
-        return jsonText({ vault, projectionSource: "vault-invalid", folder: folder ?? null, scannedNotes: 0, excludedNotes: diagnosis.managedSourceExclusions.length, clean: false, violations });
+        const doctor = await contractDoctor(vault, "agent");
+        return jsonText({ vault, folder: folder ?? null, contract: doctor.contract, scannedNotes: 0, clean: false, violations: [], findings: doctor.findings });
       }
     }
 
@@ -954,136 +866,9 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       return jsonText({ vault, ...linkCheckPayload(report) });
     }
 
-    if (name === "write-guide") {
-      const report = await getWriteGuidance({
-        target: { vault, source },
-        notePath: stringArg(args, "notePath") ?? null,
-        templateId: stringArg(args, "templateId") ?? null,
-      });
-      return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...report });
-    }
-
-    if (name === "write-check") {
-      const notePath = stringArg(args, "notePath");
-      if (!notePath) return errorText('Missing required string argument "notePath".');
-      const evidenceArg = args?.["evidencePaths"];
-      if (evidenceArg !== undefined && (!Array.isArray(evidenceArg) || evidenceArg.some(entry => typeof entry !== "string"))) {
-        return errorText('Argument "evidencePaths" must be an array of vault-relative paths.');
-      }
-      const report = await checkSavedNote({
-        target: { vault, source },
-        notePath,
-        templateId: stringArg(args, "templateId") ?? null,
-        ...(args?.["binding"] === undefined ? {} : { binding: args["binding"] }),
-        ...(evidenceArg === undefined ? {} : { evidencePaths: (evidenceArg as string[]) }),
-      });
-      return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...report });
-    }
-
-    if (name === "write-complete") {
-      const report = await completeSavedNote({
-        target: { vault, source },
-        checkpoint: args?.["checkpoint"],
-        review: args?.["review"],
-      });
-      return jsonText({ vault, resolvedVault: vault, resolutionSource: source, ...report });
-    }
-
     if (name === "oms_validate_templates") {
-      return jsonText(await diagnoseTemplates({ vault, source }));
+      return jsonText({ vault, ...await contractDoctor(vault, "agent") });
     }
-    if (name === "oms_regenerate_types") {
-      const request = guardedTemplateRequest(args);
-      if (request === undefined) return errorText("Template repair requires dryRun:true or an approvedDigest.");
-      return jsonText(await regenerateTypes({ target: { vault, source }, request }));
-    }
-
-    if (name === "write-template") {
-      const admission = await admitWriteTarget({ vault, source });
-      if (admission !== undefined) {
-        return jsonText({ vault, status: "rejected", rejection: admission });
-      }
-      const mode = stringArg(args, "mode");
-      if (mode === "interview-next") {
-        if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
-          return errorText("Template interview-next does not accept a guarded request.");
-        }
-        // Proposals are the caller's explicit contract meaning. OMS never
-        // derives one by reading template syntax.
-        const proposals = args?.["proposals"];
-        if (proposals !== undefined && !Array.isArray(proposals)) {
-          return errorText('Argument "proposals" must be an array of explicit contract proposals.');
-        }
-        return jsonText(await nextTemplateInterview({ vault, source }, proposals === undefined ? {} : { proposals: proposals as never }));
-      }
-      if (mode === "interview-answer") {
-        if (args?.["dryRun"] !== undefined || args?.["approvedDigest"] !== undefined) {
-          return errorText("Template interview-answer saves a draft and does not accept a guarded request.");
-        }
-        const questionId = args?.["questionId"];
-        const answer = args?.["answer"];
-        const censusDigest = args?.["censusDigest"];
-        const expectedLedgerDigest = args?.["expectedLedgerDigest"];
-        if (
-          !isDigest(questionId) ||
-          !isJsonValue(answer) ||
-          !isDigest(censusDigest) ||
-          !(expectedLedgerDigest === null || isDigest(expectedLedgerDigest))
-        ) {
-          return errorText("Template interview-answer requires questionId, JSON answer, censusDigest, and expectedLedgerDigest.");
-        }
-        const answerProposals = args?.["proposals"];
-        if (answerProposals !== undefined && !Array.isArray(answerProposals)) {
-          return errorText('Argument "proposals" must be an array of explicit contract proposals.');
-        }
-        return jsonText(await answerTemplateInterview({
-          vault,
-          source,
-        }, {
-          questionId,
-          answer,
-          censusDigest,
-          expectedLedgerDigest,
-          ...(answerProposals === undefined ? {} : { proposals: answerProposals as never }),
-        }));
-      }
-      if (mode === "commit-contracts") {
-        const censusDigest = args?.["censusDigest"];
-        const expectedLedgerDigest = args?.["expectedLedgerDigest"];
-        const request = guardedTemplateRequest(args);
-        if (
-          !isDigest(censusDigest) ||
-          !(expectedLedgerDigest === null || isDigest(expectedLedgerDigest)) ||
-          request === undefined
-        ) {
-          return errorText("Template commit-contracts requires censusDigest, expectedLedgerDigest, and dryRun:true or an approvedDigest.");
-        }
-        const commitProposals = args?.["proposals"];
-        if (commitProposals !== undefined && !Array.isArray(commitProposals)) {
-          return errorText('Argument "proposals" must be an array of explicit contract proposals.');
-        }
-        return jsonText(await commitTemplateContracts({
-          vault,
-          source,
-        }, {
-          censusDigest,
-          expectedLedgerDigest,
-          ...(commitProposals === undefined ? {} : { proposals: commitProposals as never }),
-          ...request,
-        }));
-      }
-      const resumeId = stringArg(args, "transactionId");
-      const resumeApproval = args?.["approvedDigest"];
-      if (resumeId !== undefined) {
-        if (!isDigest(resumeApproval) || args?.["dryRun"] === true) {
-          return errorText("Template resume requires transactionId and the exact approvedDigest.");
-        }
-        return jsonText(await resumeTemplateTransaction(vault, resumeId, resumeApproval));
-      }
-
-      return errorText("Template mutation modes are interview-next, interview-answer, and commit-contracts.");
-    }
-
     return errorText(`Unknown Oh My Second Brain tool: ${publicName}`);
     } catch (error) {
       if (error instanceof SemanticIndexUnavailableError) {
@@ -1095,17 +880,6 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       return errorText(`Oh My Second Brain MCP error: ${error instanceof Error ? error.message : String(error)}`);
     }
         })();
-        if (
-          request.params.name === "write" ||
-          request.params.name === "search" ||
-          request.params.name === "status"
-        ) {
-          result = await attachTemplateNotice(
-            result,
-            vault,
-            request.params.name === "status" ? "poll" : "dedupe",
-          );
-        }
       } finally {
         const disposal = await Promise.allSettled(owned.map(async assembled => assembled.dispose()));
         disposalFailure = disposal.find((item): item is PromiseRejectedResult => item.status === "rejected");
@@ -1125,12 +899,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 }
 
 export async function runMcpServer(opts: OMSMcpServerOptions): Promise<void> {
-  // The review census is read before synchronous server construction so the
-  // initial notice can be included in instructions without making the factory
-  // itself asynchronous. Tool-result delivery re-reads it for long-lived
-  // sessions and therefore also observes edits after this boot.
-  const templateNotice = await readTemplateChangeNotice(opts.vault);
-  const server = createOMSMcpServer({ ...opts, templateNotice });
+  const server = createOMSMcpServer(opts);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Detached and unawaited: a slow or offline registry must not delay serving.

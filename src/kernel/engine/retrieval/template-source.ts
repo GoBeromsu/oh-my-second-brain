@@ -1,119 +1,151 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import type { TemplateRetrievalSource } from "../../templates/axes.js";
-import { digestBytes, hashCanonical } from "../../templates/canonical.js";
-import { parseTemplatePolicy } from "../../templates/policy.js";
-import {
-  composeTemplateRetrievalSource,
-  controlGenerationDigest,
-  taxonomyRouting,
-  type TaxonomyRouting,
-} from "../../templates/resolver.js";
-import type { Digest, TemplateFolderPath, TemplatePolicy } from "../../templates/types.js";
+import { compareCodePoints, hashCanonical, type Digest } from "../../conventions/canonical.js";
+import { readSourceExclusions, type SourceExclusionInventory } from "../../conventions/note-exclude.js";
+import { deriveFolderOntologyAxis } from "../../contract/folders-axis.js";
+import type { PropertyContract, VaultContract } from "../../contract/types.js";
+import { resolveSealState } from "../../contract/vault-id.js";
+import type { GlobalAxes, GlobalAxis, RetrievalFields, TemplateRetrievalSource } from "./axes.js";
 
 /**
- * Search-side read of policy and taxonomy bytes.
- * Missing or invalid policy, invalid taxonomy, and composition failure stay
- * unavailable. This reader does not admit a vault, open a projection, consult
- * a publication marker, or write.
+ * Search-side read of the sealed vault contract.
+ *
+ * Search sees only the acceptance surface: folder path and meaning, and
+ * property name, type and required. No rule or value leaves the store through
+ * this reader. It admits no vault, writes nothing and never reads a vault-side
+ * control file other than settings.json. `null` metadata means unavailable,
+ * never an empty contract.
  */
 
-const POLICY_FILE = ".oms/template-policy.json";
-const TAXONOMY_FILE = ".oms/taxonomy.json";
-const ABSENT_DOMAIN = "oms.search-template-source.absent.v1";
-const NO_PATHS = [] as const;
+const CONTRACT_PATH = "folders.json";
+const RETRIEVAL_DOMAIN = "oms.search-template-source.v6";
 
-export type SearchTemplateSource =
-  | {
-      readonly available: true;
-      readonly digest: Digest;
-      readonly source: TemplateRetrievalSource;
-      readonly managedSourcePaths: readonly string[];
-    }
-  | {
-      readonly available: false;
-      readonly digest: Digest;
-      readonly reason: string;
-      readonly managedSourcePaths: readonly [];
-    };
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+export interface RetrievalDiagnostic {
+  readonly code: string;
+  readonly path: string;
+  readonly message: string;
 }
 
-function isEnoent(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+export interface SearchTemplateSource {
+  readonly digest: Digest;
+  readonly source: TemplateRetrievalSource;
+  readonly exclusions: SourceExclusionInventory;
+  readonly diagnostics: readonly RetrievalDiagnostic[];
 }
 
-function unavailable(digest: Digest, reason: string): SearchTemplateSource {
-  return { available: false, digest, reason, managedSourcePaths: NO_PATHS };
+type ReadState =
+  | { readonly state: "open" }
+  | { readonly state: "unreadable"; readonly reason: string }
+  | { readonly state: "sealed"; readonly contract: VaultContract };
+
+/** A fixed reason by code: a raw filesystem message would carry a private store path. */
+function failureReason(error: unknown): string {
+  const code = (error as { readonly code?: unknown } | null)?.code;
+  const named = typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code) ? code : "CONTRACT_READ_FAILED";
+  return `${named}; run oms contract doctor`;
 }
 
-function emptyRouting(): TaxonomyRouting {
-  const targetFolders = new Map<string, TemplateFolderPath>();
-  const globalAxes: TaxonomyRouting["globalAxes"] = Object.create(null);
-  return { targetFolders, globalAxes };
+function isAbsent(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error
+    && (error.code === "ENOENT" || error.code === "ENOTDIR");
 }
 
-/** Both control files use the P05 generation digest. A missing file stays null, so empty bytes are a different input. */
-function presenceDigest(policy: Uint8Array | null, taxonomy: Uint8Array | null): Digest {
-  if (policy !== null && taxonomy !== null) return controlGenerationDigest(policy, taxonomy);
-  return hashCanonical(ABSENT_DOMAIN, {
-    policy: policy === null ? null : digestBytes(policy),
-    taxonomy: taxonomy === null ? null : digestBytes(taxonomy),
-  });
-}
-
-function decodeUtf8(bytes: Uint8Array): string {
-  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-}
-
-async function readBytes(file: string): Promise<Uint8Array | null> {
+async function readState(vault: string): Promise<ReadState> {
   try {
-    return Uint8Array.from(await readFile(file));
+    const view = (await resolveSealState(vault)).view;
+    if (view.state === "sealed") return { state: "sealed", contract: view.contract };
+    if (view.state === "unreadable") return { state: "unreadable", reason: "the sealed contract is unreadable; run oms contract doctor" };
+    return { state: "open" };
   } catch (error: unknown) {
-    if (isEnoent(error)) return null;
-    throw error;
+    return isAbsent(error) ? { state: "open" } : { state: "unreadable", reason: failureReason(error) };
   }
 }
 
-function listedSourcePaths(source: TemplateRetrievalSource): readonly string[] {
-  const paths: string[] = [];
-  for (const templateId of Object.keys(source.templates)) {
-    const sourcePath = source.policy.templates[templateId]?.source?.path;
-    if (sourcePath !== undefined) paths.push(sourcePath);
+function sortedEntries<T>(record: Readonly<Record<string, T>>): Array<[string, T]> {
+  return Object.entries(record).sort(([left], [right]) => compareCodePoints(left, right));
+}
+
+/** The only contract facts search may carry. Rules and templates' narrowed rules never enter. */
+function publicProjection(contract: VaultContract): unknown {
+  return {
+    folders: contract.folders === null
+      ? null
+      : sortedEntries(contract.folders).map(([path, folder]) => ({ path, meaning: folder.meaning, searchExclude: folder.searchExclude })),
+    properties: contract.properties === null
+      ? null
+      : sortedEntries(contract.properties).map(([name, property]) => ({ name, type: property.type, required: property.required })),
+    templates: sortedEntries(contract.templates).map(([name, template]) => ({
+      name,
+      source: template.source,
+      requiredProperties: [...template.requiredProperties].sort(compareCodePoints),
+    })),
+  };
+}
+
+function fields(
+  properties: Readonly<Record<string, PropertyContract>>,
+  forcedRequired: readonly string[],
+): RetrievalFields {
+  const out: Record<string, RetrievalFields[string]> = Object.create(null) as Record<string, RetrievalFields[string]>;
+  for (const [name, property] of sortedEntries(properties)) {
+    out[name] = {
+      property: name,
+      type: property.type,
+      required: property.required || forcedRequired.includes(name),
+      valuePolicy: "free",
+    };
   }
-  return paths;
+  return out;
+}
+
+function globalAxes(contract: VaultContract): GlobalAxes {
+  const axes: Record<string, GlobalAxis> = Object.create(null) as Record<string, GlobalAxis>;
+  const axis = deriveFolderOntologyAxis(contract.folders);
+  if (axis !== null) axes["folder-ontology"] = axis;
+  return axes;
 }
 
 export async function readSearchTemplateSource(vault: string): Promise<SearchTemplateSource> {
-  const policyBytes = await readBytes(path.join(vault, ".oms", "template-policy.json"));
-  const taxonomyBytes = await readBytes(path.join(vault, ".oms", "taxonomy.json"));
-  const digest = presenceDigest(policyBytes, taxonomyBytes);
-  if (policyBytes === null) return unavailable(digest, `template policy missing (${POLICY_FILE})`);
+  const [state, exclusions] = await Promise.all([readState(vault), readSourceExclusions(vault)]);
+  const diagnostics: RetrievalDiagnostic[] = exclusions.diagnostics.map(item => ({ code: item.code, path: item.path, message: item.message }));
+  const digest = hashCanonical(RETRIEVAL_DOMAIN, {
+    state: state.state,
+    contract: state.state === "sealed" ? publicProjection(state.contract) : null,
+    exclusions: exclusions.digest,
+  });
 
-  let policy: TemplatePolicy;
-  try {
-    policy = parseTemplatePolicy(decodeUtf8(policyBytes));
-  } catch (error: unknown) {
-    return unavailable(digest, `template policy invalid: ${message(error)}`);
+  if (state.state === "open") {
+    diagnostics.push({ code: "CONTRACT_OPEN", path: CONTRACT_PATH, message: "no contract is sealed; notes stay searchable without declared field axes" });
+    return {
+      digest,
+      source: { generationDigest: digest, defaultFields: null, templates: null, globalAxes: Object.create(null) as GlobalAxes, sourcePaths: null },
+      exclusions,
+      diagnostics,
+    };
+  }
+  if (state.state === "unreadable") {
+    diagnostics.push({ code: "CONTRACT_UNREADABLE", path: CONTRACT_PATH, message: `sealed contract is unavailable: ${state.reason}` });
+    return {
+      digest,
+      source: { generationDigest: digest, defaultFields: null, templates: null, globalAxes: null, sourcePaths: null },
+      exclusions,
+      diagnostics,
+    };
   }
 
-  let routing: TaxonomyRouting;
-  if (taxonomyBytes === null) {
-    routing = emptyRouting();
-  } else {
-    try {
-      routing = taxonomyRouting(TAXONOMY_FILE, taxonomyBytes);
-    } catch (error: unknown) {
-      return unavailable(digest, `template taxonomy invalid: ${message(error)}`);
-    }
+  const { contract } = state;
+  const templates: Record<string, RetrievalFields | null> = Object.create(null) as Record<string, RetrievalFields | null>;
+  for (const [name, template] of sortedEntries(contract.templates)) {
+    templates[name] = contract.properties === null ? null : fields(contract.properties, template.requiredProperties);
   }
-
-  try {
-    const source = composeTemplateRetrievalSource(policy, routing, digest);
-    return { available: true, digest, source, managedSourcePaths: listedSourcePaths(source) };
-  } catch (error: unknown) {
-    return unavailable(digest, `template composition failed: ${message(error)}`);
-  }
+  return {
+    digest,
+    source: {
+      generationDigest: digest,
+      defaultFields: contract.properties === null ? null : fields(contract.properties, []),
+      templates,
+      globalAxes: globalAxes(contract),
+      sourcePaths: Object.values(contract.templates).map(template => template.source).sort(compareCodePoints),
+    },
+    exclusions,
+    diagnostics,
+  };
 }

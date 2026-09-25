@@ -4,6 +4,9 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **Breaking: host guidance describes the sealed contract.** The `interview` and `template` skills are deleted, leaving six skills. Guidance tells agents to write whole notes through `write {path, content, template?}`, to stay inside the sealed property pool, never to read or write `~/.oms/`, and to ask the user to run `oms setup` on `contract-unreadable`.
+- **The `link` skill describes the payload it returns.** A suggestion carries a `baseContentHash` and a stable `id` per candidate, and `link { op: "check" }` requires `notePath`.
+
 ## [0.16.0] - 2026-09-23
 - Live host-facing docs no longer show a copyable `interview-next` call without `proposals`. Confirming the template notice still starts that mode, but the same proposals array must reach review, answer, and commit.
 - Search, status, and write skills now say `templateNotice.next` is a mode hint, not a replayable `interview-next` CallToolRequest.

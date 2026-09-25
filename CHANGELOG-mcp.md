@@ -4,6 +4,11 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- **Breaking: `write` takes `{path, content, template?}` with no `op`.** The whole note is judged against the sealed contract and saved atomically only when allowed; a denial returns `{field, kind}` violations and one guidance command. The `guide`, `check`, and `template` operations and the `folderIntents` input are removed. `search` `templates` returns the sealed folders, property names and types, and templates; `doctor` `validate` diagnoses the seal, and `doctor` `regenerate-types` is removed with no alias.
+- **Breaking: retrieval metadata reads the sealed folder contract.** Search responses rename `taxonomyIntents` to `folderIntents`, semantic status reports `folderContext` instead of the taxonomy context, and `projectionSource` names `folders.json` (the sealed contract) instead of `.oms/template-policy.json`. A vault without a sealed contract reports `vault-invalid` and its remediation points at `oms setup`.
+- **An unreachable search fallback is gone.** Every `oms_semantic_query` path returns inside its own block, so the later ephemeral-lexical branch keyed on that tool name could never run. Search's model-free lexical path stays where it actually executes.
+- Tool schemas expose operation names and arguments at the top level so hosts can discover them without unpacking branch schemas. Strict operation-specific validation and approval requirements remain enforced. (#144)
+
 ## [0.16.0] - 2026-09-23
 - Host-facing docs no longer show a copyable `interview-next` call without `proposals`. Confirming the template notice still starts that mode, but the same proposals array must reach review, answer, and commit.
 - The machine template notice `next` field is a mode hint (`skill: interview`, `mode: interview-next`), not a replayable CallToolRequest. OMS still does not invent proposals; `확인하기` enters `/interview`.

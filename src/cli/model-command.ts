@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { readModelsConfig, resolveModelCapabilities } from "../kernel/engine/embed/config.js";
+import { readVaultEmbeddingModel, resolveModelCapabilities } from "../kernel/engine/embed/config.js";
 import {
   acquireModelSet,
   applyModelSelection,
@@ -130,34 +130,34 @@ async function select(parsed: ParsedModelArgs): Promise<void> {
   const manifest = await chosenManifest(parsed.options);
   const resolved = await target(parsed.options);
   if (resolved.source === "cwd") invalid("selection requires --vault or an existing verified vault/bridge/env target");
-  const proposal = await proposeModelSelection({ vault: resolved.vault, config: modelsConfigFromAcquisitionManifest(manifest), cacheDir: text(parsed.options, "cache-dir") });
+  const proposal = await proposeModelSelection({ vault: resolved.vault, model: manifest.embed.model, cacheDir: text(parsed.options, "cache-dir") });
   if (flag(parsed.options, "dry-run")) {
     if (flag(parsed.options, "yes") || text(parsed.options, "approved-digest") !== undefined) invalid("--dry-run conflicts with --yes and --approved-digest");
     print({ status: "proposed", operation: "select", ...proposal });
     return;
   }
   approval(parsed.options, proposal.approvalDigest);
-  print(await applyModelSelection({ vault: resolved.vault, config: proposal.proposed, approvedDigest: proposal.approvalDigest, cacheDir: text(parsed.options, "cache-dir") }));
+  print(await applyModelSelection({ vault: resolved.vault, model: proposal.proposed, approvedDigest: proposal.approvalDigest, cacheDir: text(parsed.options, "cache-dir") }));
 }
 
 async function waive(parsed: ParsedModelArgs): Promise<void> {
   only(parsed, ["vault", "yes"]);
   if (!flag(parsed.options, "yes")) invalid("waive requires --yes");
   const resolved = await target(parsed.options);
-  print({ status: "waived", scope: "this-operation", persisted: false, modelsConfigPreserved: await readModelsConfig(resolved.vault) });
+  print({ status: "waived", scope: "this-operation", persisted: false, embeddingModelPreserved: await readVaultEmbeddingModel(resolved.vault) });
 }
 
 async function status(parsed: ParsedModelArgs): Promise<void> {
   only(parsed, ["vault", "cache-dir"]);
   const resolved = await target(parsed.options);
-  const config = await readModelsConfig(resolved.vault);
+  const embeddingModel = await readVaultEmbeddingModel(resolved.vault);
   const installed = await readInstalledModelsReceipt({ cacheDir: text(parsed.options, "cache-dir") });
   print({
     status: "ok",
     vault: resolved.vault,
-    modelsConfig: config,
+    embeddingModel,
     installed,
-    resolutions: resolveModelCapabilities({ env: process.env, vaultConfig: config, installedArtifacts: installed.artifacts, setupDefaults: installed.defaults }),
+    resolutions: resolveModelCapabilities({ env: process.env, vaultEmbeddingModel: embeddingModel, installedArtifacts: installed.artifacts, setupDefaults: installed.defaults }),
   });
 }
 

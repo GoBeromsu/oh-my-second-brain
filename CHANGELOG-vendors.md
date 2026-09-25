@@ -4,6 +4,10 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- **Breaking: the Claude guard follows the judge.** The PostToolUse hook and the `oms-post-guard` bin are removed, and `OMS_GUARD` no longer exists. The PreToolUse write matcher is now `Write|Edit|MultiEdit|NotebookEdit`, and a second PreToolUse entry for `Read|Grep|Glob` denies access under `~/.oms/`. A write that the judge finds in violation is denied; when the judge cannot run, the call is allowed with a warning. The hook output format changed accordingly. Codex and Hermes still declare no write hook. Run `oms host sync` after upgrading to rewrite the registration.
+- **The `oms-reviewer` host role is retired.** It was built around a completion protocol that no longer exists, so no surface could produce its request or consume its result. The Claude plugin agent, the Codex custom-agent role and its shipped asset, the harness reviewer registry, and the reviewer asset-health lane are gone with no alias. `oms host remove` still deletes a role and provenance sidecar an earlier version installed, and only when the OMS-written provenance record proves ownership; a foreign agent file is still left in place and reported.
+- **Shipped host instructions no longer describe a completion reviewer or a retry budget.** The Claude and Codex guidance and the installed Hermes adapter README drop the semantic reviewer handshake and the finite retry budget; `agentRepair` lives in the portable `.oms/settings.json`.
+
 ## [0.16.0] - 2026-09-23
 
 - Codex installs an optional provenance-owned reviewer role while preserving unowned collisions; a genuine generic separate subagent remains valid without custom-role discovery. Dry-run skill paths now match the eight installed shared skills.

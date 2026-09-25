@@ -11,16 +11,17 @@ import { syncEngineStore } from "./sync.js";
 
 const roots: string[] = [];
 
+async function externalStoreParent(vault: string): Promise<void> {
+  await mkdir(path.dirname(engineStorePath(vault)), { recursive: true });
+}
+
 async function makeVault(): Promise<string> {
   const root = await (async () => {
     const directory = path.join(tmpdir(), `oms-repair-${crypto.randomUUID()}`);
     await mkdir(path.join(directory, ".oms"), { recursive: true });
     roots.push(directory);
     await writeFile(path.join(directory, "note.md"), "# Note\n", "utf8");
-    await writeFile(path.join(directory, ".oms", "taxonomy.json"), "{}\n", "utf8");
-    await writeFile(path.join(directory, ".oms", "template-policy.json"), '{"templates":{}}\n', "utf8");
-    await writeFile(path.join(directory, ".oms", "types.json"), "{}\n", "utf8");
-    await writeFile(path.join(directory, ".oms", "models.json"), "{}\n", "utf8");
+    await writeFile(path.join(directory, ".oms", "settings.json"), '{"version":1,"vaultId":"11111111-2222-4333-8444-555555555555"}\n', "utf8");
     return directory;
   })();
   return root;
@@ -29,10 +30,7 @@ async function makeVault(): Promise<string> {
 async function authorityHashes(vault: string): Promise<Map<string, string>> {
   const files = [
     "note.md",
-    ".oms/taxonomy.json",
-    ".oms/template-policy.json",
-    ".oms/types.json",
-    ".oms/models.json",
+    ".oms/settings.json",
   ];
   return new Map(await Promise.all(files.map(async (file) => [
     file,
@@ -89,6 +87,7 @@ describe("repairEngineStore", () => {
     "%s dry-run is non-mutating and rebuild preserves vault authority",
     async (kind) => {
       const vault = await makeVault();
+      await externalStoreParent(vault);
       legacyStore(vault, kind);
       const before = await authorityHashes(vault);
       const storePath = engineStorePath(vault);
@@ -135,6 +134,7 @@ describe("repairEngineStore", () => {
 
   it("drop moves the store aside without creating a replacement or touching vault authority", async () => {
     const vault = await makeVault();
+    await externalStoreParent(vault);
     legacyStore(vault, "normal");
     const before = await authorityHashes(vault);
     const storePath = engineStorePath(vault);
@@ -161,6 +161,7 @@ describe("repairEngineStore", () => {
 
   it("does not overwrite a prior backup with the same timestamp", async () => {
     const vault = await makeVault();
+    await externalStoreParent(vault);
     const storePath = engineStorePath(vault);
     legacyStore(vault, "normal");
     const now = () => new Date("2026-09-01T10:00:00.000Z");
@@ -177,6 +178,7 @@ describe("repairEngineStore", () => {
 
   it("preserves orphan SQLite sidecars and removes them from the source paths", async () => {
     const vault = await makeVault();
+    await externalStoreParent(vault);
     const storePath = engineStorePath(vault);
     await Promise.all([
       writeFile(`${storePath}-wal`, "orphan wal"),

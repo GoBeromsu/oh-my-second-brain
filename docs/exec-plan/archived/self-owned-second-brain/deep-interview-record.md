@@ -3,15 +3,15 @@
 ## Metadata
 - Interview ID: deep-interview-self-owned-second-brain-engine
 - Status: **THRESHOLD MET — compile/wiki 동작 잠금 완료, plan 진입 대기** (모든 컴포넌트+lint+tracer+폴더 토폴로지+ingest+provenance+setup+`.oms` 거버넌스 분리+compile/wiki 동작 잠금; 잔여 = plan.md 작성 go-ahead)
-- Rounds completed: Round 0 (topology gate) + R1–R17 (R17=.oms 거버넌스 분리→ADR-006, R17b=compile/wiki 동작 설계)
+- Rounds completed: Round 0 (topology gate) + R1–R17 (R17=.oms 거버넌스 분리→구 ADR-006, R17b=compile/wiki 동작 설계)
 - Current Ambiguity: **~3%** (threshold 0.05 통과 ✅)
 - 위치 이전(2026-06-13): `.omc/specs/`(gitignored, omc 아티팩트)에서 repo-소유 `docs/exec-plan/archived/self-owned-second-brain/deep-interview-record.md`로 이전. 유출 방지: `.omc/.omx/.omo`는 gitignore로 은닉(설계 rationale 텍스트는 유지).
 - **RESOLVED(R17b)**: compile·wiki 스킬 동작 설계 잠금 완료 — `docs/research/compile-wiki-operation-references.md`(837줄, 10개 구현 마이닝) + 자기저작 레퍼런스 bstack `terminology` 흡수. Compile=stateless per-concept SHA worker, Wiki=stateful collection owner(staleness ledger 5-state CLEAN|DIRTY|STUB|ORPHAN|CONFLICT), 물리 3-tier에 sync 경계 횡단. 물리 폴더 분리(raw/processed/wiki)는 사용자 동의(R14).
-- Type: brownfield (oms repo 존재, ADR-002/004/005 + research 입력)
+- Type: brownfield (oms repo 존재, 구 ADR-002/004/005 + research 입력)
 - Generated: 2026-06-13
 - Threshold: 0.05 (source: `~/.claude/settings.json` → `omc.deepInterview.ambiguityThreshold`)
 - Brownfield weights: Goal 0.35 / Constraints 0.25 / Criteria 0.25 / Context 0.15
-- 입력 문서: ADR-002(벡터/임베더 티어/RRF), ADR-004(설정/시크릿/접근), ADR-005(frontmatter 4-tier 그래프), `docs/exec-plan/archived/self-owned-second-brain/spec.md`(living design doc), `docs/research/*-mining.md`
+- 입력 문서: 구 ADR-002(벡터/임베더 티어/RRF), 구 ADR-004(설정/시크릿/접근), 구 ADR-005(frontmatter 4-tier 그래프), `docs/exec-plan/archived/self-owned-second-brain/spec.md`(living design doc), `docs/research/*-mining.md`
 - 교차참조: 이 인터뷰는 **scoping 결정 + ambiguity 추적**을 소유. "무엇을 짓나"의 살아있는 설계는 design doc(`active/self-owned-second-brain/spec.md`)이 소유. 둘은 상보적, 중복 금지.
 
 ---
@@ -26,7 +26,7 @@
 - **oms = vault-독립 엔진/제품.** 특정 vault(Ataraxia)에 하드코딩 금지.
 - **구체 vault 바인딩**(wiki 생성 위치, raw/processed tier 폴더, `.oms` 캐시 경로, lint 스키마 SSOT, taxonomy)은 **setup-time에 엔진 자신의 setup 인터뷰로 해소**. 코드/스펙에 박는 값이 아님.
 - **Ataraxia 유래 값 = 레퍼런스 디폴트(reference implementation)일 뿐**, override 필수.
-- 메타-우아함: oms는 deep-interview와 동일한 **인터뷰 패턴을 자기 setup에 내장** — 설치되는 vault마다 규칙을 인터뷰로 확립(§12 vault-scaffold / ADR-003과 합류).
+- 메타-우아함: oms는 deep-interview와 동일한 **인터뷰 패턴을 자기 setup에 내장** — 설치되는 vault마다 규칙을 인터뷰로 확립(§12 vault-scaffold / 구 ADR-003과 합류).
 - ⟹ 아래 R9/R10/R14의 Ataraxia 특정값은 "고정 잠금"이 아니라 **"setup-time 해소 가능한 디폴트"**로 읽을 것.
 
 ## 6-Component Engine Topology (Round 0 — 전부 in-scope 잠금)
@@ -82,9 +82,9 @@
 - 별도 **`gph` 모드**(graphify식 traversal/shortest_path/community) 병존.
 - 거인 비교 근거: qmd typed array / graphify query_graph(BFS·DFS+IDF) / MS GraphRAG RRF k=60 / HippoRAG PPR.
 
-### R17 — `.oms` 거버넌스: 기계검증 계약 ↔ 의도 기록 명시적 분리 (잠금) → ADR-006
+### R17 — `.oms` 거버넌스: 기계검증 계약 ↔ 의도 기록 명시적 분리 (잠금) → 구 ADR-006
 사용자 verbatim: **"이거다 기록해 /documents 로 ... 단 이 경우 기계적 검증을 위한 yaml과 의도가 섞여있는 documents는 명시적으로 분리가 되어야 한다고 생각함."** (직전 교정: "yaml의 의도는 기계적으로 이름 검증하려는 것이고, documents 스킬 구조를 oms에 두는 것은 vault의 정책과 폴더 구조가 바뀔 때 의도적으로 기록해두기 위함이야.")
-- **`.oms/`(vault·repo 양쪽)는 두 레이어를 명시적으로 분리 보유** (ADR-006으로 기록, ADR-003 정련·비-supersede):
+- **`.oms/`(vault·repo 양쪽)는 두 레이어를 명시적으로 분리 보유** (구 ADR-006으로 기록, 구 ADR-003 정련·비-supersede):
   - **Layer 1 CONTRACT (기계검증)**: `taxonomy.yaml`/`concepts/*.yaml`/`schemas/` = 파서가 읽는 현재형 계약. `vault-lint`(R9)+`oms_validate_contract`의 enforcement 대상. "의도한 키만 올바른 값으로 생존하는가"만 판정, 역사 없음.
   - **Layer 2 GOVERNANCE (의도 기록)**: `.oms/governance/`(decisions/rules/architecture) = craft-skills `documents` 온톨로지의 vault 적용. vault 정책·폴더 구조가 *왜·언제* 바뀌었나의 산문. supersede로만 갱신, 삭제 없음.
 - **a+b 병행 = lane 분리**: CONTRACT는 **checker lane**(`vault-lint`), GOVERNANCE는 **author lane**(`vault-decision-record` 계열). 작성과 검증을 같은 active context에 섞지 않음(글로벌 규율 정합). lint가 ADR을 쓰지 않고, 거버넌스 스킬이 taxonomy를 강제하지 않음. anti-proliferation 비위반(사용자 명시 sanction).
@@ -104,7 +104,7 @@
 - oms는 설치 vault마다 **자체 setup 인터뷰**로 Non-Sticky 바인딩 확립: tier 폴더 매핑, provenance 등급 매핑, lint 스키마 SSOT, 임베더 선택, 민감-zone(`ignore_for_external_apis`), agent-writable zone/routing law.
 - **철학**: Ataraxia 유래 **의견있는 디폴트(taxonomy.yaml)** 제시 → 사용자가 각 바인딩 확인·override. 빠른 시작 + 완전 override.
 - auto-detect(vault 스캔, graphify/qmd 재사용)가 default를 seed 가능(옵션).
-- §12 vault-scaffold / ADR-003과 합류 — oms가 deep-interview 패턴을 자기 setup에 내장.
+- §12 vault-scaffold / 구 ADR-003과 합류 — oms가 deep-interview 패턴을 자기 setup에 내장.
 - **인터뷰 방식 = deep-interview 방법론 (사용자 명시)**: verbatim "그 setup의 인터뷰 방식은 우리 omc의 deep-interview 방식을 따르면 될거같아."
   - 흡수 대상 = Socratic clarity, ambiguity 임계(설정 가능), 차원별 스코어링(Goal/Constraint/Criteria/Context), Round 0 토폴로지 게이트, challenge 모드(Contrarian/Simplifier/Ontologist), 스펙 crystallize.
   - **탈종속 단서**: omc deep-interview 스킬에 *의존하지 않음*. 방법론만 **self-owned 재구현**(method 파쿠리, 구현 소유). ACKNOWLEDGMENTS에 deep-interview 방법론 참조·감사 기록.
@@ -155,7 +155,7 @@
 
 ### R10 — C4 reconcile: 단일 vault + 인덱스 위치 (잠금)
 사용자 답변: **"일단은 단일 vault만 지원, 인덱스는 해당 볼트에 있어야 하지 않나"** (+ "아까 이야기 나눴다" = design doc §11 `.oms` 마커/전역 MCP).
-- **단일 vault만 지원**: canonical = Ataraxia. 다중 vault 레지스트리는 과잉(ADR-001 단일 vault 확정) → 미채택.
+- **단일 vault만 지원**: canonical = Ataraxia. 다중 vault 레지스트리는 과잉(구 ADR-001 단일 vault 확정) → 미채택.
 - **인덱스 = vault 귀속**: vault 안 **`Ataraxia/.oms/` 닷폴더**에 마커+캐시 통합. 분산 265MB 문제 해소.
 - **Sync 위험 화해 메커니즘**: Obsidian Sync는 닷폴더(hidden)를 **기본 전파 안 함**(hidden-files sync opt-in, 기본 OFF) → "볼트 귀속"과 "265MB 전 기기 전파 방지" 동시 달성.
 - **caveat(구현 노트)**: vault가 iCloud Drive/Dropbox 동기화 경로 위면 닷폴더도 전파됨 → 그 경우에만 캐시를 machine-local `~/.oms/{vault-id}`로 자동 이전. 현 동기화 = Obsidian Sync 채널 → 기본 안전.
@@ -196,7 +196,7 @@ R1 51% → R2 48% → R3 41% → R4 32% → R5 31% → R6 ~28% → **R7 ~24%**
 
 ## 신규 스코프 — Vault-Lint (frontmatter 정합성) [R9 도입, 사용자 명시 요청]
 사용자 verbatim: **"lint 스킬이 있어서 obsidian vault의 프론트매터의 정합성 등을 판단했으면해. 정합성의 의미는 우리가 의도한 프론트매터만 살아있는지같은거지."**
-- **위치**: oms-owned **vault-convention 자산군**(ADR-003 / design doc §12)에 `vault-lint` 추가 → vault-scaffold · vault-decision-record와 3종 세트. 새 top-level 엔진 컴포넌트 아님(C4 config/convention 위에 앉음). anti-proliferation 비위반(사용자 명시 의도).
+- **위치**: oms-owned **vault-convention 자산군**(구 ADR-003 / design doc §12)에 `vault-lint` 추가 → vault-scaffold · vault-decision-record와 3종 세트. 새 top-level 엔진 컴포넌트 아님(C4 config/convention 위에 앉음). anti-proliferation 비위반(사용자 명시 의도).
 - **정합성 정의(핵심)**: 각 note-type별 **선언된 frontmatter 키 집합(의도)** 과 실제 노트의 키 집합 일치 — "**의도한 키만 생존**"(rogue/예상외 키 탐지 + 필수 키 누락 탐지).
 - **선언 스키마 SSOT**: vault 자신의 템플릿/가이드(`90. Settings/01 Guideline`, `taxonomy.yaml`) = intended frontmatter의 단일 출처. 별도 스키마 중복 금지.
 - **재사용**: 기존 `oms_validate_contract`(capture 게이트) + `wiki_lint` 위에 구축. created_by routing law도 검사 대상(agent 노트 필수 필드).
@@ -206,7 +206,7 @@ R1 51% → R2 48% → R3 41% → R4 32% → R5 31% → R6 ~28% → **R7 ~24%**
 ## 잔존 Open Items (다음 라운드 대상)
 1. **build 순서 / first-runnable tracer** (Goal 0.72 — 최대 가중 갭). 전체 일괄 빌드라도 첫 end-to-end 수직선(엔진을 증명하는 tracer bullet)이 비었음.
 2. **rerank 모델 선택** (Qwen3-Reranker 등) + 언제 발동(상용 경로/exact 트리거).
-3. **graph 4-tier 가중 휴리스틱** — ADR-005 명시적으로 "증명 안 됨". ablation 필요 vs 일단 휴리스틱 고정 후 골든셋으로 검증.
+3. **graph 4-tier 가중 휴리스틱** — 구 ADR-005 명시적으로 "증명 안 됨". ablation 필요 vs 일단 휴리스틱 고정 후 골든셋으로 검증.
 4. **wiki compile 트리거/정책** (C5 Compile 단계 발동 조건 — 수동? 임계?).
 5. **config `.oms` 마커 포맷** + C4 reconcile: 전역 설치인데 stateless/no-daemon, stdio MCP. oms 인스턴스 2개 불일치(`mcp.json`→`/01_Project/oms` vs `settings.json` 훅→`Ataraxia`) + `.oms` 캐시 분산 정리.
 6. **distill clean-room 구현 구체** — 어떤 에이전트 격리 메커니즘? 레드팀 분석 산출물 포맷?
@@ -234,7 +234,7 @@ R1 51% → R2 48% → R3 41% → R4 32% → R5 31% → R6 ~28% → **R7 ~24%**
 
 ## 표준 제약 (불변, verbatim)
 - main orchestration 깨끗하게 유지.
-- 임의로 스킬 늘리지 말 것(anti-proliferation) — CLI alias는 ADR 메모로만(ADR-002).
+- 임의로 스킬 늘리지 말 것(anti-proliferation) — CLI alias는 ADR 메모로만(구 ADR-002).
 - distill은 본체에서 untrusted script 미실행(R6: clean-room 격리로 화해).
 - GPL-3.0(nashsu/llm_wiki) = 아이디어 참조만, 코드 inline 금지. no-license repo = 개념만, verbatim 복사 금지.
 - 민감정보(주소 등) 한 곳 집중 + 외부 임베딩 API 제외(`ignore_for_external_apis`). 모든 시크릿 env var.
@@ -336,9 +336,9 @@ R18 후 ~22% → **R19 후 ~14%** (repo 토폴로지 해소 = 최대 기여)
 
 ## Post-Finalization Locked Principles — R22 (2026-06-14)
 
-> 인터뷰 임계는 R21에서 통과(~3%)했다. 이 라운드는 구현 과정에서 명시적으로 잠금된 두 불변 원칙을 /documents 라이프사이클에 기록한다. 공식 결정은 ADR-007에 있으며, 이 섹션은 인터뷰 record의 연속으로 맥락을 보존한다.
+> 인터뷰 임계는 R21에서 통과(~3%)했다. 이 라운드는 구현 과정에서 명시적으로 잠금된 두 불변 원칙을 /documents 라이프사이클에 기록한다. 공식 결정은 구 ADR-007에 있으며, 이 섹션은 인터뷰 record의 연속으로 맥락을 보존한다.
 
-### R22 — 임베딩 무결성 불변 (잠금) → ADR-007
+### R22 — 임베딩 무결성 불변 (잠금) → 구 ADR-007
 
 **P-A — 네이티브 차원 무결성 (no-projection / native-dim integrity)**
 
@@ -347,7 +347,7 @@ R18 후 ~22% → **R19 후 ~14%** (repo 토폴로지 해소 = 최대 기여)
 - **불변**: 임베딩 차원은 절대 투영·폴딩·절단하지 않는다. `native-dim-in == stored-dim-out`.
 - 신규 엔진: EmbeddingGemma-300M = **768d**(전체), Upstage Solar = **4096d**(전체).
 - `src/search/semantic-embedding-provider.ts`의 768→64 모듈로 폴드는 레거시 회귀 층 전용. `#5 swap` 시 완전 제거. `src/engine/`에 복사 금지.
-- Solar 4096d가 pgvector HNSW 한계를 초과하는 것은 이 불변의 귀결 — exact scan + Qwen3-Reranker로 대응(ADR-002).
+- Solar 4096d가 pgvector HNSW 한계를 초과하는 것은 이 불변의 귀결 — exact scan + Qwen3-Reranker로 대응(구 ADR-002).
 
 **P-B — 프로덕션 경로 가짜 임베더 폴백 금지 (no fake stub as unintended fallback in production)**
 
@@ -358,4 +358,4 @@ R18 후 ~22% → **R19 후 ~14%** (repo 토폴로지 해소 = 최대 기여)
 - `requireRealEmbeddingProvider`: 실제 모델/키 미설정 시 예외 throw(`OMS_MODEL_PATH` 메시지). 가짜 임베더 묵시적 대체 없음.
 - 해시-투영 임베더: 계획에 없었음. 프로덕션에서 제거 → 테스트-헬퍼로 이동 완료.
 
-**공식 기록 위치**: [ADR-007 임베딩 무결성 불변](../../../decisions/ADR-007-no-fake-embedder-fallback-native-dim-integrity.md)
+**공식 기록 위치**: [구 ADR-007 임베딩 무결성 불변](../../../decisions/ADR-005-embedding-model-contract-integrity-lifecycle.md)

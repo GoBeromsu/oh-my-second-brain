@@ -1,3 +1,9 @@
+import {
+  authoredSkillDirectories,
+  main as syncGjcSkills,
+  parseSkillSelection,
+} from "../../scripts/sync-gjc-skills.mjs";
+import { lstatSync, symlinkSync } from "node:fs";
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -82,30 +88,16 @@ describe("Gajae-Code skill surface", () => {
     }
   });
 
-  it("carries proposals in every executable interview payload it shows", () => {
-    // Commit rebuilds the interview from the proposals it is given, so a shown
-    // payload that omits them teaches a call that cannot publish.
-    const body = readFileSync(absolute("assets/skills/interview/SKILL.md"), "utf8");
-    const payloads = [...body.matchAll(/```text\n([\s\S]*?)```/gu)]
-      .map(match => match[1] ?? "")
-      .filter(block => /mode:\s*"(interview-next|interview-answer|commit-contracts)"/u.test(block));
-    expect(payloads.length, "the interview skill must show its next, answer, and commit payloads").toBeGreaterThanOrEqual(3);
-    for (const payload of payloads) {
-      expect(payload, `an interview payload omits proposals: ${payload}`).toMatch(/\bproposals\b/u);
-    }
-    expect(body).toMatch(/interview-next.*interview-answer.*commit-contracts/su);
-  });
-  it("never shows a copyable interview-next call without proposals", () => {
-    // The skill payloads already carry proposals. Live docs that still show
-    // `write { op: "template", mode: "interview-next" }` teach the same
-    // orphan-answer refusal the previous payload gap caused.
+  it("never shows a copyable call for the retired interview surface", () => {
+    // The interview ledger is gone. Live docs that still show
+    // `write { op: "template", mode: "interview-next" }` teach a call the
+    // server no longer accepts.
     const files = [
       "README.md",
       "README.ko.md",
       "docs/adapters.md",
       "docs/cli-map.md",
       "docs/harness-architecture.md",
-      "assets/skills/interview/SKILL.md",
     ];
     const bare = /write \{ op: "template", mode: "interview-next" \}/gu;
     for (const relativePath of files) {
@@ -168,5 +160,161 @@ describe("Gajae-Code skill surface", () => {
   it("ships the root skills tree in the npm package", async () => {
     const packageJson = await readJson<{ readonly files?: readonly string[] }>("package.json");
     expect(packageJson.files).toContain("skills");
+  });
+
+  it("regenerates only the selected authored mirror", () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
+    fixtures.push(fixture);
+    const source = path.join(fixture, "assets", "skills");
+    const mirror = path.join(fixture, "skills");
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
+      mkdirSync(path.join(source, name), { recursive: true });
+      writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
+      mkdirSync(path.join(mirror, name), { recursive: true });
+      writeFileSync(path.join(mirror, name, "SKILL.md"), `stale ${name}\n`);
+    }
+    const sentinel = Buffer.from("user-owned sentinel\n");
+    const sentinelPath = path.join(mirror, "notes.txt");
+    writeFileSync(sentinelPath, sentinel);
+    const selectedSentinel = Buffer.from("selected-dir sentinel\n");
+    const selectedSentinelPath = path.join(mirror, "write", "notes.txt");
+    writeFileSync(selectedSentinelPath, selectedSentinel);
+
+    expect(syncGjcSkills(["--skill", "write", "--skill", "link"], { sourceRoot: source, destinationRoot: mirror })).toEqual(["write", "link"]);
+
+    expect(readFileSync(path.join(mirror, "write", "SKILL.md"))).toEqual(readFileSync(path.join(source, "write", "SKILL.md")));
+    expect(readFileSync(path.join(mirror, "link", "SKILL.md"))).toEqual(readFileSync(path.join(source, "link", "SKILL.md")));
+    expect(readFileSync(path.join(mirror, "doctor", "SKILL.md"), "utf8")).toBe("stale doctor\n");
+    expect(readFileSync(sentinelPath)).toEqual(sentinel);
+    expect(readFileSync(selectedSentinelPath)).toEqual(selectedSentinel);
+    expect(skillDirectories(mirror)).toEqual(skillDirectories(source));
+  });
+
+  it("keeps default generation limited to authored skill directories", () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
+    fixtures.push(fixture);
+    const source = path.join(fixture, "assets", "skills");
+    const mirror = path.join(fixture, "skills");
+    for (const name of ["write", "distill", "doctor", "link", "search", "status"]) {
+      mkdirSync(path.join(source, name), { recursive: true });
+      writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
+    }
+    mkdirSync(mirror, { recursive: true });
+    const sentinel = Buffer.from("keep me\n");
+    writeFileSync(path.join(mirror, "user-note.txt"), sentinel);
+    mkdirSync(path.join(mirror, "write"), { recursive: true });
+    writeFileSync(path.join(mirror, "write", "SKILL.md"), "stale write\n");
+
+    expect(syncGjcSkills([], { sourceRoot: source, destinationRoot: mirror })).toEqual(authoredSkillDirectories(source));
+
+    for (const name of authoredSkillDirectories(source)) {
+      expect(readFileSync(path.join(mirror, name, "SKILL.md"))).toEqual(readFileSync(path.join(source, name, "SKILL.md")));
+    }
+    expect(readFileSync(path.join(mirror, "user-note.txt"))).toEqual(sentinel);
+  });
+  it("mutates nothing when a later selected source is missing", () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
+    fixtures.push(fixture);
+    const source = path.join(fixture, "assets", "skills");
+    const mirror = path.join(fixture, "skills");
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
+      mkdirSync(path.join(source, name), { recursive: true });
+      writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
+      mkdirSync(path.join(mirror, name), { recursive: true });
+      writeFileSync(path.join(mirror, name, "SKILL.md"), `stale ${name}\n`);
+    }
+    rmSync(path.join(source, "link", "SKILL.md"));
+    const before = readFileSync(path.join(mirror, "write", "SKILL.md"));
+    const sibling = readFileSync(path.join(mirror, "doctor", "SKILL.md"));
+
+    expect(() => syncGjcSkills(["--skill", "write", "--skill", "link"], { sourceRoot: source, destinationRoot: mirror })).toThrow("missing source link/SKILL.md");
+    expect(readFileSync(path.join(mirror, "write", "SKILL.md"))).toEqual(before);
+    expect(readFileSync(path.join(mirror, "doctor", "SKILL.md"))).toEqual(sibling);
+    expect(skillDirectories(mirror)).toEqual(skillDirectories(source));
+  });
+
+  it("refuses overlapping source and destination before any write", () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
+    fixtures.push(fixture);
+    const source = path.join(fixture, "assets", "skills");
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
+      mkdirSync(path.join(source, name), { recursive: true });
+      writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
+    }
+    const before = readFileSync(path.join(source, "write", "SKILL.md"));
+    const aliasRoot = path.join(fixture, "alias-parent");
+    mkdirSync(aliasRoot);
+    symlinkSync(path.join(fixture, "assets"), path.join(aliasRoot, "assets"), "dir");
+
+    expect(() => syncGjcSkills(["--skill", "write"], { sourceRoot: source, destinationRoot: source })).toThrow("overlap");
+    expect(() => syncGjcSkills(["--skill", "write"], { sourceRoot: source, destinationRoot: path.join(source, "write") })).toThrow("overlap");
+    expect(() => syncGjcSkills(["--skill", "write"], {
+      sourceRoot: path.join(aliasRoot, "assets", "skills"),
+      destinationRoot: source,
+    })).toThrow("overlap");
+    expect(readFileSync(path.join(source, "write", "SKILL.md"))).toEqual(before);
+    const nested = path.join(source, "..mirror");
+    expect(() => syncGjcSkills(["--skill", "write"], { sourceRoot: source, destinationRoot: nested })).toThrow("overlap");
+    expect(readFileSync(path.join(source, "write", "SKILL.md"))).toEqual(before);
+    expect(lstatSync(nested, { throwIfNoEntry: false })).toBeUndefined();
+
+    const sibling = path.join(fixture, "assets", "..mirror");
+    mkdirSync(sibling);
+    expect(syncGjcSkills(["--skill", "write"], { sourceRoot: source, destinationRoot: sibling })).toEqual(["write"]);
+    expect(readFileSync(path.join(sibling, "write", "SKILL.md"))).toEqual(before);
+    expect(readFileSync(path.join(source, "write", "SKILL.md"))).toEqual(before);
+  });
+
+  it("refuses a destination leaf symlink without following it", () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
+    fixtures.push(fixture);
+    const source = path.join(fixture, "assets", "skills");
+    const mirror = path.join(fixture, "skills");
+    const outside = path.join(fixture, "outside.md");
+    const outsideBytes = Buffer.from("outside sentinel\n");
+    writeFileSync(outside, outsideBytes);
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
+      mkdirSync(path.join(source, name), { recursive: true });
+      writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
+    }
+    mkdirSync(path.join(mirror, "write"), { recursive: true });
+    symlinkSync(outside, path.join(mirror, "write", "SKILL.md"));
+    const sibling = path.join(mirror, "write", "notes.txt");
+    const siblingBytes = Buffer.from("selected-dir sentinel\n");
+    writeFileSync(sibling, siblingBytes);
+
+    expect(() => syncGjcSkills(["--skill", "write"], { sourceRoot: source, destinationRoot: mirror })).toThrow("symlink");
+    expect(readFileSync(outside)).toEqual(outsideBytes);
+    expect(lstatSync(path.join(mirror, "write", "SKILL.md")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(sibling)).toEqual(siblingBytes);
+  });
+
+  it("mutates nothing when the skill selection is invalid", () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
+    fixtures.push(fixture);
+    const source = path.join(fixture, "assets", "skills");
+    const mirror = path.join(fixture, "skills");
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
+      mkdirSync(path.join(source, name), { recursive: true });
+      writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
+    }
+    mkdirSync(path.join(mirror, "write"), { recursive: true });
+    const before = Buffer.from("untouched\n");
+    writeFileSync(path.join(mirror, "write", "SKILL.md"), before);
+    const snapshot = () => readFileSync(path.join(mirror, "write", "SKILL.md"));
+
+    for (const args of [
+      ["--skill", "../write"],
+      ["--skill", "contract"],
+      ["--skill"],
+      ["--skill", "write", "link"],
+      ["--skill=write/../../etc"],
+      ["write"],
+    ]) {
+      expect(() => syncGjcSkills(args, { sourceRoot: source, destinationRoot: mirror }), args.join(" ")).toThrow("[sync:skills] refusing to sync");
+      expect(snapshot(), args.join(" ")).toEqual(before);
+      expect(skillDirectories(mirror), args.join(" ")).toEqual(["write"]);
+    }
+    expect(() => parseSkillSelection(["--skill", "Write"])).toThrow("invalid skill name");
   });
 });

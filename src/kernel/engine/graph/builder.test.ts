@@ -6,7 +6,8 @@ import { buildGraph, buildGraphWithWarnings, buildNodeIndex, loadCachedGraph, lo
 import { filterNodesByQueryAxes, queryFacets } from "./node.js";
 import type { EngineGraphNode } from "./node.js";
 import type { SearchTemplateSource } from "../retrieval/template-source.js";
-import type { Digest, ManagedTemplatePath, ResolvedContract, ResolvedField, TemplateId, TemplatePolicy } from "../../templates/types.js";
+import type { Digest } from "../../conventions/canonical.js";
+import type { RetrievalField, RetrievalFields, TemplateId } from "../retrieval/axes.js";
 
 let vault: string;
 const DIGEST = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Digest;
@@ -14,70 +15,52 @@ const OTHER_DIGEST = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 const signature = "sha256:projection" as Digest;
 const template = "note" as TemplateId;
 
-function field(property: string, overrides: Partial<ResolvedField> = {}): ResolvedField {
-  return { property, type: "string", intent: property, required: false, ...overrides };
+function field(property: string, overrides: Partial<RetrievalField> = {}): RetrievalField {
+  return { property, type: "string", required: false, valuePolicy: "free", intent: property, ...overrides };
 }
 
-function contract(templateId: string | null, fields: Record<string, ResolvedField>): ResolvedContract {
-  return {
-    templateId: templateId as TemplateId | null,
-    headingOrder: "unordered",
-    fields,
-    headings: [],
-    semanticCriteria: [],
-    approved: {
-      defaultLayer: {
-        templatePath: ".oms/templates/default.md" as ManagedTemplatePath,
-        approvedMarkdown: "",
-        approvedMarkdownDigest: DIGEST,
-      },
-    },
-    contractDigest: DIGEST,
-  };
+function fields(entries: Record<string, RetrievalField>): RetrievalFields {
+  const record = Object.create(null) as Record<string, RetrievalField>;
+  for (const [key, value] of Object.entries(entries)) record[key] = value;
+  return record;
 }
 
-function policy(): TemplatePolicy {
-  return {
-    version: 4,
-    properties: {},
-    default: {
-      templatePath: ".oms/templates/default.md" as ManagedTemplatePath,
-      approvedMarkdown: "",
-      approvedMarkdownDigest: DIGEST,
-      fields: {},
-      headings: [],
-      semanticCriteria: [],
-    },
-    templates: {},
-    completion: { retryBudget: 2, agentRepair: { enabled: false } },
-  };
-}
-
-function noteContract(): ResolvedContract {
-  return contract(template, {
-    status: field("status", { type: "select", intent: "Status.", required: true, allowedValues: ["open", "closed"] }),
+function noteFields(): RetrievalFields {
+  return fields({
+    status: field("status", { type: "select", intent: "Status.", required: true, valuePolicy: "closed", allowedValues: ["open", "closed"] }),
     rating: field("rating", { type: "number", intent: "Rating." }),
   });
 }
 
-function meta(options: { readonly digest?: Digest; readonly managedSourcePaths?: readonly string[]; readonly templates?: Readonly<Record<string, ResolvedContract>>; readonly defaultFields?: ResolvedContract["fields"] } = {}): Extract<SearchTemplateSource, { available: true }> {
+function inventory(paths: readonly string[]): SearchTemplateSource["exclusions"] {
+  return { digest: DIGEST, roots: [], paths, globs: [], complete: true, diagnostics: [] };
+}
+
+function meta(options: { readonly digest?: Digest; readonly sourcePaths?: readonly string[]; readonly templates?: Readonly<Record<string, RetrievalFields | null>>; readonly defaultFields?: RetrievalFields } = {}): SearchTemplateSource {
   const digest = options.digest ?? DIGEST;
+  const sourcePaths = options.sourcePaths ?? ["Templates/note.md"];
   return {
-    available: true,
     digest,
-    managedSourcePaths: options.managedSourcePaths ?? ["Templates/note.md"],
     source: {
-      defaultContract: contract(null, options.defaultFields ?? { title: field("title", { intent: "Title.", required: true }) }),
-      templates: options.templates ?? { [template]: noteContract() },
-      globalAxes: {},
       generationDigest: digest,
-      policy: policy(),
+      defaultFields: options.defaultFields ?? fields({ title: field("title", { intent: "Title.", required: true }) }),
+      templates: options.templates ?? { [template]: noteFields() },
+      globalAxes: Object.create(null) as Record<string, never>,
+      sourcePaths,
     },
+    exclusions: inventory(sourcePaths),
+    diagnostics: [],
   };
 }
 
-function unavailableMeta(digest: Digest = DIGEST, reason = "template policy missing (.oms/template-policy.json)"): SearchTemplateSource {
-  return { available: false, digest, reason, managedSourcePaths: [] };
+/** Metadata the reader could not establish: identities and rules are unavailable. */
+function unavailableMeta(digest: Digest = DIGEST, code = "TEMPLATE_POLICY_ABSENT"): SearchTemplateSource {
+  return {
+    digest,
+    source: { generationDigest: digest, defaultFields: null, templates: null, globalAxes: null, sourcePaths: null },
+    exclusions: inventory([]),
+    diagnostics: [{ code, path: ".oms/settings.json", message: "no explicit contract is published" }],
+  };
 }
 
 async function note(file: string, frontmatter: string, body = ""): Promise<void> {
@@ -138,7 +121,7 @@ describe("template-bound graph construction", () => {
   it("excludes managed template source paths from explicit and whole-vault scans", async () => {
     await note("Templates/note.md", "template: note\nstatus: source", "source");
     await note("notes/live.md", "template: note\nstatus: live", "live");
-    const resolved = meta({ managedSourcePaths: ["Templates/note.md", "Templates/missing.md"] });
+    const resolved = meta({ sourcePaths: ["Templates/note.md", "Templates/missing.md"] });
     await expect(buildNodeIndex({ vaultPath: vault, meta: resolved })).resolves.toHaveLength(1);
     await expect(buildNodeIndex({ vaultPath: vault, meta: resolved, files: ["Templates/note.md"] })).resolves.toEqual([]);
     await expect(buildNodeIndex({ vaultPath: vault, meta: resolved, files: ["notes/live.md", "Templates/note.md"] })).resolves.toHaveLength(1);
@@ -198,8 +181,8 @@ describe("template-bound graph construction", () => {
       vaultPath: vault,
       meta: meta({
         templates: {
-          [template]: noteContract(),
-          [task]: contract(task, { status: field("status", { type: "select", intent: "Status." }) }),
+          [template]: noteFields(),
+          [task]: fields({ status: field("status", { type: "select", intent: "Status." }) }),
         },
       }),
     });
@@ -393,10 +376,11 @@ describe("read-only scans", () => {
 
   it("propagates template and exclusion failures instead of returning an empty graph", async () => {
     await note("notes/a.md", "template: note\nstatus: open", "body");
-    const broken = { available: true as const, digest: DIGEST, managedSourcePaths: [] as const, source: { templates: {} } };
+    const broken = { digest: DIGEST, source: { templates: {} }, exclusions: inventory([]), diagnostics: [] } as unknown as SearchTemplateSource;
     await expect(buildNodeIndex({ vaultPath: vault, meta: broken })).rejects.toThrow(/TEMPLATE_AXIS_UNDECLARED_FIELD/);
-    await mkdir(path.join(vault, ".oms"));
-    await writeFile(path.join(vault, ".oms", "taxonomy.json"), "{", "utf8");
+    // An unreadable declared exclusion channel must block rather than scan unfiltered.
+    await mkdir(path.join(vault, ".obsidian"));
+    await writeFile(path.join(vault, ".obsidian", "templates.json"), "{", "utf8");
     await expect(buildGraph({ vaultPath: vault, meta: meta() })).rejects.toThrow(/NOTE_EXCLUSION_RESOLUTION_FAILED/);
   });
 });
@@ -461,8 +445,8 @@ describe("projection-bound cache", () => {
     expect(await nodeSourceSignature(vault, meta({ digest: OTHER_DIGEST }))).not.toBe(first);
     expect(await nodeSourceSignature(vault, unavailableMeta(DIGEST))).not.toBe(first);
     expect(await nodeSourceSignature(vault, unavailableMeta(OTHER_DIGEST))).not.toBe(await nodeSourceSignature(vault, unavailableMeta(DIGEST)));
-    const missingA = await nodeSourceSignature(vault, meta({ managedSourcePaths: ["Templates/note.md", "Templates/missing-a.md"] }));
-    const missingB = await nodeSourceSignature(vault, meta({ managedSourcePaths: ["Templates/note.md", "Templates/missing-b.md"] }));
+    const missingA = await nodeSourceSignature(vault, meta({ sourcePaths: ["Templates/note.md", "Templates/missing-a.md"] }));
+    const missingB = await nodeSourceSignature(vault, meta({ sourcePaths: ["Templates/note.md", "Templates/missing-b.md"] }));
     expect(missingA).not.toBe(missingB);
     await note("notes/a.md", "template: note\nstatus: open", "beta");
     expect(await nodeSourceSignature(vault, available)).not.toBe(first);

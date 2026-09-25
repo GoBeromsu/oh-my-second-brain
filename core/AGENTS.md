@@ -1,49 +1,49 @@
 # Oh My Second Brain Vault Convention — SSOT for Host Agents
 
 This file defines the end-user vault convention for host agents (Claude Code, Codex,
-Hermes, and others). All convention data and its meaning remain vault-owned.
+Hermes, and others). The vault's meaning belongs to the user.
 
-## Four Separate Authorities
+## The Sealed Contract
 
-These authorities do not overlap:
+The user states what the vault means once, by running the interactive `oms setup` at
+a terminal. The interview covers folders, the property pool, and the templates in the
+template folder together, and seals the result as the vault contract. Agents never
+seal: `oms setup` refuses to run without a terminal or under
+`OMS_NON_INTERACTIVE=1`, and there is no MCP operation or skill for it.
 
-1. **Markdown templates — shape and body.** Actual vault Markdown templates own
-   frontmatter-key scaffolding, default literals, and note body shape. Do not infer
-   semantic meaning from a template's defaults.
-2. **Ontology policy — note and field meaning.** `.oms/template-policy.json` owns
-   `intent` for notes and frontmatter fields. It is the note/field portion of the
-   semantic ontology, not template shape or type authority.
-3. **Taxonomy — placement and folder/link ontology.** `.oms/taxonomy.yaml` owns note
-   placement and the folder/link portion of the semantic ontology, expressed through
-   folder and link `intent`. Authored folder intents surface on the derived
-   `folder-ontology` axis.
-4. **Obsidian types — type authority.** `.obsidian/types.json` is the read-only type
-   authority. `.oms/types.json` is derived output, never an independent authority.
+- The sealed contract lives outside the vault under `~/.oms/`. That directory is
+  off-limits: do not read, search, or write anything under it.
+- The only OMS file inside the vault is `.oms/settings.json`. Do not write under
+  `.oms/`.
+- Templates in the template folder are the user's own Markdown. Read them to see a
+  note's shape; do not rewrite them.
+- `.obsidian/types.json` is a read-only observation. Do not modify it.
 
-## Operating Boundaries
+## Writing Notes
 
-- Treat the verified target note and its applicable vault template as the write
-  boundary. Write only after verifying that target; never use a destination merely
-  because a template default suggests it.
-- Read ontology and taxonomy to understand declared meaning and placement. Do not
-  overwrite them as a side effect of writing a note.
-- Read `.obsidian/types.json` without modifying it. Do not edit derived
-  `.oms/types.json` as a source of truth.
-- Preserve unknown frontmatter fields and their values. The convention constrains only
-  what the user declared.
+- Write notes with the MCP `write` tool: `{path, content, template?}`, where
+  `content` is the whole note and `template` optionally names the sealed template
+  the note follows. In Claude Code, native edits inside the vault are judged the
+  same way by the guard hook.
+- A denied write leaves the file unchanged and returns `{field, kind}` violations
+  and one guidance command. Fix the note and write it again; do not look for the
+  rule values.
+- Use only the properties the vault declares; a key outside the sealed property
+  pool is denied. Keep existing frontmatter values you were not asked to change.
+- Replace every template variable with a real value before writing.
+- A `contract-unreadable` denial means the seal no longer matches the vault. Ask
+  the user to run `oms setup`; do not work around it.
 
 ## User Ownership
 
-The user owns templates, ontology, taxonomy, and type definitions in the vault.
-Oh My Second Brain applies those declarations without making them sticky: it does not
-impose a folder structure, retain obsolete declarations, or replace user-authored
-meaning. The user-owned semantic ontology remains active across ontology policy and
-taxonomy; it is separate from template shape and type authority.
+An allowed write means the note fits the sealed structure, not that it is worth
+keeping. Deciding that belongs to the user. Oh My Second Brain does not impose a
+folder structure, hardcode property names, or replace user-authored meaning.
 
 ## Quick Reference for Host Agents
 
-- For note shape and default values, read the applicable vault Markdown template.
-- For note or field ontology, read `intent` in `.oms/template-policy.json`.
-- For destination and folder/link ontology, read `.oms/taxonomy.yaml`.
-- For types, read `.obsidian/types.json`; treat `.oms/types.json` only as derived data.
-- When in doubt, preserve user-authored content and unknown frontmatter.
+- For note shape, read the applicable template in the vault's template folder.
+- For the sealed folders, property names and types, and templates, use MCP
+  `search` with `op: "templates"`.
+- For contract health, run `oms status` or `oms contract doctor`, or ask the user.
+- When in doubt, preserve user-authored content.

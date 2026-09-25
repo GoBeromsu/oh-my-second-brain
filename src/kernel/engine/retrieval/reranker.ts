@@ -382,7 +382,7 @@ export function createLazyOwnedReranker(
 // capability reachable as a real one: the MCP facade treats any defined reranker
 // as available, so injecting a passthrough made an explicit `rerank: true` request
 // report success while returning the unchanged RRF order. Reranking is opt-in
-// (ADR-011) and an unavailable capability must fail loudly (ADR-007), so the
+// (ADR-004) and an unavailable capability must fail loudly (ADR-005), so the
 // correct production state is an absent reranker, not an inert one.
 //
 // Tests that need an inert `Reranker` import it from `./passthrough.test-helper.js`.

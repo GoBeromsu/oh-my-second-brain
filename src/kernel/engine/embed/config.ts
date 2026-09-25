@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
+
+import { parseVaultSettings, readVaultSettings, SETTINGS_PATH } from "../../vault/settings.js";
 
 export type ModelCapability = "embed" | "rerank" | "generate";
 
@@ -33,8 +34,24 @@ export interface InstalledModelArtifact {
   readonly embedShape?: EmbedModelShape;
 }
 
-export const MODELS_CONFIG_FILENAME = "models.json" as const;
-export const MODELS_CONFIG_VERSION = 1 as const;
+const MODELS_CONFIG_VERSION = 1 as const;
+
+/** The vault's embedding model name from `.oms/settings.json` `embedding.model`, or null when unset. */
+export async function readVaultEmbeddingModel(vault: string): Promise<string | null> {
+  return (await readVaultSettings(vault))?.embedding?.model ?? null;
+}
+
+/** Synchronous form for engine assembly; a missing settings file means no vault model. */
+export function readVaultEmbeddingModelSync(vault: string): string | null {
+  let bytes: string;
+  try {
+    bytes = readFileSync(path.join(vault, ...SETTINGS_PATH.split("/")), "utf8");
+  } catch (error: unknown) {
+    if (isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) return null;
+    throw error;
+  }
+  return parseVaultSettings(bytes).embedding?.model ?? null;
+}
 export const MODEL_CAPABILITY_ENV_PAIRS: Readonly<Record<ModelCapability, readonly [string, string]>> = {
   embed: ["OMS_EMBEDDING_PROVIDER", "OMS_EMBEDDING_MODEL"],
   rerank: ["OMS_RERANK_PROVIDER", "OMS_RERANK_MODEL"],
@@ -58,7 +75,11 @@ export interface ResolveModelCapabilityOptions {
   readonly capability: ModelCapability;
   readonly request?: PortableModelSelection;
   readonly env?: Readonly<Record<string, string | undefined>>;
-  readonly vaultConfig?: ModelsConfigV1 | null;
+  /**
+   * The vault's embedding model name from `.oms/settings.json` `embedding.model`.
+   * It is an embed-only source: rerank and generate have no vault declaration.
+   */
+  readonly vaultEmbeddingModel?: string | null;
   readonly installedArtifacts?: readonly InstalledModelArtifact[];
   /** Canonical identity keys written by setup, at most one per capability. */
   readonly setupDefaults?: readonly string[];
@@ -67,7 +88,7 @@ export interface ResolveModelCapabilityOptions {
 export interface ResolveModelCapabilitiesOptions {
   readonly requests?: Readonly<Partial<Record<ModelCapability, PortableModelSelection>>>;
   readonly env?: Readonly<Record<string, string | undefined>>;
-  readonly vaultConfig?: ModelsConfigV1 | null;
+  readonly vaultEmbeddingModel?: string | null;
   readonly installedArtifacts?: readonly InstalledModelArtifact[];
   readonly setupDefaults?: readonly string[];
 }
@@ -83,7 +104,7 @@ const GENERATE_PROMPT = "qmd-query-expansion-v2.8.3";
 type SelectionSource = Exclude<ModelSelectionSource, "unavailable">;
 
 function fail(message: string): never {
-  throw new Error(`Invalid .oms/${MODELS_CONFIG_FILENAME}: ${message}`);
+  throw new Error(`Invalid model selection: ${message}`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -137,7 +158,7 @@ function parseSelection(value: unknown, capability: ModelCapability, label: stri
   return { provider: "gguf", model, revision, sha256, promptScheme };
 }
 
-/** Parse a strict, portable `.oms/models.json` schema-version 1 document. */
+/** Parse a strict, portable in-memory model selection set (schema version 1). It is never read from or written to a vault file. */
 export function parseModelsConfig(input: string | unknown): ModelsConfigV1 {
   let value: unknown = input;
   if (typeof input === "string") {
@@ -163,28 +184,6 @@ export function parseModelsConfig(input: string | unknown): ModelsConfigV1 {
   };
 }
 
-/** Read and parse a vault-local models configuration. Missing configuration is unavailable, not an error. */
-export async function readModelsConfig(vault: string): Promise<ModelsConfigV1 | null> {
-  const filename = path.join(vault, ".oms", MODELS_CONFIG_FILENAME);
-  try {
-    return parseModelsConfig(await readFile(filename, "utf8"));
-  } catch (error: unknown) {
-    if (isRecord(error) && error.code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-/** Read and parse a vault-local models configuration synchronously. Missing configuration is unavailable, not an error. */
-export function readModelsConfigSync(vault: string): ModelsConfigV1 | null {
-  const filename = path.join(vault, ".oms", MODELS_CONFIG_FILENAME);
-  try {
-    return parseModelsConfig(readFileSync(filename, "utf8"));
-  } catch (error: unknown) {
-    if (isRecord(error) && error.code === "ENOENT") return null;
-    throw error;
-  }
-}
-
 /** Stable identity for matching portable selections to local artifacts and setup defaults. */
 export function canonicalModelIdentityKey(selection: PortableModelSelection): string {
   const validated = parseSelection(selection, promptCapability(selection), "selection");
@@ -199,11 +198,6 @@ function promptCapability(selection: PortableModelSelection): ModelCapability {
   if (selection.promptScheme === GENERATE_PROMPT) return "generate";
   // parseSelection provides the public validation error after this branch.
   return "embed";
-}
-
-function selectionForCapability(config: ModelsConfigV1 | null | undefined, capability: ModelCapability): PortableModelSelection | undefined {
-  if (config === null || config === undefined) return undefined;
-  return config[capability];
 }
 
 function validateArtifacts(artifacts: readonly InstalledModelArtifact[]): void {
@@ -254,11 +248,20 @@ function artifactForEnvironment(
   artifacts: readonly InstalledModelArtifact[],
 ): InstalledModelArtifact {
   if (provider !== "gguf") throw new Error(`Environment selection for ${capability} must use provider gguf.`);
-  portableValue(model, `environment ${capability} model`);
+  return artifactForModelName(capability, model, artifacts, "Environment selection");
+}
+
+function artifactForModelName(
+  capability: ModelCapability,
+  model: string,
+  artifacts: readonly InstalledModelArtifact[],
+  label: string,
+): InstalledModelArtifact {
+  portableValue(model, `${label} ${capability} model`);
   const found = artifacts.filter((artifact) => artifact.capability === capability &&
-    artifact.selection.provider === provider && artifact.selection.model === model);
+    artifact.selection.provider === "gguf" && artifact.selection.model === model);
   if (found.length !== 1) {
-    throw new Error(`Environment selection for ${capability} does not identify exactly one installed artifact.`);
+    throw new Error(`${label} for ${capability} does not identify exactly one installed artifact.`);
   }
   return found[0]!;
 }
@@ -312,9 +315,9 @@ function envArtifact(
  * installs it, and never one that does not.
  */
 const CAPABILITY_INSTALL_REMEDY: Readonly<Record<ModelCapability, string>> = {
-  embed: "install the pinned default with `oms setup --models-default`",
-  rerank: "install one with `oms setup --models-descriptor <path>`",
-  generate: "install one with `oms setup --models-descriptor <path>`",
+  embed: "install and select the pinned default with `oms model install --default` and `oms model select --default`",
+  rerank: "install one with `oms model install --descriptor <path>`",
+  generate: "install one with `oms model install --descriptor <path>`",
 };
 
 /**
@@ -327,10 +330,10 @@ const CAPABILITY_INSTALL_REMEDY: Readonly<Record<ModelCapability, string>> = {
  */
 export function capabilityGuidance(capability: ModelCapability): string {
   const [provider, model] = MODEL_CAPABILITY_ENV_PAIRS[capability];
+  const vault = capability === "embed" ? "set `embedding.model` in .oms/settings.json, " : "";
   return (
     `No ${capability} model is configured. Set ${provider} and ${model}, ` +
-    `declare ${capability} in .oms/${MODELS_CONFIG_FILENAME}, or ` +
-    `${CAPABILITY_INSTALL_REMEDY[capability]}.`
+    `${vault}or ${CAPABILITY_INSTALL_REMEDY[capability]}.`
   );
 }
 
@@ -359,12 +362,10 @@ export function resolveModelCapability(options: ResolveModelCapabilityOptions): 
   }
   const environment = envArtifact(options.capability, options.env ?? process.env, artifacts);
   if (environment !== undefined) candidates.push({ source: "environment", selection: environment.selection, artifact: environment });
-  const vaultSelection = selectionForCapability(options.vaultConfig, options.capability);
-  if (vaultSelection !== undefined) {
-    candidates.push({
-      source: "vault",
-      selection: parseSelection(vaultSelection, options.capability, `vault ${options.capability}`),
-    });
+  const vaultModel = options.capability === "embed" ? options.vaultEmbeddingModel ?? undefined : undefined;
+  if (vaultModel !== undefined) {
+    const vault = artifactForModelName("embed", vaultModel, artifacts, "Vault settings embedding.model");
+    candidates.push({ source: "vault", selection: vault.selection, artifact: vault });
   }
   const setup = setupDefaultForCapability(options.capability, defaults, artifacts);
   if (setup !== undefined) candidates.push({ source: "setup-default", selection: setup.selection, artifact: setup });

@@ -25,7 +25,7 @@ const HERMES_SKILL_CATEGORY = "knowledge-management";
 const HERMES_SKILL_NAME = "oms";
 
 const HERMES_MCP_ENTRY_PATH = ["mcp_servers", "oms"] as const;
-const HERMES_SKILLS = ["distill", "doctor", "interview", "link", "search", "status", "template", "write"] as const;
+const HERMES_SKILLS = ["distill", "doctor", "link", "search", "status", "write"] as const;
 
 /** Recognizes the MCP entry rendered and verified by the Hermes adapter. */
 export function isHermesOmsRegistration(raw: string): boolean {
