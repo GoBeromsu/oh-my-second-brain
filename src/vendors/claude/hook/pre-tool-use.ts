@@ -1,134 +1,130 @@
-import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
-import { readStdinTimeout } from "./stdin.js";
-
-interface PreToolUsePayload {
-  tool_name?: string;
-  toolName?: string;
-  tool_input?: Record<string, unknown>;
-}
-
-interface HookResponse {
-  continue: boolean;
-  suppressOutput?: boolean;
-  reason?: string;
-}
-
-function writeResponse(resp: HookResponse): void {
-  process.stdout.write(JSON.stringify(resp) + "\n");
-}
+import { judgeReadyTarget, resolveWriteTarget, unreadableTarget } from "../../../kernel/contract/judge-write.js";
+import { formatDenyReason, type Verdict, type Violation } from "../../../kernel/contract/types.js";
+import { readStdinTimeout, type StdinRead } from "./stdin.js";
 
 /**
- * Check whether a vault-relative path is covered by any registered folder entry.
- *
- * Handles both top-level registrations (`00. Inbox`) and 2-depth registrations
- * (`80. References/03 Clippings`) so Ataraxia and agent vault taxonomies are
- * treated identically.
+ * `oms hook pre`: translates a Claude PreToolUse payload into the note the tool would
+ * leave on disk and hands it to the contract judge. Only the judge decides; this layer
+ * reconstructs content and formats the answer.
  */
-export function isPathAllowed(relPath: string, registeredFolders: readonly string[]): boolean {
-  for (const folder of registeredFolders) {
-    if (relPath === folder || relPath.startsWith(folder + "/")) {
-      return true;
-    }
+
+export const WRITE_TOOLS = ["write", "edit", "multiedit", "notebookedit"] as const;
+
+export type HookResponse =
+  | { readonly continue: true; readonly suppressOutput: true }
+  | { readonly hookSpecificOutput: { readonly hookEventName: "PreToolUse"; readonly permissionDecision: "deny"; readonly permissionDecisionReason: string } };
+
+export interface HookResult {
+  readonly response: HookResponse;
+  /** One line for stderr when the payload could not be judged; never names a path or value. */
+  readonly warning: string | null;
+}
+
+const ALLOW: HookResponse = { continue: true, suppressOutput: true };
+
+function allow(warning: string | null = null): HookResult {
+  return { response: ALLOW, warning };
+}
+
+function deny(violations: readonly Violation[]): HookResult {
+  return {
+    response: { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: formatDenyReason(violations) } },
+    warning: null,
+  };
+}
+
+function fromVerdict(verdict: Verdict): HookResult {
+  if (verdict.ok) return allow();
+  return deny(verdict.violations);
+}
+
+/** `~` and `~/rest` expand to the home directory; `~user` forms cannot be resolved and give null. */
+function expandHome(target: string): string | null {
+  if (target === "~") return homedir();
+  if (target.startsWith("~/")) return path.join(homedir(), target.slice(2));
+  if (target.startsWith("~")) return null;
+  return target;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Applies one Claude edit the way the tool does; null when the tool itself would refuse it. */
+function applyEdit(base: string | undefined, edit: Record<string, unknown>): string | null {
+  const oldString = text(edit["old_string"]);
+  const newString = text(edit["new_string"]);
+  if (oldString === undefined || newString === undefined) return null;
+  if (base === undefined) return oldString === "" ? newString : null;
+  if (oldString === "") return null;
+  const parts = base.split(oldString);
+  const count = parts.length - 1;
+  if (count === 0) return null;
+  if (edit["replace_all"] === true) return parts.join(newString);
+  if (count !== 1) return null;
+  return parts.join(newString);
+}
+
+function reconstruct(tool: string, input: Record<string, unknown>, previous: string | undefined): string | null {
+  if (tool === "write") return text(input["content"]) ?? null;
+  if (tool === "edit") return applyEdit(previous, input);
+  const edits = input["edits"];
+  if (!Array.isArray(edits) || edits.length === 0) return null;
+  let current = previous;
+  for (const edit of edits) {
+    const next = applyEdit(current, record(edit));
+    if (next === null) return null;
+    current = next;
   }
-  return false;
+  return current ?? null;
 }
 
 /**
- * Load registered folder keys from <vault>/.oms/taxonomy.json.
- * Returns null on any I/O or parse error (caller must fail-open).
+ * Judges one PreToolUse payload for the vault. Never throws. The guard only routes writes
+ * inside the vault here, so a payload that is cut off or cannot be parsed is denied.
  */
-export async function loadRegisteredFolders(vault: string): Promise<string[] | null> {
+export async function translatePreToolUse(raw: string, vault: string, transport: Pick<StdinRead, "truncated"> = { truncated: false }): Promise<HookResult> {
+  if (transport.truncated) return deny([{ field: "input", kind: "unsupported-input" }]);
+  let payload: Record<string, unknown>;
   try {
-    const raw = await readFile(path.join(vault, ".oms", "taxonomy.json"), "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const folders = parsed["folders"];
-    if (!folders || typeof folders !== "object" || Array.isArray(folders)) return null;
-    return Object.keys(folders as Record<string, unknown>);
+    payload = record(JSON.parse(raw));
   } catch {
-    return null;
+    return deny([{ field: "input", kind: "unsupported-input" }]);
   }
+  const tool = String(payload["tool_name"] ?? payload["toolName"] ?? "").toLowerCase();
+  if (!(WRITE_TOOLS as readonly string[]).includes(tool)) return allow();
+  const input = record(payload["tool_input"] ?? payload["toolInput"]);
+  const target = text(input["file_path"]) || text(input["notebook_path"]) || text(input["path"]);
+  if (!target) return allow();
+  const cwd = text(payload["cwd"]) || process.cwd();
+  const expanded = expandHome(target);
+  if (expanded === null) return deny([{ field: "path", kind: "path-unsafe" }]);
+
+  const resolved = await resolveWriteTarget(vault, path.resolve(cwd, expanded));
+  if (resolved.state === "denied") {
+    return resolved.verdict.violations.some(violation => violation.kind === "outside-vault") ? allow() : fromVerdict(resolved.verdict);
+  }
+  if (tool === "notebookedit" || !resolved.path.toLowerCase().endsWith(".md")) return allow();
+  if (resolved.previousContent === null) return fromVerdict(unreadableTarget(resolved.view));
+
+  const content = reconstruct(tool, input, resolved.previousContent);
+  if (content === null) {
+    // The tool refuses an edit that does not apply; a sealed vault denies it here as well.
+    if (resolved.view.state !== "open") return deny([{ field: "content", kind: "unsupported-input" }]);
+    return allow("[oms] the edit does not apply to the current file; nothing to judge.");
+  }
+  return fromVerdict(judgeReadyTarget(resolved, content));
 }
 
 export async function runPreToolUse(opts: { vault: string }): Promise<void> {
-  // Escape hatch: OMS_GUARD=off bypasses all checks.
-  if (process.env["OMS_GUARD"] === "off") {
-    writeResponse({ continue: true, suppressOutput: true });
-    return;
-  }
-
-  const vault = path.resolve(opts.vault);
-
-  // Fail-open on stdin errors.
-  let rawInput: string;
-  try {
-    rawInput = await readStdinTimeout();
-  } catch {
-    process.stderr.write("[oms-guard] stdin read error — fail-open\n");
-    writeResponse({ continue: true, suppressOutput: true });
-    return;
-  }
-
-  // Fail-open on invalid JSON.
-  let payload: PreToolUsePayload;
-  try {
-    payload = JSON.parse(rawInput) as PreToolUsePayload;
-  } catch {
-    process.stderr.write("[oms-guard] invalid JSON on stdin — fail-open\n");
-    writeResponse({ continue: true, suppressOutput: true });
-    return;
-  }
-
-  const toolName = (payload.tool_name ?? payload.toolName ?? "").toLowerCase();
-
-  // Only intercept Write and Edit. Bash is too ambiguous to parse safely.
-  if (toolName !== "write" && toolName !== "edit") {
-    writeResponse({ continue: true, suppressOutput: true });
-    return;
-  }
-
-  const toolInput = payload.tool_input ?? {};
-  // Write tool uses `path`; Edit tool uses `path` or `file_path`.
-  const rawFilePath = String(toolInput["path"] ?? toolInput["file_path"] ?? "");
-  if (!rawFilePath) {
-    writeResponse({ continue: true, suppressOutput: true });
-    return;
-  }
-
-  const absFilePath = path.isAbsolute(rawFilePath) ? rawFilePath : path.resolve(rawFilePath);
-  const relPath = path.relative(vault, absFilePath).replace(/\\/g, "/");
-
-  // Outside vault — not our concern.
-  if (relPath.startsWith("..") || path.isAbsolute(relPath)) {
-    writeResponse({ continue: true, suppressOutput: true });
-    return;
-  }
-
-  // Load taxonomy — fail-open if unreadable or corrupt.
-  const registeredFolders = await loadRegisteredFolders(vault);
-  if (registeredFolders === null) {
-    process.stderr.write(`[oms-guard] taxonomy.json unreadable at ${vault} — fail-open\n`);
-    writeResponse({ continue: true, suppressOutput: true });
-    return;
-  }
-
-  // Empty taxonomy → fail-open (avoid blocking everything on an unconfigured vault).
-  if (registeredFolders.length === 0) {
-    writeResponse({ continue: true, suppressOutput: true });
-    return;
-  }
-
-  if (isPathAllowed(relPath, registeredFolders)) {
-    writeResponse({ continue: true, suppressOutput: true });
-    return;
-  }
-
-  const topFolder = relPath.split("/")[0] ?? relPath;
-  const reason =
-    `[oms-guard] Blocked: "${topFolder}" is not registered in .oms/taxonomy.json.\n` +
-    `Vault: ${vault}\n` +
-    `To register this folder run: oms setup --vault ${vault}\n` +
-    `To bypass temporarily set: OMS_GUARD=off`;
-
-  writeResponse({ continue: false, reason });
+  const read = await readStdinTimeout();
+  const result = await translatePreToolUse(read.text, path.resolve(opts.vault), read);
+  if (result.warning !== null) process.stderr.write(`${result.warning}\n`);
+  process.stdout.write(`${JSON.stringify(result.response)}\n`);
 }

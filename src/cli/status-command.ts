@@ -1,13 +1,12 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 
 import { runEngineSession } from "./engine-session.js";
+import { contractStatus } from "../kernel/contract/status.js";
 import * as engineAssembly from "../kernel/engine/assemble.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
-import { composeContractV5, parseContractPolicyV5 } from "../kernel/templates/contract-v5.js";
 
 function usage(): string {
   return "Usage: oms status [--vault <path>]";
@@ -51,37 +50,14 @@ export async function runStatusCommand(argv: readonly string[]): Promise<void> {
       ? await resolveEffectiveVault(process.cwd(), process.env)
       : { vault: path.resolve(explicit), source: "explicit" as const };
 
+    // Status is an observation, not a control dump: posture, findings and drift
+    // states only, never a rule value, a vault id or a store path.
     let convention: unknown;
-    const policyPath = path.join(resolved.vault, ".oms", "template-policy.json");
-    if (!existsSync(policyPath)) {
-      convention = {
-        status: "absent",
-        diagnostics: [{
-          code: "TEMPLATE_POLICY_ABSENT",
-          remediation: `No template convention exists at "${policyPath}".`,
-        }],
-      };
-    } else {
-      try {
-        const policy = parseContractPolicyV5(await readFile(policyPath, "utf8"));
-        // Status is an observation, not a control dump: report identities and
-        // digests, never the raw control bytes or the user's own source text.
-        convention = {
-          status: "approved",
-          revision: policy.revision,
-          common: policy.common.status === "active"
-            ? { status: "active", contractDigest: composeContractV5(policy, null).contractDigest }
-            : { status: "review-required", reasons: policy.common.reasons },
-          templates: Object.fromEntries(Object.entries(policy.templates).map(([templateId, entry]) => [
-            templateId,
-            entry.status === "active"
-              ? { status: "active", contractDigest: composeContractV5(policy, templateId).contractDigest, source: { identity: entry.source.identity, path: entry.source.path } }
-              : { status: "review-required", reasons: entry.reasons },
-          ])),
-        };
-      } catch (error: unknown) {
-        convention = { status: "invalid", diagnostics: [diagnostic(error)] };
-      }
+    try {
+      convention = await contractStatus(resolved.vault);
+    } catch {
+      // The error text may name the store; only the fixed guidance is shown.
+      convention = { contract: "unreadable", findings: [{ message: "contract status unavailable", guidance: "oms contract doctor" }] };
     }
 
     let history: unknown;

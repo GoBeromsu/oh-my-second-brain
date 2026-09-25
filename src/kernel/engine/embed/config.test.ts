@@ -2,12 +2,12 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { serializeVaultSettings } from "../../vault/settings.js";
 import {
-  MODELS_CONFIG_FILENAME,
   canonicalModelIdentityKey,
   parseModelsConfig,
-  readModelsConfig,
-  readModelsConfigSync,
+  readVaultEmbeddingModel,
+  readVaultEmbeddingModelSync,
   resolveModelCapabilities,
   resolveModelCapability,
   type InstalledModelArtifact,
@@ -72,21 +72,24 @@ describe("models configuration v1", () => {
     for (const value of invalid) expect(() => parseModelsConfig(value)).toThrow();
   });
 
-  it("reads only the vault-local filename and treats only a missing file as unavailable", async () => {
+  it("reads the vault embedding model only from settings.json and never from a retired model file", async () => {
     const vault = await mkdtemp(path.join(tmpdir(), "oms-models-"));
     vaults.push(vault);
-    expect(await readModelsConfig(vault)).toBeNull();
-    expect(readModelsConfigSync(vault)).toBeNull();
+    expect(await readVaultEmbeddingModel(vault)).toBeNull();
+    expect(readVaultEmbeddingModelSync(vault)).toBeNull();
     await mkdir(path.join(vault, ".oms"));
-    const filename = path.join(vault, ".oms", MODELS_CONFIG_FILENAME);
-    await writeFile(filename, JSON.stringify(config()));
-    expect(await readModelsConfig(vault)).toEqual(config());
-    expect(readModelsConfigSync(vault)).toEqual(config());
-    await writeFile(filename, "{");
-    expect(() => readModelsConfigSync(vault)).toThrow("not valid JSON");
-    await rm(filename);
-    await mkdir(filename);
-    expect(() => readModelsConfigSync(vault)).toThrow();
+    await writeFile(path.join(vault, ".oms", ["models", "json"].join(".")), JSON.stringify(config()));
+    expect(await readVaultEmbeddingModel(vault)).toBeNull();
+    expect(readVaultEmbeddingModelSync(vault)).toBeNull();
+    const settings = path.join(vault, ".oms", "settings.json");
+    await writeFile(settings, serializeVaultSettings({ version: 1, vaultId: "11111111-2222-4333-8444-555555555555" }));
+    expect(await readVaultEmbeddingModel(vault)).toBeNull();
+    expect(readVaultEmbeddingModelSync(vault)).toBeNull();
+    await writeFile(settings, serializeVaultSettings({ version: 1, vaultId: "11111111-2222-4333-8444-555555555555", embedding: { model: "embed.gguf" } }));
+    expect(await readVaultEmbeddingModel(vault)).toBe("embed.gguf");
+    expect(readVaultEmbeddingModelSync(vault)).toBe("embed.gguf");
+    await writeFile(settings, "{");
+    expect(() => readVaultEmbeddingModelSync(vault)).toThrow();
   });
 });
 
@@ -95,8 +98,9 @@ describe("strict capability resolution", () => {
     it(`uses strict precedence for ${capability} and discloses equivalent/shadowed sources`, () => {
       const requested = selection(capability, `request-${capability}.gguf`);
       const env = artifact(capability, `environment-${capability}.gguf`);
-      const vault = selection(capability, `vault-${capability}.gguf`);
+      const vault = artifact(capability, `vault-${capability}.gguf`);
       const setup = artifact(capability, `setup-${capability}.gguf`);
+      const vaultEmbeddingModel = capability === "embed" ? vault.selection.model : null;
       const result = resolveModelCapability({
         capability,
         request: requested,
@@ -105,22 +109,42 @@ describe("strict capability resolution", () => {
           : capability === "rerank"
             ? { OMS_RERANK_PROVIDER: "gguf", OMS_RERANK_MODEL: env.selection.model }
             : { OMS_GENERATE_PROVIDER: "gguf", OMS_GENERATE_MODEL: env.selection.model },
-        vaultConfig: { schemaVersion: 1, embed: capability === "embed" ? vault : selection("embed"), ...(capability === "rerank" ? { rerank: vault } : {}), ...(capability === "generate" ? { generate: vault } : {}) },
-        installedArtifacts: [artifact(capability, requested.model), env, setup],
+        vaultEmbeddingModel,
+        installedArtifacts: [artifact(capability, requested.model), env, vault, setup],
         setupDefaults: [canonicalModelIdentityKey(setup.selection)],
       });
       expect(result.source).toBe("request");
-      expect(result.shadowedSources).toEqual(["environment", "vault", "setup-default"]);
+      expect(result.shadowedSources).toEqual(capability === "embed"
+        ? ["environment", "vault", "setup-default"]
+        : ["environment", "setup-default"]);
 
       const equivalent = resolveModelCapability({
         capability,
         request: requested,
-        vaultConfig: { schemaVersion: 1, embed: capability === "embed" ? requested : selection("embed"), ...(capability === "rerank" ? { rerank: requested } : {}), ...(capability === "generate" ? { generate: requested } : {}) },
+        vaultEmbeddingModel: capability === "embed" ? requested.model : null,
         installedArtifacts: [artifact(capability, requested.model)],
       });
-      expect(equivalent.equivalentSources).toEqual(["vault"]);
+      expect(equivalent.equivalentSources).toEqual(capability === "embed" ? ["vault"] : []);
     });
   }
+
+  it("selects the settings.json embedding model as the vault source ahead of setup defaults", () => {
+    const vault = artifact("embed", "vault-embed.gguf");
+    const setup = artifact("embed", "setup-embed.gguf");
+    const result = resolveModelCapability({
+      capability: "embed",
+      env: {},
+      vaultEmbeddingModel: vault.selection.model,
+      installedArtifacts: [vault, setup],
+      setupDefaults: [canonicalModelIdentityKey(setup.selection)],
+    });
+    expect(result.source).toBe("vault");
+    expect(result.artifact?.path).toBe(vault.path);
+    expect(result.shadowedSources).toEqual(["setup-default"]);
+    expect(() => resolveModelCapability({
+      capability: "embed", env: {}, vaultEmbeddingModel: "absent.gguf", installedArtifacts: [setup],
+    })).toThrow();
+  });
 
   it("never falls through malformed or missing higher selections, and rejects duplicates", () => {
     expect(() => resolveModelCapability({
@@ -162,8 +186,9 @@ describe("strict capability resolution", () => {
     const unavailable = resolveModelCapability({ capability: "generate", env: {} });
     expect(unavailable.guidance).toContain("OMS_GENERATE_PROVIDER");
     expect(unavailable.guidance).toContain("OMS_GENERATE_MODEL");
-    expect(unavailable.guidance).toContain(".oms/models.json");
-    expect(unavailable.guidance).toContain("oms setup");
+    expect(unavailable.guidance).not.toContain(["models", "json"].join("."));
+    expect(resolveModelCapability({ capability: "embed", env: {} }).guidance).toContain(".oms/settings.json");
+    expect(unavailable.guidance).toContain("oms model install --descriptor");
   });
 
   it("resolves all three capabilities independently", () => {

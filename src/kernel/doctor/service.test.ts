@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { assembleCoreSemanticEngine, assembleGraphOnlyEngine } from "../engine/assemble.js";
 import * as engineStoreRepair from "../engine/embed/repair.js";
 import { engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../engine/paths.js";
-import { writeApprovedVault } from "../templates/approved-vault-fixture.js";
+import { writeContractVault } from "../contract/contract-vault-fixture.js";
 import { repairDoctor } from "./service.js";
 
 let roots: string[] = [];
@@ -14,7 +14,7 @@ let roots: string[] = [];
 async function makeVault(): Promise<string> {
   const vault = await mkdtemp(path.join(tmpdir(), "oms-doctor-service-"));
   roots.push(vault);
-  await writeApprovedVault(vault, {
+  await writeContractVault(vault, {
     properties: { title: { type: "text", intent: "Note title." } },
     templates: {
       note: {

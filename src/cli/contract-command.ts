@@ -1,52 +1,60 @@
-import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 
-import { InterviewAborted, runInterview, type InterviewIO, type InterviewTarget, type Question } from "../kernel/contract/interview.js";
-import { contractStatus } from "../kernel/contract/status.js";
-import { recordSeen, reissue } from "../kernel/contract/store.js";
-import { readVaultId, VAULT_ID_PATH } from "../kernel/contract/vault-id.js";
+import { extractTemplate } from "../kernel/contract/extract.js";
+import { InterviewAborted, runInterview, type InterviewIO, type Question } from "../kernel/contract/interview.js";
+import { contractDoctor, contractStatus, doctorFix, ROW_FINDING } from "../kernel/contract/status.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
-import { atomicWrite } from "../kernel/templates/file-lock.js";
+import { VaultSettingsError } from "../kernel/vault/settings.js";
 
 export function contractUsage(): string {
-  return `Usage: oms contract <interview|status|reissue-id> [options]
+  return `Usage: oms contract <setup|extract|status|doctor> [options]
 
-  interview --template <path> [--vault <path>]
-            Interview one template and seal its rules. <path> is relative to the vault.
-  interview --common [--vault <path>]
-            Interview and seal the common rules every template must keep.
+  setup [--reask] [--vault <path>]
+            Interview the whole vault (folders, properties, templates) and seal the contract.
+            --reask asks again about items declined at an earlier seal.
+  extract --template <path> [--vault <path>]
+            Show what a template declares. <path> is relative to the vault. Values are not printed.
   status [--vault <path>]
-            Show the contract posture. Hidden values are never printed.
-  reissue-id [--vault <path>]
-            Give this vault a new id (use after copying a vault) and copy its sealed rules.
+            Show the contract posture and template drift. Hidden values are never printed.
+  doctor [--fix] [--vault <path>]
+            Diagnose the seal. --fix only re-indexes a moved or unindexed vault.
 
-The interview is interactive and needs a terminal; it is never run by an agent.`;
+setup is interactive and needs a terminal; it is never run by an agent.`;
 }
 
+const VERBS = ["setup", "extract", "status", "doctor"] as const;
+type Verb = (typeof VERBS)[number];
+
 interface ContractArgs {
-  readonly verb: string;
+  readonly verb: Verb;
   readonly vault?: string;
   readonly template?: string;
-  readonly common: boolean;
+  readonly fix: boolean;
+  readonly reask: boolean;
 }
 
 function parse(argv: readonly string[]): ContractArgs {
   const [verb, ...rest] = argv;
-  if (verb === undefined) throw new Error("CONTRACT_ARGS_INVALID: missing subcommand (interview, status, or reissue-id)");
-  if (!["interview", "status", "reissue-id"].includes(verb)) throw new Error(`CONTRACT_ARGS_INVALID: unknown subcommand ${verb}`);
+  if (verb === undefined) throw new Error("CONTRACT_ARGS_INVALID: missing subcommand (setup, extract, status, or doctor)");
+  if (!(VERBS as readonly string[]).includes(verb)) throw new Error(`CONTRACT_ARGS_INVALID: unknown subcommand ${verb}`);
   let vault: string | undefined;
   let template: string | undefined;
-  let common = false;
+  let fix = false;
+  let reask = false;
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index]!;
-    if (token === "--common" && verb === "interview") {
-      if (common) throw new Error("CONTRACT_ARGS_INVALID: duplicate flag --common");
-      common = true;
+    if (token === "--fix" && verb === "doctor") {
+      if (fix) throw new Error("CONTRACT_ARGS_INVALID: duplicate flag --fix");
+      fix = true;
       continue;
     }
-    if (token !== "--vault" && !(token === "--template" && verb === "interview")) {
+    if (token === "--reask" && verb === "setup") {
+      if (reask) throw new Error("CONTRACT_ARGS_INVALID: duplicate flag --reask");
+      reask = true;
+      continue;
+    }
+    if (token !== "--vault" && !(token === "--template" && verb === "extract")) {
       throw new Error(`CONTRACT_ARGS_INVALID: unknown argument ${token}`);
     }
     const value = rest[++index];
@@ -59,22 +67,20 @@ function parse(argv: readonly string[]): ContractArgs {
       template = value;
     }
   }
-  if (verb === "interview" && (template === undefined) === !common) {
-    throw new Error("CONTRACT_ARGS_INVALID: interview needs exactly one of --template <path> or --common");
-  }
-  return { verb, common, ...(vault === undefined ? {} : { vault }), ...(template === undefined ? {} : { template }) };
+  if (verb === "extract" && template === undefined) throw new Error("CONTRACT_ARGS_INVALID: extract needs --template <path>");
+  return { verb: verb as Verb, fix, reask, ...(vault === undefined ? {} : { vault }), ...(template === undefined ? {} : { template }) };
 }
 
 function print(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
-function templateTarget(vault: string, template: string): InterviewTarget {
+function templatePath(vault: string, template: string): string {
   const relative = path.isAbsolute(template) ? path.relative(vault, template) : path.normalize(template);
   if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`CONTRACT_ARGS_INVALID: --template must name a file inside the vault (${template})`);
+    throw new Error("CONTRACT_ARGS_INVALID: --template must name a file inside the vault");
   }
-  return { kind: "template", sourcePath: relative.split(path.sep).join("/") };
+  return relative.split(path.sep).join("/");
 }
 
 function describe(question: Question): string {
@@ -82,7 +88,10 @@ function describe(question: Question): string {
     const options = question.options.map((option, index) => `  ${index + 1}) ${option}`).join("\n");
     return `${question.prompt}\n${options}\n> `;
   }
-  if (question.kind === "confirm") return `${question.prompt} [y/n] `;
+  if (question.kind === "confirm") {
+    const hint = question.initial === true ? "[Y/n]" : question.initial === false ? "[y/N]" : "[y/n]";
+    return `${question.prompt} ${hint} `;
+  }
   return question.initial === undefined || question.initial === "" ? `${question.prompt}\n> ` : `${question.prompt}\n  [${question.initial}]\n> `;
 }
 
@@ -110,25 +119,25 @@ function terminalIO(): { readonly io: InterviewIO; close(): void } {
   return { io, close: () => rl.close() };
 }
 
-async function interview(vault: string, args: ContractArgs, deps: ContractCommandDeps): Promise<void> {
+async function setup(vault: string, reask: boolean, deps: ContractCommandDeps): Promise<void> {
   const interactive = deps.interactive ?? (process.stdin.isTTY === true && process.env["OMS_NON_INTERACTIVE"] !== "1");
   if (deps.io === undefined && !interactive) {
     process.exitCode = 1;
-    console.error("[oms] contract interview needs an interactive terminal. Run it yourself in a terminal; it is never run by an agent or a script.");
+    console.error("[oms] contract setup needs an interactive terminal. Run it yourself in a terminal; it is never run by an agent or a script.");
     return;
   }
-  const target: InterviewTarget = args.common ? { kind: "common" } : templateTarget(vault, args.template!);
   const terminal = deps.io === undefined ? terminalIO() : null;
   try {
-    const result = await runInterview({ vault, target, io: deps.io ?? terminal!.io });
+    const result = await runInterview({ vault, io: deps.io ?? terminal!.io, ...(reask ? { reask } : {}) });
     if (result.state !== "sealed") process.exitCode = 1;
     if (result.state === "sealed") {
       print({
         status: "sealed",
-        vault,
         vaultIdCreated: result.vaultIdCreated,
-        ...(result.publicTemplate === null ? {} : { template: { id: result.publicTemplate.id, name: result.publicTemplate.name, sealId: result.publicTemplate.sealId } }),
-        ...(result.publicCommon === null ? {} : { common: { sealId: result.publicCommon.sealId } }),
+        folders: result.folders,
+        properties: result.properties,
+        templates: result.templates,
+        ...(result.removedTemplates === undefined || result.removedTemplates.length === 0 ? {} : { removedTemplates: result.removedTemplates }),
       });
     } else if (result.state === "refused") {
       print({ status: "refused", reasons: result.reasons });
@@ -140,18 +149,49 @@ async function interview(vault: string, args: ContractArgs, deps: ContractComman
   }
 }
 
-async function reissueId(vault: string): Promise<void> {
-  const current = await readVaultId(vault);
-  if (current.state !== "ok") {
-    throw new Error(`CONTRACT_VAULT_ID_UNAVAILABLE: ${current.state === "absent" ? "this vault has no .oms/vault-id; seal a contract first" : `.oms/vault-id is invalid (${current.reason})`}`);
+/** Shapes only: literal values stay out of the output so an agent running this learns no rule. */
+async function extract(vault: string, template: string): Promise<void> {
+  const result = await extractTemplate(vault, templatePath(vault, template));
+  if (!result.ok) {
+    process.exitCode = 1;
+    print({ status: "rejected", diagnostics: result.diagnostics.map(item => ({ code: item.code })) });
+    return;
   }
-  const next = randomUUID();
-  const copied = await reissue(current.id, next);
-  if (!copied.ok) throw new Error(`CONTRACT_REISSUE_FAILED: ${copied.reason}`);
-  await atomicWrite(path.join(vault, VAULT_ID_PATH), `${next}\n`);
-  const seen = await recordSeen(next, await realpath(vault));
-  if (!seen.ok) throw new Error(`CONTRACT_REISSUE_FAILED: ${seen.reason}`);
-  print({ status: "reissued", vault, previousVaultId: current.id, vaultId: next });
+  print({
+    status: "extracted",
+    fields: result.extraction.fields.map(field => ({
+      name: field.name,
+      type: field.inferredType,
+      variable: field.variable,
+      literal: field.literal !== null,
+    })),
+    headings: result.extraction.headings,
+  });
+}
+
+async function doctor(vault: string, fix: boolean): Promise<void> {
+  if (fix) {
+    const result = await doctorFix(vault);
+    if (result === "not-fixable") process.exitCode = 1;
+    print({ status: result });
+    return;
+  }
+  const report = await contractDoctor(vault, "human");
+  // Healthy rows carry only their own row finding; any added finding (shared id, unreadable settings or store) needs attention.
+  const healthy = (report.row === "sealed" || report.row === "never-sealed")
+    && report.findings.every(finding => finding === ROW_FINDING[report.row]) && report.cause === null
+    && report.staleLocks === 0 && report.orphans === 0 && report.unexpectedControlFiles.length === 0;
+  if (!healthy) process.exitCode = 1;
+  print({
+    contract: report.contract,
+    findings: report.findings,
+    cause: report.cause,
+    recovery: report.recovery,
+    staleLocks: report.staleLocks,
+    orphans: report.orphans,
+    unexpectedControlFiles: report.unexpectedControlFiles,
+    transportFailures: report.transportFailures,
+  });
 }
 
 export interface ContractCommandDeps {
@@ -169,18 +209,54 @@ export async function runContractCommand(argv: readonly string[], deps: Contract
   }
   try {
     const args = parse(argv);
-    const target = args.vault === undefined
-      ? await resolveEffectiveVault(process.cwd(), process.env)
-      : { vault: path.resolve(args.vault), source: "explicit" as const };
-    if (args.verb !== "status" && target.source === "cwd") {
-      throw new Error(`CONTRACT_ARGS_INVALID: contract ${args.verb} writes to the vault and requires --vault or an existing verified vault/bridge/env target`);
+    let target: { readonly vault: string; readonly source: string };
+    try {
+      target = args.vault === undefined
+        ? await resolveEffectiveVault(process.cwd(), process.env)
+        : { vault: path.resolve(args.vault), source: "explicit" };
+    } catch {
+      // Resolution messages name bridge and vault paths; only the fixed code is reported.
+      throw new Error("CONTRACT_VAULT_UNRESOLVED: the vault could not be resolved. Pass --vault <path> or run: oms status");
+    }
+    const writes = args.verb === "setup" || args.verb === "doctor" && args.fix;
+    if (writes && target.source === "cwd") {
+      throw new Error(`CONTRACT_ARGS_INVALID: contract ${args.verb} writes and requires --vault or an existing verified vault/bridge/env target`);
     }
     const vault = target.vault;
-    if (args.verb === "interview") await interview(vault, args, deps);
-    else if (args.verb === "status") print({ vault, contract: await contractStatus(vault) });
-    else await reissueId(vault);
+    if (args.verb === "setup") await setup(vault, args.reask, deps);
+    else if (args.verb === "extract") await extract(vault, args.template!);
+    else if (args.verb === "status") {
+      const status = await contractStatus(vault);
+      print({ contract: status.contract, findings: status.findings, templates: status.templates });
+    } else await doctor(vault, args.fix);
   } catch (error: unknown) {
     process.exitCode = 1;
-    print({ status: "rejected", diagnostics: [{ code: error instanceof Error ? error.message.split(":", 1)[0] : "CONTRACT_COMMAND_FAILED", remediation: error instanceof Error ? error.message : String(error) }] });
+    print({ status: "rejected", diagnostics: [commandDiagnostic(error)] });
   }
+}
+
+/** Filesystem causes by errno. The error's own message is never echoed: it can name the store path. */
+const FS_REMEDIATION: Readonly<Record<string, string>> = {
+  EACCES: "Permission denied on the vault or the contract store. Check their ownership and permissions, then retry.",
+  EPERM: "The operation is not permitted on the vault or the contract store. Check their ownership and permissions, then retry.",
+  ENOSPC: "No space left on the device. Free disk space, then retry.",
+  EROFS: "The vault or the contract store is on a read-only filesystem.",
+  ENOENT: "A file disappeared while the command ran. Retry, then run: oms contract doctor",
+  ELOOP: "A symlink loop was found. Run: oms contract doctor",
+};
+
+/**
+ * Coded, path-free diagnostics. Messages we author (`CONTRACT_`, vault settings,
+ * unsafe template source) carry field names only and pass through.
+ */
+export function commandDiagnostic(error: unknown): { readonly code: string; readonly remediation: string } {
+  if (error instanceof VaultSettingsError) return { code: error.code, remediation: error.message };
+  if (error instanceof Error && /^(CONTRACT_[A-Z_]+|TEMPLATE_SOURCE_UNSAFE):/.test(error.message)) {
+    return { code: error.message.split(":", 1)[0]!, remediation: error.message };
+  }
+  const errno = (error as NodeJS.ErrnoException | null)?.code;
+  if (typeof errno === "string" && /^E[A-Z]+$/.test(errno)) {
+    return { code: "CONTRACT_FS_ERROR", remediation: `${errno}: ${FS_REMEDIATION[errno] ?? "A filesystem operation failed. Run: oms contract doctor"}` };
+  }
+  return { code: "CONTRACT_COMMAND_FAILED", remediation: "The contract command failed. Run: oms contract doctor" };
 }

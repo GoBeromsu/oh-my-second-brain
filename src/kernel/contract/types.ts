@@ -1,9 +1,9 @@
-import type { Digest, ObsidianContractType } from "../templates/types.js";
+import type { Digest } from "../conventions/canonical.js";
+import type { ObsidianContractType } from "./obsidian.js";
 
 /**
- * ADR-007 sealed two-layer contract. The public part lives in the vault
- * (`.oms/contract-public.json`); hidden rules live only in the per-vault store
- * outside the vault. Nothing in the public shapes may carry a hidden value.
+ * The sealed vault contract. Every value lives only in the store outside the vault
+ * (`~/.oms/vaults/<id>/`); agents see `{field, kind}` only.
  */
 
 export type { Digest };
@@ -11,70 +11,63 @@ export type JsonScalar = string | number | boolean | null;
 export type FieldType = ObsidianContractType;
 export type VariableKind = "date" | "datetime" | "title" | "free";
 
-export interface PublicField {
-  readonly name: string;
-  readonly type: FieldType;
-  readonly required: boolean;
-  readonly description: string;
-}
-
-export interface PublicTemplate {
-  /** Vault-relative template source path. */
-  readonly id: string;
-  /** Basename of the source, without the `.md` extension. */
-  readonly name: string;
-  readonly applyFolder: string | null;
-  readonly fields: readonly PublicField[];
-  readonly requiredHeadings: readonly string[];
-  readonly sourceHash: Digest;
-  /** Random. Never derived from hidden rules. */
-  readonly sealId: string;
-}
-
-export interface PublicCommon {
-  readonly fields: readonly PublicField[];
-  readonly sealId: string;
-}
-
-export interface PublicManifest {
-  readonly version: 1;
-  readonly common: PublicCommon | null;
-  /** Code-point sorted by id. */
-  readonly templates: readonly PublicTemplate[];
-}
-
-export type HiddenRule =
+export type Rule =
   | { readonly kind: "allowed"; readonly values: readonly JsonScalar[] }
   | { readonly kind: "fixed"; readonly value: JsonScalar }
   | { readonly kind: "pattern"; readonly regex: string }
   | { readonly kind: "range"; readonly min?: number | string; readonly max?: number | string };
 
-export interface SealedField extends PublicField {
-  readonly rules: readonly HiddenRule[];
-  readonly variable: VariableKind | null;
+export interface FolderContract {
+  readonly meaning: string;
+  readonly searchExclude: boolean;
 }
 
-/** Raw interview answers, kept only in the hidden store so a re-interview can diff. */
-export type InterviewAnswers = Readonly<Record<string, string>>;
+export interface PropertyContract {
+  readonly meaning: string;
+  readonly type: FieldType;
+  /** Missing but not required: the write passes and the name is reported in `missingDefaults`. */
+  readonly default: boolean;
+  readonly required: boolean;
+  readonly rules: readonly Rule[];
+}
 
-export interface SealedLayer {
-  readonly sealId: string;
-  readonly fields: readonly SealedField[];
+export interface TemplateContract {
+  /** Vault-relative template source path. */
+  readonly source: string;
+  readonly sourceHash: Digest;
+  readonly applyFolder?: string;
+  readonly requiredProperties: readonly string[];
+  readonly narrowedRules: Readonly<Record<string, readonly Rule[]>>;
   readonly requiredHeadings: readonly string[];
-  readonly applyFolder: string | null;
-  /** Null for the common layer. */
-  readonly sourcePath: string | null;
-  readonly sourceHash: Digest | null;
-  readonly answers: InterviewAnswers;
+}
+
+/** Null axis = open (nothing sealed for it). Templates are keyed by name. */
+export interface VaultContract {
+  readonly folders: Readonly<Record<string, FolderContract>> | null;
+  readonly properties: Readonly<Record<string, PropertyContract>> | null;
+  readonly templates: Readonly<Record<string, TemplateContract>>;
+}
+
+export interface JudgeInput {
+  /** Vault-relative note path. */
+  readonly path: string;
+  readonly frontmatter: Readonly<Record<string, unknown>>;
+  readonly body: string;
+  /** Template name the writer explicitly chose. */
+  readonly selectedTemplate?: string;
+  /** Raw content of the note before this write; absent for a new file. */
+  readonly previousContent?: string;
 }
 
 export type ViolationKind =
+  | "control-path"
   | "yaml-syntax"
   | "path-unsafe"
-  | "path-required"
   | "outside-vault"
-  | "outside-apply-folder"
-  | "required"
+  | "contract-unreadable"
+  | "unregistered-folder"
+  | "unknown-property"
+  | "missing"
   | "type"
   | "not-allowed"
   | "not-fixed"
@@ -82,25 +75,73 @@ export type ViolationKind =
   | "range"
   | "unsubstituted-variable"
   | "heading-missing"
-  | "contract-unreadable"
-  | "template-unknown"
-  | "template-ambiguous"
-  | "exists";
+  | "folder-mismatch"
+  | "template-mismatch"
+  | "unsupported-input";
 
-/** Names a field (or a public heading) and a kind. Never a hidden value. */
+export const VIOLATION_KINDS: readonly ViolationKind[] = [
+  "control-path", "yaml-syntax", "path-unsafe", "outside-vault", "contract-unreadable",
+  "unregistered-folder", "unknown-property", "missing", "type", "not-allowed", "not-fixed",
+  "pattern", "range", "unsubstituted-variable", "heading-missing", "folder-mismatch",
+  "template-mismatch", "unsupported-input",
+];
+
+/**
+ * `field` is `path`, `template`, `contract`, `content`, a property key or an input key.
+ * It never carries a value, a pattern or a template name.
+ */
 export interface Violation {
-  readonly field: string | null;
+  readonly field: string;
   readonly kind: ViolationKind;
 }
 
-export const FIELD_TYPES: readonly FieldType[] = [
-  "text", "string", "select", "number", "boolean", "checkbox", "date", "datetime",
-  "list", "multitext", "multi", "tags", "aliases", "file",
-];
-
-export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-/** Code-point order, independent of locale. */
-export function compareCodePoint(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+export interface Verdict {
+  readonly ok: boolean;
+  readonly violations: readonly Violation[];
+  readonly missingDefaults: readonly string[];
 }
+
+/** The only command names agent-facing output may contain. */
+export const GUIDANCE = [
+  "oms contract doctor",
+  "oms contract doctor --fix",
+  "oms status",
+  "oms host sync",
+  "oms setup",
+] as const;
+export type Guidance = (typeof GUIDANCE)[number];
+
+/** Total: exactly one guidance per kind. */
+export const GUIDANCE_FOR: Readonly<Record<ViolationKind, Guidance>> = {
+  "control-path": "oms status",
+  "yaml-syntax": "oms status",
+  "path-unsafe": "oms status",
+  "outside-vault": "oms status",
+  "contract-unreadable": "oms contract doctor",
+  "unregistered-folder": "oms status",
+  "unknown-property": "oms status",
+  "missing": "oms status",
+  "type": "oms status",
+  "not-allowed": "oms status",
+  "not-fixed": "oms status",
+  "pattern": "oms status",
+  "range": "oms status",
+  "unsubstituted-variable": "oms status",
+  "heading-missing": "oms status",
+  "folder-mismatch": "oms status",
+  "template-mismatch": "oms status",
+  "unsupported-input": "oms host sync",
+};
+
+/** The first violation picks the one guidance; the reason carries `{field, kind}` only. */
+export function formatDenyReason(violations: readonly Violation[]): string {
+  const list = violations.map(violation => ({ field: violation.field, kind: violation.kind }));
+  const guidance = violations.length === 0 ? "oms status" : GUIDANCE_FOR[violations[0]!.kind];
+  return `[oms] write denied: ${JSON.stringify(list)} Run: ${guidance}`;
+}
+
+/** What the judge sees of a vault's seal: nothing sealed, sealed but unreadable, or the contract. */
+export type ContractView =
+  | { readonly state: "open" }
+  | { readonly state: "unreadable" }
+  | { readonly state: "sealed"; readonly contract: VaultContract };

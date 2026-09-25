@@ -10,62 +10,26 @@ function validate(tool: string, input: Record<string, unknown>): boolean {
 }
 
 describe("template-native MCP surface", () => {
-  it("keeps template listing, showing, scanning, and document reads mutually exclusive", () => {
-    expect(validate("search", { op: "template-scan" })).toBe(true);
+  it("keeps template listing, showing, and document reads mutually exclusive", () => {
+    expect(validate("search", { op: "template-scan" })).toBe(false);
     expect(validate("search", { op: "templates" })).toBe(true);
-    expect(validate("search", { op: "templates", templateId: "note" })).toBe(true);
+    expect(validate("search", { op: "templates", templateId: "note" })).toBe(false);
     expect(validate("search", { op: "get-document", target: "notes/a.md" })).toBe(true);
     expect(validate("search", { op: "get-document", targets: ["notes/a.md"] })).toBe(true);
     expect(validate("search", { op: "get-document", notePath: "notes/a.md", fromLine: 1, lineCount: 20 })).toBe(true);
     expect(validate("search", { op: "get-document", target: "notes/a.md", targets: ["notes/a.md"] })).toBe(false);
   });
 
-  it("advertises contract selection and a locator-bound check", () => {
-    const connectionId = "11111111-1111-4111-8111-111111111111";
-    const sessionId = "22222222-2222-4222-8222-222222222222";
-    // Guide selects a contract for one explicit saved path.
-    expect(validate("write", { op: "guide", notePath: "notes/a.md", templateId: "note" })).toBe(true);
-    expect(validate("write", { op: "guide", notePath: "notes/a.md", headingBindings: { summary: "Summary" } })).toBe(true);
-    expect(validate("write", { op: "guide" })).toBe(false);
-    // Check reads the selection the session already holds, not caller-supplied rules.
-    expect(validate("write", { op: "check", connectionId, sessionId })).toBe(true);
-    expect(validate("write", { op: "check", connectionId })).toBe(false);
-    expect(validate("write", { op: "check", notePath: "notes/a.md" })).toBe(false);
-    // Completion is not an operation: OMS reports mechanics, not a verdict.
-    expect(validate("write", { op: "complete", checkpoint: { schemaVersion: 1 }, review: {} })).toBe(false);
-    // OMS does not write ordinary notes, so no note-write branch exists.
-    expect(validate("write", { op: "note", mode: "create", templateId: "note", body: "body" })).toBe(false);
-    expect(validate("write", { op: "check", connectionId, sessionId, body: "unsaved" })).toBe(false);
-  });
-
-  it("exposes the explicit contract protocol with a transaction and confirmation", () => {
-    const digest = `sha256:${"a".repeat(64)}`;
-    const tx = "33333333-3333-4333-8333-333333333333";
-    // Publication carries the caller's document and one named transaction.
-    expect(validate("write", { op: "template", mode: "publish-contract", policy: { version: 5 }, transactionId: tx })).toBe(true);
-    expect(validate("write", { op: "template", mode: "publish-contract", policy: { version: 5 }, transactionId: tx, confirmed: true })).toBe(true);
-    expect(validate("write", { op: "template", mode: "publish-contract", policy: { version: 5 } })).toBe(false);
-    expect(validate("write", { op: "template", mode: "publish-contract", transactionId: tx })).toBe(false);
-    // Source review reads; both source changes need their own evidence.
-    expect(validate("write", { op: "template", mode: "review-sources" })).toBe(true);
-    expect(validate("write", { op: "template", mode: "review-sources", templateId: "note" })).toBe(true);
-    expect(validate("write", { op: "template", mode: "acknowledge-source", templateId: "note", reviewedDigest: digest, transactionId: tx, confirmed: true })).toBe(true);
-    expect(validate("write", { op: "template", mode: "acknowledge-source", templateId: "note", transactionId: tx })).toBe(false);
-    expect(validate("write", { op: "template", mode: "relink-source", templateId: "note", candidatePath: "Templates/moved.md", transactionId: tx })).toBe(true);
-    expect(validate("write", { op: "template", mode: "relink-source", templateId: "note", transactionId: tx })).toBe(false);
-    // The retired interview ledger has no schema branch at all.
-    expect(validate("write", { op: "template", mode: "acknowledge-source", templateId: "note", reviewedDigest: digest, transactionId: tx, censusDigest: digest })).toBe(false);
-  });
-
-  it("retires every template authoring and folder-registration mode", () => {
-    const digest = `sha256:${"a".repeat(64)}`;
-    for (const mode of ["create", "update", "reclassify", "relocate-folder", "remove", "default", "register-folder", "register", "add-file", "later", "review", "interview-next", "interview-answer", "commit-contracts"]) {
-      expect(validate("write", { op: "template", mode, dryRun: true }), mode).toBe(false);
-      expect(validate("write", { op: "template", mode }), mode).toBe(false);
-    }
-    // Publication and source review are the only contract mutations.
-    expect(validate("write", { op: "template", mode: "publish-contract", policy: {}, transactionId: "33333333-3333-4333-8333-333333333333", confirmed: true })).toBe(true);
-    expect(digest).toMatch(/^sha256:/u);
+  it("advertises one write payload: {path, content, template?}", () => {
+    expect(validate("write", { path: "notes/a.md", content: "body" })).toBe(true);
+    expect(validate("write", { path: "notes/a.md", content: "body", template: "note" })).toBe(true);
+    expect(validate("write", { path: "notes/a.md" })).toBe(false);
+    expect(validate("write", { content: "body" })).toBe(false);
+    // Retired guide/check/template branches have no schema at all.
+    expect(validate("write", { op: "guide", notePath: "notes/a.md", templateId: "note" })).toBe(false);
+    expect(validate("write", { op: "check", connectionId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" })).toBe(false);
+    expect(validate("write", { op: "template", mode: "publish-contract", policy: { version: 5 }, transactionId: "33333333-3333-4333-8333-333333333333" })).toBe(false);
+    expect(validate("write", { path: "notes/a.md", content: "body", templateId: "note" })).toBe(false);
   });
 
   it("keeps link read-only and doctor free of note backfill", () => {

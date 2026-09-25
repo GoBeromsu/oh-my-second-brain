@@ -1,15 +1,11 @@
 #!/usr/bin/env node
-import { readFileSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runPostToolUse } from "../vendors/claude/hook/post-tool-use.js";
 import { runPreToolUse } from "../vendors/claude/hook/pre-tool-use.js";
 import type { WriteTarget } from "../kernel/capture/safe.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { runMcpServer } from "../mcp/server.js";
-import {
-  PINNED_DEFAULT_EMBEDDING_MODEL,
-} from "../kernel/engine/embed/model.js";
 import { parseCliArgs } from "./args.js";
 import { runGraphCommand } from "./graph-command.js";
 import { runHostCommand, runModelCommand } from "./host-commands.js";
@@ -19,9 +15,8 @@ import { runNoteCommand } from "./note-command.js";
 import { runPackageCommand } from "./package-command.js";
 import { runSearchCommand, runIndexFamilyCommand } from "./search.js";
 import { runServeHttp } from "./serve-http.js";
-import { runSetup } from "./setup-command.js";
+import { runSetup, setupUsage } from "./setup-command.js";
 import { runStatusCommand } from "./status-command.js";
-import { runTemplateCommand, templateUsage } from "./template-command.js";
 import { maybePrintUpdateNotice } from "./update-notice.js";
 import { mainUsageCommandNames, printUsage } from "./usage.js";
 
@@ -37,7 +32,8 @@ function isKnownCommand(command: string | undefined): boolean {
 }
 
 const RETIRED_COMMAND_GUIDANCE: Readonly<Record<string, string>> = {
-  doctor: "Use `oms template check`, `oms note audit`, or `oms index repair`.",
+  doctor: "Use `oms contract doctor`, `oms note audit`, or `oms index repair`.",
+  template: "Use `oms contract setup|extract|status|doctor`; the sealed contract replaces template publication.",
   audit: "Use `oms note audit`.",
   reconcile: "Use `oms host sync`.",
   linkify: "Use `oms link suggest` or `oms link check`; OMS does not edit note bodies.",
@@ -132,24 +128,17 @@ async function runHookCommand(argv: readonly string[]): Promise<void> {
   process.exitCode = 0;
   const [leaf, ...leafArgs] = argv;
   if (leaf === "--help" || leaf === "-h") {
-    console.log("Usage: oms hook <pre|post> [--vault <path>]");
+    console.log("Usage: oms hook pre [--vault <path>]");
     return;
   }
-  if (
-    (leaf === "pre" || leaf === "post")
-    && leafArgs.length === 1
-    && (leafArgs[0] === "--help" || leafArgs[0] === "-h")
-  ) {
-    console.log(`Usage: oms hook ${leaf} [--vault <path>]`);
+  if (leaf === "pre" && leafArgs.length === 1 && (leafArgs[0] === "--help" || leafArgs[0] === "-h")) {
+    console.log("Usage: oms hook pre [--vault <path>]");
     return;
   }
-  if (leaf === "pre-tool-use" || leaf === "post-tool-use") {
-    throw new Error(`Hook leaf \`${leaf}\` is retired. Use \`oms hook ${leaf === "pre-tool-use" ? "pre" : "post"}\`.`);
-  }
-  if (leaf !== "pre" && leaf !== "post") throw new Error("Usage: oms hook <pre|post> [--vault <path>]");
+  if (leaf === "pre-tool-use") throw new Error("Hook leaf `pre-tool-use` is retired. Use `oms hook pre`.");
+  if (leaf !== "pre") throw new Error("Usage: oms hook pre [--vault <path>]");
   const target = await effectiveTarget(parseVaultFlag(leafArgs));
-  if (leaf === "pre") await runPreToolUse({ vault: target.vault });
-  else await runPostToolUse({ vault: target.vault });
+  await runPreToolUse({ vault: target.vault });
 }
 
 async function main(): Promise<void> {
@@ -162,92 +151,19 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    if (parsedArgs.command === "template") console.log(templateUsage());
-    else if (parsedArgs.command === "contract") console.log(contractUsage());
+    if (parsedArgs.command === "contract") console.log(contractUsage());
+    else if (parsedArgs.command === "setup") console.log(setupUsage());
     else printUsage();
     process.exitCode = 0;
     return;
   }
-  if (parsedArgs.error !== undefined) {
-    console.error(parsedArgs.error.message);
-    process.exitCode = 1;
-    return;
-  }
-  const {
-    command,
-    vault,
-    yes,
-    approvalToken,
-    approvedDigest,
-    installClaude,
-    dryRun,
-    modelsDescriptorPath,
-    modelsNoDefault,
-    modelsDefault,
-    unknownFlags,
-  } = parsedArgs;
+  const { command } = parsedArgs;
 
-  if (command === "template") {
-    await runTemplateCommand(argv.slice(1));
-  } else if (command === "contract") {
+  if (command === "contract") {
     await runContractCommand(argv.slice(1));
   } else if (command === "setup") {
-    const canonicalModelFlags =
-      "--models-default, --models-descriptor <path>, or --models-no-default";
-    if (unknownFlags.length > 0) {
-      console.error(
-        `[oms] Unsupported setup option: ${unknownFlags.join(", ")}. Canonical model options are ${canonicalModelFlags}.`,
-      );
-      process.exitCode = 1;
-      return;
-    }
-    const modelChoices = [
-      modelsDescriptorPath !== undefined ? "--models-descriptor" : undefined,
-      modelsDefault ? "--models-default" : undefined,
-      modelsNoDefault ? "--models-no-default" : undefined,
-    ].filter((flag): flag is string => flag !== undefined);
-    if (modelChoices.length > 1) {
-      console.error(
-        `[oms] Mutually exclusive setup model options: ${modelChoices.join(" and ")}. Choose one of ${canonicalModelFlags}.`,
-      );
-      process.exitCode = 1;
-      return;
-    }
-    let modelSetManifest: unknown;
-    if (modelsDescriptorPath !== undefined) {
-      modelSetManifest = JSON.parse(readFileSync(modelsDescriptorPath, "utf8")) as unknown;
-    } else if (modelsDefault) {
-      modelSetManifest = {
-        schemaVersion: 1,
-        embed: {
-          provider: PINNED_DEFAULT_EMBEDDING_MODEL.provider,
-          model: PINNED_DEFAULT_EMBEDDING_MODEL.model,
-          revision: PINNED_DEFAULT_EMBEDDING_MODEL.revision,
-          sha256: PINNED_DEFAULT_EMBEDDING_MODEL.sha256,
-          promptScheme: PINNED_DEFAULT_EMBEDDING_MODEL.prefixScheme,
-          filename: PINNED_DEFAULT_EMBEDDING_MODEL.filename,
-          url: PINNED_DEFAULT_EMBEDDING_MODEL.url,
-          dimensions: PINNED_DEFAULT_EMBEDDING_MODEL.dimensions,
-          contextLength: PINNED_DEFAULT_EMBEDDING_MODEL.context,
-          mrlDim: PINNED_DEFAULT_EMBEDDING_MODEL.mrlDim,
-          normalization: PINNED_DEFAULT_EMBEDDING_MODEL.normalization,
-        },
-      };
-    }
-    const target = parsedArgs.vaultExplicit
-      ? { vault, source: "explicit" as const }
-      : await effectiveTarget(undefined);
-    const outcome = await runSetup({
-      target,
-      yes,
-      approvalToken,
-      approvedDigest: approvedDigest as `sha256:${string}` | undefined,
-      installClaude,
-      dryRun,
-      modelSetManifest,
-      modelsNoDefault,
-    });
-    if (!dryRun && outcome === "completed") await maybePrintUpdateNotice();
+    await runSetup(argv.slice(1));
+    if (process.exitCode === 0) await maybePrintUpdateNotice();
   } else if (command === "note") {
     await runNoteCommand(argv.slice(1));
   } else if (command === "link") {

@@ -108,8 +108,8 @@ describe("oms package update isolated e2e", () => {
     const home = makeTempRoot("oms-update-home-");
     const omsDir = path.join(cwd, ".oms");
     mkdirSync(omsDir);
-    const owned = path.join(omsDir, "user-owned.txt");
-    writeFileSync(owned, "must remain unchanged\n", "utf-8");
+    const owned = path.join(omsDir, "settings.json");
+    writeFileSync(owned, `${JSON.stringify({ version: 1, vaultId: "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c" })}\n`, "utf-8");
     const before = readFileSync(owned, "utf-8");
 
     const result = runCli(["package", "check"], cwd, {
@@ -121,6 +121,7 @@ describe("oms package update isolated e2e", () => {
     expect(result.stdout).toContain("Update available");
     expect(result.stdout).not.toContain("host vault pointer");
     expect(readFileSync(owned, "utf-8")).toBe(before);
+    expect(readdirSync(omsDir)).toEqual(["settings.json"]);
   });
 
   it("rejects a source-tree binary before npm can mutate a package or host integration", () => {
@@ -128,8 +129,8 @@ describe("oms package update isolated e2e", () => {
     const home = makeTempRoot("oms-update-home-");
     const omsDir = path.join(cwd, ".oms");
     mkdirSync(omsDir);
-    const owned = path.join(omsDir, "user-owned.txt");
-    writeFileSync(owned, "must remain unchanged\n", "utf-8");
+    const owned = path.join(omsDir, "settings.json");
+    writeFileSync(owned, `${JSON.stringify({ version: 1, vaultId: "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c" })}\n`, "utf-8");
     const beforeOmsHash = createHash("sha256")
       .update(readFileSync(owned))
       .digest("hex");
@@ -146,6 +147,7 @@ describe("oms package update isolated e2e", () => {
       .update(readFileSync(owned))
       .digest("hex");
     expect(afterOmsHash).toBe(beforeOmsHash);
+    expect(readdirSync(omsDir)).toEqual(["settings.json"]);
     expect(existsSync(hostMarker)).toBe(false);
   });
 

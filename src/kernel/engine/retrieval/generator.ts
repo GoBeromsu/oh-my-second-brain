@@ -86,7 +86,7 @@ function expansionPrompt(query: string, context: string | undefined): string {
   const contextBlock = context === undefined || context.trim() === ""
     ? ""
     : (
-      `\nVault folder intents (authoritative taxonomy context; use only when relevant):\n` +
+      `\nVault folder intents (authoritative sealed folder meanings; use only when relevant):\n` +
       `${context.trim()}\n`
     );
   return (

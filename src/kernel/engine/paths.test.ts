@@ -3,7 +3,7 @@ import { linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { digestBytes } from "../templates/canonical.js";
+import { digestBytes } from "../conventions/canonical.js";
 import {
   assertExternalCachePath,
   assertExternalDatabasePath,

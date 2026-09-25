@@ -88,19 +88,19 @@ describe("validateHarnessRegistry", () => {
   });
 
   it("reports a missing shared skill and an unregistered skill directory", () => {
-    const missingInterview = withHost("claude", {
-      skillDirs: harnessSurfaceRegistry.hosts[0]!.skillDirs.filter((skill) => skill !== "interview"),
+    const missingDistill = withHost("claude", {
+      skillDirs: harnessSurfaceRegistry.hosts[0]!.skillDirs.filter((skill) => skill !== "distill"),
     });
     const unregistered = withHost("hermes", {
       skillDirs: [...harnessSurfaceRegistry.hosts[0]!.skillDirs, "backfill"],
     });
 
-    expect(validateHarnessRegistry(missingInterview)).toEqual(
+    expect(validateHarnessRegistry(missingDistill)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           code: "missing_surface",
           surface: "hosts.claude.skillDirs",
-          value: "interview",
+          value: "distill",
         }),
       ]),
     );
@@ -241,7 +241,7 @@ describe("validateHarnessRegistry", () => {
       packageAssets: {
         ...base.packageAssets,
         releaseRequiredPaths: base.packageAssets.releaseRequiredPaths.filter(
-          (requiredPath) => requiredPath !== "assets/skills/interview/SKILL.md",
+          (requiredPath) => requiredPath !== "assets/skills/write/SKILL.md",
         ),
       },
     };
@@ -258,7 +258,7 @@ describe("validateHarnessRegistry", () => {
         expect.objectContaining({
           code: "missing_surface",
           surface: "packageAssets.releaseRequiredPaths",
-          value: "assets/skills/interview/SKILL.md",
+          value: "assets/skills/write/SKILL.md",
         }),
       ]),
     );
@@ -267,7 +267,7 @@ describe("validateHarnessRegistry", () => {
         expect.objectContaining({
           code: "missing_surface",
           surface: "packageAssets.npmFiles",
-          value: "skills/interview/SKILL.md",
+          value: "skills/write/SKILL.md",
         }),
       ]),
     );

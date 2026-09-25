@@ -1,50 +1,52 @@
-import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { extractTemplate, type ExtractedField } from "./extract.js";
-import { EMPTY_PUBLIC_MANIFEST, readPublicManifest, writePublicManifest } from "./public.js";
-import { buildRedactor, hiddenValuesOf } from "./redact.js";
-import { loadLayers, sealLayer, type LoadedLayers } from "./store.js";
-import {
-  compareCodePoint,
-  FIELD_TYPES,
-  type FieldType,
-  type HiddenRule,
-  type JsonScalar,
-  type PublicCommon,
-  type PublicField,
-  type PublicManifest,
-  type PublicTemplate,
-  type SealedField,
-  type SealedLayer,
-  type VariableKind,
+import { lstat, readdir, realpath } from "node:fs/promises";
+import { compareCodePoints } from "../conventions/canonical.js";
+import { readVaultSettings, type VaultSettings } from "../vault/settings.js";
+import { normalizeFolderPath, verifyVaultPath } from "../vault/paths.js";
+import { extractTemplate, type Extraction } from "./extract.js";
+import { FIELD_TYPES, readObsidianTemplateFolder, readObsidianTypes } from "./obsidian.js";
+import { buildRedactor, hiddenValuesOf, publicTokensOf } from "./redact.js";
+import { scanTemplateSources } from "./scan.js";
+import { currentSequence, isSafeName, NO_DECLINED, readDeclined, sealContract, storeRoot, type DeclinedSet, type SealDeps } from "./store.js";
+import type {
+  FieldType,
+  FolderContract,
+  JsonScalar,
+  PropertyContract,
+  Rule,
+  TemplateContract,
+  VaultContract,
 } from "./types.js";
-import { ensureVaultId, readVaultId } from "./vault-id.js";
+import { ensureVaultId, resolveSealState, writeVaultSettings } from "./vault-id.js";
 
 /**
- * Deterministic seal-time questionnaire (ADR-007 §2). No LLM asks anything: every
- * question comes from the extracted template or the previous seal. All IO is injected,
- * so the kernel never touches a terminal. Only the CLI calls it.
+ * Deterministic seal-time questionnaire over a full vault scan: top-level folders,
+ * properties (template fields and Obsidian types) and the templates in the template
+ * folder. No LLM asks anything and all IO is injected. Only the CLI calls it.
+ * With a readable sealed contract, a rerun asks only about new folders, new properties
+ * and new or changed templates, and keeps every existing answer (diff-only). Declined
+ * folders, properties and templates (with their source hash) are kept beside the contract
+ * and not asked again until they change or the caller asks to review them.
  */
 
 export type Question =
   | { readonly id: string; readonly prompt: string; readonly kind: "choice"; readonly options: readonly string[] }
   | { readonly id: string; readonly prompt: string; readonly kind: "text"; readonly initial?: string }
-  | { readonly id: string; readonly prompt: string; readonly kind: "confirm" };
+  | { readonly id: string; readonly prompt: string; readonly kind: "confirm"; readonly initial?: boolean };
 
 export interface InterviewIO {
   ask(question: Question): Promise<string>;
   say(line: string): void;
 }
 
-export type InterviewTarget = { readonly kind: "common" } | { readonly kind: "template"; readonly sourcePath: string };
-
 export type InterviewResult =
   | {
     readonly state: "sealed";
-    readonly vaultId: string;
     readonly vaultIdCreated: boolean;
-    readonly publicTemplate: PublicTemplate | null;
-    readonly publicCommon: PublicCommon | null;
+    readonly folders: number;
+    readonly properties: number;
+    readonly templates: readonly string[];
+    /** Sealed templates whose source file was gone and that the user removed. */
+    readonly removedTemplates?: readonly string[];
   }
   | { readonly state: "refused"; readonly reasons: readonly string[] }
   | { readonly state: "aborted" };
@@ -57,12 +59,9 @@ export class InterviewAborted extends Error {
   }
 }
 
-export const LITERAL_CHOICES = ["must-equal", "one-of-allowed", "example-only"] as const;
-const COMMON_RULE_CHOICES = ["none", "one-of-allowed", "must-equal", "pattern", "range"] as const;
+const LITERAL_CHOICES = ["must-equal", "one-of-allowed", "example-only"] as const;
+const RULE_CHOICES = ["none", "one-of-allowed", "must-equal", "pattern", "range"] as const;
 const MAX_ATTEMPTS = 3;
-const STRING_TYPES = new Set<FieldType>(["text", "string", "select", "file"]);
-const LIST_TYPES = new Set<FieldType>(["list", "multitext", "multi", "tags", "aliases"]);
-const RANGE_TYPES = new Set<FieldType>(["number", "date", "datetime"]);
 
 /** A rejected answer; the question is asked again with this message. */
 class Invalid {
@@ -96,9 +95,11 @@ class Asker {
     });
   }
 
-  confirm(id: string, prompt: string): Promise<boolean> {
-    return this.loop({ id, prompt, kind: "confirm" }, answer => {
+  confirm(id: string, prompt: string, initial?: boolean): Promise<boolean> {
+    const question: Question = initial === undefined ? { id, prompt, kind: "confirm" } : { id, prompt, kind: "confirm", initial };
+    return this.loop(question, answer => {
       const text = answer.trim().toLowerCase();
+      if (text === "" && initial !== undefined) return initial;
       if (text === "y" || text === "yes") return true;
       if (text === "n" || text === "no") return false;
       return invalid("Answer yes or no.");
@@ -138,393 +139,407 @@ function parseValues(type: FieldType, raw: string): JsonScalar[] | Invalid {
   return values.length > 0 ? values : invalid("Give at least one value, separated by commas.");
 }
 
-function hasLiteral(literal: ExtractedField["literal"]): literal is JsonScalar | readonly JsonScalar[] {
-  if (literal === null || literal === "") return false;
-  return !Array.isArray(literal) || literal.length > 0;
-}
-
-function literalMembers(literal: JsonScalar | readonly JsonScalar[]): readonly JsonScalar[] {
-  return Array.isArray(literal) ? literal : [literal as JsonScalar];
-}
-
-/** The public draft never names a value; it only says a rule exists. */
-export function draftDescription(name: string, type: FieldType, required: boolean, rules: readonly HiddenRule[], variable: VariableKind | null): string {
-  const kinds = new Set(rules.map(rule => rule.kind));
-  let sentence: string;
-  if (kinds.has("fixed")) sentence = `\`${name}\` must have its defined value.`;
-  else if (kinds.has("allowed")) sentence = `\`${name}\` must be one of the defined values.`;
-  else if (kinds.has("pattern")) sentence = `\`${name}\` must match its defined format.`;
-  else if (kinds.has("range")) sentence = `\`${name}\` must be within its defined range.`;
-  else if (variable === "free") sentence = `\`${name}\` is a free value filled by the agent.`;
-  else if (variable !== null) sentence = `\`${name}\` is a ${type} value filled by the agent.`;
-  else sentence = `\`${name}\` is a ${type} value.`;
-  return required ? `${sentence} Required.` : sentence;
-}
-
-function contradiction(field: SealedField, other: SealedField, otherLabel: string): string | null {
-  const name = `\`${field.name}\``;
-  if (field.type !== other.type) return `${name} has type ${field.type} here but ${other.type} in ${otherLabel}.`;
-  const allowed = (target: SealedField) => target.rules.filter((rule): rule is Extract<HiddenRule, { kind: "allowed" }> => rule.kind === "allowed");
-  const fixed = (target: SealedField) => target.rules.filter((rule): rule is Extract<HiddenRule, { kind: "fixed" }> => rule.kind === "fixed");
-  for (const left of allowed(field)) {
-    for (const right of allowed(other)) {
-      if (!left.values.some(value => right.values.some(known => sameScalar(value, known)))) {
-        return `${name} allowed values do not overlap with ${otherLabel}.`;
-      }
-    }
-  }
-  for (const [fixedSide, allowedSide] of [[field, other], [other, field]] as const) {
-    for (const rule of fixed(fixedSide)) {
-      if (allowed(allowedSide).some(set => !set.values.some(value => sameScalar(value, rule.value)))) {
-        return `${name} has a fixed value outside the allowed values of ${fixedSide === field ? otherLabel : "this layer"}.`;
-      }
-    }
-  }
-  if (!LIST_TYPES.has(field.type)) {
-    for (const left of fixed(field)) {
-      if (fixed(other).some(right => !sameScalar(left.value, right.value))) return `${name} has a different fixed value in ${otherLabel}.`;
-    }
-  }
-  return null;
+function oneLine(raw: string): string | Invalid {
+  return raw.includes("\n") ? invalid("Keep it on one line.") : raw;
 }
 
 /**
- * Refuses a seal whose public text carries a hidden value of any layer, or whose rules
- * contradict another layer. Reasons name fields, never values.
+ * Conservative ReDoS screen: refuses a group that holds a quantifier or an alternation
+ * and is itself repeated by `*`, `+` or `{…}`, such as `(a+)+`, `(a*)*` or `(a|a)*`.
+ * Some safe patterns are refused too; the judge also caps the input it matches.
  */
-export function sealGuard(layer: SealedLayer, others: readonly { readonly label: string; readonly layer: SealedLayer }[] = [], publicTokens: readonly string[] = []): string[] {
-  const reasons: string[] = [];
-  const tokens = [
-    ...FIELD_TYPES,
-    ...publicTokens,
-    ...layer.fields.map(field => field.name),
-    ...others.flatMap(other => other.layer.fields.map(field => field.name)),
-  ];
-  const redact = buildRedactor(hiddenValuesOf([layer, ...others.map(other => other.layer)]), { publicTokens: tokens });
-  for (const field of layer.fields) {
-    if (redact(field.description) !== field.description) {
-      reasons.push(`The description of \`${field.name}\` contains a hidden value; rewrite it without the value.`);
+export function hasNestedQuantifier(source: string): boolean {
+  const open: boolean[] = [];
+  let closedRisky = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]!;
+    const afterGroup = closedRisky;
+    closedRisky = false;
+    if (char === "\\") {
+      index += 1;
+      continue;
     }
-  }
-  if (layer.applyFolder !== null && redact(layer.applyFolder) !== layer.applyFolder) reasons.push("The apply folder contains a hidden value.");
-  layer.requiredHeadings.forEach((heading, index) => {
-    if (redact(heading) !== heading) reasons.push(`Required heading ${index + 1} contains a hidden value; do not require it.`);
-  });
-  for (const other of others) {
-    for (const field of layer.fields) {
-      const counterpart = other.layer.fields.find(candidate => candidate.name === field.name);
-      const reason = counterpart === undefined ? null : contradiction(field, counterpart, other.label);
-      if (reason !== null) reasons.push(reason);
+    if (char === "[") {
+      for (index += 1; index < source.length && source[index] !== "]"; index += 1) if (source[index] === "\\") index += 1;
+      continue;
     }
+    if (char === "(") {
+      open.push(false);
+      if (source[index + 1] === "?") {
+        index += 1;
+        if (source[index + 1] === "<" && source[index + 2] !== "=" && source[index + 2] !== "!") {
+          while (index < source.length && source[index] !== ">") index += 1;
+        } else index += 1;
+      }
+      continue;
+    }
+    if (char === ")") {
+      const risky = open.pop() ?? false;
+      if (open.length > 0 && risky) open[open.length - 1] = true;
+      closedRisky = risky;
+      continue;
+    }
+    const repeats = char === "*" || char === "+" || char === "{" && /^\{\d*,?\d*\}/.test(source.slice(index));
+    if (repeats && afterGroup) return true;
+    if ((repeats || char === "?" || char === "|") && open.length > 0) open[open.length - 1] = true;
   }
-  return reasons;
+  return false;
 }
 
-function publicField(field: SealedField): PublicField {
-  return { name: field.name, type: field.type, required: field.required, description: field.description };
-}
-
-function normalizeSourcePath(sourcePath: string): string {
-  return sourcePath.normalize("NFC").replaceAll("\\", "/").replace(/\/+/g, "/").replace(/^(?:\.\/)+/, "");
-}
-
-function templateName(id: string): string {
-  const base = id.slice(id.lastIndexOf("/") + 1);
-  return base.toLowerCase().endsWith(".md") ? base.slice(0, -3) : base;
-}
-
-function parseFolder(raw: string): string | null | Invalid {
-  if (raw === "" || raw === "-") return null;
-  const folder = raw.normalize("NFC").replaceAll("\\", "/").replace(/\/+/g, "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
-  if (folder.startsWith("/") || /^[A-Za-z]:/.test(folder) || folder.split("/").some(part => part === ".." || part === ".")) {
-    return invalid("Give a vault-relative folder without `..`, or leave it empty.");
-  }
-  return folder === "" ? null : folder;
-}
-
-async function askExtraRule(asker: Asker, name: string, type: FieldType): Promise<HiddenRule[]> {
-  const options = ["none", ...(STRING_TYPES.has(type) ? ["pattern"] : []), ...(RANGE_TYPES.has(type) ? ["range"] : [])];
-  if (options.length === 1) return [];
-  const choice = await asker.choice(`field:${name}:rule`, `Add a hidden format rule to \`${name}\`?`, options);
-  if (choice === "pattern") return [await askPattern(asker, name)];
-  if (choice === "range") return [await askRange(asker, name, type)];
-  return [];
-}
-
-async function askPattern(asker: Asker, name: string): Promise<HiddenRule> {
-  const regex = await asker.text(`field:${name}:pattern`, `Regular expression every \`${name}\` value must fully match`, undefined, raw => {
+async function askPattern(asker: Asker, id: string, name: string): Promise<Rule> {
+  const regex = await asker.text(`${id}:pattern`, `Regular expression every \`${name}\` value must fully match`, undefined, raw => {
     if (raw === "") return invalid("Give a regular expression.");
     try {
       new RegExp(raw, "u");
-      return raw;
     } catch {
       return invalid("That is not a valid regular expression.");
     }
+    return hasNestedQuantifier(raw) ? invalid("Nested repetition such as (a+)+ or (a|b)* can hang the check; rewrite it without repeating a repeated group.") : raw;
   });
   return { kind: "pattern", regex };
 }
 
-async function askRange(asker: Asker, name: string, type: FieldType): Promise<HiddenRule> {
+async function askRange(asker: Asker, id: string, name: string, type: FieldType): Promise<Rule> {
   const bound = (raw: string): number | string | undefined | Invalid => {
     if (raw === "" || raw === "-") return undefined;
     if (type !== "number") return raw;
     const value = coerce(type, raw);
     return typeof value === "number" ? value : invalid(`"${raw}" is not a number.`);
   };
-  for (;;) {
-    const min = await asker.text(`field:${name}:range-min`, `Lowest allowed \`${name}\` (empty for none)`, undefined, bound);
-    const max = await asker.text(`field:${name}:range-max`, `Highest allowed \`${name}\` (empty for none)`, undefined, bound);
-    if (min !== undefined && max !== undefined && min > max) {
-      asker.say(`  The lowest value is above the highest; give the range again.`);
-      continue;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const min = await asker.text(`${id}:range-min`, `Lowest allowed \`${name}\` (empty for none)`, undefined, bound);
+    const max = await asker.text(`${id}:range-max`, `Highest allowed \`${name}\` (empty for none)`, undefined, bound);
+    if (min === undefined && max === undefined) asker.say("  Give at least one bound.");
+    else if (min !== undefined && max !== undefined && min > max) asker.say("  The lowest value is above the highest; give the range again.");
+    else return { kind: "range", ...(min === undefined ? {} : { min }), ...(max === undefined ? {} : { max }) };
+  }
+  throw new InterviewAborted(`too many invalid answers to ${id}:range`);
+}
+
+async function askRules(asker: Asker, id: string, name: string, type: FieldType): Promise<Rule[]> {
+  const choice = await asker.choice(`${id}:rule`, `Hidden rule for \`${name}\``, RULE_CHOICES);
+  if (choice === "one-of-allowed") {
+    return [{ kind: "allowed", values: await asker.text(`${id}:allowed`, `Allowed values for \`${name}\` (comma separated)`, undefined, raw => parseValues(type, raw)) }];
+  }
+  if (choice === "must-equal") {
+    return [{ kind: "fixed", value: await asker.text(`${id}:fixed`, `Value \`${name}\` must have`, undefined, raw => raw === "" ? invalid("Give a value.") : coerce(type, raw)) }];
+  }
+  if (choice === "pattern") return [await askPattern(asker, id, name)];
+  if (choice === "range") return [await askRange(asker, id, name, type)];
+  return [];
+}
+
+interface Discovered {
+  readonly folders: readonly string[];
+  readonly templates: readonly { readonly name: string; readonly source: string; readonly extraction: Extraction }[];
+  readonly observedTypes: ReadonlyMap<string, FieldType>;
+}
+
+async function topLevelFolders(vault: string): Promise<string[]> {
+  const folders: string[] = [];
+  for (const entry of await readdir(vault, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    try {
+      folders.push(normalizeFolderPath(entry.name));
+    } catch {
+      // Internal or unsafe names are never offered as contract folders.
     }
-    if (min === undefined && max === undefined) {
-      asker.say(`  Give at least one bound.`);
-      continue;
+  }
+  return folders.sort(compareCodePoints);
+}
+
+async function discover(vault: string, templateFolder: string | undefined): Promise<Discovered | { readonly refused: string[] }> {
+  const observedTypes = new Map<string, FieldType>();
+  try {
+    for (const [name, type] of Object.entries(await readObsidianTypes(vault))) observedTypes.set(name, type);
+  } catch {
+    return { refused: ["The Obsidian property types file is unreadable; fix it in Obsidian first."] };
+  }
+
+  const templates: { name: string; source: string; extraction: Extraction }[] = [];
+  const reasons: string[] = [];
+  if (templateFolder !== undefined) {
+    const inventory = await scanTemplateSources(vault, [{ path: templateFolder, kind: "folder" }]);
+    if (!inventory.complete) reasons.push("The template folder could not be scanned completely; fix the reported template files first.");
+    const seen = new Set<string>();
+    for (const found of inventory.sources) {
+      const source = String(found.path);
+      const base = source.slice(source.lastIndexOf("/") + 1);
+      const name = base.endsWith(".md") ? base.slice(0, -3) : base;
+      if (!isSafeName(name)) {
+        reasons.push(`A template file name is not usable as a template name (${JSON.stringify(name)}).`);
+        continue;
+      }
+      if (seen.has(name)) {
+        reasons.push(`Two templates share the name "${name}"; rename one.`);
+        continue;
+      }
+      seen.add(name);
+      const extracted = await extractTemplate(vault, source);
+      if (!extracted.ok) {
+        reasons.push(`Template "${name}" cannot be read (${extracted.diagnostics.map(item => item.code).join(", ")}).`);
+        continue;
+      }
+      templates.push({ name, source, extraction: extracted.extraction });
+      for (const field of extracted.extraction.fields) {
+        if (!observedTypes.has(field.name)) observedTypes.set(field.name, field.inferredType);
+      }
     }
-    return { kind: "range", ...(min === undefined ? {} : { min }), ...(max === undefined ? {} : { max }) };
+  }
+  if (reasons.length > 0) return { refused: reasons };
+  templates.sort((left, right) => compareCodePoints(left.name, right.name));
+  return { folders: await topLevelFolders(vault), templates, observedTypes };
+}
+
+/** A vault-relative folder that exists, stays inside the vault and is not hidden; null otherwise. */
+async function usableFolder(vault: string, raw: string): Promise<string | null> {
+  try {
+    const folder = normalizeFolderPath(raw);
+    const verified = await verifyVaultPath(vault, folder, { expected: "either" });
+    if (verified.targetRealPath === null) return null;
+    return (await lstat(verified.absolutePath)).isDirectory() ? folder : null;
+  } catch {
+    return null;
   }
 }
 
-async function askType(asker: Asker, name: string, initial: FieldType): Promise<FieldType> {
-  return asker.text(`field:${name}:type`, `Type of \`${name}\` (${FIELD_TYPES.join(", ")})`, initial, raw =>
-    (FIELD_TYPES as readonly string[]).includes(raw) ? raw as FieldType : invalid(`Use one of: ${FIELD_TYPES.join(", ")}.`));
-}
-
-async function askDescription(asker: Asker, name: string, draft: string): Promise<string> {
-  return asker.text(`field:${name}:description`, `Public description of \`${name}\` (agents see this; never include a hidden value)`, draft, raw =>
-    raw.includes("\n") ? invalid("Keep the description on one line.") : raw);
-}
-
-/** One template field. The extraction proposes; the user decides. */
-async function askTemplateField(asker: Asker, extracted: ExtractedField): Promise<SealedField> {
-  const { name } = extracted;
-  let variable = extracted.variable;
-  if (variable === "free") {
-    const free = await asker.confirm(`field:${name}:free`, `\`${name}\` holds a template expression OMS cannot interpret. Treat it as a free value the agent fills?`);
-    if (!free) variable = null;
+/**
+ * The template folder when the vault settings name none: the Obsidian Templates or
+ * Templater folder once the owner confirms it, otherwise a folder the owner names.
+ * An empty answer means the vault has no templates (`null`).
+ */
+async function askTemplateFolder(asker: Asker, vault: string): Promise<string | null> {
+  const detected = await readObsidianTemplateFolder(vault);
+  const candidate = detected === null ? null : await usableFolder(vault, detected);
+  if (candidate !== null && await asker.confirm("template-folder:confirm", `Use \`${candidate}\` (from the Obsidian template settings) as the template folder?`, true)) return candidate;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const answer = await asker.text("template-folder:path", "Vault-relative template folder (empty if this vault has no templates)", "", oneLine);
+    if (answer === "") return null;
+    const folder = await usableFolder(vault, answer);
+    if (folder !== null) return folder;
+    asker.say("  Give an existing folder inside the vault that is not hidden, or leave it empty.");
   }
-  const type = await askType(asker, name, extracted.inferredType);
-  const required = await asker.confirm(`field:${name}:required`, `Is \`${name}\` required in every note from this template?`);
-  const rules: HiddenRule[] = [];
-  if (variable === null && hasLiteral(extracted.literal)) {
-    const members = literalMembers(extracted.literal);
+  throw new InterviewAborted("too many invalid answers to template-folder:path");
+}
+
+async function askFolders(asker: Asker, folders: readonly string[]): Promise<Record<string, FolderContract> | null> {
+  const result: Record<string, FolderContract> = {};
+  for (const folder of folders) {
+    if (!await asker.confirm(`folder:${folder}:register`, `Register the folder \`${folder}\`? Notes may only be written in registered folders.`)) continue;
+    const meaning = await asker.text(`folder:${folder}:meaning`, `What belongs in \`${folder}\`? (agents see this; never include a hidden value)`, "", oneLine);
+    const searchExclude = await asker.confirm(`folder:${folder}:search-exclude`, `Exclude \`${folder}\` from search?`);
+    result[folder] = { meaning, searchExclude };
+  }
+  return Object.keys(result).length === 0 ? null : result;
+}
+
+async function askProperties(asker: Asker, observed: ReadonlyMap<string, FieldType>): Promise<Record<string, PropertyContract> | null> {
+  const result: Record<string, PropertyContract> = {};
+  for (const name of [...observed.keys()].sort(compareCodePoints)) {
+    const id = `property:${name}`;
+    if (!await asker.confirm(`${id}:register`, `Register the property \`${name}\`? Unregistered properties are refused once any is registered.`)) continue;
+    const type = await asker.text(`${id}:type`, `Type of \`${name}\` (${FIELD_TYPES.join(", ")})`, observed.get(name), raw =>
+      (FIELD_TYPES as readonly string[]).includes(raw) ? raw as FieldType : invalid(`Use one of: ${FIELD_TYPES.join(", ")}.`));
+    const required = await asker.confirm(`${id}:required`, `Must every note have \`${name}\`?`);
+    const fallback = required ? false : await asker.confirm(`${id}:default`, `When a note leaves \`${name}\` out, should the write pass and report it as missing?`);
+    const rules = await askRules(asker, id, name, type);
+    const meaning = await asker.text(`${id}:meaning`, `What does \`${name}\` mean? (agents see this; never include a hidden value)`, "", oneLine);
+    result[name] = { meaning, type, default: fallback, required, rules };
+  }
+  return Object.keys(result).length === 0 ? null : result;
+}
+
+async function askTemplate(asker: Asker, name: string, source: string, extraction: Extraction): Promise<TemplateContract | null> {
+  const id = `template:${name}`;
+  if (!await asker.confirm(`${id}:register`, `Seal the template "${name}"?`)) return null;
+  const requiredProperties: string[] = [];
+  const narrowedRules: Record<string, Rule[]> = {};
+  for (const field of extraction.fields) {
+    if (await asker.confirm(`${id}:field:${field.name}:required`, `Must notes from "${name}" keep \`${field.name}\`?`)) requiredProperties.push(field.name);
+    const literal = field.literal;
+    if (field.variable !== null || literal === null || literal === "" || Array.isArray(literal) && literal.length === 0) continue;
+    const members: readonly JsonScalar[] = Array.isArray(literal) ? literal : [literal as JsonScalar];
     const choice = await asker.choice(
-      `field:${name}:literal`,
-      `The template writes a value for \`${name}\`. Must notes use exactly that value, one of several allowed values, or is it just an example?`,
+      `${id}:field:${field.name}:literal`,
+      `"${name}" writes a value for \`${field.name}\`. Must notes use exactly that value, one of several allowed values, or is it just an example?`,
       LITERAL_CHOICES,
     );
     if (choice === "must-equal") {
-      for (const value of members) rules.push({ kind: "fixed", value });
+      narrowedRules[field.name] = members.map(value => ({ kind: "fixed", value }));
     } else if (choice === "one-of-allowed") {
-      const values = await asker.text(`field:${name}:allowed`, `Allowed values for \`${name}\` (comma separated)`, members.map(String).join(", "), raw => parseValues(type, raw));
-      rules.push({ kind: "allowed", values });
+      const values = await asker.text(`${id}:field:${field.name}:allowed`, `Allowed values for \`${field.name}\` (comma separated)`, members.map(String).join(", "), raw => parseValues(field.inferredType, raw));
+      narrowedRules[field.name] = [{ kind: "allowed", values }];
     }
   }
-  if (rules.length === 0 && variable === null) rules.push(...await askExtraRule(asker, name, type));
-  const description = await askDescription(asker, name, draftDescription(name, type, required, rules, variable));
-  return { name, type, required, description, rules, variable };
-}
-
-/** One common field, declared by the user (the common layer has no source template). */
-async function askCommonField(asker: Asker, name: string, previous: SealedField | null): Promise<SealedField> {
-  const type = await askType(asker, name, previous?.type ?? "text");
-  const required = await asker.confirm(`field:${name}:required`, `Must every note have \`${name}\`?`);
-  const choice = await asker.choice(`field:${name}:rule`, `Hidden rule for \`${name}\``, COMMON_RULE_CHOICES);
-  const rules: HiddenRule[] = [];
-  if (choice === "one-of-allowed") {
-    rules.push({ kind: "allowed", values: await asker.text(`field:${name}:allowed`, `Allowed values for \`${name}\` (comma separated)`, undefined, raw => parseValues(type, raw)) });
-  } else if (choice === "must-equal") {
-    const value = await asker.text(`field:${name}:fixed`, `Value \`${name}\` must have`, undefined, raw => raw === "" ? invalid("Give a value.") : coerce(type, raw));
-    rules.push({ kind: "fixed", value });
-  } else if (choice === "pattern") {
-    rules.push(await askPattern(asker, name));
-  } else if (choice === "range") {
-    rules.push(await askRange(asker, name, type));
-  }
-  const draft = draftDescription(name, type, required, rules, null);
-  const description = await askDescription(asker, name, previous !== null && previous.rules.length === 0 && rules.length === 0 ? previous.description || draft : draft);
-  return { name, type, required, description, rules, variable: null };
-}
-
-interface Context {
-  readonly manifest: PublicManifest;
-  readonly loaded: LoadedLayers | null;
-}
-
-async function readContext(vault: string): Promise<Context | { readonly refused: string[] }> {
-  const manifest = await readPublicManifest(vault);
-  if (manifest.state === "invalid") return { refused: ["The public manifest .oms/contract-public.json is unreadable; restore it before sealing."] };
-  const known = manifest.state === "ok" ? manifest.manifest : EMPTY_PUBLIC_MANIFEST;
-  const vaultId = await readVaultId(vault);
-  if (vaultId.state === "invalid") return { refused: [`.oms/vault-id is unreadable (${vaultId.reason}); restore it before sealing.`] };
-  if (vaultId.state === "absent") return { manifest: known, loaded: null };
-  const loaded = await loadLayers(vaultId.id, known);
-  if (loaded.orphaned) {
-    return { refused: ["The sealed store holds a layer the public manifest does not name; restore .oms/contract-public.json before sealing."] };
-  }
-  return { manifest: known, loaded };
-}
-
-function okLayer(state: LoadedLayers["common"] | undefined): SealedLayer | null {
-  return state !== undefined && state !== null && state.state === "ok" ? state.layer : null;
-}
-
-async function templateLayer(vault: string, sourcePath: string, asker: Asker, context: Context): Promise<{ readonly layer: SealedLayer; readonly replaces?: string; readonly others: { label: string; layer: SealedLayer }[] } | { readonly refused: string[] }> {
-  const id = normalizeSourcePath(sourcePath);
-  const entry = context.manifest.templates.find(template => template.id === id);
-  const previous = okLayer(context.loaded?.templates.get(id));
-  const common = context.manifest.common === null ? null : okLayer(context.loaded?.common);
-  if (context.manifest.common !== null && common === null) {
-    return { refused: ["The sealed common rules are unreadable, so a template cannot be checked against them; run `oms contract interview --common` first."] };
-  }
-  const extraction = await extractTemplate(vault, id);
-  if (!extraction.ok) return { refused: extraction.diagnostics.map(item => `${item.code}: ${item.message}`) };
-  if (entry !== undefined && previous === null) asker.say("The previous seal is unreadable; every field is asked again.");
-
-  const answers: Record<string, string> = {};
-  const fields: SealedField[] = [];
-  for (const extracted of extraction.extraction.fields) {
-    const fingerprint = JSON.stringify([extracted.inferredType, extracted.literal, extracted.variable]);
-    const key = `field:${extracted.name}:source`;
-    answers[key] = fingerprint;
-    const kept = previous?.answers[key] === fingerprint ? previous.fields.find(field => field.name === extracted.name) : undefined;
-    if (kept !== undefined) {
-      asker.say(`Kept \`${kept.name}\` (unchanged since the last seal).`);
-      fields.push(kept);
-      continue;
-    }
-    fields.push(await askTemplateField(asker, extracted));
-  }
-  for (const field of previous?.fields ?? []) {
-    if (!fields.some(current => current.name === field.name)) asker.say(`Dropped \`${field.name}\` (no longer in the template).`);
-  }
-
   const requiredHeadings: string[] = [];
-  for (const heading of extraction.extraction.headings) {
+  for (const heading of extraction.headings) {
     if (heading.variable || requiredHeadings.includes(heading.title)) continue;
-    const key = `heading:${heading.title}`;
-    const earlier = previous?.answers[key];
-    const required = earlier !== undefined
-      ? earlier === "required"
-      : await asker.confirm(key, `Must notes from this template keep the heading "${heading.title}"?`);
-    answers[key] = required ? "required" : "optional";
-    if (required) requiredHeadings.push(heading.title);
+    if (await asker.confirm(`${id}:heading:${heading.title}`, `Must notes from "${name}" keep the heading "${heading.title}"?`)) requiredHeadings.push(heading.title);
   }
-
-  let applyFolder: string | null;
-  if (entry !== undefined) {
-    applyFolder = entry.applyFolder;
-  } else {
-    applyFolder = await asker.text("apply-folder", "Folder this template applies to (empty for any folder)", "", parseFolder);
-  }
-
-  const layer: SealedLayer = {
-    sealId: randomUUID(),
-    fields,
-    requiredHeadings,
-    applyFolder,
-    sourcePath: id,
-    sourceHash: extraction.extraction.sourceHash,
-    answers,
-  };
+  const applyFolder = await asker.text(`${id}:apply-folder`, `Folder "${name}" applies to (empty for any folder)`, "", raw => {
+    if (raw === "" || raw === "-") return null;
+    try {
+      return normalizeFolderPath(raw);
+    } catch {
+      return invalid("Give a vault-relative folder without hidden or `..` segments, or leave it empty.");
+    }
+  });
   return {
-    layer,
-    ...(entry === undefined ? {} : { replaces: entry.sealId }),
-    others: common === null ? [] : [{ label: "the common rules", layer: common }],
+    source,
+    sourceHash: extraction.sourceHash,
+    ...(applyFolder === null ? {} : { applyFolder }),
+    requiredProperties,
+    narrowedRules,
+    requiredHeadings,
   };
 }
 
-async function commonLayer(asker: Asker, context: Context): Promise<{ readonly layer: SealedLayer; readonly replaces?: string; readonly others: { label: string; layer: SealedLayer }[] } | { readonly refused: string[] }> {
-  const previous = okLayer(context.loaded?.common);
-  if (context.manifest.common !== null && previous === null) asker.say("The previous common rules are unreadable; declare them again.");
-  const fields: SealedField[] = [];
-  for (const field of [...previous?.fields ?? []].sort((left, right) => compareCodePoint(left.name, right.name))) {
-    const action = await asker.choice(`common:${field.name}:action`, `Common field \`${field.name}\` (${field.type}, ${field.required ? "required" : "optional"})`, ["keep", "edit", "remove"]);
-    if (action === "keep") fields.push(field);
-    else if (action === "edit") fields.push(await askCommonField(asker, field.name, field));
+/** Refuses a contract whose public text carries a hidden value or that no note could pass. Reasons never name a value. */
+export function sealGuard(contract: VaultContract): string[] {
+  const reasons: string[] = [];
+  const redact = buildRedactor(hiddenValuesOf(contract), { publicTokens: publicTokensOf(contract) });
+  for (const [folder, entry] of Object.entries(contract.folders ?? {})) {
+    if (redact(entry.meaning) !== entry.meaning) reasons.push(`The meaning of folder \`${folder}\` contains a hidden value; rewrite it without the value.`);
   }
-  for (let index = 1; await asker.confirm(`common:add:${index}`, "Add a common field?"); index += 1) {
-    const name = await asker.text(`common:add:${index}:name`, "Field name", undefined, raw => {
-      if (raw === "" || /[\n:#]/.test(raw)) return invalid("Give a field name without `:` or `#`.");
-      if (fields.some(field => field.name === raw)) return invalid(`\`${raw}\` is already declared.`);
-      return raw;
-    });
-    fields.push(await askCommonField(asker, name, null));
+  for (const [name, entry] of Object.entries(contract.properties ?? {})) {
+    if (redact(entry.meaning) !== entry.meaning) reasons.push(`The meaning of \`${name}\` contains a hidden value; rewrite it without the value.`);
   }
-  if (fields.length === 0) return { refused: ["The common rules declare no field; nothing to seal."] };
-  const others: { label: string; layer: SealedLayer }[] = [];
-  for (const template of context.manifest.templates) {
-    const layer = okLayer(context.loaded?.templates.get(template.id));
-    if (layer !== null) others.push({ label: `template ${template.id}`, layer });
+  if (contract.properties !== null) {
+    for (const [name, template] of Object.entries(contract.templates)) {
+      for (const field of [...template.requiredProperties, ...Object.keys(template.narrowedRules)]) {
+        if (!Object.hasOwn(contract.properties, field)) reasons.push(`Template "${name}" uses \`${field}\`, which is not a registered property.`);
+      }
+    }
   }
-  const layer: SealedLayer = {
-    sealId: randomUUID(),
-    fields: fields.sort((left, right) => compareCodePoint(left.name, right.name)),
-    requiredHeadings: [],
-    applyFolder: null,
-    sourcePath: null,
-    sourceHash: null,
-    answers: {},
-  };
-  return { layer, ...(context.manifest.common === null ? {} : { replaces: context.manifest.common.sealId }), others };
+  return [...new Set(reasons)];
 }
 
-function preview(io: InterviewIO, layer: SealedLayer): void {
+function preview(io: InterviewIO, contract: VaultContract): void {
   io.say("Public part (agents will see this):");
-  for (const field of layer.fields) {
-    io.say(`  - ${field.name} (${field.type}, ${field.required ? "required" : "optional"}): ${field.description}`);
+  for (const [folder, entry] of Object.entries(contract.folders ?? {})) io.say(`  folder ${folder}: ${entry.meaning}`);
+  if (contract.folders === null) io.say("  folders: any");
+  for (const [name, entry] of Object.entries(contract.properties ?? {})) {
+    io.say(`  property ${name} (${entry.type}, ${entry.required ? "required" : "optional"}): ${entry.meaning}`);
   }
-  if (layer.requiredHeadings.length > 0) io.say(`  Required headings: ${layer.requiredHeadings.join(", ")}`);
-  if (layer.sourcePath !== null) io.say(`  Apply folder: ${layer.applyFolder ?? "(any)"}`);
+  if (contract.properties === null) io.say("  properties: any");
+  for (const [name, template] of Object.entries(contract.templates)) {
+    io.say(`  template ${name}: properties [${template.requiredProperties.join(", ")}], headings [${template.requiredHeadings.join(", ")}]`);
+  }
 }
 
-export async function runInterview(input: { readonly vault: string; readonly target: InterviewTarget; readonly io: InterviewIO }): Promise<InterviewResult> {
-  const { vault, target, io } = input;
+/** Answers kept from the sealed contract merged with the new ones; null stays null only when both are. */
+function merge<T>(kept: Readonly<Record<string, T>> | null, asked: Readonly<Record<string, T>> | null): Record<string, T> | null {
+  return kept === null && asked === null ? null : { ...kept, ...asked };
+}
+
+export async function runInterview(input: {
+  readonly vault: string;
+  readonly io: InterviewIO;
+  readonly root?: string;
+  readonly sealDeps?: Partial<SealDeps>;
+  /** Ask again about folders, properties and templates declined at an earlier seal. */
+  readonly reask?: boolean;
+}): Promise<InterviewResult> {
+  const { vault, io } = input;
+  const root = input.root ?? storeRoot();
   const asker = new Asker(io);
   try {
-    const context = await readContext(vault);
-    if ("refused" in context) return { state: "refused", reasons: context.refused };
-    const built = target.kind === "common" ? await commonLayer(asker, context) : await templateLayer(vault, target.sourcePath, asker, context);
-    if ("refused" in built) return { state: "refused", reasons: built.refused };
-    const { layer, others } = built;
-    const publicTokens = layer.sourcePath === null ? [] : [layer.sourcePath, templateName(layer.sourcePath)];
-    const reasons = sealGuard(layer, others, publicTokens);
+    const state = await resolveSealState(vault, root);
+    if (state.row === "vault-id-tampered") {
+      throw new Error("CONTRACT_VAULT_ID_TAMPERED: the vault id in .oms/settings.json does not match the id this vault was sealed with; restore the original .oms/settings.json or run `oms contract doctor`");
+    }
+    if (state.shared) {
+      throw new Error("CONTRACT_VAULT_ID_SHARED: another existing vault uses this vault id (a copied vault); remove .oms/settings.json in the copy, then run `oms contract setup` again");
+    }
+    let settings: VaultSettings | null;
+    try {
+      settings = await readVaultSettings(vault);
+    } catch {
+      return { state: "refused", reasons: ["The vault settings are unreadable; run `oms contract doctor`."] };
+    }
+    const baseSeq = state.vaultId === null ? "none" : await currentSequence(state.vaultId, root);
+    const previous = state.view.state === "sealed" ? state.view.contract : null;
+    const pickFolder = settings?.templateFolder === undefined && (previous === null || input.reask === true);
+    const chosenFolder = pickFolder ? await askTemplateFolder(asker, vault) : null;
+    const found = await discover(vault, settings?.templateFolder ?? chosenFolder ?? undefined);
+    if ("refused" in found) return { state: "refused", reasons: found.refused };
+
+    const earlier: DeclinedSet = input.reask === true || state.vaultId === null ? NO_DECLINED : await readDeclined(state.vaultId, root);
+    const newFolders = found.folders.filter(folder => !Object.hasOwn(previous?.folders ?? {}, folder));
+    const newProperties = new Map([...found.observedTypes].filter(([name]) => !Object.hasOwn(previous?.properties ?? {}, name)));
+    const changedTemplates = found.templates.filter(template => previous?.templates[template.name]?.sourceHash !== template.extraction.sourceHash);
+    const askFolderList = newFolders.filter(folder => !earlier.folders.includes(folder));
+    const askPropertyMap = new Map([...newProperties].filter(([name]) => !earlier.properties.includes(name)));
+    const askTemplateList = changedTemplates.filter(template => earlier.templates[template.name] !== template.extraction.sourceHash);
+    const goneTemplates = Object.keys(previous?.templates ?? {}).filter(name => !found.templates.some(template => template.name === name)).sort(compareCodePoints);
+    if (previous !== null) {
+      io.say(askFolderList.length + askPropertyMap.size + askTemplateList.length + goneTemplates.length === 0
+        ? "Nothing new since the last seal; existing answers are kept."
+        : "Asking only about what is new or changed since the last seal; existing answers are kept.");
+    }
+    const skipped = newFolders.length - askFolderList.length + newProperties.size - askPropertyMap.size + changedTemplates.length - askTemplateList.length;
+    if (skipped > 0) io.say(`Skipping ${skipped} item(s) declined at an earlier seal; run \`oms contract setup --reask\` to answer them again.`);
+
+    const askedFolders = await askFolders(asker, askFolderList);
+    const askedProperties = await askProperties(asker, askPropertyMap);
+    const folders = merge(previous?.folders ?? null, askedFolders);
+    const properties = merge(previous?.properties ?? null, askedProperties);
+    const templates: Record<string, TemplateContract> = { ...previous?.templates };
+    const declinedTemplates: Record<string, string> = {};
+    for (const template of askTemplateList) {
+      const sealed = await askTemplate(asker, template.name, template.source, template.extraction);
+      if (sealed === null) {
+        delete templates[template.name];
+        declinedTemplates[template.name] = template.extraction.sourceHash;
+      } else templates[template.name] = sealed;
+    }
+    const removedTemplates: string[] = [];
+    for (const name of goneTemplates) {
+      if (!await asker.confirm(`template:${name}:remove`, `The source of the sealed template "${name}" is gone. Remove it from the contract?`, true)) continue;
+      delete templates[name];
+      removedTemplates.push(name);
+    }
+    const contract: VaultContract = { folders, properties, templates };
+    const reasons = sealGuard(contract);
     if (reasons.length > 0) return { state: "refused", reasons };
 
-    preview(io, layer);
+    preview(io, contract);
+    if (removedTemplates.length > 0) io.say(`  removed templates: ${removedTemplates.join(", ")}`);
     if (!await asker.confirm("seal", "Seal this contract?")) return { state: "aborted" };
 
+    const currentTemplates = new Map(found.templates.map(template => [template.name, template.extraction.sourceHash]));
+    const declined: DeclinedSet = {
+      folders: [
+        ...earlier.folders.filter(folder => found.folders.includes(folder) && !Object.hasOwn(folders ?? {}, folder)),
+        ...askFolderList.filter(folder => !Object.hasOwn(askedFolders ?? {}, folder)),
+      ],
+      properties: [
+        ...earlier.properties.filter(name => found.observedTypes.has(name) && !Object.hasOwn(properties ?? {}, name)),
+        ...[...askPropertyMap.keys()].filter(name => !Object.hasOwn(askedProperties ?? {}, name)),
+      ],
+      templates: {
+        ...Object.fromEntries(Object.entries(earlier.templates).filter(([name, hash]) => currentTemplates.get(name) === hash && !Object.hasOwn(templates, name))),
+        ...declinedTemplates,
+      },
+    };
     const vaultId = await ensureVaultId(vault);
-    if (vaultId.state !== "ok") return { state: "refused", reasons: [`.oms/vault-id could not be created (${vaultId.reason}).`] };
-    const sealed = await sealLayer(vaultId.id, layer, await realpath(vault), built.replaces === undefined ? {} : { replaces: built.replaces });
-    if (!sealed.ok) return { state: "refused", reasons: [`The sealed store could not be written (${sealed.reason}).`] };
-
-    const publicFields = layer.fields.map(publicField);
-    let publicTemplate: PublicTemplate | null = null;
-    let publicCommon: PublicCommon | null = null;
-    let manifest: PublicManifest;
-    if (layer.sourcePath === null) {
-      publicCommon = { fields: publicFields, sealId: layer.sealId };
-      manifest = { ...context.manifest, common: publicCommon };
-    } else {
-      publicTemplate = {
-        id: layer.sourcePath,
-        name: templateName(layer.sourcePath),
-        applyFolder: layer.applyFolder,
-        fields: publicFields,
-        requiredHeadings: layer.requiredHeadings,
-        sourceHash: layer.sourceHash!,
-        sealId: layer.sealId,
-      };
-      const id = publicTemplate.id;
-      manifest = { ...context.manifest, templates: [...context.manifest.templates.filter(template => template.id !== id), publicTemplate] };
+    const deps: Partial<SealDeps> = {
+      confirmStaleReclaim: () => asker.confirm("seal-lock:reclaim", "An earlier seal did not finish and left its lock behind. Reclaim it and continue?"),
+      ...input.sealDeps,
+    };
+    await sealContract({ vaultRealPath: await realpath(vault), vaultId, contract, baseSeq, declined }, root, deps);
+    if (chosenFolder !== null) {
+      const current = await readVaultSettings(vault);
+      if (current !== null) await writeVaultSettings(vault, { ...current, templateFolder: chosenFolder });
     }
-    const written = await writePublicManifest(vault, manifest);
-    if (!written.ok) {
-      return { state: "refused", reasons: [`The layer was sealed but .oms/contract-public.json could not be written (${written.reason}); run the interview again.`] };
-    }
-    return { state: "sealed", vaultId: vaultId.id, vaultIdCreated: vaultId.created, publicTemplate, publicCommon };
+    return {
+      state: "sealed",
+      vaultIdCreated: settings === null,
+      folders: Object.keys(folders ?? {}).length,
+      properties: Object.keys(properties ?? {}).length,
+      templates: Object.keys(templates),
+      ...(removedTemplates.length === 0 ? {} : { removedTemplates }),
+    };
   } catch (error: unknown) {
     if (error instanceof InterviewAborted) return { state: "aborted" };
     throw error;

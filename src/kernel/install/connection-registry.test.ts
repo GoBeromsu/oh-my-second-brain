@@ -68,7 +68,7 @@ async function reason(operation: Promise<unknown>): Promise<string> {
 
 async function publishIdentity(vault: string, vaultId: string): Promise<void> {
   await mkdir(path.join(vault, ".oms"));
-  await writeFile(path.join(vault, ".oms", "settings.json"), `${JSON.stringify({ version: 1, vaultId, templateRoots: ["Templates"] })}\n`, "utf8");
+  await writeFile(path.join(vault, ".oms", "settings.json"), `${JSON.stringify({ version: 1, vaultId, templateFolder: "Templates" })}\n`, "utf8");
 }
 
 function reservationFile(runtime: string, canonical: string, portableVaultId: string): string {
@@ -525,7 +525,7 @@ describe("vault connection reservation", () => {
     await upsertVaultConnection({
       expectedDigest: "sha256:absent", portableVaultId: ID_B, localVaultPath: samePath.vaultA, connectionId: ID_A, select: false, operationId: OP,
     }, options(samePath.registry, samePath.runtime));
-    await writeFile(path.join(samePath.vaultA, ".oms", "settings.json"), `${JSON.stringify({ version: 1, vaultId: ID_C, templateRoots: ["Templates"] })}\n`);
+    await writeFile(path.join(samePath.vaultA, ".oms", "settings.json"), `${JSON.stringify({ version: 1, vaultId: ID_C, templateFolder: "Templates" })}\n`);
     const beforeMismatch = await readFile(samePath.registry);
     expect(await reason(reserveVaultConnection({ vault: samePath.vaultA, source: "explicit" }, options(samePath.registry, samePath.runtime)))).toBe("identity-conflict");
     expect(await readFile(samePath.registry)).toEqual(beforeMismatch);
@@ -613,7 +613,7 @@ describe("vault connection reservation", () => {
     await publishIdentity(vaultA, "not-a-uuid");
     expect(await reason(reserveVaultConnection({ vault: vaultA, source: "explicit" }, options(registry, runtime)))).toBe("malformed");
     expect(existsSync(runtime)).toBe(false);
-    await writeFile(path.join(vaultA, ".oms", "settings.json"), `${JSON.stringify({ version: 1, vaultId: ID_B, templateRoots: ["Templates"] })}\n`);
+    await writeFile(path.join(vaultA, ".oms", "settings.json"), `${JSON.stringify({ version: 1, vaultId: ID_B, templateFolder: "Templates" })}\n`);
     expect(await reason(reserveVaultConnection({ vault: vaultA, source: "cwd" }, options(registry, runtime)))).toBe("unsafe-target");
     expect(await reason(reserveVaultConnection({ vault: vaultA, source: "unknown" as "explicit" }, options(registry, runtime)))).toBe("unsafe-target");
     expect(existsSync(path.join(runtime, "connection-reservations"))).toBe(false);

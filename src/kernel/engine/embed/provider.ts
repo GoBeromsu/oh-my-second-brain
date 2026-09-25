@@ -486,7 +486,7 @@ export function requireRealEmbeddingProvider(
   // shared capability guidance instead of a locally worded variant. These messages
   // reach the MCP surface verbatim, and they previously named the environment pair
   // alone — telling an agent one of the three ways to configure a model while
-  // omitting `.oms/models.json` and the one-step install entirely.
+  // omitting the vault setting `embedding.model` and the one-step install entirely.
   //
   // The supported-provider hint is kept: the shared guidance says where to set a
   // provider but not which values are valid, and that is the first thing someone

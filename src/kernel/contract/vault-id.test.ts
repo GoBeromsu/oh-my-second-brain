@@ -1,78 +1,87 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { UUID_PATTERN } from "./types.js";
-import { ensureVaultId, readVaultId, VAULT_ID_PATH } from "./vault-id.js";
+import { addSharedCopy, buildTruthTableRow, TRUTH_TABLE_ROWS, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
+import { SETTINGS_PATH, VAULT_ID_PATTERN } from "../vault/settings.js";
+import { ensureVaultId, resolveSealState, type SealRow } from "./vault-id.js";
 
-const roots: string[] = [];
-const ID = "abcdef12-2222-4333-8444-555555555555";
+const fixtures: TruthTableFixture[] = [];
+const temps: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+  await Promise.all(fixtures.splice(0).map(fixture => fixture.cleanup()));
+  await Promise.all(temps.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
-async function vault(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "oms-contract-vault-id-"));
-  roots.push(root);
-  return root;
+async function row(name: SealRow): Promise<TruthTableFixture> {
+  const fixture = await buildTruthTableRow(name);
+  fixtures.push(fixture);
+  return fixture;
 }
 
-describe("readVaultId", () => {
-  it("reports absent without creating .oms", async () => {
-    const root = await vault();
-    expect(await readVaultId(root)).toEqual({ state: "absent" });
-    expect(await readdir(root)).toEqual([]);
+const EXPECTED_VIEW: Readonly<Record<SealRow, "open" | "unreadable" | "sealed">> = {
+  "never-sealed": "open",
+  "synced-second-machine": "open",
+  "store-without-index": "sealed",
+  "vault-moved": "sealed",
+  "sealed": "sealed",
+  "index-without-store": "unreadable",
+  "vault-id-tampered": "unreadable",
+  "index-corrupt": "sealed",
+};
+
+describe("resolveSealState truth table", () => {
+  it("covers exactly eight rows", () => {
+    expect(new Set(TRUTH_TABLE_ROWS).size).toBe(8);
   });
 
-  it("reads a valid id and rejects malformed or linked files", async () => {
-    const root = await vault();
-    await mkdir(join(root, ".oms"));
-    await writeFile(join(root, VAULT_ID_PATH), `${ID}\n`);
-    expect(await readVaultId(root)).toEqual({ state: "ok", id: ID });
-    await writeFile(join(root, VAULT_ID_PATH), ID.toUpperCase());
-    expect((await readVaultId(root)).state).toBe("invalid");
-    await writeFile(join(root, VAULT_ID_PATH), "x".repeat(300));
-    expect((await readVaultId(root)).state).toBe("invalid");
-    await rm(join(root, VAULT_ID_PATH));
-    await writeFile(join(root, "elsewhere"), ID);
-    await symlink(join(root, "elsewhere"), join(root, VAULT_ID_PATH));
-    expect((await readVaultId(root)).state).toBe("invalid");
+  for (const name of TRUTH_TABLE_ROWS) {
+    it(`resolves ${name}`, async () => {
+      const fixture = await row(name);
+      const state = await resolveSealState(fixture.vault, fixture.root);
+      expect(state.row).toBe(name);
+      expect(state.view.state).toBe(EXPECTED_VIEW[name]);
+      expect(state.shared).toBe(false);
+      expect(state.settingsInvalid).toBe(false);
+      if (name === "never-sealed") expect(state.vaultId).toBeNull();
+      else if (name !== "vault-id-tampered") expect(state.vaultId).toBe(fixture.vaultId);
+    });
+  }
+
+  it("is read-only: resolving creates no store root or settings", async () => {
+    const fixture = await row("never-sealed");
+    await resolveSealState(fixture.vault, fixture.root);
+    await expect(readFile(join(fixture.vault, SETTINGS_PATH))).rejects.toThrow();
+    await expect(readFile(join(fixture.root, "index.json"))).rejects.toThrow();
   });
 
-  it("rejects a .oms that is not a real directory", async () => {
-    const root = await vault();
-    await writeFile(join(root, ".oms"), "file");
-    expect((await readVaultId(root)).state).toBe("invalid");
+  it("reports a copied vault as shared", async () => {
+    const fixture = await row("sealed");
+    await addSharedCopy(fixture);
+    const state = await resolveSealState(fixture.vault, fixture.root);
+    expect(state.row).toBe("sealed");
+    expect(state.shared).toBe(true);
+  });
+
+  it("marks invalid settings without throwing", async () => {
+    const fixture = await row("never-sealed");
+    await mkdir(join(fixture.vault, ".oms"), { recursive: true });
+    await writeFile(join(fixture.vault, SETTINGS_PATH), "{\"version\":1,\"vaultId\":\"not-a-uuid\"}");
+    const state = await resolveSealState(fixture.vault, fixture.root);
+    expect(state.settingsInvalid).toBe(true);
+    expect(state.row).toBe("never-sealed");
+    expect(state.view.state).toBe("open");
   });
 });
 
 describe("ensureVaultId", () => {
-  it("seeds the first id from settings vaultId", async () => {
-    const root = await vault();
-    await mkdir(join(root, ".oms"));
-    await writeFile(join(root, ".oms/settings.json"), JSON.stringify({ version: 1, vaultId: ID, templateRoots: [] }));
-    expect(await ensureVaultId(root)).toEqual({ state: "ok", id: ID, created: true });
-    expect(await readFile(join(root, VAULT_ID_PATH), "utf8")).toBe(`${ID}\n`);
-    expect(await ensureVaultId(root)).toEqual({ state: "ok", id: ID, created: false });
-  });
-
-  it("falls back to a random id when settings are absent or unreadable", async () => {
-    const root = await vault();
-    const first = await ensureVaultId(root);
-    expect(first.state === "ok" && UUID_PATTERN.test(first.id) && first.created).toBe(true);
-    const other = await vault();
-    await mkdir(join(other, ".oms"));
-    await writeFile(join(other, ".oms/settings.json"), "{not json");
-    const second = await ensureVaultId(other);
-    expect(second.state === "ok" && UUID_PATTERN.test(second.id)).toBe(true);
-  });
-
-  it("never overwrites an invalid id file", async () => {
-    const root = await vault();
-    await mkdir(join(root, ".oms"));
-    await writeFile(join(root, VAULT_ID_PATH), "garbage");
-    expect((await ensureVaultId(root)).state).toBe("invalid");
-    expect(await readFile(join(root, VAULT_ID_PATH), "utf8")).toBe("garbage");
+  it("issues a UUID once and returns the same id afterwards", async () => {
+    const vault = await realpath(await mkdtemp(join(tmpdir(), "oms-vault-id-")));
+    temps.push(vault);
+    const first = await ensureVaultId(vault);
+    expect(first).toMatch(VAULT_ID_PATTERN);
+    expect(await ensureVaultId(vault)).toBe(first);
+    expect(JSON.parse(await readFile(join(vault, SETTINGS_PATH), "utf8"))).toMatchObject({ version: 1, vaultId: first });
   });
 });

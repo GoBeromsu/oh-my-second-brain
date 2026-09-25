@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { digestBytes } from "../templates/canonical.js";
+import { digestBytes } from "./canonical.js";
 import {
   CompletionContractError,
   type CompletionCriterion,

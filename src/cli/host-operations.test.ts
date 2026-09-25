@@ -16,7 +16,9 @@ import {
 } from "../kernel/install/hosts.js";
 import {
   buildGuardCommandString,
+  HOOK_MATCHER,
   isOmsHookEntry,
+  READ_MATCHER,
   removeClaudeHooks,
   toShellVaultPath,
   upsertClaudeHooks,
@@ -859,10 +861,17 @@ describe("Claude Code hook wiring helpers", () => {
     expect(cmd).toContain("OMS_AGENT_VAULT=");
   });
 
-  it("isOmsHookEntry detects marker in hook command", () => {
+  it("isOmsHookEntry claims generated oms bins under owned matchers only", () => {
     const entry = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="$HOME/V" oms-guard' }] };
-    expect(isOmsHookEntry(entry, "oms-guard")).toBe(true);
-    expect(isOmsHookEntry(entry, "oms-post-guard")).toBe(false);
+    const readEntry = { matcher: READ_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="$HOME/V" oms-guard' }] };
+    const twoAssignments = { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/v" OMS_AGENT_VAULT="/r" oms-guard' }] };
+    const threeAssignments = { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/v" OMS_AGENT_VAULT="/r" OMS_VAULT="/w" oms-guard' }] };
+    const notOmsBin = { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/v" my-guard' }] };
+    expect(isOmsHookEntry(entry)).toBe(true);
+    expect(isOmsHookEntry(readEntry)).toBe(true);
+    expect(isOmsHookEntry(twoAssignments)).toBe(true);
+    expect(isOmsHookEntry(threeAssignments)).toBe(false);
+    expect(isOmsHookEntry(notOmsBin)).toBe(false);
   });
 
   it("does not claim a user hook with a suffix after the quoted assignment", () => {
@@ -870,7 +879,7 @@ describe("Claude Code hook wiring helpers", () => {
       matcher: ".*",
       hooks: [{ type: "command", command: 'OMS_VAULT="/x"suffix oms-guard' }],
     };
-    expect(isOmsHookEntry(entry, "oms-guard")).toBe(false);
+    expect(isOmsHookEntry(entry)).toBe(false);
   });
 
   it("does not claim escaped-quote assignments", () => {
@@ -878,7 +887,7 @@ describe("Claude Code hook wiring helpers", () => {
       matcher: ".*",
       hooks: [{ type: "command", command: 'OMS_VAULT="/x\\q" oms-guard' }],
     };
-    expect(isOmsHookEntry(entry, "oms-guard")).toBe(false);
+    expect(isOmsHookEntry(entry)).toBe(false);
   });
 
   it("does not claim a matching command under a different hook shape", () => {
@@ -894,12 +903,12 @@ describe("Claude Code hook wiring helpers", () => {
     const extraField = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/x" oms-guard', owner: "user" }] };
     const embeddedHome = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="prefix$HOME/foo" oms-guard' }] };
     const emptyAssignment = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="" oms-guard' }] };
-    expect(isOmsHookEntry(wrongMatcher, "oms-guard")).toBe(false);
-    expect(isOmsHookEntry(multipleHooks, "oms-guard")).toBe(false);
-    expect(isOmsHookEntry(wrongType, "oms-guard")).toBe(false);
-    expect(isOmsHookEntry(extraField, "oms-guard")).toBe(false);
-    expect(isOmsHookEntry(embeddedHome, "oms-guard")).toBe(false);
-    expect(isOmsHookEntry(emptyAssignment, "oms-guard")).toBe(false);
+    expect(isOmsHookEntry(wrongMatcher)).toBe(false);
+    expect(isOmsHookEntry(multipleHooks)).toBe(false);
+    expect(isOmsHookEntry(wrongType)).toBe(false);
+    expect(isOmsHookEntry(extraField)).toBe(false);
+    expect(isOmsHookEntry(embeddedHome)).toBe(false);
+    expect(isOmsHookEntry(emptyAssignment)).toBe(false);
   });
 });
 
@@ -911,7 +920,7 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     return claudeDir;
   }
 
-  it("writes PreToolUse and PostToolUse entries into missing settings.json", async () => {
+  it("writes the write and read PreToolUse entries into missing settings.json", async () => {
     const claudeDir = await makeClaudeDir("write");
     const home = path.dirname(claudeDir);
     const result = await upsertClaudeHooks({ vault: path.join(home, "Vault"), homeDir: home }, claudeDir);
@@ -919,8 +928,8 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     const raw = await readFile(path.join(claudeDir, "settings.json"), "utf-8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const hooks = parsed["hooks"] as Record<string, unknown>;
-    expect(Array.isArray(hooks["PreToolUse"])).toBe(true);
-    expect(Array.isArray(hooks["PostToolUse"])).toBe(true);
+    expect((hooks["PreToolUse"] as { matcher: string }[]).map((entry) => entry.matcher)).toEqual([HOOK_MATCHER, READ_MATCHER]);
+    expect(Object.keys(hooks)).toEqual(["PreToolUse"]);
   });
 
   it("is idempotent: running twice does not duplicate entries", async () => {
@@ -932,8 +941,20 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     const raw = await readFile(path.join(claudeDir, "settings.json"), "utf-8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const hooks = parsed["hooks"] as Record<string, unknown>;
-    expect((hooks["PreToolUse"] as unknown[]).length).toBe(1);
-    expect((hooks["PostToolUse"] as unknown[]).length).toBe(1);
+    expect((hooks["PreToolUse"] as unknown[]).length).toBe(2);
+    expect(Object.keys(hooks)).toEqual(["PreToolUse"]);
+  });
+
+  it("keeps settings.json byte-identical across a second sync", async () => {
+    const claudeDir = await makeClaudeDir("bytes-twice");
+    const home = path.dirname(claudeDir);
+    await upsertClaudeHooks({ vault: path.join(home, "Vault"), homeDir: home }, claudeDir);
+    const first = await readFile(path.join(claudeDir, "settings.json"), "utf-8");
+    await upsertClaudeHooks({ vault: path.join(home, "Vault"), homeDir: home }, claudeDir);
+    const second = await readFile(path.join(claudeDir, "settings.json"), "utf-8");
+    expect(second).toBe(first);
+    const hooks = (JSON.parse(second) as { hooks: Record<string, unknown[]> }).hooks;
+    expect(hooks["PreToolUse"]!.filter(isOmsHookEntry)).toHaveLength(2);
   });
 
   it("preserves existing non-OMS hook entries", async () => {
@@ -950,7 +971,7 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const hooks = parsed["hooks"] as Record<string, unknown>;
     const preArr = hooks["PreToolUse"] as unknown[];
-    expect(preArr.length).toBe(2);
+    expect(preArr.length).toBe(3);
     expect(JSON.stringify(preArr)).toContain("other-tool");
   });
 
@@ -1053,10 +1074,10 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     await upsertClaudeHooks(options, claudeDir);
     await upsertClaudeHooks(options, claudeDir);
     const installed = JSON.parse(await readFile(path.join(claudeDir, "settings.json"), "utf-8")) as {
-      hooks: { PreToolUse: unknown[]; PostToolUse: unknown[] };
+      hooks: Record<string, unknown[]>;
     };
-    expect(installed.hooks.PreToolUse).toHaveLength(1);
-    expect(installed.hooks.PostToolUse).toHaveLength(1);
+    expect(installed.hooks["PreToolUse"]).toHaveLength(2);
+    expect(Object.keys(installed.hooks)).toEqual(["PreToolUse"]);
 
     await removeClaudeHooks({}, claudeDir);
     const removed = JSON.parse(await readFile(path.join(claudeDir, "settings.json"), "utf-8")) as { hooks?: unknown };
@@ -1118,10 +1139,88 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
     const afterInstall = JSON.parse(await readFile(path.join(claudeDir, "settings.json"), "utf-8")) as Record<string, unknown>;
     const hooksAfterInstall = afterInstall["hooks"] as Record<string, unknown>;
     expect(JSON.stringify(hooksAfterInstall["PreToolUse"])).toContain("oms-guard");
-    expect(JSON.stringify(hooksAfterInstall["PostToolUse"])).toContain("oms-post-guard");
+    expect((hooksAfterInstall["PreToolUse"] as unknown[]).filter(isOmsHookEntry)).toHaveLength(2);
+    expect(hooksAfterInstall["PostToolUse"]).toBeUndefined();
 
     await runHostOperation({ action: "uninstall", runtime: "claude", vault: path.join(home, "Vault"), homeDir: home, adapterRoot, yes: true });
     const afterUninstall = JSON.parse(await readFile(path.join(claudeDir, "settings.json"), "utf-8")) as Record<string, unknown>;
     expect(afterUninstall["hooks"]).toBeUndefined();
+  });
+
+  const legacyPre = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/old" oms-guard' }] };
+  const legacyPost = { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: `OMS_VAULT="/old" oms-${["post", "guard"].join("-")}` }] };
+  const userEntry = { matcher: ".*", hooks: [{ type: "command", command: "user-tool" }] };
+  const ownedCount = (hooks: Record<string, unknown[]> | undefined): number =>
+    Object.values(hooks ?? {}).reduce((count, entries) => count + entries.filter(isOmsHookEntry).length, 0);
+  const readSettings = async (claudeDir: string): Promise<{ hooks?: Record<string, unknown[]> }> =>
+    JSON.parse(await readFile(path.join(claudeDir, "settings.json"), "utf-8")) as { hooks?: Record<string, unknown[]> };
+
+  it("removes every oms-owned entry after a current install and keeps user entries", async () => {
+    const claudeDir = await makeClaudeDir("remove-current");
+    const home = path.dirname(claudeDir);
+    await writeFile(path.join(claudeDir, "settings.json"), JSON.stringify({ hooks: { PreToolUse: [userEntry] } }), "utf-8");
+    await upsertClaudeHooks({ vault: path.join(home, "Vault"), homeDir: home }, claudeDir);
+    expect(ownedCount((await readSettings(claudeDir)).hooks)).toBe(2);
+
+    await removeClaudeHooks({ homeDir: home }, claudeDir);
+    const after = await readSettings(claudeDir);
+    expect(ownedCount(after.hooks)).toBe(0);
+    expect(after.hooks).toEqual({ PreToolUse: [userEntry] });
+  });
+
+  it("removes legacy PreToolUse and PostToolUse entries", async () => {
+    const claudeDir = await makeClaudeDir("remove-legacy");
+    await writeFile(path.join(claudeDir, "settings.json"), JSON.stringify({ hooks: { PreToolUse: [legacyPre], PostToolUse: [legacyPost] } }), "utf-8");
+
+    await removeClaudeHooks({}, claudeDir);
+    expect((await readSettings(claudeDir)).hooks).toBeUndefined();
+  });
+
+  it("removes a mix of current and legacy entries across events", async () => {
+    const claudeDir = await makeClaudeDir("remove-mixed");
+    const home = path.dirname(claudeDir);
+    await upsertClaudeHooks({ vault: path.join(home, "Vault"), homeDir: home }, claudeDir);
+    const current = await readSettings(claudeDir);
+    const mixed = { hooks: { PreToolUse: [legacyPre, ...current.hooks!["PreToolUse"]!, userEntry], PostToolUse: [legacyPost] } };
+    await writeFile(path.join(claudeDir, "settings.json"), JSON.stringify(mixed), "utf-8");
+
+    await removeClaudeHooks({ homeDir: home }, claudeDir);
+    const after = await readSettings(claudeDir);
+    expect(ownedCount(after.hooks)).toBe(0);
+    expect(after.hooks).toEqual({ PreToolUse: [userEntry] });
+  });
+
+  it("keeps user entries whose command does not end in an oms bin or carries three assignments", async () => {
+    const claudeDir = await makeClaudeDir("remove-user");
+    const notOmsBin = { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/v" guard-oms' }] };
+    const threeAssignments = {
+      matcher: HOOK_MATCHER,
+      hooks: [{ type: "command", command: 'OMS_VAULT="/v" OMS_AGENT_VAULT="/r" OMS_VAULT="/w" oms-guard' }],
+    };
+    const settings = { hooks: { PreToolUse: [notOmsBin, threeAssignments] } };
+    await writeFile(path.join(claudeDir, "settings.json"), JSON.stringify(settings), "utf-8");
+
+    const result = await removeClaudeHooks({}, claudeDir);
+    expect(result.changed).toBe(false);
+    expect((await readSettings(claudeDir)).hooks).toEqual(settings.hooks);
+  });
+
+  it("upgrades a 0.16.0 settings.json on host sync to two PreToolUse entries and no PostToolUse", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hooks-upgrade-"));
+    const claudeDir = path.join(home, ".claude");
+    await mkdir(claudeDir, { recursive: true });
+    await writeFile(
+      path.join(claudeDir, "settings.json"),
+      JSON.stringify({ hooks: { PreToolUse: [userEntry, legacyPre], PostToolUse: [legacyPost] } }, null, 2),
+      "utf-8",
+    );
+
+    await runHostOperation({ action: "install", runtime: "claude", vault: path.join(home, "Vault"), homeDir: home, adapterRoot });
+    const after = await readSettings(claudeDir);
+    const pre = after.hooks!["PreToolUse"]!;
+    expect(pre.filter(isOmsHookEntry).map((entry) => (entry as { matcher: string }).matcher)).toEqual([HOOK_MATCHER, READ_MATCHER]);
+    expect(pre.filter((entry) => !isOmsHookEntry(entry))).toEqual([userEntry]);
+    expect(after.hooks!["PostToolUse"]).toBeUndefined();
+    expect(ownedCount(after.hooks)).toBe(2);
   });
 });

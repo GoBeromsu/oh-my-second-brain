@@ -9,10 +9,8 @@ import { exploreLocalGraph } from "../../graph/explore.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import type { EmbeddingProvider, ScoredHit, VectorStore } from "../types.js";
 import type { EngineStore } from "../embed/store.js";
-import { digestBytes } from "../../templates/canonical.js";
-import { serializeContractPolicyV5 } from "../../templates/contract-v5.js";
-import { controlGenerationDigest, expectedProjectionManaged, taxonomyRouting } from "../../templates/resolver.js";
-import type { Digest } from "../../templates/types.js";
+import { writeContractVault } from "../../contract/contract-vault-fixture.js";
+import type { Digest } from "../../conventions/canonical.js";
 
 // ---------------------------------------------------------------------------
 // Fake backends
@@ -75,58 +73,39 @@ const tempDirs: string[] = [];
 
 const digest = (value: string): Digest => `sha256:${createHash("sha256").update(value).digest("hex")}` as Digest;
 
-/** Create an isolated template-authorized vault with two linked notes. */
-function freshVault(intents: Readonly<Record<string, string>> = {}): string {
+/** Create an isolated sealed vault with two linked notes. */
+async function freshVault(intents: Readonly<Record<string, string>> = {}): Promise<string> {
   const dir = mkdtempSync(path.join(tmpdir(), "oms-facade-"));
-  mkdirSync(path.join(dir, "notes"), { recursive: true });
-  mkdirSync(path.join(dir, ".oms"), { recursive: true });
-  mkdirSync(path.join(dir, ".obsidian"), { recursive: true });
-  mkdirSync(path.join(dir, "Templates", "OMS"), { recursive: true });
-  // The retrieval reader consumes the explicit V5 contract. Approved Markdown
-  // and the derived projection stay out of search metadata entirely.
-  const policy = serializeContractPolicyV5({
-    version: 5,
-    revision: 1,
+  tempDirs.push(dir);
+  // Retrieval reads the sealed contract; registered originals are the user's
+  // own Markdown and stay excluded from ordinary note scans.
+  await writeContractVault(dir, {
     properties: {
       status: { type: "text", intent: "Workflow state." },
       rating: { type: "number", intent: "Numeric rating." },
       done: { type: "boolean", intent: "Completion flag." },
     },
-    common: { status: "active", fields: {} },
     templates: {
       project: {
-        status: "active",
-        source: { identity: "source-project", path: "Templates/OMS/project.md", rawDigest: digestBytes("project source") },
-        fields: { status: {}, rating: {}, done: {} },
+        fields: ["status", "rating", "done"],
+        optionalFields: ["status", "rating", "done"],
+        targetFolder: "notes",
+        rawSource: { path: "Templates/OMS/project.md", identity: "source-project", bytes: "project source" },
       },
       reference: {
-        status: "active",
-        source: { identity: "source-reference", path: "Templates/OMS/reference.md", rawDigest: digestBytes("reference source") },
-        fields: { rating: {}, done: {} },
+        fields: ["rating", "done"],
+        optionalFields: ["rating", "done"],
+        targetFolder: "notes",
+        rawSource: { path: "Templates/OMS/reference.md", identity: "source-reference", bytes: "reference source" },
       },
     },
-  });
-  const intentEntries = Object.entries(intents).sort(([left], [right]) => left.localeCompare(right));
-  const taxonomy = JSON.stringify({
-    folders: Object.fromEntries(intentEntries.map(([folder, intent]) => [folder, { intent }])),
-    templates: {
-      project: { templateFolder: "notes" },
-      reference: { templateFolder: "notes" },
+    folders: Object.fromEntries(Object.entries(intents).map(([folder, intent]) => [folder, { intent }])),
+    obsidianTypes: { status: "text", rating: "number", done: "boolean" },
+    notes: {
+      "notes/alpha.md": "---\ntemplate: project\nstatus: active\n---\n# Alpha\n\nLinks to [[beta]].\n",
+      "notes/beta.md": "---\ntemplate: reference\n---\n# Beta\n\nreferenced by alpha.\n",
     },
   });
-  const types = JSON.stringify({ types: { status: "text", rating: "number", done: "boolean" } });
-  const encoder = new TextEncoder();
-  mkdirSync(path.join(dir, ".oms", "templates"), { recursive: true });
-  writeFileSync(path.join(dir, ".oms", "template-policy.json"), policy);
-  writeFileSync(path.join(dir, ".oms", "taxonomy.json"), taxonomy);
-  writeFileSync(path.join(dir, ".obsidian", "types.json"), types);
-  // Registered originals are the user's own Markdown; they are excluded from
-  // ordinary note scans rather than copied into a managed location.
-  writeFileSync(path.join(dir, "Templates", "OMS", "project.md"), "project source");
-  writeFileSync(path.join(dir, "Templates", "OMS", "reference.md"), "reference source");
-  writeFileSync(path.join(dir, "notes", "alpha.md"), "---\ntemplate: project\nstatus: active\n---\n# Alpha\n\nLinks to [[beta]].\n");
-  writeFileSync(path.join(dir, "notes", "beta.md"), "---\ntemplate: reference\n---\n# Beta\n\nreferenced by alpha.\n");
-  tempDirs.push(dir);
   return dir;
 }
 
@@ -173,13 +152,13 @@ describe("McpEngineAdapter.semanticQuery", () => {
     });
   });
 
-  it("executes a validated expansion plan with active taxonomy provenance", async () => {
-    const vault = freshVault({
+  it("executes a validated expansion plan with active folder provenance", async () => {
+    const vault = await freshVault({
       notes: "Permanent project notes",
       unused: "No indexed documents",
     });
     // Parallel legacy context must never reach a model prompt.
-    writeFileSync(path.join(vault, "taxonomy.json"), `
+    writeFileSync(path.join(vault, `${["tax", "onomy"].join("")}.json`), `
 folders:
   notes:
     intent: Legacy context must not leak
@@ -223,22 +202,22 @@ folders:
         { type: "lex", query: "ataraxia" },
         { type: "vec", query: "freedom from disturbance" },
       ],
-      taxonomyIntents: [
+      folderIntents: [
         {
           folder: "notes",
           intent: "Permanent project notes",
-          source: ".oms/taxonomy.json",
+          source: "folders.json",
         },
       ],
     });
     expect(result.receipt.warnings).toEqual([
-      'Indexed folder "inbox" has no intent in .oms/taxonomy.json.',
-      'Taxonomy folder "unused" has no indexed Markdown files.',
+      'Indexed folder "inbox" has no meaning in the sealed folder contract.',
+      'Sealed folder "unused" has no indexed Markdown files.',
     ]);
   });
 
   it("keeps expansion available when the read-only Obsidian projection is missing", async () => {
-    const vault = freshVault();
+    const vault = await freshVault();
     rmSync(path.join(vault, ".obsidian", "types.json"));
     const adapter = new McpEngineAdapter(
       { store: makeEngineStore(["notes/alpha.md"]), embed: makeEmbed(), queryExpander: vi.fn() },
@@ -271,7 +250,8 @@ folders:
     if (result.available) return;
     expect(result.reason).toMatch(/OMS_GENERATE_PROVIDER/);
     expect(result.reason).toMatch(/OMS_GENERATE_MODEL/);
-    expect(result.reason).toMatch(/\.oms\/models\.json/);
+    // A vault selects only its embedding model; generate is never a vault setting.
+    expect(result.reason).not.toMatch(/\.oms\/settings\.json/);
     expect(result.receipt.requestedStrategy).toBe("expand");
   });
 
@@ -338,8 +318,8 @@ folders:
     expect(store.queryVec).not.toHaveBeenCalled();
   });
 
-  it("feeds active taxonomy intent to reranking and records it", async () => {
-    const vault = freshVault({ notes: "Permanent project notes" });
+  it("feeds active folder intent to reranking and records it", async () => {
+    const vault = await freshVault({ notes: "Permanent project notes" });
     const store = makeEngineStore(["notes/alpha.md", "notes/beta.md"]);
     vi.mocked(store.queryLex).mockReturnValue([
       { docPath: "notes/alpha.md", chunkOrdinal: 0, score: 0.9 },
@@ -364,19 +344,19 @@ folders:
     expect(result.receipt).toMatchObject({
       requestedStrategy: "plain",
       rerankApplied: true,
-      taxonomyIntents: [
+      folderIntents: [
         {
           folder: "notes",
           intent: "Permanent project notes",
-          source: ".oms/taxonomy.json",
+          source: "folders.json",
         },
       ],
     });
   });
 
   it("keeps reranking available while a contract publication is in progress", async () => {
-    const vault = freshVault();
-    writeFileSync(path.join(vault, ".oms", "template-transaction.json"), JSON.stringify({ status: "in-progress" }));
+    const vault = await freshVault();
+    writeFileSync(path.join(vault, ".oms", `${["template", "transaction"].join("-")}.json`), JSON.stringify({ status: "in-progress" }));
     const adapter = new McpEngineAdapter(
       { store: makeEngineStore(["notes/alpha.md"]), embed: makeEmbed() },
       vault,
@@ -473,13 +453,13 @@ folders:
     // The refusal has to be actionable for the person who hit it, not just for a
     // programmer reading the source. It previously named only `assembleEngine()`,
     // which tells a CLI or MCP user nothing they can act on. Assert the whole
-    // remedy: the exact rerank environment pair, the vault contract file, and the
-    // setup command that installs one.
+    // remedy: the exact rerank environment pair and the model command that
+    // installs one. A vault never selects a reranker, so settings.json is not named.
     const reason = result.available === false ? result.reason : "";
     expect(reason).toMatch(/OMS_RERANK_PROVIDER/);
     expect(reason).toMatch(/OMS_RERANK_MODEL/);
-    expect(reason).toMatch(/\.oms\/models\.json/);
-    expect(reason).toMatch(/oms setup --models-descriptor/);
+    expect(reason).not.toMatch(/\.oms\/settings\.json/);
+    expect(reason).toMatch(/oms model install --descriptor/);
     // A programmatic caller still learns about injection.
     expect(reason).toMatch(/assembleEngine\(\)/);
   });
@@ -547,7 +527,7 @@ folders:
     ["typed hyde", { searches: [{ type: "hyde" as const, query: "alpha" }] }],
     ["vsearch mode", { query: "alpha", mode: "vsearch" as const }],
   ])("rejects explicit %s retrieval on model-free axes", async (_name, search) => {
-    const adapter = new McpEngineAdapter(makeDeps(), freshVault());
+    const adapter = new McpEngineAdapter(makeDeps(), await freshVault());
     const result = await adapter.semanticQuery({
       ...search,
       axes: { folder: "notes" },
@@ -576,7 +556,7 @@ folders:
   });
 
   it("uses template-declared typed axes for filtering", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     writeFileSync(path.join(v, "notes", "alpha.md"), "---\ntemplate: project\nrating: 9\ndone: false\n---\n# Alpha\n");
     writeFileSync(path.join(v, "notes", "beta.md"), "---\ntemplate: reference\nrating: 2\ndone: true\n---\n# Beta\n");
     const adapter = new McpEngineAdapter(makeDeps(), v, undefined, undefined, false, false);
@@ -605,7 +585,7 @@ folders:
   });
 
   it("applies the query envelope after axis filtering without returning zero-score nonmatches", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     writeFileSync(path.join(v, "notes", "first.md"), "---\ntemplate: project\n---\n# Needle\nneedle needle\n");
     writeFileSync(path.join(v, "notes", "second.md"), "---\ntemplate: project\n---\n# Needle\nneedle\n");
     writeFileSync(path.join(v, "notes", "nonmatch.md"), "---\ntemplate: project\n---\n# Other\nunrelated text\n");
@@ -640,7 +620,7 @@ folders:
   });
 
   it("applies lexical score thresholds consistently to axis hits and facets", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     writeFileSync(path.join(v, "notes", "matching.md"), "---\ntemplate: project\nstatus: active\n---\n# Needle\nneedle\n");
     writeFileSync(path.join(v, "notes", "nonmatching.md"), "---\ntemplate: project\nstatus: archived\n---\n# Other\nunrelated text\n");
     const adapter = new McpEngineAdapter(makeDeps(), v, undefined, undefined, false, false);
@@ -661,7 +641,7 @@ folders:
   });
 
   it("derives reranked threshold facets from the same final hit set", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const rerank = vi.fn().mockResolvedValue([
       { docPath: "notes/beta.md", chunkOrdinal: 0, score: 0.9 },
       { docPath: "notes/alpha.md", chunkOrdinal: 0, score: 0.1 },
@@ -689,7 +669,7 @@ folders:
   });
 
   it("does not report lexical or vector evidence for an axis-only query", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v, undefined, undefined, false, false);
 
     const result = await adapter.semanticQuery({
@@ -719,7 +699,7 @@ describe("McpEngineAdapter.syncEmbeddings", () => {
     delete process.env["OMS_EMBEDDING_PROVIDER"];
     delete process.env["OMS_EMBEDDING_MODEL"];
     try {
-      const v = freshVault();
+      const v = await freshVault();
       const adapter = new McpEngineAdapter(makeDeps([], [], "my-model"), v);
       const result = await adapter.syncEmbeddings({ vault: v });
       expect(result.available).toBe(false);
@@ -802,8 +782,8 @@ describe("McpEngineAdapter.semanticStatus", () => {
     expect(JSON.stringify(result)).not.toContain("/Users/secret/model.gguf");
   });
 
-  it("reports deterministic taxonomy context drift without exposing a second source", async () => {
-    const vault = freshVault({
+  it("reports deterministic folder context drift without exposing a second source", async () => {
+    const vault = await freshVault({
       notes: "Permanent notes",
       unused: "No indexed files",
     });
@@ -816,15 +796,15 @@ describe("McpEngineAdapter.semanticStatus", () => {
 
     expect(result).toMatchObject({
       available: true,
-      taxonomyContext: {
+      folderContext: {
         matched: [
-          { folder: "notes", intent: "Permanent notes", source: ".oms/taxonomy.json" },
+          { folder: "notes", intent: "Permanent notes", source: "folders.json" },
         ],
         indexedWithoutIntent: ["inbox"],
-        taxonomyWithoutIndexed: ["unused"],
+        foldersWithoutIndexed: ["unused"],
         warnings: [
-          'Indexed folder "inbox" has no intent in .oms/taxonomy.json.',
-          'Taxonomy folder "unused" has no indexed Markdown files.',
+          'Indexed folder "inbox" has no meaning in the sealed folder contract.',
+          'Sealed folder "unused" has no indexed Markdown files.',
         ],
       },
     });
@@ -874,8 +854,8 @@ describe("McpEngineAdapter.listContexts", () => {
     expect(result.contexts).toHaveLength(0);
   });
 
-  it("lists active taxonomy intents with provenance instead of a parallel store", async () => {
-    const vault = freshVault({ notes: "Permanent project notes" });
+  it("lists active folder intents with provenance instead of a parallel store", async () => {
+    const vault = await freshVault({ notes: "Permanent project notes" });
     const adapter = new McpEngineAdapter(
       { store: makeEngineStore(["notes/alpha.md"]), embed: makeEmbed() },
       vault,
@@ -889,7 +869,7 @@ describe("McpEngineAdapter.listContexts", () => {
         collection: "notes",
         pathPrefix: "notes",
         context: "Permanent project notes",
-        source: ".oms/taxonomy.json",
+        source: "folders.json",
       }],
     });
     if (!result.available) return;
@@ -903,7 +883,7 @@ describe("McpEngineAdapter.listContexts", () => {
 
 describe("McpEngineAdapter.cleanup", () => {
   it("removes store docs that no longer exist in the live vault", async () => {
-    const v = freshVault(); // live: notes/alpha.md, notes/beta.md
+    const v = await freshVault(); // live: notes/alpha.md, notes/beta.md
     const store = makeEngineStore(["notes/alpha.md", "notes/beta.md", "ghost/removed.md"]);
     const adapter = new McpEngineAdapter({ store, embed: makeEmbed() }, v);
     const result = await adapter.cleanup({});
@@ -916,7 +896,7 @@ describe("McpEngineAdapter.cleanup", () => {
   });
 
   it("removes nothing when every stored doc is still live", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const store = makeEngineStore(["notes/alpha.md", "notes/beta.md"]);
     const adapter = new McpEngineAdapter({ store, embed: makeEmbed() }, v);
     const result = await adapter.cleanup({});
@@ -928,7 +908,7 @@ describe("McpEngineAdapter.cleanup", () => {
   });
 
   it("rejects cleanup while another writer holds the engine lock", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const dbPath = engineStorePath(v);
     mkdirSync(path.dirname(dbPath), { recursive: true });
     writeFileSync(`${dbPath}.lock`, `${process.pid}\n`, "utf8");
@@ -949,7 +929,7 @@ describe("McpEngineAdapter.cleanup", () => {
 
 describe("McpEngineAdapter.graphBuild", () => {
   it("builds the edge graph + node index and persists both to the external engine cache", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
     const result = await adapter.graphBuild({}, v);
     expect(result.available).toBe(true);
@@ -965,7 +945,7 @@ describe("McpEngineAdapter.graphBuild", () => {
   });
 
   it("dryRun reports the persisted stats without rebuilding", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
     const built = await adapter.graphBuild({}, v);
     const dry = await adapter.graphBuild({ dryRun: true }, v);
@@ -980,7 +960,7 @@ describe("McpEngineAdapter.graphBuild", () => {
 
 describe("McpEngineAdapter.graphStatus", () => {
   it("returns available=false before the cache is built", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
     const result = await adapter.graphStatus(v);
     expect(result.available).toBe(false);
@@ -990,7 +970,7 @@ describe("McpEngineAdapter.graphStatus", () => {
   });
 
   it("rejects a stale graph projection cache without rebuilding it", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
     await adapter.graphBuild({}, v);
     const graphPath = engineGraphCachePath(v);
@@ -1002,7 +982,7 @@ describe("McpEngineAdapter.graphStatus", () => {
   });
 
   it("returns available=true after graphBuild", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
     await adapter.graphBuild({}, v);
     const result = await adapter.graphStatus(v);
@@ -1022,7 +1002,7 @@ describe("McpEngineAdapter.graphStatus", () => {
 
 describe("McpEngineAdapter.retrieveByAxis", () => {
   it("filters the node index by template and JSON-encodes axis metadata in context", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
     const result = await adapter.retrieveByAxis({ template: "project" });
     expect(result.available).toBe(true);
@@ -1036,7 +1016,7 @@ describe("McpEngineAdapter.retrieveByAxis", () => {
   });
 
   it("does not surface notes outside the requested template axis", async () => {
-    const v = freshVault();
+    const v = await freshVault();
     const adapter = new McpEngineAdapter(makeDeps(), v);
     const result = await adapter.retrieveByAxis({ template: "reference" });
     expect(result.available).toBe(true);

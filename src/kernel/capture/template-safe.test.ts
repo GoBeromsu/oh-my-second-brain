@@ -23,10 +23,9 @@ describe("write target admission", () => {
     }
     const refused = await admitWriteTarget({ vault: "/tmp/oms-vault", source: "cwd" });
     expect(refused?.code).toBe("target-unverified");
-    expect(refused?.message).toMatch(/guide or check/);
+    expect(refused?.message).toMatch(/^Refusing to write: /u);
     expect(refused?.message).not.toMatch(/\bcomplete\b/u);
     expect(refused?.message).toMatch(/explicit vault target/i);
-    expect(refused?.message).not.toMatch(/Refusing to write/);
   });
 });
 

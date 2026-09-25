@@ -8,45 +8,13 @@ describe("CLI argument parser", () => {
       ["package", ["update", "--bogus"]],
       ["note", ["audit", "--folder", "references"]],
       ["link", ["check", "--json"]],
+      ["setup", ["--vault", "Vault"]],
     ] as const) {
-      const parsed = parseCliArgs([family, ...args], "/tmp/oms-cli");
+      const parsed = parseCliArgs([family, ...args]);
       expect(parsed.command).toBe(family);
-      expect(parsed.error).toBeUndefined();
+      expect(parsed.help).toBe(false);
       expect(parsed.unknownFlags).toEqual(args);
-      expect(parsed.vault).toBe("/tmp/oms-cli");
-      expect(parsed.vaultExplicit).toBe(false);
     }
-  });
-
-  it("parses an approved setup digest and rejects a missing value", () => {
-    const digest = `sha256:${"0".repeat(64)}`;
-    expect(parseCliArgs(["setup", "--approved-digest", digest]).approvedDigest).toBe(digest);
-    expect(parseCliArgs(["setup", "--approved-digest"]).error?.message).toBe(
-      "[oms] Missing value for --approved-digest.",
-    );
-  });
-
-  it("refuses the retired setup template-folder selection instead of ignoring it", () => {
-    // Setup proposes an empty contract, so selecting a folder here would do
-    // nothing; accepting the flag silently would mislead the caller.
-    const parsed = parseCliArgs(["setup", "--template-folder", "Meta/Templates", "--dry-run"]);
-    expect(parsed.error).toBeDefined();
-    expect(parsed.error?.message).toContain("--template-folder was removed");
-  });
-
-  it("accepts setup's shared facade flags", () => {
-    const parsed = parseCliArgs([
-      "setup", "--vault", "Vault", "--runtime", "hermes", "--agent-vault", "AgentVault",
-      "--dry-run", "--execute", "--yes", "--install-claude", "--models-no-default",
-    ], "/tmp/oms-cli");
-    expect(parsed.error).toBeUndefined();
-    expect(parsed.unknownFlags).toEqual([]);
-    expect(parsed.vault).toBe("/tmp/oms-cli/Vault");
-    expect(parsed.vaultExplicit).toBe(true);
-    expect(parsed.runtime).toBe("hermes");
-    expect(parsed.agentVault).toBe("/tmp/oms-cli/AgentVault");
-    expect(parsed.executeExternal).toBe(true);
-    expect(parsed.yes).toBe(true);
   });
 
   it("parses help without retaining it as an unknown family flag", () => {
@@ -57,29 +25,5 @@ describe("CLI argument parser", () => {
       expect(parsed.unknownFlags).not.toContain("-h");
     }
     expect(parseCliArgs(["--help"]).command).toBeUndefined();
-  });
-
-  it("parses the mutually exclusive setup model options", () => {
-    const supplied = parseCliArgs(["setup", "--models-descriptor", "models.json"], "/tmp/oms-cli");
-    expect(parseCliArgs(["setup", "--models-default"]).modelsDefault).toBe(true);
-    expect(supplied.modelsDescriptorPath).toBe("/tmp/oms-cli/models.json");
-    expect(parseCliArgs(["setup", "--models-no-default"]).modelsNoDefault).toBe(true);
-    expect(parseCliArgs(["setup", "--models-default", "--models-no-default"]).error?.message).toContain(
-      "Mutually exclusive setup model options",
-    );
-  });
-
-  it("requires a non-option model descriptor path", () => {
-    for (const args of [["setup", "--models-descriptor"], ["setup", "--models-descriptor", "--yes"]]) {
-      expect(parseCliArgs(args).error?.message).toContain("Missing value for --models-descriptor");
-    }
-  });
-
-  it("preserves retired embedding flags for actionable setup rejection", () => {
-    expect(parseCliArgs(["setup", "--embedding-default"]).unknownFlags).toEqual(["--embedding-default"]);
-    expect(parseCliArgs(["setup", "--embedding-no-default"]).unknownFlags).toEqual(["--embedding-no-default"]);
-    expect(parseCliArgs(["setup", "--embedding-descriptor", "legacy.json"]).unknownFlags).toEqual([
-      "--embedding-descriptor",
-    ]);
   });
 });

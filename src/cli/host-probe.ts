@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import type { InstalledAssetDeclaration, InstalledAssetState, InstalledHostDeclaration } from "../kernel/install/asset-health.js";
 import { hostHome } from "../kernel/install/common.js";
-import { isCodexOmsRegistration, isHermesOmsRegistration, isOmsHookEntry } from "./host-commands.js";
+import { HOOK_MATCHER, READ_MATCHER, isCodexOmsRegistration, isHermesOmsRegistration, isOmsHookEntry } from "./host-commands.js";
 
 type PathEvidence = "present" | "absent" | "error";
 
@@ -48,9 +48,14 @@ function claudeRegistration(settings: unknown): { readonly installed: boolean; r
   const hooks = (settings as Record<string, unknown>)["hooks"];
   if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)) return { installed: false, complete: false };
   const events = hooks as Record<string, unknown>;
-  const guard = Array.isArray(events["PreToolUse"]) && events["PreToolUse"].some(entry => isOmsHookEntry(entry, "oms-guard"));
-  const postGuard = Array.isArray(events["PostToolUse"]) && events["PostToolUse"].some(entry => isOmsHookEntry(entry, "oms-post-guard"));
-  return { installed: guard || postGuard, complete: guard && postGuard };
+  const pre = Array.isArray(events["PreToolUse"]) ? events["PreToolUse"] : [];
+  const owned = (matcher: string): boolean => pre.some(entry => {
+    if (!isOmsHookEntry(entry)) return false;
+    const record = entry as { readonly matcher: string; readonly hooks: readonly { readonly command: string }[] };
+    return record.matcher === matcher && / oms-guard$/.test(record.hooks[0]?.command ?? "");
+  });
+  const installed = Object.values(events).some(entries => Array.isArray(entries) && entries.some(entry => isOmsHookEntry(entry)));
+  return { installed, complete: owned(HOOK_MATCHER) && owned(READ_MATCHER) };
 }
 
 async function probeClaude(root: string): Promise<{ readonly host: InstalledHostDeclaration; readonly assets: readonly InstalledAssetDeclaration[] }> {

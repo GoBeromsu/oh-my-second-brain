@@ -29,11 +29,11 @@ import {
 import { inspectInstalledAssets } from "../kernel/install/asset-health.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
-import { installClaude, isOmsHookEntry, uninstallClaude } from "../vendors/claude/claude.js";
+import { HOOK_MATCHER, READ_MATCHER, installClaude, isOmsHookEntry, uninstallClaude } from "../vendors/claude/claude.js";
 import { installCodex, isCodexOmsRegistration, uninstallCodex } from "../vendors/codex/codex.js";
 import { installHermes, isHermesOmsRegistration, uninstallHermes } from "../vendors/hermes/hermes.js";
 
-export { isCodexOmsRegistration, isHermesOmsRegistration, isOmsHookEntry };
+export { HOOK_MATCHER, READ_MATCHER, isCodexOmsRegistration, isHermesOmsRegistration, isOmsHookEntry };
 export { runModelCommand } from "./model-command.js";
 
 /** Everything the host commands need from the parsed argv, plus the adapter root. */

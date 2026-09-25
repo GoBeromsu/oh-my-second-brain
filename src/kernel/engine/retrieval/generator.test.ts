@@ -177,7 +177,7 @@ describe("createLlamaHydeGenerator", () => {
     expect(fake.calls[0]?.options.temperature).not.toBe(0);
   });
 
-  it("expands through the same lazy runtime with taxonomy context and typed-plan mode", async () => {
+  it("expands through the same lazy runtime with folder context and typed-plan mode", async () => {
     const fake = fakeRuntime("lex: ataraxia\nvec: freedom from mental disturbance");
     const generator = createLlamaHydeGenerator({
       modelPath: "/models/gen.gguf",

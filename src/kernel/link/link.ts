@@ -19,7 +19,7 @@ import {
 } from "../install/connection-registry.js";
 import { readConnectionBytes } from "../install/connection-registry.js";
 import { readProjectConnection } from "../install/project-connection.js";
-import { parseVaultSettings, readVaultSettings, serializeVaultSettings, type VaultSettings } from "../templates/vault-settings.js";
+import { parseVaultSettings, readVaultSettings, serializeVaultSettings, type VaultSettings } from "../vault/settings.js";
 
 /**
  * Cross-repo vault bridge.
@@ -158,9 +158,7 @@ async function visible(candidate: string): Promise<boolean> {
 
 async function hasLocalVaultEvidence(startDir: string): Promise<boolean> {
   const omsDir = path.join(startDir, ".oms");
-  return await pathKind(path.join(omsDir, "settings.json")) === "file"
-    || await pathKind(path.join(omsDir, "template-policy.json")) === "file"
-    || await pathKind(path.join(omsDir, "taxonomy.json")) === "file";
+  return await pathKind(path.join(omsDir, "settings.json")) === "file";
 }
 
 async function hasBridgeEvidence(startDir: string): Promise<boolean> {
@@ -219,7 +217,7 @@ async function resolveBridge(startDir: string, registry: ConnectionRegistryOptio
 /**
  * Resolve the effective vault root for a command invoked from `startDir`.
  *
- * Precedence is explicit, then local settings/policy/taxonomy evidence, then
+ * Precedence is explicit, then local settings.json evidence, then
  * a verified bridge, then `OMS_VAULT`, then `startDir`. Global selection is
  * never a fallback.
  */

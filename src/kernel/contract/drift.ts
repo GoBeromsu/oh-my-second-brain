@@ -1,14 +1,14 @@
-import { scanTemplateSources } from "../templates/census.js";
-import type { PublicManifest, PublicTemplate } from "./types.js";
+import { scanTemplateSources } from "./scan.js";
+import type { TemplateContract, VaultContract } from "./types.js";
 
 /** Compares a template source with the hash recorded at seal time. Read-only. */
 
 export type DriftState = "active" | "drift" | "missing";
 
-export async function templateDrift(vault: string, template: PublicTemplate): Promise<DriftState> {
+export async function templateDrift(vault: string, template: Pick<TemplateContract, "source" | "sourceHash">): Promise<DriftState> {
   let inventory;
   try {
-    inventory = await scanTemplateSources(vault, [{ path: template.id, kind: "file" }]);
+    inventory = await scanTemplateSources(vault, [{ path: template.source, kind: "file" }]);
   } catch {
     return "drift";
   }
@@ -20,8 +20,9 @@ export async function templateDrift(vault: string, template: PublicTemplate): Pr
   return source.rawDigest === template.sourceHash ? "active" : "drift";
 }
 
-export async function detectDrift(vault: string, manifest: PublicManifest): Promise<Map<string, DriftState>> {
+/** Drift per template name. */
+export async function detectDrift(vault: string, contract: VaultContract): Promise<Map<string, DriftState>> {
   const states = new Map<string, DriftState>();
-  for (const template of manifest.templates) states.set(template.id, await templateDrift(vault, template));
+  for (const [name, template] of Object.entries(contract.templates)) states.set(name, await templateDrift(vault, template));
   return states;
 }

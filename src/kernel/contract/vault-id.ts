@@ -1,70 +1,98 @@
 import { randomUUID } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { atomicWrite } from "../templates/file-lock.js";
-import { readVaultSettings } from "../templates/vault-settings.js";
-import { UUID_PATTERN } from "./types.js";
+import { lstat, realpath } from "node:fs/promises";
+import { atomicWrite } from "./fs-private.js";
+import { readIndex, readStore, storeExists, storeRoot } from "./store.js";
+import type { ContractView } from "./types.js";
+import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH, type VaultSettings } from "../vault/settings.js";
+import { verifyControlPath } from "../vault/paths.js";
 
 /**
- * `.oms/vault-id` is the only link between a vault and its hidden store. It is
- * separate from `settings.json` `vaultId`; the first seal may seed from it.
+ * Seal-state resolution (the index truth table). S = settings `vaultId`, I = the index
+ * entry for this vault's realpath, St(x) = the store link for x exists. Read-only.
  */
 
-export const VAULT_ID_PATH = ".oms/vault-id";
-const MAX_VAULT_ID_BYTES = 256;
+export type SealRow =
+  | "never-sealed"
+  | "synced-second-machine"
+  | "store-without-index"
+  | "vault-moved"
+  | "sealed"
+  | "index-without-store"
+  | "vault-id-tampered"
+  | "index-corrupt";
 
-export type VaultIdRead =
-  | { readonly state: "absent" }
-  | { readonly state: "invalid"; readonly reason: string }
-  | { readonly state: "ok"; readonly id: string };
-
-export type VaultIdEnsure =
-  | { readonly state: "ok"; readonly id: string; readonly created: boolean }
-  | { readonly state: "invalid"; readonly reason: string };
-
-function errorCode(error: unknown): string | undefined {
-  return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
+export interface SealState {
+  readonly row: SealRow;
+  readonly view: ContractView;
+  /** S; null when absent or unreadable. Never printed. */
+  readonly vaultId: string | null;
+  /** True when another existing vault path maps to the same id. */
+  readonly shared: boolean;
+  readonly settingsInvalid: boolean;
 }
 
-/** Read-only: never creates `.oms/` or the id file. */
-export async function readVaultId(vault: string): Promise<VaultIdRead> {
-  const directory = join(vault, ".oms");
-  const target = join(vault, VAULT_ID_PATH);
+async function exists(path: string): Promise<boolean> {
   try {
-    const parent = await lstat(directory);
-    if (parent.isSymbolicLink() || !parent.isDirectory()) return { state: "invalid", reason: ".oms is not a real directory" };
-    const leaf = await lstat(target);
-    if (leaf.isSymbolicLink() || !leaf.isFile()) return { state: "invalid", reason: "vault-id is not a regular file" };
-    if (leaf.size > MAX_VAULT_ID_BYTES) return { state: "invalid", reason: "vault-id is too large" };
-    const text = (await readFile(target, "utf8")).trim();
-    if (!UUID_PATTERN.test(text)) return { state: "invalid", reason: "vault-id is not a lowercase UUID" };
-    return { state: "ok", id: text };
-  } catch (error: unknown) {
-    if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return { state: "absent" };
-    return { state: "invalid", reason: error instanceof Error ? error.message : String(error) };
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 
-async function seedId(vault: string): Promise<string> {
+async function settingsId(vault: string): Promise<{ readonly id: string | null; readonly invalid: boolean }> {
   try {
     const settings = await readVaultSettings(vault);
-    if (settings !== null && UUID_PATTERN.test(settings.vaultId)) return settings.vaultId;
+    return { id: settings?.vaultId ?? null, invalid: false };
   } catch {
-    // Unreadable settings only lose the seed; the id is then random.
+    return { id: null, invalid: true };
   }
-  return randomUUID();
 }
 
-/** Seal-time only. An invalid existing file is reported, never overwritten. */
-export async function ensureVaultId(vault: string): Promise<VaultIdEnsure> {
-  const current = await readVaultId(vault);
-  if (current.state === "ok") return { state: "ok", id: current.id, created: false };
-  if (current.state === "invalid") return current;
-  const id = await seedId(vault);
-  try {
-    await atomicWrite(join(vault, VAULT_ID_PATH), `${id}\n`);
-  } catch (error: unknown) {
-    return { state: "invalid", reason: error instanceof Error ? error.message : String(error) };
+async function load(vaultId: string, root: string): Promise<ContractView> {
+  const read = await readStore(vaultId, root);
+  return read.state === "ok" ? { state: "sealed", contract: read.contract } : { state: "unreadable" };
+}
+
+export async function resolveSealState(vault: string, root: string = storeRoot()): Promise<SealState> {
+  const vaultRealPath = await realpath(vault);
+  const settings = await settingsId(vault);
+  const s = settings.id;
+  const base = { vaultId: s, settingsInvalid: settings.invalid };
+  const index = await readIndex(root);
+
+  if (index.state === "corrupt") {
+    const view: ContractView = s !== null && await storeExists(s, root) ? await load(s, root) : { state: "open" };
+    return { ...base, row: "index-corrupt", view, shared: false };
   }
-  return { state: "ok", id, created: true };
+  const entries = index.state === "ok" ? index.entries : {};
+  const others = Object.entries(entries).filter(([path, id]) => path !== vaultRealPath && id === s);
+  let shared = false;
+  for (const [path] of others) if (await exists(path)) shared = true;
+  const i = Object.hasOwn(entries, vaultRealPath) ? entries[vaultRealPath]! : null;
+
+  if (i !== null) {
+    if (s !== i) return { ...base, row: "vault-id-tampered", view: { state: "unreadable" }, shared };
+    if (!await storeExists(i, root)) return { ...base, row: "index-without-store", view: { state: "unreadable" }, shared };
+    return { ...base, row: "sealed", view: await load(i, root), shared };
+  }
+  if (s === null) return { ...base, row: "never-sealed", view: { state: "open" }, shared: false };
+  if (!await storeExists(s, root)) return { ...base, row: "synced-second-machine", view: { state: "open" }, shared };
+  return { ...base, row: others.length > 0 ? "vault-moved" : "store-without-index", view: await load(s, root), shared };
+}
+
+/** Seal time only: replaces `.oms/settings.json` atomically after validating the new settings. */
+export async function writeVaultSettings(vault: string, settings: VaultSettings): Promise<void> {
+  const bytes = serializeVaultSettings(settings);
+  const verified = await verifyControlPath(vault, SETTINGS_PATH, { expected: "either" });
+  await atomicWrite(verified.absolutePath, bytes);
+}
+
+/** Seal time only: returns the settings `vaultId`, issuing one when settings are absent. */
+export async function ensureVaultId(vault: string): Promise<string> {
+  const existing = await readVaultSettings(vault);
+  if (existing !== null) return existing.vaultId;
+  const settings: VaultSettings = { version: 1, vaultId: randomUUID() };
+  await writeVaultSettings(vault, settings);
+  return settings.vaultId;
 }

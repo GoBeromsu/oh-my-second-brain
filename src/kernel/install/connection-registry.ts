@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { admitWriteTarget, type WriteTarget } from "../capture/safe.js";
-import { readVaultSettings } from "../templates/vault-settings.js";
+import { readVaultSettings } from "../vault/settings.js";
 
 const REGISTRY_VERSION = 2;
 const POINTER_VERSION = 1;

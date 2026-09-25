@@ -247,7 +247,7 @@ export function retrievalResultsToQueryResult(
     readonly requestedStrategy?: McpSemanticReceipt["requestedStrategy"];
     readonly generatedSearches?: McpSemanticReceipt["generatedSearches"];
     readonly rerankApplied?: boolean;
-    readonly taxonomyIntents?: McpSemanticReceipt["taxonomyIntents"];
+    readonly folderIntents?: McpSemanticReceipt["folderIntents"];
     readonly warnings?: readonly string[];
     /**
      * Internal collection-child queries keep every facet until the backend
@@ -301,7 +301,7 @@ export function retrievalResultsToQueryResult(
     requestedStrategy: opts.requestedStrategy ?? "plain",
     generatedSearches: opts.generatedSearches ?? [],
     rerankApplied: opts.rerankApplied ?? false,
-    taxonomyIntents: opts.taxonomyIntents ?? [],
+    folderIntents: opts.folderIntents ?? [],
     warnings: summary.warnings,
   };
   return {
@@ -364,7 +364,7 @@ export function queryResultUnavailable(
       requestedStrategy: receipt.requestedStrategy ?? "plain",
       generatedSearches: receipt.generatedSearches ?? [],
       rerankApplied: receipt.rerankApplied ?? false,
-      taxonomyIntents: receipt.taxonomyIntents ?? [],
+      folderIntents: receipt.folderIntents ?? [],
       warnings: receipt.warnings ?? [],
     },
   };

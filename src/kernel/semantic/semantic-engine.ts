@@ -22,7 +22,7 @@ import {
   assembleEngine,
   type AssembledEngine,
 } from "../engine/assemble.js";
-import { readModelsConfigSync } from "../engine/embed/config.js";
+import { readVaultEmbeddingModelSync } from "../engine/embed/config.js";
 import {
   readInstalledModelsReceiptSync,
   resolveEmbeddingModel,
@@ -43,14 +43,14 @@ function resolvedEmbedding(
   modelCacheDir?: string,
   modelEnv?: Readonly<Record<string, string | undefined>>,
 ) {
-  const vaultConfig = readModelsConfigSync(vault);
+  const vaultEmbeddingModel = readVaultEmbeddingModelSync(vault);
   const installedReceipt = readInstalledModelsReceiptSync(
     modelCacheDir === undefined ? {} : { cacheDir: modelCacheDir },
   );
   return resolveEmbeddingModel({
     ...(modelCacheDir === undefined ? {} : { cacheDir: modelCacheDir }),
     ...(modelEnv === undefined ? {} : { env: modelEnv }),
-    vaultConfig,
+    vaultEmbeddingModel,
     installedReceipt,
   });
 }
@@ -60,13 +60,13 @@ function embeddingConfig(
   modelCacheDir?: string,
   modelEnv?: Readonly<Record<string, string | undefined>>,
 ): Parameters<typeof assembleEngine>[0] {
-  const modelsConfig = readModelsConfigSync(vault);
+  const vaultEmbeddingModel = readVaultEmbeddingModelSync(vault);
   const installedModelsReceipt = readInstalledModelsReceiptSync(
     modelCacheDir === undefined ? {} : { cacheDir: modelCacheDir },
   );
   return {
     vault,
-    modelsConfig,
+    vaultEmbeddingModel,
     installedModelsReceipt,
     ...(modelCacheDir === undefined ? {} : { embeddingCacheDir: modelCacheDir }),
     ...(modelEnv === undefined ? {} : { modelEnv }),

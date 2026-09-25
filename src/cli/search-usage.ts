@@ -15,6 +15,6 @@ an integer from 1 through 32. Reranking is opt-in with --rerank; --no-rerank exp
 Vector search needs the embed capability: OMS_EMBEDDING_PROVIDER and OMS_EMBEDDING_MODEL.
 HyDE needs both the generate pair (OMS_GENERATE_PROVIDER and OMS_GENERATE_MODEL) and the embed
 pair. Reranking needs OMS_RERANK_PROVIDER and OMS_RERANK_MODEL. Configure installed models with
-oms setup --models-default, oms setup --models-descriptor <path>, or oms setup --models-no-default;
+oms model install --default or oms model install --descriptor <path>, then oms model select;
 incomplete or unavailable capability pairs fail loudly rather than falling back.`;
 }

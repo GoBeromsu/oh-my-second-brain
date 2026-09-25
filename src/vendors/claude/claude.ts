@@ -3,7 +3,7 @@ import path from "node:path";
 import type { HarnessHostSurface } from "../../kernel/harness/surface-registry.js";
 import { resolveHostAdapterSource } from "../../kernel/install/adapter-source.js";
 import { commandExists, hostHome, isRecord, mcpServerEntry, runExternal } from "../../kernel/install/common.js";
-import { isOmsHookEntry, removeClaudeHooks, replaceRootJsonPropertyPreservingBytes, upsertClaudeHooks } from "./claude-hooks.js";
+import { HOOK_MATCHER, READ_MATCHER, isOmsHookEntry, removeClaudeHooks, replaceRootJsonPropertyPreservingBytes, upsertClaudeHooks } from "./claude-hooks.js";
 import {
   MARKETPLACE_AUTO_UPDATE_MESSAGE,
   resolveClaudeMarketplaceSource,
@@ -18,7 +18,7 @@ import type {
 
 const CLAUDE_MCP_SCOPES: readonly ClaudeMcpScope[] = ["local", "project", "user"];
 
-export { isOmsHookEntry };
+export { HOOK_MATCHER, READ_MATCHER, isOmsHookEntry };
 
 function claudeMcpRemoveCommand(scope: ClaudeMcpScope): string {
   return `claude mcp remove oms --scope ${scope}`;

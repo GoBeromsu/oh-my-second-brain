@@ -41,10 +41,10 @@ import {
 } from "./embed/model.js";
 import {
   canonicalModelIdentityKey,
-  type ModelsConfigV1,
   type PortableModelSelection,
 } from "./embed/config.js";
 import { assembleSemanticEngine } from "../semantic/semantic-engine.js";
+import { serializeVaultSettings } from "../vault/settings.js";
 
 const TEST_SHA256 = "a".repeat(64);
 
@@ -517,16 +517,11 @@ describe("assembly reranker ownership", () => {
 });
 
 describe("assembly model capability status", () => {
-  it("resolves explicit embed, environment rerank, and vault generate without exposing paths", async () => {
+  it("resolves explicit embed, environment rerank, and a settings-only vault that cannot select generate without exposing paths", async () => {
     const vault = mkdtempSync(path.join(tmpdir(), "oms-status-vault-"));
     const embed = embeddingDescriptor("/Users/secret/embed.gguf");
     const rerank = selection("rerank.gguf");
     const generate = selection("generate.gguf", "qmd-query-expansion-v2.8.3");
-    const modelsConfig: ModelsConfigV1 = {
-      schemaVersion: 1,
-      embed: selection("unused-embed.gguf", "embeddinggemma-v1"),
-      generate,
-    };
     const installedModelsReceipt: InstalledModelsReceipt = {
       schemaVersion: 1,
       artifacts: [
@@ -543,7 +538,7 @@ describe("assembly model capability status", () => {
           OMS_RERANK_PROVIDER: "gguf",
           OMS_RERANK_MODEL: "rerank.gguf",
         },
-        modelsConfig,
+        vaultEmbeddingModel: "unused-embed.gguf",
         installedModelsReceipt,
       });
       const status = await engine.adapter.semanticStatus({});
@@ -559,9 +554,8 @@ describe("assembly model capability status", () => {
             revision: "test-revision", sha256: TEST_SHA256,
           },
           generate: {
-            available: true, source: "vault", provider: "gguf", model: "generate.gguf",
-            revision: "test-revision", sha256: TEST_SHA256,
-            promptScheme: "qmd-query-expansion-v2.8.3",
+            available: false,
+            guidance: expect.stringContaining("OMS_GENERATE_PROVIDER"),
           },
         },
       });
@@ -616,7 +610,8 @@ describe("assembly model capability status", () => {
       expect(serialized).toContain("OMS_EMBEDDING_MODEL");
       expect(serialized).toContain("OMS_RERANK_MODEL");
       expect(serialized).toContain("OMS_GENERATE_MODEL");
-      expect(serialized).toContain(".oms/models.json");
+      expect(serialized).toContain(".oms/settings.json");
+      expect(serialized).not.toContain(["models", "json"].join("."));
       await engine.dispose();
     } finally {
       rmSync(vault, { recursive: true, force: true });
@@ -668,8 +663,12 @@ describe("assembly model capability status", () => {
     const defaultSelection = makeSelection("default-model.gguf", defaultModelPath);
     mkdirSync(path.join(vault, ".oms"), { recursive: true });
     writeFileSync(
-      path.join(vault, ".oms", "models.json"),
-      JSON.stringify({ schemaVersion: 1, embed: vaultSelection }),
+      path.join(vault, ".oms", "settings.json"),
+      serializeVaultSettings({
+        version: 1,
+        vaultId: "11111111-2222-4333-8444-555555555555",
+        embedding: { model: "vault-model.gguf" },
+      }),
     );
     writeFileSync(
       path.join(cache, INSTALLED_MODELS_RECEIPT),

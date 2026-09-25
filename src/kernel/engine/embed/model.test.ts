@@ -16,19 +16,17 @@ import {
   parseModelSetAcquisitionManifest,
   parseInstalledModelsReceipt,
   PINNED_DEFAULT_EMBEDDING_MODEL,
-  commitFreshModelSelection,
-  prepareFreshModelSelection,
-  observeFreshModelSelectionFault,
+  applyModelSelection,
+  proposeModelSelection,
   readInstalledModelsReceipt,
   readInstalledModelsReceiptSync,
   resolveEmbeddingModel,
   resolveEmbeddingModelFromCache,
   type InstalledModelsReceipt,
 } from "./model.js";
-import { canonicalModelIdentityKey } from "./config.js";
+import { canonicalModelIdentityKey, readVaultEmbeddingModel } from "./config.js";
 import { parseModelsConfig } from "./config.js";
-import { readVaultSettings } from "../../templates/vault-settings.js";
-import type { WriteTarget } from "../../capture/safe.js";
+import { readVaultSettings, serializeVaultSettings } from "../../vault/settings.js";
 
 const bytes = new TextEncoder().encode("verified model bytes");
 const sha256 = createHash("sha256").update(bytes).digest("hex");
@@ -302,8 +300,8 @@ describe("model-set acquisition manifest", () => {
     });
 
     it("keeps the host path out of the portable vault config", async () => {
-      // `.oms/models.json` travels with the vault, so a machine-specific path in it
-      // would break every other machine that opened the same vault.
+      // The portable selection identity can travel between machines, so a
+      // machine-specific path in it would break every other machine.
       const root = await mkdtemp(path.join(tmpdir(), "oms-local-"));
       try {
         const cache = path.join(root, "cache");
@@ -447,7 +445,7 @@ describe("strict embed adapter", () => {
       const installed = receipt(model);
       expect(resolveEmbeddingModel({ installedReceipt: installed, request: selection }).source).toBe("request");
       expect(resolveEmbeddingModel({ installedReceipt: installed, env: { [EMBEDDING_PROVIDER_ENV]: "gguf", [EMBEDDING_MODEL_ENV]: "test.gguf" } }).source).toBe("environment");
-      expect(resolveEmbeddingModel({ installedReceipt: installed, vaultConfig: { schemaVersion: 1, embed: selection } }).source).toBe("vault");
+      expect(resolveEmbeddingModel({ installedReceipt: installed, vaultEmbeddingModel: "test.gguf", env: {} }).source).toBe("vault");
       expect(resolveEmbeddingModel({ installedReceipt: installed, env: {} }).source).toBe("setup-default");
       const unavailable = resolveEmbeddingModel({ installedReceipt: { schemaVersion: 1, artifacts: [], defaults: [] }, env: {} });
       expect(unavailable).toMatchObject({ available: false, source: "unavailable" });
@@ -474,501 +472,71 @@ describe("strict embed adapter", () => {
   });
 });
 
-describe("fresh model selection", () => {
+describe("settings.json model selection", () => {
   const roots: string[] = [];
   const vaultId = "11111111-1111-4111-8111-111111111111";
-  const otherId = "22222222-2222-4222-8222-222222222222";
-  const modelConfig = {
-    schemaVersion: 1 as const,
-    embed: { provider: "gguf" as const, model: "test.gguf", revision: "v1.2.3", sha256, promptScheme: "embeddinggemma-v1" as const },
-  };
-  const canonicalText = `${JSON.stringify(modelConfig, null, 2)}\n`;
 
-  async function temp(prefix: string): Promise<string> {
-    const root = await mkdtemp(path.join(tmpdir(), prefix));
+  async function vault(withSettings = true): Promise<string> {
+    const root = await mkdtemp(path.join(tmpdir(), "oms-model-select-"));
     roots.push(root);
-    return root;
-  }
-
-  async function settings(vault: string, id = vaultId): Promise<void> {
-    await writeFile(path.join(vault, ".oms", "settings.json"), `${JSON.stringify({ version: 1, vaultId: id, templateRoots: [] }, null, 2)}\n`);
-  }
-
-  async function vault(withOms = true): Promise<string> {
-    const root = await temp("oms-fresh-model-");
     const directory = path.join(root, "vault");
-    await mkdir(withOms ? path.join(directory, ".oms") : directory, { recursive: true });
+    await mkdir(path.join(directory, ".oms"), { recursive: true });
+    if (withSettings) await writeFile(path.join(directory, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId }));
     return realpath(directory);
-  }
-
-  function target(value: string, source: WriteTarget["source"] | "unsafe" = "explicit"): WriteTarget {
-    return { vault: value, source: source as WriteTarget["source"] };
-  }
-
-  async function names(directory: string): Promise<string[]> {
-    return (await readdir(directory, { withFileTypes: true })).map(entry => entry.name).sort();
   }
 
   afterEach(async () => {
     await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
   });
 
-  it("prepares an absent vault and absent .oms without writes, before settings exist", async () => {
-    const root = await temp("oms-fresh-absent-");
-    const missing = path.join(root, "missing");
-    await expect(prepareFreshModelSelection({ target: target(missing), config: modelConfig })).rejects.toMatchObject({ reason: "missing-parent" });
-    expect(await names(root)).toEqual([]);
+  it("refuses to select a model before oms setup has issued settings.json, without writing", async () => {
+    const { cache } = await cacheWithArtifact();
+    roots.push(cache);
     const bare = await vault(false);
-    const prepared = await prepareFreshModelSelection({ target: target(bare), config: structuredClone(modelConfig) });
-    expect(prepared).toMatchObject({ canonicalVault: bare, expectedCurrent: "sha256:absent", disposition: "create", config: modelConfig });
-    expect(await names(bare)).toEqual([]);
-    expect(await readVaultSettings(bare)).toBeNull();
-    await expect(commitFreshModelSelection({
-      target: target(bare), config: modelConfig, expectedCurrent: prepared.expectedCurrent, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-    })).rejects.toMatchObject({ reason: "missing-parent" });
-    expect(await names(bare)).toEqual([]);
+    await expect(proposeModelSelection({ vault: bare, model: "test.gguf", cacheDir: cache })).rejects.toThrow(/VAULT_SETTINGS_MISSING/);
+    expect(await readdir(path.join(bare, ".oms"))).toEqual([]);
   });
 
-  it("creates once from an existing .oms, reads canonical bytes back, and repeats the original absent token", async () => {
+  it("refuses a model with no verified installed artifact", async () => {
+    const { cache } = await cacheWithArtifact();
+    roots.push(cache);
     const present = await vault();
-    await settings(present);
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    const filename = path.join(present, ".oms", "models.json");
-    const request = {
-      target: target(present), config: modelConfig, expectedCurrent: "sha256:absent" as const, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-    };
-    const first = await commitFreshModelSelection(request);
-    expect(first).toEqual({ status: "written", path: filename, configDigest: prepared.configDigest, verified: true });
-    const written = await lstat(filename);
-    expect(written.nlink).toBe(1);
-    expect((await names(path.join(present, ".oms"))).filter(name => name.startsWith(".models.json.oms-"))).toEqual([]);
-    const persisted = await readFile(filename);
-    expect(persisted.toString("utf8")).toBe(canonicalText);
-    expect(parseModelsConfig(persisted.toString("utf8"))).toEqual(modelConfig);
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      await expect(commitFreshModelSelection(request)).resolves.toEqual({ status: "unchanged", path: filename, configDigest: prepared.configDigest, verified: true });
-    }
-    expect((await lstat(filename)).ino).toBe(written.ino);
-    expect(await readFile(filename)).toEqual(persisted);
-    expect((await readVaultSettings(present))?.vaultId).toBe(vaultId);
+    await expect(proposeModelSelection({ vault: present, model: "absent.gguf", cacheDir: cache })).rejects.toThrow();
+    expect(await readVaultSettings(present)).toEqual({ version: 1, vaultId });
   });
 
-  it("commits an exact existing selection through the prepared non-absent digest without rewriting it", async () => {
+  it("proposes without writing, rejects a mismatched approval, then writes and reports unchanged", async () => {
+    const { cache } = await cacheWithArtifact();
+    roots.push(cache);
     const present = await vault();
-    await settings(present);
-    const filename = path.join(present, ".oms", "models.json");
-    await writeFile(filename, canonicalText);
-    const before = await lstat(filename);
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    expect(prepared.disposition).toBe("unchanged");
-    expect(prepared.expectedCurrent).not.toBe("sha256:absent");
-    const committed = await commitFreshModelSelection({
-      target: target(present), config: modelConfig, expectedCurrent: prepared.expectedCurrent, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-    });
-    expect(committed).toEqual({ status: "unchanged", path: filename, configDigest: prepared.configDigest, verified: true });
-    const after = await lstat(filename);
-    expect(after.ino).toBe(before.ino);
-    expect(after.nlink).toBe(1);
-    expect(await readFile(filename, "utf8")).toBe(canonicalText);
+    const before = await readFile(path.join(present, ".oms", "settings.json"), "utf8");
+    const proposal = await proposeModelSelection({ vault: present, model: "test.gguf", cacheDir: cache });
+    expect(proposal).toMatchObject({ vault: present, current: null, proposed: "test.gguf", changed: true });
+    expect(proposal.approvalDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(await readFile(path.join(present, ".oms", "settings.json"), "utf8")).toBe(before);
+
+    await expect(applyModelSelection({ vault: present, model: "test.gguf", approvedDigest: `sha256:${"0".repeat(64)}`, cacheDir: cache }))
+      .rejects.toThrow(/MODEL_SELECTION_APPROVAL_MISMATCH/);
+    expect(await readFile(path.join(present, ".oms", "settings.json"), "utf8")).toBe(before);
+
+    const written = await applyModelSelection({ vault: present, model: "test.gguf", approvedDigest: proposal.approvalDigest, cacheDir: cache });
+    expect(written).toMatchObject({ status: "written", verified: true, path: path.join(present, ".oms", "settings.json") });
+    expect(await readVaultSettings(present)).toEqual({ version: 1, vaultId, embedding: { model: "test.gguf" } });
+    expect(await readVaultEmbeddingModel(present)).toBe("test.gguf");
+
+    const again = await proposeModelSelection({ vault: present, model: "test.gguf", cacheDir: cache });
+    expect(again).toMatchObject({ current: "test.gguf", changed: false });
+    expect(again.approvalDigest).not.toBe(proposal.approvalDigest);
+    const unchanged = await applyModelSelection({ vault: present, model: "test.gguf", approvedDigest: again.approvalDigest, cacheDir: cache });
+    expect(unchanged.status).toBe("unchanged");
   });
 
-  it("preserves different formatting, canonical bytes, and malformed JSON", async () => {
+  it("keeps settings.json as the only vault-side file and never writes a retired model file", async () => {
+    const { cache } = await cacheWithArtifact();
+    roots.push(cache);
     const present = await vault();
-    await settings(present);
-    const filename = path.join(present, ".oms", "models.json");
-    for (const existing of [JSON.stringify(modelConfig), "{", `${JSON.stringify({ ...modelConfig, embed: { ...modelConfig.embed, revision: "v9" } }, null, 2)}\n`]) {
-      await writeFile(filename, existing);
-      const before = await lstat(filename);
-      const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-      expect(prepared.disposition).toBe("conflict");
-      await expect(commitFreshModelSelection({
-        target: target(present), config: modelConfig, expectedCurrent: prepared.expectedCurrent, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-      })).rejects.toMatchObject({ reason: "conflict" });
-      expect(await readFile(filename, "utf8")).toBe(existing);
-      expect((await lstat(filename)).ino).toBe(before.ino);
-    }
-  });
-
-  it("rejects stale expected state and config digest without writing", async () => {
-    const present = await vault();
-    await settings(present);
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    await expect(commitFreshModelSelection({
-      target: target(present), config: modelConfig, expectedCurrent: prepared.configDigest, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-    })).rejects.toMatchObject({ reason: "stale" });
-    await expect(commitFreshModelSelection({
-      target: target(present), config: modelConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: `sha256:${"ab".repeat(32)}`, expectedVaultId: vaultId,
-    })).rejects.toMatchObject({ reason: "stale" });
-    expect(await names(path.join(present, ".oms"))).toEqual(["settings.json"]);
-  });
-
-  it("refuses cwd, legacy-bridge, and unexpected sources before any model write", async () => {
-    const present = await vault();
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    for (const source of ["cwd", "legacy-bridge", "unsafe"] as const) {
-      await expect(prepareFreshModelSelection({ target: target(present, source), config: modelConfig })).rejects.toMatchObject({ reason: "target-unverified" });
-      await expect(commitFreshModelSelection({
-        target: target(present, source), config: modelConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-      })).rejects.toMatchObject({ reason: "target-unverified" });
-    }
-    expect(await names(path.join(present, ".oms"))).toEqual([]);
-  });
-
-  it("admits a public vault symlink and refuses private parent, leaf, and hardlink aliases", async () => {
-    const root = await temp("oms-fresh-alias-");
-    const present = path.join(root, "vault");
-    await mkdir(path.join(present, ".oms"), { recursive: true });
-    const canonical = await realpath(present);
-    const alias = path.join(root, "public-alias");
-    await symlink(canonical, alias);
-    const prepared = await prepareFreshModelSelection({ target: target(alias), config: modelConfig });
-    expect(prepared.canonicalVault).toBe(canonical);
-    expect(prepared.disposition).toBe("create");
-    await rm(path.join(canonical, ".oms"), { recursive: true });
-    await symlink(path.join(root, "outside-oms"), path.join(canonical, ".oms"));
-    await mkdir(path.join(root, "outside-oms"));
-    await expect(prepareFreshModelSelection({ target: target(alias), config: modelConfig })).rejects.toMatchObject({ reason: "unsafe-target" });
-    await rm(path.join(canonical, ".oms"));
-    await mkdir(path.join(canonical, ".oms"));
-    const outside = path.join(root, "outside.json");
-    await writeFile(outside, "{\"not\":\"canonical\"}");
-    await symlink(outside, path.join(canonical, ".oms", "models.json"));
-    await expect(prepareFreshModelSelection({ target: target(alias), config: modelConfig })).rejects.toMatchObject({ reason: "unsafe-target" });
-    expect(await readFile(outside, "utf8")).toBe("{\"not\":\"canonical\"}");
-    await rm(path.join(canonical, ".oms", "models.json"));
-    await writeFile(path.join(canonical, ".oms", "models.json"), canonicalText);
-    const twin = path.join(root, "hardlink.json");
-    await link(path.join(canonical, ".oms", "models.json"), twin);
-    await expect(prepareFreshModelSelection({ target: target(alias), config: modelConfig })).rejects.toMatchObject({ reason: "unsafe-target" });
-    expect(await readFile(twin, "utf8")).toBe(canonicalText);
-  });
-
-  it("reports equal and different real EEXIST races without replacing user bytes", async () => {
-    const present = await vault();
-    await settings(present);
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    const filename = path.join(present, ".oms", "models.json");
-    const actualLink = fs.promises.link.bind(fs.promises);
-    let fired = 0;
-    const race = async (competitor: string) => {
-      const spy = vi.spyOn(fs.promises, "link").mockImplementation(async (existing, destination) => {
-        fired += 1;
-        if (String(destination) === filename) await writeFile(filename, competitor);
-        return actualLink(existing, destination);
-      });
-      syncBuiltinESMExports();
-      try {
-        return await commitFreshModelSelection({
-          target: target(present), config: modelConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-        });
-      } finally {
-        spy.mockRestore();
-        syncBuiltinESMExports();
-      }
-    };
-    await expect(race(canonicalText)).resolves.toMatchObject({ status: "unchanged", verified: true, path: filename });
-    expect(fired).toBe(1);
-    expect((await lstat(filename)).nlink).toBe(1);
-    expect(await readFile(filename, "utf8")).toBe(canonicalText);
-    await rm(filename);
-    await expect(race("{")).rejects.toMatchObject({ reason: "conflict", code: "EEXIST" });
-    expect(await readFile(filename, "utf8")).toBe("{");
-    expect(fired).toBe(2);
-    expect((await names(path.join(present, ".oms"))).filter(name => name.startsWith(".models.json.oms-"))).toEqual([]);
-  });
-
-  it("cleans an owned staging fault and reports reconciliation uncertainty without deleting user files", async () => {
-    const present = await vault();
-    await settings(present);
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    const sentinel = path.join(present, ".oms", "user-note.txt");
-    await writeFile(sentinel, "keep");
-    observeFreshModelSelectionFault("fresh-model-fault", "after-staging");
-    try {
-      await expect(commitFreshModelSelection({
-        target: target(present), config: modelConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId, faultToken: "fresh-model-fault",
-      })).rejects.toMatchObject({ reason: "io", code: "injected-fault" });
-    } finally {
-      observeFreshModelSelectionFault("fresh-model-fault", undefined);
-    }
-    expect(await readFile(sentinel, "utf8")).toBe("keep");
-    expect(await names(path.join(present, ".oms"))).toEqual(["settings.json", "user-note.txt"]);
-  });
-
-  it("cleans an owned write fault and does not adopt a same-byte staging replacement", async () => {
-    const present = await vault();
-    await settings(present);
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    const sentinel = path.join(present, ".oms", "user-note.txt");
-    await writeFile(sentinel, "keep");
-    const originalOpen = fs.promises.open.bind(fs.promises);
-    let writeFired = 0;
-    const writeSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
-      const handle = await originalOpen(...args);
-      if (String(args[0]).includes(".models.json.oms-") && String(args[1]).includes("w")) {
-        writeFired += 1;
-        vi.spyOn(handle, "writeFile").mockImplementation(async () => {
-          const error = new Error("write failed") as NodeJS.ErrnoException;
-          error.code = "EIO";
-          throw error;
-        });
-      }
-      return handle;
-    });
-    syncBuiltinESMExports();
-    try {
-      await expect(commitFreshModelSelection({
-        target: target(present), config: modelConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-      })).rejects.toMatchObject({ reason: "io", code: "EIO" });
-    } finally {
-      writeSpy.mockRestore();
-      syncBuiltinESMExports();
-    }
-    expect(writeFired).toBe(1);
-    expect(await names(path.join(present, ".oms"))).toEqual(["settings.json", "user-note.txt"]);
-    const replacedOpen = fs.promises.open.bind(fs.promises);
-    let replaceFired = 0;
-    let foreign = "";
-    let replacement = "";
-    const replaceSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
-      const handle = await replacedOpen(...args);
-      const staging = String(args[0]);
-      if (staging.includes(".models.json.oms-") && String(args[1]).includes("w")) {
-        replaceFired += 1;
-        const originalWrite = handle.writeFile.bind(handle);
-        vi.spyOn(handle, "writeFile").mockImplementation(async contents => {
-          await originalWrite(contents);
-          foreign = path.join(path.dirname(staging), "foreign-same-bytes.json");
-          replacement = staging;
-          await fs.promises.rename(staging, foreign);
-          await writeFile(staging, canonicalText);
-          const error = new Error("write failed after replacement") as NodeJS.ErrnoException;
-          error.code = "EIO";
-          throw error;
-        });
-      }
-      return handle;
-    });
-    syncBuiltinESMExports();
-    try {
-      await expect(commitFreshModelSelection({
-        target: target(present), config: modelConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-      })).rejects.toMatchObject({ reason: "reconciliation-uncertain" });
-    } finally {
-      replaceSpy.mockRestore();
-      syncBuiltinESMExports();
-    }
-    expect(replaceFired).toBe(1);
-    expect(await readFile(foreign, "utf8")).toBe(canonicalText);
-    expect(await readFile(replacement, "utf8")).toBe(canonicalText);
-    expect(await readFile(sentinel, "utf8")).toBe("keep");
-    await rm(foreign);
-    await rm(replacement);
-  });
-
-  it("refuses publication when identity or the staged file changes after staging", async () => {
-    const present = await vault();
-    await settings(present);
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    const foreign = path.join(present, ".oms", "foreign-stage.json");
-    const actualOpen = fs.promises.open.bind(fs.promises);
-    let identityFired = 0;
-    const identitySpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
-      const handle = await actualOpen(...args);
-      if (String(args[0]).includes(".models.json.oms-") && String(args[1]).includes("w")) {
-        identityFired += 1;
-        const originalSync = handle.sync.bind(handle);
-        vi.spyOn(handle, "sync").mockImplementation(async () => {
-          await originalSync();
-          await settings(present, otherId);
-        });
-      }
-      return handle;
-    });
-    syncBuiltinESMExports();
-    try {
-      await expect(commitFreshModelSelection({
-        target: target(present), config: modelConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-      })).rejects.toMatchObject({ reason: "identity-mismatch" });
-    } finally {
-      identitySpy.mockRestore();
-      syncBuiltinESMExports();
-    }
-    expect(identityFired).toBe(1);
-    expect(await names(path.join(present, ".oms"))).toEqual(["settings.json"]);
-    await settings(present, vaultId);
-    let parentFired = 0;
-    const parentSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
-      const handle = await actualOpen(...args);
-      const staging = String(args[0]);
-      if (staging.includes(".models.json.oms-") && String(args[1]).includes("w")) {
-        parentFired += 1;
-        const originalSync = handle.sync.bind(handle);
-        vi.spyOn(handle, "sync").mockImplementation(async () => {
-          await originalSync();
-          await fs.promises.rename(staging, foreign);
-          await writeFile(staging, "foreign");
-        });
-      }
-      return handle;
-    });
-    syncBuiltinESMExports();
-    try {
-      await expect(commitFreshModelSelection({
-        target: target(present), config: modelConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-      })).rejects.toMatchObject({ reason: "reconciliation-uncertain" });
-    } finally {
-      parentSpy.mockRestore();
-      syncBuiltinESMExports();
-    }
-    expect(parentFired).toBe(1);
-    expect(await readFile(foreign, "utf8")).toBe(canonicalText);
-    expect((await names(path.join(present, ".oms"))).filter(name => name.startsWith(".models.json.oms-"))).not.toEqual([]);
-    expect(await names(path.join(present, ".oms"))).toContain("foreign-stage.json");
-    expect(await names(path.join(present, ".oms"))).not.toContain("models.json");
-    await rm(foreign);
-  });
-
-  it("does not publish into a root or .oms replaced after the first model inspection", async () => {
-    const root = await temp("oms-fresh-parent-race-");
-    const present = path.join(root, "vault");
-    await mkdir(path.join(present, ".oms"), { recursive: true });
-    const canonical = await realpath(present);
-    await settings(canonical);
-    const prepared = await prepareFreshModelSelection({ target: target(canonical), config: modelConfig });
-    const replacement = path.join(root, "replacement-vault");
-    await mkdir(path.join(replacement, ".oms"), { recursive: true });
-    await writeFile(path.join(replacement, ".oms", "settings.json"), `${JSON.stringify({ version: 1, vaultId, templateRoots: [] }, null, 2)}\n`);
-    const actualLstat = fs.promises.lstat.bind(fs.promises);
-    let fired = 0;
-    const spy = vi.spyOn(fs.promises, "lstat").mockImplementation(async target => {
-      const stat = await actualLstat(target);
-      if (String(target) === path.join(canonical, ".oms", "models.json")) {
-        fired += 1;
-        if (fired === 1) await fs.promises.rename(canonical, path.join(root, "original-vault"));
-        if (fired === 1) await fs.promises.rename(replacement, canonical);
-      }
-      return stat;
-    });
-    syncBuiltinESMExports();
-    try {
-      await expect(commitFreshModelSelection({
-        target: target(canonical), config: modelConfig, expectedCurrent: prepared.expectedCurrent, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-      })).rejects.toMatchObject({ reason: "external-change" });
-    } finally {
-      spy.mockRestore();
-      syncBuiltinESMExports();
-    }
-    expect(fired).toBeGreaterThan(0);
-    // The substituted directory never receives the publication, and the refusal
-    // discloses that the approved directory identity is gone: the owned bytes
-    // stay on the original inode, which is no longer reachable by this path.
-    expect(await names(path.join(canonical, ".oms"))).toEqual(["settings.json"]);
-    expect(await names(path.join(root, "original-vault", ".oms"))).toContain("settings.json");
-    expect(await names(path.join(root, "original-vault", ".oms"))).not.toEqual(["settings.json"]);
-  });
-
-  it("refuses a byte-identical external symlink substituted for the verified model leaf", async () => {
-    const present = await vault();
-    await settings(present);
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    const outside = path.join(path.dirname(present), "external-models.json");
-    await writeFile(outside, canonicalText);
-    const filename = path.join(present, ".oms", "models.json");
-    const actualLink = fs.promises.link.bind(fs.promises);
-    let fired = 0;
-    const spy = vi.spyOn(fs.promises, "link").mockImplementation(async (from, to) => {
-      await actualLink(from, to);
-      if (String(to) === filename) {
-        fired += 1;
-        await fs.promises.rename(filename, path.join(present, ".oms", "owned-stage.json"));
-        await symlink(outside, filename);
-      }
-    });
-    syncBuiltinESMExports();
-    try {
-      await expect(commitFreshModelSelection({
-        target: target(present), config: modelConfig, expectedCurrent: prepared.expectedCurrent, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-      })).rejects.toBeInstanceOf(Error);
-    } finally {
-      spy.mockRestore();
-      syncBuiltinESMExports();
-    }
-    expect(fired).toBe(1);
-    expect((await lstat(filename)).isSymbolicLink()).toBe(true);
-    expect(await readFile(outside, "utf8")).toBe(canonicalText);
-  });
-
-  it("refuses when settings change during the final held model read and rejects oversize bytes", async () => {
-    const present = await vault();
-    await settings(present);
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    const filename = path.join(present, ".oms", "models.json");
-    const actualOpen = fs.promises.open.bind(fs.promises);
-    let readFired = 0;
-    const readSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
-      const handle = await actualOpen(...args);
-      if (String(args[0]) === filename && !String(args[1]).includes("w")) {
-        readFired += 1;
-        const originalRead = handle.read.bind(handle);
-        vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
-          await settings(present, otherId);
-          return originalRead(...readArgs);
-        });
-      }
-      return handle;
-    });
-    syncBuiltinESMExports();
-    try {
-      await expect(commitFreshModelSelection({
-        target: target(present), config: modelConfig, expectedCurrent: prepared.expectedCurrent, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-      })).rejects.toMatchObject({ reason: "identity-mismatch" });
-    } finally {
-      readSpy.mockRestore();
-      syncBuiltinESMExports();
-    }
-    expect(readFired).toBeGreaterThan(0);
-    expect((await readVaultSettings(present))?.vaultId).toBe(otherId);
-    await settings(present, vaultId);
-    await writeFile(filename, Buffer.alloc(256 * 1024 + 1, 0x61));
-    await expect(prepareFreshModelSelection({ target: target(present), config: modelConfig })).rejects.toMatchObject({ reason: "malformed" });
-    const oversized = { ...modelConfig, embed: { ...modelConfig.embed, model: "x".repeat(256 * 1024) } };
-    await expect(prepareFreshModelSelection({ target: target(present), config: oversized })).rejects.toMatchObject({ reason: "malformed" });
-    expect((await lstat(filename)).size).toBe(256 * 1024 + 1);
-  });
-
-  it("rejects identity drift between prepare and commit and keeps the settings file authoritative", async () => {
-    const present = await vault();
-    const prepared = await prepareFreshModelSelection({ target: target(present), config: modelConfig });
-    expect(prepared.disposition).toBe("create");
-    await expect(commitFreshModelSelection({
-      target: target(present), config: modelConfig, expectedCurrent: prepared.expectedCurrent, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-    })).rejects.toMatchObject({ reason: "missing-identity" });
-    await settings(present, otherId);
-    await expect(commitFreshModelSelection({
-      target: target(present), config: modelConfig, expectedCurrent: prepared.expectedCurrent, expectedConfigDigest: prepared.configDigest, expectedVaultId: vaultId,
-    })).rejects.toMatchObject({ reason: "identity-mismatch" });
-    expect(await names(path.join(present, ".oms"))).toEqual(["settings.json"]);
-    expect((await readVaultSettings(present))?.vaultId).toBe(otherId);
-  });
-
-  it("keeps concurrent independent vault operations from sharing publication state", async () => {
-    const left = await vault();
-    const right = await vault();
-    await settings(left, vaultId);
-    await settings(right, otherId);
-    const leftPrepared = await prepareFreshModelSelection({ target: target(left), config: modelConfig });
-    const rightConfig = { ...modelConfig, embed: { ...modelConfig.embed, revision: "right-v1" } };
-    const rightPrepared = await prepareFreshModelSelection({ target: target(right), config: rightConfig });
-    const [leftResult, rightResult] = await Promise.all([
-      commitFreshModelSelection({ target: target(left), config: modelConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: leftPrepared.configDigest, expectedVaultId: vaultId }),
-      commitFreshModelSelection({ target: target(right), config: rightConfig, expectedCurrent: "sha256:absent", expectedConfigDigest: rightPrepared.configDigest, expectedVaultId: otherId }),
-    ]);
-    expect(leftResult.status).toBe("written");
-    expect(rightResult.status).toBe("written");
-    expect(leftResult.configDigest).not.toBe(rightResult.configDigest);
-    expect(await readFile(leftResult.path, "utf8")).not.toBe(await readFile(rightResult.path, "utf8"));
-    expect((await readVaultSettings(left))?.vaultId).toBe(vaultId);
-    expect((await readVaultSettings(right))?.vaultId).toBe(otherId);
+    const proposal = await proposeModelSelection({ vault: present, model: "test.gguf", cacheDir: cache });
+    await applyModelSelection({ vault: present, model: "test.gguf", approvedDigest: proposal.approvalDigest, cacheDir: cache });
+    expect(await readdir(path.join(present, ".oms"))).toEqual(["settings.json"]);
   });
 });

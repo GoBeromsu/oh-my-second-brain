@@ -1,4 +1,4 @@
-import { canonicalJson, digestBytes as digestCanonicalBytes, hashCanonical } from "../templates/canonical.js";
+import { canonicalJson, digestBytes as digestCanonicalBytes, hashCanonical } from "./canonical.js";
 
 /** The completion contract is deliberately independent of host, model, and storage APIs. */
 export const COMPLETION_SCHEMA_VERSION = 1 as const;

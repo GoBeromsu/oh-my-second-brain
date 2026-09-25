@@ -5,8 +5,12 @@ import { isRecord, writeJsonObject } from "../../kernel/install/common.js";
 import type { HostOperationOptions } from "../../kernel/install/types.js";
 
 const GUARD_MARKER = "oms-guard";
-const POST_GUARD_MARKER = "oms-post-guard";
-const HOOK_MATCHER = "Write|Edit|NotebookEdit";
+export const HOOK_MATCHER = "Write|Edit|MultiEdit|NotebookEdit";
+export const READ_MATCHER = "Read|Grep|Glob";
+/** Matchers earlier releases generated; entries under them are reconciled away. */
+const LEGACY_MATCHERS = ["Write|Edit|NotebookEdit"] as const;
+const OWNED_MATCHERS = new Set<string>([HOOK_MATCHER, READ_MATCHER, ...LEGACY_MATCHERS]);
+const DESIRED_MATCHERS = [HOOK_MATCHER, READ_MATCHER] as const;
 
 function escapeShellDoubleQuoted(value: string): string {
   return value.replace(/["\\$`]/g, "\\$&");
@@ -107,17 +111,23 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
 }
 
-export function isOmsHookEntry(entry: unknown, marker: string): boolean {
+/**
+ * An entry is oms-owned when it is `{matcher, hooks}` with one command hook whose last
+ * token is an `oms-` bin preceded only by the generated `OMS_VAULT=` and optional
+ * `OMS_AGENT_VAULT=` assignments, under a matcher oms has ever generated.
+ */
+export function isOmsHookEntry(entry: unknown): boolean {
   if (!isRecord(entry)) return false;
   if (!hasExactKeys(entry, ["hooks", "matcher"])) return false;
-  if (entry["matcher"] !== HOOK_MATCHER) return false;
+  if (typeof entry["matcher"] !== "string" || !OWNED_MATCHERS.has(entry["matcher"])) return false;
   const inner = entry["hooks"];
   if (!Array.isArray(inner) || inner.length !== 1) return false;
   return inner.every((h) => {
     if (!isRecord(h) || h["type"] !== "command" || typeof h["command"] !== "string") return false;
     if (!hasExactKeys(h, ["command", "type"])) return false;
     const tokens = tokenizeHookCommand(h["command"]);
-    if (tokens === null || tokens.at(-1) !== marker) return false;
+    const bin = tokens?.at(-1);
+    if (tokens === null || tokens === undefined || bin === undefined || !/^oms-[a-z-]+$/.test(bin)) return false;
     if (tokens.length === 2) return isOwnedAssignment(tokens[0] ?? "", "OMS_VAULT");
     if (tokens.length === 3) {
       return (
@@ -127,6 +137,19 @@ export function isOmsHookEntry(entry: unknown, marker: string): boolean {
     }
     return false;
   });
+}
+
+/** Drops every oms-owned entry from every event; returns how many were removed. */
+function removeOwnedEntries(hooks: Record<string, unknown[]>): number {
+  let removed = 0;
+  for (const [eventName, entries] of Object.entries(hooks)) {
+    const kept = entries.filter((entry) => !isOmsHookEntry(entry));
+    if (kept.length === entries.length) continue;
+    removed += entries.length - kept.length;
+    if (kept.length > 0) hooks[eventName] = kept;
+    else delete hooks[eventName];
+  }
+  return removed;
 }
 
 interface SettingsReadResult {
@@ -322,12 +345,10 @@ export async function upsertClaudeHooks(
 
   if (corrupt || data === null) {
     const preCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, GUARD_MARKER);
-    const postCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, POST_GUARD_MARKER);
     messages.push(
       `WARNING: ${settingsPath} is not a supported JSON object — hook wiring skipped to avoid data loss.`,
       `Manual step: add these entries to ${settingsPath}:`,
-      `  hooks.PreToolUse:  {"matcher":"${HOOK_MATCHER}","hooks":[{"type":"command","command":"${preCmd}"}]}`,
-      `  hooks.PostToolUse: {"matcher":"${HOOK_MATCHER}","hooks":[{"type":"command","command":"${postCmd}"}]}`,
+      ...DESIRED_MATCHERS.map((matcher) => `  hooks.PreToolUse:  {"matcher":"${matcher}","hooks":[{"type":"command","command":"${preCmd}"}]}`),
     );
     return { changed: false, messages };
   }
@@ -339,56 +360,49 @@ export async function upsertClaudeHooks(
     return { changed: false, messages };
   }
   const hooks: Record<string, unknown[]> = isHookMap(rawHooks) ? rawHooks : {};
-  let changed = false;
-
+  const before = JSON.stringify(hooks);
   const preCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, GUARD_MARKER);
-  const postCmd = buildGuardCommandString(options.vault, options.agentVault, homeDir, POST_GUARD_MARKER);
 
-  const reconcile = (entries: readonly unknown[], marker: string, command: string): unknown[] => {
-    const desired = buildOmsHookEntry(HOOK_MATCHER, command);
-    const next: unknown[] = [];
-    let inserted = false;
-    for (const entry of entries) {
-      if (!isOmsHookEntry(entry, marker)) {
-        next.push(entry);
-        continue;
-      }
-      if (!inserted) {
-        next.push(desired);
-        inserted = true;
-      }
+  // Keyed by matcher: one entry per desired matcher, in place; legacy and duplicate entries go.
+  const placed = new Set<string>();
+  const nextPre: unknown[] = [];
+  for (const entry of hooks["PreToolUse"] ?? []) {
+    if (!isOmsHookEntry(entry)) {
+      nextPre.push(entry);
+      continue;
     }
-    if (!inserted) next.push(desired);
-    return next;
-  };
-
-  const preArr = Array.isArray(hooks["PreToolUse"]) ? [...hooks["PreToolUse"]] : [];
-  const nextPre = reconcile(preArr, GUARD_MARKER, preCmd);
-  if (JSON.stringify(nextPre) !== JSON.stringify(preArr)) {
-    hooks["PreToolUse"] = nextPre;
-    changed = true;
+    const matcher = (entry as Record<string, unknown>)["matcher"] as string;
+    if ((DESIRED_MATCHERS as readonly string[]).includes(matcher) && !placed.has(matcher)) {
+      nextPre.push(buildOmsHookEntry(matcher, preCmd));
+      placed.add(matcher);
+    }
   }
-
-  const postArr = Array.isArray(hooks["PostToolUse"]) ? [...hooks["PostToolUse"]] : [];
-  const nextPost = reconcile(postArr, POST_GUARD_MARKER, postCmd);
-  if (JSON.stringify(nextPost) !== JSON.stringify(postArr)) {
-    hooks["PostToolUse"] = nextPost;
-    changed = true;
+  for (const matcher of DESIRED_MATCHERS) {
+    if (!placed.has(matcher)) nextPre.push(buildOmsHookEntry(matcher, preCmd));
   }
+  const others: Record<string, unknown[]> = { ...hooks };
+  delete others["PreToolUse"];
+  removeOwnedEntries(others);
+  const next: Record<string, unknown[]> = {};
+  for (const key of Object.keys(hooks)) {
+    if (key === "PreToolUse") next[key] = nextPre;
+    else if (Object.hasOwn(others, key)) next[key] = others[key]!;
+  }
+  if (!Object.hasOwn(next, "PreToolUse")) next["PreToolUse"] = nextPre;
 
-  if (!changed) {
+  if (JSON.stringify(next) === before) {
     messages.push("Claude Code hook entries already present (idempotent — nothing written).");
     return { changed: false, messages };
   }
 
-  settings["hooks"] = hooks;
+  settings["hooks"] = next;
   try {
     await writeSettingsJson(settingsPath, raw, settings, Boolean(options.dryRun));
   } catch {
     messages.push(`WARNING: Could not write ${settingsPath}; hook wiring skipped. Add the generated entries manually.`);
     return { changed: false, messages };
   }
-  messages.push(`Wired ${GUARD_MARKER}/${POST_GUARD_MARKER} into ${settingsPath}.`);
+  messages.push(`Wired ${GUARD_MARKER} into ${settingsPath}.`);
   return { changed: true, messages };
 }
 
@@ -415,23 +429,8 @@ export async function removeClaudeHooks(
     return { changed: false, messages };
   }
   const hooks = rawHooks;
-  let changed = false;
-
-  for (const [eventName, marker] of [
-    ["PreToolUse", GUARD_MARKER],
-    ["PostToolUse", POST_GUARD_MARKER],
-  ] as const) {
-    const arr = hooks[eventName];
-    if (!Array.isArray(arr)) continue;
-    const filtered = arr.filter((e) => !isOmsHookEntry(e, marker));
-    if (filtered.length < arr.length) {
-      if (filtered.length > 0) hooks[eventName] = filtered;
-      else delete hooks[eventName];
-      changed = true;
-    }
-  }
-
-  if (!changed) {
+  const removed = removeOwnedEntries(hooks);
+  if (removed === 0) {
     return { changed: false, messages };
   }
 
@@ -448,6 +447,6 @@ export async function removeClaudeHooks(
     messages.push(`WARNING: Could not write ${settingsPath}; hook removal skipped. Remove OMS entries manually.`);
     return { changed: false, messages };
   }
-  messages.push(`Removed ${GUARD_MARKER}/${POST_GUARD_MARKER} entries from ${settingsPath}.`);
+  messages.push(`Removed ${removed} oms hook ${removed === 1 ? "entry" : "entries"} from ${settingsPath}.`);
   return { changed: true, messages };
 }

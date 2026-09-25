@@ -3,10 +3,8 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeF
 import path from "node:path";
 import { parseNote } from "../../conventions/frontmatter.js";
 import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
-import { deriveTemplateRetrievalAxes } from "../../templates/axes.js";
-import type { TemplateRetrievalAxes } from "../../templates/axes.js";
-import { classifyNoteTemplateIdentity } from "../../templates/note-index.js";
-import type { Digest } from "../../templates/types.js";
+import type { Digest } from "../../conventions/canonical.js";
+import { classifyNoteTemplateIdentity, deriveTemplateRetrievalAxes, type TemplateRetrievalAxes } from "../retrieval/axes.js";
 import type { SearchTemplateSource } from "../retrieval/template-source.js";
 import type { GraphEdge } from "../types.js";
 import type { AxisScalar, EngineGraphNode, NodeTemplateBinding } from "./node.js";

@@ -1,4 +1,5 @@
-import { FIELD_TYPES, type JsonScalar, type PublicManifest, type SealedLayer, type Violation, type ViolationKind } from "./types.js";
+import { FIELD_TYPES } from "./obsidian.js";
+import type { JsonScalar, Rule, VaultContract } from "./types.js";
 
 /**
  * Last line of defence for OMS-generated text: hidden values are replaced at token
@@ -52,32 +53,37 @@ export function buildRedactor(hidden: readonly JsonScalar[], options: { readonly
   return text => text.replace(pattern, REDACTED);
 }
 
+function ruleValues(rule: Rule, values: JsonScalar[]): void {
+  if (rule.kind === "allowed") values.push(...rule.values);
+  else if (rule.kind === "fixed") values.push(rule.value);
+  else if (rule.kind === "pattern") values.push(rule.regex);
+  else {
+    if (rule.min !== undefined) values.push(rule.min);
+    if (rule.max !== undefined) values.push(rule.max);
+  }
+}
+
 /** Every value a sealed rule holds: allowed and fixed values, range bounds and patterns. */
-export function hiddenValuesOf(layers: readonly SealedLayer[]): JsonScalar[] {
+export function hiddenValuesOf(contract: VaultContract): JsonScalar[] {
   const values: JsonScalar[] = [];
-  for (const layer of layers) {
-    for (const field of layer.fields) {
-      for (const rule of field.rules) {
-        if (rule.kind === "allowed") values.push(...rule.values);
-        else if (rule.kind === "fixed") values.push(rule.value);
-        else if (rule.kind === "pattern") values.push(rule.regex);
-        else {
-          if (rule.min !== undefined) values.push(rule.min);
-          if (rule.max !== undefined) values.push(rule.max);
-        }
-      }
+  for (const property of Object.values(contract.properties ?? {})) {
+    for (const rule of property.rules) ruleValues(rule, values);
+  }
+  for (const template of Object.values(contract.templates)) {
+    for (const rules of Object.values(template.narrowedRules)) {
+      for (const rule of rules) ruleValues(rule, values);
     }
   }
   return values;
 }
 
 /** Words the agent may already see; a hidden value equal to one is not worth hiding. */
-export function publicTokensOf(manifest: PublicManifest | null): string[] {
+export function publicTokensOf(contract: VaultContract | null): string[] {
   const tokens: string[] = [...FIELD_TYPES];
-  if (manifest === null) return tokens;
-  for (const field of manifest.common?.fields ?? []) tokens.push(field.name);
-  for (const template of manifest.templates) {
-    tokens.push(template.id, template.name, ...template.fields.map(field => field.name), ...template.requiredHeadings);
+  if (contract === null) return tokens;
+  tokens.push(...Object.keys(contract.folders ?? {}), ...Object.keys(contract.properties ?? {}));
+  for (const [name, template] of Object.entries(contract.templates)) {
+    tokens.push(name, ...template.requiredProperties, ...template.requiredHeadings);
   }
   return tokens;
 }
@@ -93,29 +99,4 @@ export function redactResponse<T>(value: T, redactor: Redactor): T {
     return node;
   };
   return walk(value) as T;
-}
-
-const WORDING: Readonly<Record<ViolationKind, (field: string) => string>> = {
-  "yaml-syntax": () => "Frontmatter is not valid YAML.",
-  "path-unsafe": () => "The note path is not a safe vault-relative Markdown path.",
-  "path-required": () => "This template has no apply folder; give a full note path.",
-  "outside-vault": () => "The note path resolves outside the vault.",
-  "outside-apply-folder": () => "The note path is outside the template's apply folder.",
-  "required": field => `Field '${field}' is required.`,
-  "type": field => `Field '${field}' has the wrong type.`,
-  "not-allowed": field => `Field '${field}' is not one of the defined values.`,
-  "not-fixed": field => `Field '${field}' does not have its defined value.`,
-  "pattern": field => `Field '${field}' does not match its defined format.`,
-  "range": field => `Field '${field}' is outside its defined range.`,
-  "unsubstituted-variable": field => field === "" ? "The body still contains a template variable." : `Field '${field}' still contains a template variable.`,
-  "heading-missing": field => `Required heading '${field}' is missing.`,
-  "contract-unreadable": () => "The vault contract cannot be read; run the contract doctor.",
-  "template-unknown": () => "No template with that name or id exists.",
-  "template-ambiguous": () => "More than one template has that name; use its id.",
-  "exists": () => "A note already exists at that path.",
-};
-
-/** Fixed wording built from the field name and the kind only. */
-export function rejectionMessage(violation: Violation): string {
-  return WORDING[violation.kind](violation.field ?? "");
 }

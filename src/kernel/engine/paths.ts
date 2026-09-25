@@ -1,7 +1,7 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { digestBytes } from "../templates/canonical.js";
+import { digestBytes } from "../conventions/canonical.js";
 
 export const ENGINE_STORE_FILENAME = "engine-store.sqlite";
 

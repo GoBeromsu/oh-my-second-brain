@@ -67,9 +67,9 @@ describe("link suggestion", () => {
     expect(scoped.candidates.map(candidate => candidate.targetPath)).toEqual(["notes/Alpha.md"]);
   });
 
-  it("excludes approved template sources from the linkable universe", async () => {
+  it("excludes the settings template folder from the linkable universe", async () => {
     const root = await vault({
-      ".oms/template-policy.json": JSON.stringify({ version: 4, templates: { note: { source: { path: "Sources/note.md" } } } }),
+      ".oms/settings.json": JSON.stringify({ version: 1, vaultId: "11111111-1111-4111-8111-111111111111", templateFolder: "Sources" }),
       "Sources/note.md": "<%* raw template %>\n",
       "notes/source.md": "Mentions note.\n",
     });
@@ -83,7 +83,7 @@ describe("link suggestion", () => {
     const root = await vault({ "notes/real.md": "note\n" });
     await symlink(join(outside, "secret.md"), join(root, "notes", "linked.md"));
     await expect(suggestLinksForNote(target(root, "../secret.md"))).rejects.toThrow();
-    await expect(suggestLinksForNote(target(root, ".oms/templates/default.md"))).rejects.toThrow();
+    await expect(suggestLinksForNote(target(root, ".oms/default.md"))).rejects.toThrow();
     expect(await readFile(join(outside, "secret.md"), "utf8")).toBe("secret\n");
   });
 });

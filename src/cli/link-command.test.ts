@@ -1,4 +1,5 @@
 import { lstat, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -137,15 +138,15 @@ describe("bridge failure formatting", () => {
     expect(await readFile(path.join(vault, ".oms", "settings.json"), "utf8")).toContain("\"vaultId\"");
   });
 
-  it("prints the actual vault publication block from a historical marker", async () => {
+  it("refuses malformed vault settings before publication or registration", async () => {
     const home = await root("oms-bridge-vault-blocked-");
     const repo = path.join(home, "repo");
     const vault = path.join(home, "vault");
-    const marker = "{\"status\":\"complete\"}\n";
+    const malformed = "{not json\n";
     await mkdir(path.join(vault, ".oms"), { recursive: true });
     await mkdir(path.join(vault, "notes"));
     await mkdir(repo);
-    await writeFile(path.join(vault, ".oms", "template-transaction.json"), marker, "utf8");
+    await writeFile(path.join(vault, ".oms", "settings.json"), malformed, "utf8");
     process.env.XDG_CONFIG_HOME = path.join(home, ".config");
     process.env.OMS_RUNTIME_ROOT = path.join(home, ".oms", "runtime", "v1");
     process.chdir(repo);
@@ -153,12 +154,11 @@ describe("bridge failure formatting", () => {
     const added = await capture(() => runBridgeCommand(["add", "--vault", vault, "--folder", "notes", "--no-convention-note"]));
 
     expect(added.code).toBe(1);
-    expect(added.err).toContain("Vault publication: blocked");
-    expect(added.err).toContain("Vault publication: publication-blocked: ");
-    expect(added.err).toContain("Historical publication marker blocks ordinary publication");
-    expect(added.err).toContain("Global registration: unattempted");
-    expect(added.err).toContain("Project reference: unattempted");
-    expect(await readFile(path.join(vault, ".oms", "template-transaction.json"), "utf8")).toBe(marker);
+    expect(added.err).toContain("VAULT_SETTINGS_INVALID");
+    expect(existsSync(path.join(home, ".config", "oms", "vault.json"))).toBe(false);
+    expect((await readProjectConnection(await realpath(repo))).reference).toBeUndefined();
+    expect(existsSync(path.join(repo, ".oms", "links.yaml"))).toBe(false);
+    expect(await readFile(path.join(vault, ".oms", "settings.json"), "utf8")).toBe(malformed);
   });
 
 });

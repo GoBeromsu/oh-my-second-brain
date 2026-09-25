@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
 import { demotedOperationNames } from "./server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,8 +14,9 @@ const repoRoot = path.resolve(__dirname, "../../");
 const fixtureVault = path.join(repoRoot, "test", "fixtures", "vault");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
-async function createTemplateAuthority(vault: string): Promise<void> {
+async function createTemplateAuthority(vault: string, home: string): Promise<void> {
   await writeContractVault(vault, {
+    contractStoreRoot: path.join(home, ".oms", "vaults"),
     properties: {
       title: { type: "text", intent: "Note title." },
       status: { type: "select", intent: "Workflow state.", allowedValues: ["open", "closed"] },
@@ -69,9 +70,10 @@ describe("MCP detail-tool demotion", () => {
   it("keeps every demoted implementation reachable behind the five-tool surface", async () => {
     const client = new Client({ name: "demotion-test", version: "0" });
     const vault = await mkdtemp(path.join(tmpdir(), "oms-demotion-"));
+    const home = await mkdtemp(path.join(tmpdir(), "oms-demotion-home-"));
     await cp(fixtureVault, vault, { recursive: true });
-    await createTemplateAuthority(vault);
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [distCli, "serve", "mcp", "--vault", vault], cwd: repoRoot, stderr: "pipe" }));
+    await createTemplateAuthority(vault, home);
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [distCli, "serve", "mcp", "--vault", vault], cwd: repoRoot, env: { HOME: home, PATH: process.env.PATH ?? "" }, stderr: "pipe" }));
     try {
       const names = (await client.listTools()).tools.map((tool) => tool.name);
       const tools = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]));
@@ -83,23 +85,10 @@ describe("MCP detail-tool demotion", () => {
       };
       expect(names).toEqual(["write", "search", "link", "status", "doctor"]);
       expect(names).not.toEqual(expect.arrayContaining(demotedOperationNames));
-      expect(payload(await call("status", {})).derivedState).toBeDefined();
+      expect(payload(await call("status", {})).contract).toMatchObject({ contract: "sealed" });
       expect(payload(await call("doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
-      expect(payload(await call("doctor", { op: "validate" })).status).toBeTypeOf("string");
+      expect(payload(await call("doctor", { op: "validate" })).contract).toBe("sealed");
       expect(payload(await call("doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
-      const scan = payload(await call("search", { op: "template-scan" }));
-      expect(scan).toMatchObject({
-        revision: expect.any(Number),
-        registrations: [expect.objectContaining({
-          templateId: "note",
-          status: "active",
-          path: "Templates/OMS/note.md",
-          state: "unchanged",
-        })],
-      });
-      // Review evidence carries digests, never raw bytes or approved Markdown.
-      expect(JSON.stringify(scan)).not.toContain('"bytes"');
-      expect(JSON.stringify(scan)).not.toContain("approvedMarkdown\":\"");
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
       // The derived projection repair is retired: the explicit contract is the
       // authority, so it is neither advertised nor reachable, with no alias.
@@ -139,6 +128,6 @@ describe("MCP detail-tool demotion", () => {
         op: "sync-embeddings", mode: "repair", repairMode: "rebuild", dryRun: true,
       }))).toMatchObject({ mode: "rebuild", dryRun: true, resolvedVault: vault });
       await expect(client.listResourceTemplates()).rejects.toThrow(/Method not found/);
-    } finally { await client.close(); await rm(vault, { recursive: true, force: true }); }
+    } finally { await client.close(); await rm(vault, { recursive: true, force: true }); await rm(home, { recursive: true, force: true }); }
   }, 120_000);
 });

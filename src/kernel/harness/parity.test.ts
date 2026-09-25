@@ -44,11 +44,10 @@ describe("harness registry parity", () => {
     expect(harnessSurfaceRegistry.cliCommands.map((command) => command.name)).toContain("status");
   });
 
-  it("keeps fifteen CLI families distinct from eight shared skills and five MCP tools", () => {
+  it("keeps fourteen CLI families distinct from six shared skills and five MCP tools", () => {
     const commands = harnessSurfaceRegistry.cliCommands.map((command) => command.name);
     expect(commands).toEqual([
       "setup",
-      "template",
       "contract",
       "note",
       "link",
@@ -67,11 +66,9 @@ describe("harness registry parity", () => {
     expect(skills).toEqual([
       "distill",
       "doctor",
-      "interview",
       "link",
       "search",
       "status",
-      "template",
       "write",
     ]);
     expect([...commands].sort()).not.toEqual(skills);
@@ -129,7 +126,8 @@ describe("harness registry parity", () => {
     // once the deletion lands.
     const declared = new Set(harnessSurfaceRegistry.hosts.map((host) => [...host.skillDirs].sort().join(",")));
     expect(declared.size, "hosts declare divergent skill sets").toBe(1);
-    await expect(fileExists("assets/skills/interview/SKILL.md"), "authored interview skill").resolves.toBe(true);
+    await expect(fileExists("assets/skills/interview/SKILL.md"), "retired interview skill").resolves.toBe(false);
+    await expect(fileExists("assets/skills/template/SKILL.md"), "retired template skill").resolves.toBe(false);
   });
 
   it("declares fail-open or no write hook and no reviewer mechanism", async () => {
@@ -188,9 +186,12 @@ describe("harness registry parity", () => {
       ).toBe(true);
     }
     expect(harnessSurfaceRegistry.packageAssets.releaseRequiredPaths).toEqual(expect.arrayContaining([
-      "assets/skills/interview/SKILL.md",
-      "skills/interview/SKILL.md",
+      "assets/skills/write/SKILL.md",
+      "skills/write/SKILL.md",
     ]));
+    for (const retired of ["assets/skills/interview/SKILL.md", "skills/interview/SKILL.md", "assets/skills/template/SKILL.md", "skills/template/SKILL.md"]) {
+      expect(harnessSurfaceRegistry.packageAssets.releaseRequiredPaths).not.toContain(retired);
+    }
     expect(harnessSurfaceRegistry.packageAssets.releaseRequiredPaths).not.toEqual(expect.arrayContaining([
       "agents/oms-reviewer.md",
       "assets/codex/agents/oms-reviewer.toml",

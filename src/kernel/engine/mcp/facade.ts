@@ -21,9 +21,11 @@
  */
 
 import path from "node:path";
-import { readFileSync, statSync } from "node:fs";
-import { deriveTemplateRetrievalAxes } from "../../templates/axes.js";
-import type { TemplateRetrievalSource } from "../../templates/axes.js";
+import { readFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
+import { storeRoot } from "../../contract/store.js";
+import { resolveSealState } from "../../contract/vault-id.js";
+import { deriveTemplateRetrievalAxes, type TemplateRetrievalSource } from "../retrieval/axes.js";
 import { readSearchTemplateSource, type SearchTemplateSource } from "../retrieval/template-source.js";
 import { walkVaultMarkdown } from "../../conventions/vault-walk.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
@@ -31,9 +33,9 @@ import { retrieve } from "../retrieval/index.js";
 import type { Reranker } from "../retrieval/reranker.js";
 import { validateExpandedPlan } from "../retrieval/generator.js";
 import {
-  loadTaxonomyIntentProjection,
-  type TaxonomyIntentProjection,
-} from "../retrieval/taxonomy-context.js";
+  loadFolderIntentProjection,
+  type FolderIntentProjection,
+} from "../retrieval/folder-context.js";
 import {
   acquireEngineStoreWriterLock,
   syncEngineStore,
@@ -114,6 +116,17 @@ interface ParsedDocTarget {
   readonly lineCount?: number;
   readonly isDocid: boolean;
   readonly isGlob: boolean;
+}
+
+/** When the current sealed generation was written; empty when it cannot be observed. */
+async function sealedAt(vault: string): Promise<string> {
+  try {
+    const { vaultId } = await resolveSealState(vault);
+    if (vaultId === null || vaultId === undefined) return "";
+    return (await stat(path.join(storeRoot(), vaultId, "folders.json"))).mtime.toISOString();
+  } catch {
+    return "";
+  }
 }
 
 function positiveInt(value: string | undefined): number | undefined {
@@ -630,18 +643,18 @@ export class McpEngineAdapter {
         ? "explicit"
         : "plain";
     let generatedSearches: readonly McpSemanticTypedSearch[] = [];
-    let taxonomyProjection: TaxonomyIntentProjection | undefined;
-    const ensureTaxonomyProjection = async (): Promise<TaxonomyIntentProjection> => {
-      if (taxonomyProjection !== undefined) return taxonomyProjection;
+    let folderProjection: FolderIntentProjection | undefined;
+    const ensureFolderProjection = async (): Promise<FolderIntentProjection> => {
+      if (folderProjection !== undefined) return folderProjection;
       const indexedPaths = typeof (this.deps.store as Partial<EngineStore>).listDocPaths === "function"
         ? (this.deps.store as EngineStore).listDocPaths()
         : [];
-      taxonomyProjection = await loadTaxonomyIntentProjection(
+      folderProjection = await loadFolderIntentProjection(
         opts.vault ?? this.vaultPath,
         indexedPaths,
         opts.collectionPath,
       );
-      return taxonomyProjection;
+      return folderProjection;
     };
     const vecAvailable = typeof (this.deps.store as Partial<EngineStore>).capabilities === "function"
       ? (this.deps.store as EngineStore).capabilities().vecAvailable
@@ -659,7 +672,7 @@ export class McpEngineAdapter {
         });
       }
       try {
-        const context = await ensureTaxonomyProjection();
+        const context = await ensureFolderProjection();
         generatedSearches = validateExpandedPlan(
           await this.deps.queryExpander({
             query: opts.query!,
@@ -677,8 +690,8 @@ export class McpEngineAdapter {
         return queryResultUnavailable(err instanceof Error ? err.message : String(err), {
           requestedStrategy: "expand",
           generatedSearches,
-          taxonomyIntents: taxonomyProjection?.matched ?? [],
-          warnings: taxonomyProjection?.warnings ?? [],
+          folderIntents: folderProjection?.matched ?? [],
+          warnings: folderProjection?.warnings ?? [],
         });
       }
     }
@@ -747,8 +760,8 @@ export class McpEngineAdapter {
           {
             requestedStrategy,
             generatedSearches,
-            taxonomyIntents: taxonomyProjection?.matched ?? [],
-            warnings: taxonomyProjection?.warnings ?? [],
+            folderIntents: folderProjection?.matched ?? [],
+            warnings: folderProjection?.warnings ?? [],
           },
         );
       }
@@ -757,9 +770,9 @@ export class McpEngineAdapter {
       if (shouldRerank && naturalQuery === "") {
         return queryResultUnavailable("reranking requires a non-empty natural-language query.");
       }
-      if (shouldRerank) await ensureTaxonomyProjection();
-      const modelQuery = shouldRerank && taxonomyProjection?.promptContext !== undefined
-        ? `${naturalQuery}\n\nVault folder intents:\n${taxonomyProjection.promptContext}`
+      if (shouldRerank) await ensureFolderProjection();
+      const modelQuery = shouldRerank && folderProjection?.promptContext !== undefined
+        ? `${naturalQuery}\n\nVault folder intents:\n${folderProjection.promptContext}`
         : naturalQuery || undefined;
       const results = await retrieve({
         subQueries: [...effectiveSubQueries],
@@ -803,8 +816,8 @@ export class McpEngineAdapter {
         requestedStrategy,
         generatedSearches,
         rerankApplied: shouldRerank,
-        taxonomyIntents: taxonomyProjection?.matched ?? [],
-        warnings: [...(taxonomyProjection?.warnings ?? []), ...facetWarnings],
+        folderIntents: folderProjection?.matched ?? [],
+        warnings: [...(folderProjection?.warnings ?? []), ...facetWarnings],
       });
       // Fill title + doc-head snippet from disk so engine hits reach practical
       // parity with the src/search preview (the pure mapper stays text-free).
@@ -816,9 +829,9 @@ export class McpEngineAdapter {
         // A failed response cannot claim the reranker was successfully applied,
         // but preserve its request in warnings for an auditable error receipt.
         rerankApplied: false,
-        taxonomyIntents: taxonomyProjection?.matched ?? [],
+        folderIntents: folderProjection?.matched ?? [],
         warnings: [
-          ...(taxonomyProjection?.warnings ?? []),
+          ...(folderProjection?.warnings ?? []),
           ...facetWarnings,
           ...(rerankRequested ? ["Reranking was requested but the query did not complete."] : []),
         ],
@@ -930,22 +943,22 @@ export class McpEngineAdapter {
       const indexedPaths = typeof (this.deps.store as Partial<EngineStore>).listDocPaths === "function"
         ? (this.deps.store as EngineStore).listDocPaths()
         : [];
-      const taxonomyContext = await loadTaxonomyIntentProjection(
+      const folderContext = await loadFolderIntentProjection(
         _opts.vault ?? this.vaultPath,
         indexedPaths,
       );
-      const taxonomyStatus = {
-        matched: taxonomyContext.matched,
-        indexedWithoutIntent: taxonomyContext.indexedWithoutIntent,
-        taxonomyWithoutIndexed: taxonomyContext.taxonomyWithoutIndexed,
-        warnings: taxonomyContext.warnings,
+      const folderStatus = {
+        matched: folderContext.matched,
+        indexedWithoutIntent: folderContext.indexedWithoutIntent,
+        foldersWithoutIndexed: folderContext.foldersWithoutIndexed,
+        warnings: folderContext.warnings,
       };
       if (this.config?.modelCapabilityStatus === undefined) {
         return {
           ...status,
           models: model === undefined ? {} : { ...status.models, embedding: model },
           ...(identity === null ? {} : { storeEmbeddingFingerprint: identity.fingerprint }),
-          taxonomyContext: taxonomyStatus,
+          folderContext: folderStatus,
         };
       }
 
@@ -965,7 +978,7 @@ export class McpEngineAdapter {
         models: model === undefined ? {} : { ...status.models, embedding: model },
         capabilities,
         ...(identity === null ? {} : { storeEmbeddingFingerprint: identity.fingerprint }),
-        taxonomyContext: taxonomyStatus,
+        folderContext: folderStatus,
       };
     } catch {
       return statusResultUnavailable("Semantic status is unavailable.");
@@ -994,17 +1007,14 @@ export class McpEngineAdapter {
   // 5. oms_semantic_contexts
   // -------------------------------------------------------------------------
 
-  /** List active taxonomy contexts without creating a parallel context store. */
+  /** List sealed folder meanings without creating a parallel context store. */
   async listContexts(opts: McpStatusOptions): Promise<McpSemanticContextResult> {
     try {
       const store = this.deps.store as Partial<EngineStore>;
       const indexedPaths = typeof store.listDocPaths === "function" ? store.listDocPaths() : [];
       const vault = opts.vault ?? this.vaultPath;
-      const projection = await loadTaxonomyIntentProjection(vault, indexedPaths);
-      const taxonomyPath = path.join(vault, ".oms", "taxonomy.json");
-      const updatedAt = projection.matched.length === 0
-        ? ""
-        : statSync(taxonomyPath).mtime.toISOString();
+      const projection = await loadFolderIntentProjection(vault, indexedPaths);
+      const updatedAt = projection.matched.length === 0 ? "" : await sealedAt(vault);
       return {
         available: true,
         contexts: projection.matched.map(({ folder, intent, source }) => ({
@@ -1187,7 +1197,7 @@ export class McpEngineAdapter {
           requestedStrategy: "plain",
           generatedSearches: [],
           rerankApplied: false,
-          taxonomyIntents: [],
+          folderIntents: [],
           warnings: [],
         },
       };

@@ -1,25 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import { admitWriteTarget, type WriteTarget } from "../capture/safe.js";
-import { digestBytes, hashCanonical, parseDigest } from "../templates/canonical.js";
-import type { Digest } from "../templates/types.js";
-import {
-  commitVaultPublication,
-  planVaultPublication,
-  legacyMigrationLocator,
-  recoverPreparedLegacyMigration,
-  recoverSealedSettingsPublication,
-  type LegacyMigrationLocator,
-  type PreparedLegacyMigration,
-  type PublicationOptions,
-  type VaultPublicationPlan,
-  type VaultPublicationReceipt,
-
-  type VaultPublicationRequest,
-} from "../templates/vault-publication.js";
-import { readVaultSettings, serializeVaultSettings, type VaultSettings } from "../templates/vault-settings.js";
+import { digestBytes, hashCanonical, parseDigest, type Digest } from "../conventions/canonical.js";
+import { verifyControlPath } from "../vault/paths.js";
+import { parseVaultSettings, readVaultSettings, serializeVaultSettings, SETTINGS_PATH, type VaultSettings } from "../vault/settings.js";
+import { publishVaultSettings } from "./vault-settings-publish.js";
 import {
   connectionRegistryPath,
   type ConnectionRegistryOptions,
@@ -44,6 +31,39 @@ import {
   readProjectConnection,
   updateProjectConnection,
 } from "./project-connection.js";
+
+/** The single vault publication the coordinator performs: `.oms/settings.json` only. */
+export type VaultPublicationKind = "settings-update";
+export type VaultPublicationFault = "after-plan";
+interface Blob { readonly digest: Digest; readonly base64: string; }
+export interface VaultPublicationPlan {
+  readonly version: 1;
+  readonly transactionId: string;
+  readonly kind: VaultPublicationKind;
+  readonly vaultId: string;
+  readonly targetDigest: Digest;
+  readonly markerBefore: Blob | null;
+  readonly outputs: readonly { readonly path: string; readonly before: Blob | null; readonly after: Blob }[];
+  readonly sources: readonly { readonly path: string; readonly digest: Digest }[];
+  readonly evidence: readonly { readonly name: string; readonly content: Blob }[];
+  readonly planDigest: Digest;
+}
+export interface VaultPublicationRequest {
+  readonly transactionId?: string;
+  readonly kind: VaultPublicationKind;
+  readonly vaultId: string;
+  readonly outputs: readonly { readonly path: string; readonly expectedDigest: Digest | null; readonly content: string }[];
+  readonly sources?: readonly { readonly path: string; readonly digest: Digest }[];
+  readonly evidence?: readonly { readonly name: string; readonly bytes: Uint8Array }[];
+}
+export interface VaultPublicationReceipt {
+  readonly version: 1;
+  readonly transactionId: string;
+  readonly kind: VaultPublicationKind;
+  readonly planDigest: Digest;
+  readonly status: "complete" | "rolled-back";
+  readonly verified: readonly { readonly path: string; readonly digest: Digest | null }[];
+}
 
 const firedFaults = new Set<string>();
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -115,13 +135,6 @@ export interface PreparedConnection {
   readonly digest: Digest;
 }
 
-export interface PrepareMigratedConnectionInput {
-  readonly operationId: string;
-  readonly target: WriteTarget;
-  readonly publication: PreparedLegacyMigration;
-  readonly select: false;
-}
-
 export interface ConnectionCommitResult {
   readonly operationId: string;
   readonly planDigest: Digest;
@@ -188,7 +201,7 @@ interface ApprovedIntent {
   readonly select: boolean;
   readonly scope: readonly string[] | null;
   readonly blockers: readonly { readonly code: ConnectionDiagnosticCode; readonly stage: ConnectionStageName }[];
-  /** Exact generic material(prepared). Migration omits it; its digest covers its own metadata. */
+  /** Exact generic material(prepared). */
   readonly approvalBinding?: ApprovalBinding;
 }
 
@@ -196,7 +209,7 @@ export interface ConnectionCoordinatorOptions extends ConnectionRegistryOptions 
   /** Test seam only. It never fabricates a receipt or skips a stage. */
   readonly coordinatorFault?: ConnectionCoordinatorFault;
   /** Native publication fault injection without bypassing its durable checks. */
-  readonly publicationFault?: PublicationOptions["fault"];
+  readonly publicationFault?: (point: VaultPublicationFault) => void | Promise<void>;
 }
 
 export class ConnectionCoordinatorError extends Error {
@@ -342,6 +355,75 @@ async function readActualSettings(vault: string): Promise<{ readonly settings: V
   }
 }
 
+async function readSettingsBytes(vault: string): Promise<Buffer | null> {
+  const verified = await verifyControlPath(vault, SETTINGS_PATH, { expected: "either" });
+  if (verified.targetRealPath === null) return null;
+  return readFile(verified.absolutePath);
+}
+
+function blob(bytes: Uint8Array) {
+  return { digest: digestBytes(bytes), base64: Buffer.from(bytes).toString("base64") };
+}
+
+/**
+ * Plans the generic connection publication: exactly `.oms/settings.json` and nothing else.
+ * Evidence is bound into the approval digest only; it is never stored in the vault.
+ */
+async function planSettingsPublication(vault: string, request: VaultPublicationRequest): Promise<VaultPublicationPlan> {
+  if (request.kind !== "settings-update" || request.transactionId === undefined) throw new ConnectionCoordinatorError("publication-blocked", "Connection publication accepts only a settings-update with a transactionId.");
+  const [output, ...rest] = request.outputs;
+  if (output === undefined || rest.length !== 0 || output.path !== SETTINGS_PATH || (request.sources ?? []).length !== 0) {
+    throw new ConnectionCoordinatorError("publication-blocked", "Connection publication writes only .oms/settings.json.");
+  }
+  const settings = parseVaultSettings(output.content);
+  const expected = serializeVaultSettings({ version: 1, vaultId: request.vaultId });
+  if (settings.vaultId !== request.vaultId || output.content !== expected) throw new ConnectionCoordinatorError("publication-blocked", "Connection settings must carry only the requested portable identity.");
+  const before = await readSettingsBytes(vault);
+  const after = Buffer.from(expected, "utf8");
+  if (before !== null && !before.equals(after)) throw new ConnectionCoordinatorError("publication-blocked", "Existing settings differ from the proposed connection settings.");
+  if (output.expectedDigest !== null && (before === null || digestBytes(before) !== output.expectedDigest)) throw new ConnectionCoordinatorError("publication-blocked", "Existing settings do not match the expected digest.");
+  const evidence = (request.evidence ?? []).map(item => ({ name: item.name, content: blob(item.bytes) }));
+  const targetDigest = digestBytes(vault);
+  const planDigest = hashCanonical("oms.connection-coordinator.settings.v1", {
+    transactionId: request.transactionId,
+    kind: request.kind,
+    vaultId: request.vaultId,
+    targetDigest,
+    after: digestBytes(after),
+    evidence: evidence.map(item => ({ name: item.name, digest: item.content.digest })),
+  });
+  return {
+    version: 1,
+    transactionId: request.transactionId,
+    kind: "settings-update",
+    vaultId: request.vaultId,
+    targetDigest,
+    markerBefore: null,
+    outputs: [{ path: SETTINGS_PATH, before: before === null ? null : blob(before), after: blob(after) }],
+    sources: [],
+    evidence,
+    planDigest,
+  };
+}
+
+/** Publishes approved settings through the vault settings publisher; identical existing bytes complete idempotently. */
+async function commitSettingsPublication(vault: string, plan: VaultPublicationPlan, options: ConnectionCoordinatorOptions): Promise<VaultPublicationReceipt> {
+  const output = plan.outputs[0];
+  if (output === undefined || output.path !== SETTINGS_PATH || plan.outputs.length !== 1) throw new ConnectionCoordinatorError("publication-blocked", "Connection publication writes only .oms/settings.json.");
+  const after = Buffer.from(output.after.base64, "base64");
+  if (digestBytes(after) !== output.after.digest) throw new ConnectionCoordinatorError("publication-blocked", "Settings plan bytes do not match their digest.");
+  const current = await readSettingsBytes(vault);
+  if (current === null) {
+    await options.publicationFault?.("after-plan");
+    await publishVaultSettings(vault, parseVaultSettings(after.toString("utf8")));
+  } else if (!current.equals(after)) {
+    throw new ConnectionCoordinatorError("publication-blocked", "Settings changed since the approved preparation; they were preserved.");
+  }
+  const verified = await readSettingsBytes(vault);
+  if (verified === null || !verified.equals(after)) throw new ConnectionCoordinatorError("publication-blocked", "Settings did not read back as approved.");
+  return { version: 1, transactionId: plan.transactionId, kind: "settings-update", planDigest: plan.planDigest, status: "complete", verified: [{ path: SETTINGS_PATH, digest: digestBytes(verified) }] };
+}
+
 function settingsIdentity(plan: VaultPublicationPlan | null): string | null {
   const output = plan?.outputs.find(item => item.path === ".oms/settings.json");
   if (output === undefined) return null;
@@ -382,7 +464,7 @@ export async function prepareConnection(
   let plan: VaultPublicationPlan | null = null;
   if (input.publication !== null) {
     try {
-      plan = await planVaultPublication({ vault: canonical, source: input.target.source }, input.publication);
+      plan = await planSettingsPublication(canonical, input.publication);
     } catch (error) {
       blockers.push({ ...classify(error, "vault"), stage: "vault" });
     }
@@ -479,7 +561,7 @@ function approvedFrom(prepared: PreparedConnection): ApprovedIntent {
     select: prepared.input.select,
     scope: prepared.input.project?.scope ?? null,
     blockers: prepared.blockers.map(item => ({ code: item.code, stage: item.stage ?? "vault" })),
-    ...(prepared.input.publication?.kind === "schema-migration" ? {} : { approvalBinding: material(prepared) }),
+    approvalBinding: material(prepared),
   };
 }
 
@@ -637,7 +719,7 @@ export async function commitConnection(
     if (!intent.publicationRequested) return null;
     const plan = prepared.publicationPlan;
     if (plan === null || plan.planDigest !== intent.publicationPlanDigest || plan.transactionId !== intent.publicationTransactionId) throw new ConnectionCoordinatorError("publication-blocked", "The original approved publication plan is required.");
-    return commitVaultPublication({ vault: intent.canonicalTarget, source: prepared.input.target.source }, plan, plan.planDigest, { fault: options.publicationFault });
+    return commitSettingsPublication(intent.canonicalTarget, plan, options);
   }, prepared.blockers, async () => {
     if (existing !== null) return;
     await writeIntent(intentFile, intent);
@@ -649,129 +731,13 @@ export async function commitConnection(
 export function settingsPublicationRequest(transactionId: string, vaultId: string = randomUUID()): VaultPublicationRequest {
   assertUuid(transactionId, "transactionId");
   assertUuid(vaultId, "vaultId");
-  const content = serializeVaultSettings({ version: 1, vaultId, templateRoots: [] });
+  const content = serializeVaultSettings({ version: 1, vaultId });
   return {
     transactionId,
     kind: "settings-update",
     vaultId,
     outputs: [{ path: ".oms/settings.json", expectedDigest: null, content }],
   };
-}
-
-export interface PreparedMigratedConnection extends PreparedConnection {
-  readonly migration: LegacyMigrationLocator;
-}
-export interface ResumeMigratedConnectionInput {
-  readonly operationId: string;
-  readonly target: WriteTarget;
-  readonly publication?: PreparedLegacyMigration;
-  readonly expectedMigration?: LegacyMigrationLocator;
-}
-function migrationIntentDigest(intent: ApprovedIntent): Digest {
-  const { planDigest: _planDigest, ...metadata } = intent;
-  return hashCanonical("oms.connection-coordinator.migration.v1", {
-    ...metadata,
-    filesystemBindingDigest: digestBytes(JSON.stringify({
-      vault: intent.canonicalTarget,
-      registry: intent.registryPath,
-      runtime: intent.runtimeRoot,
-    })),
-  });
-}
-function migrationDigest(prepared: PreparedConnection, locator: LegacyMigrationLocator): Digest {
-  return migrationIntentDigest(migrationApproved({ ...prepared, migration: locator }));
-}
-function sameMigration(left: LegacyMigrationLocator, right: LegacyMigrationLocator): boolean {
-  return left.kind === right.kind && left.transactionId === right.transactionId && left.vaultId === right.vaultId && left.targetDigest === right.targetDigest && left.planDigest === right.planDigest;
-}
-function intentLocator(intent: ApprovedIntent): LegacyMigrationLocator | null {
-  if (intent.publicationKind !== "schema-migration" || intent.publicationTransactionId === null || intent.publicationPlanDigest === null || intent.portableVaultId === null) return null;
-  return { kind: "schema-migration", transactionId: intent.publicationTransactionId, vaultId: intent.portableVaultId, targetDigest: digestBytes(intent.canonicalTarget), planDigest: intent.publicationPlanDigest };
-}
-function migrationApproved(prepared: PreparedMigratedConnection): ApprovedIntent {
-  const { approvalBinding: _binding, ...metadata } = approvedFrom(prepared);
-  return { ...metadata, publicationRequested: true, publicationKind: "schema-migration", publicationTransactionId: prepared.migration.transactionId, publicationPlanDigest: prepared.migration.planDigest, portableVaultId: prepared.migration.vaultId, select: false };
-}
-/** Dedicated migration preparation. It seals no body and does not use the generic publication request. */
-export async function prepareMigratedConnection(input: PrepareMigratedConnectionInput, options: ConnectionCoordinatorOptions = {}): Promise<PreparedMigratedConnection> {
-  if ("project" in input) invalid("Automatic migration has no project stage.");
-  if (input.select !== false) invalid("Automatic migration never changes global selection.");
-  const locator = legacyMigrationLocator(input.publication);
-  const prepared = await prepareConnection({ operationId: input.operationId, target: input.target, publication: null, select: false }, options);
-  if (prepared.input.project !== undefined || prepared.projectPath !== null) invalid("Automatic migration has no project stage.");
-  if (digestBytes(prepared.canonicalTarget) !== locator.targetDigest || (prepared.portableVaultId !== null && prepared.portableVaultId !== locator.vaultId)) {
-    throw new ConnectionCoordinatorError("identity-conflict", "Prepared migration target does not match the opaque capability.");
-  }
-  const blockers = prepared.blockers.filter(item => item.code !== "identity-missing");
-  const migration = { ...prepared, portableVaultId: locator.vaultId, blockers };
-  return { ...migration, digest: migrationDigest(migration, locator), migration: locator };
-}
-
-async function publishMigration(prepared: PreparedMigratedConnection, publication: PreparedLegacyMigration | undefined, options: ConnectionCoordinatorOptions): Promise<ConnectionCommitResult | { readonly state: "preparation-required"; readonly operationId: string; readonly migration: LegacyMigrationLocator }> {
-  const bound = boundOptions(prepared, options);
-  if (prepared.input.project !== undefined || prepared.projectPath !== null || prepared.input.select !== false) invalid("Automatic migration has no project stage.");
-  if (migrationDigest(prepared, prepared.migration) !== prepared.digest) throw new ConnectionCoordinatorError("approval-mismatch", "Approval must bind this exact prepared migration.");
-  if (await canonicalTarget(prepared.input.target) !== prepared.canonicalTarget) {
-    throw new ConnectionCoordinatorError("unsafe-target", "Migration target differs from the prepared canonical vault.");
-  }
-  const intent = migrationApproved(prepared);
-  return runMigrationIntent(intent, prepared.input.target.source, publication, bound, prepared.blockers);
-}
-
-async function sealedMigrationIntent(input: ResumeMigratedConnectionInput, options: ConnectionCoordinatorOptions): Promise<ApprovedIntent | null> {
-  assertUuid(input.operationId, "operationId");
-  const runtimeRoot = connectionRuntimeRoot(options);
-  const registryPath = options.registryPath ?? connectionRegistryPath(options.env, options.homeDir);
-  const intent = await readJson<ApprovedIntent>(intentPath(runtimeRoot, input.operationId), input.operationId);
-  if (intent === null) return null;
-  const locator = intentLocator(intent);
-  if (migrationIntentDigest(intent) !== intent.planDigest || locator === null || path.resolve(intent.runtimeRoot) !== path.resolve(runtimeRoot) || path.resolve(intent.registryPath) !== path.resolve(registryPath)) {
-    throw new ConnectionCoordinatorError("external-change", "No sealed schema-migration intent exists for these options.");
-  }
-  if (intent.projectRoot !== null || intent.scope !== null || intent.projectPath !== null || intent.expectedProjectDigest !== null || intent.select !== false) invalid("Automatic migration has no project stage.");
-  if (input.expectedMigration !== undefined && !sameMigration(input.expectedMigration, locator)) throw new ConnectionCoordinatorError("approval-mismatch", "Expected migration locator does not match the sealed intent.");
-  if (await canonicalTarget(input.target) !== intent.canonicalTarget) throw new ConnectionCoordinatorError("external-change", "Resume target does not match the sealed intent.");
-  return intent;
-}
-
-/** Read-only exact migration locator. Null is genuine absence, never malformed or mismatched state. */
-export async function inspectMigratedConnection(input: ResumeMigratedConnectionInput, options: ConnectionCoordinatorOptions = {}): Promise<LegacyMigrationLocator | null> {
-  const intent = await sealedMigrationIntent(input, options);
-  return intent === null ? null : intentLocator(intent);
-}
-async function runMigrationIntent(intent: ApprovedIntent, source: WriteTarget["source"], publication: PreparedLegacyMigration | undefined, options: ConnectionCoordinatorOptions, blockers: readonly ConnectionDiagnostic[] = [], expected?: LegacyMigrationLocator): Promise<ConnectionCommitResult | { readonly state: "preparation-required"; readonly operationId: string; readonly migration: LegacyMigrationLocator }> {
-  const locator = intentLocator(intent) ?? invalid("Sealed migration intent has no locator.");
-  if (expected !== undefined && !sameMigration(expected, locator)) throw new ConnectionCoordinatorError("approval-mismatch", "Expected migration locator does not match the sealed intent.");
-  if (publication !== undefined && !sameMigration(legacyMigrationLocator(publication), locator)) throw new ConnectionCoordinatorError("approval-mismatch", "Fresh migration capability does not match the sealed locator.");
-  if (intent.projectRoot !== null || intent.scope !== null || intent.projectPath !== null || intent.expectedProjectDigest !== null || intent.select !== false) invalid("Automatic migration has no project stage.");
-  const file = intentPath(intent.runtimeRoot, intent.operationId);
-  await assertOutside(intent.canonicalTarget, intent.runtimeRoot, "Coordinator runtime");
-  await assertOutside(intent.canonicalTarget, file, "Coordinator intent");
-  await assertOutside(intent.canonicalTarget, intent.registryPath, "Connection registry");
-  const existing = await readJson<ApprovedIntent>(file, intent.operationId);
-  if (existing !== null && !sameIntent(existing, intent)) throw new ConnectionCoordinatorError("external-change", "Sealed coordinator intent does not match the approved migration.");
-  const committed = await runConnectionStages(intent, source, options, options, async () => {
-    const located = await recoverPreparedLegacyMigration({ vault: intent.canonicalTarget, source }, locator, publication, { fault: options.publicationFault });
-    if ("state" in located) throw new ConnectionCoordinatorError("preparation-required", "The original native migration plan is not sealed.");
-    if (located.kind !== "schema-migration" || located.transactionId !== locator.transactionId || located.planDigest !== locator.planDigest) throw new ConnectionCoordinatorError("publication-blocked", "Native recovery did not return the original migration plan.");
-    return located;
-  }, blockers, async () => {
-    if (existing !== null) return;
-    await writeIntent(file, intent);
-    takeFault(intent.operationId, options.coordinatorFault, "after-intent");
-  });
-  if (committed.vault.code === "preparation-required") return { state: "preparation-required", operationId: intent.operationId, migration: locator };
-  return committed;
-}
-export async function commitMigratedConnection(prepared: PreparedMigratedConnection, publication: PreparedLegacyMigration, options: ConnectionCoordinatorOptions = {}): Promise<ConnectionCommitResult | { readonly state: "preparation-required"; readonly operationId: string; readonly migration: LegacyMigrationLocator }> {
-  if (!sameMigration(legacyMigrationLocator(publication), prepared.migration)) throw new ConnectionCoordinatorError("approval-mismatch", "Fresh migration capability does not match the prepared locator.");
-  return publishMigration(prepared, publication, options);
-}
-/** Resumes one sealed migration intent. A stored native plan needs no in-memory capability. */
-export async function resumeMigratedConnection(input: ResumeMigratedConnectionInput, options: ConnectionCoordinatorOptions = {}): Promise<ConnectionCommitResult | { readonly state: "preparation-required"; readonly operationId: string; readonly migration: LegacyMigrationLocator }> {
-  const intent = await sealedMigrationIntent(input, options);
-  if (intent === null) throw new ConnectionCoordinatorError("external-change", "No sealed schema-migration intent exists for these options.");
-  return runMigrationIntent(intent, input.target.source, input.publication, { ...options, runtimeRoot: intent.runtimeRoot, registryPath: intent.registryPath }, [], input.expectedMigration);
 }
 
 const GENERIC_INTENT_KEYS = ["protocol", "operationId", "planDigest", "canonicalTarget", "registryPath", "runtimeRoot", "projectRoot", "projectPath", "publicationRequested", "publicationKind", "publicationTransactionId", "publicationPlanDigest", "expectedRegistryDigest", "expectedEntryRevision", "expectedProjectDigest", "portableVaultId", "select", "scope", "blockers", "approvalBinding"] as const;
@@ -932,17 +898,12 @@ export async function resumeConnection(input: ResumeConnectionInput, approvedDig
     if (!intent.publicationRequested) return null;
     const binding = intent.approvalBinding.publication;
     if (binding.kind !== "settings-update" || binding.transactionId === null || binding.vaultId === null || binding.planDigest === null || intent.publicationPlanDigest === null) throw new ConnectionCoordinatorError("publication-blocked", "The original settings publication binding is incomplete.");
-    const locator = { kind: "settings-update" as const, transactionId: binding.transactionId, vaultId: binding.vaultId, targetDigest: digestBytes(intent.canonicalTarget), planDigest: binding.planDigest };
-    const recovered = await recoverSealedSettingsPublication({ vault: intent.canonicalTarget, source: input.target.source }, locator, { fault: options.publicationFault });
-    if (recovered.state === "sealed") {
-      if (recovered.receipt.planDigest !== binding.planDigest || recovered.receipt.transactionId !== binding.transactionId || recovered.receipt.kind !== "settings-update") throw new ConnectionCoordinatorError("publication-blocked", "Recovered settings publication does not match the original plan.");
-      return recovered.receipt;
-    }
-    if (binding.evidence.length !== 0 || binding.planDigest === null) return preparationRequired(intent.operationId);
+    // Evidence bytes are never stored, so an evidenced approval cannot be replayed without its original preparation.
+    if (binding.evidence.length !== 0) return preparationRequired(intent.operationId);
     const request = settingsPublicationRequest(binding.transactionId, binding.vaultId);
-    const plan = await planVaultPublication({ vault: intent.canonicalTarget, source: input.target.source }, request);
+    const plan = await planSettingsPublication(intent.canonicalTarget, request);
     if (plan.planDigest !== binding.planDigest || plan.transactionId !== binding.transactionId || plan.vaultId !== binding.vaultId) return preparationRequired(intent.operationId);
-    return commitVaultPublication({ vault: intent.canonicalTarget, source: input.target.source }, plan, plan.planDigest, { fault: options.publicationFault });
+    return commitSettingsPublication(intent.canonicalTarget, plan, options);
   }, intent.blockers.map(item => ({ ...item, message: `Approved ${item.stage} preparation is blocked.` })));
   if (committed.vault.code === "preparation-required") return { state: "preparation-required", operationId: intent.operationId };
   return committed;

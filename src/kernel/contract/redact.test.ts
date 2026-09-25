@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildRedactor, hiddenValuesOf, publicTokensOf, redactResponse, rejectionMessage, REDACTED } from "./redact.js";
-import type { PublicManifest, SealedLayer, ViolationKind } from "./types.js";
+import { buildRedactor, hiddenValuesOf, publicTokensOf, redactResponse, REDACTED } from "./redact.js";
+import type { VaultContract } from "./types.js";
 
 describe("buildRedactor", () => {
   it("replaces raw, quoted, escaped and normalised forms at token boundaries", () => {
@@ -38,20 +38,19 @@ describe("buildRedactor", () => {
 
 describe("hiddenValuesOf and publicTokensOf", () => {
   it("collects every rule value and every public word", () => {
-    const layer: SealedLayer = {
-      sealId: "00000000-0000-4000-8000-000000000001",
-      fields: [{ name: "s", type: "text", required: false, description: "", variable: null, rules: [
+    const contract: VaultContract = {
+      folders: { Projects: { meaning: "work", searchExclude: false } },
+      properties: { s: { meaning: "", type: "text", default: false, required: false, rules: [
         { kind: "allowed", values: ["a", "b"] }, { kind: "fixed", value: "c" }, { kind: "pattern", regex: "d+" }, { kind: "range", min: 1, max: "z" },
-      ] }],
-      requiredHeadings: [], applyFolder: null, sourcePath: null, sourceHash: null, answers: {},
+      ] } },
+      templates: { Meeting: {
+        source: "T/Meeting.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: ["status"],
+        narrowedRules: { s: [{ kind: "fixed", value: "e" }] }, requiredHeadings: ["Notes"],
+      } },
     };
-    expect(hiddenValuesOf([layer])).toEqual(["a", "b", "c", "d+", 1, "z"]);
-    const manifest: PublicManifest = {
-      version: 1,
-      common: { sealId: "00000000-0000-4000-8000-000000000002", fields: [{ name: "status", type: "text", required: true, description: "" }] },
-      templates: [{ id: "T/Meeting.md", name: "Meeting", applyFolder: null, fields: [], requiredHeadings: ["Notes"], sourceHash: `sha256:${"0".repeat(64)}`, sealId: "00000000-0000-4000-8000-000000000003" }],
-    };
-    expect(publicTokensOf(manifest)).toEqual(expect.arrayContaining(["status", "T/Meeting.md", "Meeting", "Notes", "text", "tags"]));
+    expect(hiddenValuesOf(contract)).toEqual(["a", "b", "c", "d+", 1, "z", "e"]);
+    expect(publicTokensOf(contract)).toEqual(expect.arrayContaining(["Projects", "s", "status", "Meeting", "Notes", "text", "tags"]));
+    expect(publicTokensOf(contract)).not.toContain("T/Meeting.md");
     expect(publicTokensOf(null)).toContain("number");
   });
 });
@@ -62,20 +61,5 @@ describe("redactResponse", () => {
     const output = redactResponse(input, buildRedactor(["secret"]));
     expect(output).toEqual({ message: `got ${REDACTED}`, nested: [{ value: REDACTED }, 3, null, true], secret: `key stays` });
     expect(input.nested[0]).toEqual({ value: "secret" });
-  });
-});
-
-describe("rejectionMessage", () => {
-  it("uses fixed wording with the field name only", () => {
-    const kinds: ViolationKind[] = [
-      "yaml-syntax", "path-unsafe", "path-required", "outside-vault", "outside-apply-folder", "required", "type", "not-allowed", "not-fixed",
-      "pattern", "range", "unsubstituted-variable", "heading-missing", "contract-unreadable", "template-unknown", "template-ambiguous", "exists",
-    ];
-    for (const kind of kinds) {
-      const text = rejectionMessage({ field: "status", kind });
-      expect(text.length).toBeGreaterThan(0);
-    }
-    expect(rejectionMessage({ field: "status", kind: "not-allowed" })).toBe("Field 'status' is not one of the defined values.");
-    expect(rejectionMessage({ field: null, kind: "unsubstituted-variable" })).toBe("The body still contains a template variable.");
   });
 });

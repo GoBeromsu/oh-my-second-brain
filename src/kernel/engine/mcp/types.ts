@@ -162,11 +162,11 @@ export interface McpSemanticReceipt {
   /** Validated model output; empty for plain and caller-authored typed requests. */
   readonly generatedSearches: readonly McpSemanticTypedSearch[];
   readonly rerankApplied: boolean;
-  /** Exact active-taxonomy intents that reached a model prompt. */
-  readonly taxonomyIntents: readonly {
+  /** Exact sealed folder meanings that reached a model prompt. */
+  readonly folderIntents: readonly {
     readonly folder: string;
     readonly intent: string;
-    readonly source: ".oms/taxonomy.json";
+    readonly source: "folders.json";
   }[];
   readonly warnings: readonly string[];
 }
@@ -306,10 +306,10 @@ export type McpSemanticProviderStatus =
       readonly index?: McpSemanticIndexStatus;
       readonly capabilities?: Readonly<Record<"embed" | "rerank" | "generate", McpSemanticModelCapabilityStatus>>;
       readonly storeEmbeddingFingerprint?: string;
-      readonly taxonomyContext?: {
-        readonly matched: readonly McpSemanticReceipt["taxonomyIntents"][number][];
+      readonly folderContext?: {
+        readonly matched: readonly McpSemanticReceipt["folderIntents"][number][];
         readonly indexedWithoutIntent: readonly string[];
-        readonly taxonomyWithoutIndexed: readonly string[];
+        readonly foldersWithoutIndexed: readonly string[];
         readonly warnings: readonly string[];
       };
     }
@@ -352,7 +352,7 @@ export interface McpSemanticStoredContext {
   readonly pathPrefix: string;
   readonly context: string;
   readonly updatedAt: string;
-  readonly source: ".oms/taxonomy.json";
+  readonly source: "folders.json";
 }
 
 /** Output of oms_semantic_contexts (mirrors SemanticContextResult). */

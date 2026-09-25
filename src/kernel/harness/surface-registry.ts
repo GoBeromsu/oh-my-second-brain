@@ -77,17 +77,14 @@ export interface HarnessSurfaceRegistry {
 export const HARNESS_SHARED_SKILLS: readonly string[] = [
   "distill",
   "doctor",
-  "interview",
   "link",
   "search",
   "status",
-  "template",
   "write",
 ];
 
 export const HARNESS_CLI_COMMANDS: readonly HarnessCliCommandSurface[] = [
   { name: "setup", owner: "cli", stability: "stable" },
-  { name: "template", owner: "cli", stability: "experimental" },
   { name: "contract", owner: "cli", stability: "experimental" },
   { name: "note", owner: "capture", stability: "stable" },
   { name: "link", owner: "capture", stability: "stable" },
@@ -104,8 +101,6 @@ export const HARNESS_CLI_COMMANDS: readonly HarnessCliCommandSurface[] = [
 ];
 
 export const HARNESS_MCP_TOOLS: readonly HarnessMcpToolSurface[] = [
-  // Mixed: guide and check do not write note bytes; contract publication and
-  // confirmed source changes mutate.
   { name: "write", owner: "capture", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
   { name: "search", owner: "retrieval", posture: "read", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
   { name: "link", owner: "capture", posture: "read", destructive: false, idempotent: true, openWorld: false, stability: "stable" },
@@ -129,7 +124,7 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       skillDirs: HARNESS_SHARED_SKILLS,
       manifestFiles: [".claude-plugin/plugin.json"],
       guidanceFiles: ["assets/claude/CLAUDE.md"],
-      hookFiles: ["assets/claude/hooks/oms-guard.mjs", "assets/claude/hooks/oms-post-guard.mjs"],
+      hookFiles: ["assets/claude/hooks/oms-guard.mjs"],
       ruleFiles: [],
       mcpConfigFiles: [".mcp.json"],
       writeHook: HARNESS_WRITE_HOOK.claude,
@@ -161,13 +156,6 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
     {
       bin: "oms-guard",
       path: "assets/claude/hooks/oms-guard.mjs",
-      owner: "hook",
-      runtime: "claude",
-      stability: "stable",
-    },
-    {
-      bin: "oms-post-guard",
-      path: "assets/claude/hooks/oms-post-guard.mjs",
       owner: "hook",
       runtime: "claude",
       stability: "stable",
@@ -221,22 +209,17 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       ".mcp.codex.json",
       "assets/skills/distill/SKILL.md",
       "assets/skills/doctor/SKILL.md",
-      "assets/skills/interview/SKILL.md",
       "assets/skills/link/SKILL.md",
       "assets/skills/search/SKILL.md",
       "assets/skills/status/SKILL.md",
-      "assets/skills/template/SKILL.md",
       "assets/skills/write/SKILL.md",
       "skills/distill/SKILL.md",
       "skills/doctor/SKILL.md",
-      "skills/interview/SKILL.md",
       "skills/link/SKILL.md",
       "skills/search/SKILL.md",
       "skills/status/SKILL.md",
-      "skills/template/SKILL.md",
       "skills/write/SKILL.md",
       "assets/claude/hooks/oms-guard.mjs",
-      "assets/claude/hooks/oms-post-guard.mjs",
       "assets/claude/CLAUDE.md",
       "assets/codex/AGENTS.md",
       "assets/codex/rules/oms.md",

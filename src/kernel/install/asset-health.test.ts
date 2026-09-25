@@ -19,10 +19,10 @@ afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, {
 describe("inspectInstalledAssets", () => {
   it("reports executable assets as ok", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "oms-asset-health-")); roots.push(root);
-    const guard = path.join(root, "oms-guard"); const postGuard = path.join(root, "oms-post-guard");
-    await Promise.all([guard, postGuard].map(asset => writeFile(asset, "#!/usr/bin/env node\n")));
-    await Promise.all([guard, postGuard].map(asset => chmod(asset, 0o755)));
-    await expect(inspectInstalledAssets({ assets: [{ id: "guard", kind: "hook", host: "claude", declaredPath: guard }, { id: "post-guard", kind: "binary", host: "claude", declaredPath: postGuard }], hosts })).resolves.toMatchObject({ status: "ok", hosts, assets: [{ state: "ok", realPath: expect.any(String) }, { state: "ok", realPath: expect.any(String) }] });
+    const guard = path.join(root, "oms-guard"); const cli = path.join(root, "oms");
+    await Promise.all([guard, cli].map(asset => writeFile(asset, "#!/usr/bin/env node\n")));
+    await Promise.all([guard, cli].map(asset => chmod(asset, 0o755)));
+    await expect(inspectInstalledAssets({ assets: [{ id: "guard", kind: "hook", host: "claude", declaredPath: guard }, { id: "cli", kind: "binary", host: "claude", declaredPath: cli }], hosts })).resolves.toMatchObject({ status: "ok", hosts, assets: [{ state: "ok", realPath: expect.any(String) }, { state: "ok", realPath: expect.any(String) }] });
   });
   it("names a dangling symlink instead of treating it as absent", async () => { const root = await mkdtemp(path.join(tmpdir(), "oms-asset-health-")); roots.push(root); const target = path.join(root, "deleted-target"); const asset = path.join(root, "oms-guard"); await writeFile(target, "#!/usr/bin/env node\n"); await symlink(target, asset); await unlink(target); const result = await inspect(asset); expect(result.assets[0]).toMatchObject({ state: "dangling-symlink", realPath: null }); });
   it("reports a present non-executable file", async () => { const root = await mkdtemp(path.join(tmpdir(), "oms-asset-health-")); roots.push(root); const asset = path.join(root, "oms-guard"); await writeFile(asset, "#!/usr/bin/env node\n"); await chmod(asset, 0o644); expect((await inspect(asset)).assets[0]).toMatchObject({ state: "not-executable", realPath: expect.any(String) }); });

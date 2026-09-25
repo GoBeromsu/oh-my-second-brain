@@ -89,7 +89,7 @@ const writeNote = async (input) => {
 
 const target = {
   target: { vault: "/tmp/in-memory-vault", source: "explicit" },
-  ontology: { concepts: new Map(), taxonomy: { version: 1, folders: {} } },
+  ontology: { concepts: new Map(), folders: {} },
   notePath: NOTE_PATH,
 };
 

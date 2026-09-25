@@ -6,9 +6,8 @@ import { buildGraph, buildGraphWithWarnings, buildNodeIndex, loadCachedGraph, lo
 import { filterNodesByQueryAxes, queryFacets } from "./node.js";
 import type { EngineGraphNode } from "./node.js";
 import type { SearchTemplateSource } from "../retrieval/template-source.js";
-import type { RetrievalFields } from "../../templates/axes.js";
-import type { EffectiveFieldV5 } from "../../templates/contract-v5.js";
-import type { Digest, TemplateId } from "../../templates/types.js";
+import type { Digest } from "../../conventions/canonical.js";
+import type { RetrievalField, RetrievalFields, TemplateId } from "../retrieval/axes.js";
 
 let vault: string;
 const DIGEST = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Digest;
@@ -16,12 +15,12 @@ const OTHER_DIGEST = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 const signature = "sha256:projection" as Digest;
 const template = "note" as TemplateId;
 
-function field(property: string, overrides: Partial<EffectiveFieldV5> = {}): EffectiveFieldV5 {
+function field(property: string, overrides: Partial<RetrievalField> = {}): RetrievalField {
   return { property, type: "string", required: false, valuePolicy: "free", intent: property, ...overrides };
 }
 
-function fields(entries: Record<string, EffectiveFieldV5>): RetrievalFields {
-  const record = Object.create(null) as Record<string, EffectiveFieldV5>;
+function fields(entries: Record<string, RetrievalField>): RetrievalFields {
+  const record = Object.create(null) as Record<string, RetrievalField>;
   for (const [key, value] of Object.entries(entries)) record[key] = value;
   return record;
 }
@@ -60,7 +59,7 @@ function unavailableMeta(digest: Digest = DIGEST, code = "TEMPLATE_POLICY_ABSENT
     digest,
     source: { generationDigest: digest, defaultFields: null, templates: null, globalAxes: null, sourcePaths: null },
     exclusions: inventory([]),
-    diagnostics: [{ code, path: ".oms/template-policy.json", message: "no explicit contract is published" }],
+    diagnostics: [{ code, path: ".oms/settings.json", message: "no explicit contract is published" }],
   };
 }
 
@@ -379,8 +378,9 @@ describe("read-only scans", () => {
     await note("notes/a.md", "template: note\nstatus: open", "body");
     const broken = { digest: DIGEST, source: { templates: {} }, exclusions: inventory([]), diagnostics: [] } as unknown as SearchTemplateSource;
     await expect(buildNodeIndex({ vaultPath: vault, meta: broken })).rejects.toThrow(/TEMPLATE_AXIS_UNDECLARED_FIELD/);
-    await mkdir(path.join(vault, ".oms"));
-    await writeFile(path.join(vault, ".oms", "taxonomy.json"), "{", "utf8");
+    // An unreadable declared exclusion channel must block rather than scan unfiltered.
+    await mkdir(path.join(vault, ".obsidian"));
+    await writeFile(path.join(vault, ".obsidian", "templates.json"), "{", "utf8");
     await expect(buildGraph({ vaultPath: vault, meta: meta() })).rejects.toThrow(/NOTE_EXCLUSION_RESOLUTION_FAILED/);
   });
 });

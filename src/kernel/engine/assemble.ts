@@ -22,13 +22,11 @@ import {
 import type { EmbeddingModelDescriptor, InstalledModelsReceipt } from "./embed/model.js";
 import {
   capabilityGuidance,
-  MODEL_CAPABILITY_ENV_PAIRS,
-  readModelsConfigSync,
+  readVaultEmbeddingModelSync,
   resolveModelCapability,
 } from "./embed/config.js";
 import type {
   ModelCapability,
-  ModelsConfigV1,
   PortableModelSelection,
 } from "./embed/config.js";
 import {
@@ -93,7 +91,8 @@ export interface AssembleConfig {
   embeddingPrefixScheme?: string;
 
   /** Deterministic model-resolution seams. */
-  modelsConfig?: ModelsConfigV1 | null;
+  /** The vault's `.oms/settings.json` `embedding.model`; read from the vault when omitted. */
+  vaultEmbeddingModel?: string | null;
   installedModelsReceipt?: InstalledModelsReceipt;
   modelRequests?: Readonly<Partial<Record<ModelCapability, PortableModelSelection>>>;
   modelEnv?: Readonly<Record<string, string | undefined>>;
@@ -294,7 +293,7 @@ function resolvedEmbeddingConfig(config: AssembleConfig): ResolvedEmbeddingConfi
   const resolution = resolveEmbeddingModel({
     env,
     request: config.modelRequests?.embed,
-    vaultConfig: config.modelsConfig ?? readModelsConfigSync(config.vault),
+    vaultEmbeddingModel: vaultEmbeddingModel(config),
     installedReceipt: config.installedModelsReceipt ??
       readInstalledModelsReceiptSync({ cacheDir: config.embeddingCacheDir }),
     ...(config.embeddingCacheDir !== undefined ? { cacheDir: config.embeddingCacheDir } : {}),
@@ -327,7 +326,7 @@ function ownedReranker(config: AssembleConfig): DisposableReranker | undefined {
       capability: "rerank",
       request: config.modelRequests?.rerank,
       env: config.modelEnv ?? process.env,
-      vaultConfig: config.modelsConfig ?? readModelsConfigSync(config.vault),
+      vaultEmbeddingModel: vaultEmbeddingModel(config),
       installedArtifacts: receipt.artifacts,
       setupDefaults: receipt.defaults,
     });
@@ -336,8 +335,7 @@ function ownedReranker(config: AssembleConfig): DisposableReranker | undefined {
       // fallback covers only the internally inconsistent case of an available
       // resolution with no artifact. It uses the shared guidance rather than a
       // hand-written copy, which named the env pair and a bare `oms setup` while
-      // omitting `.oms/models.json` and the descriptor flag that actually installs
-      // a reranker.
+      // omitting the descriptor flag that actually installs a reranker.
       throw new Error(resolution.guidance ?? capabilityGuidance("rerank"));
     }
     return createLlamaReranker({ modelPath: resolution.artifact.path });
@@ -378,7 +376,7 @@ function createOwnedGenerator(config: AssembleConfig): OwnedGenerator | undefine
         capability: "generate",
         request: config.modelRequests?.generate,
         env: config.modelEnv ?? process.env,
-        vaultConfig: config.modelsConfig ?? readModelsConfigSync(config.vault),
+        vaultEmbeddingModel: vaultEmbeddingModel(config),
         installedArtifacts: receipt.artifacts,
         setupDefaults: receipt.defaults,
       });
@@ -426,19 +424,21 @@ function createCoreOwnedGenerator(config: AssembleConfig): OwnedGenerator | unde
     env["OMS_GENERATE_MODEL"]!.trim() !== "";
   const hasResolutionBoundary =
     config.modelRequests?.generate !== undefined ||
-    config.modelsConfig?.generate !== undefined ||
     config.installedModelsReceipt !== undefined ||
     hasGenerateEnv;
   return hasResolutionBoundary ? createOwnedGenerator(config) : undefined;
 }
 
+function vaultEmbeddingModel(config: AssembleConfig): string | null {
+  return config.vaultEmbeddingModel !== undefined ? config.vaultEmbeddingModel : readVaultEmbeddingModelSync(config.vault);
+}
+
 function unavailableCapabilityStatus(capability: ModelCapability): McpSemanticModelCapabilityStatus {
-  const [provider, model] = MODEL_CAPABILITY_ENV_PAIRS[capability];
   return {
     capability,
     available: false,
     source: "unavailable",
-    guidance: `Configure ${provider} and ${model}, add ${capability} to .oms/models.json, or install a matching model with oms setup.`,
+    guidance: capabilityGuidance(capability),
   };
 }
 
@@ -473,7 +473,7 @@ function modelCapabilityStatus(
     try {
       const receipt = config.installedModelsReceipt ??
         readInstalledModelsReceiptSync({ cacheDir: config.embeddingCacheDir });
-      const vaultConfig = config.modelsConfig ?? readModelsConfigSync(config.vault);
+      const vaultModel = vaultEmbeddingModel(config);
       const env = {
         ...(config.modelEnv ?? process.env),
         ...(config.embeddingProvider === undefined ? {} : { [EMBEDDING_PROVIDER_ENV]: config.embeddingProvider }),
@@ -485,7 +485,7 @@ function modelCapabilityStatus(
           capability,
           request: config.modelRequests?.[capability],
           env,
-          vaultConfig,
+          vaultEmbeddingModel: vaultModel,
           installedArtifacts: receipt.artifacts,
           setupDefaults: receipt.defaults,
         }),

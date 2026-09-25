@@ -1,56 +1,50 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { detectDrift, templateDrift } from "./drift.js";
 import { extractTemplate } from "./extract.js";
-import type { PublicTemplate } from "./types.js";
+import type { TemplateContract } from "./types.js";
 
-const roots: string[] = [];
+let vault: string;
 
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+beforeEach(async () => {
+  vault = await realpath(await mkdtemp(join(tmpdir(), "oms-drift-")));
+  await mkdir(join(vault, "Templates"));
+  await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n");
 });
 
-async function vault(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "oms-contract-drift-"));
-  roots.push(root);
-  await mkdir(join(root, "T"));
-  return root;
+afterEach(async () => {
+  await rm(vault, { recursive: true, force: true });
+});
+
+async function sealedTemplate(): Promise<TemplateContract> {
+  const result = await extractTemplate(vault, "Templates/Meeting.md");
+  if (!result.ok) throw new Error("extraction failed");
+  return { source: "Templates/Meeting.md", sourceHash: result.extraction.sourceHash, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
 }
 
-async function template(root: string, id: string): Promise<PublicTemplate> {
-  const extraction = await extractTemplate(root, id);
-  if (!extraction.ok) throw new Error("extraction failed");
-  return { id, name: "A", applyFolder: null, fields: [], requiredHeadings: [], sourceHash: extraction.extraction.sourceHash, sealId: "00000000-0000-4000-8000-000000000001" };
-}
-
-describe("templateDrift", () => {
-  it("is active until the source bytes change", async () => {
-    const root = await vault();
-    await writeFile(join(root, "T/A.md"), "# A\n");
-    const sealed = await template(root, "T/A.md");
-    expect(await templateDrift(root, sealed)).toBe("active");
-    await writeFile(join(root, "T/A.md"), "# A\n\nmore\n");
-    expect(await templateDrift(root, sealed)).toBe("drift");
+describe("template drift", () => {
+  it("is active when the source is unchanged", async () => {
+    expect(await templateDrift(vault, await sealedTemplate())).toBe("active");
   });
 
-  it("is missing when the source is gone and drift when it becomes unsafe", async () => {
-    const root = await vault();
-    await writeFile(join(root, "T/A.md"), "# A\n");
-    const sealed = await template(root, "T/A.md");
-    await rm(join(root, "T/A.md"));
-    expect(await templateDrift(root, sealed)).toBe("missing");
-    await writeFile(join(root, "T/B.md"), "# A\n");
-    await symlink(join(root, "T/B.md"), join(root, "T/A.md"));
-    expect(await templateDrift(root, sealed)).toBe("drift");
+  it("is drift when the source changed", async () => {
+    const template = await sealedTemplate();
+    await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: closed\n---\n## Agenda\n");
+    expect(await templateDrift(vault, template)).toBe("drift");
   });
 
-  it("maps every manifest template", async () => {
-    const root = await vault();
-    await writeFile(join(root, "T/A.md"), "# A\n");
-    const sealed = await template(root, "T/A.md");
-    const states = await detectDrift(root, { version: 1, common: null, templates: [sealed, { ...sealed, id: "T/Gone.md" }] });
-    expect([...states]).toEqual([["T/A.md", "active"], ["T/Gone.md", "missing"]]);
+  it("is missing when the source is gone", async () => {
+    const template = await sealedTemplate();
+    await rm(join(vault, "Templates/Meeting.md"));
+    expect(await templateDrift(vault, template)).toBe("missing");
+  });
+
+  it("reports every template by name", async () => {
+    const active = await sealedTemplate();
+    const gone: TemplateContract = { ...active, source: "Templates/Gone.md" };
+    const states = await detectDrift(vault, { folders: null, properties: null, templates: { Meeting: active, Gone: gone } });
+    expect(Object.fromEntries(states)).toEqual({ Meeting: "active", Gone: "missing" });
   });
 });

@@ -2,21 +2,22 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { lstat, mkdir, readFile, readlink, realpath, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { mainUsageCommandNames } from "./usage.js";
-import { writeApprovedVault, writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
+import { serializeVaultSettings } from "../kernel/vault/settings.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../..");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
-// This suite calls `runCli(["setup", ...])` without `--dry-run`. `oms setup`
-// writes a stamp-only pointer and host state under `$HOME` - e.g.
-// `--install-claude` wires hook entries into
+// This suite runs CLI commands that write host state under `$HOME` - e.g.
+// `oms host install` writes a stamp-only pointer and wires hook entries into
 // `$HOME/.claude/settings.json` (see upsertClaudeHooks in
 // src/vendors/claude/claude-hooks.ts) - so the isolation below is load-bearing
 // today, not merely precautionary. Every runCli() call gets HOME/USERPROFILE
@@ -85,15 +86,10 @@ async function makeVault(): Promise<string> {
   return vault;
 }
 
-/** Publishes native settings through the real dry-run token and outer digest. */
-async function approvedSetup(vault: string): Promise<ReturnType<typeof runCli>> {
-  const dryRun = runCli(["setup", "--vault", vault, "--dry-run"]);
-  expect(dryRun.status, `${dryRun.stdout}\n${dryRun.stderr}`).toBe(0);
-  expect(existsSync(path.join(vault, ".oms", "template-policy.json"))).toBe(false);
-  const proposal = JSON.parse(dryRun.stdout) as { readonly approvalToken?: string; readonly approvalDigest?: string };
-  expect(proposal.approvalToken).toEqual(expect.any(String));
-  expect(proposal.approvalDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
-  return runCli(["setup", "--vault", vault, "--yes", "--approval-token", proposal.approvalToken!, "--approved-digest", proposal.approvalDigest!]);
+/** Issues the vault identity `oms setup` would write; the seal itself is interactive. */
+async function issueSettings(vault: string): Promise<void> {
+  await mkdir(path.join(vault, ".oms"), { recursive: true });
+  await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: randomUUID() }));
 }
 
 function runCli(
@@ -138,7 +134,7 @@ describe("oms CLI dispatch", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("Compatibility alias: oms <command>");
-    for (const command of ["setup", "template", "note", "link", "bridge", "search", "index", "graph", "host", "package", "model", "serve", "hook", "status"]) {
+    for (const command of ["setup", "contract", "note", "link", "bridge", "search", "index", "graph", "host", "package", "model", "serve", "hook", "status"]) {
       expect(result.stdout).toContain(command);
     }
     expect(result.stdout).not.toMatch(/semantic/u);
@@ -180,7 +176,8 @@ describe("oms CLI dispatch", () => {
   });
 
   it.each([
-    ["doctor", "oms template check"],
+    ["doctor", "oms contract doctor"],
+    ["template", "oms contract setup|extract|status|doctor"],
     ["audit", "oms note audit"],
     ["reconcile", "oms host sync"],
     ["linkify", "oms link suggest"],
@@ -204,28 +201,31 @@ describe("oms CLI dispatch", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("[oms] Usage: oms hook <pre|post> [--vault <path>]");
+    expect(result.stderr).toContain("[oms] Usage: oms hook pre [--vault <path>]");
   });
 
-  it("routes the pre hook and preserves bypass output", async () => {
+  it("routes the pre hook and allows input that names no tool", async () => {
     const vault = await makeVault();
-    const result = runCli(["hook", "pre", "--vault", vault], "{}\n", { OMS_GUARD: "off" });
+    const result = runCli(["hook", "pre", "--vault", vault], "{}\n");
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe("{\"continue\":true,\"suppressOutput\":true}\n");
   });
 
-  it("routes the post hook and rejects retired hook leaf names", async () => {
+  it("rejects the removed post hook and retired hook leaf names", async () => {
     const vault = await makeVault();
-    const post = runCli(["hook", "post", "--vault", vault], "{}\n", { OMS_GUARD: "off" });
-    const retired = runCli(["hook", "post-tool-use", "--vault", vault], "{}\n");
+    const post = runCli(["hook", "post", "--vault", vault], "{}\n");
+    const retiredPost = runCli(["hook", "post-tool-use", "--vault", vault], "{}\n");
+    const retiredPre = runCli(["hook", "pre-tool-use", "--vault", vault], "{}\n");
 
-    expect(post.status).toBe(0);
-    expect(post.stderr).toBe("");
+    expect(post.status).toBe(1);
     expect(post.stdout).toBe("");
-    expect(retired.status).toBe(1);
-    expect(retired.stderr).toContain("Use `oms hook post`");
+    expect(post.stderr).toContain("Usage: oms hook pre [--vault <path>]");
+    expect(retiredPost.status).toBe(1);
+    expect(retiredPost.stderr).toContain("Usage: oms hook pre [--vault <path>]");
+    expect(retiredPre.status).toBe(1);
+    expect(retiredPre.stderr).toContain("Use `oms hook pre`");
   });
 
   it("rejects unsupported runtime before host operations", () => {
@@ -264,30 +264,22 @@ describe("oms CLI dispatch", () => {
     );
 
     expect(result.status).toBe(1);
-    expect(existsSync(path.join(vault, ".oms", "template-policy.json"))).toBe(false);
+    expect(existsSync(path.join(vault, ".oms", "settings.json"))).toBe(false);
     expect(result.stderr).not.toContain("Update available");
   });
 
-  it("routes template and link diagnostics for an empty temp vault", async () => {
+  it("routes contract and link diagnostics for an empty temp vault", async () => {
     const vault = await makeVault();
-    const doctor = runCli(["template", "check", "--vault", vault]);
+    const doctor = runCli(["contract", "status", "--vault", vault]);
     const lint = runCli(["link", "check", "--vault", vault, "--json"]);
 
     expect(doctor.status).toBe(0);
     expect(doctor.stderr).toBe("");
-    expect(jsonObject(doctor.stdout)).toEqual(
-      expect.objectContaining({
-        // The diagnosis reports the canonical root it actually read.
-        vault: await realpath(vault),
-        status: "needs-repair",
-        revision: null,
-        settings: "missing",
-        diagnostics: expect.arrayContaining([
-          expect.objectContaining({ code: "CONTRACT_ABSENT", path: ".oms/template-policy.json" }),
-          expect.objectContaining({ code: "VAULT_SETTINGS_MISSING", path: ".oms/settings.json" }),
-        ]),
-      }),
-    );
+    expect(jsonObject(doctor.stdout)).toEqual({
+      contract: "none",
+      findings: [{ message: "contract: none", guidance: "oms setup" }],
+      templates: [],
+    });
 
     expect(lint.status).toBe(0);
     expect(lint.stderr).toBe("");
@@ -300,93 +292,46 @@ describe("oms CLI dispatch", () => {
     );
   });
 
-  it("keeps legacy YAML untouched and plans setup without inventing placement", async () => {
+  it("refuses the retired setup dry-run and writes nothing", async () => {
     const vault = await makeVault();
-    await mkdir(path.join(vault, ".oms"), { recursive: true });
-    const yaml = "this: [is not valid YAML\n";
-    await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), yaml);
-
-    const doctor = runCli(["template", "check", "--vault", vault]);
+    const doctor = runCli(["contract", "status", "--vault", vault]);
     expect(doctor.status).toBe(0);
     expect(doctor.stderr).toBe("");
-    expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({
-      vault: await realpath(vault),
-      status: "needs-repair",
-      diagnostics: expect.arrayContaining([expect.objectContaining({
-        code: "CONTRACT_ABSENT",
-        path: ".oms/template-policy.json",
-      })]),
-    }));
-    expect(doctor.stdout).not.toContain("LEGACY_TAXONOMY_YAML");
-    expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(false);
-    await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf8")).resolves.toBe(yaml);
+    expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({ contract: "none" }));
 
     await mkdir(path.join(vault, ".obsidian"), { recursive: true });
     await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text" } }));
     await mkdir(path.join(vault, "Templates"), { recursive: true });
     await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\n---\nbody\n");
+    // Setup is the interactive seal: the retired dry-run plan is refused and nothing is written.
     const dryRun = runCli(["setup", "--vault", vault, "--dry-run"]);
-    expect(dryRun.status).toBe(0);
-    expect(dryRun.stdout).not.toContain("TEMPLATE_PLACEMENT_UNDECLARED");
-    expect(dryRun.stdout).toContain("approvalDigest");
-    expect(dryRun.stdout).not.toContain("Inbox");
-    expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(false);
-    await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf8")).resolves.toBe(yaml);
-  });
-
-  it("uses JSON-only taxonomy authority and accepts omitted placement without changing either file", async () => {
-    const vault = await makeVault();
-    await mkdir(path.join(vault, ".oms"), { recursive: true });
-    const yaml = "folders: {}\n";
-    const json = "{\"folders\":{}}\n";
-    await writeFile(path.join(vault, ".oms", "taxonomy.yaml"), yaml);
-    await writeFile(path.join(vault, ".oms", "taxonomy.json"), json);
-
-    const doctor = runCli(["template", "check", "--vault", vault]);
-    expect(doctor.status).toBe(0);
-    expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({
-      vault: await realpath(vault),
-      status: "needs-repair",
-      diagnostics: expect.arrayContaining([
-        expect.objectContaining({
-          code: "CONTRACT_ABSENT",
-          path: ".oms/template-policy.json",
-        }),
-      ]),
-    }));
-    // Legacy YAML is ignored, never migrated and never reported as authority.
-    expect(doctor.stdout).not.toContain("LEGACY_TAXONOMY_YAML");
-
-    await mkdir(path.join(vault, ".obsidian"), { recursive: true });
-    await mkdir(path.join(vault, "Templates"), { recursive: true });
-    await writeFile(path.join(vault, ".obsidian", "types.json"), JSON.stringify({ types: { template: "text" } }));
-    await writeFile(path.join(vault, "Templates", "note.md"), "---\ntemplate: note\n---\nbody\n");
-    const setup = runCli(["setup", "--vault", vault, "--dry-run"]);
-    expect(setup.status).toBe(0);
-    expect(setup.stdout).not.toContain("TEMPLATE_PLACEMENT_UNDECLARED");
-    expect(setup.stdout).toContain("approvalDigest");
-    expect(setup.stdout).not.toContain("Inbox");
-    expect(existsSync(path.join(vault, ".oms", "taxonomy.json"))).toBe(true);
-    expect(existsSync(path.join(vault, ".oms", "taxonomy.yaml"))).toBe(true);
-    await expect(readFile(path.join(vault, ".oms", "taxonomy.json"), "utf8")).resolves.toBe(json);
-    await expect(readFile(path.join(vault, ".oms", "taxonomy.yaml"), "utf8")).resolves.toBe(yaml);
+    expect(dryRun.status).toBe(1);
+    expect(dryRun.stderr).toContain("setup option --dry-run was removed");
+    expect(existsSync(path.join(vault, ".oms"))).toBe(false);
   });
 
   it("emits audit JSON and exits 0 for an existing approved contract", async () => {
     const vault = await makeVault();
-    await writeContractVault(vault);
+    await writeContractVault(vault, {
+      contractStoreRoot: path.join(smokeHome, ".oms", "vaults"),
+      properties: { title: { type: "text", intent: "Note title." } },
+      folders: { notes: { intent: "Notes." } },
+    });
     await mkdir(path.join(vault, "notes"), { recursive: true });
     await writeFile(path.join(vault, "notes", "Alpha.md"), "---\ntitle: Alpha\n---\nAlpha.\n");
     const audit = runCli(["note", "audit", "--vault", vault, "--folder", "notes", "--json"]);
     expect(audit.status, `${audit.stdout}\n${audit.stderr}`).toBe(0);
     expect(audit.stderr).toBe("");
-    // An unbound note is governed by the always-on default layer, not a defect.
-    expect(jsonObject(audit.stdout)).toEqual(expect.objectContaining({
+    // The audit re-judges against the sealed contract the child HOME holds.
+    expect(jsonObject(audit.stdout)).toEqual({
+      vault,
       folder: "notes",
+      contract: "sealed",
       scannedNotes: 1,
       clean: true,
-      templateCounts: { "<default>": 1 },
-    }));
+      violationCount: 0,
+      violations: [],
+    });
   });
 
   it("G002-CLI-001 rejects audit folder scopes that are not top-level folders", async () => {
@@ -398,16 +343,16 @@ describe("oms CLI dispatch", () => {
     expect(audit.stderr).toContain("path separators");
   });
 
-  it("reports incomplete local .oms during audit instead of falling back to bundled defaults", async () => {
+  it("audits a vault with a bare local .oms as unsealed instead of falling back to bundled defaults", async () => {
     const vault = await makeVault();
     await mkdir(path.join(vault, ".oms"), { recursive: true });
 
     const audit = runCli(["note", "audit", "--vault", vault, "--json"]);
 
-    expect(audit.status).toBe(1);
-    expect(audit.stdout).toBe("");
-    expect(audit.stderr).toContain("CONTRACT_UNVERIFIABLE");
-    expect(audit.stderr).not.toContain("bundled");
+    expect(audit.status, `${audit.stdout}\n${audit.stderr}`).toBe(0);
+    expect(audit.stderr).toBe("");
+    expect(jsonObject(audit.stdout)).toEqual(expect.objectContaining({ contract: "none", clean: true, violations: [] }));
+    expect(audit.stdout).not.toContain("bundled");
   });
 
   it("dispatches index status and rejects retired command names", async () => {
@@ -467,8 +412,7 @@ describe("oms CLI dispatch", () => {
       "utf-8",
     );
 
-    const setup = await approvedSetup(vault);
-    expect(setup.status).toBe(0);
+    await issueSettings(vault);
 
     const link = runCli(["bridge", "add", "--vault", vault, "--folder", "notes"], undefined, undefined, repo);
     expect(link.status, `${link.stdout}\n${link.stderr}`).toBe(0);
@@ -487,9 +431,9 @@ describe("oms CLI dispatch", () => {
     expect(agents).toContain("`oms search query \"what context should I know for this change?\"`");
     expect(agents).toContain("`oms serve mcp`");
 
-    const doctor = runCli(["template", "check"], undefined, undefined, repo);
+    const doctor = runCli(["contract", "status"], undefined, undefined, repo);
     expect(doctor.status).toBe(0);
-    expect(doctor.stdout).toContain('"status":');
+    expect(doctor.stdout).toContain('"contract":');
     const search = runCli(["search", "query", "--lex", "Alpha"], undefined, undefined, repo);
     expect(search.status).toBe(0);
     expect(search.stderr).toBe("");
@@ -502,7 +446,7 @@ describe("oms CLI dispatch", () => {
 
   it("routes link suggestion and checking without touching the vault", async () => {
     const vault = await makeVault();
-    expect((await approvedSetup(vault)).status).toBe(0);
+    await issueSettings(vault);
     await mkdir(path.join(vault, "terms"), { recursive: true });
     await mkdir(path.join(vault, "notes"), { recursive: true });
     await writeFile(path.join(vault, "terms", "Ataraxia.md"), "---\ntemplate: note\ntitle: Ataraxia\n---\n\nCalm.\n", "utf-8");

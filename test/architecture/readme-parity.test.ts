@@ -132,27 +132,25 @@ const CLI_FAMILIES = [
   "oms serve",
   "oms setup",
   "oms status",
-  "oms template",
 ] as const;
 
 const MCP_TOOLS = ["doctor", "link", "search", "status", "write"] as const;
 
 const CLI_SURFACES = [
   "oms bridge add|remove|status",
-  "oms contract interview|status|reissue-id",
+  "oms contract setup|extract|status|doctor",
   "oms graph build|status",
-  "oms hook pre|post",
+  "oms hook pre",
   "oms host install|remove|sync|status",
   "oms index sync|embed|repair|status|clean",
   "oms link suggest|check",
   "oms model install|select|waive|status",
-  "oms note guide|check|audit|get",
+  "oms note audit|get",
   "oms package check|update",
   "oms search query|context",
   "oms serve mcp|http",
   "oms setup",
   "oms status",
-  "oms template list|show|scan|check|publish|review-sources|acknowledge-source|relink-source",
 ] as const;
 
 const CURRENT_CLI_SURFACES = [
@@ -160,7 +158,7 @@ const CURRENT_CLI_SURFACES = [
   "oms search context",
   "oms index sync|embed|repair|status|clean",
   "oms index status --view status|collections|contexts",
-  "oms note guide|check|audit|get",
+  "oms note audit|get",
   "oms host install|remove|sync|status",
   "oms package check|update",
   "oms serve mcp|http",
@@ -185,15 +183,13 @@ describe("README.md and README.ko.md agree on product facts", () => {
     expect(toolNames(section(ko, SECTIONS.mcp[KO], KO))).toEqual(advertised);
   });
 
-  it("enumerates eight shared skills, including tool-less interview, distinct from the five tools", async () => {
+  it("enumerates six shared skills, including tool-less distill, distinct from the five tools", async () => {
     const skills = [
       "distill",
       "doctor",
-      "interview",
       "link",
       "search",
       "status",
-      "template",
       "write",
     ];
     expect([...HARNESS_SHARED_SKILLS]).toEqual(skills);
@@ -211,7 +207,7 @@ describe("README.md and README.ko.md agree on product facts", () => {
   it("lists the complete current CLI families and synchronized canonical surfaces", async () => {
     const [en, ko] = await Promise.all([read(EN), read(KO)]);
     expect([...HARNESS_CLI_COMMANDS].map((command) => `oms ${command.name}`).sort()).toEqual([...CLI_FAMILIES]);
-    expect(CLI_FAMILIES).toHaveLength(15);
+    expect(CLI_FAMILIES).toHaveLength(14);
     for (const [file, source] of [[EN, en], [KO, ko]] as const) {
       const cli = section(source, SECTIONS.cli[file], file);
       expect(cliCommands(cli)).toEqual(CLI_FAMILIES);

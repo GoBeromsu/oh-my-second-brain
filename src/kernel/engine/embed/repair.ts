@@ -22,7 +22,7 @@ export interface RepairEngineStoreOptions {
 /**
  * This service owns only the engine SQLite file and its SQLite sidecars. It
  * never opens a legacy store and never writes vault Markdown or authoritative
- * `.oms` files (taxonomy, template-policy, types, or models).
+ * `.oms/settings.json`.
  */
 export function repairEngineStore(options: RepairEngineStoreOptions): EngineStoreRepairPlan {
   const storePath = engineStorePath(options.vault);

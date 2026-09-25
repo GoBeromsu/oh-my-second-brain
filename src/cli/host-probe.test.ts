@@ -8,6 +8,7 @@ import { hostSurfaceForRuntime } from "../kernel/install/hosts.js";
 import { installCodex } from "../vendors/codex/codex.js";
 import { installHermes } from "../vendors/hermes/hermes.js";
 import { computeTreeDigest, serializeProvenance } from "../kernel/install/provenance.js";
+import { HOOK_MATCHER, READ_MATCHER } from "../vendors/claude/claude-hooks.js";
 import { discoverHostInstallAssets } from "./host-probe.js";
 
 const roots: string[] = [];
@@ -91,27 +92,45 @@ describe("discoverHostInstallAssets", () => {
     expect(result.hosts).toContainEqual({ host: "claude", state: "degraded" });
   });
 
-  it("rejects lookalike guard and post-guard commands", async () => {
+  it("rejects lookalike guard commands", async () => {
     const home = await homes();
     await mkdir(home.claude, { recursive: true });
     await writeFile(path.join(home.claude, "settings.json"), JSON.stringify({ hooks: {
-      PreToolUse: [{ matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: "not-owned oms-guard" }] }],
-      PostToolUse: [{ matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: "not-owned oms-post-guard" }] }],
+      PreToolUse: [
+        { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: "not-owned oms-guard" }] },
+        { matcher: READ_MATCHER, hooks: [{ type: "command", command: "not-owned oms-guard" }] },
+      ],
     } }));
     const result = await discoverHostInstallAssets();
     expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:claude", evidence: { state: "missing", cause: null } }));
     expect(result.hosts.map(host => host.host)).toEqual(["claude", "codex", "hermes"]);
   });
 
-  it("does not accept Claude hooks registered under swapped events", async () => {
+  it("does not accept a legacy or event-swapped Claude registration as complete", async () => {
     const home = await homes();
     await mkdir(home.claude, { recursive: true });
     await writeFile(path.join(home.claude, "settings.json"), JSON.stringify({ hooks: {
-      PostToolUse: [{ matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] }],
-      PreToolUse: [{ matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-post-guard' }] }],
+      PostToolUse: [{ matcher: HOOK_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] }],
+      PreToolUse: [
+        { matcher: "Write|Edit|NotebookEdit", hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] },
+        { matcher: READ_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] },
+      ],
     } }));
     const result = await discoverHostInstallAssets();
     expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:claude", evidence: { state: "missing", cause: null } }));
+  });
+
+  it("accepts the write and read PreToolUse entries as a complete Claude registration", async () => {
+    const home = await homes();
+    await mkdir(home.claude, { recursive: true });
+    await writeFile(path.join(home.claude, "settings.json"), JSON.stringify({ hooks: {
+      PreToolUse: [
+        { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] },
+        { matcher: READ_MATCHER, hooks: [{ type: "command", command: 'OMS_VAULT="/vault" oms-guard' }] },
+      ],
+    } }));
+    const result = await discoverHostInstallAssets();
+    expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:claude", evidence: { state: "ok", cause: null } }));
   });
 
   it.each([
@@ -224,14 +243,12 @@ describe("discoverHostInstallAssets", () => {
     const expectedSkills = [
       "distill",
       "doctor",
-      "interview",
       "link",
       "search",
       "status",
-      "template",
       "write",
     ].map(skill => path.join(home.codex, "skills", `oms-${skill}`));
-    expect(host.skillDirs).toEqual(["distill", "doctor", "interview", "link", "search", "status", "template", "write"]);
+    expect(host.skillDirs).toEqual(["distill", "doctor", "link", "search", "status", "write"]);
     expect(installed.paths.filter(candidate => candidate.includes(`${path.sep}skills${path.sep}`)).sort()).toEqual([...expectedSkills].sort());
     expect(installed.paths.some(candidate => candidate.endsWith(`${path.sep}oms-setup`))).toBe(false);
 

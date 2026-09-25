@@ -411,7 +411,7 @@ async function* walkVaultMarkdownStrict(
       yield* walkVaultMarkdownStrict(fullPath, base, isExcluded, root, visitedDirectories);
     } else if (entryStat.isFile() && entry.name.toLowerCase().endsWith(".md")) {
       const notePath = path.relative(base, fullPath).replace(/\\/g, "/");
-      // Taxonomy-declared non-notes (template sources above all) never enter
+      // Contract-excluded non-notes (template sources above all) never enter
       // the EAV scan: their frontmatter is intentionally not valid YAML.
       if (!(await isExcluded(notePath))) yield notePath;
     }

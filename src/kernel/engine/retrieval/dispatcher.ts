@@ -132,7 +132,7 @@ export type HydeGenerator = (query: string) => Promise<string>;
 
 export interface ExpansionRequest {
   readonly query: string;
-  /** Taxonomy-derived context only; callers must not pass arbitrary persisted maps. */
+  /** Sealed folder-meaning context only; callers must not pass arbitrary persisted maps. */
   readonly context?: string;
   readonly maxQueries?: number;
   readonly cancel?: { readonly cancelled: boolean };
@@ -298,8 +298,8 @@ async function dispatchOne(
           throw new Error(
             "Explicit HyDE retrieval requires a generation model to write the hypothetical " +
               `document (set ${GENERATE_PROVIDER_ENV} and ${GENERATE_MODEL_ENV}) and an embedding ` +
-              `model to embed it (set ${EMBED_PROVIDER_ENV} and ${EMBED_MODEL_ENV}). Declare them in ` +
-              "`.oms/models.json`, or install them with `oms setup`.",
+              `model to embed it (set ${EMBED_PROVIDER_ENV} and ${EMBED_MODEL_ENV}). The embedding model may ` +
+              "also be declared as `embedding.model` in `.oms/settings.json`.",
           );
         }
         hypoDoc = assertGeneratedDocument(

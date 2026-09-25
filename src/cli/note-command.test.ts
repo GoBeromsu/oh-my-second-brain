@@ -1,31 +1,13 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { checkContract, selectContract, resolveVault } = vi.hoisted(() => ({
-  checkContract: vi.fn(async (input: { readonly locator: { readonly connectionId: string; readonly sessionId: string } }) => ({
-    locator: input.locator,
-    notePath: "notes/one.md",
-    result: { valid: true, structural: "pass", semantic: "not-evaluated", violations: [] },
-  })),
-  selectContract: vi.fn(async (input: { readonly notePath: string; readonly templateId: string | null }) => ({
-    state: "selected",
-    locator: { connectionId: "c", sessionId: "s" },
-    notePath: input.notePath,
-    selected: { binding: { templateId: input.templateId } },
-  })),
+const { resolveVault } = vi.hoisted(() => ({
   resolveVault: vi.fn(async () => ({ vault: process.cwd(), source: "cwd" as const, scope: null })),
 }));
 
-vi.mock("../kernel/templates/service.js", () => ({
-  checkContract,
-  selectContract,
-  ContractServiceError: class extends Error {
-    constructor(readonly code: string, message: string) { super(`${code}: ${message}`); }
-  },
-}));
 vi.mock("../kernel/link/link.js", () => ({ resolveEffectiveVault: resolveVault }));
 
 import { noteUsage, runNoteCommand } from "./note-command.js";
@@ -63,8 +45,10 @@ afterEach(async () => {
 describe("note command", () => {
   it("documents every public leaf and rejects retired leaves with no alias", async () => {
     const usage = noteUsage();
-    for (const verb of ["guide", "check", "audit", "get"]) expect(usage).toContain(verb);
-    expect(usage).toContain("Leaves: guide | check | audit | get");
+    for (const verb of ["audit", "get"]) expect(usage).toContain(verb);
+    expect(usage).toContain("Leaves: audit | get");
+    expect(usage).not.toMatch(/\bguide\b/u);
+    expect(usage).not.toMatch(/\bcheck\b/u);
     expect(usage).not.toMatch(/\bcomplete\b/u);
     expect(usage).not.toContain("--evidence-path");
     expect(usage).not.toMatch(/\bcreate\b/u);
@@ -72,76 +56,10 @@ describe("note command", () => {
     expect(usage).not.toMatch(/\bupdate\b/u);
     expect(usage).not.toMatch(/\bbackfill\b/u);
 
-    for (const args of [["create"], ["append", "notes/a.md"], ["update", "notes/a.md"], ["backfill", "notes/a.md"], ["complete", "--checkpoint", "{}", "--review", "{}"]]) {
+    for (const args of [["guide", "notes/a.md"], ["check", "--connection-id", "c", "--session-id", "s"], ["create"], ["append", "notes/a.md"], ["update", "notes/a.md"], ["backfill", "notes/a.md"], ["complete", "--checkpoint", "{}", "--review", "{}"]]) {
       await runNoteCommand(args);
       expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "NOTE_ARGS_INVALID" }] });
     }
-    expect(checkContract).not.toHaveBeenCalled();
-    expect(selectContract).not.toHaveBeenCalled();
-  });
-
-  it("selects a contract for the saved path without writing vault bytes", async () => {
-    const root = await vault();
-    await writeFile(path.join(root, "notes", "kept.md"), "unchanged\n");
-    const before = await readdir(root, { recursive: true });
-    await runNoteCommand(["guide", "notes/one.md", "--vault", root, "--template-id", "note"]);
-    expect(output()).toMatchObject({ state: "selected", notePath: "notes/one.md" });
-    expect(selectContract).toHaveBeenCalledWith({
-      target: { vault: root, source: "explicit" },
-      notePath: "notes/one.md",
-      templateId: "note",
-    });
-    expect(await readdir(root, { recursive: true })).toEqual(before);
-    expect(await import("node:fs/promises").then(fs => fs.readFile(path.join(root, "notes", "kept.md"), "utf8"))).toBe("unchanged\n");
-    expect(checkContract).not.toHaveBeenCalled();
-  });
-
-  it("forwards the three migration ids together so a legacy vault can be selected at all", async () => {
-    const root = await vault();
-    // Without these ids selectContract answers review-required by design, so a
-    // surface that cannot pass them makes on-use migration unreachable.
-    await runNoteCommand([
-      "guide", "notes/one.md", "--vault", root,
-      "--migration-operation-id", "11111111-1111-4111-8111-111111111111",
-      "--migration-transaction-id", "22222222-2222-4222-8222-222222222222",
-      "--migration-vault-id", "33333333-3333-4333-8333-333333333333",
-    ]);
-    expect(selectContract).toHaveBeenCalledWith({
-      target: { vault: root, source: "explicit" },
-      notePath: "notes/one.md",
-      templateId: null,
-      migration: {
-        operationId: "11111111-1111-4111-8111-111111111111",
-        transactionId: "22222222-2222-4222-8222-222222222222",
-        vaultId: "33333333-3333-4333-8333-333333333333",
-      },
-    });
-
-    selectContract.mockClear();
-    await runNoteCommand(["guide", "notes/one.md", "--vault", root, "--migration-operation-id", "11111111-1111-4111-8111-111111111111"]);
-    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "NOTE_ARGS_INVALID" }] });
-    expect(selectContract).not.toHaveBeenCalled();
-  });
-
-  it("checks through the selection locator and refuses retired check arguments", async () => {
-    const root = await vault();
-    await runNoteCommand(["check", "--vault", root, "--connection-id", "c", "--session-id", "s"]);
-    expect(checkContract).toHaveBeenCalledWith({ vault: root, locator: { connectionId: "c", sessionId: "s" } });
-    expect(output()).toMatchObject({ result: { structural: "pass", semantic: "not-evaluated" } });
-
-    checkContract.mockClear();
-    await runNoteCommand(["check", "notes/one.md", "--vault", root, "--template-id", "note"]);
-    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "NOTE_ARGS_INVALID" }] });
-    expect(checkContract).not.toHaveBeenCalled();
-  });
-
-  it("refuses a cwd-inferred vault for guide and check", async () => {
-    await runNoteCommand(["guide", "notes/one.md"]);
-    expect(output()).toMatchObject({ status: "rejected", rejection: { code: "TARGET_UNVERIFIED" } });
-    await runNoteCommand(["check", "--connection-id", "c", "--session-id", "s"]);
-    expect(output()).toMatchObject({ status: "rejected", rejection: { code: "TARGET_UNVERIFIED" } });
-    expect(checkContract).not.toHaveBeenCalled();
-    expect(selectContract).not.toHaveBeenCalled();
   });
 
   it("reads single, multi, and window documents without creating the engine store", async () => {

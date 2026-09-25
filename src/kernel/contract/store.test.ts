@@ -1,187 +1,296 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { contractStoreRoot, loadLayers, readStoreMeta, recordSeen, reissue, sealLayer } from "./store.js";
-import type { PublicManifest, SealedLayer } from "./types.js";
+import { digestBytes } from "../conventions/canonical.js";
+import { currentSequence, diagnoseStore, readDeclined, readIndex, readStore, SEAL_LOCK_STALE_MS, sealContract, storeExists, storeHousekeeping, writeIndexEntry } from "./store.js";
+import type { VaultContract } from "./types.js";
 
-const roots: string[] = [];
-const previousRoot = process.env["OMS_CONTRACT_STORE_ROOT"];
-const VAULT = "abcdef00-0000-4000-8000-000000000001";
-const OTHER = "abcdef00-0000-4000-8000-000000000002";
-const COMMON = "00000000-0000-4000-8000-0000000000c0";
-const TEMPLATE = "00000000-0000-4000-8000-0000000000d0";
-const RESEAL = "00000000-0000-4000-8000-0000000000d1";
-const HASH = `sha256:${"b".repeat(64)}`;
-let store: string;
+const ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
+const OTHER = "9b1d2c3e-4f5a-4b6c-8d7e-0f1a2b3c4d5e";
+
+const CONTRACT: VaultContract = {
+  folders: { Projects: { meaning: "projects", searchExclude: false } },
+  properties: { rating: { meaning: "score", type: "number", default: false, required: true, rules: [{ kind: "range", min: 0.5, max: 4.5 }] } },
+  templates: {
+    Meeting: { source: "Templates/Meeting.md", sourceHash: `sha256:${"a".repeat(64)}`, applyFolder: "Meetings", requiredProperties: ["rating"], narrowedRules: {}, requiredHeadings: ["Agenda"] },
+  },
+};
+
+let base: string;
+let root: string;
+let vault: string;
 
 beforeEach(async () => {
-  store = await mkdtemp(join(tmpdir(), "oms-contract-store-"));
-  roots.push(store);
-  process.env["OMS_CONTRACT_STORE_ROOT"] = join(store, "vaults");
+  base = await realpath(await mkdtemp(join(tmpdir(), "oms-store-")));
+  root = join(base, "home", ".oms", "vaults");
+  vault = join(base, "vault");
 });
 
 afterEach(async () => {
-  if (previousRoot === undefined) delete process.env["OMS_CONTRACT_STORE_ROOT"];
-  else process.env["OMS_CONTRACT_STORE_ROOT"] = previousRoot;
-  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+  await rm(base, { recursive: true, force: true });
 });
 
-function layer(sealId: string, sourcePath: string | null): SealedLayer {
-  return {
-    sealId,
-    fields: [{ name: "status", type: "text", required: true, description: "", variable: null, rules: [{ kind: "allowed", values: ["open"] }] }],
-    requiredHeadings: [],
-    applyFolder: null,
-    sourcePath,
-    sourceHash: sourcePath === null ? null : HASH,
-    answers: { status: "only open" },
-  };
+async function generation(): Promise<string> {
+  return join(root, await readlink(join(root, ID)));
 }
 
-function manifest(templateSeal = TEMPLATE): PublicManifest {
-  return {
-    version: 1,
-    common: { sealId: COMMON, fields: [{ name: "status", type: "text", required: true, description: "" }] },
-    templates: [{ id: "T/Meeting.md", name: "Meeting", applyFolder: null, fields: [], requiredHeadings: [], sourceHash: HASH, sealId: templateSeal }],
-  };
-}
-
-async function sealBoth(): Promise<void> {
-  expect(await sealLayer(VAULT, layer(COMMON, null), "/vault")).toEqual({ ok: true });
-  expect(await sealLayer(VAULT, layer(TEMPLATE, "T/Meeting.md"), "/vault")).toEqual({ ok: true });
-}
-
-const vaultDir = (id = VAULT): string => join(store, "vaults", id);
-
-describe("contractStoreRoot", () => {
-  it("honours the override and rejects a relative root", () => {
-    expect(contractStoreRoot({ OMS_CONTRACT_STORE_ROOT: "/abs/root" })).toBe("/abs/root");
-    expect(() => contractStoreRoot({ OMS_CONTRACT_STORE_ROOT: "relative/root" })).toThrow(/absolute/);
-    expect(contractStoreRoot({})).toMatch(/\.oms[\\/]vaults$/);
+describe("contract store", () => {
+  it("round-trips a sealed contract", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readIndex(root)).toEqual({ state: "ok", entries: { [vault]: ID } });
+    expect(await storeExists(ID, root)).toBe(true);
+    expect((await lstat(join(root, ID))).isSymbolicLink()).toBe(true);
   });
 
-  it("reports invalid-root on read and refuses to seal", async () => {
-    process.env["OMS_CONTRACT_STORE_ROOT"] = "relative/root";
-    expect(await readStoreMeta(VAULT)).toEqual({ state: "invalid", reason: "invalid-root" });
-    expect((await sealLayer(VAULT, layer(COMMON, null), "/vault")).ok).toBe(false);
-  });
-});
-
-describe("sealLayer and loadLayers", () => {
-  it("writes private directories and files, only under the root", async () => {
-    await sealBoth();
-    for (const directory of [join(store, "vaults"), vaultDir(), join(vaultDir(), "layers")]) {
-      expect((await stat(directory)).mode & 0o777).toBe(0o700);
+  it("writes private directories and files", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    const dir = await generation();
+    expect((await stat(root)).mode & 0o777).toBe(0o700);
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    for (const file of ["folders.json", "properties.json", "manifest.json", "templates/Meeting.json"]) {
+      expect((await stat(join(dir, file))).mode & 0o777).toBe(0o600);
     }
-    for (const file of [join(vaultDir(), "meta.json"), join(vaultDir(), "layers", `${COMMON}.json`), join(vaultDir(), "layers", `${TEMPLATE}.json`)]) {
-      expect((await stat(file)).mode & 0o777).toBe(0o600);
-    }
-    expect(await readdir(store)).toEqual(["vaults"]);
-    const meta = await readStoreMeta(VAULT);
-    expect(meta).toEqual({ state: "ok", meta: { version: 1, vaultId: VAULT, lastSeenRealpath: "/vault", layers: [COMMON, TEMPLATE] } });
+    expect((await stat(join(root, "index.json"))).mode & 0o777).toBe(0o600);
   });
 
-  it("loads every layer the manifest names", async () => {
-    await sealBoth();
-    const loaded = await loadLayers(VAULT, manifest());
-    expect(loaded.orphaned).toBe(false);
-    expect(loaded.common).toEqual({ state: "ok", layer: layer(COMMON, null) });
-    expect(loaded.templates.get("T/Meeting.md")).toEqual({ state: "ok", layer: layer(TEMPLATE, "T/Meeting.md") });
+  it("keeps an absent axis absent", async () => {
+    const open: VaultContract = { folders: null, properties: null, templates: {} };
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: open }, root);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: open });
   });
 
-  it("reports missing-store without creating it", async () => {
-    const loaded = await loadLayers(VAULT, manifest());
-    expect(loaded.common).toEqual({ state: "unreadable", reason: "missing-store" });
-    expect(loaded.templates.get("T/Meeting.md")).toEqual({ state: "unreadable", reason: "missing-store" });
-    expect(await readdir(store)).toEqual([]);
+  it("treats an altered file as unreadable", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    await writeFile(join(await generation(), "folders.json"), "{\"version\":1,\"folders\":{}}\n");
+    expect(await readStore(ID, root)).toEqual({ state: "unreadable" });
   });
 
-  it("reports corrupt, missing-layer and id-mismatch per layer", async () => {
-    await sealBoth();
-    await writeFile(join(vaultDir(), "layers", `${COMMON}.json`), "{");
-    await rm(join(vaultDir(), "layers", `${TEMPLATE}.json`));
-    let loaded = await loadLayers(VAULT, manifest());
-    expect(loaded.common).toEqual({ state: "unreadable", reason: "corrupt" });
-    expect(loaded.templates.get("T/Meeting.md")).toEqual({ state: "unreadable", reason: "missing-layer" });
-
-    await writeFile(join(vaultDir(), "layers", `${COMMON}.json`), JSON.stringify({ version: 1, layer: layer(COMMON, "T/Other.md") }));
-    await writeFile(join(vaultDir(), "layers", `${TEMPLATE}.json`), JSON.stringify({ version: 1, layer: layer(RESEAL, "T/Meeting.md") }));
-    loaded = await loadLayers(VAULT, manifest());
-    expect(loaded.common).toEqual({ state: "unreadable", reason: "id-mismatch" });
-    expect(loaded.templates.get("T/Meeting.md")).toEqual({ state: "unreadable", reason: "id-mismatch" });
+  it("treats an altered manifest as unreadable", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    const manifest = join(await generation(), "manifest.json");
+    const parsed = JSON.parse(await readFile(manifest, "utf8")) as { files: Record<string, string> };
+    parsed.files["folders.json"] = `sha256:${"0".repeat(64)}`;
+    await writeFile(manifest, JSON.stringify(parsed));
+    expect(await readStore(ID, root)).toEqual({ state: "unreadable" });
   });
 
-  it("reports missing-layer for a manifest seal the store does not list", async () => {
-    await sealBoth();
-    const loaded = await loadLayers(VAULT, { ...manifest(), templates: [...manifest().templates, { ...manifest().templates[0]!, id: "T/New.md", sealId: RESEAL }] });
-    expect(loaded.templates.get("T/New.md")).toEqual({ state: "unreadable", reason: "missing-layer" });
-    expect(loaded.templates.get("T/Meeting.md")?.state).toBe("ok");
+  it("treats an extra file as unreadable", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    await writeFile(join(await generation(), "extra.json"), "{}");
+    expect(await readStore(ID, root)).toEqual({ state: "unreadable" });
   });
 
-  it("fails every layer when the store holds an orphan seal", async () => {
-    await sealBoth();
-    const loaded = await loadLayers(VAULT, { ...manifest(), templates: [] });
-    expect(loaded.orphaned).toBe(true);
-    expect(loaded.common).toEqual({ state: "unreadable", reason: "manifest-mismatch" });
+  it("reads nothing into existence", async () => {
+    expect(await readStore(ID, root)).toEqual({ state: "absent" });
+    expect(await readIndex(root)).toEqual({ state: "absent" });
+    expect(await storeExists(ID, root)).toBe(false);
+    await expect(stat(root)).rejects.toThrow();
   });
 
-  it("treats corrupt or foreign meta as unreadable", async () => {
-    await sealBoth();
-    await writeFile(join(vaultDir(), "meta.json"), "[]");
-    expect(await readStoreMeta(VAULT)).toEqual({ state: "invalid", reason: "corrupt" });
-    expect((await loadLayers(VAULT, manifest())).common).toEqual({ state: "unreadable", reason: "corrupt" });
-    expect((await sealLayer(VAULT, layer(RESEAL, "T/Meeting.md"), "/vault")).ok).toBe(false);
-    await writeFile(join(vaultDir(), "meta.json"), JSON.stringify({ version: 1, vaultId: OTHER, lastSeenRealpath: null, layers: [] }));
-    expect(await readStoreMeta(VAULT)).toEqual({ state: "invalid", reason: "id-mismatch" });
+  it("refuses an id that is not a UUID", async () => {
+    await expect(sealContract({ vaultRealPath: vault, vaultId: "../x", contract: CONTRACT }, root)).rejects.toThrow(/CONTRACT_VAULT_ID_INVALID/);
+    expect(await readStore("../x", root)).toEqual({ state: "unreadable" });
   });
 
-  it("reseals by replacing the old seal and refuses duplicates", async () => {
-    await sealBoth();
-    expect((await sealLayer(VAULT, layer(TEMPLATE, "T/Meeting.md"), "/vault")).ok).toBe(false);
-    expect(await sealLayer(VAULT, layer(RESEAL, "T/Meeting.md"), "/vault", { replaces: TEMPLATE })).toEqual({ ok: true });
-    expect((await readdir(join(vaultDir(), "layers"))).sort()).toEqual([`${COMMON}.json`, `${RESEAL}.json`]);
-    const loaded = await loadLayers(VAULT, manifest(RESEAL));
-    expect(loaded.templates.get("T/Meeting.md")?.state).toBe("ok");
+  it("reseals into a new generation", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    const next: VaultContract = { ...CONTRACT, folders: { Areas: { meaning: "areas", searchExclude: true } } };
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: next }, root);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: next });
   });
 
-  it("rejects an invalid layer shape or vault id", async () => {
-    expect((await sealLayer("not-a-uuid", layer(COMMON, null), "/vault")).ok).toBe(false);
-    expect((await sealLayer(VAULT, { ...layer(COMMON, null), sealId: "x" }, "/vault")).ok).toBe(false);
-    expect(await readdir(store)).toEqual([]);
+  it("reports a corrupt index", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    await writeFile(join(root, "index.json"), "{not json");
+    expect(await readIndex(root)).toEqual({ state: "corrupt" });
+  });
+
+  it("refuses to reset a corrupt index and rebuilds it only when asked, keeping the old bytes aside", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    await writeFile(join(root, "index.json"), "{not json");
+    await expect(writeIndexEntry(vault, ID, root)).rejects.toThrow(/^CONTRACT_INDEX_CORRUPT: /);
+    await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT }, root)).rejects.toThrow(/^CONTRACT_INDEX_CORRUPT: /);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readFile(join(root, "index.json"), "utf8")).toBe("{not json");
+    await writeIndexEntry(vault, ID, root, { rebuildCorrupt: true });
+    expect(await readIndex(root)).toEqual({ state: "ok", entries: { [vault]: ID } });
+    const aside = (await readdir(root)).filter(name => name.startsWith("index.json.corrupt-"));
+    expect(aside).toHaveLength(1);
+    expect(await readFile(join(root, aside[0]!), "utf8")).toBe("{not json");
+  });
+
+  it("serializes concurrent index updates so no entry is lost", async () => {
+    const paths = Array.from({ length: 8 }, (_, index) => join(base, `vault-${index}`));
+    await Promise.all(paths.map(path => mkdir(path)));
+    await Promise.all(paths.map((path, index) => writeIndexEntry(path, index % 2 === 0 ? ID : OTHER, root)));
+    const read = await readIndex(root);
+    expect(read.state === "ok" ? Object.keys(read.entries).sort() : []).toEqual([...paths].sort());
+    expect((await readdir(root)).filter(name => name.includes("lock"))).toEqual([]);
+  });
+
+  it("keeps declined answers with the generation, outside the contract", async () => {
+    const declined = { folders: ["Inbox"], properties: ["mood"], templates: { Daily: `sha256:${"b".repeat(64)}` } };
+    expect(await readDeclined(ID, root)).toEqual({ folders: [], properties: [], templates: {} });
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT, declined }, root);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readDeclined(ID, root)).toEqual(declined);
+    expect((await stat(join(await generation(), "declined.json"))).mode & 0o777).toBe(0o600);
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    expect(await readDeclined(ID, root)).toEqual({ folders: [], properties: [], templates: {} });
+  });
+
+  it("prunes stale entries for the same id but keeps other vaults", async () => {
+    await writeIndexEntry(join(base, "gone"), ID, root);
+    await writeIndexEntry(join(base, "other"), OTHER, root);
+    await writeIndexEntry(vault, ID, root);
+    expect(await readIndex(root)).toEqual({ state: "ok", entries: { [join(base, "other")]: OTHER, [vault]: ID } });
   });
 });
 
-describe("recordSeen", () => {
-  it("creates meta when absent and keeps layers", async () => {
-    expect(await recordSeen(VAULT, "/first")).toEqual({ ok: true });
-    expect(await readStoreMeta(VAULT)).toEqual({ state: "ok", meta: { version: 1, vaultId: VAULT, lastSeenRealpath: "/first", layers: [] } });
-    await sealBoth();
-    await recordSeen(VAULT, "/second");
-    const meta = await readStoreMeta(VAULT);
-    expect(meta.state === "ok" && meta.meta).toMatchObject({ lastSeenRealpath: "/second", layers: [COMMON, TEMPLATE] });
+async function generations(): Promise<string[]> {
+  return (await readdir(root)).filter(name => /^\.[0-9a-f-]+\.\d+$/.test(name)).sort();
+}
+
+const NEXT: VaultContract = { ...CONTRACT, folders: { Areas: { meaning: "areas", searchExclude: true } } };
+const HOST = "this-host";
+
+async function plantLock(owner: { pid: number; host: string; startedAt: number }): Promise<void> {
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, `.${ID}.lock`), JSON.stringify(owner));
+}
+
+describe("locked atomic reseal", () => {
+  it("aborts on a live lock without touching the store", async () => {
+    await plantLock({ pid: 4242, host: HOST, startedAt: 1_000 });
+    const deps = { host: HOST, now: () => 2_000, isPidAlive: () => true, confirmStaleReclaim: async () => true };
+    await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root, deps)).rejects.toThrow(/CONTRACT_SEAL_BUSY: another seal in progress/);
+    expect(await readStore(ID, root)).toEqual({ state: "absent" });
+    expect(await storeHousekeeping(ID, root, deps)).toEqual({ staleLocks: 0, orphans: 0 });
+  });
+
+  it("reclaims a same-host lock whose pid is gone, only after confirmation", async () => {
+    await plantLock({ pid: 4242, host: HOST, startedAt: 1_000 });
+    const dead = { host: HOST, now: () => 2_000, isPidAlive: () => false };
+    expect(await storeHousekeeping(ID, root, dead)).toEqual({ staleLocks: 1, orphans: 0 });
+    await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root, dead)).rejects.toThrow(/CONTRACT_SEAL_LOCK_STALE/);
+    await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root, { ...dead, confirmStaleReclaim: async () => false })).rejects.toThrow(/CONTRACT_SEAL_LOCK_STALE/);
+    expect(await readStore(ID, root)).toEqual({ state: "absent" });
+
+    let asked = 0;
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root, { ...dead, confirmStaleReclaim: async () => { asked += 1; return true; } });
+    expect(asked).toBe(1);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect((await readdir(root)).filter(name => name.includes(".lock"))).toEqual([]);
+  });
+
+  it("judges a lock from another host by age alone", async () => {
+    await plantLock({ pid: 4242, host: "elsewhere", startedAt: 1_000 });
+    const young = { host: HOST, now: () => 1_000 + SEAL_LOCK_STALE_MS, isPidAlive: () => false, confirmStaleReclaim: async () => true };
+    await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root, young)).rejects.toThrow(/CONTRACT_SEAL_BUSY/);
+    const old = { ...young, now: () => 1_001 + SEAL_LOCK_STALE_MS, isPidAlive: () => true };
+    expect(await storeHousekeeping(ID, root, old)).toEqual({ staleLocks: 1, orphans: 0 });
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root, old);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+  });
+
+  it("aborts when another seal finished after the interview read the contract", async () => {
+    const baseSeq = await currentSequence(ID, root);
+    expect(baseSeq).toBe("none");
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT, baseSeq }, root)).rejects.toThrow(/CONTRACT_SEAL_CHANGED: .*oms setup again/);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await currentSequence(ID, root)).toBe(1);
+    expect((await readdir(root)).some(name => name.endsWith(".lock"))).toBe(false);
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT, baseSeq: 1 }, root);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: NEXT });
+  });
+
+  it("keeps N-1 so a read that resolved before a reseal still completes", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    const resolved = await generation();
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT }, root);
+    expect(JSON.parse(await readFile(join(resolved, "folders.json"), "utf8"))).toEqual({ version: 1, folders: CONTRACT.folders });
+    expect(await generations()).toEqual([`.${ID}.1`, `.${ID}.2`]);
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    expect(await generations()).toEqual([`.${ID}.2`, `.${ID}.3`]);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+  });
+
+  it("moves a real directory aside on the first seal", async () => {
+    await mkdir(join(root, ID), { recursive: true });
+    await writeFile(join(root, ID, "folders.json"), "{}");
+    expect(await currentSequence(ID, root)).toBe("directory");
+    expect(await diagnoseStore(ID, root)).toBe("link-dangling");
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    expect((await lstat(join(root, ID))).isSymbolicLink()).toBe(true);
+    expect(await generations()).toEqual([`.${ID}.0`, `.${ID}.1`]);
+    expect(await readFile(join(root, `.${ID}.0`, "folders.json"), "utf8")).toBe("{}");
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+  });
+
+  it("puts a legacy directory back when the link swap fails", async () => {
+    await mkdir(join(root, ID), { recursive: true });
+    await writeFile(join(root, ID, "folders.json"), "{}");
+    let renames = 0;
+    const failing = { fs: { rename: (async (from: string, to: string) => {
+      renames += 1;
+      if (from.endsWith(".link-tmp")) throw new Error("disk gone");
+      await rename(from, to);
+    }) as never, symlink, rm } };
+    await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root, failing)).rejects.toThrow(/disk gone/);
+    expect(renames).toBe(3);
+    expect((await lstat(join(root, ID))).isDirectory()).toBe(true);
+    expect(await readFile(join(root, ID, "folders.json"), "utf8")).toBe("{}");
+    expect(await generations()).toEqual([]);
+    expect((await readdir(root)).filter(name => name.includes("link-tmp") || name.includes(".lock"))).toEqual([]);
+  });
+
+  it("removes orphan generations and reclaimed lock leftovers under the lock", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT }, root);
+    await mkdir(join(root, `.${ID}.9`));
+    await writeFile(join(root, `.${ID}.lock.stale-5`), "{}");
+    expect(await storeHousekeeping(ID, root)).toEqual({ staleLocks: 1, orphans: 1 });
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    expect(await generations()).toEqual([`.${ID}.2`, `.${ID}.3`]);
+    expect(await storeHousekeeping(ID, root)).toEqual({ staleLocks: 0, orphans: 0 });
+  });
+
+  it("leaves the previous contract intact when the swap fails midway", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    const failing = { fs: { rename: (async () => { throw new Error("disk gone"); }) as never, symlink, rm } };
+    await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT }, root, failing)).rejects.toThrow(/disk gone/);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await generations()).toEqual([`.${ID}.1`]);
+    expect((await readdir(root)).filter(name => name.includes(".lock") || name.includes("link-tmp"))).toEqual([]);
   });
 });
 
-describe("reissue", () => {
-  it("copies the store to a new id and keeps the old one", async () => {
-    await sealBoth();
-    expect(await reissue(VAULT, OTHER)).toEqual({ ok: true });
-    const meta = await readStoreMeta(OTHER);
-    expect(meta.state === "ok" && meta.meta.vaultId).toBe(OTHER);
-    expect((await loadLayers(OTHER, manifest())).templates.get("T/Meeting.md")?.state).toBe("ok");
-    expect((await readStoreMeta(VAULT)).state).toBe("ok");
-    expect((await stat(vaultDir(OTHER))).mode & 0o777).toBe(0o700);
-    expect((await stat(join(vaultDir(OTHER), "meta.json"))).mode & 0o777).toBe(0o600);
-    expect((await readdir(join(store, "vaults"))).sort()).toEqual([VAULT, OTHER].sort());
-  });
+describe("store diagnosis", () => {
+  it("names the cause of an unreadable store and nothing else", async () => {
+    expect(await diagnoseStore(ID, root)).toBe("absent");
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    expect(await diagnoseStore(ID, root)).toBe("ok");
 
-  it("refuses an existing target, a missing source and equal ids", async () => {
-    await sealBoth();
-    await mkdir(vaultDir(OTHER), { recursive: true });
-    expect((await reissue(VAULT, OTHER)).ok).toBe(false);
-    expect((await reissue(OTHER, VAULT)).ok).toBe(false);
-    expect((await reissue(VAULT, VAULT)).ok).toBe(false);
-    expect(JSON.parse(await readFile(join(vaultDir(), "meta.json"), "utf8")).vaultId).toBe(VAULT);
+    const dir = await generation();
+    const manifestPath = join(dir, "manifest.json");
+    const manifest = await readFile(manifestPath, "utf8");
+    const invalid = "{\"version\":1,\"folders\":{\"Projects\":{\"meaning\":1}}}\n";
+    await writeFile(join(dir, "folders.json"), invalid);
+    expect(await diagnoseStore(ID, root)).toBe("manifest-mismatch");
+    const parsed = JSON.parse(manifest) as { files: Record<string, string> };
+    parsed.files["folders.json"] = digestBytes(invalid);
+    await writeFile(manifestPath, JSON.stringify(parsed));
+    expect(await diagnoseStore(ID, root)).toBe("schema-invalid");
+    expect(await readStore(ID, root)).toEqual({ state: "unreadable" });
+
+    await rm(dir, { recursive: true });
+    expect(await diagnoseStore(ID, root)).toBe("link-dangling");
+    expect(await readStore(ID, root)).toEqual({ state: "unreadable" });
+    await rm(join(root, ID));
+    await symlink("elsewhere", join(root, ID));
+    expect(await diagnoseStore(ID, root)).toBe("link-dangling");
   });
 });

@@ -88,21 +88,6 @@ describe("Gajae-Code skill surface", () => {
     }
   });
 
-  it("carries an explicit transaction id in every mutating template payload it shows", () => {
-    // A publication or source change is one named transaction. A shown payload
-    // without it teaches a call the server refuses.
-    const body = readFileSync(absolute("assets/skills/interview/SKILL.md"), "utf8");
-    const payloads = [...body.matchAll(/```text\n([\s\S]*?)```/gu)]
-      .map(match => match[1] ?? "")
-      .filter(block => /mode:\s*"(publish-contract|acknowledge-source|relink-source)"/u.test(block));
-    expect(payloads.length, "the interview skill must show its publication payloads").toBeGreaterThanOrEqual(2);
-    for (const payload of payloads) {
-      expect(payload, `a mutating template payload omits transactionId: ${payload}`).toMatch(/\btransactionId\b/u);
-    }
-    // The retired interview ledger must not reappear as guidance.
-    expect(body).not.toMatch(/interview-next|interview-answer|commit-contracts|censusDigest|expectedLedgerDigest/u);
-    expect(body).toMatch(/publish-contract[\s\S]*review-sources[\s\S]*acknowledge-source/u);
-  });
   it("never shows a copyable call for the retired interview surface", () => {
     // The interview ledger is gone. Live docs that still show
     // `write { op: "template", mode: "interview-next" }` teach a call the
@@ -113,7 +98,6 @@ describe("Gajae-Code skill surface", () => {
       "docs/adapters.md",
       "docs/cli-map.md",
       "docs/harness-architecture.md",
-      "assets/skills/interview/SKILL.md",
     ];
     const bare = /write \{ op: "template", mode: "interview-next" \}/gu;
     for (const relativePath of files) {
@@ -183,7 +167,7 @@ describe("Gajae-Code skill surface", () => {
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
     const mirror = path.join(fixture, "skills");
-    for (const name of ["distill", "doctor", "interview", "link", "search", "status", "template", "write"]) {
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
       mkdirSync(path.join(mirror, name), { recursive: true });
@@ -211,7 +195,7 @@ describe("Gajae-Code skill surface", () => {
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
     const mirror = path.join(fixture, "skills");
-    for (const name of ["write", "distill", "doctor", "interview", "link", "search", "status", "template"]) {
+    for (const name of ["write", "distill", "doctor", "link", "search", "status"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
     }
@@ -233,7 +217,7 @@ describe("Gajae-Code skill surface", () => {
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
     const mirror = path.join(fixture, "skills");
-    for (const name of ["distill", "doctor", "interview", "link", "search", "status", "template", "write"]) {
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
       mkdirSync(path.join(mirror, name), { recursive: true });
@@ -253,7 +237,7 @@ describe("Gajae-Code skill surface", () => {
     const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
-    for (const name of ["distill", "doctor", "interview", "link", "search", "status", "template", "write"]) {
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
     }
@@ -289,7 +273,7 @@ describe("Gajae-Code skill surface", () => {
     const outside = path.join(fixture, "outside.md");
     const outsideBytes = Buffer.from("outside sentinel\n");
     writeFileSync(outside, outsideBytes);
-    for (const name of ["distill", "doctor", "interview", "link", "search", "status", "template", "write"]) {
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
     }
@@ -310,7 +294,7 @@ describe("Gajae-Code skill surface", () => {
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
     const mirror = path.join(fixture, "skills");
-    for (const name of ["distill", "doctor", "interview", "link", "search", "status", "template", "write"]) {
+    for (const name of ["distill", "doctor", "link", "search", "status", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
     }

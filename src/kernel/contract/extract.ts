@@ -1,7 +1,7 @@
 import { parseNote } from "../conventions/frontmatter.js";
-import { scanTemplateSources, type CensusDiagnostic } from "../templates/census.js";
-import { scanContractHeadings } from "../templates/content-contract.js";
-import { compareCodePoint, type Digest, type FieldType, type JsonScalar, type VariableKind } from "./types.js";
+import { compareCodePoints } from "../conventions/canonical.js";
+import { scanContractHeadings, scanTemplateSources, type CensusDiagnostic } from "./scan.js";
+import type { Digest, FieldType, JsonScalar, VariableKind } from "./types.js";
 
 /**
  * Read-only template extraction for the interview. Templater is never run and
@@ -95,7 +95,7 @@ export async function extractTemplate(vault: string, sourcePath: string): Promis
   }
 
   const fields: ExtractedField[] = [];
-  for (const name of Object.keys(parsed.frontmatter).sort(compareCodePoint)) {
+  for (const name of Object.keys(parsed.frontmatter).sort(compareCodePoints)) {
     const value = parsed.frontmatter[name];
     const text = typeof value === "string" ? value : Array.isArray(value) ? value.filter(member => typeof member === "string").join(" ") : "";
     const found = [...text.matchAll(PLACEHOLDER)].map(match => tokens[Number(match[1])] ?? "");

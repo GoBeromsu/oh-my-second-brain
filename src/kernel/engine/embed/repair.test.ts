@@ -21,10 +21,7 @@ async function makeVault(): Promise<string> {
     await mkdir(path.join(directory, ".oms"), { recursive: true });
     roots.push(directory);
     await writeFile(path.join(directory, "note.md"), "# Note\n", "utf8");
-    await writeFile(path.join(directory, ".oms", "taxonomy.json"), "{}\n", "utf8");
-    await writeFile(path.join(directory, ".oms", "template-policy.json"), '{"templates":{}}\n', "utf8");
-    await writeFile(path.join(directory, ".oms", "types.json"), "{}\n", "utf8");
-    await writeFile(path.join(directory, ".oms", "models.json"), "{}\n", "utf8");
+    await writeFile(path.join(directory, ".oms", "settings.json"), '{"version":1,"vaultId":"11111111-2222-4333-8444-555555555555"}\n', "utf8");
     return directory;
   })();
   return root;
@@ -33,10 +30,7 @@ async function makeVault(): Promise<string> {
 async function authorityHashes(vault: string): Promise<Map<string, string>> {
   const files = [
     "note.md",
-    ".oms/taxonomy.json",
-    ".oms/template-policy.json",
-    ".oms/types.json",
-    ".oms/models.json",
+    ".oms/settings.json",
   ];
   return new Map(await Promise.all(files.map(async (file) => [
     file,

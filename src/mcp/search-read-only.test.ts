@@ -17,7 +17,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import Database from "better-sqlite3";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile, stat } from "node:fs/promises";
@@ -66,7 +66,6 @@ function advertisedSearchOperations(): { op: string; args: Record<string, unknow
   // Arguments that satisfy each operation's required fields. Anything not
   // listed here takes the bare `{ op }` form.
   const argsByOp: Record<string, Record<string, unknown>> = {
-    "template-scan": {},
     templates: {},
     query: { mode: "query", query: "alpha" },
     "index-status": { view: "status" },
@@ -138,7 +137,7 @@ async function makeVault(): Promise<string> {
   return vault;
 }
 
-async function makeTemplateVault(): Promise<string> {
+async function makeTemplateVault(home: string): Promise<string> {
   const vault = await makeVault();
   await Promise.all([
     mkdir(path.join(vault, ".oms"), { recursive: true }),
@@ -146,6 +145,7 @@ async function makeTemplateVault(): Promise<string> {
     mkdir(path.join(vault, "Templates", "OMS"), { recursive: true }),
   ]);
   await writeContractVault(vault, {
+    contractStoreRoot: path.join(home, ".oms", "vaults"),
     properties: { title: { type: "text", intent: "Note title." } },
     templates: {
       note: {
@@ -175,8 +175,8 @@ async function makeTemplateVault(): Promise<string> {
  * target would have writes rejected by the admission layer anyway, so a clean
  * tree would prove nothing about `search`'s own behaviour.
  */
-async function withClient<T>(vault: string, run: (client: Client) => Promise<T>): Promise<T> {
-  const emptyHome = await mkdtemp(path.join(tmpdir(), "oms-readonly-home-"));
+async function withClient<T>(vault: string, run: (client: Client) => Promise<T>, home?: string): Promise<T> {
+  const emptyHome = home ?? await mkdtemp(path.join(tmpdir(), "oms-readonly-home-"));
   homes.push(emptyHome);
   const cacheHome = process.env["XDG_CACHE_HOME"];
   if (cacheHome === undefined || cacheHome.length === 0) {
@@ -221,17 +221,20 @@ describe("search read-only guarantee", () => {
   });
 
   it("lists resolved templates without mutating a valid template vault", async () => {
-    const vault = await makeTemplateVault();
+    // The child reads the sealed contract from its own HOME store.
+    const home = await mkdtemp(path.join(tmpdir(), "oms-readonly-home-"));
+    const vault = await makeTemplateVault(home);
     vaults.push(vault);
     const before = await snapshotTree(vault);
     const result = await withClient(vault, (client) =>
       client.callTool({ name: "search", arguments: { op: "templates" } }),
-    );
+    home);
     const payload = textPayload(result);
     expect(payload["templates"]).toMatchObject([{
       templateId: "note",
       rulesAvailable: true,
-      fields: [{ kind: "field", key: "title", property: "title", intent: "Note title." }],
+      // The sealed contract projects field axes by property and type; meaning stays hidden.
+      fields: [{ kind: "field", key: "title", property: "title" }],
     }]);
     // The always-on common contract is reported beside the registrations.
     expect(payload["default"]).toMatchObject({ fields: expect.any(Array) });

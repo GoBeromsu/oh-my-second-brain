@@ -9,7 +9,7 @@ import Database from "better-sqlite3";
 import { syncEngineStore } from "../kernel/engine/embed/sync.js";
 import { engineGraphCachePath, engineNodeCachePath, engineStorePath, vaultCacheRoot } from "../kernel/engine/paths.js";
 import * as engineAssembly from "../kernel/engine/assemble.js";
-import { writeContractVault } from "../kernel/templates/approved-vault-fixture.js";
+import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
 import { runGraphCommand } from "./graph-command.js";
 import { runStatusCommand } from "./status-command.js";
 
@@ -58,6 +58,7 @@ beforeEach(async () => {
   const cache = await mkdtemp(path.join(tmpdir(), "oms-status-model-cache-"));
   roots.push(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
+  vi.stubEnv("HOME", path.join(cache, "home"));
   vi.stubEnv("OMS_EMBEDDING_PROVIDER", undefined);
   vi.stubEnv("OMS_EMBEDDING_MODEL", undefined);
 });
@@ -124,7 +125,7 @@ describe("graph command", () => {
     expect(output.pop()).toMatchObject({
       vault,
       source: "explicit",
-      convention: { templates: { note: {} } },
+      convention: { contract: "sealed", row: "sealed", templates: [{ name: "note", state: "active" }] },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false, reason: "Graph cache not built" },
@@ -146,11 +147,10 @@ describe("graph command", () => {
       vault,
       source: "explicit",
       convention: {
-        status: "absent",
-        diagnostics: [{
-          code: "TEMPLATE_POLICY_ABSENT",
-          remediation: `No template convention exists at "${path.join(vault, ".oms", "template-policy.json")}".`,
-        }],
+        contract: "none",
+        row: "never-sealed",
+        findings: [{ message: "contract: none", guidance: "oms setup" }],
+        templates: [],
       },
       history: {
         events: 0,
@@ -166,9 +166,9 @@ describe("graph command", () => {
     expect(await fileSnapshot(vault)).toEqual(before);
   });
 
-  it("retains history, engine, and graph evidence when the convention is invalid", async () => {
+  it("retains history, engine, and graph evidence when the vault settings are invalid", async () => {
     const vault = await freshVault();
-    await writeFile(path.join(vault, ".oms", "template-policy.json"), "{");
+    await writeFile(path.join(vault, ".oms", "settings.json"), "{");
     const output: unknown[] = [];
     vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
 
@@ -176,7 +176,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "invalid", diagnostics: [{ code: "CONTRACT_POLICY_INVALID" }] },
+      convention: { contract: "unreadable", findings: expect.arrayContaining([{ message: "vault settings unreadable", guidance: "oms contract doctor" }]) },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },
@@ -199,7 +199,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "approved", templates: { note: {} } },
+      convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
       history: { status: "unavailable", diagnostics: [{ code: "LEDGER_ROOT_INSIDE_VAULT" }] },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },
@@ -218,7 +218,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "approved", templates: { note: {} } },
+      convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
       history: { events: 0 },
       engine: {
         available: false,
@@ -241,7 +241,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { status: "approved", templates: { note: {} } },
+      convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: {
@@ -278,7 +278,7 @@ describe("graph command", () => {
 
       expect(output.pop()).toMatchObject({
         vault,
-        convention: { status: "approved", templates: { note: {} } },
+        convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
         history: { events: 0 },
         engine: { available: true },
         graph: { available: false },

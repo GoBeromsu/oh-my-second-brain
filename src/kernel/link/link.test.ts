@@ -9,7 +9,7 @@ import { admitWriteTarget } from "../capture/safe.js";
 import { readConnectionRegistry, upsertVaultConnection } from "../install/connection-registry.js";
 import { readProjectConnection } from "../install/project-connection.js";
 import type { ConnectionCoordinatorFault } from "../install/connection-coordinator.js";
-import { serializeVaultSettings } from "../templates/vault-settings.js";
+import { serializeVaultSettings } from "../vault/settings.js";
 import {
   ensureGitignore,
   expandHome,
@@ -111,16 +111,19 @@ describe("resolveEffectiveVault", () => {
     expect(resolved).toEqual({ vault: path.resolve(vault), scope: null, source: "explicit", diagnostics: [] });
   });
 
-  it("treats settings, policy, or taxonomy evidence as the local vault", async () => {
+  it("treats settings.json as the only local vault evidence", async () => {
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "taxonomy.json"), JSON.stringify({ version: 1, folders: {} }));
+    await writeFile(path.join(vault, ".oms", `${["tax", "onomy"].join("")}.json`), JSON.stringify({ version: 1, folders: {} }));
+    await writeFile(path.join(vault, ".oms", `${["template", "policy"].join("-")}.json`), "{}\n");
+    expect((await resolveEffectiveVault(vault, {})).source).not.toBe("vault");
+    await writeFile(path.join(vault, ".oms", "settings.json"), "{}\n");
     expect((await resolveEffectiveVault(vault, {})).source).toBe("vault");
     expect((await resolveEffectiveVault(vault, {})).scope).toBeNull();
   });
 
   it("resolves a v2 bridge by exact connection and both portable identities", async () => {
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateRoots: [] }));
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID }));
     await mkdir(path.join(vault, "notes"), { recursive: true });
     const linked = await link({ cwd: repo, vault, folders: ["notes"], operationId: OPERATION_ID, publicationTransactionId: TRANSACTION_ID, registry: registry() });
     const connectionId = linked.connection.reservation?.connectionId;
@@ -164,7 +167,7 @@ describe("resolveEffectiveVault", () => {
 
   it("admits a v2 bridge only when connection and both portable identities match", async () => {
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateRoots: [] }));
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID }));
     await mkdir(path.join(vault, "notes"), { recursive: true });
     const linked = await link({ cwd: repo, vault, folders: ["notes"], operationId: OPERATION_ID, publicationTransactionId: TRANSACTION_ID, registry: registry() });
     const connectionId = linked.connection.reservation?.connectionId ?? "";
@@ -173,9 +176,9 @@ describe("resolveEffectiveVault", () => {
     await writeFile(path.join(repo, ".oms", "links.yaml"), `version: 2\nconnectionId: ${connectionId}\nportableVaultId: ${otherId}\nscope:\n  - notes\n`);
     await expect(resolveEffectiveVault(repo, { OMS_VAULT: vault }, { registry: registry() })).rejects.toThrow(/not bound in the connection registry/);
     await writeFile(path.join(repo, ".oms", "links.yaml"), `version: 2\nconnectionId: ${connectionId}\nportableVaultId: ${record.portableVaultId}\nscope:\n  - notes\n`);
-    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: otherId, templateRoots: [] }));
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: otherId }));
     await expect(resolveEffectiveVault(repo, { OMS_VAULT: vault }, { registry: registry() })).rejects.toThrow(/does not match published portable identity/);
-    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: record.portableVaultId, templateRoots: [] }));
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: record.portableVaultId }));
     const restored = await resolveEffectiveVault(repo, { OMS_VAULT: "/not-selected" }, { registry: registry() });
     expect(restored.source).toBe("bridge");
     expect(restored.vault).toBe(await realpath(vault));
@@ -229,7 +232,7 @@ describe("prepareVaultLink", () => {
 
   it("preserves an existing portable identity and merges scope", async () => {
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    const before = serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateRoots: [] });
+    const before = serializeVaultSettings({ version: 1, vaultId: VAULT_ID });
     await writeFile(path.join(vault, ".oms", "settings.json"), before);
     await link({ cwd: repo, vault, folders: ["notes"], operationId: OPERATION_ID, publicationTransactionId: TRANSACTION_ID, registry: registry() });
     const second = await link({
@@ -248,7 +251,7 @@ describe("prepareVaultLink", () => {
 
   it("reports partial status and does not claim the bridge is ready when projection conflicts", async () => {
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateRoots: [] }));
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID }));
     await mkdir(path.join(repo, ".oms", "linked"), { recursive: true });
     await writeFile(path.join(repo, ".oms", "linked", "notes"), "user bytes");
     const result = await link({ cwd: repo, vault, folders: ["notes"], operationId: OPERATION_ID, publicationTransactionId: TRANSACTION_ID, registry: registry() });
@@ -277,7 +280,7 @@ describe("prepareVaultLink", () => {
 
   it("preserves a mismatched user symlink instead of re-pointing it", async () => {
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateRoots: [] }));
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID }));
     const linkedDir = path.join(repo, ".oms", "linked");
     await mkdir(linkedDir, { recursive: true });
     const stale = path.join(tmp, "old-target");
@@ -353,7 +356,7 @@ describe("prepareVaultLink", () => {
 
   it("keeps vault and global complete when the project record is malformed", async () => {
     await mkdir(path.join(vault, ".oms"), { recursive: true });
-    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateRoots: [] }));
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: VAULT_ID }));
     await mkdir(path.join(repo, ".oms"), { recursive: true });
     await writeFile(path.join(repo, ".oms", "links.yaml"), "version: 2\nconnectionId: not-a-record\n");
     const prepared = await prepareVaultLink({
@@ -539,7 +542,7 @@ describe("prepareVaultLink", () => {
     const moved = path.join(tmp, "moved-vault");
     await mkdir(path.join(moved, ".oms"), { recursive: true });
     await mkdir(path.join(moved, "notes"), { recursive: true });
-    await writeFile(path.join(moved, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: entry.portableVaultId, templateRoots: [] }));
+    await writeFile(path.join(moved, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: entry.portableVaultId }));
     let stage: RemovalBinding | undefined;
     removalBindingSeam.beforeUnlink = async (binding) => {
       stage = binding;
@@ -574,7 +577,7 @@ describe("prepareVaultLink", () => {
     const record = await readFile(recordPath);
     const declared = await readlink(linkPath);
     removalBindingSeam.beforeUnlink = async () => {
-      await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: "99999999-9999-4999-8999-999999999999", templateRoots: [] }));
+      await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: "99999999-9999-4999-8999-999999999999" }));
     };
     try {
       await expect(removeVaultLink(repo, registry())).rejects.toThrow(/binding changed before removal|does not match published portable identity/);
@@ -629,7 +632,7 @@ describe("prepareVaultLink", () => {
     if (original === undefined || before.registry === undefined) throw new Error("missing registry entry");
     const other = path.join(tmp, "unrelated-vault");
     await mkdir(path.join(other, ".oms"), { recursive: true });
-    await writeFile(path.join(other, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: "88888888-8888-4888-8888-888888888888", templateRoots: [] }));
+    await writeFile(path.join(other, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: "88888888-8888-4888-8888-888888888888" }));
     removalBindingSeam.beforeUnlink = async (binding) => {
       expect(binding.connectionId).toBe(original.connectionId);
       expect(binding.canonicalVaultPath).toBe(original.localVaultPath);

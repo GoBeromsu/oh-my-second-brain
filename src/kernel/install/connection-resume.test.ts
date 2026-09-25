@@ -1,16 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { hashCanonical } from "../templates/canonical.js";
-import { serializeVaultSettings } from "../templates/vault-settings.js";
+import { serializeVaultSettings } from "../vault/settings.js";
 import {
   commitConnection,
   ConnectionCoordinatorError,
-  inspectMigratedConnection,
   prepareConnection,
   resumeConnection,
   settingsPublicationRequest,
@@ -60,7 +58,7 @@ function options(registry: string, runtime: string, home: string, fault?: Connec
 
 async function publish(vault: string, vaultId = ID_A): Promise<void> {
   await mkdir(path.join(vault, ".oms"), { recursive: true });
-  await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId, templateRoots: [] }));
+  await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId }));
 }
 
 function intentFile(runtime: string, id: string): string {
@@ -73,11 +71,8 @@ async function bytesAt(file: string): Promise<Buffer | undefined> {
 
 async function snapshot(vault: string, project: string, registry: string, runtime: string, id: string) {
   const intent = await bytesAt(intentFile(runtime, id));
-  const tx = JSON.parse((intent ?? Buffer.from("{}")).toString("utf8")).publicationTransactionId as string | undefined;
   return {
     settings: await bytesAt(path.join(vault, ".oms", "settings.json")),
-    marker: await bytesAt(path.join(vault, ".oms", "template-transaction.json")),
-    plan: tx === undefined ? undefined : await bytesAt(path.join(vault, ".oms", ".template-transactions", tx, "plan.json")),
     registry: await bytesAt(registry),
     links: await bytesAt(path.join(project, ".oms", "links.yaml")),
     intent,
@@ -131,7 +126,7 @@ describe("generic connection cold resume", () => {
     expect(resumed).toMatchObject({ planDigest: prepared.digest, vault: { state: "complete" }, global: { state: "complete", receipt: { completed: true } }, project: { state: "complete", receipt: { completed: true } } });
     const after = await snapshot(vault, project, registry, runtime, prepared.operationId);
     expect(after.intent).toEqual(before.intent);
-    if (fault !== "after-intent") expect(after.plan).toEqual(before.plan);
+    if (fault !== "after-intent") expect(after.settings).toEqual(before.settings);
     expect(await readConnectionRegistry(options(registry, runtime, home))).toMatchObject({ state: "v2" });
     expect(await readProjectConnection(project)).toMatchObject({ state: "v2" });
   });
@@ -141,8 +136,7 @@ describe("generic connection cold resume", () => {
     const prepared = await prepare(vault, registry, runtime, home, project);
     await seal(prepared, registry, runtime, home, "after-plan");
     const before = await snapshot(vault, project, registry, runtime, prepared.operationId);
-    expect(before.plan).toBeDefined();
-    expect(before.marker).toBeUndefined();
+    expect(before.settings).toBeUndefined();
     const childHome = await mkdtemp(path.join(tmpdir(), "oms-connection-resume-child-"));
     roots.push(childHome);
     const child = execFileSync(process.execPath, ["--input-type=module", "-e", "const { resumeConnection } = await import(process.env.OMS_CHILD_COORDINATOR); const result = await resumeConnection({ operationId: process.env.OMS_CHILD_OP, target: { vault: process.env.OMS_CHILD_VAULT, source: 'explicit' } }, process.env.OMS_CHILD_DIGEST, { registryPath: process.env.OMS_CHILD_REGISTRY, runtimeRoot: process.env.OMS_RUNTIME_ROOT, homeDir: process.env.HOME, createId: () => process.env.OMS_CHILD_ID }); if ('state' in result) throw new Error(result.state); process.stdout.write(JSON.stringify({ vault: result.vault.state, global: result.global.state, project: result.project.state, digest: result.planDigest }));"], {
@@ -150,7 +144,8 @@ describe("generic connection cold resume", () => {
       env: { PATH: process.env.PATH ?? "", HOME: childHome, XDG_CONFIG_HOME: path.join(childHome, ".config"), XDG_CACHE_HOME: path.join(childHome, ".cache"), OMS_RUNTIME_ROOT: runtime, OMS_CHILD_COORDINATOR: fileURLToPath(new URL("../../../dist/kernel/install/connection-coordinator.js", import.meta.url)), OMS_CHILD_VAULT: vault, OMS_CHILD_OP: prepared.operationId, OMS_CHILD_DIGEST: prepared.digest, OMS_CHILD_REGISTRY: registry, OMS_CHILD_ID: ID_A },
     });
     expect(JSON.parse(child)).toEqual({ vault: "complete", global: "complete", project: "complete", digest: prepared.digest });
-    expect((await snapshot(vault, project, registry, runtime, prepared.operationId)).plan).toEqual(before.plan);
+    const after = await snapshot(vault, project, registry, runtime, prepared.operationId);
+    expect(after.settings?.toString("utf8")).toBe(serializeVaultSettings({ version: 1, vaultId: ID_A }));
   });
 
   it("resumes a registered no-publication project without rewriting settings", async () => {
@@ -165,7 +160,6 @@ describe("generic connection cold resume", () => {
     const resumed = committed(await resumeConnection({ operationId: prepared.operationId, target: { vault, source: "explicit" } }, prepared.digest, options(registry, runtime, home)));
     expect(resumed).toMatchObject({ vault: { state: "not-requested" }, global: { state: "complete" }, project: { state: "complete" } });
     expect(await readFile(path.join(vault, ".oms", "settings.json"))).toEqual(before);
-    expect(await bytesAt(path.join(vault, ".oms", ".template-transactions"))).toBeUndefined();
   });
 
   it("replays receipts and rejects tampered or omitted approval material before effects", async () => {
@@ -205,23 +199,23 @@ describe("generic connection cold resume", () => {
     await writeFile(registry, `${await readFile(registry, "utf8")} `);
     await expect(resumeConnection({ operationId: prepared.operationId, target: { vault, source: "explicit" } }, prepared.digest, options(registry, runtime, home))).resolves.toMatchObject({ global: { state: "pending", code: "external-change" } });
     await writeFile(registry, before.registry ?? "");
-    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: "99999999-9999-4999-8999-999999999999", templateRoots: [] }));
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: "99999999-9999-4999-8999-999999999999" }));
     const changedSettings = await snapshot(vault, project, registry, runtime, prepared.operationId);
     await expect(resumeConnection({ operationId: prepared.operationId, target: { vault, source: "explicit" } }, prepared.digest, options(registry, runtime, home))).resolves.toMatchObject({ vault: { state: "blocked", code: "publication-blocked" }, global: { state: "unattempted" } });
     expect(await snapshot(vault, project, registry, runtime, prepared.operationId)).toEqual(changedSettings);
     await writeFile(path.join(vault, ".oms", "settings.json"), before.settings ?? "");
     await expect(resumeConnection({ operationId: prepared.operationId, target: { vault: other, source: "explicit" } }, prepared.digest, options(registry, runtime, home))).rejects.toMatchObject({ code: "external-change" });
-    expect(await snapshot(vault, project, registry, runtime, prepared.operationId)).toMatchObject({ intent: before.intent, plan: before.plan, links: before.links });
+    expect(await snapshot(vault, project, registry, runtime, prepared.operationId)).toMatchObject({ intent: before.intent, settings: before.settings, links: before.links });
   });
 
-  it("regenerates a missing standard namespace and blocks partial, corrupt, unrelated, and post-marker plans", async () => {
+  it("resumes without vault-side plan state, requires preparation for evidence, and blocks changed settings", async () => {
     const missing = await fixture();
     const prepared = await prepare(missing.vault, missing.registry, missing.runtime, missing.home, missing.project);
     await seal(prepared, missing.registry, missing.runtime, missing.home, "after-intent");
-    const tx = prepared.publicationPlan?.transactionId ?? "";
-    expect(await bytesAt(path.join(missing.vault, ".oms", ".template-transactions", tx))).toBeUndefined();
+    expect(await bytesAt(path.join(missing.vault, ".oms", "settings.json"))).toBeUndefined();
     const resumed = committed(await resumeConnection({ operationId: prepared.operationId, target: { vault: missing.vault, source: "explicit" } }, prepared.digest, options(missing.registry, missing.runtime, missing.home)));
     expect(resumed).toMatchObject({ vault: { state: "complete" }, project: { state: "complete", receipt: { completed: true } } });
+    expect(await readdir(path.join(missing.vault, ".oms"))).toEqual(["settings.json"]);
 
     const evidenced = await fixture();
     const evidence = await prepareConnection({ operationId: operationId(), target: { vault: evidenced.vault, source: "explicit" }, publication: { ...settingsPublicationRequest(transactionId(sequence), ID_A), evidence: [{ name: "review", bytes: Buffer.from("sentinel-evidence-body") }] }, select: false, project: { root: evidenced.project, scope: ["notes"] } }, options(evidenced.registry, evidenced.runtime, evidenced.home));
@@ -237,35 +231,18 @@ describe("generic connection cold resume", () => {
     const damaged = await fixture();
     const later = await prepare(damaged.vault, damaged.registry, damaged.runtime, damaged.home, damaged.project);
     await seal(later, damaged.registry, damaged.runtime, damaged.home, "after-plan");
-    const laterTx = later.publicationPlan?.transactionId ?? "";
-    const plan = path.join(damaged.vault, ".oms", ".template-transactions", laterTx, "plan.json");
-    const original = await readFile(plan);
-    const unchanged = async () => expect(await snapshot(damaged.vault, damaged.project, damaged.registry, damaged.runtime, later.operationId)).toMatchObject({ settings: undefined, marker: undefined, registry: undefined, links: undefined });
-    await rm(plan);
+    const settingsFile = path.join(damaged.vault, ".oms", "settings.json");
+    const foreign = serializeVaultSettings({ version: 1, vaultId: "99999999-9999-4999-8999-999999999999" });
+    await mkdir(path.dirname(settingsFile), { recursive: true });
+    await writeFile(settingsFile, foreign);
     await expect(resumeConnection({ operationId: later.operationId, target: { vault: damaged.vault, source: "explicit" } }, later.digest, options(damaged.registry, damaged.runtime, damaged.home))).resolves.toMatchObject({ vault: { state: "blocked", code: "publication-blocked" } });
-    await unchanged();
-    await mkdir(path.dirname(plan), { recursive: true });
-    await expect(resumeConnection({ operationId: later.operationId, target: { vault: damaged.vault, source: "explicit" } }, later.digest, options(damaged.registry, damaged.runtime, damaged.home))).resolves.toMatchObject({ vault: { state: "blocked", code: "publication-blocked" } });
-    await writeFile(plan, Buffer.from("{"));
-    await expect(resumeConnection({ operationId: later.operationId, target: { vault: damaged.vault, source: "explicit" } }, later.digest, options(damaged.registry, damaged.runtime, damaged.home))).resolves.toMatchObject({ vault: { state: "blocked", code: "publication-blocked" } });
-    await unchanged();
-    await writeFile(plan, original);
-    const predecessor = { version: "oms.vault-publication.v1", transactionId: "88888888-8888-4888-8888-888888888888", kind: "settings-update", planDigest: `sha256:${"cd".repeat(32)}`, status: "complete" };
-    await mkdir(path.join(damaged.vault, ".oms"), { recursive: true });
-    await writeFile(path.join(damaged.vault, ".oms", "template-transaction.json"), `${JSON.stringify({ ...predecessor, checksum: hashCanonical("oms.vault-publication.marker.v1", predecessor) })}\n`);
-    await expect(resumeConnection({ operationId: later.operationId, target: { vault: damaged.vault, source: "explicit" } }, later.digest, options(damaged.registry, damaged.runtime, damaged.home))).resolves.toMatchObject({ vault: { state: "blocked", code: "publication-blocked" } });
-    await rm(plan);
-    await expect(resumeConnection({ operationId: later.operationId, target: { vault: damaged.vault, source: "explicit" } }, later.digest, options(damaged.registry, damaged.runtime, damaged.home))).resolves.toMatchObject({ vault: { state: "blocked", code: "publication-blocked" } });
-    expect(await readFile(path.join(damaged.vault, ".oms", "template-transaction.json"), "utf8")).toContain(predecessor.transactionId);
-  });
-
-  it("returns null only for a genuinely absent migration intent", async () => {
-    const { vault, registry, runtime, home } = await fixture();
-    const id = operationId();
-    await expect(inspectMigratedConnection({ operationId: id, target: { vault, source: "explicit" } }, options(registry, runtime, home))).resolves.toBeNull();
-    const file = intentFile(runtime, id);
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, "{}\n");
-    await expect(inspectMigratedConnection({ operationId: id, target: { vault, source: "explicit" } }, options(registry, runtime, home))).rejects.toThrow(ConnectionCoordinatorError);
+    expect(await snapshot(damaged.vault, damaged.project, damaged.registry, damaged.runtime, later.operationId)).toMatchObject({ settings: Buffer.from(foreign), registry: undefined, links: undefined });
+    await rm(settingsFile);
+    const predecessor = JSON.stringify({ transactionId: "88888888-8888-4888-8888-888888888888", status: "complete" });
+    await writeFile(path.join(damaged.vault, ".oms", "unrelated.json"), predecessor);
+    const recovered = committed(await resumeConnection({ operationId: later.operationId, target: { vault: damaged.vault, source: "explicit" } }, later.digest, options(damaged.registry, damaged.runtime, damaged.home)));
+    expect(recovered).toMatchObject({ vault: { state: "complete" }, project: { state: "complete" } });
+    expect(await readFile(settingsFile, "utf8")).toBe(serializeVaultSettings({ version: 1, vaultId: ID_A }));
+    expect(await readFile(path.join(damaged.vault, ".oms", "unrelated.json"), "utf8")).toBe(predecessor);
   });
 });

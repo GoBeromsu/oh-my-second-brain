@@ -1,6 +1,6 @@
 import path from "node:path";
 import { rejection, type WriteRejection, type WriteTargetSource } from "../conventions/write-protocol.js";
-import { normalizeTemplateSourcePath, verifyVaultPath } from "../templates/paths.js";
+import { normalizeTemplateSourcePath, verifyVaultPath } from "../vault/paths.js";
 
 /**
  * Target admission and note-path confinement for guide, check, and complete.
@@ -42,7 +42,7 @@ export async function admitWriteTarget(target: WriteTarget): Promise<WriteReject
   return rejection(
     "admission",
     "target-unverified",
-    `Refusing to guide or check: ${reason}. An explicit vault target is accepted; a current-directory inference, a legacy v1 bridge, and an unexpected source are not.`,
+    `Refusing to write: ${reason}. An explicit vault target is accepted; a current-directory inference, a legacy v1 bridge, and an unexpected source are not.`,
     "pass an explicit vault target, run `oms setup` in your Obsidian vault, or set OMS_VAULT, then retry",
   );
 }

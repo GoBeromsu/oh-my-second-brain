@@ -345,7 +345,7 @@ describe("retrievalResultsToQueryResult — shape", () => {
         requestedStrategy: "plain",
         generatedSearches: [],
         rerankApplied: false,
-        taxonomyIntents: [],
+        folderIntents: [],
         warnings: [],
       },
     });
@@ -367,7 +367,7 @@ describe("retrievalResultsToQueryResult — shape", () => {
         requestedStrategy: "plain",
         generatedSearches: [],
         rerankApplied: false,
-        taxonomyIntents: [],
+        folderIntents: [],
         warnings: [],
       },
     });
