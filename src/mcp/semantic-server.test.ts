@@ -90,7 +90,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
   it("runs typed semantic search and document rehydration through read-only MCP tools", async () => {
     // The clean swap routes oms_sync_embeddings / oms_semantic_query through the
     // native engine, which REQUIRES an explicitly configured embedding provider
-    // (ADR-007). With OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL set we assert
+    // (ADR-005). With OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL set we assert
     // real engine results end-to-end through stdio; without them we assert the
     // loud guard — a positive routing proof, since the legacy src/search hash
     // path would have returned available:true instead.
@@ -177,7 +177,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
         );
       } else {
         // Model-free path. Two different contracts apply here and the test
-        // asserts both, because collapsing them is how ADR-007 gets eroded.
+        // asserts both, because collapsing them is how ADR-005 gets eroded.
         //
         // Sync REQUIRES embeddings, so it must fail loudly and name what to
         // configure. A plain query does NOT: since the SearchBackend seam was

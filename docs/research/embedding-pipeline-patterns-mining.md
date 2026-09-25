@@ -432,9 +432,9 @@ qmd embed [options]
 | `qmd doctor` | 헬스체크 + 진단 | `oms doctor` |
 | `qmd search / vsearch` | BM25 / 벡터 검색 | `oms query` |
 
-**ADR-002 통합 포인트 (`embed`: 벡터+그래프 동시 빌드):**
+**ADR-003 통합 포인트 (`embed`: 벡터+그래프 동시 빌드):**
 
-qmd는 `update`(인덱싱)와 `embed`(벡터화)를 분리한다. 우리는 ADR-002에 따라
+qmd는 `update`(인덱싱)와 `embed`(벡터화)를 분리한다. 우리는 ADR-003에 따라
 `oms capture` 시 벡터+그래프를 동시 빌드하되, `emb` 단독 커맨드로도 벡터만
 재빌드 가능하게 설계해야 한다.
 

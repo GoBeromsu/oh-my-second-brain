@@ -2,7 +2,7 @@
 
 Oh My Second Brain is an Obsidian-first convention layer over plain Markdown. Obsidian remains the command center, and the vault remains readable without OMS. The user owns meaning. The agent writes and repairs notes. OMS guides one note path at a time and checks saved bytes; the user and agent decide whether a note is worth keeping and repair it when needed.
 
-The sequence in this page is a repository sketch. It is not the G002 Excalidraw artifact. Nothing here is a host-smoke result or a product-gate pass. [ADR-015](./decisions/ADR-015-explicit-vault-contract-and-agent-owned-judgement.md) supersedes [ADR-014](./decisions/ADR-014-user-owned-contract-completion-harness.md), which superseded [ADR-013](./decisions/ADR-013-folder-sourced-template-contracts.md). [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as ideas that were not ported and were not turned into a research claim.
+The sequence in this page is a repository sketch. It is not the G002 Excalidraw artifact. Nothing here is a host-smoke result or a product-gate pass. Template contracts are recorded in [ADR-007](./decisions/ADR-007-template-contract-sealed-two-layer.md) (Accepted; implementation in progress), which replaces the former ADR-013 through ADR-016; until it is implemented, the code still follows the former ADR-015 version-5 policy. [ACKNOWLEDGMENTS](../ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as ideas that were not ported and were not turned into a research claim.
 
 ## Authority the harness enforces
 
@@ -45,7 +45,7 @@ Admission still applies to contract publication and other mutations: verified ta
 
 ## Retrieval and maintenance
 
-Lexical, vector, HyDE, and typed-axis retrieval include unbound, invalid, and incomplete notes. Search does not write or repair. Registered template sources stay out of ordinary note results. Typed axes come from the version-5 policy and `.oms/taxonomy.json`; a missing or unreadable contract fails an affected axis loudly with a named reason. Vector, HyDE, and rerank fail loudly when their capability pair is missing or unusable, per ADR-007, rather than returning a fake match.
+Lexical, vector, HyDE, and typed-axis retrieval include unbound, invalid, and incomplete notes. Search does not write or repair. Registered template sources stay out of ordinary note results. Typed axes come from the version-5 policy and `.oms/taxonomy.json`; a missing or unreadable contract fails an affected axis loudly with a named reason. Vector, HyDE, and rerank fail loudly when their capability pair is missing or unusable, per ADR-005, rather than returning a fake match.
 
 `status` is read-only. `doctor`, together with `validate`, diagnoses policy, portable settings, held registrations, source state, and indexes. An unreadable control has its own state, including `CONTRACT_POLICY_UNREADABLE`, `TEMPLATE_POLICY_UNREADABLE`, and `TEMPLATE_TAXONOMY_UNREADABLE`; publication refuses rather than overwriting it. Repairs are explicit managed-state operations after admission. Note backfill is not one of them. The engine store, graph cache, and node index are outside the vault and rebuildable.
 

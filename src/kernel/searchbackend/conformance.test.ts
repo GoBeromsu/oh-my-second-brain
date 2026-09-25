@@ -291,7 +291,7 @@ function searchBackendConformance(
         try {
           const result = await backend.search(request);
 
-          // ADR-007 locks no-fake-fallback: an explicitly requested strategy that
+          // ADR-005 locks no-fake-fallback: an explicitly requested strategy that
           // cannot run must say so, not silently return lexical results dressed
           // up as vector ones. The reason has to name what to configure.
           expect(result.available).toBe(false);

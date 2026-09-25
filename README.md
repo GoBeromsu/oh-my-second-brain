@@ -12,7 +12,7 @@ The agent writes and repairs note files. Before that write, `guide` selects the 
 
 Each registered source remains the user's own Markdown file, recorded by its path and content hash. OMS never rewrites, copies, or snapshots that source, has no managed drafts or `.oms/templates/` directory, and stores no approved-Markdown bytes in the policy. OMS does not parse or execute Templater, JavaScript, or a private token language.
 
-ADR-015 supersedes ADR-014, which superseded ADR-013. [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as design ideas. Those credits are not a copied runtime and not a research result. Diagrams in this repository are explanatory sketches. They are not the G002 Excalidraw artifact. These pages record the approved architecture. They are not a host-smoke result and not a product-gate pass.
+Template contracts are recorded in ADR-007 (Accepted; implementation in progress), which replaces the former ADR-013 through ADR-016; until it is implemented, the code still follows the former ADR-015 version-5 policy. [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) credits Ouroboros and Gajae Code's deep-interview as design ideas. Those credits are not a copied runtime and not a research result. Diagrams in this repository are explanatory sketches. They are not the G002 Excalidraw artifact. These pages record the approved architecture. They are not a host-smoke result and not a product-gate pass.
 
 The authority model is in [architecture](./docs/architecture.md). Vault files are in [conventions](./docs/conventions.md). Leaves are in [the CLI map](./docs/cli-map.md).
 
@@ -33,6 +33,7 @@ The host notice text is exactly `템플릿에 변경이 있습니다` and its ac
 
 ```text
 oms bridge add|remove|status                   Manage repository-to-vault target bridges
+oms contract interview|status|reissue-id       Interview and seal template rules, or inspect them
 oms graph build|status                         Build or inspect the note graph
 oms hook pre|post                              Run pre- or post-tool-use hooks
 oms host install|remove|sync|status            Manage host assets and MCP registrations
@@ -48,7 +49,7 @@ oms status                                     Show the read-only aggregate stat
 oms template list|show|scan|check|publish|review-sources|acknowledge-source|relink-source
 ```
 
-`oh-my-second-brain` is the full command; `oms` is its short alias. These fourteen families, the eight skills, and the five MCP tools are three different sets. The leaf map is [the CLI map](./docs/cli-map.md).
+`oh-my-second-brain` is the full command; `oms` is its short alias. These fifteen families, the eight skills, and the five MCP tools are three different sets. The leaf map is [the CLI map](./docs/cli-map.md).
 
 ### Help contract
 
@@ -68,7 +69,7 @@ Lexical, vector, HyDE, and typed-axis queries still include unbound, invalid, an
 
 The eight skills (`distill`, `doctor`, `interview`, `link`, `search`, `status`, `template`, `write`) are host workflows. `interview` and `template` are tool-less.
 
-The five tools are a subset of those skills, and neither set is the fourteen CLI families. Detail capabilities remain `op` values under the five tools.
+The five tools are a subset of those skills, and neither set is the fifteen CLI families. Detail capabilities remain `op` values under the five tools.
 
 `write` keeps a write posture because explicit contract publication and confirmed source changes mutate managed state. `guide` and `check` write no note bytes; the one managed-state exception is `guide` with the three `migration` ids, which publishes a historical vault's version-5 contract in place before selecting. Contract review uses `op: "template"` with `publish-contract`, `review-sources`, `acknowledge-source`, and `relink-source` only. `status` and every search operation are read-only and do not decide completion. The `doctor` tool diagnoses controls and indexes; it does not backfill notes.
 

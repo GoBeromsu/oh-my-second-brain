@@ -36,7 +36,7 @@ export interface SuggestOptions {
   readonly queryLex?: (text: string, k: number) => readonly LexHit[];
   /** Optional semantic veto, honoured only when `embeddingConfigured` is true. */
   readonly vectorVeto?: (candidate: LinkCandidate) => boolean;
-  /** ADR-007 gate; when false the vector veto is inert. Defaults to true. */
+  /** ADR-005 gate; when false the vector veto is inert. Defaults to true. */
   readonly embeddingConfigured?: boolean;
 }
 

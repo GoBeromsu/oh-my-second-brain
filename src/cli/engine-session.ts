@@ -25,7 +25,7 @@ export interface EngineSession {
   dispose(): Promise<void>;
 }
 
-/** Fails loudly under ADR-007 before an operation that requires real embeddings. */
+/** Fails loudly under ADR-005 before an operation that requires real embeddings. */
 export function ensureEmbeddingCapability(
   vault: string,
   modelCacheDir?: string,

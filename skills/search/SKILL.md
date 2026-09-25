@@ -34,7 +34,7 @@ Use `search { op: "templates" }` to list stable template IDs and declared axes, 
 - `axes.folder` scopes physical placement.
 - `axes.link` follows observed wikilinks.
 
-Axes intersect. They require current authority and fail loudly on an undeclared field or stale signature. Remove the typed axis rather than guessing a field. That failure does not stop lexical retrieval and does not start doctor, repair, or interview. Vector or HyDE retrieval fails loudly without a configured embedding provider and model. ADR-007 still applies: do not hide a provider or backend failure as an empty success, a fake embedder, or another backend. Missing results and history are unobserved, not proof of absence or non-use.
+Axes intersect. They require current authority and fail loudly on an undeclared field or stale signature. Remove the typed axis rather than guessing a field. That failure does not stop lexical retrieval and does not start doctor, repair, or interview. Vector or HyDE retrieval fails loudly without a configured embedding provider and model. ADR-005 still applies: do not hide a provider or backend failure as an empty success, a fake embedder, or another backend. Missing results and history are unobserved, not proof of absence or non-use.
 
 Search never creates `.oms` and never mutates templates, notes, controls, indexes, or the interview ledger. Stale or mixed controls are not a search outage and not a repair trigger. A search call does not grant edit rights.
 

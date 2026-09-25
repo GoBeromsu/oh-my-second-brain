@@ -535,7 +535,7 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
   // embedding-model path must be forwarded explicitly or the child is always
   // model-less regardless of this process's env -- which would desync it from the
   // hasModel gate below. Forward the canonical OMS_EMBEDDING_PROVIDER +
-  // OMS_EMBEDDING_MODEL pair (ADR-007: explicit config, no auto-detect),
+  // OMS_EMBEDDING_MODEL pair (ADR-005: explicit config, no auto-detect),
   // matching src/mcp/semantic-server.test.ts. HOME/USERPROFILE are likewise
   // forwarded explicitly (the sandboxed default subset drops them) so this
   // child's global write-back also lands in the isolated HOME, not the real one.
@@ -559,7 +559,7 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
     // Exercise retrieve_context the way the WITH/NO-model unit test does. On a
     // model-less host the qmd:// ReadResource and document reads below hydrate
     // from disk through the engine's core (lex + file-based) adapter, which needs
-    // no model. oms_sync_embeddings is engine-owned and loud-guards (ADR-007)
+    // no model. oms_sync_embeddings is engine-owned and loud-guards (ADR-005)
     // without a model, so retrieve_context's semantic leg simply degrades to the
     // graph leg here; with a model present the engine handles the sync just as well.
     await client.callTool({
@@ -584,14 +584,14 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
       },
     });
     // oms_sync_embeddings / oms_semantic_query route through the native engine,
-    // which REQUIRES a real embedding model (ADR-007). With a model we assert
+    // which REQUIRES a real embedding model (ADR-005). With a model we assert
     // real results; without one (the default CI runner) we assert the op
     // *refuses to falsely succeed* -- which itself proves it routed to the
     // engine and never fabricated a result. Mirrors src/mcp/semantic-server.test.ts.
     // Gate on the canonical embedding pair, mirroring semantic-server.test.ts: the
     // smoke forwards OMS_EMBEDDING_PROVIDER + OMS_EMBEDDING_MODEL to the child, so the
     // runner gate must key off the same pair to stay in sync with the forwarded child
-    // env (ADR-007: explicit config, no auto-detect).
+    // env (ADR-005: explicit config, no auto-detect).
     const hasModel = Boolean(process.env.OMS_EMBEDDING_PROVIDER && process.env.OMS_EMBEDDING_MODEL);
     const textOf = (res) => (res.content?.[0]?.type === "text" ? res.content[0].text : "");
     // The detail tools were demoted behind the five public tools during the
@@ -656,25 +656,25 @@ async function mcpSmoke(packageRoot, vault, smokeHome) {
         fail("MCP semantic query did not find packaged smoke note");
       }
     } else {
-      // sync gives the strong routing proof: the ADR-007 loud guard naming the model env.
+      // sync gives the strong routing proof: the ADR-005 loud guard naming the model env.
       const sync = await callGuarded(syncCall);
       if (!sync.guarded || !/OMS_EMBEDDING_PROVIDER|OMS_EMBEDDING_MODEL/.test(sync.text)) {
-        fail("MCP semantic sync did not loud-guard the missing embedding model (ADR-007)");
+        fail("MCP semantic sync did not loud-guard the missing embedding model (ADR-005)");
       }
       // Plain query expands to lexical retrieval, so a model-less packaged vault
-      // still returns the smoke note. Explicit vec remains guarded by ADR-007.
+      // still returns the smoke note. Explicit vec remains guarded by ADR-005.
       const query = await client.callTool(queryCall);
       const queryPayload = JSON.parse(textOf(query) || "{}");
       if (query.isError || queryPayload.hits?.[0]?.path !== "Literature/semantic-retrieval.md") {
         fail("MCP plain semantic query did not return the packaged smoke note without an embedding model");
       }
     }
-    // ADR-009 D2 retired the qmd-compatible surface, so the packaged server
+    // ADR-001 retired the qmd-compatible surface, so the packaged server
     // must NOT advertise it. Asserting its absence keeps a retired surface from
     // quietly reappearing in a published artifact.
     const templates = await client.listResourceTemplates().catch(() => ({ resourceTemplates: [] }));
     if (templates.resourceTemplates.some((template) => template.uriTemplate?.startsWith("qmd://"))) {
-      fail("MCP server still advertises a retired qmd:// resource template (ADR-009 D2)");
+      fail("MCP server still advertises a retired qmd:// resource template (ADR-001)");
     }
 
     // The public surface must be exactly the five tools.

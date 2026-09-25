@@ -126,7 +126,7 @@ function positiveInt(value: string | undefined): number | undefined {
  * Strip a resource scheme to a vault-relative path.
  *
  * `oms://<collection>/<path>` is URL-decoded; plain targets get backslashes and
- * a leading "./" normalized away. The `qmd://` branch was removed with ADR-009:
+ * a leading "./" normalized away. The `qmd://` branch was removed per ADR-001:
  * qmd compatibility is no longer a product contract, and keeping an input
  * tolerance for a retired scheme is a compatibility layer with no caller.
  */
@@ -853,7 +853,7 @@ export class McpEngineAdapter {
         // Embedding identity is owned by the assemble-time canonical config
         // (OMS_EMBEDDING_PROVIDER / OMS_EMBEDDING_MODEL) threaded into the
         // adapter; the MCP call no longer carries modelPath. syncEngineStore
-        // resolves the real provider and fails fast (ADR-007) if it is missing.
+        // resolves the real provider and fails fast (ADR-005) if it is missing.
         embeddingProvider: this.config?.embeddingProvider,
         embeddingModel: this.config?.embeddingModel,
         embeddingRevision: this.config?.embeddingRevision,
@@ -1201,7 +1201,7 @@ export class McpEngineAdapter {
   // -------------------------------------------------------------------------
 
   /**
-   * Hydrate one document from disk by real vault-relative path (ADR-008).
+   * Hydrate one document from disk by real vault-relative path (ADR-001).
    * Supports "file.md", "file.md:N" (single line), "file.md:N-M" (range),
    * and "#docid" (resolved via store.listDocPaths). No embedding model needed.
    */

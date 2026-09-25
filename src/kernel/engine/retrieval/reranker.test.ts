@@ -29,7 +29,7 @@ function deferred<T>(): {
 describe("PassthroughReranker", () => {
   it("documents the locked no-fake embedder contract", () => {
     const adr = readFileSync(
-      path.resolve(process.cwd(), "docs/decisions/ADR-007-no-fake-embedder-fallback-native-dim-integrity.md"),
+      path.resolve(process.cwd(), "docs/decisions/ADR-005-embedding-model-contract-integrity-lifecycle.md"),
       "utf8",
     );
     expect(adr).toContain("OMS_EMBEDDING_PROVIDER");

@@ -7,8 +7,8 @@ retrieval code lives under this directory, organised into sub-modules: `embed/`
 `retrieval/` (hybrid fusion pipeline). Shared interface contracts are exported
 from `types.ts`.
 
-Model selection is explicit and ordered per capability (ADR-007,
-[ADR-012](../../../docs/decisions/ADR-012-portable-model-contract-and-lifecycle.md)):
+Model selection is explicit and ordered per capability
+([ADR-005](../../../docs/decisions/ADR-005-embedding-model-contract-integrity-lifecycle.md)):
 request override, then a complete environment pair, then `.oms/models.json`,
 then a setup-installed default, then unavailable. There is no fake/hash
 fallback, provider auto-detect, or `OMS_MODEL_PATH` alias. A malformed

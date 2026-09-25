@@ -22,7 +22,7 @@ export interface SearchRequest {
   readonly hyde?: string;
   readonly limit?: number;
   readonly candidateLimit?: number;
-  /** Apply the configured reranker (opt-in; ADR-011). */
+  /** Apply the configured reranker (opt-in; ADR-004). */
   readonly rerank?: boolean;
   readonly minScore?: number;
   /** Context that disambiguates a query without becoming a sub-query. */

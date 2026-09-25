@@ -120,7 +120,7 @@ describe("dispatch — routing", () => {
   it("hyde with no hydeGenerator fails loudly instead of embedding the raw query", async () => {
     // This previously fell back to an identity stub, so an explicit HyDE request
     // silently became an ordinary vector search over the raw query while still
-    // reporting itself as HyDE. ADR-007 forbids exactly that substitution: the
+    // reporting itself as HyDE. ADR-005 forbids exactly that substitution: the
     // caller asked for a capability the engine did not have.
     const store = makeStore([], [VEC_HIT]);
     const embed = makeEmbed();

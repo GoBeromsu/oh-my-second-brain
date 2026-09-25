@@ -6,8 +6,8 @@ type: research
 status: active
 created_by: claude-code
 relates_to:
-  - docs/decisions/ADR-005-graph-access-model.md
-  - docs/decisions/ADR-002-vector-embedding-backend.md
+  - docs/decisions/ADR-006-graph-access.md
+  - docs/decisions/ADR-003-local-index-storage-and-fusion.md
   - ../../ACKNOWLEDGMENTS.md
 ---
 
@@ -15,7 +15,7 @@ relates_to:
 
 > 목적: 그래프(엔티티+타입 관계) 표현이 RAG/LLM 검색 정확도를 어떻게 높이는지, 그리고 ~20,000 노트 Obsidian vault에서 frontmatter relation / wikilink·backlink / shared tag / semantic similarity로 엣지를 유도할 때의 구현 고려사항을 정리한다.
 > 이 문서는 **사실 · 옵션 · 트레이드오프**를 제시하며, 결정을 선언하지 않는다.
-> 결정은 [ADR-005](../decisions/ADR-005-graph-access-model.md)에 기록한다.
+> 결정은 [ADR-006](../decisions/ADR-006-graph-access.md)에 기록한다.
 >
 > **출처**: 105-agent / 2.6M-token adversarial deep-research. 각 finding에 찬성(F)/반대(A) vote tally를 병기한다.
 
@@ -23,7 +23,7 @@ relates_to:
 
 ## Summary
 
-그래프 구조는 RAG 검색에서 lexical/semantic 유사도만으로는 도달할 수 없는 topically-connected 문서를 surface하는 데 실증된 가치를 갖는다(multi-hop associative retrieval). 기존 GraphRAG 구현체(LightRAG, HippoRAG, MS GraphRAG)는 모두 그래프를 raw text에서 LLM 파이프라인으로만 구축하며, Obsidian vault의 wikilink·frontmatter 같은 pre-existing 메타데이터를 native하게 ingest하지 않는다 — 이 gap이 우리 frontmatter-first 전략의 핵심 정당화 근거다. graph 결과와 vector 검색의 RRF(k=60) 융합은 여러 실제 구현에서 지배적 패턴으로 확인됐으며, ADR-002의 결정과 일치한다.
+그래프 구조는 RAG 검색에서 lexical/semantic 유사도만으로는 도달할 수 없는 topically-connected 문서를 surface하는 데 실증된 가치를 갖는다(multi-hop associative retrieval). 기존 GraphRAG 구현체(LightRAG, HippoRAG, MS GraphRAG)는 모두 그래프를 raw text에서 LLM 파이프라인으로만 구축하며, Obsidian vault의 wikilink·frontmatter 같은 pre-existing 메타데이터를 native하게 ingest하지 않는다 — 이 gap이 우리 frontmatter-first 전략의 핵심 정당화 근거다. graph 결과와 vector 검색의 RRF(k=60) 융합은 여러 실제 구현에서 지배적 패턴으로 확인됐으며, ADR-003의 결정과 일치한다.
 
 정확도 lift 수치들은 adversarial 검증에서 대거 탈락했다. 메커니즘 설명은 근거가 강하지만, 정밀 수치는 independent reproduction 없이 신뢰할 수 없다.
 
@@ -88,7 +88,7 @@ RRF_score(d) = Σ_i  1 / (k + rank_i(d))     k = 60
 
 순위 기반이므로 graph score와 vector cosine의 스케일 불일치 문제가 없다.
 
-> ADR-002의 RRF(k=60) 결정과 일치한다. graph traversal 결과까지 동일 융합으로 확장 가능하다.
+> ADR-003의 RRF(k=60) 결정과 일치한다. graph traversal 결과까지 동일 융합으로 확장 가능하다.
 
 Source: arxiv.org/pdf/2507.03226.
 
@@ -108,7 +108,7 @@ MS GraphRAG는 엔티티 그래프를 **hierarchical Leiden**(Traag 2019)으로 
 
 Dynamic community selection은 평균 ≈470 reports 처리(69% 감소)와 품질 동등을 AP News 50문항에서 보고. 단, 이 수치는 vote 2-1로 확인됐으므로 1차 paper 재검증 없이 인용하지 말 것.
 
-> Louvain 대비 Leiden의 핵심 차이: well-connected community를 수학적으로 보장. 이는 ADR-005 §4 `oms_graph_cluster`의 Louvain → Leiden 업그레이드 경로에 관련된다.
+> Louvain 대비 Leiden의 핵심 차이: well-connected community를 수학적으로 보장. 이는 구 ADR-005 §4 `oms_graph_cluster`의 Louvain → Leiden 업그레이드 경로에 관련된다.
 
 Sources: arxiv.org/abs/2404.16130, Microsoft Research blog (graphrag-improving-global-search-via-dynamic-community-selection).
 
@@ -191,5 +191,5 @@ Sources: arxiv.org/abs/2501.00309, arxiv.org/abs/2502.14902, arxiv.org/abs/2503.
 
 Cross-links:
 - [ACKNOWLEDGMENTS.md](../../ACKNOWLEDGMENTS.md)
-- [ADR-005: 그래프 접근 모델](../decisions/ADR-005-graph-access-model.md)
-- [ADR-002: 벡터 임베딩 백엔드](../decisions/ADR-002-vector-embedding-backend.md)
+- [ADR-006: 그래프 접근 모델](../decisions/ADR-006-graph-access.md)
+- [ADR-003: 벡터 임베딩 백엔드](../decisions/ADR-003-local-index-storage-and-fusion.md)

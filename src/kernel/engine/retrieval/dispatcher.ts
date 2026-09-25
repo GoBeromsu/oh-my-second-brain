@@ -124,7 +124,7 @@ async function withRetry<T>(
  * There is deliberately **no default**. An identity stub used to stand in here,
  * returning the query unchanged, which meant an explicit `hyde` request quietly
  * became an ordinary vector search over the raw query while still reporting
- * itself as HyDE. That is precisely the silent degradation ADR-007 forbids: the
+ * itself as HyDE. That is precisely the silent degradation ADR-005 forbids: the
  * caller asked for a capability the engine did not have and was given something
  * else without being told. An absent generator is now an explicit failure.
  */

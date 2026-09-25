@@ -80,7 +80,7 @@ The active convention is user-owned, resolved from `vault/.oms/` at runtime; `co
 
 `src/kernel/searchbackend/` defines `SearchBackend`; the in-repo engine is the **default** implementation. qmd is pluggable, neither default nor required. A new backend implements the interface and must pass `src/kernel/searchbackend/conformance.test.ts`.
 
-ADR-007 is permanently locked: an unavailable backend fails **loudly** with actionable guidance and never silently degrades. A plain `query` expands to lexical only; requesting `vec` without a configured provider correctly returns `available: false` naming `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL`.
+ADR-005 is permanently locked: an unavailable backend fails **loudly** with actionable guidance and never silently degrades. A plain `query` expands to lexical only; requesting `vec` without a configured provider correctly returns `available: false` naming `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL`.
 
 ## CI Gates
 

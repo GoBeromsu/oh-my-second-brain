@@ -451,7 +451,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   };
 
   // A real embedding provider is configured iff the canonical pair is set
-  // (ADR-007). The engine's model-OPTIONAL surface (document reads,
+  // (ADR-005). The engine's model-OPTIONAL surface (document reads,
   // retrieve_context's semantic leg, ReadResource) keys off this to decide
   // vec-capable vs core engine WITHOUT a no-model assembly throw.
   const hasEmbeddingModel = (): boolean => embeddingConfigPresent(vault);
@@ -459,13 +459,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   // Adapter resolver for the model-OPTIONAL paths: the vec-capable engine when
   // the canonical embedding pair is configured, else the core (lex + file-based
   // document) engine. The counterpart isEngineSemanticOp path assembles eagerly
-  // and lets the no-model error surface loudly (ADR-007). Both honor the same
+  // and lets the no-model error surface loudly (ADR-005). Both honor the same
   // invariant: query + document reads resolve on the SAME backend, so a
   // retrieve_context real-path docid always hydrates where it was produced.
   //
   // No catch here: a CONFIGURED-but-broken full engine (bad provider/model,
   // missing auth, store-open failure) must surface its error loudly rather than
-  // silently masquerade as a model-less host (ADR-007). The core fallback is
+  // silently masquerade as a model-less host (ADR-005). The core fallback is
   // strictly for the absent-config case.
   const resolveCreatingDocumentAdapter = (): McpEngineAdapter =>
     hasEmbeddingModel() ? getSemanticEngine().adapter : getCoreSemanticEngine().adapter;
@@ -503,7 +503,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   const searchBackend = new EngineSearchBackend(
     (requiresEmbeddings) => requiresEmbeddings
       ? (() => {
-        // Validate ADR-007 configuration before probing the read-only store:
+        // Validate ADR-005 configuration before probing the read-only store:
         // vector intent is actionable only after its required provider/model
         // pair is present, regardless of whether an index exists yet.
         if (!hasEmbeddingModel()) return getSemanticEngine().adapter;
@@ -772,11 +772,11 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
 
     // Semantic / sync / cleanup / document ops route to the native engine adapter:
     //   - vec/HyDE semantic ops → EAGER getSemanticEngine().adapter (vec-capable):
-    //     a model-less host throws a loud ADR-007 error (surfaces via the dispatch
+    //     a model-less host throws a loud ADR-005 error (surfaces via the dispatch
     //     catch below).
     //   - lex-only query and document ops → resolveDocumentAdapter(): vec-capable
     //     engine when a model is configured, else the core engine. Lex is a real
-    //     model-free BM25/FTS feature, not an ADR-007 fake vector fallback.
+    //     model-free BM25/FTS feature, not an ADR-005 fake vector fallback.
     // Every other tool never touches the engine here.
     if (isEngineSemanticOp(name) || isEngineDocumentOp(name)) {
       if (name === "oms_semantic_query") {

@@ -2,7 +2,7 @@
 slug: governance-architecture
 date: 2026-06-13
 created_by: claude-code
-governing-adr: ADR-006-oms-governance-contract-separation
+governing-adr: ADR-008-taxonomy
 status: active
 type: architecture
 ---
@@ -13,7 +13,7 @@ This document is the living structure map of the `.oms/` dotfolder.
 It describes *what* exists here and *why* the two-layer separation is maintained.
 Update it (supersede entries, never delete) whenever the vault structure changes.
 
-## Two-Layer Topology (ADR-006)
+## Two-Layer Topology (구 ADR-006; 현재 ADR-008·ADR-009)
 
 The `.oms/` dotfolder holds two fundamentally different asset types.
 They must never be mixed: one is parsed by machines, the other is read by humans.
@@ -59,7 +59,7 @@ They must never be mixed: one is parsed by machines, the other is read by humans
 3. `vault-lint` enforces Layer 1 only. It does not parse or validate Layer 2 prose.
 4. `vault-decision-record` writes to Layer 2 only. It does not edit taxonomy or concept schemas.
 5. `.oms/cache/` is gitignored unconditionally. No cache artifact is ever committed.
-6. Everything else under `.oms/` is committed (ADR-006 §Decision).
+6. Everything else under `.oms/` is committed (ADR-002).
 
 ## Vault Installation Note
 
@@ -69,4 +69,4 @@ At setup time, `vault-scaffold` seeds both layers for a specific vault:
 - Creates `governance/architecture.md` (vault-specific version of this file)
 - Leaves `governance/decisions/` and `governance/rules/` empty (populated as the vault evolves)
 
-The *boundary* between the two layers is fixed. The *contents* are vault-specific (Non-Sticky, ADR-006 §Non-Sticky).
+The *boundary* between the two layers is fixed. The *contents* are vault-specific (Non-Sticky, ADR-009).

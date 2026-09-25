@@ -22,7 +22,7 @@ import {
  * MCP facade decides reranking is available by checking only whether a reranker is
  * defined, injecting it made an explicit `rerank: true` request report success
  * while returning the unchanged fused order. A fake capability reachable from
- * production is exactly the silent degradation ADR-007 forbids, so the boundary
+ * production is exactly the silent degradation ADR-005 forbids, so the boundary
  * that keeps such helpers out of production needs enforcement rather than trust.
  *
  * Scope note: helpers are still compiled into `dist/` and therefore published, so

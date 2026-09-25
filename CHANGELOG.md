@@ -19,7 +19,7 @@ This aggregate changelog contains changes that span multiple layers.
 
   Your files stay yours. Review reads and verifies source bytes where they already are and publishes only `.oms` control files through the existing exact-digest transaction — it never rewrites a template or an existing note. A change surfaces as exactly `템플릿에 변경이 있습니다` with `확인하기` and `나중에`, naming nothing; `나중에` is handled by the host alone. Confirming opens one linear interview that asks only what it must, keeps confirmed answers that the edit did not touch, resumes after an interruption, re-asks only the answers whose anchored part of the source actually changed, and still ends at an explicit final confirmation even when nothing is left to ask. Contracts now describe frontmatter *and* a bounded body grammar with per-node requiredness and order; what OMS observed and what you confirmed stay separate, so an ambiguous source asks rather than inventing a rule.
 
-  A changed template no longer stalls the rest of the vault: shared authority files still fail closed vault-wide, but a single edited source makes only its own template pending while unrelated notes keep writing. Approval records independently derived source and body evidence, so a hand-edited projection can never transfer a template's identity. Note placement is no longer a precondition for having a contract — it is resolved when a note is created, from an explicit destination, then the taxonomy default, then by asking. See ADR-013.
+  A changed template no longer stalls the rest of the vault: shared authority files still fail closed vault-wide, but a single edited source makes only its own template pending while unrelated notes keep writing. Approval records independently derived source and body evidence, so a hand-edited projection can never transfer a template's identity. Note placement is no longer a precondition for having a contract — it is resolved when a note is created, from an explicit destination, then the taxonomy default, then by asking. See 구 ADR-013.
 
 ## [0.14.0] - 2026-09-05
 
@@ -214,7 +214,7 @@ This aggregate changelog contains changes that span multiple layers.
 ### Breaking
 
 - **The MCP surface is five tools.** `oms_write`, `oms_search`, `oms_link`, `oms_status` and `oms_doctor` replace the previous twenty-three. The eighteen detail tools were not deleted: each is reachable through an `op` parameter on the tool that owns it, so no capability was lost. A client that calls a detail tool by its old name must switch to the owning tool plus `op`. See [CHANGELOG-mcp.md](./CHANGELOG-mcp.md) for the operation map.
-- **The qmd-compatible aliases are gone.** The `query`, `get`, `multi_get` and `status` commands and the `qmd://` resource were retired; ADR-009's D2 is superseded by ADR-010, while D1 remains in force. The canonical nested commands `oms semantic query|status|get|multi-get|vsearch` are unaffected.
+- **The qmd-compatible aliases are gone.** The `query`, `get`, `multi_get` and `status` commands and the `qmd://` resource were retired; 구 ADR-009 D2 was superseded by 구 ADR-010, while D1 remains in force (both now ADR-001/ADR-004). The canonical nested commands `oms semantic query|status|get|multi-get|vsearch` are unaffected.
 - **`oms_search` no longer accepts sync parameters.** `embeddingSyncBeforeSearch` and its siblings let a caller turn a search into a write, which is incompatible with the read-only guarantee the tool now makes. Preparing index data on disk is `oms_doctor { op: "sync-embeddings" }`, which is annotated as writing.
 
 ### Changed

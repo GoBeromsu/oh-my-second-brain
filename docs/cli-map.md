@@ -1,6 +1,6 @@
 # CLI and MCP surface map
 
-OMS exposes fourteen CLI command families and exactly five MCP tools. The families are `setup`, `template`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. CLI commands that have no MCP equivalent remain first-class CLI capabilities; MCP detail operations are discriminated by `op` and never become extra tools.
+OMS exposes fifteen CLI command families and exactly five MCP tools. The families are `setup`, `template`, `contract`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. CLI commands that have no MCP equivalent remain first-class CLI capabilities; MCP detail operations are discriminated by `op` and never become extra tools.
 
 The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doctor`. The server id is `oms`; the tables below use the host-qualified spellings `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`, not additional wire tools.
 
@@ -79,6 +79,7 @@ Read-only search is independent of policy validity. Lexical, vector, HyDE, and t
 | CLI | Purpose |
 |---|---|
 | `oms setup` | Connect the vault: write its portable `.oms/settings.json` identity and the host connection after a dry-run approval digest, optionally selecting a model. It publishes no contract; that is `oms template publish`. |
+| `oms contract interview|status|reissue-id` | Interview and seal the common or one template's rules (interactive terminal only), show the contract posture without hidden values, or reissue the vault id after a copy. |
 | `oms host install|remove|sync|status` | Manage host-native assets and registrations. Install is a user-run command. `remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. |
 | `oms package check|update` | Check or update the npm package without implicitly syncing hosts. |
 | `oms model install|select|waive|status` | Manage model acquisition, selection, waiver, and status. |

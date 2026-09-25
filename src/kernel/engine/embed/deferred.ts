@@ -6,7 +6,7 @@
  * work off the filesystem and need no vectors, so those engines wire these guards
  * and stay fully usable for everything that does not require embeddings.
  *
- * ADR-007: these are LOUD GUARDS, not fake fallbacks. They never return a
+ * ADR-005: these are LOUD GUARDS, not fake fallbacks. They never return a
  * projected or hash vector — they throw, so a semantic call reaches a real error
  * rather than fabricated results.
  *
@@ -64,7 +64,7 @@ export function makeDeferredProvider(): EmbeddingProvider {
  *
  * The graph subsystem never touches the store, so these guards are never hit in
  * normal operation; they exist to fail loudly if a semantic path is ever wired
- * here by mistake (ADR-007 — never fabricate vectors). `close()` is a safe no-op
+ * here by mistake (ADR-005 — never fabricate vectors). `close()` is a safe no-op
  * so dispose() can run unconditionally.
  */
 export function makeDeferredStore(): EngineStore {

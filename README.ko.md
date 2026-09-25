@@ -12,7 +12,7 @@ Oh My Second Brain(`oms`)은 기존 Obsidian·Markdown 볼트를 AI 호스트와
 
 등록된 각 소스는 경로와 내용 hash로 기록되는 사용자의 Markdown 파일 그대로 남는다. OMS는 그 소스를 다시 쓰거나 복사하거나 스냅샷하지 않고, 관리 draft나 `.oms/templates/` 디렉터리도 없으며 정책에 승인된 Markdown 바이트를 저장하지 않는다. OMS는 Templater, JavaScript, 전용 token 언어를 해석하거나 실행하지 않는다.
 
-ADR-015는 ADR-014를 대체하고, ADR-014는 ADR-013을 대체했다. [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 Ouroboros와 Gajae Code의 deep-interview를 설계 아이디어로 밝힌다. 이는 runtime 복제도 연구 결과도 아니다. 저장소의 도식은 설명용 스케치이며 G002 Excalidraw 산출물이 아니다. 이 문서들은 승인된 아키텍처 기록이지 host smoke 결과나 제품 gate 통과가 아니다.
+템플릿 계약은 ADR-007(Accepted, 구현 진행 중)에 기록되며, 구 ADR-013–016을 대체한다. 구현 전까지 코드는 구 ADR-015의 version-5 정책을 따른다. [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 Ouroboros와 Gajae Code의 deep-interview를 설계 아이디어로 밝힌다. 이는 runtime 복제도 연구 결과도 아니다. 저장소의 도식은 설명용 스케치이며 G002 Excalidraw 산출물이 아니다. 이 문서들은 승인된 아키텍처 기록이지 host smoke 결과나 제품 gate 통과가 아니다.
 
 권위 모델은 [아키텍처](./docs/architecture.md), 볼트 파일은 [컨벤션](./docs/conventions.md), leaf 목록은 [CLI 맵](./docs/cli-map.md)에 있다.
 
@@ -33,6 +33,7 @@ interview 스킬은 결정을 사용자와 하나씩 합의하고, 명시적 계
 
 ```text
 oms bridge add|remove|status                   저장소-볼트 target bridge 관리
+oms contract interview|status|reissue-id       템플릿 규칙 인터뷰·봉인 또는 조회
 oms graph build|status                         노트 그래프 생성 또는 조회
 oms hook pre|post                              pre/post-tool-use hook 실행
 oms host install|remove|sync|status            호스트 asset과 MCP 등록 관리
@@ -48,7 +49,7 @@ oms status                                     읽기 전용 종합 상태 표�
 oms template list|show|scan|check|publish|review-sources|acknowledge-source|relink-source
 ```
 
-`oh-my-second-brain`은 전체 명령이고 `oms`는 짧은 별칭이다. 이 열네 개 family, 여덟 개 skill, 다섯 개 MCP 도구는 서로 다른 세 집합이다. leaf 대응은 [CLI 맵](./docs/cli-map.md)에 있다.
+`oh-my-second-brain`은 전체 명령이고 `oms`는 짧은 별칭이다. 이 열다섯 개 family, 여덟 개 skill, 다섯 개 MCP 도구는 서로 다른 세 집합이다. leaf 대응은 [CLI 맵](./docs/cli-map.md)에 있다.
 
 ### 도움말 계약
 
@@ -68,7 +69,7 @@ lexical, vector, HyDE, typed-axis 질의는 템플릿에 결속되지 않았거�
 
 여덟 skill(`distill`, `doctor`, `interview`, `link`, `search`, `status`, `template`, `write`)은 호스트 워크플로다. `interview`와 `template`은 도구가 없다.
 
-다섯 도구는 그 skill의 부분집합이고, 어느 쪽도 열네 개 CLI family와 같지 않다. 세부 기능은 다섯 도구의 `op` 값으로 남는다.
+다섯 도구는 그 skill의 부분집합이고, 어느 쪽도 열다섯 개 CLI family와 같지 않다. 세부 기능은 다섯 도구의 `op` 값으로 남는다.
 
 `write`는 명시적 계약 게시와 소스 검토가 관리 상태를 바꾸기 때문에 쓰기 posture를 유지한다. `guide`와 `check`는 노트 바이트를 쓰지 않는다. 관리 상태에 대한 유일한 예외는 세 개의 `migration` id를 받은 `guide`이며, 이 경우 역사적 저장소의 version 5 계약을 제자리에 게시한 뒤 선택한다. 계약 변경은 `op: "template"`의 `publish-contract`, `review-sources`, `acknowledge-source`, `relink-source` mode만 사용한다. `status`와 모든 검색 동작은 읽기 전용이며 완료를 대신 판정하지 않는다. `doctor` 도구는 control과 index를 진단하며 노트를 backfill하지 않는다.
 
