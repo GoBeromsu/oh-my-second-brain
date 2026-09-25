@@ -245,12 +245,13 @@ describe("discoverHostInstallAssets", () => {
       "doctor",
       "link",
       "search",
+      "setup",
       "status",
       "write",
     ].map(skill => path.join(home.codex, "skills", `oms-${skill}`));
-    expect(host.skillDirs).toEqual(["distill", "doctor", "link", "search", "status", "write"]);
+    expect(host.skillDirs).toEqual(["distill", "doctor", "link", "search", "setup", "status", "write"]);
     expect(installed.paths.filter(candidate => candidate.includes(`${path.sep}skills${path.sep}`)).sort()).toEqual([...expectedSkills].sort());
-    expect(installed.paths.some(candidate => candidate.endsWith(`${path.sep}oms-setup`))).toBe(false);
+    expect(installed.paths.some(candidate => candidate.endsWith(`${path.sep}oms-setup`))).toBe(true);
 
     const discovered = await discoverHostInstallAssets();
     const discoveredSkills = discovered.assets
@@ -258,7 +259,7 @@ describe("discoverHostInstallAssets", () => {
       .map(asset => asset.declaredPath)
       .sort();
     expect(discoveredSkills).toEqual([...expectedSkills].sort());
-    expect(discovered.assets.some(asset => asset.declaredPath.includes("oms-setup"))).toBe(false);
+    expect(discovered.assets.some(asset => asset.declaredPath.includes("oms-setup"))).toBe(true);
     expect(discovered.hosts).toContainEqual({ host: "codex", state: "ok" });
     // The reviewer role went with the completion protocol it served, so install
     // discovery must not declare a reviewer asset for any host.
@@ -268,6 +269,6 @@ describe("discoverHostInstallAssets", () => {
     const after = await discoverHostInstallAssets();
     expect(after.hosts).toContainEqual({ host: "codex", state: "ok" });
     expect(after.assets).toContainEqual(expect.objectContaining({ id: "registration:codex", evidence: { state: "ok", cause: null } }));
-    expect(after.assets.some(asset => asset.id === "codex.subagent" || asset.declaredPath.includes("oms-setup"))).toBe(false);
+    expect(after.assets.some(asset => asset.id === "codex.subagent")).toBe(false);
   });
 });

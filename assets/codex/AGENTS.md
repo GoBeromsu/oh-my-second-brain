@@ -6,8 +6,10 @@
 
 The vault owns its conventions. The user seals folders, properties, and
 templates once, in an interactive `oms setup` they run themselves at a terminal.
-You never run it. The sealed contract lives outside the vault, and it is not
-yours to read. `~/.oms` is off-limits. Inside the vault, `.oms/settings.json` is
+The `setup` skill may seal for them too: you ask each question, and `oms setup
+--answers` seals a first or stricter contract only. Loosening a seal and
+recovering a broken one stay with the user's terminal. The sealed contract lives
+outside the vault, and it is not yours to read. `~/.oms` is off-limits. Inside the vault, `.oms/settings.json` is
 the only OMS file.
 
 ## Writing
@@ -40,5 +42,5 @@ guess the contract's location or values.
   backfills notes. A broken or missing seal is fixed by the user running
   `oms setup`.
 
-Codex installs six shared skills (`write`, `search`, `link`, `distill`,
-`status`, `doctor`) backed by the five public MCP tools.
+Codex installs seven shared skills (`write`, `search`, `link`, `distill`,
+`setup`, `status`, `doctor`) backed by the five public MCP tools.

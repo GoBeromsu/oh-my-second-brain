@@ -18,7 +18,7 @@ Oh My Second Brain(`oms`)은 기존 Obsidian·Markdown 볼트를 AI 호스트와
 
 ## 설정
 
-`oms setup`은 `oms contract setup`과 같은 명령이다. 볼트 전체를 인터뷰해 계약을 봉인한다. 볼트 안에는 `.oms/settings.json`만 쓰고 노트는 수정하지 않는다. 대화형 터미널이 없거나 `OMS_NON_INTERACTIVE=1`이면 실행을 거부하므로 에이전트는 실행하지 않는다. 언제든 다시 실행해 재봉인할 수 있다.
+`oms setup`은 `oms contract setup`과 같은 명령이다. 볼트 전체를 인터뷰해 계약을 봉인한다. 볼트 안에는 `.oms/settings.json`만 쓰고 노트는 수정하지 않는다. 대화형 인터뷰는 터미널이 없거나 `OMS_NON_INTERACTIVE=1`이면 실행을 거부한다. 에이전트는 `setup` 스킬로만 봉인한다: `oms setup --questions`로 질문을 받아 소유자에게 하나씩 묻고, `oms setup --answers <file|->`로 첫 봉인이나 더 엄격한 재봉인만 한다. 계약을 느슨하게 하는 재봉인은 거부되고 소유자의 터미널 몫이다. 언제든 다시 실행해 재봉인할 수 있다.
 
 ```bash
 oms setup --vault /path/to/vault
@@ -46,7 +46,7 @@ oms setup                                      볼트를 인터뷰하고 계약 
 oms status                                     읽기 전용 통합 상태 표시
 ```
 
-`oh-my-second-brain`이 전체 명령이고 `oms`는 짧은 별칭이다. 이 14개 family, 6개 스킬, 5개 MCP 도구는 서로 다른 집합이다. leaf 목록은 [CLI 맵](./docs/cli-map.md)에 있다.
+`oh-my-second-brain`이 전체 명령이고 `oms`는 짧은 별칭이다. 이 14개 family, 7개 스킬, 5개 MCP 도구는 서로 다른 집합이다. leaf 목록은 [CLI 맵](./docs/cli-map.md)에 있다.
 
 ### 도움말 계약
 
@@ -64,7 +64,7 @@ lexical, vector, HyDE, typed-axis 질의는 계약을 통과하지 못할 노트
 
 `write` · `search` · `link` · `status` · `doctor`
 
-6개 스킬(`distill`, `doctor`, `link`, `search`, `status`, `write`)은 호스트 workflow다. `distill`은 도구가 없다.
+7개 스킬(`distill`, `doctor`, `link`, `search`, `setup`, `status`, `write`)은 호스트 workflow다. `distill`과 `setup`은 도구가 없다. `setup`은 소유자에게 setup 질문을 하나씩 묻고 첫 봉인이나 더 엄격한 재봉인만 한다.
 
 다섯 도구는 스킬의 부분집합이며, 두 집합 모두 14개 CLI family와 다르다. 세부 기능은 다섯 도구 아래의 `op` 값으로 남는다. 봉인에는 MCP 작업도 스킬도 없다.
 
@@ -79,7 +79,7 @@ npm install -g oh-my-second-brain
 oms host install --runtime all --vault /path/to/vault --yes
 ```
 
-Gajae-Code에서는 npm 패키지를 marketplace plugin으로 설치한다: `gjc plugin install oms@oms`. GJC는 패키지 루트의 `skills/` 관례 경로에서 여섯 OMS 스킬을 찾는다.
+Gajae-Code에서는 npm 패키지를 marketplace plugin으로 설치한다: `gjc plugin install oms@oms`. GJC는 패키지 루트의 `skills/` 관례 경로에서 일곱 OMS 스킬을 찾는다.
 
 호스트 설치는 정식 볼트를 `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`에 기록하고, 관리하는 각 호스트 항목에 `oms serve mcp --vault /path/to/vault`를 새긴다. `oms host install|remove|sync|status`는 그 서명된 pointer를 호스트 통합 유지보수에만 쓴다. `oms package update`는 패키지를 업데이트하지만 호스트를 암묵적으로 sync하지 않는다. `oms host sync`를 따로 실행한다.
 

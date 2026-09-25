@@ -37,4 +37,4 @@ A typed axis fails loudly on an undeclared field. Remove the typed axis rather t
 
 Search never creates `.oms` and never mutates templates, notes, the contract, or indexes. A search call does not grant edit rights.
 
-The surface is five MCP tools and six skills.
+The surface is five MCP tools and seven skills.

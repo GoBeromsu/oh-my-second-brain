@@ -6,6 +6,7 @@ import { writeSettings } from "../../../test/fixtures/contract-truth-table.js";
 import { extractTemplate } from "./extract.js";
 import { insideApplyFolder, judge, PATTERN_VALUE_LIMIT } from "./judge.js";
 import { judgeContent, judgeWrite } from "./judge-write.js";
+import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { sealContract, storeRoot } from "./store.js";
 import {
   formatDenyReason, GUIDANCE, GUIDANCE_FOR, VIOLATION_KINDS,
@@ -272,5 +273,12 @@ describe("pattern values are capped", () => {
     const started = Date.now();
     expect(judge({ path: "a.md", frontmatter: { id: long }, body: "" }, view).violations).toEqual([{ field: "id", kind: "pattern" }]);
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("never runs a sealed source past the seal-time length cap", () => {
+    const atCap = sealed({ properties: { id: property({ rules: [{ kind: "pattern", regex: "a".repeat(PATTERN_SOURCE_LIMIT) }] }) } });
+    expect(judge({ path: "a.md", frontmatter: { id: "a".repeat(PATTERN_SOURCE_LIMIT) }, body: "" }, atCap).violations).toEqual([]);
+    const overCap = sealed({ properties: { id: property({ rules: [{ kind: "pattern", regex: "a".repeat(PATTERN_SOURCE_LIMIT + 1) }] }) } });
+    expect(judge({ path: "a.md", frontmatter: { id: "a".repeat(PATTERN_SOURCE_LIMIT + 1) }, body: "" }, overCap).violations).toEqual([{ field: "id", kind: "pattern" }]);
   });
 });

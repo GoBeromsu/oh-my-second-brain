@@ -18,7 +18,7 @@ The authority model is in [architecture](./docs/architecture.md). Vault files ar
 
 ## Setup
 
-`oms setup` is the same command as `oms contract setup`. It interviews the whole vault and seals the contract. It writes only `.oms/settings.json` inside the vault and never modifies notes. It refuses to run without an interactive terminal or under `OMS_NON_INTERACTIVE=1`, so an agent never runs it. Run it again at any time to re-seal.
+`oms setup` is the same command as `oms contract setup`. It interviews the whole vault and seals the contract. It writes only `.oms/settings.json` inside the vault and never modifies notes. The interactive interview refuses to run without a terminal or under `OMS_NON_INTERACTIVE=1`. An agent seals only through the `setup` skill: `oms setup --questions` prints the questions, the agent asks the owner each one, and `oms setup --answers <file|->` seals a first or stricter contract. A reseal that loosens is refused there and left to the owner's terminal. Run it again at any time to re-seal.
 
 ```bash
 oms setup --vault /path/to/vault
@@ -46,7 +46,7 @@ oms setup                                      Interview the vault and seal its 
 oms status                                     Show the read-only aggregate status
 ```
 
-`oh-my-second-brain` is the full command; `oms` is its short alias. These fourteen families, the six skills, and the five MCP tools are three different sets. The leaf map is [the CLI map](./docs/cli-map.md).
+`oh-my-second-brain` is the full command; `oms` is its short alias. These fourteen families, the seven skills, and the five MCP tools are three different sets. The leaf map is [the CLI map](./docs/cli-map.md).
 
 ### Help contract
 
@@ -64,7 +64,7 @@ Lexical, vector, HyDE, and typed-axis queries still include notes that would fai
 
 `write` · `search` · `link` · `status` · `doctor`
 
-The six skills (`distill`, `doctor`, `link`, `search`, `status`, `write`) are host workflows. `distill` is tool-less.
+The seven skills (`distill`, `doctor`, `link`, `search`, `setup`, `status`, `write`) are host workflows. `distill` and `setup` are tool-less; `setup` asks the owner each setup question and seals a first or stricter contract.
 
 The five tools are a subset of those skills, and neither set is the fourteen CLI families. Detail capabilities remain `op` values under the five tools. Sealing has no MCP operation and no skill.
 

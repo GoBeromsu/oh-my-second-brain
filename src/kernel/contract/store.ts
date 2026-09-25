@@ -7,6 +7,7 @@ import { parseStrictJson } from "../conventions/strict-json.js";
 import { VAULT_ID_PATTERN } from "../vault/settings.js";
 import { ensureDirectory, syncDirectory, writePrivate } from "./fs-private.js";
 import { isFieldType } from "./obsidian.js";
+import { patternRefusal } from "./pattern.js";
 import type { FolderContract, JsonScalar, PropertyContract, Rule, TemplateContract, VaultContract } from "./types.js";
 
 /**
@@ -334,7 +335,23 @@ export async function diagnoseStore(vaultId: string, root: string = storeRoot())
   return read.state === "unreadable" ? read.cause : read.state;
 }
 
+/** Every pattern rule must pass the interview's screen; the error never echoes the source. */
+function assertSealablePatterns(contract: VaultContract): void {
+  const ruleSets = [
+    ...Object.values(contract.properties ?? {}).map(property => property.rules),
+    ...Object.values(contract.templates).flatMap(template => Object.values(template.narrowedRules)),
+  ];
+  for (const rules of ruleSets) {
+    for (const rule of rules) {
+      if (rule.kind !== "pattern") continue;
+      const refusal = patternRefusal(rule.regex);
+      if (refusal !== null) throw new TypeError(`CONTRACT_PATTERN_UNSAFE: a pattern rule is ${refusal}`);
+    }
+  }
+}
+
 function contractFiles(contract: VaultContract, declined: DeclinedSet = NO_DECLINED): Map<string, string> {
+  assertSealablePatterns(contract);
   const files = new Map<string, string>();
   if (declined.folders.length + declined.properties.length + Object.keys(declined.templates).length > 0) {
     files.set(DECLINED, stringify({

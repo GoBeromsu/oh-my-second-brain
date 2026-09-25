@@ -17,13 +17,13 @@ import { SHARED_SKILLS_SOURCE } from "../../src/assets/shared-skills.js";
 /**
  * Surface-set parity gate.
  *
- * The live target set (6 skills / 5 tools / 14 CLI families) is asserted directly.
+ * The live target set (7 skills / 5 tools / 14 CLI families) is asserted directly.
  * The fixture cases below prove that the rules also fail closed when a surface drifts.
  *
  * The rule set is deliberately NOT "all three lists are equal". The three
  * surfaces are related but distinct:
  *
- *   skills      - the authored skill set, including tool-less distill
+ *   skills      - the authored skill set, including tool-less distill and setup
  *   mcpTools    - a strict SUBSET of those skills: write, search, link, status, doctor
  *   cliCommands - an INDEPENDENT allowlist of fourteen real CLI families.
  *                 It is intentionally distinct from the skill and MCP-tool surfaces.
@@ -182,11 +182,11 @@ export function checkSurfaceSets(sets: SurfaceSets, expected: { skills: number; 
   return violations;
 }
 
-const TARGET = { skills: 6, tools: 5 } as const;
+const TARGET = { skills: 7, tools: 5 } as const;
 const MCP_SERVER_ID = "oms";
 
 const CLEAN: SurfaceSets = {
-  skills: ["distill", "doctor", "link", "search", "status", "write"],
+  skills: ["distill", "doctor", "link", "search", "setup", "status", "write"],
   skillsWithTool: ["write", "search", "link", "status", "doctor"],
   // In this fixture, a tool is identified by its declaring skill; the `oms_`
   // naming convention is verified separately by the registry parity suite.
@@ -299,7 +299,7 @@ describe("surface-set parity gate (rules)", () => {
   it("does NOT require CLI commands to equal the skill set", () => {
     const violations = checkSurfaceSets(CLEAN, TARGET);
     expect(violations).toEqual([]);
-    expect(CLEAN.skills).toHaveLength(6);
+    expect(CLEAN.skills).toHaveLength(7);
     expect(CLEAN.skills).not.toContain("interview");
     expect(CLEAN.skills).not.toContain("template");
     expect(CLEAN.mcpTools).toHaveLength(5);
@@ -437,7 +437,7 @@ function liveSurfaceSets(skillRoot = path.join(repoRoot, "assets/skills")): Surf
     expect(typeof frontmatter["mcp_tool"]).toBe("string");
     expect(frontmatter["mcp_args"]).toBeDefined();
   }
-  for (const name of ["distill"] as const) {
+  for (const name of ["distill", "setup"] as const) {
     const toolLess = parsedSkills.find(({ skill }) => skill === name);
     expect(toolLess, `${name} skill must exist and stay tool-less`).toBeDefined();
     expect(toolLess!.frontmatter["mcp_tool"], name).toBeUndefined();
@@ -516,7 +516,7 @@ const RETIRED_GUIDANCE_SPELLINGS: readonly {
   { retiredSpelling: "old repository-link syntax", pattern: /\boms\s+link\s+(?:--vault|--folder)\b/g },
   { retiredSpelling: "old hook leaf", pattern: /\boms\s+hook\s+(?:pre-tool-use|post-tool-use)\b/g },
   { retiredSpelling: "--embedding-*", pattern: /--embedding-[A-Za-z0-9_-]+\b/g },
-  { retiredSpelling: "seven-skill surface", pattern: /\bseven skills\b/g },
+  { retiredSpelling: "six-skill surface", pattern: /\bsix (?:shared )?skills\b/g },
   { retiredSpelling: "retired note leaf", pattern: /\boms\s+note\s+(?:create|append|update|backfill)\b/g },
   { retiredSpelling: "retired link apply leaf", pattern: /\boms\s+link\s+apply\b/g },
   { retiredSpelling: "retired template authoring leaf", pattern: /\boms\s+template\s+(?:add|update|move|remove|default)\b/g },
@@ -594,7 +594,7 @@ describe("current guidance CLI spellings", () => {
       { category: "shared-skills", path: "accepted-note-guide", content: "`oms note audit|get`" },
       { category: "shared-skills", path: "accepted-link", content: "`oms link suggest|check`" },
       { category: "shared-skills", path: "accepted-contract", content: "`oms contract setup|extract|status|doctor`" },
-      { category: "shared-skills", path: "accepted-six-skills", content: "six shared skills, including tool-less distill" },
+      { category: "shared-skills", path: "accepted-seven-skills", content: "seven shared skills, including tool-less distill and setup" },
     ];
 
     expect(currentGuidanceViolations(fixtures)).toEqual([]);
@@ -631,7 +631,7 @@ describe("current guidance CLI spellings", () => {
       { category: "shared-skills", path: "embedding-default", content: "`oms setup --embedding-default`" },
       { category: "shared-skills", path: "embedding-descriptor", content: "`oms setup --embedding-descriptor model.json`" },
       { category: "shared-skills", path: "embedding-no-default", content: "`oms setup --embedding-no-default`" },
-      { category: "shared-skills", path: "seven-skills", content: "installs seven skills: write and search" },
+      { category: "shared-skills", path: "six-skills", content: "installs six skills: write and search" },
       { category: "shared-skills", path: "note-create", content: "`oms note create`" },
       { category: "shared-skills", path: "note-append", content: "`oms note append`" },
       { category: "shared-skills", path: "note-update", content: "`oms note update`" },
@@ -676,7 +676,7 @@ describe("current guidance CLI spellings", () => {
       "embedding-default",
       "embedding-descriptor",
       "embedding-no-default",
-      "seven-skills",
+      "six-skills",
       "note-create",
       "note-append",
       "note-update",

@@ -456,7 +456,7 @@ async function crossVersionHostRehearsal(tarball, tempRoot) {
     fail("new binary did not load matching installed Hermes manifest/provenance identity");
   }
   const skillRoot = path.join(hermesHome, "skills", "knowledge-management", "oms");
-  const expectedSkills = ["distill", "doctor", "link", "search", "status", "write"];
+  const expectedSkills = ["distill", "doctor", "link", "search", "setup", "status", "write"];
   for (const skill of expectedSkills) assertPath(path.join(skillRoot, skill, "SKILL.md"), `installed Hermes ${skill} skill`);
   const installedSkills = readdirSync(skillRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())

@@ -56,6 +56,9 @@ interface RunOptions {
   home: string;
   wrapper?: string;
   pathEnv?: string;
+  /** Claude config directory overrides; unset unless given, so the caller's own never leak in. */
+  claudeConfigDir?: string;
+  omsClaudeHome?: string;
 }
 
 function run(input: unknown, options: RunOptions): Run {
@@ -63,6 +66,10 @@ function run(input: unknown, options: RunOptions): Run {
   if (options.vault === undefined) delete env["OMS_VAULT"];
   else env["OMS_VAULT"] = options.vault;
   if (options.pathEnv !== undefined) env["PATH"] = options.pathEnv;
+  delete env["CLAUDE_CONFIG_DIR"];
+  delete env["OMS_CLAUDE_HOME"];
+  if (options.claudeConfigDir !== undefined) env["CLAUDE_CONFIG_DIR"] = options.claudeConfigDir;
+  if (options.omsClaudeHome !== undefined) env["OMS_CLAUDE_HOME"] = options.omsClaudeHome;
   const result = spawnSync(process.execPath, [options.wrapper ?? WRAPPER], {
     encoding: "utf-8",
     input: typeof input === "string" ? input : JSON.stringify(input),
@@ -323,6 +330,74 @@ describe("oms-guard wrapper write routing", () => {
     const realVault = realpathSync(tmpVault);
     expect(run(tool("Write", { file_path: path.join(realVault, ".oms", "settings.json"), content: "{}" }), { vault: tmpVault, home }).reason).toBe(CONTROL_DENY);
     expect(run(tool("Write", { file_path: path.join(tmpVault, ".oms", "settings.json"), content: "{}" }), { vault: realVault, home }).reason).toBe(CONTROL_DENY);
+  });
+});
+
+describe("oms-guard wrapper Claude settings files", () => {
+  function settingsWrites(file: string): unknown[] {
+    return [
+      tool("Write", { file_path: file, content: "{}" }),
+      tool("Edit", { file_path: file, old_string: "oms-guard", new_string: "x" }),
+      tool("MultiEdit", { file_path: file, edits: [{ old_string: "oms-guard", new_string: "x" }] }),
+    ];
+  }
+
+  it("denies writes to the user's settings files and still allows reading them", () => {
+    const home = realpathSync(tempDir("oms-guard-settings-"));
+    mkdirSync(path.join(home, ".claude"), { recursive: true });
+    for (const name of ["settings.json", "settings.local.json"]) {
+      const file = path.join(home, ".claude", name);
+      writeFileSync(file, '{"hooks":{"PreToolUse":[{"command":"oms-guard"}]}}');
+      for (const payload of settingsWrites(file)) expect(run(payload, { home }).reason).toBe(CONTROL_DENY);
+      expect(run(tool("Write", { file_path: `~/.claude/${name}`, content: "{}" }), { home }).reason).toBe(CONTROL_DENY);
+      expect(run(tool("Write", { file_path: name, content: "{}" }, path.join(home, ".claude")), { home }).reason).toBe(CONTROL_DENY);
+      expect(run(tool("Read", { file_path: file }), { home }).decision).toBe("allow");
+    }
+    expect(run(tool("Write", { file_path: path.join(home, ".claude", "settings.json.md"), content: "x" }), { home }).decision).toBe("allow");
+    expect(run(tool("Write", { file_path: "~/.claude/notes.md", content: "x" }), { home }).decision).toBe("allow");
+    expect(run(tool("Write", { file_path: path.join(home, "settings.json"), content: "{}" }), { home }).decision).toBe("allow");
+  });
+
+  it("denies a settings file that does not exist yet and one reached through a symlinked config directory", () => {
+    const home = realpathSync(tempDir("oms-guard-settings-link-"));
+    const elsewhere = realpathSync(tempDir("oms-guard-settings-real-"));
+    symlinkSync(elsewhere, path.join(home, ".claude"));
+    expect(run(tool("Write", { file_path: path.join(home, ".claude", "settings.json"), content: "{}" }), { home }).reason).toBe(CONTROL_DENY);
+    expect(run(tool("Write", { file_path: path.join(elsewhere, "settings.local.json"), content: "{}" }), { home }).reason).toBe(CONTROL_DENY);
+    expect(run(tool("Write", { file_path: path.join(elsewhere, "keybindings.json"), content: "{}" }), { home }).decision).toBe("allow");
+  });
+
+  it("denies writes to settings under CLAUDE_CONFIG_DIR and OMS_CLAUDE_HOME", () => {
+    const home = realpathSync(tempDir("oms-guard-settings-env-"));
+    const configDir = realpathSync(tempDir("oms-guard-config-dir-"));
+    const omsHome = realpathSync(tempDir("oms-guard-oms-claude-"));
+    const options = { home, claudeConfigDir: configDir, omsClaudeHome: omsHome };
+    expect(run(tool("Write", { file_path: path.join(configDir, "settings.json"), content: "{}" }), options).reason).toBe(CONTROL_DENY);
+    expect(run(tool("Edit", { file_path: path.join(omsHome, "settings.local.json"), old_string: "a", new_string: "b" }), options).reason).toBe(CONTROL_DENY);
+    expect(run(tool("Write", { file_path: path.join(configDir, "settings.json"), content: "{}" }), { home }).decision).toBe("allow");
+  });
+
+  it("denies writes to the vault's project settings and routes its other files to the judge", async () => {
+    const { vault, home } = await row("never-sealed");
+    for (const name of ["settings.json", "settings.local.json"]) {
+      const file = path.join(vault, ".claude", name);
+      for (const payload of settingsWrites(file)) expect(run(payload, { vault, home }).reason).toBe(CONTROL_DENY);
+      expect(run(tool("Write", { file_path: path.join(".claude", name), content: "{}" }, vault), { vault, home }).reason).toBe(CONTROL_DENY);
+      expect(run(tool("Read", { file_path: file }), { vault, home }).decision).toBe("allow");
+    }
+    // Other files there still reach the judge, which refuses hidden folders by its own rule.
+    expect(run(tool("Write", { file_path: path.join(vault, ".claude", "keybindings.json"), content: "{}" }), { vault, home }).reason).toBe(UNSAFE_DENY);
+    expect(run(tool("Write", { file_path: path.join(vault, "Projects", "settings.json"), content: "{}" }), { vault, home }).decision).toBe("allow");
+  });
+
+  it("names no path or value in the settings deny", () => {
+    const home = realpathSync(tempDir("oms-guard-settings-quiet-"));
+    const secret = "status-secret-value";
+    const denied = run(tool("Write", { file_path: path.join(home, ".claude", "settings.json"), content: `{"x":"${secret}"}` }), { home });
+    expect(denied.reason).toBe(CONTROL_DENY);
+    expect(denied.stdout).not.toContain(secret);
+    expect(denied.stdout).not.toContain(home);
+    expect(denied.stderr).toBe("");
   });
 });
 

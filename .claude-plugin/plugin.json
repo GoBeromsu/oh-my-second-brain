@@ -1,7 +1,7 @@
 {
   "name": "oms",
   "version": "0.17.0",
-  "description": "Oh My Second Brain convention layer for Obsidian vaults — eight shared skills and five MCP tools under a user-owned contract.",
+  "description": "Oh My Second Brain convention layer for Obsidian vaults — seven shared skills and five MCP tools under a user-owned contract.",
   "author": {
     "name": "gobeumsu"
   },
@@ -19,6 +19,7 @@
     "./assets/skills/doctor/",
     "./assets/skills/link/",
     "./assets/skills/search/",
+    "./assets/skills/setup/",
     "./assets/skills/status/",
     "./assets/skills/write/"
   ]

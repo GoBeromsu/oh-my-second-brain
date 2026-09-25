@@ -2,6 +2,7 @@ import { compareCodePoints } from "../conventions/canonical.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { isControlPath, normalizeFolderPath } from "../vault/paths.js";
 import { isObsidianTag } from "./obsidian.js";
+import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { scanContractHeadings } from "./scan.js";
 import type {
   ContractView, FieldType, JsonScalar, JudgeInput, PropertyContract, Rule,
@@ -37,6 +38,11 @@ function matchesType(value: unknown, type: FieldType): boolean {
   return type !== "tags" || value.every(member => isObsidianTag(member as string));
 }
 
+/** True when a value of this type always reaches the rules as one member, never a list. */
+export function singleValued(type: FieldType | null): boolean {
+  return type !== null && !LIST_TYPES.has(type);
+}
+
 function empty(value: unknown): boolean {
   return value == null || typeof value === "string" && value.trim() === "" || Array.isArray(value) && value.length === 0;
 }
@@ -50,7 +56,9 @@ function members(value: unknown): readonly unknown[] {
   return Array.isArray(value) ? value : [value];
 }
 
+/** Null for a source the seal would refuse to compile (a hand-edited store), so it is never run. */
 function fullMatch(regex: string, value: string): boolean | null {
+  if (regex.length > PATTERN_SOURCE_LIMIT) return null;
   if (value.length > PATTERN_VALUE_LIMIT) return false;
   try {
     return new RegExp(`^(?:${regex})$`, "u").test(value);
@@ -100,7 +108,8 @@ function hasVariable(value: unknown): boolean {
   return false;
 }
 
-function normalizePath(path: string): string {
+/** Separator- and NFC-normalized vault-relative path, as the judge compares apply folders. */
+export function normalizePath(path: string): string {
   return path.normalize("NFC").replaceAll("\\", "/").replace(/\/+/g, "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
 }
 
@@ -164,7 +173,7 @@ function templateViolations(template: TemplateContract, note: Note, properties: 
   }
   for (const [name, rules] of Object.entries(template.narrowedRules)) {
     if (!Object.hasOwn(note.frontmatter, name)) continue;
-    const type = properties?.[name]?.type ?? null;
+    const type = properties !== null && Object.hasOwn(properties, name) ? properties[name]!.type : null;
     for (const kind of valueKinds(note.frontmatter[name], type, rules)) found.add(name, kind);
   }
   const observed = headings(note.body);

@@ -4,7 +4,9 @@ import { readVaultSettings, type VaultSettings } from "../vault/settings.js";
 import { normalizeFolderPath, verifyVaultPath } from "../vault/paths.js";
 import { extractTemplate, type Extraction } from "./extract.js";
 import { FIELD_TYPES, readObsidianTemplateFolder, readObsidianTypes } from "./obsidian.js";
+import { looseningChanges, unsafePatternChanges, type LooseningChange } from "./loosening.js";
 import { buildRedactor, hiddenValuesOf, publicTokensOf } from "./redact.js";
+import { PATTERN_SOURCE_LIMIT, patternRefusal } from "./pattern.js";
 import { scanTemplateSources } from "./scan.js";
 import { currentSequence, isSafeName, NO_DECLINED, readDeclined, sealContract, storeRoot, type DeclinedSet, type SealDeps } from "./store.js";
 import type {
@@ -18,6 +20,8 @@ import type {
 } from "./types.js";
 import { ensureVaultId, resolveSealState, writeVaultSettings } from "./vault-id.js";
 
+export { hasNestedQuantifier } from "./pattern.js";
+
 /**
  * Deterministic seal-time questionnaire over a full vault scan: top-level folders,
  * properties (template fields and Obsidian types) and the templates in the template
@@ -30,11 +34,23 @@ import { ensureVaultId, resolveSealState, writeVaultSettings } from "./vault-id.
 
 export type Question =
   | { readonly id: string; readonly prompt: string; readonly kind: "choice"; readonly options: readonly string[] }
-  | { readonly id: string; readonly prompt: string; readonly kind: "text"; readonly initial?: string }
+  | {
+    readonly id: string;
+    readonly prompt: string;
+    readonly kind: "text";
+    readonly initial?: string;
+    /** The initial answer holds template literal values; it is never printed to an agent. */
+    readonly secret?: boolean;
+  }
   | { readonly id: string; readonly prompt: string; readonly kind: "confirm"; readonly initial?: boolean };
 
 export interface InterviewIO {
-  ask(question: Question): Promise<string>;
+  /**
+   * The answer, or null when the question has no answer yet. An unanswered question is
+   * collected and a fixed placeholder that opens no follow-up is used instead; such a
+   * run ends `incomplete` and never seals.
+   */
+  ask(question: Question): Promise<string | null>;
   say(line: string): void;
 }
 
@@ -49,7 +65,11 @@ export type InterviewResult =
     readonly removedTemplates?: readonly string[];
   }
   | { readonly state: "refused"; readonly reasons: readonly string[] }
-  | { readonly state: "aborted" };
+  | { readonly state: "aborted" }
+  /** Some questions had no answer; they are listed in the order asked. Nothing was sealed. */
+  | { readonly state: "incomplete"; readonly questions: readonly Question[] }
+  /** A `nonLoosening` reseal would loosen the sealed contract. Changes name fields and kinds only. */
+  | { readonly state: "loosening"; readonly changes: readonly LooseningChange[] };
 
 /** Thrown by an IO (or after repeated invalid answers) to end the interview without sealing. */
 export class InterviewAborted extends Error {
@@ -62,6 +82,7 @@ export class InterviewAborted extends Error {
 const LITERAL_CHOICES = ["must-equal", "one-of-allowed", "example-only"] as const;
 const RULE_CHOICES = ["none", "one-of-allowed", "must-equal", "pattern", "range"] as const;
 const MAX_ATTEMPTS = 3;
+const SEAL_QUESTION = { id: "seal", prompt: "Seal this contract?", kind: "confirm" } as const satisfies Question;
 
 /** A rejected answer; the question is asked again with this message. */
 class Invalid {
@@ -70,32 +91,43 @@ class Invalid {
 
 const invalid = (error: string): Invalid => new Invalid(error);
 
+/**
+ * Each call names the placeholder used when the IO has no answer yet. Placeholders open
+ * no follow-up question, so answering one later only adds questions after it.
+ */
 class Asker {
+  readonly unanswered: Question[] = [];
+
   constructor(private readonly io: InterviewIO) {}
 
   say(line: string): void {
     this.io.say(line);
   }
 
-  private async loop<T>(question: Question, parse: (answer: string) => T | Invalid): Promise<T> {
+  private async loop<T>(question: Question, parse: (answer: string) => T | Invalid, placeholder: () => T): Promise<T> {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-      const parsed = parse(await this.io.ask(question));
+      const answer = await this.io.ask(question);
+      if (answer === null) {
+        this.unanswered.push(question);
+        return placeholder();
+      }
+      const parsed = parse(answer);
       if (!(parsed instanceof Invalid)) return parsed;
       this.io.say(`  ${parsed.error}`);
     }
     throw new InterviewAborted(`too many invalid answers to ${question.id}`);
   }
 
-  choice<T extends string>(id: string, prompt: string, options: readonly T[]): Promise<T> {
+  choice<T extends string>(id: string, prompt: string, options: readonly T[], placeholder: T): Promise<T> {
     return this.loop({ id, prompt, kind: "choice", options }, answer => {
       const text = answer.trim();
       const index = /^\d+$/.test(text) ? Number(text) - 1 : -1;
       const found = options[index] ?? options.find(option => option.toLowerCase() === text.toLowerCase());
       return found ?? invalid(`Choose one of: ${options.join(", ")}.`);
-    });
+    }, () => placeholder);
   }
 
-  confirm(id: string, prompt: string, initial?: boolean): Promise<boolean> {
+  confirm(id: string, prompt: string, initial?: boolean, placeholder = initial ?? false): Promise<boolean> {
     const question: Question = initial === undefined ? { id, prompt, kind: "confirm" } : { id, prompt, kind: "confirm", initial };
     return this.loop(question, answer => {
       const text = answer.trim().toLowerCase();
@@ -103,12 +135,28 @@ class Asker {
       if (text === "y" || text === "yes") return true;
       if (text === "n" || text === "no") return false;
       return invalid("Answer yes or no.");
-    });
+    }, () => placeholder);
   }
 
-  text<T = string>(id: string, prompt: string, initial: string | undefined, parse: (answer: string) => T | Invalid): Promise<T> {
-    const question: Question = initial === undefined ? { id, prompt, kind: "text" } : { id, prompt, kind: "text", initial };
-    return this.loop(question, answer => parse(answer.trim() === "" ? initial ?? "" : answer.trim()));
+  /** The placeholder is the parsed initial answer, or `placeholder` when that is not valid. */
+  text<T = string>(
+    id: string,
+    prompt: string,
+    initial: string | undefined,
+    parse: (answer: string) => T | Invalid,
+    placeholder?: T,
+    secret = false,
+  ): Promise<T> {
+    const question: Question = { id, prompt, kind: "text", ...(initial === undefined ? {} : { initial }), ...(secret ? { secret } : {}) };
+    return this.loop(question, answer => {
+      if (answer.trim() !== "") return parse(answer.trim());
+      const parsed = parse(initial ?? "");
+      // A secret default holds template literals, so its error must not echo them.
+      return secret && parsed instanceof Invalid ? invalid("The default could not be used; type the value instead.") : parsed;
+    }, () => {
+      const parsed = parse(initial ?? "");
+      return parsed instanceof Invalid ? placeholder as T : parsed;
+    });
   }
 }
 
@@ -143,59 +191,14 @@ function oneLine(raw: string): string | Invalid {
   return raw.includes("\n") ? invalid("Keep it on one line.") : raw;
 }
 
-/**
- * Conservative ReDoS screen: refuses a group that holds a quantifier or an alternation
- * and is itself repeated by `*`, `+` or `{…}`, such as `(a+)+`, `(a*)*` or `(a|a)*`.
- * Some safe patterns are refused too; the judge also caps the input it matches.
- */
-export function hasNestedQuantifier(source: string): boolean {
-  const open: boolean[] = [];
-  let closedRisky = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index]!;
-    const afterGroup = closedRisky;
-    closedRisky = false;
-    if (char === "\\") {
-      index += 1;
-      continue;
-    }
-    if (char === "[") {
-      for (index += 1; index < source.length && source[index] !== "]"; index += 1) if (source[index] === "\\") index += 1;
-      continue;
-    }
-    if (char === "(") {
-      open.push(false);
-      if (source[index + 1] === "?") {
-        index += 1;
-        if (source[index + 1] === "<" && source[index + 2] !== "=" && source[index + 2] !== "!") {
-          while (index < source.length && source[index] !== ">") index += 1;
-        } else index += 1;
-      }
-      continue;
-    }
-    if (char === ")") {
-      const risky = open.pop() ?? false;
-      if (open.length > 0 && risky) open[open.length - 1] = true;
-      closedRisky = risky;
-      continue;
-    }
-    const repeats = char === "*" || char === "+" || char === "{" && /^\{\d*,?\d*\}/.test(source.slice(index));
-    if (repeats && afterGroup) return true;
-    if ((repeats || char === "?" || char === "|") && open.length > 0) open[open.length - 1] = true;
-  }
-  return false;
-}
-
 async function askPattern(asker: Asker, id: string, name: string): Promise<Rule> {
   const regex = await asker.text(`${id}:pattern`, `Regular expression every \`${name}\` value must fully match`, undefined, raw => {
-    if (raw === "") return invalid("Give a regular expression.");
-    try {
-      new RegExp(raw, "u");
-    } catch {
-      return invalid("That is not a valid regular expression.");
-    }
-    return hasNestedQuantifier(raw) ? invalid("Nested repetition such as (a+)+ or (a|b)* can hang the check; rewrite it without repeating a repeated group.") : raw;
-  });
+    const refusal = patternRefusal(raw);
+    if (refusal === "empty") return invalid("Give a regular expression.");
+    if (refusal === "too-long") return invalid(`Keep it to ${PATTERN_SOURCE_LIMIT} characters or fewer.`);
+    if (refusal === "invalid") return invalid("That is not a valid regular expression.");
+    return refusal === "nested" ? invalid("Nested repetition such as (a+)+ or (a|b)* can hang the check; rewrite it without repeating a repeated group.") : raw;
+  }, "");
   return { kind: "pattern", regex };
 }
 
@@ -207,8 +210,10 @@ async function askRange(asker: Asker, id: string, name: string, type: FieldType)
     return typeof value === "number" ? value : invalid(`"${raw}" is not a number.`);
   };
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const before = asker.unanswered.length;
     const min = await asker.text(`${id}:range-min`, `Lowest allowed \`${name}\` (empty for none)`, undefined, bound);
     const max = await asker.text(`${id}:range-max`, `Highest allowed \`${name}\` (empty for none)`, undefined, bound);
+    if (asker.unanswered.length > before) return { kind: "range" };
     if (min === undefined && max === undefined) asker.say("  Give at least one bound.");
     else if (min !== undefined && max !== undefined && min > max) asker.say("  The lowest value is above the highest; give the range again.");
     else return { kind: "range", ...(min === undefined ? {} : { min }), ...(max === undefined ? {} : { max }) };
@@ -217,12 +222,12 @@ async function askRange(asker: Asker, id: string, name: string, type: FieldType)
 }
 
 async function askRules(asker: Asker, id: string, name: string, type: FieldType): Promise<Rule[]> {
-  const choice = await asker.choice(`${id}:rule`, `Hidden rule for \`${name}\``, RULE_CHOICES);
+  const choice = await asker.choice(`${id}:rule`, `Hidden rule for \`${name}\``, RULE_CHOICES, "none");
   if (choice === "one-of-allowed") {
-    return [{ kind: "allowed", values: await asker.text(`${id}:allowed`, `Allowed values for \`${name}\` (comma separated)`, undefined, raw => parseValues(type, raw)) }];
+    return [{ kind: "allowed", values: await asker.text(`${id}:allowed`, `Allowed values for \`${name}\` (comma separated)`, undefined, raw => parseValues(type, raw), []) }];
   }
   if (choice === "must-equal") {
-    return [{ kind: "fixed", value: await asker.text(`${id}:fixed`, `Value \`${name}\` must have`, undefined, raw => raw === "" ? invalid("Give a value.") : coerce(type, raw)) }];
+    return [{ kind: "fixed", value: await asker.text(`${id}:fixed`, `Value \`${name}\` must have`, undefined, raw => raw === "" ? invalid("Give a value.") : coerce(type, raw), "") }];
   }
   if (choice === "pattern") return [await askPattern(asker, id, name)];
   if (choice === "range") return [await askRange(asker, id, name, type)];
@@ -340,7 +345,7 @@ async function askProperties(asker: Asker, observed: ReadonlyMap<string, FieldTy
     if (!await asker.confirm(`${id}:register`, `Register the property \`${name}\`? Unregistered properties are refused once any is registered.`)) continue;
     const type = await asker.text(`${id}:type`, `Type of \`${name}\` (${FIELD_TYPES.join(", ")})`, observed.get(name), raw =>
       (FIELD_TYPES as readonly string[]).includes(raw) ? raw as FieldType : invalid(`Use one of: ${FIELD_TYPES.join(", ")}.`));
-    const required = await asker.confirm(`${id}:required`, `Must every note have \`${name}\`?`);
+    const required = await asker.confirm(`${id}:required`, `Must every note have \`${name}\`?`, undefined, true);
     const fallback = required ? false : await asker.confirm(`${id}:default`, `When a note leaves \`${name}\` out, should the write pass and report it as missing?`);
     const rules = await askRules(asker, id, name, type);
     const meaning = await asker.text(`${id}:meaning`, `What does \`${name}\` mean? (agents see this; never include a hidden value)`, "", oneLine);
@@ -353,7 +358,8 @@ async function askTemplate(asker: Asker, name: string, source: string, extractio
   const id = `template:${name}`;
   if (!await asker.confirm(`${id}:register`, `Seal the template "${name}"?`)) return null;
   const requiredProperties: string[] = [];
-  const narrowedRules: Record<string, Rule[]> = {};
+  // No prototype, so a property named `constructor` or `__proto__` is an ordinary key.
+  const narrowedRules: Record<string, Rule[]> = Object.create(null) as Record<string, Rule[]>;
   for (const field of extraction.fields) {
     if (await asker.confirm(`${id}:field:${field.name}:required`, `Must notes from "${name}" keep \`${field.name}\`?`)) requiredProperties.push(field.name);
     const literal = field.literal;
@@ -363,11 +369,12 @@ async function askTemplate(asker: Asker, name: string, source: string, extractio
       `${id}:field:${field.name}:literal`,
       `"${name}" writes a value for \`${field.name}\`. Must notes use exactly that value, one of several allowed values, or is it just an example?`,
       LITERAL_CHOICES,
+      "example-only",
     );
     if (choice === "must-equal") {
       narrowedRules[field.name] = members.map(value => ({ kind: "fixed", value }));
     } else if (choice === "one-of-allowed") {
-      const values = await asker.text(`${id}:field:${field.name}:allowed`, `Allowed values for \`${field.name}\` (comma separated)`, members.map(String).join(", "), raw => parseValues(field.inferredType, raw));
+      const values = await asker.text(`${id}:field:${field.name}:allowed`, `Allowed values for \`${field.name}\` (comma separated)`, members.map(String).join(", "), raw => parseValues(field.inferredType, raw), [], true);
       narrowedRules[field.name] = [{ kind: "allowed", values }];
     }
   }
@@ -392,6 +399,43 @@ async function askTemplate(asker: Asker, name: string, source: string, extractio
     narrowedRules,
     requiredHeadings,
   };
+}
+
+function unsafePattern(rule: Rule): boolean {
+  return rule.kind === "pattern" && patternRefusal(rule.regex) !== null;
+}
+
+/**
+ * A sealed pattern the seal screen now refuses (an older release sealed it) fails every
+ * value, so the owner answers that property's rule again and its other rules are kept.
+ * Prompts name the field only, never the sealed pattern.
+ */
+async function askUnsafePatterns(asker: Asker, properties: Record<string, PropertyContract> | null, templates: Record<string, TemplateContract>): Promise<void> {
+  const notice = (field: string): void => asker.say(`The sealed pattern rule for \`${field}\` is no longer accepted; answer its rule again (its other rules are kept).`);
+  for (const [name, property] of Object.entries(properties ?? {}).sort(([left], [right]) => compareCodePoints(left, right))) {
+    if (!property.rules.some(unsafePattern)) continue;
+    notice(name);
+    const rules = [...property.rules.filter(rule => !unsafePattern(rule)), ...await askRules(asker, `property:${name}:repair`, name, property.type)];
+    properties![name] = { ...property, rules };
+  }
+  for (const [templateName, template] of Object.entries(templates).sort(([left], [right]) => compareCodePoints(left, right))) {
+    const narrowedRules: Record<string, Rule[]> = Object.create(null) as Record<string, Rule[]>;
+    let repaired = false;
+    for (const [name, rules] of Object.entries(template.narrowedRules)) {
+      if (!rules.some(unsafePattern)) {
+        narrowedRules[name] = [...rules];
+        continue;
+      }
+      notice(`${templateName}.${name}`);
+      // `properties` holds every sealed entry, so a registered field gets its sealed type. An
+      // unregistered one has no sealed type and the judge checks it without one; "text" keeps
+      // the answer as the literal string the owner typed, never coerced to a guessed type.
+      const type = properties !== null && Object.hasOwn(properties, name) ? properties[name]!.type : "text";
+      narrowedRules[name] = [...rules.filter(rule => !unsafePattern(rule)), ...await askRules(asker, `template:${templateName}:repair:${name}`, name, type)];
+      repaired = true;
+    }
+    if (repaired) templates[templateName] = { ...template, narrowedRules };
+  }
 }
 
 /** Refuses a contract whose public text carries a hidden value or that no note could pass. Reasons never name a value. */
@@ -439,6 +483,11 @@ export async function runInterview(input: {
   readonly sealDeps?: Partial<SealDeps>;
   /** Ask again about folders, properties and templates declined at an earlier seal. */
   readonly reask?: boolean;
+  /**
+   * Answers that did not come from the owner at a terminal: only a first seal or a
+   * reseal that adds or tightens is allowed. Loosening stays with the terminal interview.
+   */
+  readonly nonLoosening?: boolean;
 }): Promise<InterviewResult> {
   const { vault, io } = input;
   const root = input.root ?? storeRoot();
@@ -451,6 +500,11 @@ export async function runInterview(input: {
     if (state.shared) {
       throw new Error("CONTRACT_VAULT_ID_SHARED: another existing vault uses this vault id (a copied vault); remove .oms/settings.json in the copy, then run `oms contract setup` again");
     }
+    // A first seal on this machine (no store yet) or a reseal of a readable seal; every recovery row stays with the terminal.
+    const firstOrReseal = state.row === "never-sealed" || state.row === "synced-second-machine" || (state.row === "sealed" && state.view.state === "sealed");
+    if (input.nonLoosening === true && !firstOrReseal) {
+      return { state: "refused", reasons: ["The seal needs recovery first; run `oms contract doctor`, then run `oms setup` yourself in a terminal."] };
+    }
     let settings: VaultSettings | null;
     try {
       settings = await readVaultSettings(vault);
@@ -459,8 +513,13 @@ export async function runInterview(input: {
     }
     const baseSeq = state.vaultId === null ? "none" : await currentSequence(state.vaultId, root);
     const previous = state.view.state === "sealed" ? state.view.contract : null;
+    // A sealed pattern refused by today's seal screen can only be replaced, which is looser.
+    const unsafe = input.nonLoosening === true && previous !== null ? unsafePatternChanges(previous) : [];
+    if (unsafe.length > 0) return { state: "loosening", changes: unsafe };
     const pickFolder = settings?.templateFolder === undefined && (previous === null || input.reask === true);
     const chosenFolder = pickFolder ? await askTemplateFolder(asker, vault) : null;
+    // The template folder decides which questions follow, so it is answered first.
+    if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
     const found = await discover(vault, settings?.templateFolder ?? chosenFolder ?? undefined);
     if ("refused" in found) return { state: "refused", reasons: found.refused };
 
@@ -499,13 +558,21 @@ export async function runInterview(input: {
       delete templates[name];
       removedTemplates.push(name);
     }
+    await askUnsafePatterns(asker, properties, templates);
+    if (asker.unanswered.length > 0) return { state: "incomplete", questions: [...asker.unanswered, SEAL_QUESTION] };
     const contract: VaultContract = { folders, properties, templates };
     const reasons = sealGuard(contract);
     if (reasons.length > 0) return { state: "refused", reasons };
+    if (input.nonLoosening === true && previous !== null) {
+      const changes = looseningChanges(previous, contract);
+      if (changes.length > 0) return { state: "loosening", changes };
+    }
 
     preview(io, contract);
     if (removedTemplates.length > 0) io.say(`  removed templates: ${removedTemplates.join(", ")}`);
-    if (!await asker.confirm("seal", "Seal this contract?")) return { state: "aborted" };
+    const seal = await asker.confirm(SEAL_QUESTION.id, SEAL_QUESTION.prompt);
+    if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
+    if (!seal) return { state: "aborted" };
 
     const currentTemplates = new Map(found.templates.map(template => [template.name, template.extraction.sourceHash]));
     const declined: DeclinedSet = {

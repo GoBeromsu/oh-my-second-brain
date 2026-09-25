@@ -4,6 +4,9 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- The five MCP tools are unchanged. Agent-driven setup is a tool-less skill over the CLI, not an MCP operation, so no tool can publish, edit, or read the contract.
+- `doctor` `validate` output carries the contract doctor's `unsafePatterns` (`{field, kind}` only, no values). The `note-write.ts` header now notes that a crash between `link()` and removing the temp name leaves a second hard link to the new note, which nothing sweeps.
+
 ## [0.17.0] - 2026-09-25
 
 - **Breaking: `write` takes `{path, content, template?}` with no `op`.** The whole note is judged against the sealed contract and saved atomically only when allowed; a denial returns `{field, kind}` violations and one guidance command. The `guide`, `check`, and `template` operations and the `folderIntents` input are removed. `search` `templates` returns the sealed folders, property names and types, and templates; `doctor` `validate` diagnoses the seal, and `doctor` `regenerate-types` is removed with no alias.

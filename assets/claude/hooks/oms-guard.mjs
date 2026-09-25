@@ -3,9 +3,10 @@
  * oms-guard — PreToolUse wrapper for Claude Code settings.json.
  *
  * Order: parse stdin → normalise the tool name → deny `~/.oms/**` (reads and writes,
- * no spawn) → read tools decided here (no spawn) → deny writes to this guard file and the
- * installed oms package → writes inside a configured vault (the deepest one) are judged by
- * `oms hook pre --vault <vault>`; everything else passes without a spawn.
+ * no spawn) → read tools decided here (no spawn) → deny writes to this guard file, the
+ * installed oms package and Claude's settings files → writes inside a configured vault
+ * (the deepest one) are judged by `oms hook pre --vault <vault>`; everything else passes
+ * without a spawn.
  *
  * Configuration (env vars set by the settings.json hook definition):
  *   OMS_VAULT        — primary vault path
@@ -17,8 +18,13 @@
  * A payload that cannot be parsed (or exceeds the stdin cap) is denied when its raw text
  * names a configured vault or `~/.oms`, and otherwise allowed with one stderr line.
  *
- * Known limit: `~/.claude/settings.json`, where this hook is registered, is not protected;
- * the user edits it legitimately.
+ * Claude's settings files, where this hook is registered, are write-protected like the
+ * guard itself: `settings.json` and `settings.local.json` in `~/.claude` (or
+ * `$CLAUDE_CONFIG_DIR`, `$OMS_CLAUDE_HOME`) and in each configured vault's `.claude/`.
+ * Reads stay allowed; the user edits these files outside the agent.
+ *
+ * Known limit: only the tools in the hook matchers reach this guard. A Bash command that
+ * writes one of these files is not seen here.
  */
 
 import { spawnSync } from "node:child_process";
@@ -249,6 +255,38 @@ function rawNamesProtectedPath(raw, control) {
   return text.includes("~/.oms") || protectedRoots(control).some((root) => text.includes(root));
 }
 
+const HOST_CONFIG_FILES = ["settings.json", "settings.local.json"];
+
+/** Claude config directories whose settings files hold this hook's registration. */
+function hostConfigDirs() {
+  const dirs = [path.join(homedir(), ".claude")];
+  for (const value of [process.env.CLAUDE_CONFIG_DIR, process.env.OMS_CLAUDE_HOME]) {
+    const expanded = value ? expandHome(value) : null;
+    if (expanded) dirs.push(path.resolve(expanded));
+  }
+  for (const vault of configuredVaults()) dirs.push(path.join(vault, ".claude"));
+  return dirs;
+}
+
+/** Each settings file as spelled and as resolved; a symlinked file or directory matches its target. */
+function hostConfigFiles() {
+  const files = [];
+  for (const dir of hostConfigDirs()) {
+    for (const name of HOST_CONFIG_FILES) {
+      const file = path.join(dir, name);
+      files.push(file);
+      try { files.push(realTarget(file, process.cwd())); } catch { /* the spelled form still counts */ }
+    }
+  }
+  return files;
+}
+
+/** Case-insensitive, so a differently cased name on a case-insensitive disk is still caught. */
+function isHostConfig(target, files = hostConfigFiles()) {
+  const wanted = target.toLowerCase();
+  return files.some((file) => file.toLowerCase() === wanted);
+}
+
 const PACKAGE_RUNTIME = ["dist", "assets", "node_modules", "package.json"];
 
 /**
@@ -312,7 +350,8 @@ async function main() {
     target = realTarget(expanded, cwd);
   } catch {
     const textual = path.resolve(cwd, expanded);
-    const exposed = protectedRoots(control).some((root) => atOrUnder(root, textual)) || (searches && under(textual, control));
+    const exposed = protectedRoots(control).some((root) => atOrUnder(root, textual)) || (searches && under(textual, control))
+      || (WRITE_TOOLS.has(tool) && isHostConfig(textual));
     if (exposed) { deny(UNSAFE_PATH_REASON); return; }
     process.stderr.write("[oms] guard could not resolve the target; allowed.\n");
     allow();
@@ -328,6 +367,7 @@ async function main() {
   }
 
   if (guardOwnedRoots().some((root) => atOrUnder(root, target))) { deny(CONTROL_PATH_REASON); return; }
+  if (isHostConfig(target)) { deny(CONTROL_PATH_REASON); return; }
 
   const vault = configuredVaults()
     .filter((root) => under(root, target))

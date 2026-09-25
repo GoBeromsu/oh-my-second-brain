@@ -143,15 +143,16 @@ describe("Codex legacy oms-reviewer cleanup", () => {
       "doctor",
       "link",
       "search",
+      "setup",
       "status",
       "write",
     ].map(skill => path.join(home, ".codex", "skills", `oms-${skill}`));
     await isolate(home, async () => {
       const result = await installCodex(operation(home, "install", { dryRun: true }), host);
       expect(result.changed).toBe(false);
-      expect(host.skillDirs).toEqual(["distill", "doctor", "link", "search", "status", "write"]);
+      expect(host.skillDirs).toEqual(["distill", "doctor", "link", "search", "setup", "status", "write"]);
       expect(result.paths.filter(candidate => candidate.includes(`${path.sep}skills${path.sep}`))).toEqual(skills);
-      expect(result.paths.some(candidate => candidate.endsWith(`${path.sep}oms-setup`))).toBe(false);
+      expect(result.paths.some(candidate => candidate.endsWith(`${path.sep}oms-setup`))).toBe(true);
       expect(result.paths).not.toContain(paths(home).role);
       expect(result.paths).not.toContain(paths(home).provenance);
       expect(result.paths).toContain(path.join(home, ".codex", "rules", "oms.md"));

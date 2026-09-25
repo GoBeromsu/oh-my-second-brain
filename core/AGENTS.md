@@ -7,9 +7,12 @@ Hermes, and others). The vault's meaning belongs to the user.
 
 The user states what the vault means once, by running the interactive `oms setup` at
 a terminal. The interview covers folders, the property pool, and the templates in the
-template folder together, and seals the result as the vault contract. Agents never
-seal: `oms setup` refuses to run without a terminal or under
-`OMS_NON_INTERACTIVE=1`, and there is no MCP operation or skill for it.
+template folder together, and seals the result as the vault contract. The interactive
+interview refuses to run without a terminal or under `OMS_NON_INTERACTIVE=1`. An agent
+seals only through the `setup` skill: `oms setup --questions` prints the questions, the
+agent asks the owner each one, and `oms setup --answers <file>` seals a first or stricter
+contract. A reseal that loosens is refused there and belongs to the terminal. There is no
+MCP operation for setup.
 
 - The sealed contract lives outside the vault under `~/.oms/`. That directory is
   off-limits: do not read, search, or write anything under it.

@@ -4,7 +4,7 @@ OMS exposes fourteen CLI command families and exactly five MCP tools. The famili
 
 The MCP server advertises exactly `write`, `search`, `link`, `status`, and `doctor`. The server id is `oms`; the tables below use the host-qualified spellings `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor`, not additional wire tools.
 
-The six skills are `distill`, `doctor`, `link`, `search`, `status`, and `write`. `distill` is tool-less. Skills are workflows. They are not the five tools.
+The seven skills are `distill`, `doctor`, `link`, `search`, `setup`, `status`, and `write`. `distill` and `setup` are tool-less. Skills are workflows. They are not the five tools.
 
 The agent writes notes. `oms_write` takes `{path, content, template?}` with no `op`: the whole note is judged against the sealed contract and saved only when it is allowed. Unknown or missing input keys are refused before any judgement. A denial leaves the file unchanged and returns only `{field, kind}` violations and one guidance command. Sealing has no MCP operation and no skill.
 

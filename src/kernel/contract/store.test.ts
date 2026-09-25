@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { digestBytes } from "../conventions/canonical.js";
+import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { currentSequence, diagnoseStore, readDeclined, readIndex, readStore, SEAL_LOCK_STALE_MS, sealContract, storeExists, storeHousekeeping, writeIndexEntry } from "./store.js";
 import type { VaultContract } from "./types.js";
 
@@ -36,6 +37,28 @@ async function generation(): Promise<string> {
 }
 
 describe("contract store", () => {
+  it("seals a pattern at the length cap and refuses one past it without echoing it", async () => {
+    const withPattern = (regex: string): VaultContract => ({
+      ...CONTRACT,
+      properties: { code: { meaning: "code", type: "text", default: false, required: false, rules: [{ kind: "pattern", regex }] } },
+    });
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: withPattern("b".repeat(PATTERN_SOURCE_LIMIT)) }, root);
+    expect(await currentSequence(ID, root)).toBe(1);
+    const over = "c".repeat(PATTERN_SOURCE_LIMIT + 1);
+    const refused = sealContract({ vaultRealPath: vault, vaultId: ID, contract: withPattern(over) }, root);
+    await expect(refused).rejects.toThrow(/^CONTRACT_PATTERN_UNSAFE: a pattern rule is too-long$/);
+    expect(await currentSequence(ID, root)).toBe(1);
+  });
+
+  it("refuses an unsafe pattern in a template's narrowed rules before touching the store", async () => {
+    const meeting = CONTRACT.templates["Meeting"]!;
+    for (const regex of ["d".repeat(PATTERN_SOURCE_LIMIT + 1), "(a+)+", "("]) {
+      const contract: VaultContract = { ...CONTRACT, templates: { Meeting: { ...meeting, narrowedRules: { rating: [{ kind: "pattern", regex }] } } } };
+      await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract }, root)).rejects.toThrow(/^CONTRACT_PATTERN_UNSAFE: /);
+    }
+    await expect(stat(root)).rejects.toThrow();
+  });
+
   it("round-trips a sealed contract", async () => {
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
     expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });

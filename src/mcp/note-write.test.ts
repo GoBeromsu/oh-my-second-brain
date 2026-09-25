@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -55,6 +55,64 @@ describe("atomicWriteNote", () => {
     const target = path.join(dir, "a.md");
     expect(await atomicWriteNote(target, "next", "judged")).toBe("vanished");
     expect(await atomicWriteNote(target, "next", null)).toBe("vanished");
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it("never replaces a note that appears between the last check and the publish", async () => {
+    const target = path.join(dir, "a.md");
+    const racer = async (): Promise<void> => writeFile(target, "racing writer");
+    expect(await atomicWriteNote(target, "mine", undefined, { beforePublish: racer })).toBe("changed");
+    expect(await readFile(target, "utf8")).toBe("racing writer");
+    expect(await readdir(dir)).toEqual(["a.md"]);
+  });
+
+  it("publishes a new note by hard link and removes the temporary name", async () => {
+    const target = path.join(dir, "a.md");
+    const linked: string[] = [];
+    const spy = async (existing: string, created: string): Promise<void> => {
+      linked.push(created);
+      await link(existing, created);
+    };
+    expect(await atomicWriteNote(target, "new", undefined, { link: spy })).toBe("written");
+    expect(linked).toEqual([target]);
+    expect(await readFile(target, "utf8")).toBe("new");
+    expect((await stat(target)).nlink).toBe(1);
+    expect(await readdir(dir)).toEqual(["a.md"]);
+  });
+
+  it("overwrites an unchanged note by rename without linking", async () => {
+    const target = path.join(dir, "a.md");
+    await writeFile(target, "old");
+    const refuse = async (): Promise<void> => {
+      throw new Error("an overwrite must not link");
+    };
+    expect(await atomicWriteNote(target, "next", "old", { link: refuse })).toBe("written");
+    expect(await readFile(target, "utf8")).toBe("next");
+    expect(await readdir(dir)).toEqual(["a.md"]);
+  });
+
+  it("falls back to a final check and rename where hard links are unsupported", async () => {
+    const unsupported = async (): Promise<void> => {
+      throw Object.assign(new Error("not supported"), { code: "ENOTSUP" });
+    };
+    const target = path.join(dir, "a.md");
+    expect(await atomicWriteNote(target, "new", undefined, { link: unsupported })).toBe("written");
+    expect(await readFile(target, "utf8")).toBe("new");
+    expect(await readdir(dir)).toEqual(["a.md"]);
+
+    const other = path.join(dir, "b.md");
+    const racer = async (): Promise<void> => writeFile(other, "racing writer");
+    expect(await atomicWriteNote(other, "mine", undefined, { link: unsupported, beforePublish: racer })).toBe("changed");
+    expect(await readFile(other, "utf8")).toBe("racing writer");
+    expect((await readdir(dir)).sort()).toEqual(["a.md", "b.md"]);
+  });
+
+  it("surfaces an unexpected link failure and leaves no temporary file", async () => {
+    const broken = async (): Promise<void> => {
+      throw Object.assign(new Error("disk gone"), { code: "EIO" });
+    };
+    const target = path.join(dir, "a.md");
+    await expect(atomicWriteNote(target, "new", undefined, { link: broken })).rejects.toThrow(/disk gone/);
     expect(await readdir(dir)).toEqual([]);
   });
 });

@@ -1,9 +1,11 @@
-import { cp, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { digestBytes } from "../kernel/conventions/canonical.js";
 import type { InterviewIO } from "../kernel/contract/interview.js";
+import { PATTERN_SOURCE_LIMIT } from "../kernel/contract/pattern.js";
 
 const { resolveEffectiveVault } = vi.hoisted(() => ({
   resolveEffectiveVault: vi.fn(async () => ({ vault: process.cwd(), source: "cwd", scope: null })),
@@ -118,6 +120,7 @@ describe("oms contract", () => {
       findings: [{ message: "contract: sealed", guidance: null }],
       cause: null,
       recovery: null,
+      unsafePatterns: [],
       staleLocks: 0,
       orphans: 0,
       transportFailures: { total: 0, kinds: {} },
@@ -159,6 +162,37 @@ describe("oms contract", () => {
     });
     expect(printed()).not.toContain(home);
     expect(printed()).not.toContain(generation);
+  });
+
+  it("doctor names a sealed pattern the seal screen now refuses by field and kind only and guides to oms setup", async () => {
+    await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
+    const root = path.join(home, ".oms", "vaults");
+    const generation = path.join(root, (await readdir(root)).find(entry => /^\.[0-9a-f-]+\.\d+$/.test(entry))!);
+    const legacy = `${SECRET}${"x".repeat(PATTERN_SOURCE_LIMIT)}`;
+    const properties = `${JSON.stringify({ version: 1, properties: { code: { meaning: "", type: "text", default: false, required: false, rules: [{ kind: "pattern", regex: legacy }] } } })}\n`;
+    await writeFile(path.join(generation, "properties.json"), properties);
+    const manifest = JSON.parse(await readFile(path.join(generation, "manifest.json"), "utf8")) as { files: Record<string, string> };
+    manifest.files["properties.json"] = digestBytes(properties);
+    await writeFile(path.join(generation, "manifest.json"), `${JSON.stringify(manifest)}\n`);
+
+    await runContractCommand(["doctor", "--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toMatchObject({
+      contract: "sealed",
+      cause: null,
+      recovery: "oms setup",
+      unsafePatterns: [{ field: "properties.code", kind: "pattern-unsafe" }],
+    });
+    expect(printed()).not.toContain(SECRET);
+  });
+
+  it("refuses an answers file inside the vault whose name starts with two dots", async () => {
+    const file = path.join(vault, "..answers.json");
+    await writeFile(file, JSON.stringify({ seal: true }));
+    await runContractCommand(["setup", "--answers", file, "--vault", vault], { interactive: false });
+    expect(process.exitCode).toBe(1);
+    expect(printed()).toContain("keep the answers file outside the vault");
+    await expect(readdir(path.join(home, ".oms"))).rejects.toThrow();
   });
 
   it("extracts shapes without printing literal values", async () => {
@@ -226,5 +260,50 @@ describe("oms contract", () => {
     await runContractCommand(["setup", "--reask", "--vault", vault], { io: sealingIO() });
     expect(process.exitCode).toBe(0);
     expect(output()).toMatchObject({ status: "sealed" });
+  });
+
+  it("accepts --questions and --answers for setup only, once each and not together", async () => {
+    const answers = path.join(base, "answers.json");
+    await writeFile(answers, "{}");
+    for (const argv of [
+      ["status", "--questions", "--vault", vault],
+      ["doctor", "--answers", answers, "--vault", vault],
+      ["setup", "--questions", "--questions", "--vault", vault],
+      ["setup", "--answers", answers, "--answers", answers, "--vault", vault],
+      ["setup", "--answers", "--vault", vault],
+      ["setup", "--questions", "--answers", answers, "--vault", vault],
+    ]) {
+      await runContractCommand(argv);
+      expect(process.exitCode).toBe(1);
+      expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "CONTRACT_ARGS_INVALID" }] });
+    }
+    await runContractCommand(["setup", "--questions"]);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "CONTRACT_ARGS_INVALID" }] });
+    await expect(readdir(path.join(home, ".oms"))).rejects.toThrow();
+  });
+
+  it("seals from scripted answers without a terminal and never prints a template literal", async () => {
+    await runContractCommand(["setup", "--questions", "--vault", vault], { interactive: false });
+    expect(process.exitCode).toBe(0);
+    expect(output()).toMatchObject({ status: "questions" });
+    await expect(readdir(path.join(home, ".oms"))).rejects.toThrow();
+
+    type Asked = { id: string; kind: string; choices?: string[]; default?: string };
+    const answers: Record<string, unknown> = {};
+    const file = path.join(base, "answers.json");
+    let asked = (output() as { questions: Asked[] }).questions;
+    for (let round = 0; round < 20 && asked.length > 0; round += 1) {
+      for (const question of asked) {
+        answers[question.id] = question.id === "seal" ? true : question.kind === "confirm" ? false : question.default ?? question.choices?.[0] ?? "";
+      }
+      await writeFile(file, JSON.stringify(answers));
+      process.exitCode = 0;
+      await runContractCommand(["setup", "--answers", file, "--vault", vault], { interactive: false });
+      const result = output() as { status: string; questions?: Asked[] };
+      asked = result.status === "incomplete" ? result.questions ?? [] : [];
+    }
+    expect(process.exitCode).toBe(0);
+    expect(output()).toMatchObject({ status: "sealed" });
+    expect(printed()).not.toContain(SECRET);
   });
 });

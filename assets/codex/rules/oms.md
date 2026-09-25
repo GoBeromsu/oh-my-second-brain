@@ -1,8 +1,9 @@
 # Oh My Second Brain for Codex
 
 The vault owns its conventions. The user seals them once with an interactive
-`oms setup` they run themselves. You never run it, and the sealed contract is
-not yours to read.
+`oms setup` they run themselves, or through the `setup` skill, which seals a
+first or stricter contract only. Loosening stays with their terminal, and the
+sealed contract is not yours to read.
 
 | User intent | Preferred surface |
 |---|---|
