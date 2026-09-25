@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-25
+
 - **An agent can seal the vault contract by asking you each setup question.** The new tool-less `setup` skill runs `oms setup --questions`, asks the owner every question one at a time, and seals with `oms setup --answers <file|->`. That path seals a first contract or a reseal that only adds or tightens; a reseal that would loosen is refused with `{field, kind}` only and left to `oms setup` in the owner's own terminal, which keeps full authority. The public surface is seven skills, five MCP tools, and fourteen CLI families. See ADR-007 §3.
 - **An agent reseal can no longer loosen the contract in the gaps a review found.** A fixed value and an allowed list stand in for each other only for a single-valued property, so a list property's `allowed` cannot turn into a looser `fixed`. A newly scoped template whose apply folder overlaps a sealed scoped template is `apply-folder-overlap`. A sealed pattern that today's seal screen refuses (such as one over the length cap sealed by 0.17.0) is `pattern-unsafe`: `--answers` refuses it, `oms contract doctor` reports it as `unsafePatterns` with `{field, kind}` only, and the terminal `oms setup` asks for just that rule again. A sealed template may not change at all through `--answers`, not even to become stricter: the judge enforces a template only where the previous content passed it, so a stricter template would stop checking notes that fail it. Such a change is `template-tightened` and belongs to the owner's terminal `oms setup`. ADR-007 records the residual risks of a pty wrapper and of a fresh first seal after the vault or `.oms/settings.json` is moved, deleted, or re-IDed.
 

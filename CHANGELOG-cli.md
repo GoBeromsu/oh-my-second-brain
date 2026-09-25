@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-25
+
 - **`oms setup` and `oms contract setup` take `--questions` and `--answers <file|->`.** `--questions` prints the interview questions as JSON and seals nothing; `--answers` runs the same interview from a JSON object of answers by question id (`-` reads stdin) and seals. Missing answers return `incomplete` with the follow-up questions; an invalid, unknown, or malformed answer, an answers file inside the vault, or both flags together exit 1 and seal nothing. A reseal through `--answers` must be equal or stricter; loosening exits 1 with `status: loosening`, `{field, kind}` changes and no values, and points at `oms setup` in a terminal. The interactive setup is unchanged and keeps full authority, and the non-TTY refusal now names the two-step path.
 - **`oms contract doctor` reports `unsafePatterns`.** Each entry is `{field, kind: "pattern-unsafe"}` for a sealed pattern the seal screen now refuses; the report is unhealthy and recovery is `oms setup` in a terminal. `--answers` now accepts an answers file whose name merely starts with two dots (such as `..answers.json`) only when it is actually outside the vault; one inside the vault is refused.
 
