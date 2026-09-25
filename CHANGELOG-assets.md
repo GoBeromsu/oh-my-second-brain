@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-25
+
 - **Breaking: host guidance describes the sealed contract.** The `interview` and `template` skills are deleted, leaving six skills. Guidance tells agents to write whole notes through `write {path, content, template?}`, to stay inside the sealed property pool, never to read or write `~/.oms/`, and to ask the user to run `oms setup` on `contract-unreadable`.
 - **The `link` skill describes the payload it returns.** A suggestion carries a `baseContentHash` and a stable `id` per candidate, and `link { op: "check" }` requires `notePath`.
 

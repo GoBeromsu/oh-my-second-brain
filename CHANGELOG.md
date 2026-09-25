@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-25
+
 - **Breaking: the vault contract is sealed once by the user and judged on every write.** The interactive `oms setup` interviews folders, the property pool, and templates together and seals the contract under `~/.oms/vaults/<vault-id>/`, outside the vault; `.oms/settings.json` is the only OMS file inside it. One judge decides MCP `write {path, content, template?}` and the Claude guard hook, and a violation is refused with `{field, kind}` entries and one guidance command. `oms template`, the MCP `write` guide, check, and template operations, the `interview` and `template` skills, the PostToolUse hook, and `OMS_GUARD` are removed. The public surface is six skills, five MCP tools, and fourteen CLI families. Upgrade order: (1) install this release and run `oms host sync`; (2) back up `.oms/settings.json` and keep only `version`, `vaultId`, `templateFolder` (formerly `templateRoots`), `embedding`, and `agentRepair`; (3) run `oms setup` at a terminal to seal the vault; (4) run `oms contract doctor` and review the unexpected control files it lists under `.oms/`; (5) keep those backups while a rollback to 0.16.0 is still possible.
 
 ## [0.16.0] - 2026-09-23

@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-25
+
 - **Breaking: `write` takes `{path, content, template?}` with no `op`.** The whole note is judged against the sealed contract and saved atomically only when allowed; a denial returns `{field, kind}` violations and one guidance command. The `guide`, `check`, and `template` operations and the `folderIntents` input are removed. `search` `templates` returns the sealed folders, property names and types, and templates; `doctor` `validate` diagnoses the seal, and `doctor` `regenerate-types` is removed with no alias.
 - **Breaking: retrieval metadata reads the sealed folder contract.** Search responses rename `taxonomyIntents` to `folderIntents`, semantic status reports `folderContext` instead of the taxonomy context, and `projectionSource` names `folders.json` (the sealed contract) instead of `.oms/template-policy.json`. A vault without a sealed contract reports `vault-invalid` and its remediation points at `oms setup`.
 - **An unreachable search fallback is gone.** Every `oms_semantic_query` path returns inside its own block, so the later ephemeral-lexical branch keyed on that tool name could never run. Search's model-free lexical path stays where it actually executes.
