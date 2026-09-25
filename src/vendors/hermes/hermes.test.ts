@@ -255,7 +255,7 @@ describe("installHermes transaction", () => {
       else process.env.OMS_HERMES_HOME = previousHermesHome;
     }
     expect((await readdir(skills)).sort()).toEqual([
-      "distill", "doctor", "link", "search", "status", "write",
+      "distill", "doctor", "link", "search", "setup", "status", "write",
     ]);
     expect(await readFile(path.join(skills, "write", "SKILL.md"), "utf8"))
       .toBe(await readFile("assets/skills/write/SKILL.md", "utf8"));

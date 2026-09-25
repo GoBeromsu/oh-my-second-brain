@@ -31,7 +31,7 @@ When a write names a `template`, the note must satisfy it and sit inside its app
 
 ## Sealing and drift
 
-`oms setup` (the same command as `oms contract setup`) interviews the whole vault at an interactive terminal and seals the contract. It refuses to run without a TTY or under `OMS_NON_INTERACTIVE=1`, so an agent never seals. It writes only `.oms/settings.json` inside the vault and never modifies notes. Model install, selection, waiver, and status are separate `oms model` leaves.
+`oms setup` (the same command as `oms contract setup`) interviews the whole vault at an interactive terminal and seals the contract. The interactive interview refuses to run without a TTY or under `OMS_NON_INTERACTIVE=1`. An agent seals only through the `setup` skill: `oms setup --questions` prints the questions as JSON, the agent asks the owner each one, and `oms setup --answers <file|->` seals a first contract or a reseal that only adds or tightens. A loosening reseal is refused there with `{field, kind}` only and is left to the owner's terminal. It writes only `.oms/settings.json` inside the vault and never modifies notes. Model install, selection, waiver, and status are separate `oms model` leaves.
 
 A later edit to a sealed template file is drift. `oms contract status` reports each sealed template as `active`, `drift`, or `missing` against the live file. Drift is reported, never re-sealed silently; the user re-seals by running `oms setup` again. `oms contract extract --template <path>` shows what one template declares without printing values.
 

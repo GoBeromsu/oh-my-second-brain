@@ -23,11 +23,19 @@ const RETIRED_SETUP_FLAGS: Readonly<Record<string, string>> = {
 };
 
 export function setupUsage(): string {
-  return `Usage: oms setup [--vault <path>]
+  return `Usage: oms setup [--reask] [--vault <path>]
+       oms setup --questions [--reask] [--vault <path>]
+       oms setup --answers <file|-> [--reask] [--vault <path>]
 
 Interview the whole vault (folders, properties, templates) and seal the contract.
 Setup writes only .oms/settings.json inside the vault; the sealed contract lives outside it.
-Run it again at any time to re-seal. It is interactive and needs a terminal; it is never run by an agent.
+Run it again at any time to re-seal. In a terminal it is interactive and has full authority,
+including loosening a sealed contract.
+
+--questions prints the interview questions as JSON and seals nothing. --answers runs the
+same interview from a JSON object of answers by question id (- reads stdin) and seals.
+This is how an agent asks the owner each question (the setup skill). It seals a first
+contract or a stricter one only; loosening is left to \`oms setup\` in a terminal.
 Same as \`oms contract setup\`.`;
 }
 

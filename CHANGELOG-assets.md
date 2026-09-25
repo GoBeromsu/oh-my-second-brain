@@ -4,6 +4,9 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The `setup` skill is added (seven skills).** It walks the owner through `oms setup --questions` and `oms setup --answers`, asking each question with the recommended option first, keeping the answers file outside the vault and deleting it afterwards, and sending any loosening reseal or seal recovery to the owner's terminal. Host guidance and the `doctor`, `status`, and `write` skills no longer say the agent never runs setup; they name the skill for a first or stricter seal and keep recovery and loosening with the terminal.
+- **The `setup` skill spells out what it must never do.** It never runs `oms setup` or `oms contract setup` without `--questions` or `--answers`, never runs setup under a pty wrapper (`script`, `expect`, `unbuffer`), and never moves the vault or deletes, edits, or re-IDs `.oms/settings.json`. It notes that adding a folder, property, or template widens a closed axis, and sends a `pattern-unsafe` change to the owner's terminal. It says the skill path may add new entries, but changing a sealed template, even to make it stricter, is `template-tightened` and needs `oms setup` in the owner's terminal.
+
 ## [0.17.0] - 2026-09-25
 
 - **Breaking: host guidance describes the sealed contract.** The `interview` and `template` skills are deleted, leaving six skills. Guidance tells agents to write whole notes through `write {path, content, template?}`, to stay inside the sealed property pool, never to read or write `~/.oms/`, and to ask the user to run `oms setup` on `contract-unreadable`.

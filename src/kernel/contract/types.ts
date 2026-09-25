@@ -87,8 +87,10 @@ export const VIOLATION_KINDS: readonly ViolationKind[] = [
 ];
 
 /**
- * `field` is `path`, `template`, `contract`, `content`, a property key or an input key.
- * It never carries a value, a pattern or a template name.
+ * `field` is `path`, `template`, `contract`, `content`, a property key, a required heading
+ * or an input key. It never carries a value or a pattern. The judge's own fields never name
+ * a template; other `{field, kind}` reports, such as reseal loosening changes, may carry a
+ * template name or a heading, which are vault-visible, never sealed values.
  */
 export interface Violation {
   readonly field: string;

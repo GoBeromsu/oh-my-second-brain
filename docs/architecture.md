@@ -54,7 +54,7 @@ The CLI does not require a host. The three public sets stay independent:
 
 | Set | What it is |
 | --- | --- |
-| Six skills | `distill`, `doctor`, `link`, `search`, `status`, `write`. Host workflows. `distill` is tool-less. |
+| Seven skills | `distill`, `doctor`, `link`, `search`, `setup`, `status`, `write`. Host workflows. `distill` and `setup` are tool-less. |
 | Five MCP tools | `write`, `search`, `link`, `status`, `doctor`, from `oms serve mcp`. A subset of the skills. |
 | Fourteen CLI families | `setup`, `contract`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, `status`. Not the skill list and not the tool list. |
 

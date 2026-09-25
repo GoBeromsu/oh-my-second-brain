@@ -18,7 +18,7 @@ Oh My Second Brain is an Obsidian-first, user-owned convention layer: Obsidian i
 
 Outside `src/`:
 
-- `assets/skills/` — the six skills, authored **once**. There are no per-vendor copies.
+- `assets/skills/` — the seven skills, authored **once**. There are no per-vendor copies.
 - `assets/{claude,codex,hermes}/` — host runtime assets (hooks, rules, guidance).
 - `.claude-plugin/`, `.codex-plugin/`, `.mcp.json`, `.mcp.codex.json` — vendor plugin manifests at the repository root.
 - `core/ontology/` — legacy default schemas; nothing reads them at runtime and the package excludes them. `core/AGENTS.md` — separately-owned vault SSOT.
@@ -32,7 +32,7 @@ Outside `src/`:
 
 `cli/` and `mcp/` import `kernel/`, with one deliberate exception class: the CLI is the composition root, so it selects host adapters, invokes host hooks, and starts the MCP or HTTP server. Those edges are enumerated with reasons in `CLI_ENTRYPOINT_EXCEPTIONS` in `test/architecture/import-boundary.test.ts`, and the assertion is exact-match — a new forbidden edge fails, and so does a stale exception. Every other path in `cli/` and `mcp/` must resolve into `kernel/`.
 
-**The public surface is three distinct sets, not one.** Six skills (`write`, `search`, `link`, `distill`, `status`, `doctor`). Five MCP tools (`write`, `search`, `link`, `status`, `doctor`) are a strict subset. CLI command families are an independent allowlist: `setup`, `contract`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. Never collapse these into equality; `test/architecture/surface-parity.test.ts` guards it.
+**The public surface is three distinct sets, not one.** Seven skills (`write`, `search`, `link`, `distill`, `setup`, `status`, `doctor`). Five MCP tools (`write`, `search`, `link`, `status`, `doctor`) are a strict subset. CLI command families are an independent allowlist: `setup`, `contract`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. Never collapse these into equality; `test/architecture/surface-parity.test.ts` guards it.
 
 **Detail operations are demoted, never deleted.** The 18 former detail tools route through the five public tools by an `op` parameter (`oms_doctor` + `op: "sync-embeddings"`, `oms_search` + `op: "query"`). Adding a capability means adding an `op`, not a sixth tool.
 

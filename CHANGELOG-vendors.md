@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- Claude, Codex, Hermes, and Gajae-Code register the new `setup` skill, so each host installs seven shared skills. Host discovery and installation now report the `setup` skill as installed.
+
 ## [0.17.0] - 2026-09-25
 
 - **Breaking: the Claude guard follows the judge.** The PostToolUse hook and the `oms-post-guard` bin are removed, and `OMS_GUARD` no longer exists. The PreToolUse write matcher is now `Write|Edit|MultiEdit|NotebookEdit`, and a second PreToolUse entry for `Read|Grep|Glob` denies access under `~/.oms/`. A write that the judge finds in violation is denied; when the judge cannot run, the call is allowed with a warning. The hook output format changed accordingly. Codex and Hermes still declare no write hook. Run `oms host sync` after upgrading to rewrite the registration.

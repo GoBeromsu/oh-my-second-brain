@@ -3,6 +3,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
+import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { hasNestedQuantifier, InterviewAborted, runInterview, sealGuard, type InterviewIO, type Question } from "./interview.js";
 import { judge } from "./judge.js";
 import { readDeclined, readStore } from "./store.js";
@@ -123,6 +124,14 @@ describe("runInterview", () => {
     await expect(readdir(root)).rejects.toThrow();
   });
 
+  it("never echoes a hidden template default that cannot be used", async () => {
+    await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: [\"\"]\ncreated: \"{{date}}\"\n---\n## Agenda\n");
+    const io = scripted({ ...BASE_ANSWERS, "template:Meeting:field:status:literal": "one-of-allowed", "template:Meeting:field:status:allowed": "" });
+    expect(await runInterview({ vault, io, root })).toEqual({ state: "aborted" });
+    expect(io.said.filter(line => line.includes("The default could not be used"))).toHaveLength(3);
+    expect(io.said).not.toContain("  Give at least one value, separated by commas.");
+  });
+
   it("aborts when the IO aborts or the seal is declined", async () => {
     const aborting: InterviewIO = { say: () => {}, ask: async () => { throw new InterviewAborted(); } };
     expect(await runInterview({ vault, io: aborting, root })).toEqual({ state: "aborted" });
@@ -143,6 +152,12 @@ describe("runInterview", () => {
     expect(io.said.filter(line => line.includes("Nested repetition"))).toHaveLength(3);
     for (const risky of ["(a+)+", "(a*)*", "(a|a)*", "(?:a+){2,}", "((ab)*)+", "(?<x>a?)+"]) expect(hasNestedQuantifier(risky)).toBe(true);
     for (const safe of ["^[a-z]+$", "(ab)+", "\\(a+\\)+", "[(a+)]+", "\\d{4}-\\d{2}", "(a|b)"]) expect(hasNestedQuantifier(safe)).toBe(false);
+  });
+
+  it("refuses a pattern rule past the length cap", async () => {
+    const io = scripted({ ...BASE_ANSWERS, "property:status:rule": "pattern", "property:status:pattern": ["a".repeat(PATTERN_SOURCE_LIMIT + 1)] });
+    expect(await runInterview({ vault, io, root })).toEqual({ state: "aborted" });
+    expect(io.said.filter(line => line.includes(`${PATTERN_SOURCE_LIMIT} characters or fewer`))).not.toHaveLength(0);
   });
 
   it("refuses a vault whose id was changed or is shared with a copy", async () => {

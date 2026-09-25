@@ -44,7 +44,7 @@ describe("harness registry parity", () => {
     expect(harnessSurfaceRegistry.cliCommands.map((command) => command.name)).toContain("status");
   });
 
-  it("keeps fourteen CLI families distinct from six shared skills and five MCP tools", () => {
+  it("keeps fourteen CLI families distinct from seven shared skills and five MCP tools", () => {
     const commands = harnessSurfaceRegistry.cliCommands.map((command) => command.name);
     expect(commands).toEqual([
       "setup",
@@ -68,6 +68,7 @@ describe("harness registry parity", () => {
       "doctor",
       "link",
       "search",
+      "setup",
       "status",
       "write",
     ]);

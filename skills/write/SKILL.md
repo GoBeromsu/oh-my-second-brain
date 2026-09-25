@@ -31,10 +31,10 @@ The judge answers allow or deny. Allow writes the note atomically and returns `{
 
 Placement is explicit: an explicit path, otherwise the folder meaning the user approved, otherwise ask. There is no Inbox fallback.
 
-A vault with no sealed contract accepts any note inside it. A contract that cannot be read denies writes until the user restores it with `oms setup`; you never run it. Paths outside the vault and the vault's control paths are always denied.
+A vault with no sealed contract accepts any note inside it. A contract that cannot be read denies writes until the user restores it with `oms setup` at a terminal; the `setup` skill does not recover a broken seal. Paths outside the vault and the vault's control paths are always denied.
 
 ## Host file tools
 
 In Claude Code, native writes into the vault go through the same judge in the PreToolUse hook. When the hook cannot reach the judge, it allows the write with one warning and records the failure for `oms contract doctor`. Codex and Hermes declare no write hook, so use MCP `write` for vault notes there.
 
-The surface is five MCP tools and six skills.
+The surface is five MCP tools and seven skills.

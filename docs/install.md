@@ -62,7 +62,7 @@ oms setup --vault /path/to/vault
 oms contract status --vault /path/to/vault
 ```
 
-`oms setup` (the same command as `oms contract setup`) interviews folders, the property pool, and the templates in the template folder together, then seals the contract under `~/.oms/vaults/<vault-id>/`, outside the vault. Inside the vault it writes only `.oms/settings.json`, and it never modifies notes. It refuses to run without a TTY or under `OMS_NON_INTERACTIVE=1`, so an agent cannot seal. Run it again at any time to re-seal. `oms contract doctor` diagnoses the seal; see [conventions](./conventions.md).
+`oms setup` (the same command as `oms contract setup`) interviews folders, the property pool, and the templates in the template folder together, then seals the contract under `~/.oms/vaults/<vault-id>/`, outside the vault. Inside the vault it writes only `.oms/settings.json`, and it never modifies notes. The interactive interview refuses to run without a TTY or under `OMS_NON_INTERACTIVE=1`. Through the `setup` skill an agent asks the owner each question and runs `oms setup --questions` / `oms setup --answers <file|->`, which seal a first or stricter contract only; loosening stays with the terminal. Run it again at any time to re-seal. `oms contract doctor` diagnoses the seal; see [conventions](./conventions.md).
 
 Model lifecycle is separate from setup:
 

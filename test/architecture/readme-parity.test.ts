@@ -183,12 +183,13 @@ describe("README.md and README.ko.md agree on product facts", () => {
     expect(toolNames(section(ko, SECTIONS.mcp[KO], KO))).toEqual(advertised);
   });
 
-  it("enumerates six shared skills, including tool-less distill, distinct from the five tools", async () => {
+  it("enumerates seven shared skills, including tool-less distill and setup, distinct from the five tools", async () => {
     const skills = [
       "distill",
       "doctor",
       "link",
       "search",
+      "setup",
       "status",
       "write",
     ];
@@ -197,6 +198,7 @@ describe("README.md and README.ko.md agree on product facts", () => {
     for (const tool of MCP_TOOLS) expect(skills).toContain(tool);
     expect(MCP_TOOLS).not.toContain("interview");
     expect(MCP_TOOLS).not.toContain("distill");
+    expect(MCP_TOOLS).not.toContain("setup");
     expect(MCP_TOOLS).not.toContain("template");
 
     const [en, ko] = await Promise.all([read(EN), read(KO)]);

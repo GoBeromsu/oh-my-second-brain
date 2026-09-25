@@ -19,8 +19,8 @@ Diagnose the seal and derived indexes, then run only the repair the user named. 
 - `build-graph` and `cleanup` repair the derived graph or semantic index the user named.
 - `sync-embeddings` takes exactly one `mode`: `sync`, `embed`, or `repair`. `repair` also requires `repairMode: "rebuild"` or `"drop"` and may set `dryRun`. It backs up the engine store and checks the rebuilt or absent result. It is not forced embedding. Do not send retired boolean `embed` or `force` switches, and do not send repair-only fields with `sync` or `embed`.
 
-A broken or missing seal is recovered by the user running `oms setup` at a terminal; you never run it. The only automatic seal repair is `oms contract doctor --fix`, which re-indexes a moved or unindexed vault and nothing else. `oms contract doctor` also names the unexpected `.oms` entries for the person at the CLI.
+A broken or missing seal is recovered by the user running `oms setup` at a terminal; recovery is never done through the `setup` skill. The only automatic seal repair is `oms contract doctor --fix`, which re-indexes a moved or unindexed vault and nothing else. `oms contract doctor` also names the unexpected `.oms` entries for the person at the CLI.
 
 Index repairs run only when explicitly requested and do not edit notes. There is no default-value backfill: OMS never rewrites a note.
 
-The surface is five MCP tools and six skills.
+The surface is five MCP tools and seven skills.

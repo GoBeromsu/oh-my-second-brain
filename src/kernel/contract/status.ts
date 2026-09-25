@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { compareCodePoints } from "../conventions/canonical.js";
 import { detectDrift, type DriftState } from "./drift.js";
 import { readTransportFailures, type TransportFailures } from "./guard-events.js";
-import { diagnoseStore, storeExists, storeHousekeeping, storeRoot, writeIndexEntry, type StoreCause } from "./store.js";
+import { unsafePatternChanges, type LooseningChange } from "./loosening.js";
+import { diagnoseStore, readStore, storeExists, storeHousekeeping, storeRoot, writeIndexEntry, type StoreCause } from "./store.js";
 import { resolveSealState, type SealRow } from "./vault-id.js";
 import type { Guidance } from "./types.js";
 
@@ -72,6 +73,8 @@ export interface ContractDoctor extends ContractStatus {
   readonly cause: UnreadableCause | null;
   /** Recovery is a full reseal; there is no automatic fallback. */
   readonly recovery: "oms setup" | null;
+  /** Sealed pattern rules today's seal screen refuses, by field and kind only; only a terminal reseal replaces them. */
+  readonly unsafePatterns: readonly LooseningChange[];
   readonly staleLocks: number;
   readonly orphans: number;
   /** Hook transport failures the guard wrapper recorded: counts per kind only. */
@@ -114,7 +117,10 @@ export async function contractDoctor(vault: string, audience: "human" | "agent",
   }
   const housekeeping = state.vaultId === null ? { staleLocks: 0, orphans: 0 } : await storeHousekeeping(state.vaultId, root);
   const transportFailures = await readTransportFailures(root);
-  const report: ContractDoctor = { ...status, cause, recovery: cause === null ? null : "oms setup", ...housekeeping, transportFailures };
+  const read = status.contract === "sealed" && state.vaultId !== null ? await readStore(state.vaultId, root) : null;
+  const unsafePatterns = read?.state === "ok" ? unsafePatternChanges(read.contract) : [];
+  const recovery = cause === null && unsafePatterns.length === 0 ? null : "oms setup";
+  const report: ContractDoctor = { ...status, cause, recovery, unsafePatterns, ...housekeeping, transportFailures };
   const unexpected = await unexpectedControlFiles(vault);
   return audience === "human"
     ? { ...report, audience, unexpectedControlFiles: unexpected }

@@ -5,8 +5,8 @@ Installed by `oms host install --runtime hermes` into:
 - `~/.hermes/skills/knowledge-management/oms/`
 - `~/.hermes/config.yaml` as `mcp_servers.oms`
 
-The shared skill bundle contains six skills: `write`, `search`, `link`,
-`distill`, `status`, and `doctor`. Runtime operations use the five MCP tools
+The shared skill bundle contains seven skills: `write`, `search`, `link`,
+`distill`, `setup`, `status`, and `doctor`. Runtime operations use the five MCP tools
 through `oms serve mcp`.
 
 Agents write notes with MCP `write {path, content, template?}`. OMS judges each

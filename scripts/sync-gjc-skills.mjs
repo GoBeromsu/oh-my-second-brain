@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = path.join(repositoryRoot, "assets", "skills");
 const destinationRoot = path.join(repositoryRoot, "skills");
-const exportedSkills = ["distill", "doctor", "link", "search", "status", "write"];
+const exportedSkills = ["distill", "doctor", "link", "search", "setup", "status", "write"];
 const skillNamePattern = /^[a-z][a-z0-9-]*$/u;
 const ownedSkillFile = "SKILL.md";
 
