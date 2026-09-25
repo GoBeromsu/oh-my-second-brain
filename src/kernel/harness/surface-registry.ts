@@ -88,6 +88,7 @@ export const HARNESS_SHARED_SKILLS: readonly string[] = [
 export const HARNESS_CLI_COMMANDS: readonly HarnessCliCommandSurface[] = [
   { name: "setup", owner: "cli", stability: "stable" },
   { name: "template", owner: "cli", stability: "experimental" },
+  { name: "contract", owner: "cli", stability: "experimental" },
   { name: "note", owner: "capture", stability: "stable" },
   { name: "link", owner: "capture", stability: "stable" },
   { name: "bridge", owner: "install", stability: "stable" },

@@ -36,6 +36,7 @@ describe("CLI usage text", () => {
     expect(mainUsageCommandNames()).toEqual([
       "setup",
       "template",
+      "contract",
       "note",
       "link",
       "bridge",

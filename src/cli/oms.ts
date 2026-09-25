@@ -14,6 +14,7 @@ import { parseCliArgs } from "./args.js";
 import { runGraphCommand } from "./graph-command.js";
 import { runHostCommand, runModelCommand } from "./host-commands.js";
 import { runBridgeCommand, runLinkFamilyCommand } from "./link-command.js";
+import { contractUsage, runContractCommand } from "./contract-command.js";
 import { runNoteCommand } from "./note-command.js";
 import { runPackageCommand } from "./package-command.js";
 import { runSearchCommand, runIndexFamilyCommand } from "./search.js";
@@ -162,6 +163,7 @@ async function main(): Promise<void> {
       return;
     }
     if (parsedArgs.command === "template") console.log(templateUsage());
+    else if (parsedArgs.command === "contract") console.log(contractUsage());
     else printUsage();
     process.exitCode = 0;
     return;
@@ -187,6 +189,8 @@ async function main(): Promise<void> {
 
   if (command === "template") {
     await runTemplateCommand(argv.slice(1));
+  } else if (command === "contract") {
+    await runContractCommand(argv.slice(1));
   } else if (command === "setup") {
     const canonicalModelFlags =
       "--models-default, --models-descriptor <path>, or --models-no-default";

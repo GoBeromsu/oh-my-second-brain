@@ -119,6 +119,7 @@ function advertisedTools(serverSource: string): string[] {
 
 const CLI_FAMILIES = [
   "oms bridge",
+  "oms contract",
   "oms graph",
   "oms hook",
   "oms host",
@@ -138,6 +139,7 @@ const MCP_TOOLS = ["doctor", "link", "search", "status", "write"] as const;
 
 const CLI_SURFACES = [
   "oms bridge add|remove|status",
+  "oms contract interview|status|reissue-id",
   "oms graph build|status",
   "oms hook pre|post",
   "oms host install|remove|sync|status",
@@ -209,7 +211,7 @@ describe("README.md and README.ko.md agree on product facts", () => {
   it("lists the complete current CLI families and synchronized canonical surfaces", async () => {
     const [en, ko] = await Promise.all([read(EN), read(KO)]);
     expect([...HARNESS_CLI_COMMANDS].map((command) => `oms ${command.name}`).sort()).toEqual([...CLI_FAMILIES]);
-    expect(CLI_FAMILIES).toHaveLength(14);
+    expect(CLI_FAMILIES).toHaveLength(15);
     for (const [file, source] of [[EN, en], [KO, ko]] as const) {
       const cli = section(source, SECTIONS.cli[file], file);
       expect(cliCommands(cli)).toEqual(CLI_FAMILIES);

@@ -17,7 +17,7 @@ import { SHARED_SKILLS_SOURCE } from "../../src/assets/shared-skills.js";
 /**
  * Surface-set parity gate.
  *
- * The live target set (8 skills / 5 tools / 14 CLI families) is asserted directly.
+ * The live target set (8 skills / 5 tools / 15 CLI families) is asserted directly.
  * The fixture cases below prove that the rules also fail closed when a surface drifts.
  *
  * The rule set is deliberately NOT "all three lists are equal". The three
@@ -25,7 +25,7 @@ import { SHARED_SKILLS_SOURCE } from "../../src/assets/shared-skills.js";
  *
  *   skills      - the authored skill set, including tool-less interview
  *   mcpTools    - a strict SUBSET of those skills: write, search, link, status, doctor
- *   cliCommands - an INDEPENDENT allowlist of fourteen real CLI families.
+ *   cliCommands - an INDEPENDENT allowlist of fifteen real CLI families.
  *                 It is intentionally distinct from the skill and MCP-tool surfaces.
  *
  * Enforcing equality across all three would let a contributor satisfy the gate
@@ -63,7 +63,7 @@ export interface ParityViolation {
 }
 
 const TARGET_CLI_COMMANDS = [
-  "setup", "template", "note", "link", "bridge", "search", "index",
+  "setup", "template", "contract", "note", "link", "bridge", "search", "index",
   "graph", "host", "package", "model", "serve", "hook", "status",
 ] as const;
 
@@ -305,7 +305,7 @@ describe("surface-set parity gate (rules)", () => {
     expect(CLEAN.mcpTools).not.toContain("interview");
     expect(CLEAN.mcpTools).not.toContain("distill");
     expect(CLEAN.mcpTools).not.toContain("template");
-    expect(CLEAN.cliCommands).toHaveLength(14);
+    expect(CLEAN.cliCommands).toHaveLength(15);
     expect([...CLEAN.cliCommands].sort()).not.toEqual([...CLEAN.skills].sort());
     expect(CLEAN.cliCommands).toContain("index");
     expect(CLEAN.cliCommands).toContain("template");
@@ -713,14 +713,14 @@ describe("surface-set parity gate (live surface)", () => {
     assertServerOperationInventory();
   });
 
-  it("reads the eight disk-authored skills, five-tool subset, and fourteen CLI families", () => {
+  it("reads the eight disk-authored skills, five-tool subset, and fifteen CLI families", () => {
     const live = liveSurfaceSets();
     expect([...live.skills].sort()).toEqual([...HARNESS_SHARED_SKILLS]);
     expect(live.mcpTools).toEqual([...HARNESS_MCP_TOOLS].map((tool) => tool.name).sort());
     expect(live.skillsWithTool).not.toContain("interview");
     expect(live.skillsWithTool).not.toContain("distill");
     expect(live.skillsWithTool).not.toContain("template");
-    expect(live.cliCommands).toHaveLength(14);
+    expect(live.cliCommands).toHaveLength(15);
     expect([...live.cliCommands].sort()).toEqual([...HARNESS_CLI_COMMANDS].map((command) => command.name).sort());
     expect([...live.cliCommands].sort()).not.toEqual([...live.skills].sort());
     expect(checkSurfaceSets(live, TARGET)).toEqual([]);

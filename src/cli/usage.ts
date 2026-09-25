@@ -30,6 +30,7 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
       "             Run `oms template --help` for leaf arguments and confirmation requirements.",
     ],
   },
+  { name: "contract", line: "  contract Interview, seal, and inspect the sealed template contract." },
   { name: "note", line: "  note     Guide, check, audit, or get notes. The agent writes the note." },
   { name: "link", line: "  link     Suggest or check vault wikilinks." },
   { name: "bridge", line: "  bridge   Add, remove, or inspect external-repository vault bridges." },
@@ -76,6 +77,7 @@ oh-my-second-brain — Oh My Second Brain convention layer for Obsidian vaults
 Usage:
   oh-my-second-brain setup [--vault <path>] [--dry-run | --yes --approval-token <token> --approved-digest <sha256:...>]
   oh-my-second-brain template <list|show|scan|check|publish|review-sources|acknowledge-source|relink-source> [options]
+  oh-my-second-brain contract <interview|status|reissue-id> [options]
   oh-my-second-brain note <guide|check|audit|get> [options]
   oh-my-second-brain link <suggest|check> [options]
   oh-my-second-brain bridge <add|remove|status> [options]
