@@ -75,7 +75,7 @@ Every check below runs before a single file or git ref changes, so a failed pref
 
 ### 2. Lockstep version bump
 
-Five files get the new version: `package.json`, `package-lock.json` (root `version` plus `packages[""].version`), `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `assets/hermes-manifest.json`. The script then re-reads all of them and asserts consistency. If anything is off, it stops and tells you to run `git checkout -- .`, since nothing has been committed yet.
+Six files get the new version: `package.json`, `package-lock.json` (root `version` plus `packages[""].version`), `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (top-level `version` plus `plugins[0].version`), `.codex-plugin/plugin.json`, and `assets/hermes-manifest.json`. The script then re-reads all of them and asserts consistency. If anything is off, it stops and tells you to run `git checkout -- .`, since nothing has been committed yet.
 
 ### 3. Changelog roll
 
@@ -107,7 +107,7 @@ With that flag the version heading is inserted below an intact empty `## [Unrele
 8. `npm run release:artifact-smoke`
 9. `npm run release:plugin`
 
-`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and exercises approved setup/template mutations, `host install|sync|remove`, `package check|update`, `serve http|mcp`, canonical note/search/index commands, and the five-tool MCP surface from the extracted package root. All child processes use an isolated home. A metadata-only guard (not a byte-content digest) verifies that the operator's real `~/.oms` tree and exact OMS-managed Hermes config/skill/adapter paths did not change; symlinks are recorded but never traversed.
+`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and exercises the removed-setup-flag and non-terminal setup refusals, the retired template and note guide/check leaves, `oms contract status` against a sealed contract, `host install|sync|remove`, `package check|update`, `serve http|mcp`, canonical note/search/index commands, and the five-tool MCP surface from the extracted package root. All child processes use an isolated home. A metadata-only guard (not a byte-content digest) verifies that the operator's real `~/.oms` tree and exact OMS-managed Hermes config/skill/adapter paths did not change; symlinks are recorded but never traversed.
 
 When the release ships the `boost-additive` baseline, `check:measurement`
 passes the `boost-c040` gate with a receipt and does not require

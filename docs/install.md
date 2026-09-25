@@ -1,6 +1,6 @@
 # Installation
 
-Oh My Second Brain is an npm package with an independent CLI, optional host assets, eight public skills, and five public MCP tools. It requires Node.js 20 or later.
+Oh My Second Brain is an npm package with an independent CLI, optional host assets, six public skills, and five public MCP tools. It requires Node.js 20 or later.
 
 ## Install the CLI
 
@@ -46,27 +46,25 @@ This does not enumerate or modify other profiles; a `hermes -p research` wrapper
 At runtime, target resolution is ordered as follows:
 
 1. Explicit `--vault`.
-2. Local `.oms` template controls.
+2. Local `.oms/settings.json`.
 3. Local bridge.
 4. `OMS_VAULT`.
 5. Current working directory.
 
-The current-directory fallback is read-only. OMS does not write ordinary notes on any source. See [verified targets](./verified-target.md). The host's stamped `--vault` supplies the explicit source; runtime target resolution never reads the maintenance pointer.
+The current-directory fallback is read-only: sealing and note writes are refused on it. See [verified targets](./verified-target.md). The host's stamped `--vault` supplies the explicit source; runtime target resolution never reads the maintenance pointer.
 
 ## Contract setup
 
-`.oms/template-policy.json` version 5 is the only structural authority. It holds the property pool, an always-on common contract with no Markdown file of its own, and explicitly registered templates. A registration inherits the common contract and may add to it, tighten it, or relax it where that relaxation was approved for the template. A note with no individual template is valid under the common contract. Historical version-3 and version-4 policies remain readable; only a mutating selection migrates one in place, preserving its recorded meaning.
-
-Setup connects the vault: it writes the portable `.oms/settings.json` identity and the approved host connection. It publishes no contract and never modifies notes. After the interview agrees the contract document, publish it explicitly with `oms template publish --policy <file.json> --transaction-id <uuid> [--yes]`; publication previews without `--yes` and compares against the exact policy bytes now on disk.
-
-Inspect the connection proposal, then approve the digest and token it showed:
+The vault contract is sealed by the user at an interactive terminal:
 
 ```bash
-oms setup --vault /path/to/vault --dry-run
-oms setup --vault /path/to/vault --yes --approval-token <token> --approved-digest <digest>
+oms setup --vault /path/to/vault
+oms contract status --vault /path/to/vault
 ```
 
-Setup can select a model in the same approved pass. Model lifecycle is also available explicitly:
+`oms setup` (the same command as `oms contract setup`) interviews folders, the property pool, and the templates in the template folder together, then seals the contract under `~/.oms/vaults/<vault-id>/`, outside the vault. Inside the vault it writes only `.oms/settings.json`, and it never modifies notes. It refuses to run without a TTY or under `OMS_NON_INTERACTIVE=1`, so an agent cannot seal. Run it again at any time to re-seal. `oms contract doctor` diagnoses the seal; see [conventions](./conventions.md).
+
+Model lifecycle is separate from setup:
 
 - `oms model install`: acquire and verify a model.
 - `oms model select`: select an installed model.
@@ -78,8 +76,8 @@ These are local verified acquisitions, not runtime downloads. Direct capability 
 ## Notes, search, index, and serving
 
 ```text
-oms note guide|check|audit|get
-oms template list|show|scan|check|publish|review-sources|acknowledge-source|relink-source
+oms contract setup|extract|status|doctor
+oms note audit|get
 oms link suggest|check
 oms search query <text> [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank]
 oms search context
@@ -88,11 +86,9 @@ oms graph build|status
 oms serve mcp|http
 ```
 
-`guide` selects the contract for one explicit note path and returns a session locator. The agent writes the file with its own tools. After the file is saved, `check` reads those saved bytes through that locator and reports declared properties and headings with `semantic: "not-evaluated"`. Neither command writes the note, and there is no completion command or reviewer handshake. The agent and user decide whether the note is worth keeping and repair it. The command table is [the CLI map](./cli-map.md).
+The agent writes notes, through MCP `write {path, content, template?}` or, in Claude Code, through native tools judged by the guard hook. A write that violates the sealed contract is refused and the file stays unchanged. `oms note audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them. There is no completion command or reviewer handshake; the agent and user decide whether a note is worth keeping. The command table is [the CLI map](./cli-map.md).
 
-`oms template` leaves are `list`, `show`, `scan`, `check`, `publish`, `review-sources`, `acknowledge-source`, and `relink-source`. `publish`, `acknowledge-source`, and `relink-source` require an explicit transaction ID; `review-sources` is read-only. `acknowledge-source` needs the live reviewed digest, and `relink-source` requires a genuinely missing original source plus the exact candidate path supplied by the user. None of these operations writes ordinary notes.
-
-A plain `oms search query <text>` is lexical-only. Every non-lexical channel is explicit: `--vec`, `--hyde`, G004 `--expand`, and `--rerank`. G004 expansion is available only when selected; no replacement, parity, or outperformance claim is made. Read-only search still returns unbound, invalid, and incomplete notes. Policy validity does not gate it.
+A plain `oms search query <text>` is lexical-only. Every non-lexical channel is explicit: `--vec`, `--hyde`, G004 `--expand`, and `--rerank`. G004 expansion is available only when selected; no replacement, parity, or outperformance claim is made. Search still returns notes that would fail the contract, and a missing or damaged contract does not stop it.
 
 `oms index sync`, `oms index embed`, and `oms index repair` are exclusive modes of the same guarded embedding operation; obsolete boolean `embed` and `force` combinations are not accepted. `status` is read-only and selects the `status`, `collections`, or `contexts` view. `clean` removes eligible derived state.
 
@@ -102,17 +98,17 @@ A plain `oms search query <text>` is lexical-only. Every non-lexical channel is 
 
 ## Host, package, and model lifecycle
 
-Use `oms host install|remove|sync|status` for host integrations. `oms package check|update` manages the npm package only; package update never performs host sync implicitly. Use `oms model install|select|waive|status` for model lifecycle outside setup. Hook entrypoints are `oms hook pre|post`; post-tool-use records the tool result and is not a graph-build alias. Claude's write hook is fail-open. Codex and Hermes declare no write hook. A hook entrypoint is not a hard save block.
+Use `oms host install|remove|sync|status` for host integrations. `oms package check|update` manages the npm package only; package update never performs host sync implicitly. Use `oms model install|select|waive|status` for model lifecycle outside setup. The hook entrypoint is `oms hook pre`; there is no post-tool-use hook. Claude's write hook denies a write when the contract judge finds a violation and allows it with a warning when the hook itself cannot run. Codex and Hermes declare no write hook.
 
 ## Skills and MCP tools
 
-The installable skill set is `distill`, `doctor`, `interview`, `link`, `search`, `status`, `template`, and `write`. `interview` and `template` are tool-less. Skills are host workflows, not MCP tool names.
+The installable skill set is `distill`, `doctor`, `link`, `search`, `status`, and `write`. `distill` is tool-less. Skills are host workflows, not MCP tool names.
 
 `oms serve mcp` exposes exactly five public tools:
 
 `oms_write` · `oms_search` · `oms_link` · `oms_status` · `oms_doctor`
 
-`oms_status` is read-only and does not stand in for completion. `oms_doctor` diagnoses controls and indexes. Its repairs are explicit managed-state repairs after verified-target admission, not note backfill. Notes are written by the agent.
+`oms_status` is read-only and does not stand in for completion. `oms_doctor` diagnoses the contract and indexes. Its repairs are explicit managed-state repairs after verified-target admission, not note backfill. Notes are written by the agent.
 
 ## Remove host integrations
 
@@ -120,7 +116,7 @@ The installable skill set is `distill`, `doctor`, `interview`, `link`, `search`,
 oms host remove --runtime all --yes
 ```
 
-`oms host remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. It deletes the owned host integration: registrations and installed host assets. It does not modify vault notes, templates, or vault convention files.
+`oms host remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. It deletes the owned host integration: registrations and installed host assets. It does not modify vault notes, templates, `.oms/settings.json`, or the sealed contract.
 
 For Hermes, removal deletes only an installation with valid OMS npm provenance, or an older unrecorded tree that still passes the installer's legacy ownership check. It refuses to delete a foreign or tampered skill tree.
 

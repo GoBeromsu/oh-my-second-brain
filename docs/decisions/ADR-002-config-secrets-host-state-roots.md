@@ -13,7 +13,7 @@ relates_to:
   - ./ADR-001-vault-resolution-link-note-identity.md
   - ./ADR-003-local-index-storage-and-fusion.md
   - ./ADR-005-embedding-model-contract-integrity-lifecycle.md
-  - ./ADR-008-taxonomy.md
+  - ./ADR-007-vault-contract-ontology.md
   - ./ADR-009-cross-cutting-principles.md
 ---
 
@@ -30,7 +30,7 @@ OMS는 설정과 상태를 네 곳에 둔다: 볼트 안(`<vault>/.oms/`), 프�
 - 구 ADR-004는 전역 설정을 `~/.config/vault-search/config.yml`에, 비밀을 `secrets.env`(0600)에 두라고 했지만, 구현에는 `vault-search` 경로가 없다. 호스트 설정은 `$XDG_CONFIG_HOME/oms/vault.json` 하나뿐이다 (src/kernel/install/connection-registry.ts:226-234, src/kernel/install/pointer.ts:36-46).
 - 구 ADR-004는 API key(UPSTAGE/VOYAGE/OPENAI, `OMS_PGVECTOR_URL`)와 `ignore_for_external_apis` glob을 전제했지만, 구현에는 비밀 저장소도 API key 처리도 없다. 비-test src에서 `API_KEY`/`apiKey`/`secrets` 검색 결과가 0건이다. 원격 provider는 구 ADR-012 D2 시점에 제거됐다.
 - 구 ADR-004 Tier 3는 프로젝트 `.oms` 마커를 "포인터·권한 선언"으로 정했지만, 구현은 `.oms/links.yaml` v2 connection reference다 (→ ADR-001 §3).
-- 구 ADR-004 Tier 2는 `taxonomy.yaml`·`routing-guidelines.md`였지만, 구현은 `.oms/taxonomy.json` 등을 쓴다 (→ ADR-008).
+- 구 ADR-004 Tier 2는 `taxonomy.yaml`·`routing-guidelines.md`였지만, 구현은 볼트 안에 `.oms/settings.json`만 두고 폴더 의미를 볼트 밖 봉인된 계약에 둔다 (→ ADR-007, 구 ADR-008 대체).
 - 코드에는 ADR에 없던 `~/.oms` 상태 루트(runtime, update notice)가 있다.
 
 ## Decision
@@ -48,25 +48,25 @@ OMS는 설정과 상태를 네 곳에 둔다: 볼트 안(`<vault>/.oms/`), 프�
 cache 파일은 `OMS_AUTO_UPDATE_STATE_DIR`이 있으면 그 아래, 없으면 `~/.oms` 아래에 둔다 (src/mcp/update-notice.ts:64-69). `OMS_UPDATE_NOTICE=0` 또는 `OMS_NO_UPDATE_NOTICE=1`이면 끈다 (src/mcp/update-notice.ts:60-62; src/cli/update-notice.ts:26).
 
 ### 4. 호스트 캐시 루트: `$XDG_CACHE_HOME` 또는 `~/.cache`
-- 모델 artifact와 host-local receipt `installed-models.json`은 `<cache>/oms/models`에 둔다 (src/kernel/engine/embed/model.ts:33, 510-514, 518). 모델 세부 → ADR-005.
+- 모델 artifact와 host-local receipt `installed-models.json`은 `<cache>/oms/models`에 둔다 (src/kernel/engine/embed/model.ts:22, 501-505, 509). 모델 세부 → ADR-005.
 - 볼트별 인덱스 캐시의 base도 같은 규칙이다. 단, 상대 경로인 `XDG_CACHE_HOME`은 무시한다 (src/kernel/engine/paths.ts:70-76). 저장 구조 → ADR-003.
 
 ### 5. 볼트 내 설정 `<vault>/.oms/` (portable)
 볼트에 들어가는 설정은 볼트와 함께 이동하며 호스트 절대 경로를 담지 않는다.
-- `settings.json`: `vaultId`(소문자 UUID) (src/kernel/templates/vault-settings.ts:23, 57)
-- `models.json`: 모델 identity 선언 (src/kernel/engine/embed/config.ts:36; src/kernel/engine/embed/model.ts:746)
-- `template-policy.json`: → ADR-007
-- `taxonomy.json`: → ADR-008
+- 볼트 안의 OMS 파일은 `settings.json` 하나다 (src/kernel/vault/settings.ts:8, 25). 키는 `version`(1), `vaultId`(소문자 UUID), `templateFolder`(정규 볼트 상대 폴더), `embedding.model`, `agentRepair`뿐이며 모르는 키는 거부한다 (src/kernel/vault/settings.ts:9-18, 28, 57-86).
+- 쓰기는 `publishVaultSettings`가 control path를 검증한 뒤 원자적으로 쓰고 다시 읽어 확인한다 (src/kernel/install/vault-settings-publish.ts:6-15).
+- 봉인된 계약(폴더·속성·템플릿)은 볼트 밖 `~/.oms/vaults/<id>`에 있다 (src/kernel/contract/store.ts:12-17). 계약 내용 → ADR-007.
+- `.oms/`의 다른 항목은 읽지 않는다. `oms contract doctor`가 예상하지 않은 제어 파일로 보고할 뿐이다 (src/kernel/contract/status.ts:86-100).
 
 프로젝트 `<repo>/.oms/links.yaml`은 참조와 scope만 담는다 (→ ADR-001 §3).
 
 ### 6. 모델 설정 우선순위 (설정 층위만)
-capability(embed/rerank/generate)마다 request → 완전한 env 쌍 → 볼트 `.oms/models.json` → setup default(receipt) → unavailable 순으로 고른다 (src/kernel/engine/embed/config.ts:349-386). env 쌍은 `OMS_EMBEDDING_*`, `OMS_RERANK_*`, `OMS_GENERATE_*`의 `PROVIDER`/`MODEL`이다 (src/kernel/engine/embed/config.ts:38-42). `OMS_MODEL_PATH` alias는 없다 (src/kernel/engine/README.md:13-14). fail-closed·identity·lineage는 → ADR-005.
+capability(embed/rerank/generate)마다 request → 완전한 env 쌍 → 볼트 `.oms/settings.json`의 `embedding.model`(embed만) → setup default(receipt) → unavailable 순으로 고른다 (src/kernel/engine/embed/config.ts:352-388). 볼트 값은 `readVaultEmbeddingModel`/`readVaultEmbeddingModelSync`가 읽는다 (src/kernel/engine/embed/config.ts:39-54). env 쌍은 `OMS_EMBEDDING_*`, `OMS_RERANK_*`, `OMS_GENERATE_*`의 `PROVIDER`/`MODEL`이다 (src/kernel/engine/embed/config.ts:55-59). `OMS_MODEL_PATH` alias는 없다 (src/kernel/engine/README.md:13-14). fail-closed·identity·lineage는 → ADR-005.
 
 ### 7. 호스트 에이전트 홈과 주입
 - 에이전트 홈 디렉터리는 `OMS_CLAUDE_HOME`/`OMS_CODEX_HOME`/`OMS_HERMES_HOME`으로 바꿀 수 있다. 기본값은 `~/.claude`/`~/.codex`/`~/.hermes`다 (src/kernel/install/common.ts:31-34; src/vendors/claude/claude.ts:256, src/vendors/codex/codex.ts:295, src/vendors/hermes/hermes.ts:193).
-- 설치 시 볼트 경로는 설정 파일이 아니라 hook의 `OMS_VAULT=`/`OMS_AGENT_VAULT=` 할당 (src/vendors/claude/claude-hooks.ts:29-31)과 MCP 인자 `serve mcp --vault <vault>` (src/kernel/install/common.ts:36-37)로 주입한다.
-- `OMS_GUARD=off`는 pre-tool-use guard를 끈다 (src/vendors/claude/hook/pre-tool-use.ts:54-57).
+- 설치 시 볼트 경로는 설정 파일이 아니라 hook의 `OMS_VAULT=`/`OMS_AGENT_VAULT=` 할당 (src/vendors/claude/claude-hooks.ts:27-39)과 MCP 인자 `serve mcp --vault <vault>` (src/kernel/install/common.ts:36-37)로 주입한다.
+- guard를 끄는 환경 변수는 없다. `oms hook pre`는 볼트 안 쓰기를 항상 판정자에게 보낸다 (→ ADR-007).
 
 ### 8. 비밀과 권한
 - OMS는 비밀(API key 등)을 저장하거나 읽지 않는다. 비밀 파일도 없다.
@@ -102,7 +102,7 @@ capability(embed/rerank/generate)마다 request → 완전한 env 쌍 → 볼트
 | 구 ADR-004 Tier 1 `~/.config/vault-search/config.yml` | §1 (실제 `$XDG_CONFIG_HOME/oms/vault.json`) |
 | 구 ADR-004 Tier 1 `secrets.env`, API key, `OMS_PGVECTOR_URL` | 폐기: 원격 provider·pgvector 코드 없음 (§8) |
 | 구 ADR-004 `ignore_for_external_apis` | 폐기: 외부 API 호출 경로 없음 |
-| 구 ADR-004 Tier 2 볼트 설정(`taxonomy.yaml`, `routing-guidelines.md`) | §5 (파일명 코드 기준, 내용 → ADR-008) |
+| 구 ADR-004 Tier 2 볼트 설정(`taxonomy.yaml`, `routing-guidelines.md`) | 폐기: 볼트 안 파일은 `settings.json` 하나 (§5), 폴더 의미는 봉인된 계약 (→ ADR-007) |
 | 구 ADR-004 Tier 3 프로젝트 마커 = 포인터·권한 | §5, → ADR-001 §3 (v2 reference) |
 | 구 ADR-004 기각안(볼트 내 전역 설정, 마커 내 설정, env 단독) | Alternatives Considered |
 | 구 ADR-012 D2 해석 순서·env 쌍 | §6 |

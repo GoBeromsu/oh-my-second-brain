@@ -1,11 +1,12 @@
 ---
 slug: ADR-008-taxonomy
 title: "Taxonomy — 사용자 소유 .oms/taxonomy.json 단일 권위"
-status: Accepted
+status: Superseded
 date: 2026-09-24
 created_by: claude
 deciders: [beomsu]
 supersedes: []
+superseded_by: ./ADR-007-vault-contract-ontology.md
 supersedes_in_part:
   - 구 ADR-003#D1
   - 구 ADR-006#Layer1
@@ -13,7 +14,7 @@ relates_to:
   - ./ADR-001-vault-resolution-link-note-identity.md
   - ./ADR-004-search-backend-and-reranking.md
   - ./ADR-006-graph-access.md
-  - ./ADR-007-template-contract-sealed-two-layer.md
+  - ./ADR-007-vault-contract-ontology.md
   - ./ADR-009-cross-cutting-principles.md
 ---
 
@@ -21,7 +22,9 @@ relates_to:
 
 ## Status
 
-Accepted (2026-09-24). taxonomy를 전담한 ADR은 이제까지 없었다. 구 ADR-003 D1과 구 ADR-006 Layer 1의 taxonomy 부분(두 ADR 모두 이미 구 ADR-015가 Superseded 처리함)을 흡수한다.
+Superseded (2026-09-25) by [ADR-007](./ADR-007-vault-contract-ontology.md). `.oms/taxonomy.json`은 더 이상 읽지 않는다. 역할 A–C(검색 문맥, `folder-ontology` 축, exclusion)는 봉인된 폴더 계약 `folders.json`이 넘겨받았고(`src/kernel/engine/retrieval/template-source.ts:63-72`, :96), 역할 D(write guard)는 ADR-007 §5–§6의 단일 판정자로 옮겼다. 검색 응답 필드 `taxonomyIntents`는 `folderIntents`가 됐다. 아래 본문은 대체 전 기록이며 현재 코드를 설명하지 않는다.
+
+원래 상태: Accepted (2026-09-24). taxonomy를 전담한 ADR은 이제까지 없었다. 구 ADR-003 D1과 구 ADR-006 Layer 1의 taxonomy 부분(두 ADR 모두 이미 구 ADR-015가 Superseded 처리함)을 흡수한다.
 
 ## Context
 

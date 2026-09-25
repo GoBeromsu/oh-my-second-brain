@@ -30,33 +30,34 @@ Accepted (2026-09-24). 구 ADR-007 전체와 구 ADR-012 D1·D2·D3·D5를 대�
 embed·rerank·generate 모델은 세 가지를 보장해야 한다. vault 사이에 옮길 수 있어야 하고, 호스트에서 실제로 검증되어야 하며, 인덱스와의 호환성을 증명할 수 있어야 한다. 모델이 없을 때 가짜로 채우는 경로는 검색 품질을 조용히 망가뜨린다. 구 ADR-007과 구 ADR-012가 각자 이 원칙을 나눠 가졌고, 다운로드 금지 규칙은 두 ADR에 중복되어 있었다.
 
 - 구 ADR-012 D3은 prompt scheme이 "data-driven"이라고 했지만, 구현은 이름으로 버전 관리하는 닫힌 집합이다. `switch`로 분기한다 (`src/kernel/engine/embed/provider.ts:108-139`, `src/kernel/engine/embed/model.ts:109`, `:120`, `:300-305`).
-- 구 ADR-007은 vec/HyDE 불가 안내에 provider 인증 환경변수를 포함한다고 했지만, 구현은 로컬 GGUF 전용이다. guidance는 env pair, `.oms/models.json`, 설치 명령만 안내한다 (`src/kernel/engine/embed/config.ts:328-335`, `provider.ts:479-523`).
+- 구 ADR-007은 vec/HyDE 불가 안내에 provider 인증 환경변수를 포함한다고 했지만, 구현은 로컬 GGUF 전용이다. guidance는 env pair, embed일 때 `.oms/settings.json`의 `embedding.model`, 설치 명령만 안내한다 (`src/kernel/engine/embed/config.ts:331-338`, `provider.ts:479-523`).
 - 구 ADR-007/구 ADR-002가 언급한 `src/search`의 768→64 fold는 코드에서 제거되었다. 남은 차원 변환은 없다 (`provider.ts:72-92`).
 
 ## Decision
 
-### 1. vault 선언은 identity-only `.oms/models.json` v1 (`src/kernel/engine/embed/config.ts`)
+### 1. vault 선언은 `.oms/settings.json`의 `embedding.model` 하나다 (`src/kernel/engine/embed/config.ts`)
 
-- 파일명은 `models.json`, version은 1이다 (`config.ts:36-37`). capability는 `embed`, `rerank`, `generate`다 (`config.ts:5`).
-- 파싱은 strict하다. 파일이 없으면 오류가 아니라 unavailable이다 (`config.ts:141-186`).
-- 선택은 설치된 artifact 하나와 정확히 일치해야 한다 (`config.ts:246`).
-- mutable revision(`latest`, `main`, `master`, `head`)은 거부한다 (`model.ts:151`).
-- 선택 변경은 propose/apply와 approval digest를 거친다. 대상은 symlink이면 안 되고, `models.json.lock`을 잡은 뒤 임시파일로 쓴다 (`model.ts:746-846`).
+- 볼트가 선언하는 모델은 embed 하나뿐이며, `settings.json`의 `embedding.model` 문자열이다 (`src/kernel/vault/settings.ts:13`, `:72-75`). 볼트 파일 `models.json`은 없다. rerank와 generate는 볼트 선언이 없다 (`config.ts:370`).
+- 값은 `readVaultEmbeddingModel`/`readVaultEmbeddingModelSync`가 읽는다. 파일이 없으면 오류가 아니라 볼트 선언 없음이다 (`config.ts:39-54`).
+- 모델 이름은 설치된 embed artifact 하나와 정확히 일치해야 한다 (`config.ts:254-267`).
+- mutable revision(`latest`, `main`, `master`, `head`)은 거부한다 (`config.ts:100`, `:140-141`; `model.ts:142`, `:213`).
+- 선택 변경은 `oms model select`의 propose/apply와 approval digest를 거친다 (`model.ts:738-788`; `src/cli/model-command.ts:128-141`). `settings.json`이 없으면 `VAULT_SETTINGS_MISSING`으로 거부하고 `oms setup`을 먼저 안내한다 (`model.ts:732-736`). 쓰기는 `publishEmbeddingModel`이 기존 설정에 합친 뒤 원자적으로 쓰고 다시 읽어 확인한다 (`src/kernel/install/vault-settings-publish.ts:6-22`).
+- `oms model waive`는 볼트에 아무것도 쓰지 않는다.
 - `.oms/` 설정 위치의 일반 규칙은 → ADR-002.
 
 ### 2. 호스트 설치 증거는 `installed-models.json` receipt이며 매번 재검증한다 (`model.ts`)
 
-- receipt는 `installed-models.json`, schema version 1이다 (`model.ts:33`). 모델 캐시는 `$XDG_CACHE_HOME` 또는 `~/.cache` 아래 `oms/models`다 (`model.ts:510-514`).
-- receipt를 로드할 때마다 파일 sha256을 다시 계산한다 (`model.ts:495-508`). 빈 목록으로 취급하는 것은 receipt가 없을 때뿐이다 (`model.ts:517-528`).
-- acquisition source는 url과 local path 중 하나만 허용한다 (`model.ts:102-104`). local path는 절대·정규화 경로여야 하며 참조로 등록한다 (`model.ts:333-352`).
-- 캐시 경로와 파일 realpath가 vault 안이면 거부한다 (`model.ts:~607`, `:~645-649`). url일 때만 다운로드하고 sha256을 확인한다 (`model.ts:~662-678`). receipt는 원자적으로 쓴다 (`model.ts:~697`).
+- receipt는 `installed-models.json`, schema version 1이다 (`model.ts:22-23`). 모델 캐시는 `$XDG_CACHE_HOME` 또는 `~/.cache` 아래 `oms/models`다 (`model.ts:501-505`).
+- receipt를 로드할 때마다 파일 sha256을 다시 계산한다 (`model.ts:486-499`). 빈 목록으로 취급하는 것은 receipt가 없을 때뿐이다 (`model.ts:507-531`).
+- acquisition source는 url과 local path 중 하나만 허용한다 (`model.ts:394-401`). local path는 절대·정규화 경로여야 하며 참조로 등록한다 (`model.ts:336-352`).
+- 캐시 경로와 파일 realpath가 vault 안이면 거부한다 (`model.ts:598`, `:635-640`). url일 때만 다운로드하고 sha256을 확인한다 (`model.ts:660-677`). receipt는 원자적으로 쓴다 (`model.ts:568-571`, `:688`).
 
-### 3. 해석 순서는 고정되고 fail-closed다 (`config.ts:349-387`)
+### 3. 해석 순서는 고정되고 fail-closed다 (`config.ts:352-388`)
 
-- 순서는 request → environment → vault → setup-default → unavailable이다 (`config.ts:44`).
+- 순서는 request → environment → vault(embed의 `embedding.model`만) → setup-default → unavailable이다 (`config.ts:61`, `:358-374`).
 - 가장 높은 후보가 선택된다. 그 후보가 잘못되었거나 설치되지 않았으면 throw하고, 아래 tier로 내려가지 않는다. 결과에는 `equivalentSources`와 `shadowedSources`가 함께 보고된다.
-- 환경변수 pair는 `OMS_EMBEDDING_PROVIDER`/`OMS_EMBEDDING_MODEL`, `OMS_RERANK_PROVIDER`/`OMS_RERANK_MODEL`, `OMS_GENERATE_PROVIDER`/`OMS_GENERATE_MODEL`이다 (`config.ts:38-42`). pair 중 하나만 있으면 오류다. 앞뒤 공백도 거부한다 (`config.ts:297-300`). 환경변수 provider는 `gguf`만 허용한다 (`config.ts:256`).
-- 불가 안내 문구는 `capabilityGuidance` 한 곳에서 만든다 (`config.ts:328-335`).
+- 환경변수 pair는 `OMS_EMBEDDING_PROVIDER`/`OMS_EMBEDDING_MODEL`, `OMS_RERANK_PROVIDER`/`OMS_RERANK_MODEL`, `OMS_GENERATE_PROVIDER`/`OMS_GENERATE_MODEL`이다 (`config.ts:55-59`). pair 중 하나만 있으면 오류다. 앞뒤 공백도 거부한다 (`config.ts:297-303`). 환경변수 provider는 `gguf`만 허용한다 (`config.ts:250`).
+- 불가 안내 문구는 `capabilityGuidance` 한 곳에서 만든다. embed 안내에만 `embedding.model`이 들어간다 (`config.ts:331-338`).
 
 ### 4. 임베딩 lineage는 불변이고 정확히 일치해야 한다 (`src/kernel/engine/embed/identity.ts`)
 
@@ -77,15 +78,15 @@ embed·rerank·generate 모델은 세 가지를 보장해야 한다. vault 사�
 - `embed=false`는 lexical 전용이다. 해시 fallback 벡터는 만들지 않는다 (`sync.ts:1-8`, `:798-834`).
 - provider는 lazy 로드하고, idle이면 unload하며, dispose는 한 번만 한다 (`provider.ts:229`).
 
-### 7. 런타임은 다운로드하지 않는다 (`model.ts:560-567`)
+### 7. 런타임은 다운로드하지 않는다 (`model.ts:551-561`)
 
-- `resolveEmbeddingModel`은 다운로드하지 않는다. `acquireModelSet`은 `oms setup`과 `oms model` CLI에서만 호출된다 (`src/cli/setup-command.ts:285`, `src/cli/model-command.ts:124,140`).
+- `resolveEmbeddingModel`은 다운로드하지 않는다. `acquireModelSet`을 부르는 CLI는 `oms model install` 하나다 (`src/cli/model-command.ts:124`). `oms setup`은 모델을 설치하지 않는다.
 - plain query는 lexical이다. 임베딩 필요 여부는 → ADR-004 §2.
 
 ### 8. 기본 모델과 prompt scheme (`model.ts`, `provider.ts`)
 
-- setup 기본 embed 모델은 `embeddinggemma-300M-Q8_0.gguf`다. revision과 sha256이 고정되어 있고, 768차원, context 2048, l2 정규화, https URL이다 (`model.ts:153-165`, `provider.ts:29-32`). 명시적 setup으로 설치한 실제 모델이므로 가짜 폴백이 아니다.
-- embed scheme은 `embeddinggemma-v1`, `qwen3-embedding-v1`이다. generate scheme은 `qmd-query-expansion-v2.8.3`이다. capability마다 허용 scheme을 강제한다 (`model.ts:109`, `:120`, `:300-305`, `provider.ts:108-139`).
+- setup 기본 embed 모델은 `embeddinggemma-300M-Q8_0.gguf`다. revision과 sha256이 고정되어 있고, 768차원, context 2048, l2 정규화, https URL이다 (`model.ts:144-158`, `provider.ts:29-32`). 명시적 setup으로 설치한 실제 모델이므로 가짜 폴백이 아니다.
+- embed scheme은 `embeddinggemma-v1`, `qwen3-embedding-v1`이다. generate scheme은 `qmd-query-expansion-v2.8.3`이다. capability마다 허용 scheme을 강제한다 (`model.ts:34`, `:98`, `:109`, `:220-222`, `provider.ts:108-139`).
 
 ### 미결
 
@@ -104,7 +105,7 @@ embed·rerank·generate 모델은 세 가지를 보장해야 한다. vault 사�
 
 ## Consequences
 
-- 모델을 쓰려면 `oms setup` 또는 `oms model`로 설치하고 사용자 캐시를 준비해야 한다. 오프라인 런타임은 이미 설치된 모델만 쓴다.
+- 모델을 쓰려면 `oms model install`로 설치하고, 볼트 선언이 필요하면 `oms setup` 뒤 `oms model select`로 `embedding.model`을 쓴다. 오프라인 런타임은 이미 설치된 모델만 쓴다.
 - 상위 tier 설정이 잘못되면 하위 기본값으로 대체하지 않고 해석 자체가 막힌다.
 - 모델·revision·scheme이 바뀌면 `--force` 재임베딩이 필수다.
 - receipt를 로드할 때마다 해시를 다시 계산하므로 큰 GGUF는 로드 비용이 든다.

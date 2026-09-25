@@ -15,8 +15,7 @@ supersedes_in_part:
 relates_to:
   - ./ADR-002-config-secrets-host-state-roots.md
   - ./ADR-006-graph-access.md
-  - ./ADR-007-template-contract-sealed-two-layer.md
-  - ./ADR-008-taxonomy.md
+  - ./ADR-007-vault-contract-ontology.md
   - ./ADR-009-cross-cutting-principles.md
 ---
 
@@ -30,7 +29,7 @@ Accepted (2026-09-24). 이 주제의 유일한 기준이다. 구 ADR-008 전체�
 
 명령은 어느 디렉터리에서든 실행되고, 그때마다 "어느 볼트에 대해 동작하는가"와 "노트를 무엇으로 식별하는가"를 결정론적으로 정해야 한다. 이 결정은 구 ADR-008·009·010에 흩어져 있었고, 그 뒤 구현이 바뀌면서 문서와 코드가 어긋났다. 이 ADR은 현재 코드를 기준으로 다시 쓴다.
 
-- 구 ADR-009 D1은 로컬 볼트 증거를 `.oms/concepts/` 또는 `.oms/taxonomy.yaml`로 정했지만, 구현은 `.oms/settings.json`·`template-policy.json`·`taxonomy.json` 파일을 본다(src/kernel/link/link.ts:159-164).
+- 구 ADR-009 D1은 로컬 볼트 증거를 `.oms/concepts/` 또는 `.oms/taxonomy.yaml`로 정했지만, 구현은 `.oms/settings.json` 파일 하나만 본다(src/kernel/link/link.ts:159-162).
 - 구 ADR-009 D1에는 명시 지정(explicit)이 없었지만, 구현은 `--vault`/explicit을 모든 단계보다 먼저 둔다(src/kernel/link/link.ts:231-233).
 - 구 ADR-009 D1은 bridge를 `vault`+`scope` 레코드로 정했지만, 구현은 v2 connection reference를 registry에 대조해 검증하고, v1 레코드는 읽기 전용 `legacy-bridge`로만 인정한다(src/kernel/link/link.ts:183-215).
 - 구 ADR-010(24–27행)과 구 ADR-009는 "이후 global-config fallback"을 말했지만, 구현은 global selection을 fallback으로 절대 쓰지 않는다(src/kernel/link/link.ts:223-224).
@@ -43,7 +42,7 @@ Accepted (2026-09-24). 이 주제의 유일한 기준이다. 구 ADR-008 전체�
 `resolveEffectiveVault`는 다음 순서로 결정하며 앞 단계가 성립하면 멈춘다: (1) explicit(`--vault`) → (2) startDir의 로컬 볼트 증거 → (3) 검증된 bridge → (4) `OMS_VAULT`(`~` 전개) → (5) startDir(cwd). global selection(호스트 pointer/registry의 "선택된 볼트")은 fallback이 아니다 (src/kernel/link/link.ts:220-240). 결과에는 출처 `VaultSource = explicit | vault | bridge | legacy-bridge | env | cwd`가 붙는다 (src/kernel/link/link.ts:37). CLI 명령은 모두 이 함수 하나로 해석한다 (src/cli/oms.ts:67, src/cli/search.ts:49, src/cli/note-command.ts:75, src/cli/status-command.ts:51, src/cli/host-commands.ts:247 등). 순서 변경은 breaking change다 (src/cli/usage.ts:98에 사용자 문서로 고정).
 
 ### 2. 로컬 볼트 증거
-startDir의 `.oms/` 아래에 `settings.json`·`template-policy.json`·`taxonomy.json` 중 하나라도 regular file로 있으면 그 디렉터리가 볼트다 (src/kernel/link/link.ts:159-164). 각 파일의 내용은 → ADR-002(설정 위치), → ADR-007(template-policy), → ADR-008(taxonomy).
+startDir의 `.oms/settings.json`이 regular file로 있으면 그 디렉터리가 볼트다 (src/kernel/link/link.ts:159-162). `.oms/`의 다른 파일은 볼트 증거가 아니다. 파일 내용은 → ADR-002 §5, 봉인된 계약은 → ADR-007.
 
 ### 3. Bridge(프로젝트 → 볼트 링크)
 - 증거: `<repo>/.oms/links.yaml`이 있거나 `<repo>/.oms/linked/`에 보이는 항목이 있으면 bridge 경로로 간다 (src/kernel/link/link.ts:166-177, 32-35).
@@ -95,7 +94,7 @@ bridge 해석 실패의 반환·예외 규칙은 → ADR-009.
 | 구 ADR-008 "slug는 나중에 파생 필드로" | 미결 (코드 근거 없음) |
 | 구 ADR-008 qmd 경계의 slug forward map | 폐기: qmd 경계 코드 제거됨 (facade.ts:129) |
 | 구 ADR-009 D1 해석 순서 | §1 (explicit 선행, global fallback 없음으로 코드 기준 갱신) |
-| 구 ADR-009 D1 로컬 증거 `concepts/`·`taxonomy.yaml` | §2 (코드 기준 `settings.json`·`template-policy.json`·`taxonomy.json`) |
+| 구 ADR-009 D1 로컬 증거 `concepts/`·`taxonomy.yaml` | §2 (코드 기준 `settings.json` 하나) |
 | 구 ADR-009 D1 bridge `links.yaml` (vault+scope) | §3 (v2 registry 검증, v1은 legacy 읽기 전용) |
 | 구 ADR-009 제약 "bridge는 포인터·scope만, 설정·비밀 금지" | §3 |
 | 구 ADR-009 D3 `oms link`가 AGENTS.md에 사용법 기록 | §5 |

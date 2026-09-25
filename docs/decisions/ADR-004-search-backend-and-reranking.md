@@ -50,7 +50,7 @@ MCP `search`는 한 개의 backend 인터페이스 뒤에서 in-repo 엔진을 �
 ### 3. modality 실패는 조용히 대체하지 않는다 (`src/kernel/engine/retrieval/dispatcher.ts:250-340`)
 
 - lex는 `queryLex`를 호출한다. vec는 query를 임베딩한 뒤 `queryVec`를 호출한다.
-- HyDE는 expand가 준 문서를 그대로 쓰거나 generator가 있어야 한다. 둘 다 없으면 env pair·`models.json`·`oms setup`을 안내하며 throw한다. generator 출력이 비었거나 query를 그대로 반복하면 거부한다 (`dispatcher.ts:154-168`).
+- HyDE는 expand가 준 문서를 그대로 쓰거나 generator가 있어야 한다. 둘 다 없으면 generate·embed env pair와 `.oms/settings.json`의 `embedding.model`을 안내하며 throw한다 (`dispatcher.ts:294-303`). generator 출력이 비었거나 query를 그대로 반복하면 거부한다 (`dispatcher.ts:155-169`).
 - graph sub-query는 traversal이 연결되지 않았으면 throw한다. depth 기본값은 2다 (→ ADR-006).
 - expand 전략에서 vec 불가나 expander 부재는 capability guidance가 담긴 unavailable 결과가 된다 (`src/kernel/engine/mcp/facade.ts:650-683`).
 

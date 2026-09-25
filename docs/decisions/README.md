@@ -11,8 +11,8 @@ oh-my-secondbrain 프로젝트의 주요 설계 결정을 기록한다. 주제�
 | [ADR-004](./ADR-004-search-backend-and-reranking.md) | 검색 백엔드·리랭킹 | 좁은 SearchBackend seam, 단일 정규화, opt-in 리랭크 | Accepted |
 | [ADR-005](./ADR-005-embedding-model-contract-integrity-lifecycle.md) | 임베딩 모델 | identity-only 선언, 검증된 로컬 설치, 불변 lineage, 가짜 폴백 금지 | Accepted |
 | [ADR-006](./ADR-006-graph-access.md) | 그래프 접근 | axis-seed 1-hop 로컬 이웃, cache 또는 headless scan | Accepted |
-| [ADR-007](./ADR-007-template-contract-sealed-two-layer.md) | 템플릿 계약 | 전역·템플릿 두 층, 사용자 봉인, 에이전트에게 비공개 | Accepted |
-| [ADR-008](./ADR-008-taxonomy.md) | taxonomy | 사용자 소유 `.oms/taxonomy.json` 단일 권위 | Accepted |
+| [ADR-007](./ADR-007-vault-contract-ontology.md) | vault 계약 | 폴더·속성·템플릿 세 봉인 계약, 단일 판정자, 에이전트에게 비공개 | Accepted |
+| [ADR-008](./ADR-008-taxonomy.md) | taxonomy | 사용자 소유 `.oms/taxonomy.json` 단일 권위 | Superseded by ADR-007 |
 | [ADR-009](./ADR-009-cross-cutting-principles.md) | 공통 원칙 | 보고형 결과, 사용자 권위, 읽기 무생성, 은퇴 경로 거부 | Accepted |
 
 2026-09-24에 기존 ADR 0001–016을 위 아홉 개로 재편하고 삭제했다. 본문의 "구 ADR-0NN"은
