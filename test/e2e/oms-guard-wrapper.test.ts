@@ -335,8 +335,10 @@ describe("oms-guard wrapper transport failures", () => {
     mkdirSync(bin, { recursive: true });
     copyFileSync(WRAPPER, path.join(hooks, "oms-guard.mjs"));
     if (script !== null) {
-      writeFileSync(path.join(bin, "oms"), script);
-      chmodSync(path.join(bin, "oms"), 0o755);
+      // Write the executable from a child process: a write fd held by this (multi-threaded) process
+      // can leak into a concurrent fork and make exec fail with ETXTBSY on Linux.
+      const written = spawnSync("/bin/sh", ["-c", 'cat > "$1" && chmod 755 "$1"', "sh", path.join(bin, "oms")], { input: script });
+      if (written.status !== 0) throw new Error(`failed to write fake oms: ${written.stderr}`);
     }
     return { wrapper: path.join(hooks, "oms-guard.mjs"), pathEnv: bin };
   }
