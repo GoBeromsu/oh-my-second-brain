@@ -338,7 +338,9 @@ async function main() {
   const result = spawnSync(cmd, [...prefix, "hook", "pre", "--vault", vault], {
     input: raw, encoding: "utf-8", timeout: JUDGE_TIMEOUT_MS,
   });
-  if (result.error) {
+  // EPIPE only means the judge exited without reading all of stdin; judge it by its exit and output.
+  const judgeRan = result.error?.code === "EPIPE" && result.status !== null;
+  if (result.error && !judgeRan) {
     transportFailure(result.error.code === "ETIMEDOUT" ? "timeout" : "spawn-failed");
     return;
   }
