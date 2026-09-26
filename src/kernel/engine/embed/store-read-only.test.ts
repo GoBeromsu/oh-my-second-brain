@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   appendFileSync,
   existsSync,
@@ -22,9 +22,20 @@ import { createEngineStoreReadSnapshot } from "./read-snapshot.js";
 
 const roots: string[] = [];
 const SNAPSHOT_PREFIX = "oms-engine-read-";
+// Snapshot dirs are counted under tmpdir(); a private TMPDIR keeps parallel test files out of the count.
+const previousTmpdir = process.env.TMPDIR;
+let isolatedTmpdir = "";
+
+beforeAll(() => {
+  isolatedTmpdir = mkdtempSync(path.join(tmpdir(), "oms-store-ro-tmp-"));
+  process.env.TMPDIR = isolatedTmpdir;
+});
 
 afterAll(() => {
+  if (previousTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = previousTmpdir;
   for (const root of roots) rmSync(root, { recursive: true, force: true });
+  rmSync(isolatedTmpdir, { recursive: true, force: true });
 });
 
 function scratch(): string {
@@ -119,7 +130,6 @@ describe("read-only engine store", () => {
     const inside = path.join(root, "tmp");
     mkdirSync(inside);
     const sourceBefore = directoryImage(root);
-    const previousTmpdir = process.env.TMPDIR;
 
     try {
       process.env.TMPDIR = inside;
@@ -128,8 +138,7 @@ describe("read-only engine store", () => {
       );
       expect(directoryImage(root)).toEqual(sourceBefore);
     } finally {
-      if (previousTmpdir === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = previousTmpdir;
+      process.env.TMPDIR = isolatedTmpdir;
     }
   });
 
