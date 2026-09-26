@@ -737,6 +737,7 @@ Valid frontmatter remains available to retrieve.
 
       const status = textPayload(await client.callTool({ name: "status", arguments: {} }));
       expect(status.writeTools).toBe("write-gated-by-verified-target-and-contract");
+      expect(status.readTools).toEqual(["search", "link", "status"]);
 
       expect(status.contract).toMatchObject({ contract: "none", row: "never-sealed" });
 

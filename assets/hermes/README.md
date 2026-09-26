@@ -9,6 +9,11 @@ The shared skill bundle contains seven skills: `write`, `search`, `link`,
 `distill`, `setup`, `status`, and `doctor`. Runtime operations use the five MCP tools
 through `oms serve mcp`.
 
+Hermes takes a skill's category from the first path segment only, so these
+skills are listed under `knowledge-management`. Filter with
+`skills_list(category="knowledge-management")`; the category
+`knowledge-management/oms` matches nothing.
+
 Agents write notes with MCP `write {path, content, template?}`. OMS judges each
 note against the contract the user sealed with `oms setup`. A denial returns
 only `{field, kind}` and a guidance command. There is no completion operation

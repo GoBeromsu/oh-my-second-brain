@@ -107,6 +107,8 @@ describe("readSearchTemplateSource", () => {
     expect(read.source).toMatchObject({ defaultFields: null, templates: null, sourcePaths: null });
     expect(read.source.globalAxes).toEqual({});
     expect(read.diagnostics.map(item => item.code)).toEqual(["CONTRACT_OPEN"]);
+    expect(read.diagnostics[0]?.message).toContain("contract: none");
+    expect(read.diagnostics[0]?.message).toContain("run oms setup");
     expect(existsSync(path.join(vault, ".oms"))).toBe(false);
   });
 
@@ -114,6 +116,19 @@ describe("readSearchTemplateSource", () => {
     const vault = path.join(await makeVault(), "missing");
     const read = await readSearchTemplateSource(vault);
     expect(read.diagnostics.map(item => item.code)).toContain("CONTRACT_OPEN");
+    const open = read.diagnostics.find(item => item.code === "CONTRACT_OPEN");
+    expect(open?.message).toContain("vault not found");
+    expect(open?.message).not.toContain("oms setup");
+  });
+
+  it("points unreadable vault settings at doctor, as oms contract doctor does", async () => {
+    const vault = await makeVault();
+    await mkdir(path.join(vault, ".oms"), { recursive: true });
+    await writeFile(path.join(vault, ".oms", "settings.json"), "{not json\n");
+    const read = await readSearchTemplateSource(vault);
+    const open = read.diagnostics.find(item => item.code === "CONTRACT_OPEN");
+    expect(open?.message).toContain("vault settings unreadable");
+    expect(open?.message).toContain("run oms contract doctor");
   });
 
   it("reports an unreadable seal as unavailable metadata instead of throwing", async () => {

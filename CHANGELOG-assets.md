@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- The Hermes README and SOUL name the skill category `knowledge-management`: filter with `skills_list(category="knowledge-management")`, since `knowledge-management/oms` matches nothing. The `status` skill describes `readTools` and `writeTools` separately.
+
 ## [0.18.0] - 2026-09-25
 
 - **The `setup` skill is added (seven skills).** It walks the owner through `oms setup --questions` and `oms setup --answers`, asking each question with the recommended option first, keeping the answers file outside the vault and deleting it afterwards, and sending any loosening reseal or seal recovery to the owner's terminal. Host guidance and the `doctor`, `status`, and `write` skills no longer say the agent never runs setup; they name the skill for a first or stricter seal and keep recovery and loosening with the terminal.

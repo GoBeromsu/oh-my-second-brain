@@ -20,7 +20,8 @@ With `op` absent, `status` returns the combined read-only view:
 - `generationDigest` and `diagnostics` for the derived state.
 - The runtime history for this host and vault.
 - `engineGraph`: graph status.
-- `writeTools` and `readTools`: whether writes are gated by a verified target and a readable contract, or disabled and why.
+- `writeTools`: whether writes are gated by a verified target and a readable contract, or disabled and why.
+- `readTools`: the read-only MCP tools (`search`, `link`, `status`). `write` and `doctor` are not listed because they can mutate the vault.
 
 Use `status { op: "graph" }` only for graph status. Do not send `graph` when requesting the combined view.
 

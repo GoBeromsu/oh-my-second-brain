@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- **The status `CONTRACT_OPEN` diagnostic uses the same wording and guidance as `oms contract doctor`.** A never-sealed vault reports `contract: none` with `run oms setup`, unreadable vault settings report `vault settings unreadable` with `run oms contract doctor`, and a missing vault says no contract applies. `SETTINGS_INVALID_FINDING` is exported from `src/kernel/contract/status.ts`.
+
 ## [0.18.0] - 2026-09-25
 
 - **The interview can run from scripted answers and refuse a loosening reseal.** `runInterview` takes `nonLoosening`, which accepts only a first seal or a reseal of a readable seal and, before sealing, compares the new contract with the sealed one through `looseningChanges` (`src/kernel/contract/loosening.ts`). Removing a folder, property, or template, opening an axis, dropping a requirement, heading, or search exclusion, changing a type, fixed value, pattern, or apply folder, and widening an allowed list or range are loosening; for a single-valued type, fixed and allowed rules compare as value sets. Moving a sealed template's source is `removed` under `templates.<name>.source`, since search exclusion is built from sealed sources, and apply folders compare after NFC and separator normalization. The result names `{field, kind}` only. `scriptedIO` (`src/kernel/contract/scripted-interview.ts`) answers questions by id, turns a re-ask into `CONTRACT_ANSWER_INVALID`, reports an unknown id as `CONTRACT_ANSWER_UNKNOWN`, and ends `incomplete` with the unanswered questions instead of sealing.

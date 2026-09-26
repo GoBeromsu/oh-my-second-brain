@@ -74,6 +74,7 @@ Usage:
   oh-my-second-brain serve <mcp|http> [options]
   oh-my-second-brain hook pre [--vault <path>]
   oh-my-second-brain status [options]
+  oh-my-second-brain --version | -v
 
 Compatibility alias: oms <command>
 

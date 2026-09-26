@@ -38,4 +38,6 @@ about or guess the contract's location or values.
   user running `oms setup`.
 
 Hermes uses seven shared skills (`write`, `search`, `link`, `distill`, `setup`,
-`status`, `doctor`) backed by the five public MCP tools.
+`status`, `doctor`) backed by the five public MCP tools. Their skill category
+is `knowledge-management`, so list them with
+`skills_list(category="knowledge-management")`.

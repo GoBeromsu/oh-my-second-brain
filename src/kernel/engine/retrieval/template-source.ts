@@ -2,6 +2,7 @@ import { compareCodePoints, hashCanonical, type Digest } from "../../conventions
 import { readSourceExclusions, type SourceExclusionInventory } from "../../conventions/note-exclude.js";
 import { deriveFolderOntologyAxis } from "../../contract/folders-axis.js";
 import type { PropertyContract, VaultContract } from "../../contract/types.js";
+import { ROW_FINDING, SETTINGS_INVALID_FINDING, type DoctorFinding } from "../../contract/status.js";
 import { resolveSealState } from "../../contract/vault-id.js";
 import type { GlobalAxes, GlobalAxis, RetrievalFields, TemplateRetrievalSource } from "./axes.js";
 
@@ -32,7 +33,7 @@ export interface SearchTemplateSource {
 }
 
 type ReadState =
-  | { readonly state: "open" }
+  | { readonly state: "open"; readonly finding: DoctorFinding | null }
   | { readonly state: "unreadable"; readonly reason: string }
   | { readonly state: "sealed"; readonly contract: VaultContract };
 
@@ -50,12 +51,12 @@ function isAbsent(error: unknown): boolean {
 
 async function readState(vault: string): Promise<ReadState> {
   try {
-    const view = (await resolveSealState(vault)).view;
+    const { view, row, settingsInvalid } = await resolveSealState(vault);
     if (view.state === "sealed") return { state: "sealed", contract: view.contract };
     if (view.state === "unreadable") return { state: "unreadable", reason: "the sealed contract is unreadable; run oms contract doctor" };
-    return { state: "open" };
+    return { state: "open", finding: settingsInvalid ? SETTINGS_INVALID_FINDING : ROW_FINDING[row] };
   } catch (error: unknown) {
-    return isAbsent(error) ? { state: "open" } : { state: "unreadable", reason: failureReason(error) };
+    return isAbsent(error) ? { state: "open", finding: null } : { state: "unreadable", reason: failureReason(error) };
   }
 }
 
@@ -103,6 +104,13 @@ function globalAxes(contract: VaultContract): GlobalAxes {
   return axes;
 }
 
+/** Same wording and guidance as `oms contract doctor`, so status and doctor agree. A null finding means the vault path is missing. */
+function openContractMessage(finding: DoctorFinding | null): string {
+  if (finding === null) return "vault not found; no contract applies";
+  const guidance = finding.guidance === null ? "" : `; run ${finding.guidance}`;
+  return `${finding.message}; notes stay searchable without declared field axes${guidance}`;
+}
+
 export async function readSearchTemplateSource(vault: string): Promise<SearchTemplateSource> {
   const [state, exclusions] = await Promise.all([readState(vault), readSourceExclusions(vault)]);
   const diagnostics: RetrievalDiagnostic[] = exclusions.diagnostics.map(item => ({ code: item.code, path: item.path, message: item.message }));
@@ -113,7 +121,7 @@ export async function readSearchTemplateSource(vault: string): Promise<SearchTem
   });
 
   if (state.state === "open") {
-    diagnostics.push({ code: "CONTRACT_OPEN", path: CONTRACT_PATH, message: "no contract is sealed; notes stay searchable without declared field axes" });
+    diagnostics.push({ code: "CONTRACT_OPEN", path: CONTRACT_PATH, message: openContractMessage(state.finding) });
     return {
       digest,
       source: { generationDigest: digest, defaultFields: null, templates: null, globalAxes: Object.create(null) as GlobalAxes, sourcePaths: null },

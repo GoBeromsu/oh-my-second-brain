@@ -43,7 +43,7 @@ export const ROW_FINDING: Readonly<Record<SealRow, DoctorFinding>> = {
 };
 
 export const SHARED_FINDING: DoctorFinding = { message: "vault id shared", guidance: "oms contract doctor" };
-const SETTINGS_INVALID_FINDING: DoctorFinding = { message: "vault settings unreadable", guidance: "oms contract doctor" };
+export const SETTINGS_INVALID_FINDING: DoctorFinding = { message: "vault settings unreadable", guidance: "oms contract doctor" };
 export const STORE_UNREADABLE_FINDING: DoctorFinding = { message: "contract store unreadable", guidance: "oms setup" };
 
 export async function contractStatus(vault: string, root: string = storeRoot()): Promise<ContractStatus> {

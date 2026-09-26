@@ -17,7 +17,7 @@ import { runSearchCommand, runIndexFamilyCommand } from "./search.js";
 import { runServeHttp } from "./serve-http.js";
 import { runSetup, setupUsage } from "./setup-command.js";
 import { runStatusCommand } from "./status-command.js";
-import { maybePrintUpdateNotice } from "./update-notice.js";
+import { maybePrintUpdateNotice, readCurrentPackageVersion } from "./update-notice.js";
 import { mainUsageCommandNames, printUsage } from "./usage.js";
 
 export { buildClaudeInstallPlan } from "./claude-install-plan.js";
@@ -143,6 +143,17 @@ async function runHookCommand(argv: readonly string[]): Promise<void> {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+  if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
+    const version = await readCurrentPackageVersion().catch(() => null);
+    if (version === null) {
+      console.error("[oms] Package version is unreadable.");
+      process.exitCode = 1;
+      return;
+    }
+    console.log(version);
+    process.exitCode = 0;
+    return;
+  }
   const parsedArgs = parseCliArgs(argv);
   if (parsedArgs.help) {
     if (!isKnownCommand(parsedArgs.command)) {

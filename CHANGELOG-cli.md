@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms --version` and `oms -v` print the installed package version.** Hosts and agents can now confirm the release from the CLI. An unknown flag or extra argument still exits 1 with `[oms] Unknown command:`.
+
 ## [0.18.0] - 2026-09-25
 
 - **`oms setup` and `oms contract setup` take `--questions` and `--answers <file|->`.** `--questions` prints the interview questions as JSON and seals nothing; `--answers` runs the same interview from a JSON object of answers by question id (`-` reads stdin) and seals. Missing answers return `incomplete` with the follow-up questions; an invalid, unknown, or malformed answer, an answers file inside the vault, or both flags together exit 1 and seal nothing. A reseal through `--answers` must be equal or stricter; loosening exits 1 with `status: loosening`, `{field, kind}` changes and no values, and points at `oms setup` in a terminal. The interactive setup is unchanged and keeps full authority, and the non-TTY refusal now names the two-step path.
