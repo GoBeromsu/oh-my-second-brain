@@ -168,6 +168,22 @@ describe("oms CLI dispatch", () => {
     expect(snapshotDir(vault)).toBe(beforeVault);
   });
 
+  it.each(["--version", "-v"])("prints the package version for %s", async (flag) => {
+    const { version } = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
+    const result = runCli([flag]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(version);
+  });
+
+  it.each([["bogus"], ["--bogus"], ["--version", "extra"]])("exits 1 for unknown input %j", (...argv) => {
+    const result = runCli(argv);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("[oms] Unknown command:");
+  });
+
   it("rejects an unknown command even when help is requested", () => {
     const result = runCli(["setpu", "--help"]);
 

@@ -593,7 +593,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         writeTools: source === "cwd"
           ? "write-disabled-target-unverified"
           : contract.contract === "unreadable" ? "write-disabled-contract-unreadable" : "write-gated-by-verified-target-and-contract",
-        readTools: omsMcpTools.map(tool => tool.name),
+        readTools: omsMcpTools.filter(tool => tool.annotations?.readOnlyHint === true).map(tool => tool.name),
       });
     }
 
