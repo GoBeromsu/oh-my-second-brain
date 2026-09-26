@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-09-26
+
 - **Ships the Hermes skill namespace from 0.18.2.** The 0.18.2 tag failed its release check on a flaky test and was never published to npm, so 0.18.3 is the first published release where Hermes installs the OMS skills as `oms-*` with `SKILL_CAPABILITY_GUIDE.md` (see 0.18.2 below). The read-only engine store tests now use a private temporary directory, so snapshot directories from parallel test files no longer break the check.
 
 ## [0.18.2] - 2026-09-26

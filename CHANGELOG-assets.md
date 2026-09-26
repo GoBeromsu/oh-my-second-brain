@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-09-26
+
 ## [0.18.2] - 2026-09-26
 
 ## [0.18.1] - 2026-09-26
