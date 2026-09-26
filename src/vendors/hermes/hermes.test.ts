@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { harnessSurfaceRegistry } from "../../kernel/harness/surface-registry.js";
 import { computeTreeDigest, parseProvenance } from "../../kernel/install/provenance.js";
 import { discoverHostInstallAssets } from "../../cli/host-probe.js";
-import { installHermes, isHermesOmsRegistration, uninstallHermes } from "./hermes.js";
+import { installHermes, isHermesOmsRegistration, namespaceSkillMarkdown, uninstallHermes } from "./hermes.js";
 
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -203,7 +203,7 @@ describe("installHermes transaction", () => {
     const cpMock = vi.mocked(fsPromises.cp).mockImplementation(async (source, destination, options) => {
       await originalCp(source, destination, options);
       if (String(destination) === skillTarget) {
-        await originalWriteFile(path.join(skillTarget, "write", "SKILL.md"), "tampered\n");
+        await originalWriteFile(path.join(skillTarget, "oms-write", "SKILL.md"), "tampered\n");
       }
     });
     try {
@@ -255,10 +255,24 @@ describe("installHermes transaction", () => {
       else process.env.OMS_HERMES_HOME = previousHermesHome;
     }
     expect((await readdir(skills)).sort()).toEqual([
-      "distill", "doctor", "link", "search", "setup", "status", "write",
+      "SKILL_CAPABILITY_GUIDE.md",
+      "oms-distill", "oms-doctor", "oms-link", "oms-search", "oms-setup", "oms-status", "oms-write",
     ]);
-    expect(await readFile(path.join(skills, "write", "SKILL.md"), "utf8"))
-      .toBe(await readFile("assets/skills/write/SKILL.md", "utf8"));
+    const writeSource = await readFile("assets/skills/write/SKILL.md", "utf8");
+    expect(writeSource).toMatch(/^---\nname: write\n/);
+    expect(await readFile(path.join(skills, "oms-write", "SKILL.md"), "utf8"))
+      .toBe(namespaceSkillMarkdown("write", writeSource).markdown);
+    for (const skill of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+      const staged = await readFile(path.join(skills, `oms-${skill}`, "SKILL.md"), "utf8");
+      expect(staged).toMatch(new RegExp(`^---\\r?\\nname: oms-${skill}\\r?\\n`));
+      expect(staged).not.toMatch(/`(distill|doctor|link|search|setup|status|write)` skill/);
+      expect(staged).not.toMatch(/(^|[\s`(])\/(distill|doctor|link|search|setup|status|write)\b/m);
+      expect(staged).not.toMatch(/^# (distill|doctor|link|search|setup|status|write)\b/m);
+    }
+    const guide = await readFile(path.join(skills, "SKILL_CAPABILITY_GUIDE.md"), "utf8");
+    expect(guide).toContain("| `oms-write` | MCP tool `write` on the `oms` server");
+    expect(guide).toContain("| `oms-setup` | Agent recipe. Asks the owner every question, then runs the `oms setup` CLI");
+    expect(guide).toContain("| `oms-distill` | Agent recipe; no MCP tool or CLI command.");
     expect(provenance).toMatchObject({ source: "npm", version: packageVersion, skillTreeDigest: await computeTreeDigest(skills) });
     const before = await readFile(provenanceFile, "utf8");
     await expect(installHermes(options, host)).resolves.toMatchObject({ changed: false, skipped: true });
@@ -304,17 +318,77 @@ describe("installHermes transaction", () => {
     await expect(installHermes(options, host)).rejects.toThrow("exact legacy OMS layout");
   });
 
+  it("adopts the pre-namespace bare-name layout and replaces it with oms- prefixed skills", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-"));
+    temporaryDirectories.push(home);
+    const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
+    if (!host) throw new Error("Hermes surface missing");
+    const options = { action: "install" as const, runtime: "hermes" as const, vault: "/vault", homeDir: home, adapterRoot: path.resolve(".") };
+    const hermes = path.join(home, ".hermes");
+    const skills = path.join(hermes, "skills", "knowledge-management", "oms");
+    for (const skill of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+      await mkdir(path.join(skills, skill), { recursive: true });
+      await writeFile(path.join(skills, skill, "SKILL.md"), `---\nname: ${skill}\n---\n`);
+    }
+    await mkdir(path.join(hermes, "adapters", "oms"), { recursive: true });
+    await writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"0.10.1"}\n');
+    await expect(installHermes(options, host)).resolves.toMatchObject({ changed: true });
+    expect((await readdir(skills)).filter(entry => !entry.startsWith("oms-"))).toEqual(["SKILL_CAPABILITY_GUIDE.md"]);
+  });
+
+  it.each([
+    ["a file in place of a bare skill directory", async (skills: string) => {
+      await rm(path.join(skills, "write"), { recursive: true });
+      await writeFile(path.join(skills, "write"), "not a directory\n");
+    }],
+    ["a missing bare SKILL.md", async (skills: string) => rm(path.join(skills, "doctor", "SKILL.md"))],
+    ["a capability guide beside the bare layout", async (skills: string) => writeFile(path.join(skills, "SKILL_CAPABILITY_GUIDE.md"), "guide\n")],
+    ["a mixed bare and prefixed layout", async (skills: string) => {
+      await mkdir(path.join(skills, "oms-write"));
+      await writeFile(path.join(skills, "oms-write", "SKILL.md"), "---\nname: oms-write\n---\n");
+    }],
+  ])("rejects bare-layout legacy adoption with %s", async (_name, damage) => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-legacy-"));
+    temporaryDirectories.push(home);
+    const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
+    if (!host) throw new Error("Hermes surface missing");
+    const options = { action: "install" as const, runtime: "hermes" as const, vault: "/vault", homeDir: home, adapterRoot: path.resolve(".") };
+    const hermes = path.join(home, ".hermes");
+    const skills = path.join(hermes, "skills", "knowledge-management", "oms");
+    for (const skill of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+      await mkdir(path.join(skills, skill), { recursive: true });
+      await writeFile(path.join(skills, skill, "SKILL.md"), `---\nname: ${skill}\n---\n`);
+    }
+    await mkdir(path.join(hermes, "adapters", "oms"), { recursive: true });
+    await writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"0.10.1"}\n');
+    await damage(skills);
+    await expect(installHermes(options, host)).rejects.toThrow("Refusing to replace Hermes OMS assets");
+  });
+
+  it("namespaces CRLF and quoted frontmatter and slash and heading references", () => {
+    const { markdown, frontmatter } = namespaceSkillMarkdown("setup", '---\r\nname: "setup"\r\ndescription: Seal it\r\n---\r\n# setup\r\n\r\n```\r\n/setup [--reask]\r\n```\r\nFollow `/write`, then run `oms setup` and read 90. Settings/02 Templates.\r\n');
+    expect(markdown).toBe('---\r\nname: oms-setup\r\ndescription: Seal it\r\n---\r\n# oms-setup\r\n\r\n```\r\n/oms-setup [--reask]\r\n```\r\nFollow `/oms-write`, then run `oms setup` and read 90. Settings/02 Templates.\r\n');
+    expect(frontmatter).toMatchObject({ name: "oms-setup", description: "Seal it" });
+    expect(() => namespaceSkillMarkdown("setup", "---\nname: status\n---\n")).toThrow("frontmatter name is not setup");
+  });
+
   it.each([
     ["the current manifest version", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), `{"version":"${packageVersion}"}\n`)],
     ["a higher manifest version", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"99.0.0"}\n')],
     ["an invalid semver manifest", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"legacy"}\n')],
     ["a malformed manifest", async (hermes: string) => writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), "{not json\n")],
     ["a file in place of a canonical skill directory", async (hermes: string) => {
-      const skill = path.join(hermes, "skills", "knowledge-management", "oms", "write");
+      const skill = path.join(hermes, "skills", "knowledge-management", "oms", "oms-write");
       await rm(skill, { recursive: true });
       await writeFile(skill, "not a directory\n");
     }],
-    ["a missing canonical SKILL.md", async (hermes: string) => rm(path.join(hermes, "skills", "knowledge-management", "oms", "doctor", "SKILL.md"))],
+    ["a missing canonical SKILL.md", async (hermes: string) => rm(path.join(hermes, "skills", "knowledge-management", "oms", "oms-doctor", "SKILL.md"))],
+    ["a directory in place of the capability guide", async (hermes: string) => {
+      const guide = path.join(hermes, "skills", "knowledge-management", "oms", "SKILL_CAPABILITY_GUIDE.md");
+      await rm(guide);
+      await mkdir(guide);
+    }],
+    ["a missing capability guide", async (hermes: string) => rm(path.join(hermes, "skills", "knowledge-management", "oms", "SKILL_CAPABILITY_GUIDE.md"))],
   ])("rejects legacy adoption with %s", async (_name, damage) => {
     const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-legacy-"));
     temporaryDirectories.push(home);
@@ -335,7 +409,7 @@ describe("installHermes transaction", () => {
     if (!host) throw new Error("Hermes surface missing");
     const options = { action: "install" as const, runtime: "hermes" as const, vault: "/vault", homeDir: home, adapterRoot: path.resolve(".") };
     await installHermes(options, host);
-    const skill = path.join(home, ".hermes", "skills", "knowledge-management", "oms", "write", "SKILL.md");
+    const skill = path.join(home, ".hermes", "skills", "knowledge-management", "oms", "oms-write", "SKILL.md");
     await writeFile(skill, "tampered\n");
     await expect(uninstallHermes({ ...options, action: "uninstall" })).rejects.toThrow("not verified OMS npm ownership");
     expect(existsSync(skill)).toBe(true);
@@ -354,11 +428,11 @@ describe("installHermes transaction", () => {
     recorded.version = "99.0.0";
     await writeFile(provenance, `${JSON.stringify(recorded)}\n`);
     const configBefore = await readFile(path.join(hermes, "config.yaml"));
-    const skillBefore = await readFile(path.join(hermes, "skills", "knowledge-management", "oms", "write", "SKILL.md"));
+    const skillBefore = await readFile(path.join(hermes, "skills", "knowledge-management", "oms", "oms-write", "SKILL.md"));
 
     await expect(installHermes(options, host)).rejects.toThrow("newer than this package");
     expect(await readFile(path.join(hermes, "config.yaml"))).toEqual(configBefore);
-    expect(await readFile(path.join(hermes, "skills", "knowledge-management", "oms", "write", "SKILL.md"))).toEqual(skillBefore);
+    expect(await readFile(path.join(hermes, "skills", "knowledge-management", "oms", "oms-write", "SKILL.md"))).toEqual(skillBefore);
     await expect(uninstallHermes({ ...options, action: "uninstall" })).resolves.toMatchObject({ changed: true });
   });
 });

@@ -1,5 +1,6 @@
 import { existsSync, lstatSync } from "node:fs";
-import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import type { HarnessHostSurface } from "../../kernel/harness/surface-registry.js";
@@ -26,6 +27,90 @@ const HERMES_SKILL_NAME = "oms";
 
 const HERMES_MCP_ENTRY_PATH = ["mcp_servers", "oms"] as const;
 const HERMES_SKILLS = ["distill", "doctor", "link", "search", "setup", "status", "write"] as const;
+// Hermes resolves skills by bare name across every installed bundle, so generic
+// names such as `setup` and `status` collide with other hosts' skills. The Hermes
+// copy is namespaced at install time; the shared sources stay unprefixed.
+const HERMES_SKILL_PREFIX = "oms-";
+const HERMES_CAPABILITY_GUIDE = "SKILL_CAPABILITY_GUIDE.md";
+const hermesSkillName = (skill: string): string => `${HERMES_SKILL_PREFIX}${skill}`;
+const HERMES_INSTALLED_SKILLS = HERMES_SKILLS.map(hermesSkillName);
+
+type StagedSkill = { readonly name: string; readonly description: string; readonly mcpTool: string | null };
+
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
+
+type NamespacedSkill = { readonly markdown: string; readonly frontmatter: Record<string, unknown> };
+
+/** Renames one shared skill for Hermes; exported for tests. */
+export function namespaceSkillMarkdown(skill: string, raw: string): NamespacedSkill {
+  const match = FRONTMATTER.exec(raw);
+  if (!match) throw new Error(`Hermes skill source has no frontmatter: ${skill}`);
+  const eol = raw.includes("\r\n") ? "\r\n" : "\n";
+  const namePattern = new RegExp(`^name:[ \\t]*(["']?)${skill}\\1[ \\t]*(\\r?)$`, "m");
+  if (!namePattern.test(match[1] ?? "")) throw new Error(`Hermes skill source frontmatter name is not ${skill}`);
+  const frontmatterText = (match[1] ?? "").replace(namePattern, (_, _quote: string, cr: string) => `name: ${hermesSkillName(skill)}${cr}`);
+  const document = parseDocument(frontmatterText);
+  if (document.errors.length > 0) throw new Error(`Hermes skill source frontmatter is invalid: ${skill}: ${document.errors.map(error => error.message).join("; ")}`);
+  const names = HERMES_SKILLS.join("|");
+  const body = raw.slice(match[0].length)
+    // Prose, slash-invocation, and heading references follow the installed name.
+    .replace(new RegExp(`\`(${names})\` skill`, "g"), (_, name: string) => `\`${hermesSkillName(name)}\` skill`)
+    .replace(new RegExp(`(^|[\\s\`(])/(${names})\\b`, "gm"), (_, lead: string, name: string) => `${lead}/${hermesSkillName(name)}`)
+    .replace(new RegExp(`^# (${names})[ \\t]*(\\r?)$`, "gm"), (_, name: string, cr: string) => `# ${hermesSkillName(name)}${cr}`);
+  return {
+    markdown: `---${eol}${frontmatterText}${eol}---${eol}${body}`,
+    frontmatter: document.toJS() as Record<string, unknown>,
+  };
+}
+
+function renderCapabilityGuide(skills: readonly StagedSkill[]): string {
+  const rows = skills.map(skill => {
+    const route = skill.mcpTool === null
+      ? skill.name === hermesSkillName("setup")
+        ? "Agent recipe. Asks the owner every question, then runs the `oms setup` CLI; no MCP tool."
+        : "Agent recipe; no MCP tool or CLI command."
+      : `MCP tool \`${skill.mcpTool}\` on the \`oms\` server (\`mcp_servers.oms\`).`;
+    return `| \`${skill.name}\` | ${route} | ${skill.description.replace(/\s+/g, " ").replace(/\|/g, "\\|")} |`;
+  });
+  return [
+    "# OMS Skill Capability Guide",
+    "",
+    "Hermes lists these skills under the `knowledge-management` category. Each is",
+    "prefixed with `oms-` so it never shares a bare name with another bundle's skill;",
+    "call them by the prefixed name. Runtime operations go through the five MCP tools",
+    "that `oms serve mcp` exposes.",
+    "",
+    "| Skill | Route | Purpose |",
+    "| --- | --- | --- |",
+    ...rows,
+    "",
+  ].join("\n");
+}
+
+/** Copies the shared skills into a temporary tree laid out for Hermes. */
+async function stageHermesSkills(source: string): Promise<string> {
+  const staged = await mkdtemp(path.join(os.tmpdir(), "oms-hermes-skills-"));
+  try {
+    const skills: StagedSkill[] = [];
+    for (const skill of HERMES_SKILLS) {
+      const target = path.join(staged, hermesSkillName(skill));
+      await cp(path.join(source, skill), target, { recursive: true });
+      const skillFile = path.join(target, "SKILL.md");
+      const { markdown, frontmatter } = namespaceSkillMarkdown(skill, await readFile(skillFile, "utf8"));
+      await writeFile(skillFile, markdown);
+      skills.push({
+        name: hermesSkillName(skill),
+        description: typeof frontmatter.description === "string" ? frontmatter.description : "",
+        mcpTool: typeof frontmatter.mcp_tool === "string" ? frontmatter.mcp_tool : null,
+      });
+    }
+    await writeFile(path.join(staged, HERMES_CAPABILITY_GUIDE), renderCapabilityGuide(skills));
+    return staged;
+  } catch (error) {
+    await rm(staged, { recursive: true, force: true });
+    throw error;
+  }
+}
 
 /** Recognizes the MCP entry rendered and verified by the Hermes adapter. */
 export function isHermesOmsRegistration(raw: string): boolean {
@@ -83,7 +168,8 @@ async function verifyHermesInstall(configPath: string, skillTarget: string, opti
     throw new Error("Hermes config verification failed: mcp_servers.oms does not match the expected entry");
   }
   const installed = new Set(await readdir(skillTarget));
-  if (!HERMES_SKILLS.every(skill => installed.has(skill) && existsSync(path.join(skillTarget, skill, "SKILL.md")))) {
+  if (!installed.has(HERMES_CAPABILITY_GUIDE) ||
+    !HERMES_INSTALLED_SKILLS.every(skill => installed.has(skill) && existsSync(path.join(skillTarget, skill, "SKILL.md")))) {
     throw new Error("Hermes install verification failed: skill bundle is incomplete");
   }
 }
@@ -114,9 +200,13 @@ async function verifyHermesUninstall(configPath: string, targets: readonly strin
   }
 }
 
-function canonicalSkillLayout(entries: readonly string[]): boolean {
-  return entries.length === HERMES_SKILLS.length &&
-    entries.every(entry => HERMES_SKILLS.includes(entry as (typeof HERMES_SKILLS)[number]));
+/** Returns the skill directories of a recognized OMS layout: the bare pre-namespace one or the `oms-` one. */
+function canonicalSkillLayout(entries: readonly string[]): readonly string[] | null {
+  const matches = (expected: readonly string[]): boolean =>
+    entries.length === expected.length && expected.every(entry => entries.includes(entry));
+  if (matches(HERMES_SKILLS)) return HERMES_SKILLS;
+  if (matches([...HERMES_INSTALLED_SKILLS, HERMES_CAPABILITY_GUIDE])) return HERMES_INSTALLED_SKILLS;
+  return null;
 }
 
 type Semver = {
@@ -169,8 +259,11 @@ async function legacyOwnershipEvidence(skillTarget: string, adapterManifestTarge
     const currentVersion = parseSemver(expectedVersion);
     if (legacyVersion === null || currentVersion === null || compareSemver(legacyVersion, currentVersion) >= 0) return false;
     const entries = await readdir(skillTarget, { withFileTypes: true });
-    if (!canonicalSkillLayout(entries.map(entry => entry.name)) || entries.some(entry => !entry.isDirectory())) return false;
-    return HERMES_SKILLS.every(skill => {
+    const skills = canonicalSkillLayout(entries.map(entry => entry.name));
+    if (skills === null) return false;
+    if (entries.some(entry => entry.isDirectory() !== skills.includes(entry.name))) return false;
+    if (skills === HERMES_INSTALLED_SKILLS && !lstatSync(path.join(skillTarget, HERMES_CAPABILITY_GUIDE)).isFile()) return false;
+    return skills.every(skill => {
       const skillFile = path.join(skillTarget, skill, "SKILL.md");
       return existsSync(skillFile) && lstatSync(skillFile).isFile();
     });
@@ -190,11 +283,25 @@ function foreignOwnershipError(reason: string): Error {
 }
 
 export async function installHermes(options: HostOperationOptions, host: HarnessHostSurface): Promise<HostOperationResult> {
+  const sharedSkillSource = resolveSharedSkillsSource(options.adapterRoot);
+  if (!existsSync(sharedSkillSource)) throw new Error(`Hermes install source is missing: ${sharedSkillSource}`);
+  const skillSource = await stageHermesSkills(sharedSkillSource);
+  try {
+    return await installStagedHermes(options, host, skillSource);
+  } finally {
+    await rm(skillSource, { recursive: true, force: true });
+  }
+}
+
+async function installStagedHermes(
+  options: HostOperationOptions,
+  host: HarnessHostSurface,
+  skillSource: string,
+): Promise<HostOperationResult> {
   const hermesDir = hostHome(options.homeDir, ".hermes", "OMS_HERMES_HOME");
   const adapterSource = resolveHostAdapterSource(options.adapterRoot, host);
   const legacyPluginTarget = path.join(hermesDir, "plugins", "oms");
   const legacyMcpPath = path.join(hermesDir, "mcp", "oms.json");
-  const skillSource = resolveSharedSkillsSource(options.adapterRoot);
   const skillTarget = path.join(hermesDir, "skills", HERMES_SKILL_CATEGORY, HERMES_SKILL_NAME);
   const configPath = path.join(hermesDir, "config.yaml");
   const adapterTarget = path.join(hermesDir, "adapters", "oms");
@@ -211,7 +318,7 @@ export async function installHermes(options: HostOperationOptions, host: Harness
   const expected = { version: packageMetadata.version, skillTreeDigest: await computeTreeDigest(skillSource) };
   if (!options.dryRun) {
     // Prepare + admission: all input and host safety checks precede every write.
-    for (const source of [skillSource, path.join(adapterSource, "hermes-manifest.json"), path.join(adapterSource, "hermes", "SOUL.md"), path.join(adapterSource, "hermes", "README.md")]) {
+    for (const source of [path.join(adapterSource, "hermes-manifest.json"), path.join(adapterSource, "hermes", "SOUL.md"), path.join(adapterSource, "hermes", "README.md")]) {
       if (!existsSync(source)) throw new Error(`Hermes install source is missing: ${source}`);
     }
     for (const target of [legacyPluginTarget, legacyMcpPath, adapterTarget, skillTarget, configPath, provenanceTarget]) refuseSymlink(target);
