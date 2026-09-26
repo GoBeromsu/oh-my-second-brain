@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-09-26
+
 - **The status `CONTRACT_OPEN` diagnostic uses the same wording and guidance as `oms contract doctor`.** A never-sealed vault reports `contract: none` with `run oms setup`, unreadable vault settings report `vault settings unreadable` with `run oms contract doctor`, and a missing vault says no contract applies. `SETTINGS_INVALID_FINDING` is exported from `src/kernel/contract/status.ts`.
 
 ## [0.18.0] - 2026-09-25

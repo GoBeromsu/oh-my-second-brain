@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-09-26
+
 ## [0.18.0] - 2026-09-25
 
 - Claude, Codex, Hermes, and Gajae-Code register the new `setup` skill, so each host installs seven shared skills. Host discovery and installation now report the `setup` skill as installed.

@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-09-26
+
 ## [0.18.0] - 2026-09-25
 
 - **An agent can seal the vault contract by asking you each setup question.** The new tool-less `setup` skill runs `oms setup --questions`, asks the owner every question one at a time, and seals with `oms setup --answers <file|->`. That path seals a first contract or a reseal that only adds or tightens; a reseal that would loosen is refused with `{field, kind}` only and left to `oms setup` in the owner's own terminal, which keeps full authority. The public surface is seven skills, five MCP tools, and fourteen CLI families. See ADR-007 §3.

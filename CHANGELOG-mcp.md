@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-09-26
+
 - `status` `readTools` lists only the read-only tools (`search`, `link`, `status`); it is now derived from each tool's `readOnlyHint`, so `write` no longer appears there. Writes stay described by `writeTools`.
 
 ## [0.18.0] - 2026-09-25
