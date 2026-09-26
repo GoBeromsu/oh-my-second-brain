@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+- **Hermes can call every OMS skill by name again.** Hermes resolves a skill by its bare name across every installed bundle and refuses a name two bundles share, so OMS's `setup` and `status` were unreachable next to another bundle's skills of the same name. The Hermes installer now copies the seven shared skills as `oms-write`, `oms-search`, `oms-link`, `oms-distill`, `oms-setup`, `oms-status`, and `oms-doctor`, renaming both the directory and the frontmatter `name`, and writes `SKILL_CAPABILITY_GUIDE.md` beside them to map each skill to its MCP tool or mark it as an agent recipe. The shared sources and the Claude and Codex installs keep the unprefixed names. An existing Hermes install, including the old unprefixed layout, is replaced in place and its old skill directories are removed.
+
 ## [0.18.1] - 2026-09-26
 
 ## [0.18.0] - 2026-09-25

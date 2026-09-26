@@ -5,8 +5,13 @@ Installed by `oms host install --runtime hermes` into:
 - `~/.hermes/skills/knowledge-management/oms/`
 - `~/.hermes/config.yaml` as `mcp_servers.oms`
 
-The shared skill bundle contains seven skills: `write`, `search`, `link`,
-`distill`, `setup`, `status`, and `doctor`. Runtime operations use the five MCP tools
+The shared skill bundle contains seven skills. Hermes resolves skills by bare
+name across every installed bundle, so the installer copies them with an `oms-`
+prefix in both the directory and the frontmatter `name`: `oms-write`,
+`oms-search`, `oms-link`, `oms-distill`, `oms-setup`, `oms-status`, and
+`oms-doctor`. The shared sources and the other hosts keep the unprefixed names.
+`SKILL_CAPABILITY_GUIDE.md` in the same directory maps each skill to its MCP
+tool or marks it as an agent recipe. Runtime operations use the five MCP tools
 through `oms serve mcp`.
 
 Hermes takes a skill's category from the first path segment only, so these

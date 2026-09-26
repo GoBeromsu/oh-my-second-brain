@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir, homedir } from "node:os";
 import path from "node:path";
@@ -456,8 +456,9 @@ async function crossVersionHostRehearsal(tarball, tempRoot) {
     fail("new binary did not load matching installed Hermes manifest/provenance identity");
   }
   const skillRoot = path.join(hermesHome, "skills", "knowledge-management", "oms");
-  const expectedSkills = ["distill", "doctor", "link", "search", "setup", "status", "write"];
+  const expectedSkills = ["distill", "doctor", "link", "search", "setup", "status", "write"].map((skill) => `oms-${skill}`);
   for (const skill of expectedSkills) assertPath(path.join(skillRoot, skill, "SKILL.md"), `installed Hermes ${skill} skill`);
+  if (!statSync(path.join(skillRoot, "SKILL_CAPABILITY_GUIDE.md")).isFile()) fail("installed Hermes capability guide is not a file");
   const installedSkills = readdirSync(skillRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)

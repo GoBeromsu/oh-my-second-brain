@@ -664,7 +664,7 @@ describe("host installer/uninstaller", () => {
     const config = await readFile(path.join(home, ".hermes", "config.yaml"), "utf-8");
     expect(config).toContain("oms:");
     expect(config).toContain("command: oms");
-    expect(existsSync(path.join(home, ".hermes", "skills", "knowledge-management", "oms", "write", "SKILL.md"))).toBe(true);
+    expect(existsSync(path.join(home, ".hermes", "skills", "knowledge-management", "oms", "oms-write", "SKILL.md"))).toBe(true);
     expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "hermes-manifest.json"))).toBe(true);
     expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "SOUL.md"))).toBe(true);
     expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "README.md"))).toBe(true);

@@ -2,7 +2,7 @@
 
 The vault owns its conventions. The user seals folders, properties, and
 templates once, in an interactive `oms setup` they run themselves at a terminal.
-The `setup` skill may seal for them too: you ask each question, and `oms setup
+The `oms-setup` skill may seal for them too: you ask each question, and `oms setup
 --answers` seals a first or stricter contract only. Loosening a seal and
 recovering a broken one stay with the user's terminal. The sealed contract lives
 outside the vault, and it is not yours to read. `~/.oms` is off-limits. Inside the vault, `.oms/settings.json` is
@@ -37,7 +37,10 @@ about or guess the contract's location or values.
   notes or backfills guessed values. A broken or missing seal is fixed by the
   user running `oms setup`.
 
-Hermes uses seven shared skills (`write`, `search`, `link`, `distill`, `setup`,
-`status`, `doctor`) backed by the five public MCP tools. Their skill category
-is `knowledge-management`, so list them with
+Hermes uses the seven shared skills under an `oms-` prefix (`oms-write`,
+`oms-search`, `oms-link`, `oms-distill`, `oms-setup`, `oms-status`,
+`oms-doctor`) so their names never collide with another bundle's `setup` or
+`status`. Call them by the prefixed name. They are backed by the five public
+MCP tools; `SKILL_CAPABILITY_GUIDE.md` beside them maps each skill to its tool.
+Their skill category is `knowledge-management`, so list them with
 `skills_list(category="knowledge-management")`.
