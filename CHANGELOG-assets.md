@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-09-26
+
 ## [0.18.1] - 2026-09-26
 
 - The Hermes README and SOUL name the skill category `knowledge-management`: filter with `skills_list(category="knowledge-management")`, since `knowledge-management/oms` matches nothing. The `status` skill describes `readTools` and `writeTools` separately.

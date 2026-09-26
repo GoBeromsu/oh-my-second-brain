@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-09-26
+
 ## [0.18.1] - 2026-09-26
 
 - **`oms --version` and `oms -v` print the installed package version.** Hosts and agents can now confirm the release from the CLI. An unknown flag or extra argument still exits 1 with `[oms] Unknown command:`.

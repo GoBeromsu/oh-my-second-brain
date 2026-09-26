@@ -1,6 +1,6 @@
 {
   "name": "oms",
-  "version": "0.18.1",
+  "version": "0.18.2",
   "description": "Oh My Second Brain convention layer for Obsidian vaults — Hermes skill bundle and MCP adapter.",
   "_note": "oms host install writes ~/.hermes/config.yaml mcp_servers.oms and installs the seven shared skills, prefixed `oms-`, with provenance under ~/.hermes/skills/knowledge-management/oms/."
 }
