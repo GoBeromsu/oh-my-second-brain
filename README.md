@@ -1,18 +1,18 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" alt="Oh My Second Brain. Your knowledge. Your rules. Any agent." width="100%" />
+  <img src="./assets/readme/hero.svg" alt="Oh My Second Brain. A quiet constellation of connected thoughts." width="100%" />
 </p>
 
 <h1 align="center">Oh My Second Brain</h1>
 
 <p align="center">
-  <strong>Bring your knowledge back within reach.</strong><br />
+  <strong>A constellation of knowledge, still yours.</strong><br />
   A user-owned knowledge and convention layer for Obsidian, Markdown, and AI agents.
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/oh-my-second-brain"><img src="https://img.shields.io/npm/v/oh-my-second-brain?style=flat-square&amp;color=ac8ee3&amp;label=npm" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/oh-my-second-brain"><img src="https://img.shields.io/npm/v/oh-my-second-brain?style=flat-square&amp;color=8b9daa&amp;label=npm" alt="npm version" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%E2%89%A520-80b89b?style=flat-square" alt="Node.js 20 or later" /></a>
-  <a href="#agents--integrations"><img src="https://img.shields.io/badge/MCP-5_tools-b3a1d6?style=flat-square" alt="5 MCP tools" /></a>
+  <a href="#mcp-tools--integrations"><img src="https://img.shields.io/badge/MCP-5_tools-97a8b1?style=flat-square" alt="5 MCP tools" /></a>
   <a href="https://github.com/GoBeromsu/oh-my-second-brain/blob/main/package.json"><img src="https://img.shields.io/badge/license-MIT-d7c7a8?style=flat-square" alt="Package license: MIT" /></a>
 </p>
 
@@ -35,31 +35,31 @@ Obsidian stays the command center. Your notes stay plain Markdown, readable and 
 <table>
 <tr>
 <td width="50%" valign="top">
-<h3>01 · Recall what you already know</h3>
+<h3>Recall what you already know</h3>
 Search your existing notes with lexical retrieval. Choose vector, HyDE, query expansion, or reranking explicitly when you need them.
 </td>
 <td width="50%" valign="top">
-<h3>02 · Your vault, your vocabulary</h3>
+<h3>Your vault, your vocabulary</h3>
 Define the meaning of folders, properties, and templates. OMS records your conventions instead of shipping a system you have to adopt.
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<h3>03 · Give agents a shared contract</h3>
+<h3>Give agents a shared contract</h3>
 Seal your vault conventions through setup. Supported write paths check the whole note against that contract before saving it.
 </td>
 <td width="50%" valign="top">
-<h3>04 · Keep the files you own</h3>
+<h3>Keep the files you own</h3>
 Keep using your Markdown notes and templates. Setup does not rewrite them, and the sealed contract lives outside the vault.
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<h3>05 · Connect across hosts</h3>
+<h3>Connect across hosts</h3>
 Use native integrations for Claude Code, Codex, and Hermes, with five MCP tools and seven shared workflow skills.
 </td>
 <td width="50%" valign="top">
-<h3>06 · Inspect, don't guess</h3>
+<h3>Inspect, don't guess</h3>
 Check contract state, audit notes, inspect indexes, and review wikilink suggestions. Search and status stay read-only.
 </td>
 </tr>
@@ -158,9 +158,11 @@ Model lifecycle is separate: `oms model install|select|waive|status`.
 
 </details>
 
-## Agents & integrations
+## MCP tools & integrations
 
-**Five MCP tools. Seven workflow skills. Fourteen CLI families. Different surfaces, one domain kernel.**
+**One domain kernel, with host-native integrations.**
+
+`write` · `search` · `link` · `status` · `doctor`
 
 | MCP tool | Purpose |
 | :--- | :--- |
@@ -212,7 +214,7 @@ Use `oms search context` for structured context. Indexing is explicit: `oms inde
 
 ## CLI reference
 
-`oms` is the short alias of `oh-my-second-brain`.
+`oms` is the short alias of `oh-my-second-brain`, with fourteen CLI families. Use `oms search query` for note queries and `oms search context` for structured context.
 
 ```text
 oms setup                                 Interview the vault and seal its contract
@@ -257,7 +259,7 @@ Note `create`, `append`, `update`, and `backfill` are retired operations. There 
 
 Contributions are welcome. Start with the [contributing guide](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/CONTRIBUTING.md), or [open an issue](https://github.com/GoBeromsu/oh-my-second-brain/issues) with a reproducible problem or a focused proposal.
 
-[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) records design influences, including Ouroboros and Gajae Code's deep-interview. Those credits describe ideas, not a copied runtime or a research result. Illustrations explain concepts; they are not product screenshots, host-smoke evidence, or product-gate results.
+[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) records design influences, including Ouroboros and Gajae Code's deep-interview. Those credits describe ideas, not a copied runtime or a research result. The original constellation illustration is inspired by the connected-note landscape at [beomsukoh.com](https://beomsukoh.com/). Illustrations explain concepts; they are not product screenshots, host-smoke evidence, or product-gate results.
 
 ---
 

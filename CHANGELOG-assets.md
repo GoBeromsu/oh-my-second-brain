@@ -4,7 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
-- Refresh the English and Korean README with an original, self-contained SVG hero, compact feature cards, a four-step quickstart, and navigable reference sections. Keep contract and host enforcement boundaries explicit, and align the setup skill count with the current seven-skill registry. Runtime behavior is unchanged.
+- Refresh the English and Korean README with an original, self-contained constellation SVG inspired by beomsukoh.com, compact feature cards, a four-step quickstart, and navigable reference sections. Keep contract and host enforcement boundaries explicit, and align the setup skill count with the current seven-skill registry. Runtime behavior is unchanged.
 
 - **The `setup` skill reads each template itself before asking anything.** It now submits `{source, observedHash, fields, headings}` per template with `--interpretations`, handles the `interpretation-required` and `interpretation-rejected` results, and is told plainly that a field left out of an interpretation is a question the owner is never asked, and that `observedHash` must come from reading the bytes rather than from copying the hash OMS printed.
 

@@ -1,18 +1,18 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" alt="Oh My Second Brain. 나의 지식, 나의 규칙, 함께 쓰는 에이전트." width="100%" />
+  <img src="./assets/readme/hero.svg" alt="Oh My Second Brain. 흩어진 생각이 연결되는 별자리." width="100%" />
 </p>
 
 <h1 align="center">Oh My Second Brain</h1>
 
 <p align="center">
-  <strong>쌓아둔 지식을, 다시 꺼내 쓸 수 있도록.</strong><br />
+  <strong>흩어진 지식이, 다시 하나의 별자리로.</strong><br />
   Obsidian, Markdown, AI 에이전트를 잇는 사용자 소유의 지식·컨벤션 레이어.
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/oh-my-second-brain"><img src="https://img.shields.io/npm/v/oh-my-second-brain?style=flat-square&amp;color=ac8ee3&amp;label=npm" alt="npm 버전" /></a>
+  <a href="https://www.npmjs.com/package/oh-my-second-brain"><img src="https://img.shields.io/npm/v/oh-my-second-brain?style=flat-square&amp;color=8b9daa&amp;label=npm" alt="npm 버전" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%E2%89%A520-80b89b?style=flat-square" alt="Node.js 20 이상" /></a>
-  <a href="#에이전트-연결"><img src="https://img.shields.io/badge/MCP-5_tools-b3a1d6?style=flat-square" alt="MCP 도구 5개" /></a>
+  <a href="#mcp-도구와-에이전트-연결"><img src="https://img.shields.io/badge/MCP-5_tools-97a8b1?style=flat-square" alt="MCP 도구 5개" /></a>
   <a href="https://github.com/GoBeromsu/oh-my-second-brain/blob/main/package.json"><img src="https://img.shields.io/badge/license-MIT-d7c7a8?style=flat-square" alt="패키지 라이선스 MIT" /></a>
 </p>
 
@@ -35,31 +35,31 @@ Obsidian은 사령탑으로 남는다. OMS가 꺼져 있어도 노트는 사람�
 <table>
 <tr>
 <td width="50%" valign="top">
-<h3>01 · 이미 아는 것을 다시 찾기</h3>
+<h3>이미 아는 것을 다시 찾기</h3>
 기존 노트를 lexical 검색으로 찾는다. 필요할 때 vector, HyDE, 질의 확장, reranking을 명시적으로 선택한다.
 </td>
 <td width="50%" valign="top">
-<h3>02 · 내 볼트의 언어 그대로</h3>
+<h3>내 볼트의 언어 그대로</h3>
 폴더, 속성, 템플릿의 의미는 내가 정한다. OMS가 제시하는 체계를 따르는 대신, 내 컨벤션을 기록한다.
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<h3>03 · 에이전트가 공유하는 계약</h3>
+<h3>에이전트가 공유하는 계약</h3>
 setup으로 볼트 규약을 봉인한다. 지원되는 쓰기 경로는 저장 전에 노트 전체가 그 계약에 맞는지 확인한다.
 </td>
 <td width="50%" valign="top">
-<h3>04 · 파일의 소유권은 그대로</h3>
+<h3>파일의 소유권은 그대로</h3>
 기존 Markdown 노트와 템플릿을 계속 쓴다. setup은 이 파일들을 다시 쓰지 않으며, 봉인된 계약은 볼트 밖에 둔다.
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<h3>05 · 호스트를 넘어 연결하기</h3>
+<h3>호스트를 넘어 연결하기</h3>
 Claude Code, Codex, Hermes의 네이티브 통합을 사용한다. MCP 도구 5개와 공통 워크플로 스킬 7개를 제공한다.
 </td>
 <td width="50%" valign="top">
-<h3>06 · 추측 대신 상태 확인</h3>
+<h3>추측 대신 상태 확인</h3>
 계약 상태, 노트 규약 준수, 색인, wikilink 제안을 확인한다. 검색과 상태 조회는 읽기 전용이다.
 </td>
 </tr>
@@ -158,9 +158,11 @@ oms search query "프로젝트 결정" --vault /path/to/vault
 
 </details>
 
-## 에이전트 연결
+## MCP 도구와 에이전트 연결
 
-**MCP 도구 5개. 워크플로 스킬 7개. CLI family 14개. 서로 다른 표면이 하나의 도메인 커널을 사용한다.**
+**하나의 도메인 커널, 호스트에 맞는 연결 방식.**
+
+`write` · `search` · `link` · `status` · `doctor`
 
 | MCP 도구 | 역할 |
 | :--- | :--- |
@@ -212,7 +214,7 @@ Gajae-Code에서는 `gjc plugin install oms@oms`로 marketplace plugin을 설치
 
 ## CLI 레퍼런스
 
-`oms`는 `oh-my-second-brain`의 짧은 별칭이다.
+`oms`는 `oh-my-second-brain`의 짧은 별칭이며 CLI family는 14개다. 노트 질의는 `oms search query`, 구조화 맥락 조회는 `oms search context`를 쓴다.
 
 ```text
 oms setup                                 볼트를 인터뷰하고 계약 봉인
@@ -257,7 +259,7 @@ oms status                                읽기 전용 통합 상태 표시
 
 [기여 가이드](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/CONTRIBUTING.md)를 읽거나, 재현 가능한 문제와 구체적인 제안을 [이슈](https://github.com/GoBeromsu/oh-my-second-brain/issues)로 남길 수 있다.
 
-[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 Ouroboros, Gajae Code의 deep-interview 등 설계에 영향을 준 아이디어를 기록한다. runtime 복제나 연구 결과를 뜻하지 않는다. 이미지는 개념을 설명하는 도식이며 제품 화면, host smoke 증거, 제품 gate 통과 결과가 아니다.
+[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 Ouroboros, Gajae Code의 deep-interview 등 설계에 영향을 준 아이디어를 기록한다. runtime 복제나 연구 결과를 뜻하지 않는다. 별자리 배너는 [beomsukoh.com](https://beomsukoh.com/)의 연결된 노트 풍경에서 착안한 자체 제작 일러스트다. 이미지는 개념을 설명하는 도식이며 제품 화면, host smoke 증거, 제품 gate 통과 결과가 아니다.
 
 ---
 
