@@ -172,7 +172,9 @@ oms search query "프로젝트 결정" --vault /path/to/vault
 | `status` | 변경 없이 상태와 통계를 확인한다. |
 | `doctor` | 계약 진단, 노트 감사, 명시적인 색인 유지보수를 수행한다. |
 
-7개 스킬은 `distill`, `doctor`, `link`, `search`, `setup`, `status`, `write`다. `distill`과 `setup`은 대응 MCP 도구가 없는 워크플로다. 봉인에는 MCP 작업이 없고, 세부 기능은 다섯 도구 아래의 `op` 값으로 제공한다.
+7개 스킬은 `distill`, `doctor`, `link`, `search`, `setup`, `status`, `write`다.
+
+`distill`과 `setup`은 대응 MCP 도구가 없는 워크플로다. 봉인에는 MCP 작업이 없고, 세부 기능은 다섯 도구 아래의 `op` 값으로 제공한다.
 
 | 호스트 | 통합 방식 | 쓰기 검사 |
 | :--- | :--- | :--- |

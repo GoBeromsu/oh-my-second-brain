@@ -172,7 +172,9 @@ Model lifecycle is separate: `oms model install|select|waive|status`.
 | `status` | Inspect health and statistics without mutation. |
 | `doctor` | Diagnose the contract, audit notes, and perform explicit index maintenance. |
 
-The seven skills are `distill`, `doctor`, `link`, `search`, `setup`, `status`, and `write`. `distill` and `setup` are tool-less workflows; sealing has no MCP operation. Detail capabilities use `op` values under the five tools.
+The seven skills are `distill`, `doctor`, `link`, `search`, `setup`, `status`, and `write`.
+
+`distill` and `setup` are tool-less workflows; sealing has no MCP operation. Detail capabilities use `op` values under the five tools.
 
 | Host | Integration | Write checks |
 | :--- | :--- | :--- |
