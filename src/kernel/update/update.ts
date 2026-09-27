@@ -47,6 +47,12 @@ export interface UpdateResult {
   readonly currentVersion: string | null;
   readonly latestVersion: string;
   readonly updateAvailable: boolean;
+  /**
+   * Ownership topology of the running installation. An npm-owned install cannot
+   * be updated in place, so its guidance must name the migration commands
+   * instead of `oms package update --yes`, which would only be refused again.
+   */
+  readonly packageManager: PackageManager;
   /** Whether npm installed a package during this invocation. */
   readonly packageMutated: boolean;
   /** Whether this invocation installed the package. */
@@ -275,6 +281,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
   const packageName = options.packageName ?? DEFAULT_PACKAGE_NAME;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const runner = options.runner ?? defaultRunner;
+  const packageManager = packageManagerForEntrypoint(options, packageName);
   const latest = await resolveLatestVersion({
     packageName,
     latestVersion: options.latestVersion,
@@ -287,6 +294,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       currentVersion: options.currentVersion,
       latestVersion: "unknown",
       updateAvailable: false,
+      packageManager,
       packageMutated: false,
       mutated: false,
       message: `Update check failed: ${latest.error}`,
@@ -298,7 +306,6 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
   const currentVersion = options.currentVersion;
   const updateAvailable =
     currentVersion === null || compareVersions(currentVersion, latest.version) < 0;
-  const packageManager = packageManagerForEntrypoint(options, packageName);
   const installArgs = ["run", "--node", options.runtimeNodeVersion ?? process.versions.node, "npm", "install", "-g", `${packageName}@latest`];
   const commands = packageManager === "volta"
     ? [formatCommand(packageManager, installArgs)]
@@ -310,6 +317,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       currentVersion,
       latestVersion: latest.version,
       updateAvailable,
+      packageManager,
       packageMutated: false,
       mutated: false,
       message: !updateAvailable
@@ -329,6 +337,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       currentVersion,
       latestVersion: latest.version,
       updateAvailable,
+      packageManager,
       packageMutated: false,
       mutated: false,
       message: refusal,
@@ -344,6 +353,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         currentVersion,
         latestVersion: latest.version,
         updateAvailable: true,
+        packageManager,
         packageMutated: false,
         mutated: false,
         message: `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}. Refusing to update without --yes when stdin is not a TTY.`,
@@ -364,6 +374,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         currentVersion,
         latestVersion: latest.version,
         updateAvailable: true,
+        packageManager,
         packageMutated: false,
         mutated: false,
         message: "Update cancelled; no changes were made.",
@@ -382,6 +393,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         currentVersion,
         latestVersion: latest.version,
         updateAvailable: true,
+        packageManager,
         packageMutated: false,
         mutated: false,
         message: `${packageManager} update failed: ${error}`,
@@ -396,6 +408,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
     currentVersion,
     latestVersion: latest.version,
     updateAvailable,
+    packageManager,
     packageMutated: updateAvailable,
     mutated: updateAvailable,
     message: updateAvailable
@@ -440,7 +453,11 @@ export function formatUpdateResult(result: UpdateResult): string {
       lines.push(`  ${command}`);
     }
     lines.push("");
-    lines.push("Run `oms package update --yes` to install the package. Then run the newly installed `oms host sync` to refresh host integrations.");
+    // An npm-owned install refuses every in-place update, so pointing at
+    // `oms package update --yes` would send the user back into the refusal.
+    lines.push(result.packageManager === "npm"
+      ? "Run the commands above to migrate to the Volta-pinned installation; `oms package update` cannot update an npm-owned install in place."
+      : "Run `oms package update --yes` to install the package. Then run the newly installed `oms host sync` to refresh host integrations.");
   }
   if (result.errors.length > 0) {
     lines.push("");
@@ -454,8 +471,11 @@ export function formatUpdateResult(result: UpdateResult): string {
 
 export function formatUpdateNotice(notice: UpdateNotice | null): string {
   if (notice === null) return "";
+  // The notice carries no ownership topology, and an npm-owned install refuses
+  // `oms package update`, so the notice names only the read-only check, which
+  // prints the correct command for this installation.
   return [
     `[oms] Update available: ${notice.currentVersion ?? "unknown"} -> ${notice.latestVersion}.`,
-    "Run `oms package check` to inspect the release or `oms package update --yes` to install it. Then run the newly installed `oms host sync` to refresh host integrations.",
+    "Run `oms package check` to inspect the release and see how to install it for this installation. After installing, run the newly installed `oms host sync` to refresh host integrations.",
   ].join("\n");
 }

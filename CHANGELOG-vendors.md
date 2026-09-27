@@ -6,6 +6,7 @@ Per-host adapter and installer changes belong here.
 
 - Claude, Codex, and Hermes MCP registrations pin the installation process's absolute Node executable and OMS package entrypoint, so host `PATH` changes cannot switch the native-addon ABI; legacy `command: oms` registrations remain recognizable for safe replacement and removal.
 - The plugin-owned `.mcp.json` and `.mcp.codex.json` manifests no longer ship. Both launched a bare `oms` resolved from `PATH` — the exact cross-ABI launch the pinned registrations remove — so the plugin manifests declare no `mcpServers` pointer at all. The Claude adapter's absolute user-scope registration in `~/.claude.json` is now the only OMS registration, and a `~/.claude.json` that cannot be read, parsed, or written fails the install instead of warning and continuing.
+- A Claude install that could not run `claude plugin install` now says the plugin itself is uninstalled and names the command, instead of describing a plugin-owned MCP activation that no longer exists.
 
 ## [0.18.3] - 2026-09-26
 

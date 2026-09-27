@@ -305,12 +305,29 @@ function updateSmoke(packageRoot, vault, smokeHome) {
     env: smokeEnv(smokeHome, { OMS_UPDATE_LATEST_VERSION: "999.0.0" }),
   });
   const output = `${result.stdout}\n${result.stderr}`;
+  // The unpacked tarball is not a Volta-pinned install, so the release artifact
+  // must refuse an in-place update and print the migration instead.
   for (const expected of [
-    "npm install -g oh-my-second-brain@latest",
-    "newly installed `oms host sync`",
-    "Run `oms package update --yes`",
+    "Refusing to update an npm-owned installation in place",
+    "npm uninstall -g oh-my-second-brain",
+    "scripts/install.sh",
+    "oms host sync",
   ]) {
     if (!output.includes(expected)) fail(`package update dry-run did not include ${expected}`);
+  }
+  // A PATH-resolved `npm install -g` rebuilds the native addon under whichever
+  // Node the shell exposes while the managed MCP registrations stay pinned to
+  // the interpreter recorded at install time (issue #139). Advertising it to an
+  // npm-owned install is the defect, so seeing it advertised fails the release.
+  // The Volta-pinned `volta run --node <v> npm install -g ...` is the supported
+  // form and contains the same substring, so only the bare command is rejected.
+  if (/(^|\s)npm install -g oh-my-second-brain@latest/mu.test(output.replace(/volta run --node \S+ npm install -g \S+/gu, ""))) {
+    fail("package update advertised an in-place `npm install -g` to an npm-owned installation");
+  }
+  // `oms package update --yes` is refused for this topology, so guidance that
+  // names it sends the user into a dead end.
+  if (output.includes("oms package update --yes")) {
+    fail("package update pointed an npm-owned installation back at `oms package update --yes`");
   }
   if (/\breconcile\b/u.test(output)) {
     fail("package update advertised the retired reconcile command");

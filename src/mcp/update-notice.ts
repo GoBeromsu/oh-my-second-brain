@@ -135,7 +135,10 @@ export function cachedUpdateNotice(options: CachedUpdateNoticeOptions): string |
   if (!stampIsFresh(stamp, options.now ?? Date.now())) return null;
   if (compareVersions(options.installedVersion, stamp.latestVersion) >= 0) return null;
 
-  return `Update available for Oh My Second Brain: ${options.installedVersion} -> ${stamp.latestVersion}. Run \`oms package update --yes\` to update OMS, then \`oms host sync\` to refresh host registrations.`;
+  // The cached stamp carries no ownership topology, and an npm-owned install
+  // refuses `oms package update`, so this names the read-only check, which
+  // prints the command that actually applies to this installation.
+  return `Update available for Oh My Second Brain: ${options.installedVersion} -> ${stamp.latestVersion}. Run \`oms package check\` to see how to install it, then \`oms host sync\` to refresh host registrations.`;
 }
 
 function reclaimStaleLock(lockPath: string): void {

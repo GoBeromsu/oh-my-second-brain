@@ -84,7 +84,7 @@ Volta pins OMS to the installation runtime. Restore a previous Volta default aft
 
 For Gajae-Code, install the npm package as a marketplace plugin: `gjc plugin install oms@oms`. GJC discovers the six OMS skills at the package-root `skills/` convention path.
 
-Host installation records the canonical vault in `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json` and stamps `oms serve mcp --vault /path/to/vault` into each managed host entry. `oms host install|remove|sync|status` use that signed pointer only to maintain host integrations. `oms package update` updates the package but never syncs hosts implicitly; run `oms host sync` separately.
+Host installation records the canonical vault in `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json` and stamps `oms serve mcp --vault /path/to/vault` into each managed host entry. `oms host install|remove|sync|status` use that signed pointer only to maintain host integrations. `oms package update` updates a Volta-owned installation and never syncs hosts implicitly; run `oms host sync` separately. On an npm-owned installation it refuses and prints the migration to the Volta-pinned installer instead, because a PATH-resolved `npm` would rebuild the native addon under a different Node than the pinned MCP registrations launch.
 
 Runtime target resolution never reads the host-maintenance pointer. Its precedence is explicit target, local vault controls, bridge, `OMS_VAULT`, then the current directory only as a safe read-only fallback. Sealing, note writes, and derived-state repair cannot use that fallback.
 

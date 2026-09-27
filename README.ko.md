@@ -84,7 +84,7 @@ Volta는 OMS를 설치 시점 런타임에 고정한다. 기존 Volta 기본 Nod
 
 Gajae-Code에서는 npm 패키지를 marketplace plugin으로 설치한다: `gjc plugin install oms@oms`. GJC는 패키지 루트의 `skills/` 관례 경로에서 일곱 OMS 스킬을 찾는다.
 
-호스트 설치는 정식 볼트를 `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`에 기록하고, 관리하는 각 호스트 항목에 `oms serve mcp --vault /path/to/vault`를 새긴다. `oms host install|remove|sync|status`는 그 서명된 pointer를 호스트 통합 유지보수에만 쓴다. `oms package update`는 패키지를 업데이트하지만 호스트를 암묵적으로 sync하지 않는다. `oms host sync`를 따로 실행한다.
+호스트 설치는 정식 볼트를 `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`에 기록하고, 관리하는 각 호스트 항목에 `oms serve mcp --vault /path/to/vault`를 새긴다. `oms host install|remove|sync|status`는 그 서명된 pointer를 호스트 통합 유지보수에만 쓴다. `oms package update`는 Volta 소유 설치를 업데이트하며 호스트를 암묵적으로 sync하지 않는다. `oms host sync`를 따로 실행한다. npm 소유 설치에서는 업데이트를 거부하고 Volta 고정 installer로의 마이그레이션을 출력한다. `PATH`에서 찾은 `npm`은 고정된 MCP 등록이 실행하는 Node와 다른 Node로 native addon을 다시 빌드하기 때문이다.
 
 runtime target 해석은 호스트 유지보수 pointer를 읽지 않는다. 우선순위는 명시적 target, 로컬 볼트 제어 파일, bridge, `OMS_VAULT`, 그리고 안전한 읽기 전용 fallback으로서의 현재 디렉터리다. 봉인, 노트 쓰기, 파생 상태 repair는 그 fallback을 쓸 수 없다.
 

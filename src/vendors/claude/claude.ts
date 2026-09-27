@@ -315,7 +315,7 @@ export async function installClaude(options: HostOperationOptions, host: Harness
     }
   }
 
-  if (!pluginInstalled) messages.push("Claude plugin was not installed; plugin-owned MCP activation remains a manual step.");
+  if (!pluginInstalled) messages.push("Claude plugin was not installed; run the listed `claude plugin install` command to install it. The user-scope MCP registration above is already in place and does not depend on the plugin.");
   const hookResult = await upsertClaudeHooks(options, claudeDir);
   changed = hookResult.changed || changed;
   messages.push(...hookResult.messages);

@@ -20,6 +20,7 @@ function failCall(stderr: string): UpdateRunnerCall {
 const runningPrefix = "/opt/oms";
 const entrypoint = "/launch/oms.js";
 const realpath = () => `${runningPrefix}/lib/node_modules/oh-my-second-brain/dist/cli/oms.js`;
+const voltaRealpath = () => "/Users/test/.volta/tools/image/packages/oh-my-second-brain/lib/node_modules/oh-my-second-brain/dist/cli/oms.js";
 
 function updateOptions(overrides: Partial<RunUpdateOptions> = {}): RunUpdateOptions {
   return {
@@ -43,12 +44,46 @@ function matchingRunner(calls: string[]): (command: string, args: readonly strin
 describe("package updater", () => {
   it("refuses a non-TTY update without mutating", async () => {
     const calls: string[] = [];
-    const result = await runUpdate(updateOptions({ yes: false, interactive: false, runner: matchingRunner(calls) }));
+    // Volta-owned, so the run reaches the confirmation gate instead of the
+    // earlier npm-owned refusal.
+    const result = await runUpdate(updateOptions({
+      realpath: voltaRealpath,
+      yes: false,
+      interactive: false,
+      runner: matchingRunner(calls),
+    }));
 
     expect(result.success).toBe(false);
     expect(result.mutated).toBe(false);
     expect(calls).toEqual([]);
     expect(formatUpdateResult(result)).toContain("oms package update --yes");
+  });
+
+  // B2 regression: an npm-owned install refuses every in-place update, so
+  // guidance that names `oms package update --yes` is a dead end.
+  it("guides an npm-owned installation to the migration instead of `update --yes`", async () => {
+    const result = await runUpdate(updateOptions({ dryRun: true, runner: matchingRunner([]) }));
+    const formatted = formatUpdateResult(result);
+
+    expect(result.packageManager).toBe("npm");
+    expect(formatted).not.toContain("oms package update --yes");
+    expect(formatted).toContain("cannot update an npm-owned install in place");
+    expect(formatted).toContain("npm uninstall -g oh-my-second-brain");
+    expect(formatted).not.toContain("npm install -g oh-my-second-brain@latest");
+  });
+
+  it("still points a Volta-owned installation at `update --yes`", async () => {
+    const result = await runUpdate(updateOptions({
+      dryRun: true,
+      realpath: voltaRealpath,
+      runtimeNodeVersion: "24.21.0",
+      runner: matchingRunner([]),
+    }));
+    const formatted = formatUpdateResult(result);
+
+    expect(result.packageManager).toBe("volta");
+    expect(formatted).toContain("Run `oms package update --yes`");
+    expect(formatted).toContain("newly installed `oms host sync`");
   });
 
   it("keeps check mode read-only", async () => {
@@ -206,11 +241,12 @@ describe("package updater", () => {
     expect(compareVersions("v1.0.0+build.1", "1.0.0+build.2")).toBe(0);
   });
 
-  it("reports an update notice with the separated package and host commands", async () => {
+  it("reports an update notice without naming a topology-specific install command", async () => {
     const notice = await checkUpdateNotice({ currentVersion: "0.1.7", latestVersion: "0.1.8" });
     const formatted = formatUpdateNotice(notice);
 
-    expect(formatted).toContain("oms package update --yes");
+    expect(formatted).toContain("oms package check");
+    expect(formatted).not.toContain("oms package update --yes");
     expect(formatted).toContain("newly installed `oms host sync`");
   });
 });

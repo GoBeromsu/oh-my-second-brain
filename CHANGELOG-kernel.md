@@ -5,6 +5,7 @@ Domain logic changes belong here.
 ## [Unreleased]
 
 - Volta-owned package updates retain the running OMS Node version through Volta's documented pinned-package install path. An npm-owned installation is no longer updated in place: a PATH-resolved `npm` rebuilds the native addon under whichever Node the shell exposes while the managed MCP registrations stay pinned to the interpreter recorded at install time, so `oms package update` refuses and prints the migration to the Volta-pinned installer.
+- Update guidance is topology-aware. `UpdateResult` carries the resolved `packageManager`, so an npm-owned installation is pointed at the migration commands instead of `oms package update --yes`, which its own refusal would reject. The CLI and MCP update notices, which see no topology, name the read-only `oms package check` so the correct install path is printed per installation.
 
 ## [0.18.3] - 2026-09-26
 
