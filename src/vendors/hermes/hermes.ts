@@ -16,6 +16,7 @@ import { resolveSharedSkillsSource } from "../../assets/shared-skills.js";
 import {
   InstallTargetSymlinkError,
   hostHome,
+  isOmsMcpServerEntry,
   mcpServerEntry,
   renderYamlEntryPreservingComments,
   replaceDirectory,
@@ -124,11 +125,7 @@ export function isHermesOmsRegistration(raw: string): boolean {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
   const actual = entry as Record<string, unknown>;
   const args = actual["args"];
-  return actual["command"] === "oms"
-    && actual["enabled"] === true
-    && Array.isArray(args)
-    && typeof args[3] === "string"
-    && args.join("\0") === ["serve", "mcp", "--vault", args[3]].join("\0");
+  return actual["enabled"] === true && isOmsMcpServerEntry(actual["command"], args);
 }
 
 function refuseSymlink(target: string): void {
@@ -164,7 +161,7 @@ async function verifyHermesInstall(configPath: string, skillTarget: string, opti
   const parsed = document.toJS() as Record<string, unknown>;
   const servers = parsed.mcp_servers as Record<string, unknown>;
   const actual = servers.oms as { readonly args: readonly string[] };
-  if (actual.args[3] !== options.vault) {
+  if (actual.args.at(-1) !== options.vault) {
     throw new Error("Hermes config verification failed: mcp_servers.oms does not match the expected entry");
   }
   const installed = new Set(await readdir(skillTarget));

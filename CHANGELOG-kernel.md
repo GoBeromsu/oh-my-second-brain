@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Volta-owned package updates retain the running OMS Node version through Volta's documented pinned-package install path, while npm-owned installs keep verified-prefix admission.
+
 ## [0.18.3] - 2026-09-26
 
 ## [0.18.2] - 2026-09-26

@@ -3,6 +3,7 @@ import { existsSync, lstatSync } from "node:fs";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isAlias, isMap, isScalar, parseAllDocuments, stringify } from "yaml";
 import type { HostOperationOptions } from "./types.js";
 
@@ -35,6 +36,32 @@ export function hostHome(homeDir: string | undefined, dirname: string, envName: 
 
 export function mcpArgs(options: HostOperationOptions): string[] {
   return ["serve", "mcp", "--vault", options.vault];
+}
+
+export function omsEntrypoint(): string {
+  return fileURLToPath(new URL("../../../dist/cli/oms.js", import.meta.url));
+}
+
+export function isOmsMcpServerEntry(command: unknown, args: unknown): boolean {
+  if (typeof command !== "string" || !Array.isArray(args)) return false;
+  const legacy = command === "oms"
+    && args.length === 4
+    && args[0] === "serve"
+    && args[1] === "mcp"
+    && args[2] === "--vault"
+    && typeof args[3] === "string";
+  if (legacy) return true;
+  // The entrypoint tail, not the package directory name, is the invariant: an
+  // install root can be a worktree, a fork checkout, or a linked tree.
+  return path.isAbsolute(command)
+    && args.length === 5
+    && typeof args[0] === "string"
+    && path.isAbsolute(args[0])
+    && args[0].replaceAll("\\", "/").endsWith("/dist/cli/oms.js")
+    && args[1] === "serve"
+    && args[2] === "mcp"
+    && args[3] === "--vault"
+    && typeof args[4] === "string";
 }
 
 export function jsonString(value: string): string {
@@ -311,9 +338,13 @@ export function renderYamlEntryPreservingComments(
 }
 
 export function mcpServerEntry(options: HostOperationOptions): Record<string, unknown> {
+  return mcpServerEntryForVault(options.vault);
+}
+
+export function mcpServerEntryForVault(vault: string): Record<string, unknown> {
   return {
-    command: "oms",
-    args: mcpArgs(options),
+    command: process.execPath,
+    args: [omsEntrypoint(), "serve", "mcp", "--vault", vault],
   };
 }
 

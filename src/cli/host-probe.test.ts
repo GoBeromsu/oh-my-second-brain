@@ -181,9 +181,11 @@ describe("discoverHostInstallAssets", () => {
     }
 
     const codex = path.join(home.codex, "config.toml");
+    const installedCommand = `command = ${JSON.stringify(process.execPath)}`;
+    const installedArgs = `args = [${JSON.stringify(path.resolve("dist/cli/oms.js"))}, "serve", "mcp", "--vault", "/vault"]`;
     for (const mutation of [
-      (raw: string) => raw.replace('command = "oms"', 'command = "other"'),
-      (raw: string) => raw.replace('args = ["serve", "mcp", "--vault", "/vault"]', 'args = ["serve", "mcp", "--other", "/vault"]'),
+      (raw: string) => raw.replace(installedCommand, 'command = "other"'),
+      (raw: string) => raw.replace(installedArgs, 'args = ["serve", "mcp", "--other", "/vault"]'),
       (raw: string) => raw.replace('OMS_AGENT_RUNTIME = "codex"', 'OMS_AGENT_RUNTIME = "other"'),
     ]) {
       await installCodex(options, hostSurfaceForRuntime("codex"));
@@ -192,13 +194,13 @@ describe("discoverHostInstallAssets", () => {
       expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:codex", evidence: { state: "missing", cause: null } }));
     }
     await installCodex(options, hostSurfaceForRuntime("codex"));
-    await writeFile(codex, (await readFile(codex, "utf8")).replace('command = "oms"', 'command = "oms"\ncommand = "other"'));
+    await writeFile(codex, (await readFile(codex, "utf8")).replace(installedCommand, `${installedCommand}\ncommand = "other"`));
     result = await discoverHostInstallAssets();
     expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:codex", evidence: { state: "missing", cause: null } }));
 
     const hermes = path.join(home.hermes, "config.yaml");
     for (const mutation of [
-      (raw: string) => raw.replace("command: oms", "command: other"),
+      (raw: string) => raw.replace(`command: ${process.execPath}`, "command: other"),
       (raw: string) => raw.replace("--vault", "--other"),
       (raw: string) => raw.replace("enabled: true", "enabled: false"),
     ]) {

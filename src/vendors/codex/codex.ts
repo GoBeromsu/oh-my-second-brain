@@ -4,7 +4,7 @@ import path from "node:path";
 import type { HarnessHostSurface } from "../../kernel/harness/surface-registry.js";
 import { resolveSharedSkillsSource } from "../../assets/shared-skills.js";
 import { resolveHostAdapterSource } from "../../kernel/install/adapter-source.js";
-import { hostHome, jsonString, mcpArgs, replaceDirectory } from "../../kernel/install/common.js";
+import { hostHome, jsonString, mcpServerEntryForVault, replaceDirectory } from "../../kernel/install/common.js";
 import {
   digestOneFile,
   parseProvenance,
@@ -20,15 +20,14 @@ const CODEX_RULE_FILENAME = "oms.md";
 const CODEX_REVIEWER_FILENAME = "oms-reviewer.toml";
 const CODEX_REVIEWER_PROVENANCE_FILENAME = "oms-reviewer.provenance.json";
 
-function codexManagedBlockForVault(vault: string): string {
-  const args = mcpArgs({ vault } as HostOperationOptions).map(jsonString).join(", ");
+function renderCodexManagedBlock(command: string, args: readonly string[]): string {
   return [
     MANAGED_CODEX_START,
     "# OMS MCP hookup for Codex CLI. Managed by `oms host install/remove`.",
     "# Codex-native rules live in ~/.codex/rules/oms.md; skills live in ~/.codex/skills/oms-*.",
     "[mcp_servers.oms]",
-    'command = "oms"',
-    `args = [${args}]`,
+    `command = ${jsonString(command)}`,
+    `args = [${args.map(jsonString).join(", ")}]`,
     "",
     "[mcp_servers.oms.env]",
     'OMS_AGENT_RUNTIME = "codex"',
@@ -37,21 +36,37 @@ function codexManagedBlockForVault(vault: string): string {
   ].join("\n");
 }
 
+function codexManagedBlockForVault(vault: string): string {
+  const entry = mcpServerEntryForVault(vault);
+  const command = typeof entry["command"] === "string" ? entry["command"] : "";
+  const args = Array.isArray(entry["args"]) ? entry["args"].map(String) : [];
+  return renderCodexManagedBlock(command, args);
+}
+
+/** Pre-pinning registrations resolved `oms` from `PATH`; still recognized so they can be replaced or removed. */
+function legacyCodexManagedBlockForVault(vault: string): string {
+  return renderCodexManagedBlock("oms", ["serve", "mcp", "--vault", vault]);
+}
+
 
 /** Recognizes exactly the managed MCP block rendered by this adapter. */
 export function isCodexOmsRegistration(content: string, configPath = "Codex config"): boolean {
   const block = managedCodexBlock(content, configPath);
   if (block === undefined) return false;
   const managed = content.slice(block.start, block.end);
-  const vault = /^args = \["serve", "mcp", "--vault", ("(?:[^"\\]|\\.)*")\]$/m.exec(managed)?.[1];
-  if (vault === undefined) return false;
-  let parsedVault: unknown;
+  const encodedArgs = /^args = (\[.*\])$/m.exec(managed)?.[1];
+  if (encodedArgs === undefined) return false;
+  let parsedArgs: unknown;
   try {
-    parsedVault = JSON.parse(vault);
+    parsedArgs = JSON.parse(encodedArgs);
   } catch {
     return false;
   }
-  return typeof parsedVault === "string" && managed === codexManagedBlockForVault(parsedVault);
+  if (!Array.isArray(parsedArgs)) return false;
+  const parsedVault = parsedArgs.at(-1);
+  if (typeof parsedVault !== "string") return false;
+  return managed === codexManagedBlockForVault(parsedVault)
+    || managed === legacyCodexManagedBlockForVault(parsedVault);
 }
 
 function isCodexOMSTable(line: string): boolean {

@@ -1,15 +1,18 @@
 # Installation
 
-Oh My Second Brain is an npm package with an independent CLI, optional host assets, six public skills, and five public MCP tools. It requires Node.js 20 or later.
+Oh My Second Brain is an npm package with an independent CLI, optional host assets, six public skills, and five public MCP tools. It requires Node.js 20 or later; Node 24 LTS is the recommended runtime for the CLI and its native SQLite dependency.
 
 ## Install the CLI
 
 ```bash
-npm install -g oh-my-second-brain
+volta install node@24
+volta install oh-my-second-brain
 oms --help
 ```
 
-The package exposes both `oms` and `oh-my-second-brain` command names.
+Install [Volta](https://docs.volta.sh/guide/getting-started) first. Volta's documented package flow pins the current default Node runtime when the tool is installed, so a later shell `PATH` or default-Node change cannot make `oms` load a native addon built for another ABI. If Node 24 should not remain Volta's default, restore the previous version with `volta install node@<previous-version>` after installing OMS; the OMS pin remains Node 24. The shipped `scripts/install.sh` records and restores an existing Volta default automatically. Set `OMS_NODE_RUNTIME` only to select another supported Node version deliberately.
+
+The package exposes both `oms` and `oh-my-second-brain` command names. A Volta-owned `oms package update` retains the running OMS Node version and updates through `volta run --node <that-version> npm install -g ...`; an npm-owned installation keeps the existing verified-prefix update path.
 
 ## Install host integrations
 
@@ -21,11 +24,13 @@ oms host install --runtime all --vault /path/to/vault --yes
 
 Use `claude`, `codex`, or `hermes` instead of `all` to install one runtime.
 
-Installation writes host-native guidance and skill assets, then stamps the host MCP registration as:
+Installation writes host-native guidance and skill assets, then stamps the host MCP registration with the absolute Node executable and package entrypoint that performed installation, followed by:
 
 ```text
 oms serve mcp --vault /path/to/vault
 ```
+
+The absolute interpreter and entrypoint deliberately avoid resolving `oms` or `node` from a long-lived host's `PATH`. Run `oms host sync` after a package/runtime update to refresh those pinned paths.
 
 It also writes a strict signed host-maintenance pointer at `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`. Only `host install`, `host sync`, and `host remove` use this record. Installing or explicitly syncing another vault uses compare-and-swap and updates every owned host stamp; removal deletes the pointer last after host cleanup succeeds.
 

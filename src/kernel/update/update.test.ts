@@ -82,6 +82,22 @@ describe("package updater", () => {
     expect(result.message).toContain("newly installed `oms host sync`");
   });
 
+  it("updates a Volta-owned installation through Volta without consulting npm's global prefix", async () => {
+    const calls: string[] = [];
+    const result = await runUpdate(updateOptions({
+      realpath: () => "/Users/test/.volta/tools/image/packages/oh-my-second-brain/lib/node_modules/oh-my-second-brain/dist/cli/oms.js",
+      runtimeNodeVersion: "24.21.0",
+      runner: (command, args) => {
+        calls.push([command, ...args].join(" "));
+        return okCall();
+      },
+    }));
+
+    expect(result).toMatchObject({ success: true, packageMutated: true, mutated: true });
+    expect(result.commands).toEqual(["volta run --node 24.21.0 npm install -g oh-my-second-brain@latest"]);
+    expect(calls).toEqual(["volta run --node 24.21.0 npm install -g oh-my-second-brain@latest"]);
+  });
+
   it("does nothing when the installed package is already latest", async () => {
     const calls: string[] = [];
     const result = await runUpdate(updateOptions({

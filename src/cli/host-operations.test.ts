@@ -73,8 +73,8 @@ describe("host installer/uninstaller", () => {
     const installed = await readFile(path.join(codexDir, "config.toml"), "utf-8");
     expect(installed).toContain("# BEGIN OMS MANAGED MCP");
     expect(installed).toContain("[mcp_servers.oms]");
-    expect(installed).toContain('command = "oms"');
-    expect(installed).toContain('args = ["serve", "mcp", "--vault", "/tmp/Vault"]');
+    expect(installed).toContain(`command = ${JSON.stringify(process.execPath)}`);
+    expect(installed).toContain(`args = [${JSON.stringify(path.join(repoRoot, "dist", "cli", "oms.js"))}, "serve", "mcp", "--vault", "/tmp/Vault"]`);
     expect(installed).toContain("[other]");
     expect(existsSync(path.join(codexDir, "plugins", "oms", "AGENTS.md"))).toBe(true);
     expect(existsSync(path.join(codexDir, "rules", "oms.md"))).toBe(true);
@@ -599,7 +599,10 @@ describe("host installer/uninstaller", () => {
     const written = JSON.parse(await readFile(path.join(home, ".claude.json"), "utf-8")) as {
       mcpServers: { oms: { command: string; args: string[] } };
     };
-    expect(written.mcpServers.oms).toEqual({ command: "oms", args: ["serve", "mcp", "--vault", "/tmp/Vault"] });
+    expect(written.mcpServers.oms).toEqual({
+      command: process.execPath,
+      args: [path.join(repoRoot, "dist", "cli", "oms.js"), "serve", "mcp", "--vault", "/tmp/Vault"],
+    });
     // Claude Code's user scope is the dotfile `~/.claude.json`. The dotless
     // sibling `~/claude.json` is read by nothing, so writing there would leave
     // the registration inert while every assertion above still passed.
@@ -616,7 +619,10 @@ describe("host installer/uninstaller", () => {
     const raw = await readFile(claudeJsonPath, "utf-8");
     expect(raw.match(/"oms"\s*:/g)).toHaveLength(1);
     const written = JSON.parse(raw) as { mcpServers: { oms: { command: string; args: string[] } } };
-    expect(written.mcpServers.oms).toEqual({ command: "oms", args: ["serve", "mcp", "--vault", "/tmp/Vault"] });
+    expect(written.mcpServers.oms).toEqual({
+      command: process.execPath,
+      args: [path.join(repoRoot, "dist", "cli", "oms.js"), "serve", "mcp", "--vault", "/tmp/Vault"],
+    });
   });
 
   it("uninstall removes the Claude user-scope MCP entry", async () => {
@@ -663,7 +669,8 @@ describe("host installer/uninstaller", () => {
     await runHostOperation({ action: "install", runtime: "hermes", vault: "/tmp/Vault", homeDir: home, adapterRoot });
     const config = await readFile(path.join(home, ".hermes", "config.yaml"), "utf-8");
     expect(config).toContain("oms:");
-    expect(config).toContain("command: oms");
+    expect(config).toContain(`command: ${process.execPath}`);
+    expect(config).toContain(path.join(repoRoot, "dist", "cli", "oms.js"));
     expect(existsSync(path.join(home, ".hermes", "skills", "knowledge-management", "oms", "oms-write", "SKILL.md"))).toBe(true);
     expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "hermes-manifest.json"))).toBe(true);
     expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "SOUL.md"))).toBe(true);
@@ -1122,7 +1129,9 @@ describe("upsertClaudeHooks / removeClaudeHooks", () => {
         expect(managed).not.toContain(first);
       }
       const hermesConfig = parse(hermes) as { readonly mcp_servers: { readonly oms: { readonly args: readonly string[] } } };
-      expect(hermesConfig.mcp_servers.oms.args).toEqual(["serve", "mcp", "--vault", second]);
+      expect(hermesConfig.mcp_servers.oms.args).toEqual([
+        path.join(repoRoot, "dist", "cli", "oms.js"), "serve", "mcp", "--vault", second,
+      ]);
       expect(claudeHooks).toContain("Vault B");
       expect(claudeHooks).not.toContain("Vault A");
       expect(existsSync(path.join(home, ".oms"))).toBe(false);

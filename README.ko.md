@@ -72,12 +72,15 @@ lexical, vector, HyDE, typed-axis 질의는 계약을 통과하지 못할 노트
 
 ## 설치
 
-Node.js 20 이상이 필요하다.
+Node.js 20 이상이 필요하며 native SQLite 런타임에는 Node 24 LTS를 권장한다.
 
 ```bash
-npm install -g oh-my-second-brain
+volta install node@24
+volta install oh-my-second-brain
 oms host install --runtime all --vault /path/to/vault --yes
 ```
+
+Volta는 OMS를 설치 시점 런타임에 고정한다. 기존 Volta 기본 Node가 따로 있었다면 설치 후 되돌려도 OMS의 Node 24 고정은 유지된다. 관리형 MCP 등록은 호스트 `PATH`에서 `node`나 `oms`를 다시 찾지 않고 설치 결과의 절대 Node 실행 파일과 패키지 entrypoint를 고정한다.
 
 Gajae-Code에서는 npm 패키지를 marketplace plugin으로 설치한다: `gjc plugin install oms@oms`. GJC는 패키지 루트의 `skills/` 관례 경로에서 일곱 OMS 스킬을 찾는다.
 

@@ -72,12 +72,15 @@ The five tools are a subset of those skills, and neither set is the fourteen CLI
 
 ## Install
 
-Node.js 20 or later is required.
+Node.js 20 or later is required; Node 24 LTS is recommended for the native SQLite runtime.
 
 ```bash
-npm install -g oh-my-second-brain
+volta install node@24
+volta install oh-my-second-brain
 oms host install --runtime all --vault /path/to/vault --yes
 ```
+
+Volta pins OMS to the installation runtime. Restore a previous Volta default afterward if needed; the OMS pin remains Node 24. Managed MCP registrations pin the resulting absolute Node executable and package entrypoint instead of resolving `node` or `oms` from host `PATH`.
 
 For Gajae-Code, install the npm package as a marketplace plugin: `gjc plugin install oms@oms`. GJC discovers the six OMS skills at the package-root `skills/` convention path.
 

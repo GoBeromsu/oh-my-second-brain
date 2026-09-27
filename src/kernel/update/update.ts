@@ -42,6 +42,8 @@ export interface RunUpdateOptions {
   readonly realpath?: (target: string) => string;
   /** Injectable only to test the resolved npm prefix admission check. */
   readonly access?: (pathname: string, mode: number) => Promise<void>;
+  /** Injectable only to make Volta's retained Node runtime deterministic in tests. */
+  readonly runtimeNodeVersion?: string;
 }
 
 export interface UpdateResult {
@@ -74,6 +76,8 @@ export interface CheckUpdateNoticeOptions {
 const DEFAULT_PACKAGE_NAME = "oh-my-second-brain";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_NOTICE_TIMEOUT_MS = 1_500;
+
+type PackageManager = "npm" | "volta";
 
 function defaultRunner(
   command: string,
@@ -225,6 +229,21 @@ function runningPackagePrefix(options: RunUpdateOptions): string {
   return binary.slice(0, winIndex);
 }
 
+function packageManagerForEntrypoint(options: RunUpdateOptions, packageName: string): PackageManager {
+  const entrypoint = options.entrypoint ?? process.argv[1];
+  if (entrypoint === undefined) return "npm";
+  let binary: string;
+  try {
+    binary = (options.realpath ?? realpathSync)(entrypoint).replaceAll("\\", "/").toLocaleLowerCase();
+  } catch {
+    return "npm";
+  }
+  const packagePath = packageName.replaceAll("\\", "/").toLocaleLowerCase();
+  return binary.includes(`/tools/image/packages/${packagePath}/lib/node_modules/${packagePath}/`)
+    ? "volta"
+    : "npm";
+}
+
 function samePrefix(left: string, right: string): boolean {
   return left.includes("\\") || right.includes("\\")
     ? path.win32.resolve(left).toLocaleLowerCase() === path.win32.resolve(right).toLocaleLowerCase()
@@ -302,8 +321,11 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
   const currentVersion = options.currentVersion;
   const updateAvailable =
     currentVersion === null || compareVersions(currentVersion, latest.version) < 0;
-  const npmArgs = ["install", "-g", `${packageName}@latest`];
-  const commands = [formatCommand("npm", npmArgs)];
+  const packageManager = packageManagerForEntrypoint(options, packageName);
+  const installArgs = packageManager === "volta"
+    ? ["run", "--node", options.runtimeNodeVersion ?? process.versions.node, "npm", "install", "-g", `${packageName}@latest`]
+    : ["install", "-g", `${packageName}@latest`];
+  const commands = [formatCommand(packageManager, installArgs)];
 
   if (options.dryRun === true || options.check === true) {
     return {
@@ -358,23 +380,25 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
   }
 
   if (updateAvailable) {
-    const topology = await resolveNpmTopology(options, runner, timeoutMs);
-    if (!topology.ok) {
-      return {
-        success: false,
-        currentVersion,
-        latestVersion: latest.version,
-        updateAvailable,
-        packageMutated: false,
-        mutated: false,
-        message: topology.error,
-        commands,
-        errors: [topology.error],
-      };
+    if (packageManager === "npm") {
+      const topology = await resolveNpmTopology(options, runner, timeoutMs);
+      if (!topology.ok) {
+        return {
+          success: false,
+          currentVersion,
+          latestVersion: latest.version,
+          updateAvailable,
+          packageMutated: false,
+          mutated: false,
+          message: topology.error,
+          commands,
+          errors: [topology.error],
+        };
+      }
     }
-    const npmResult = await runner("npm", npmArgs, { timeoutMs });
-    if (npmResult.exitCode !== 0) {
-      const error = npmResult.stderr.trim() || npmResult.stdout.trim() || "npm install failed";
+    const installResult = await runner(packageManager, installArgs, { timeoutMs });
+    if (installResult.exitCode !== 0) {
+      const error = installResult.stderr.trim() || installResult.stdout.trim() || `${packageManager} install failed`;
       return {
         success: false,
         currentVersion,
@@ -382,7 +406,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
         updateAvailable: true,
         packageMutated: false,
         mutated: false,
-        message: `npm update failed: ${error}`,
+        message: `${packageManager} update failed: ${error}`,
         commands,
         errors: [error],
       };

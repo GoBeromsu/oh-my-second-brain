@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- Claude, Codex, and Hermes MCP registrations pin the installation process's absolute Node executable and OMS package entrypoint, so host `PATH` changes cannot switch the native-addon ABI; legacy `command: oms` registrations remain recognizable for safe replacement and removal.
+
 ## [0.18.3] - 2026-09-26
 
 ## [0.18.2] - 2026-09-26

@@ -38,7 +38,8 @@ describe("Codex managed OMS registration", () => {
     }, codexHost());
 
     const config = await readFile(path.join(home, ".codex", "config.toml"), "utf8");
-    expect(config).toContain('args = ["serve", "mcp", "--vault", "/vault"]');
+    expect(config).toContain(`command = ${JSON.stringify(process.execPath)}`);
+    expect(config).toContain(`args = [${JSON.stringify(path.resolve("dist/cli/oms.js"))}, "serve", "mcp", "--vault", "/vault"]`);
     expect(isCodexOmsRegistration(config)).toBe(true);
     const previous = process.env.OMS_CODEX_HOME;
     process.env.OMS_CODEX_HOME = path.join(home, ".codex");
@@ -70,6 +71,8 @@ describe("Codex managed OMS registration", () => {
 
     expect(isCodexOmsRegistration(registration('["mcp", "--vault", "/vault"]'))).toBe(false);
     expect(isCodexOmsRegistration(registration('["serve", "http", "--vault", "/vault"]'))).toBe(false);
+    // A pre-pinning registration stays recognizable so install/remove can replace it.
+    expect(isCodexOmsRegistration(registration('["serve", "mcp", "--vault", "/vault"]'))).toBe(true);
   });
 
   it("preserves an unowned custom OMS table during removal", async () => {

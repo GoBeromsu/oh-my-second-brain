@@ -3,7 +3,8 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash
 set -euo pipefail
 
-PACKAGE_SPEC="${OMS_PACKAGE_SPEC:-oh-my-second-brain@0.1.9}"
+PACKAGE_SPEC="${OMS_PACKAGE_SPEC:-oh-my-second-brain@latest}"
+NODE_RUNTIME="${OMS_NODE_RUNTIME:-24}"
 RUNTIME="${OMS_INSTALL_RUNTIME:-auto}"
 VAULT="${OMS_VAULT:-$PWD}"
 EXECUTE="${OMS_EXECUTE_EXTERNAL:-0}"
@@ -21,32 +22,40 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if ! command -v npm >/dev/null 2>&1; then
-  echo "Error: npm is required to install Oh My Second Brain." >&2
+if ! command -v volta >/dev/null 2>&1; then
+  echo "Error: Volta is required so OMS and its native dependencies keep one Node runtime." >&2
+  echo "Install Volta from https://docs.volta.sh/guide/getting-started and retry." >&2
   exit 1
 fi
 
 echo "Oh My Second Brain Installer"
 echo "  package: $PACKAGE_SPEC"
+echo "  node:    $NODE_RUNTIME (Volta-pinned for OMS only)"
 echo "  runtime: $RUNTIME"
 echo "  vault:   $VAULT"
 echo
 
-npm install -g "$PACKAGE_SPEC"
+PREVIOUS_NODE="$(volta list node --default --format plain 2>/dev/null || true)"
+case "$PREVIOUS_NODE" in
+  "runtime node@"*" (default)")
+    PREVIOUS_NODE="${PREVIOUS_NODE#runtime node@}"
+    PREVIOUS_NODE="${PREVIOUS_NODE% (default)}"
+    ;;
+  *) PREVIOUS_NODE="" ;;
+esac
 
-ARGS=(install --runtime "$RUNTIME" --vault "$VAULT" --yes)
+volta install "node@$NODE_RUNTIME"
+volta install "$PACKAGE_SPEC"
+if [ -n "$PREVIOUS_NODE" ] && [ "$PREVIOUS_NODE" != "$NODE_RUNTIME" ]; then
+  volta install "node@$PREVIOUS_NODE"
+fi
+
+ARGS=(host install --runtime "$RUNTIME" --vault "$VAULT" --yes)
 if [ "$EXECUTE" = "1" ]; then
   ARGS+=(--execute)
 fi
 
-if command -v oh-my-second-brain >/dev/null 2>&1; then
-  oh-my-second-brain "${ARGS[@]}"
-elif command -v oms >/dev/null 2>&1; then
-  oms "${ARGS[@]}"
-else
-  echo "Oh My Second Brain binary not found after npm install." >&2
-  exit 1
-fi
+volta run oms "${ARGS[@]}"
 
 echo
 echo "Oh My Second Brain install complete. Run: oh-my-second-brain doctor --vault \"$VAULT\""

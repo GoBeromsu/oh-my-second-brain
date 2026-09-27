@@ -532,7 +532,7 @@ describe("oms CLI dispatch", () => {
     const hermes = parse(
       await readFile(path.join(smokeHome, ".hermes", "config.yaml"), "utf-8"),
     ) as { readonly mcp_servers: { readonly oms: { readonly args: readonly string[] } } };
-    expect(hermes.mcp_servers.oms.args).toEqual(["serve", "mcp", "--vault", canonicalSecond]);
+    expect(hermes.mcp_servers.oms.args).toEqual([distCli, "serve", "mcp", "--vault", canonicalSecond]);
     expect(existsSync(path.join(smokeHome, ".oms"))).toBe(false);
   });
 
