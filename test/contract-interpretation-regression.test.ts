@@ -1,13 +1,15 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { digestBytes } from "../src/kernel/conventions/canonical.js";
-import { enumerateTemplateSources, resolveInterpretations, type TemplateInterpretation } from "../src/kernel/contract/interpretation.js";
-import { rekeySealedTemplates, runInterview } from "../src/kernel/contract/interview.js";
+import { enumerateTemplateSources, resolveInterpretations, scopedTemplateName, type TemplateInterpretation } from "../src/kernel/contract/interpretation.js";
+import { rekeySealedTemplates, runInterview, type InterviewIO } from "../src/kernel/contract/interview.js";
 import { scriptedIO, type Answers } from "../src/kernel/contract/scripted-interview.js";
-import { readStore, sealContract } from "../src/kernel/contract/store.js";
+import { isSafeName, readStore, sealContract } from "../src/kernel/contract/store.js";
 import type { TemplateContract, VaultContract } from "../src/kernel/contract/types.js";
 import { serializeVaultSettings, SETTINGS_PATH } from "../src/kernel/vault/settings.js";
 
@@ -24,6 +26,55 @@ import { serializeVaultSettings, SETTINGS_PATH } from "../src/kernel/vault/setti
  */
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
+
+const SOURCE_ROOT = join(import.meta.dirname, "..", "src");
+const JUDGE = join(SOURCE_ROOT, "kernel/contract/judge.ts");
+const JUDGE_ENTRIES = [JUDGE, join(SOURCE_ROOT, "kernel/contract/judge-write.ts")];
+
+/**
+ * Every relative module an emitted file still loads at runtime, read from the TypeScript
+ * AST rather than a regex: a static import, a side-effect import, `export ... from`, and a
+ * dynamic `import()` with a literal specifier all survive emit and are followed. A
+ * type-only import is erased, so it is not an edge.
+ */
+function runtimeEdges(source: ts.SourceFile): string[] {
+  const edges: string[] = [];
+  const specifier = (node: ts.Expression | undefined): void => {
+    if (node !== undefined && ts.isStringLiteral(node) && node.text.startsWith(".")) edges.push(node.text);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && node.importClause?.isTypeOnly !== true) specifier(node.moduleSpecifier);
+    else if (ts.isExportDeclaration(node) && !node.isTypeOnly) specifier(node.moduleSpecifier);
+    else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) specifier(node.arguments[0]);
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  return edges;
+}
+
+/** The transitive closure of `runtimeEdges` over the source tree, as absolute `.ts` paths. */
+async function reachableFrom(entries: readonly string[]): Promise<ReadonlySet<string>> {
+  const seen = new Set<string>();
+  const queue = [...entries];
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const text = await readFile(file, "utf8");
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true);
+    for (const edge of runtimeEdges(source)) {
+      const base = join(file, "..", edge.replace(/\.js$/, ""));
+      const candidates = [`${base}.ts`, join(base, "index.ts")];
+      for (const candidate of candidates) {
+        if (existsSync(candidate)) {
+          queue.push(candidate);
+          break;
+        }
+      }
+    }
+  }
+  return seen;
+}
 
 /** `from:{{from_links}}` — no space after the colon, so the variable is part of the key. */
 const MAIL = [
@@ -177,6 +228,34 @@ async function sources() {
   return enumerated.sources;
 }
 
+/** Answers that seal only the JS template and decline everything else. */
+function sealAnswers(): Answers {
+  const answers: Record<string, string | number | boolean> = {
+    "folder:Templates:register": false,
+    "template:manual__meeting.template:interpretation": true,
+    "template:manual__meeting.template:register": true,
+    "template:manual__meeting.template:heading:Actions": true,
+    "template:manual__meeting.template:apply-folder": "",
+  };
+  // Every other question is declined, so only the JS template's answers reach the contract.
+  for (const name of ["agent__mail-thread.template", "agent__mail.template", "agent__meeting.template"]) {
+    answers[`template:${name}:interpretation`] = true;
+    answers[`template:${name}:register`] = false;
+  }
+  for (const field of interpretations()[3]!.fields) {
+    answers[`template:manual__meeting.template:field:${field.name}:required`] = field.variable === null;
+    if (field.variable === null && field.literal !== null && !Array.isArray(field.literal)) {
+      answers[`template:manual__meeting.template:field:${field.name}:literal`] = "example-only";
+    }
+  }
+  for (const heading of ["Thinking", "Discussed", "Decisions"]) answers[`template:manual__meeting.template:heading:${heading}`] = false;
+  for (const property of ["type", "title", "index", "aliases", "date_created", "date_modified", "created_by", "authorship", "up", "source_media", "date_meet", "subject", "from", "to", "participants"]) {
+    answers[`property:${property}:register`] = false;
+  }
+  answers["seal"] = true;
+  return answers;
+}
+
 describe("templates no parser could read", () => {
   it("are enumerated with a digest each, and OMS reports nothing about their content", async () => {
     const found = await sources();
@@ -202,31 +281,7 @@ describe("templates no parser could read", () => {
   });
 
   it("carry every field and heading the retired parser lost, and seal them from the owner's answers", async () => {
-    const answers: Answers = {
-      "folder:Templates:register": false,
-      "template:manual__meeting.template:interpretation": true,
-      "template:manual__meeting.template:register": true,
-      "template:manual__meeting.template:heading:Actions": true,
-      "template:manual__meeting.template:apply-folder": "",
-    };
-    // Every other question is declined, so only the JS template's answers reach the contract.
-    for (const name of ["agent__mail-thread.template", "agent__mail.template", "agent__meeting.template"]) {
-      answers[`template:${name}:interpretation`] = true;
-      answers[`template:${name}:register`] = false;
-    }
-    for (const field of interpretations()[3]!.fields) {
-      answers[`template:manual__meeting.template:field:${field.name}:required`] = field.variable === null;
-      if (field.variable === null && field.literal !== null && !Array.isArray(field.literal)) {
-        answers[`template:manual__meeting.template:field:${field.name}:literal`] = "example-only";
-      }
-    }
-    for (const heading of ["Thinking", "Discussed", "Decisions"]) answers[`template:manual__meeting.template:heading:${heading}`] = false;
-    for (const property of ["type", "title", "index", "aliases", "date_created", "date_modified", "created_by", "authorship", "up", "source_media", "date_meet", "subject", "from", "to", "participants"]) {
-      answers[`property:${property}:register`] = false;
-    }
-    answers["seal"] = true;
-
-    const { io } = scriptedIO(answers);
+    const { io } = scriptedIO(sealAnswers());
     const result = await runInterview({ vault, io, root, nonLoosening: true, interpretations: interpretations() });
     expect(result).toMatchObject({ state: "sealed", templates: ["manual__meeting.template"] });
     const store = await readStore(VAULT_ID, root);
@@ -235,6 +290,23 @@ describe("templates no parser could read", () => {
     // All ten properties were asked about; the three with no variable are the required ones.
     expect(sealed?.requiredProperties).toEqual(["type", "aliases", "authorship"]);
     expect(sealed?.requiredHeadings).toEqual(["Actions"]);
+  });
+
+  it("refuse to seal when a template source changes after the owner answered, and leave nothing behind", async () => {
+    // The interpretation was read and confirmed from bytes that no longer exist by the
+    // time the seal commits. Detecting it as drift afterwards is too late: the contract
+    // would already be sealed narrower than the vault.
+    const { io } = scriptedIO(sealAnswers());
+    const mutating: InterviewIO = {
+      say: io.say,
+      ask: async question => {
+        if (question.id === "seal") await writeFile(join(vault, "Templates/manual/meeting.template.md"), `${MANUAL_MEETING}\nsecret_added: injected\n`);
+        return io.ask(question);
+      },
+    };
+    const result = await runInterview({ vault, io: mutating, root, nonLoosening: true, interpretations: interpretations() });
+    expect(result).toMatchObject({ state: "refused", reasons: [expect.stringContaining("changed during the interview")] });
+    expect((await readStore(VAULT_ID, root)).state).not.toBe("ok");
   });
 });
 
@@ -276,6 +348,31 @@ describe("condition 2 — scope arrives with the rekey migration", () => {
       "agent__mail.template",
       "agent__meeting.template",
     ]);
+  });
+
+  it("gives separator-bearing components distinct names, so a valid layout is sealable", () => {
+    // `a__b/meeting` and `a/b/meeting` both joined to `a__b__meeting` before the escape,
+    // and `resolveInterpretations` then refused the vault for a duplicate name.
+    expect(scopedTemplateName("T", "T/a/b/meeting.md")).not.toBe(scopedTemplateName("T", "T/a__b/meeting.md"));
+    expect(scopedTemplateName("T", "T/meeting.md")).toBe("meeting");
+    expect(scopedTemplateName("T", "T/a/b/c/meeting.md")).toBe("a__b__c__meeting");
+    expect(scopedTemplateName("T", "T/a_b/meeting.md")).toBe("a_-b__meeting");
+    // Injective across a deliberately hostile set: no two paths share a name.
+    const hostile = ["a/b/m.md", "a__b/m.md", "a_/b/m.md", "a/_b/m.md", "a_-b/m.md", "a/b_/m.md", "a__b__m.md", "m.md"];
+    const names = hostile.map(path => scopedTemplateName("T", `T/${path}`));
+    expect(new Set(names).size).toBe(hostile.length);
+    for (const name of names) expect(isSafeName(name)).toBe(true);
+  });
+
+  it("rekeys with the same encoding, and a second rekey changes nothing", () => {
+    const templates = {
+      "m.template": sealedTemplate("Templates/a__b/m.template.md"),
+      "other.template": sealedTemplate("Templates/a/b/m.template.md"),
+    };
+    const once = rekeySealedTemplates(templates, "Templates");
+    expect(Object.keys(once)).toEqual(["a_-_-b__m.template", "a__b__m.template"]);
+    // Idempotent: a rekeyed key re-derives to itself, so a second run is a no-op.
+    expect(rekeySealedTemplates(once, "Templates")).toEqual(once);
   });
 
   it("lets a vault sealed under the old keys reseal without a terminal", async () => {
@@ -322,19 +419,32 @@ describe("condition 4 — interpretation is a seal-time cost", () => {
   it("keeps every interpretation module out of the write-checking judge's imports", async () => {
     // A 22,000-note vault cannot afford an interpretation per note write, so the judge
     // must not reach the interpretation modules even transitively.
-    const seen = new Set<string>();
-    const queue = ["src/kernel/contract/judge.ts", "src/kernel/contract/judge-write.ts"];
-    while (queue.length > 0) {
-      const file = queue.pop()!;
-      if (seen.has(file)) continue;
-      seen.add(file);
-      const text = await readFile(join(import.meta.dirname, "..", file), "utf8");
-      for (const match of text.matchAll(/from "(\.[^"]+)\.js"/g)) {
-        const target = join(file, "..", `${match[1]!}.ts`);
-        expect(target).not.toMatch(/interpretation/);
-        queue.push(target);
+    const reached = await reachableFrom(JUDGE_ENTRIES);
+    for (const file of reached) expect(file).not.toMatch(/interpretation/);
+    expect(reached.size).toBeGreaterThan(2);
+  });
+
+  it("fails on a direct, a re-exported and a dynamic edge, so it can actually catch one", async () => {
+    // Negative controls: a test that cannot be broken is not evidence. Each mutation adds
+    // one edge shape the walker must follow, and each must make the gate above fail.
+    const barrel = join(SOURCE_ROOT, "kernel/contract/interpretation-barrel.ts");
+    const probe = join(SOURCE_ROOT, "kernel/contract/interpretation-probe.ts");
+    const edges = [
+      { name: "static", extra: [], line: 'import "./interpretation.js";' },
+      { name: "re-export", extra: [[barrel, 'export { SCOPE_SEPARATOR } from "./interpretation.js";\n']], line: 'import "./interpretation-barrel.js";' },
+      { name: "dynamic", extra: [[probe, 'export const load = () => import("./interpretation.js");\n']], line: 'import "./interpretation-probe.js";' },
+    ] as const;
+    for (const edge of edges) {
+      const original = await readFile(JUDGE, "utf8");
+      try {
+        for (const [path, body] of edge.extra) await writeFile(path, body);
+        await writeFile(JUDGE, `${edge.line}\n${original}`);
+        const reached = await reachableFrom(JUDGE_ENTRIES);
+        expect([edge.name, [...reached].some(file => /interpretation/.test(file))]).toEqual([edge.name, true]);
+      } finally {
+        await writeFile(JUDGE, original);
+        for (const [path] of edge.extra) await rm(path, { force: true });
       }
     }
-    expect(seen.size).toBeGreaterThan(2);
   });
 });

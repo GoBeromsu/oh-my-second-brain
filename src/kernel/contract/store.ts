@@ -513,6 +513,13 @@ export interface SealRequest {
   readonly baseSeq?: SequenceObservation;
   /** Folders, properties and templates the owner declined; kept so a rerun does not ask again. */
   readonly declined?: DeclinedSet;
+  /**
+   * Re-checks under the seal lock that the inputs the contract was built from still hold,
+   * before anything is written. A returned reason aborts the seal with nothing written.
+   * The check belongs inside the lock: outside it, the window between the check and the
+   * swap is a TOCTOU hole.
+   */
+  readonly freshness?: () => Promise<string | null>;
 }
 
 /**
@@ -534,6 +541,10 @@ export async function sealContract(request: SealRequest, root: string = storeRoo
     if (request.baseSeq !== undefined && linked !== request.baseSeq) {
       throw new Error("CONTRACT_SEAL_CHANGED: the contract was sealed elsewhere meanwhile; run oms setup again to review the differences");
     }
+    // Under the lock and before the first write, so a source that moved during the
+    // interview cannot be sealed as the bytes the owner was asked about.
+    const stale = request.freshness === undefined ? null : await request.freshness();
+    if (stale !== null) throw new Error(`CONTRACT_SEAL_STALE: ${stale}`);
 
     const keep = retained(await listGenerations(root, id), linked);
     for (const seq of await listGenerations(root, id)) {

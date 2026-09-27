@@ -92,15 +92,26 @@ const MAX_HEADING_LEVEL = 6;
 export const SCOPE_SEPARATOR = "__";
 
 /**
- * The template name: its path relative to the template folder, without `.md`, with the
- * folder separator replaced by `__`. A template directly in the folder keeps its plain
- * file name, so only nested templates gain a scope.
+ * Escapes a path component so the joined name is injective. A bare `__` in a component
+ * would otherwise read as a separator, so `a__b/meeting.md` and `a/b/meeting.md` would
+ * claim the same template name and neither could be sealed. Every `_` in a component
+ * becomes `_-`, so after escaping no `__` survives inside a component and the only `__`
+ * in a scoped name is a folder boundary.
+ */
+function escapeComponent(component: string): string {
+  return component.split("_").join("_-");
+}
+
+/**
+ * The template name: its path relative to the template folder, without `.md`, with each
+ * path component escaped and the folder separator replaced by `__`. A template directly
+ * in the folder keeps its (escaped) file name, so only nested templates gain a scope.
  */
 export function scopedTemplateName(templateFolder: string, source: string): string {
   const prefix = `${templateFolder.replace(/\/+$/, "")}/`;
   const relative = source.startsWith(prefix) ? source.slice(prefix.length) : source.slice(source.lastIndexOf("/") + 1);
   const withoutExtension = relative.endsWith(".md") ? relative.slice(0, -3) : relative;
-  return withoutExtension.split("/").join(SCOPE_SEPARATOR);
+  return withoutExtension.split("/").map(escapeComponent).join(SCOPE_SEPARATOR);
 }
 
 function isScalar(value: unknown): value is JsonScalar {

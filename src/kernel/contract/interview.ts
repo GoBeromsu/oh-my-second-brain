@@ -7,6 +7,7 @@ import {
   interpretationLines,
   resolveInterpretations,
   scopedTemplateName,
+  type EnumeratedSource,
   type InterpretedTemplate,
   type TemplateInterpretation,
 } from "./interpretation.js";
@@ -251,6 +252,8 @@ interface Discovered {
   readonly folders: readonly string[];
   readonly templates: readonly InterpretedTemplate[];
   readonly observedTypes: ReadonlyMap<string, FieldType>;
+  /** The template sources enumerated for this run, re-checked before the seal commits. */
+  readonly sources: readonly EnumeratedSource[];
 }
 
 /** Sources OMS enumerated that carry no interpretation yet. */
@@ -291,7 +294,7 @@ async function discover(
     return { refused: ["The Obsidian property types file is unreadable; fix it in Obsidian first."] };
   }
 
-  if (templateFolder === undefined) return { folders: await topLevelFolders(vault), templates: [], observedTypes };
+  if (templateFolder === undefined) return { folders: await topLevelFolders(vault), templates: [], observedTypes, sources: [] };
 
   const enumerated = await enumerateTemplateSources(vault, { path: templateFolder, kind: "folder" });
   if (!enumerated.ok) {
@@ -299,7 +302,7 @@ async function discover(
   }
   const sources = enumerated.sources;
   // Nothing to interpret: the interview asks only about folders and Obsidian types.
-  if (sources.length === 0) return { folders: await topLevelFolders(vault), templates: [], observedTypes };
+  if (sources.length === 0) return { folders: await topLevelFolders(vault), templates: [], observedTypes, sources };
   if (interpretations.length === 0) {
     return { needed: sources.map(source => ({ source: source.path, sourceHash: source.digest })) };
   }
@@ -311,7 +314,32 @@ async function discover(
       if (!observedTypes.has(field.name)) observedTypes.set(field.name, field.inferredType);
     }
   }
-  return { folders: await topLevelFolders(vault), templates, observedTypes };
+  return { folders: await topLevelFolders(vault), templates, observedTypes, sources };
+}
+
+/**
+ * Re-enumerates the template sources and compares them with the snapshot the questions
+ * were built from. The owner was asked about specific bytes; if a source appeared,
+ * disappeared or changed while they answered, the contract about to be sealed is narrower
+ * than the vault and drift after the fact is not the same as a refusal. Returns the reason
+ * to refuse, or null when the snapshot still holds.
+ */
+async function templateSourcesUnchanged(
+  vault: string,
+  templateFolder: string | undefined,
+  snapshot: readonly EnumeratedSource[],
+): Promise<string | null> {
+  if (templateFolder === undefined) return null;
+  const enumerated = await enumerateTemplateSources(vault, { path: templateFolder, kind: "folder" });
+  if (!enumerated.ok) return "the template folder could not be re-read before sealing; run `oms setup` again";
+  const before = new Map(snapshot.map(source => [source.path, source.digest]));
+  const after = new Map(enumerated.sources.map(source => [source.path, source.digest]));
+  const changed = [
+    ...[...after.keys()].filter(path => !before.has(path)),
+    ...[...before.keys()].filter(path => !after.has(path) || after.get(path) !== before.get(path)),
+  ].sort(compareCodePoints);
+  if (changed.length === 0) return null;
+  return `the template sources changed during the interview (${changed.map(path => JSON.stringify(path)).join(", ")}); read them again and run \`oms setup\` again`;
 }
 
 /** A vault-relative folder that exists, stays inside the vault and is not hidden; null otherwise. */
@@ -681,7 +709,14 @@ export async function runInterview(input: {
       confirmStaleReclaim: () => asker.confirm("seal-lock:reclaim", "An earlier seal did not finish and left its lock behind. Reclaim it and continue?"),
       ...input.sealDeps,
     };
-    await sealContract({ vaultRealPath: await realpath(vault), vaultId, contract, baseSeq, declined }, root, deps);
+    await sealContract({
+      vaultRealPath: await realpath(vault),
+      vaultId,
+      contract,
+      baseSeq,
+      declined,
+      freshness: () => templateSourcesUnchanged(vault, templateFolder, found.sources),
+    }, root, deps);
     if (chosenFolder !== null) {
       const current = await readVaultSettings(vault);
       if (current !== null) await writeVaultSettings(vault, { ...current, templateFolder: chosenFolder });
@@ -696,6 +731,10 @@ export async function runInterview(input: {
     };
   } catch (error: unknown) {
     if (error instanceof InterviewAborted) return { state: "aborted" };
+    // The seal refused because the templates moved under the interview; nothing was written.
+    if (error instanceof Error && error.message.startsWith("CONTRACT_SEAL_STALE: ")) {
+      return { state: "refused", reasons: [error.message.slice("CONTRACT_SEAL_STALE: ".length)] };
+    }
     throw error;
   }
 }
