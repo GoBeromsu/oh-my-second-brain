@@ -293,9 +293,7 @@ describe("host installer/uninstaller", () => {
       expect(executedCommands.some((command) => command.startsWith("claude plugin install "))).toBe(true);
       expect(executedCommands.every((command) => !command.includes("mcp add oms"))).toBe(true);
       const pluginManifest = await readFile(path.join(adapterRoot, ".claude-plugin", "plugin.json"), "utf-8");
-      const pluginMcp = await readFile(path.join(adapterRoot, ".mcp.json"), "utf-8");
-      expect(pluginManifest).toContain('"mcpServers": "./.mcp.json"');
-      expect(pluginMcp).toContain('"oms"');
+      expect(pluginManifest).not.toContain("mcpServers");
     } finally {
       if (originalPath === undefined) {
         delete process.env.PATH;
@@ -588,6 +586,47 @@ describe("host installer/uninstaller", () => {
     const parsed = JSON.parse(updated) as { mcpServers: { other: { command: string } }; custom: string };
     expect(parsed.mcpServers.other.command).toBe("keep");
     expect(parsed.custom).toBe("  unmanaged spacing  ");
+  });
+
+  // F1 regression: a bare `command: "oms"` in a shipped plugin manifest is a
+  // PATH-resolved launch, the exact cross-Node-ABI path the absolute-path
+  // pinning removes. No shipped manifest may reintroduce one.
+  it("ships no plugin MCP manifest that launches a PATH-resolved oms", async () => {
+    for (const manifestPath of [".mcp.json", ".mcp.codex.json"]) {
+      expect(existsSync(path.join(repoRoot, manifestPath)), manifestPath).toBe(false);
+    }
+    for (const pluginManifest of [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]) {
+      const raw = await readFile(path.join(repoRoot, pluginManifest), "utf-8");
+      expect(JSON.parse(raw), pluginManifest).not.toHaveProperty("mcpServers");
+    }
+    const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf-8")) as { files: string[] };
+    expect(packageJson.files).not.toContain(".mcp.json");
+    expect(packageJson.files).not.toContain(".mcp.codex.json");
+  });
+
+  // F1 regression: with no plugin fallback left, a user-scope registration that
+  // cannot be written must fail the install rather than report success and
+  // leave Claude with no way to launch OMS at all.
+  it.each([
+    ["malformed JSON", "{ not json"],
+    ["a non-object root", '["nope"]'],
+    ["unsupported mcpServers metadata", '{"mcpServers": "elsewhere"}'],
+  ])("fails the Claude install when ~/.claude.json has %s", async (_label, contents) => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-install-claude-unusable-"));
+    const claudeJsonPath = path.join(home, ".claude.json");
+    await writeFile(claudeJsonPath, contents, "utf-8");
+
+    const results = await runHostOperation({
+      action: "install",
+      runtime: "claude",
+      vault: "/tmp/Vault",
+      homeDir: home,
+      adapterRoot,
+    });
+
+    expect(results[0]?.messages.join("\n")).toContain("FAILED:");
+    expect(results[0]?.changed).toBe(false);
+    expect(await readFile(claudeJsonPath, "utf-8")).toBe(contents);
   });
 
   it("registers a user-scope Claude MCP entry with the resolved vault baked in as an absolute path", async () => {

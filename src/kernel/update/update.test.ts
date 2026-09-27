@@ -28,7 +28,6 @@ function updateOptions(overrides: Partial<RunUpdateOptions> = {}): RunUpdateOpti
     yes: true,
     entrypoint,
     realpath,
-    access: async () => {},
     ...overrides,
   };
 }
@@ -57,7 +56,12 @@ describe("package updater", () => {
     const result = await runUpdate(updateOptions({ check: true, runner: matchingRunner(calls) }));
 
     expect(result).toMatchObject({ success: true, updateAvailable: true, packageMutated: false, mutated: false });
-    expect(result.commands).toEqual(["npm install -g oh-my-second-brain@latest"]);
+    expect(result.commands).toEqual([
+      "npm uninstall -g oh-my-second-brain",
+      "curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash",
+      "oms host sync",
+    ]);
+    expect(result.message).toContain("Refusing to update an npm-owned installation in place");
     expect(calls).toEqual([]);
   });
 
@@ -66,20 +70,28 @@ describe("package updater", () => {
     const result = await runUpdate(updateOptions({ dryRun: true, runner: matchingRunner(calls) }));
 
     expect(result.success).toBe(true);
-    expect(result.commands).toEqual(["npm install -g oh-my-second-brain@latest"]);
+    expect(result.commands).toEqual([
+      "npm uninstall -g oh-my-second-brain",
+      "curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash",
+      "oms host sync",
+    ]);
     expect(calls).toEqual([]);
   });
 
-  it("installs only the package and directs the caller to explicit host sync", async () => {
+  // F2 regression: `npm install -g` resolves npm from PATH, so the Node that
+  // rebuilds the native addon is whatever the shell exposes while the managed
+  // MCP registrations stay pinned to the interpreter recorded at install time.
+  // An npm-owned install must be refused and migrated, never updated in place.
+  it("refuses an npm-owned in-place update and spawns no package manager", async () => {
     const calls: string[] = [];
     const result = await runUpdate(updateOptions({ runner: matchingRunner(calls) }));
 
-    expect(result).toMatchObject({ success: true, packageMutated: true, mutated: true });
-    expect(calls).toEqual([
-      "npm prefix -g",
-      "npm install -g oh-my-second-brain@latest",
-    ]);
-    expect(result.message).toContain("newly installed `oms host sync`");
+    expect(result).toMatchObject({ success: false, packageMutated: false, mutated: false });
+    expect(calls).toEqual([]);
+    expect(result.message).toContain("Refusing to update an npm-owned installation in place");
+    expect(result.message).toContain("npm uninstall -g oh-my-second-brain");
+    expect(result.message).toContain("scripts/install.sh");
+    expect(result.commands.some((command) => command === "npm install -g oh-my-second-brain@latest")).toBe(false);
   });
 
   it("updates a Volta-owned installation through Volta without consulting npm's global prefix", async () => {
@@ -141,22 +153,6 @@ describe("package updater", () => {
     expect(calls).toEqual(["npm view oh-my-second-brain@latest version --json"]);
   });
 
-  it("rejects an npm prefix mismatch with cross-version-safe recovery guidance", async () => {
-    const calls: string[] = [];
-    const result = await runUpdate(updateOptions({
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return okCall("/other/prefix\n");
-      },
-    }));
-
-    expect(result.success).toBe(false);
-    expect(result.mutated).toBe(false);
-    expect(calls).toEqual(["npm prefix -g"]);
-    expect(result.message).toContain("npm --prefix /opt/oms install -g oh-my-second-brain@latest");
-    expect(result.message).toContain("newly installed `oms host sync`");
-  });
-
   it("rejects an unresolvable running binary without attempting installation", async () => {
     const calls: string[] = [];
     const result = await runUpdate(updateOptions({
@@ -167,56 +163,42 @@ describe("package updater", () => {
     expect(result.success).toBe(false);
     expect(result.mutated).toBe(false);
     expect(calls).toEqual([]);
-    expect(result.message).toContain("npm install -g oh-my-second-brain@latest");
+    expect(result.message).toContain("Refusing to update an npm-owned installation in place");
     expect(result.message).toContain("oms host sync");
   });
 
-  it("does not invoke a host command when installation fails", async () => {
+  it("does not invoke a host command when the Volta-owned installation fails", async () => {
     const calls: string[] = [];
     const result = await runUpdate(updateOptions({
+      realpath: () => "/Users/test/.volta/tools/image/packages/oh-my-second-brain/lib/node_modules/oh-my-second-brain/dist/cli/oms.js",
+      runtimeNodeVersion: "24.21.0",
       runner: (command, args) => {
         calls.push([command, ...args].join(" "));
-        return args[0] === "prefix" ? okCall(`${runningPrefix}\n`) : failCall("install refused");
+        return failCall("install refused");
       },
     }));
 
     expect(result.success).toBe(false);
     expect(result.packageMutated).toBe(false);
-    expect(result.message).toContain("npm update failed: install refused");
-    expect(calls).toEqual(["npm prefix -g", "npm install -g oh-my-second-brain@latest"]);
+    expect(result.message).toContain("volta update failed: install refused");
+    expect(calls).toEqual(["volta run --node 24.21.0 npm install -g oh-my-second-brain@latest"]);
   });
 
-  it("refuses an unwritable resolved prefix before npm install", async () => {
-    const calls: string[] = [];
-    const result = await runUpdate(updateOptions({
-      runner: matchingRunner(calls),
-      access: async () => { throw new Error("EACCES"); },
-    }));
-
-    expect(result.success).toBe(false);
-    expect(result.packageMutated).toBe(false);
-    expect(calls).toEqual(["npm prefix -g"]);
-    expect(result.message).toContain("npm --prefix /opt/oms install -g oh-my-second-brain@latest");
-    expect(result.message).toContain("newly installed `oms host sync`");
-  });
-
-  it("recognizes a Windows global package layout without invoking its host binary", async () => {
+  // F2 regression: a Windows npm-owned layout is still npm-owned, so it takes
+  // the same refusal rather than a PATH-resolved `npm install -g`.
+  it("refuses a Windows npm-owned layout without invoking any package manager", async () => {
     const calls: string[] = [];
     const prefix = "C:\\Users\\oms\\AppData\\Roaming\\npm";
     const result = await runUpdate(updateOptions({
       entrypoint: "C:\\launch\\oms.js",
       realpath: () => `${prefix}\\node_modules\\oh-my-second-brain\\dist\\cli\\oms.js`,
-      runner: (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return args[0] === "prefix" ? okCall(`${prefix}\n`) : okCall();
-      },
+      runner: matchingRunner(calls),
     }));
 
-    expect(result.success).toBe(true);
-    expect(calls).toEqual([
-      "npm prefix -g",
-      "npm install -g oh-my-second-brain@latest",
-    ]);
+    expect(result.success).toBe(false);
+    expect(result.mutated).toBe(false);
+    expect(result.message).toContain("Refusing to update an npm-owned installation in place");
+    expect(calls).toEqual([]);
   });
 
   it("compares SemVer prerelease identifiers before stable releases", () => {

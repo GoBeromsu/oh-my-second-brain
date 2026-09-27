@@ -1,7 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { constants, realpathSync } from "node:fs";
-import { access } from "node:fs/promises";
-import path from "node:path";
+import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 
 export interface UpdateRunnerCall {
@@ -40,8 +38,6 @@ export interface RunUpdateOptions {
   /** Injectable only to make ownership topology deterministic in tests. */
   readonly entrypoint?: string;
   readonly realpath?: (target: string) => string;
-  /** Injectable only to test the resolved npm prefix admission check. */
-  readonly access?: (pathname: string, mode: number) => Promise<void>;
   /** Injectable only to make Volta's retained Node runtime deterministic in tests. */
   readonly runtimeNodeVersion?: string;
 }
@@ -244,54 +240,35 @@ function packageManagerForEntrypoint(options: RunUpdateOptions, packageName: str
     : "npm";
 }
 
-function samePrefix(left: string, right: string): boolean {
-  return left.includes("\\") || right.includes("\\")
-    ? path.win32.resolve(left).toLocaleLowerCase() === path.win32.resolve(right).toLocaleLowerCase()
-    : path.resolve(left) === path.resolve(right);
+const INSTALLER_URL = "https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh";
+
+function npmOwnedMigrationCommands(packageName: string): string[] {
+  return [`npm uninstall -g ${packageName}`, `curl -fsSL ${INSTALLER_URL} | bash`, "oms host sync"];
 }
 
-async function resolveNpmTopology(
-  options: RunUpdateOptions,
-  runner: UpdateRunner,
-  timeoutMs: number,
-): Promise<
-  | { readonly ok: true }
-  | { readonly ok: false; readonly error: string }
-> {
-  let packagePrefix: string;
+/**
+ * An npm-owned global install cannot be updated in place.
+ *
+ * `npm install -g` would be resolved from `PATH`, and a PATH-resolved npm runs
+ * under whichever Node the shell happens to expose. That Node is the one that
+ * rebuilds the native SQLite addon, while the managed MCP registrations stay
+ * pinned to the absolute interpreter recorded at install time. Matching global
+ * prefixes prove only WHERE the package lands, never WHICH interpreter built
+ * it, so no prefix check can close that gap — the addon and the launcher drift
+ * apart and OMS fails to start under the host (issue #139).
+ *
+ * The supported layout pins one Node through Volta; migrating there is the
+ * repair, so this refuses rather than performing an update it cannot make
+ * coherent.
+ */
+function npmOwnedUpdateRefusal(options: RunUpdateOptions, packageName: string): string {
+  let location: string;
   try {
-    packagePrefix = runningPackagePrefix(options);
+    location = `this OMS lives in the npm global prefix ${runningPackagePrefix(options)}`;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return { ok: false, error: `${detail} Run \`npm prefix -g\`, install from that prefix with \`npm install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run \`oms host sync\`.` };
+    location = error instanceof Error ? error.message : String(error);
   }
-
-  const prefixResult = await runner("npm", ["prefix", "-g"], { timeoutMs });
-  const npmPrefix = prefixResult.stdout.trim();
-  if (prefixResult.exitCode !== 0 || npmPrefix.length === 0) {
-    const detail = prefixResult.stderr.trim() || prefixResult.stdout.trim() || "npm prefix -g failed";
-    return {
-      ok: false,
-      error: `Unable to resolve npm's global prefix: ${detail}. Run \`npm prefix -g\`, then \`npm install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` and \`oms host sync\`.`,
-    };
-  }
-
-  if (!samePrefix(packagePrefix, npmPrefix)) {
-    return {
-      ok: false,
-      error: `Refusing to update: running OMS binary belongs to ${packagePrefix} (version ${options.currentVersion ?? "unknown"}), but npm prefix -g resolved ${npmPrefix} (target version ${options.latestVersion ?? "latest"}). Run \`npm --prefix ${packagePrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run the newly installed \`oms host sync\`.`,
-    };
-  }
-  try {
-    await (options.access ?? access)(npmPrefix, constants.W_OK);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return {
-      ok: false,
-      error: `Refusing to update: npm global prefix ${npmPrefix} is not writable: ${detail}. After restoring write access, run \`npm --prefix ${npmPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run the newly installed \`oms host sync\`.`,
-    };
-  }
-  return { ok: true };
+  return `Refusing to update an npm-owned installation in place: ${location}, and a PATH-resolved \`npm\` would rebuild the native addon under whichever Node the shell exposes while the managed MCP registrations stay pinned to the interpreter recorded at install time. Reinstall through the Volta-pinned installer instead: ${npmOwnedMigrationCommands(packageName).join(", then ")}.`;
 }
 
 export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult> {
@@ -322,10 +299,10 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
   const updateAvailable =
     currentVersion === null || compareVersions(currentVersion, latest.version) < 0;
   const packageManager = packageManagerForEntrypoint(options, packageName);
-  const installArgs = packageManager === "volta"
-    ? ["run", "--node", options.runtimeNodeVersion ?? process.versions.node, "npm", "install", "-g", `${packageName}@latest`]
-    : ["install", "-g", `${packageName}@latest`];
-  const commands = [formatCommand(packageManager, installArgs)];
+  const installArgs = ["run", "--node", options.runtimeNodeVersion ?? process.versions.node, "npm", "install", "-g", `${packageName}@latest`];
+  const commands = packageManager === "volta"
+    ? [formatCommand(packageManager, installArgs)]
+    : npmOwnedMigrationCommands(packageName);
 
   if (options.dryRun === true || options.check === true) {
     return {
@@ -335,11 +312,28 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
       updateAvailable,
       packageMutated: false,
       mutated: false,
-      message: updateAvailable
-        ? `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}.`
-        : `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}).`,
+      message: !updateAvailable
+        ? `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}).`
+        : packageManager === "npm"
+          ? `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}. ${npmOwnedUpdateRefusal(options, packageName)}`
+          : `Update available: ${currentVersion ?? "unknown"} -> ${latest.version}.`,
       commands: updateAvailable ? commands : [],
       errors: [],
+    };
+  }
+
+  if (updateAvailable && packageManager === "npm") {
+    const refusal = npmOwnedUpdateRefusal(options, packageName);
+    return {
+      success: false,
+      currentVersion,
+      latestVersion: latest.version,
+      updateAvailable,
+      packageMutated: false,
+      mutated: false,
+      message: refusal,
+      commands,
+      errors: [refusal],
     };
   }
 
@@ -380,22 +374,6 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
   }
 
   if (updateAvailable) {
-    if (packageManager === "npm") {
-      const topology = await resolveNpmTopology(options, runner, timeoutMs);
-      if (!topology.ok) {
-        return {
-          success: false,
-          currentVersion,
-          latestVersion: latest.version,
-          updateAvailable,
-          packageMutated: false,
-          mutated: false,
-          message: topology.error,
-          commands,
-          errors: [topology.error],
-        };
-      }
-    }
     const installResult = await runner(packageManager, installArgs, { timeoutMs });
     if (installResult.exitCode !== 0) {
       const error = installResult.stderr.trim() || installResult.stdout.trim() || `${packageManager} install failed`;

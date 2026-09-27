@@ -4,7 +4,7 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
-- Volta-owned package updates retain the running OMS Node version through Volta's documented pinned-package install path, while npm-owned installs keep verified-prefix admission.
+- Volta-owned package updates retain the running OMS Node version through Volta's documented pinned-package install path. An npm-owned installation is no longer updated in place: a PATH-resolved `npm` rebuilds the native addon under whichever Node the shell exposes while the managed MCP registrations stay pinned to the interpreter recorded at install time, so `oms package update` refuses and prints the migration to the Volta-pinned installer.
 
 ## [0.18.3] - 2026-09-26
 

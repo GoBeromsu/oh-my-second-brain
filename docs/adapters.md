@@ -4,8 +4,8 @@ Oh My Second Brain keeps shared skills in `assets/skills/` and host-specific run
 
 | Host | Manifest/config | Host assets | Installation destination |
 |---|---|---|---|
-| Claude Code | Root `.claude-plugin/plugin.json` and `.mcp.json` | `assets/claude/CLAUDE.md`, `assets/claude/hooks/` | Plugin root; the guard hook is registered in `~/.claude/settings.json` as PreToolUse entries for `Write|Edit|MultiEdit|NotebookEdit` and `Read|Grep|Glob`. |
-| Codex | Root `.codex-plugin/plugin.json` and `.mcp.codex.json` | `assets/codex/AGENTS.md`, `assets/codex/rules/oms.md` | `~/.codex/plugins/oms/AGENTS.md`, `~/.codex/rules/oms.md`, and `~/.codex/skills/oms-*`. |
+| Claude Code | Root `.claude-plugin/plugin.json` | `assets/claude/CLAUDE.md`, `assets/claude/hooks/` | Plugin root; the guard hook is registered in `~/.claude/settings.json` as PreToolUse entries for `Write|Edit|MultiEdit|NotebookEdit` and `Read|Grep|Glob`. |
+| Codex | Root `.codex-plugin/plugin.json` | `assets/codex/AGENTS.md`, `assets/codex/rules/oms.md` | `~/.codex/plugins/oms/AGENTS.md`, `~/.codex/rules/oms.md`, and `~/.codex/skills/oms-*`. |
 | Hermes | `assets/hermes-manifest.json` | `assets/hermes/SOUL.md`, `assets/hermes/README.md` | `~/.hermes/adapters/oms/`, `~/.hermes/skills/knowledge-management/oms/oms-*`, and `~/.hermes/config.yaml`. |
 | Gajae-Code | Marketplace-plugin convention | Generated root `skills/` mirror | The installed npm package root, where GJC discovers `skills/<name>/SKILL.md`. |
 
@@ -13,7 +13,7 @@ Claude's manifest keeps an explicit skill array. Codex's manifest keeps one shar
 
 `assets/skills/` remains the sole authored skill source. The root `skills/` tree is a committed generated mirror for GJC only: it cannot be a symlink because npm drops that symlink from packed artifacts. `npm run sync:skills` regenerates it, and the architecture gate requires matching directories and byte-identical `SKILL.md` files.
 
-The MCP server is started with `oms serve mcp`; `oms serve http` starts the HTTP surface. Neither server creates a vault engine store merely by starting. Claude uses `.mcp.json`, Codex uses `.mcp.codex.json`, and Hermes receives its registration in `~/.hermes/config.yaml`.
+The MCP server is started with `oms serve mcp`; `oms serve http` starts the HTTP surface. Neither server creates a vault engine store merely by starting. No plugin-owned MCP manifest ships: both former files invoked a bare `oms` resolved from `PATH`, which could load the native addon under a different Node ABI. `oms host install` writes every registration itself with the absolute interpreter and entrypoint — Claude in `~/.claude.json`, Codex in `~/.codex/config.toml`, Hermes in `~/.hermes/config.yaml`.
 
 All hosts expose the same five MCP tools: `write`, `search`, `link`, `status`, and `doctor`. Skills are host workflows, not tool names. `distill` is tool-less. The `write` tool takes `{path, content, template?}`: the agent supplies the whole note, and OMS judges it against the sealed contract and saves it only when it is allowed. See [the CLI map](./cli-map.md).
 

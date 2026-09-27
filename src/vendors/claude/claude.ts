@@ -153,15 +153,29 @@ async function removeClaudeMcp(
 }
 
 /**
- * `~/.claude.json`'s root `mcpServers` key is Claude Code's user scope: it
- * shadows the plugin-provided `.mcp.json` fallback (scope precedence is
- * Local > Project > User > Plugin-provided, fields are never merged), and
- * unlike `.mcp.json` it is never overwritten by `oms update` because npm
- * does not own it. This is the only place the resolved vault can be baked
- * in as an absolute path ahead of time, so registering it here is what lets
- * `oms_search`/`oms_write` resolve a vault without the user exporting
- * `OMS_VAULT` themselves.
+ * `~/.claude.json`'s root `mcpServers` key is Claude Code's user scope, and it
+ * is now the ONLY place Claude learns how to launch OMS: the plugin-owned
+ * `.mcp.json` that used to sit beside it invoked a bare `oms` resolved from
+ * `PATH`, which is exactly the cross-Node-ABI launch this pinning work exists
+ * to remove, so that manifest no longer ships. This entry pins the installing
+ * process's absolute interpreter and entrypoint and bakes in the resolved
+ * vault.
+ *
+ * Because no fallback remains, a failure here is an install failure, not a
+ * warning: continuing would leave Claude with no OMS registration at all while
+ * reporting success.
  */
+class ClaudeUserScopeRegistrationError extends Error {
+  constructor(claudeJsonPath: string, reason: string) {
+    super(
+      `Refusing to finish the Claude install: ${reason} (${claudeJsonPath}). `
+      + "The user-scope registration pins the Node interpreter OMS must launch under, and no plugin fallback exists. "
+      + `Fix ${claudeJsonPath}, then rerun oms host install --runtime claude.`,
+    );
+    this.name = "ClaudeUserScopeRegistrationError";
+  }
+}
+
 async function upsertClaudeUserScopeMcp(
   options: HostOperationOptions,
   claudeJsonPath: string,
@@ -171,22 +185,23 @@ async function upsertClaudeUserScopeMcp(
     raw = await readFile(claudeJsonPath, "utf-8");
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-      return { changed: false, message: `WARNING: Could not read ${claudeJsonPath}; user-scope MCP registration skipped.` };
+      throw new ClaudeUserScopeRegistrationError(claudeJsonPath, "the Claude user config could not be read");
     }
   }
   let data: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed)) {
-      return { changed: false, message: `WARNING: ${claudeJsonPath} is not a JSON object; user-scope MCP registration skipped.` };
+      throw new ClaudeUserScopeRegistrationError(claudeJsonPath, "the Claude user config is not a JSON object");
     }
     data = parsed;
-  } catch {
-    return { changed: false, message: `WARNING: ${claudeJsonPath} is malformed JSON; user-scope MCP registration skipped.` };
+  } catch (error) {
+    if (error instanceof ClaudeUserScopeRegistrationError) throw error;
+    throw new ClaudeUserScopeRegistrationError(claudeJsonPath, "the Claude user config is malformed JSON");
   }
   const existingServers = data["mcpServers"];
   if (existingServers !== undefined && !isRecord(existingServers)) {
-    return { changed: false, message: `WARNING: ${claudeJsonPath} has unsupported mcpServers metadata; user-scope MCP registration skipped.` };
+    throw new ClaudeUserScopeRegistrationError(claudeJsonPath, "the Claude user config has unsupported mcpServers metadata");
   }
   const nextServers = isRecord(existingServers) ? existingServers : {};
   const desired = mcpServerEntry(options);
@@ -197,13 +212,13 @@ async function upsertClaudeUserScopeMcp(
   nextServers["oms"] = desired;
   const next = replaceRootJsonPropertyPreservingBytes(raw, "mcpServers", nextServers);
   if (next === null) {
-    return { changed: false, message: `WARNING: Could not preserve unmanaged config bytes in ${claudeJsonPath}; user-scope MCP registration skipped.` };
+    throw new ClaudeUserScopeRegistrationError(claudeJsonPath, "unmanaged bytes in the Claude user config could not be preserved");
   }
   if (!options.dryRun) {
     try {
       await writeFile(claudeJsonPath, next, "utf-8");
     } catch {
-      return { changed: false, message: `WARNING: Could not write ${claudeJsonPath}; user-scope MCP registration skipped.` };
+      throw new ClaudeUserScopeRegistrationError(claudeJsonPath, "the Claude user config could not be written");
     }
   }
   return { changed: !options.dryRun };
@@ -264,7 +279,7 @@ export async function installClaude(options: HostOperationOptions, host: Harness
     `claude plugin install ${pluginPath}`,
   ];
   const messages = [
-    "Claude Code adapter registers oms as a user-scope MCP server (in ~/.claude.json) with the resolved vault baked in, which shadows the bare plugin-owned .mcp.json fallback declared for anyone who sets OMS_VAULT themselves.",
+    "Claude Code adapter registers oms as a user-scope MCP server (in ~/.claude.json) with the installing interpreter, entrypoint, and resolved vault pinned as absolute paths. It is the only OMS registration: no plugin-owned .mcp.json ships, so nothing can relaunch OMS through a PATH-resolved `oms`.",
     `Claude marketplace source: ${marketplace.source} (${marketplace.kind}); the local plugin path stays available as an offline fallback.`,
     MARKETPLACE_AUTO_UPDATE_MESSAGE,
   ];

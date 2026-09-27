@@ -12,7 +12,7 @@ oms --help
 
 Install [Volta](https://docs.volta.sh/guide/getting-started) first. Volta's documented package flow pins the current default Node runtime when the tool is installed, so a later shell `PATH` or default-Node change cannot make `oms` load a native addon built for another ABI. If Node 24 should not remain Volta's default, restore the previous version with `volta install node@<previous-version>` after installing OMS; the OMS pin remains Node 24. The shipped `scripts/install.sh` records and restores an existing Volta default automatically. Set `OMS_NODE_RUNTIME` only to select another supported Node version deliberately.
 
-The package exposes both `oms` and `oh-my-second-brain` command names. A Volta-owned `oms package update` retains the running OMS Node version and updates through `volta run --node <that-version> npm install -g ...`; an npm-owned installation keeps the existing verified-prefix update path.
+The package exposes both `oms` and `oh-my-second-brain` command names. A Volta-owned `oms package update` retains the running OMS Node version and updates through `volta run --node <that-version> npm install -g ...`. An npm-owned installation is refused: `npm install -g` runs under whichever Node `PATH` exposes, so it would rebuild the native addon against a different ABI than the interpreter pinned in the host registrations. `oms package update` prints the migration instead — uninstall the global package and reinstall through `scripts/install.sh`.
 
 ## Install host integrations
 
@@ -30,7 +30,7 @@ Installation writes host-native guidance and skill assets, then stamps the host 
 oms serve mcp --vault /path/to/vault
 ```
 
-The absolute interpreter and entrypoint deliberately avoid resolving `oms` or `node` from a long-lived host's `PATH`. Run `oms host sync` after a package/runtime update to refresh those pinned paths.
+The absolute interpreter and entrypoint deliberately avoid resolving `oms` or `node` from a long-lived host's `PATH`. That registration is the only one OMS declares: no plugin-owned `.mcp.json`/`.mcp.codex.json` ships, because both invoked a bare `oms`. A Claude install whose `~/.claude.json` cannot be read, parsed, or written therefore fails instead of continuing. Run `oms host sync` after a package/runtime update to refresh the pinned paths.
 
 It also writes a strict signed host-maintenance pointer at `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`. Only `host install`, `host sync`, and `host remove` use this record. Installing or explicitly syncing another vault uses compare-and-swap and updates every owned host stamp; removal deletes the pointer last after host cleanup succeeds.
 

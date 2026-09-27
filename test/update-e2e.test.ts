@@ -75,7 +75,7 @@ afterEach(() => {
 });
 
 describe("oms package update isolated e2e", () => {
-  it("refuses a non-TTY update without --yes and leaves the cwd untouched", () => {
+  it("refuses a non-TTY npm-owned update and leaves the cwd untouched", () => {
     const cwd = makeTempRoot("oms-update-non-tty-");
     const home = makeTempRoot("oms-update-home-");
     const result = runCli(["package", "update"], cwd, {
@@ -84,7 +84,7 @@ describe("oms package update isolated e2e", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(`${result.stdout}${result.stderr}`).toContain("stdin is not a TTY");
+    expect(`${result.stdout}${result.stderr}`).toContain("Refusing to update an npm-owned installation in place");
     expect(readdirSync(cwd)).toEqual([]);
   });
 
@@ -97,7 +97,8 @@ describe("oms package update isolated e2e", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("npm install -g oh-my-second-brain@latest");
+    expect(result.stdout).toContain("Refusing to update an npm-owned installation in place");
+    expect(result.stdout).toContain("npm uninstall -g oh-my-second-brain");
     expect(result.stdout).toContain("oms host sync");
     expect(result.stdout).not.toContain("reconcile");
     expect(readdirSync(cwd)).toEqual([]);
@@ -142,7 +143,7 @@ describe("oms package update isolated e2e", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("not owned by a global npm prefix");
-    expect(result.stdout).toContain("npm prefix -g");
+    expect(result.stdout).toContain("Refusing to update an npm-owned installation in place");
     const afterOmsHash = createHash("sha256")
       .update(readFileSync(owned))
       .digest("hex");
@@ -151,7 +152,10 @@ describe("oms package update isolated e2e", () => {
     expect(existsSync(hostMarker)).toBe(false);
   });
 
-  it("reports package installation failure without running host sync or changing the vault", () => {
+  // F2 regression at the process boundary: an npm-owned install must never
+  // spawn a PATH-resolved `npm install -g`, because that rebuilds the native
+  // addon under whatever Node the shell exposes.
+  it("refuses an npm-owned install without spawning npm, running host sync, or changing the vault", () => {
     const cwd = makeTempRoot("oms-update-install-failure-");
     const prefix = makeTempRoot("oms-update-prefix-");
     const bin = path.join(makeTempRoot("oms-update-fake-bin-"), "bin");
@@ -167,7 +171,9 @@ describe("oms package update isolated e2e", () => {
     }, cli);
 
     expect(result.status).toBe(1);
-    expect(`${result.stdout}${result.stderr}`).toContain("npm update failed: synthetic install refused");
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output).toContain("Refusing to update an npm-owned installation in place");
+    expect(output).not.toContain("synthetic install refused");
     expect(result.stdout).not.toContain("Successfully updated");
     expect(readFileSync(owned, "utf-8")).toBe(before);
     expect(existsSync(hostMarker)).toBe(false);

@@ -10,7 +10,7 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
-- **OMS now keeps one Node runtime across the CLI, native SQLite addon, and managed MCP launchers.** The recommended Volta install pins OMS to Node 24 LTS without changing the user's default Node, package updates preserve the running pinned version, and Claude/Codex/Hermes registrations record absolute interpreter and package-entrypoint paths instead of resolving `node` or `oms` from host `PATH`. This prevents global npm updates under one Node ABI from being launched later under another.
+- **OMS now keeps one Node runtime across the CLI, native SQLite addon, and managed MCP launchers.** The recommended Volta install pins OMS to Node 24 LTS without changing the user's default Node, package updates preserve the running pinned version, and Claude/Codex/Hermes registrations record absolute interpreter and package-entrypoint paths instead of resolving `node` or `oms` from host `PATH`. This prevents global npm updates under one Node ABI from being launched later under another. No plugin manifest ships a PATH-resolved `oms` fallback any more, and an npm-owned installation is migrated to the Volta-pinned installer rather than updated in place.
 
 ## [0.18.3] - 2026-09-26
 

@@ -33,13 +33,13 @@ interface ClaudeManifest {
   readonly name: string;
   readonly skills: readonly string[];
   readonly agents: readonly string[];
-  readonly mcpServers: string;
+  readonly mcpServers?: string;
 }
 
 interface CodexManifest {
   readonly name: string;
   readonly skills: string;
-  readonly mcpServers: string;
+  readonly mcpServers?: string;
 }
 
 const temporaries: string[] = [];
@@ -146,23 +146,18 @@ describe("packaged vendor discovery", () => {
     }
   });
 
-  it("points both host MCP configs at a file that exists", async () => {
+  // No plugin manifest may point at an MCP config again. Both former files
+  // launched a bare `oms` resolved from PATH, so a host could start OMS under a
+  // different Node than the one its native addon was built for. `oms host
+  // install` now writes every registration itself with absolute paths.
+  it("declares no plugin-owned MCP config in either host manifest", async () => {
     const claude = await readJson<ClaudeManifest>(".claude-plugin/plugin.json");
     const codex = await readJson<CodexManifest>(".codex-plugin/plugin.json");
 
-    for (const [host, pointer] of [
-      ["claude", claude.mcpServers],
-      ["codex", codex.mcpServers],
-    ] as const) {
-      const resolved = path.relative(absolute("."), path.resolve(absolute("."), pointer));
-      await expect(pathExists(resolved), `${host} -> ${pointer}`).resolves.toBe(true);
-    }
-  });
-
-  it("gives Claude and Codex distinct MCP configs so the root move cannot collide them", async () => {
-    const claude = await readJson<ClaudeManifest>(".claude-plugin/plugin.json");
-    const codex = await readJson<CodexManifest>(".codex-plugin/plugin.json");
-    expect(claude.mcpServers).not.toBe(codex.mcpServers);
+    expect(claude.mcpServers).toBeUndefined();
+    expect(codex.mcpServers).toBeUndefined();
+    await expect(pathExists(".mcp.json")).resolves.toBe(false);
+    await expect(pathExists(".mcp.codex.json")).resolves.toBe(false);
   });
 
   it("keeps the Hermes manifest free of a skills pointer, since Hermes installs from the shared source", async () => {
@@ -215,10 +210,8 @@ describe("packaged vendor discovery", () => {
     },
   );
 
-  it("ships the Codex native rule and both host MCP descriptors", async () => {
+  it("ships the Codex native rule", async () => {
     await expect(pathExists("assets/codex/rules/oms.md")).resolves.toBe(true);
-    await expect(pathExists(".mcp.json")).resolves.toBe(true);
-    await expect(pathExists(".mcp.codex.json")).resolves.toBe(true);
   });
 
   it("ships both Claude hook binaries that package.json bin points at", async () => {

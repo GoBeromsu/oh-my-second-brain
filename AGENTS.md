@@ -20,7 +20,7 @@ Outside `src/`:
 
 - `assets/skills/` — the seven skills, authored **once**. There are no per-vendor copies.
 - `assets/{claude,codex,hermes}/` — host runtime assets (hooks, rules, guidance).
-- `.claude-plugin/`, `.codex-plugin/`, `.mcp.json`, `.mcp.codex.json` — vendor plugin manifests at the repository root.
+- `.claude-plugin/`, `.codex-plugin/` — vendor plugin manifests at the repository root. They declare no `mcpServers` pointer: MCP registrations are written by `oms host install` with absolute interpreter and entrypoint paths.
 - `core/ontology/` — legacy default schemas; nothing reads them at runtime and the package excludes them. `core/AGENTS.md` — separately-owned vault SSOT.
 - `test/architecture/` — the CI gates. `docs/decisions/` — ADRs.
 

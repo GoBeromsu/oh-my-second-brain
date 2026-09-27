@@ -16,8 +16,6 @@
     "core/AGENTS.md",
     ".claude-plugin",
     ".codex-plugin",
-    ".mcp.json",
-    ".mcp.codex.json",
     "assets",
     "skills",
     "docs/adapters.md",

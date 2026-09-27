@@ -75,8 +75,6 @@ const SKILLS_PREFIX = "skills/";
 const PACKAGE_ROOT_ENTRIES = [
   ".claude-plugin",
   ".codex-plugin",
-  ".mcp.json",
-  ".mcp.codex.json",
   "package.json",
 ] as const;
 

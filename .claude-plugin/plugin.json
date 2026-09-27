@@ -6,7 +6,6 @@
     "name": "gobeumsu"
   },
   "license": "MIT",
-  "mcpServers": "./.mcp.json",
   "keywords": [
     "obsidian",
     "knowledge-base",

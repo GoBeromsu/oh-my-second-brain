@@ -44,11 +44,18 @@ case "$PREVIOUS_NODE" in
   *) PREVIOUS_NODE="" ;;
 esac
 
+# `volta install node@X` changes the user's DEFAULT Node, so the restore has to
+# be armed before the first mutation and run on every exit path. Restoring only
+# on the success path leaves a failed install with the user's default rewritten.
+restore_default_node() {
+  if [ -n "$PREVIOUS_NODE" ] && [ "$PREVIOUS_NODE" != "$NODE_RUNTIME" ]; then
+    volta install "node@$PREVIOUS_NODE" || true
+  fi
+}
+trap restore_default_node EXIT
+
 volta install "node@$NODE_RUNTIME"
 volta install "$PACKAGE_SPEC"
-if [ -n "$PREVIOUS_NODE" ] && [ "$PREVIOUS_NODE" != "$NODE_RUNTIME" ]; then
-  volta install "node@$PREVIOUS_NODE"
-fi
 
 ARGS=(host install --runtime "$RUNTIME" --vault "$VAULT" --yes)
 if [ "$EXECUTE" = "1" ]; then
