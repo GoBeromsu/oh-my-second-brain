@@ -2,7 +2,7 @@ import { mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { addSharedCopy, buildTruthTableRow, TRUTH_TABLE_ROWS, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
-import { extractTemplate } from "./extract.js";
+import { enumerateTemplateSources } from "./interpretation.js";
 import { guardEventsPath } from "./guard-events.js";
 import {
   contractDoctor, contractStatus, doctorFix, ROW_FINDING, SHARED_FINDING, STORE_UNREADABLE_FINDING, type DoctorFixResult,
@@ -76,9 +76,9 @@ describe("contractStatus", () => {
     const probe = await row("never-sealed");
     await mkdir(join(probe.vault, "Templates"));
     await writeFile(join(probe.vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n");
-    const extracted = await extractTemplate(probe.vault, "Templates/Meeting.md");
-    if (!extracted.ok) throw new Error("extraction failed");
-    const template = { source: "Templates/Meeting.md", sourceHash: extracted.extraction.sourceHash, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
+    const enumerated = await enumerateTemplateSources(probe.vault, { path: "Templates/Meeting.md", kind: "file" });
+    if (!enumerated.ok) throw new Error("enumeration failed");
+    const template = { source: "Templates/Meeting.md", sourceHash: enumerated.sources[0]!.digest, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
     const contract: VaultContract = { folders: null, properties: null, templates: { Meeting: template, Gone: { ...template, source: "Templates/Gone.md" } } };
 
     const fixture = await row("sealed", contract);

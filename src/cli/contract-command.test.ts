@@ -195,16 +195,15 @@ describe("oms contract", () => {
     await expect(readdir(path.join(home, ".oms"))).rejects.toThrow();
   });
 
-  it("extracts shapes without printing literal values", async () => {
+  it("names the source to interpret and the hash, and reads nothing of its content", async () => {
     await runContractCommand(["extract", "--template", "Templates/Meeting.md", "--vault", vault]);
     expect(process.exitCode).toBe(0);
     const result = output();
-    expect(result["status"]).toBe("extracted");
-    expect(result["fields"]).toEqual([
-      { name: "code", type: expect.any(String), variable: null, literal: true },
-      { name: "status", type: expect.any(String), variable: null, literal: true },
-    ]);
+    expect(result["status"]).toBe("enumerated");
+    expect(result["sources"]).toEqual([{ source: "Templates/Meeting.md", sourceHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) }]);
+    // Not just the secret: no property name either, because the bytes are never parsed.
     expect(printed()).not.toContain(SECRET);
+    expect(printed()).not.toContain("code");
   });
 
   it("refuses a template outside the vault", async () => {

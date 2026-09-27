@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { detectDrift, templateDrift } from "./drift.js";
-import { extractTemplate } from "./extract.js";
+import { enumerateTemplateSources } from "./interpretation.js";
 import type { TemplateContract } from "./types.js";
 
 let vault: string;
@@ -19,9 +19,9 @@ afterEach(async () => {
 });
 
 async function sealedTemplate(): Promise<TemplateContract> {
-  const result = await extractTemplate(vault, "Templates/Meeting.md");
-  if (!result.ok) throw new Error("extraction failed");
-  return { source: "Templates/Meeting.md", sourceHash: result.extraction.sourceHash, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
+  const result = await enumerateTemplateSources(vault, { path: "Templates/Meeting.md", kind: "file" });
+  if (!result.ok) throw new Error("enumeration failed");
+  return { source: "Templates/Meeting.md", sourceHash: result.sources[0]!.digest, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
 }
 
 describe("template drift", () => {

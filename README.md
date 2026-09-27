@@ -25,7 +25,7 @@ oms setup --vault /path/to/vault
 oms contract status --vault /path/to/vault
 ```
 
-`oms contract extract --template <path>` shows what one template declares without printing values. `oms contract doctor` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures; `--fix` only re-indexes a moved or unindexed vault. Any other broken seal is recovered by running `oms setup` again. Model lifecycle stands alone as `oms model install|select|waive|status`.
+`oms contract extract --template <path>` shows one template source and the hash OMS computed for it; OMS never parses template text, so an agent reads each template and submits what it declares with `oms setup --interpretations <file>`, and the owner confirms that interpretation before it decides a single question. `oms contract doctor` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures; `--fix` only re-indexes a moved or unindexed vault. Any other broken seal is recovered by running `oms setup` again. Model lifecycle stands alone as `oms model install|select|waive|status`.
 
 ## CLI
 

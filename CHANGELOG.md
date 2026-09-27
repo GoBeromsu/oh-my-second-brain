@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+- **The contract stops guessing what a template declares.** OMS used to parse template text to decide which questions the seal interview asks, substituting an in-band sentinel token for each Templater variable so the rest would still parse as YAML. Real templates broke that: four of this vault's templates put a variable where YAML expects a key, and a Templater JavaScript template with no frontmatter passed silently as declaring nothing while it really declares ten properties and four headings. Reading a template is now the agent's job and deriving the contract stays the machine's: the agent submits an interpretation, OMS verifies it against the sources it enumerated and the digests it computed itself, the owner confirms the interpretation before it decides a single question, and every sealed value still comes only from the owner's answers.
+
 ## [0.18.3] - 2026-09-26
 
 - **Ships the Hermes skill namespace from 0.18.2.** The 0.18.2 tag failed its release check on a flaky test and was never published to npm, so 0.18.3 is the first published release where Hermes installs the OMS skills as `oms-*` with `SKILL_CAPABILITY_GUIDE.md` (see 0.18.2 below). The read-only engine store tests now use a private temporary directory, so snapshot directories from parallel test files no longer break the check.

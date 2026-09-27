@@ -3,6 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runContractCommand } from "../../src/cli/contract-command.js";
+import { interpretVault } from "../../src/kernel/contract/interpretation-fixture.js";
 import type { InterviewIO, Question } from "../../src/kernel/contract/interview.js";
 import { readVaultSettings } from "../../src/kernel/vault/settings.js";
 
@@ -62,6 +63,7 @@ function scripted(answers: Readonly<Record<string, string>>): InterviewIO & { re
 }
 
 const TEMPLATE_ANSWERS = {
+  "template:Meeting:interpretation": "y",
   "template:Meeting:register": "y",
   "template:Meeting:field:status:required": "n",
   "template:Meeting:field:status:literal": "example-only",
@@ -69,8 +71,18 @@ const TEMPLATE_ANSWERS = {
   "seal": "y",
 } as const;
 
-async function setup(io: InterviewIO): Promise<Record<string, unknown>> {
-  await runContractCommand(["setup", "--vault", vault], { io });
+/**
+ * The agent's half of the seal: OMS no longer reads template text, so the interview needs
+ * an interpretation of every source it enumerated. The fixture plays the agent.
+ */
+async function interpreting(): Promise<readonly string[]> {
+  const file = path.join(base, "interpretations.json");
+  await writeFile(file, JSON.stringify(await interpretVault(vault, "Templates")));
+  return ["--interpretations", file];
+}
+
+async function setup(io: InterviewIO, flags: readonly string[] = []): Promise<Record<string, unknown>> {
+  await runContractCommand(["setup", ...flags, "--vault", vault], { io });
   return output();
 }
 
@@ -79,7 +91,7 @@ describe("oms contract setup template-folder discovery", () => {
     expect(homedir()).toBe(home);
     await writeFile(path.join(vault, ".obsidian", "templates.json"), JSON.stringify({ folder: "Templates" }));
     const io = scripted({ ...TEMPLATE_ANSWERS, "template-folder:confirm": "" });
-    expect(await setup(io)).toEqual({ status: "sealed", vaultIdCreated: true, folders: 0, properties: 0, templates: ["Meeting"] });
+    expect(await setup(io, await interpreting())).toEqual({ status: "sealed", vaultIdCreated: true, folders: 0, properties: 0, templates: ["Meeting"] });
     expect(process.exitCode).toBe(0);
     expect(io.asked).toContain("template-folder:confirm");
     expect(io.asked).not.toContain("template-folder:path");
@@ -93,7 +105,7 @@ describe("oms contract setup template-folder discovery", () => {
   it("offers the Templater folder, with its slashes trimmed, when the core plugin names none", async () => {
     await writeFile(path.join(vault, ".obsidian", "plugins", "templater-obsidian", "data.json"), JSON.stringify({ templates_folder: "/Templates/" }));
     const io = scripted({ ...TEMPLATE_ANSWERS, "template-folder:confirm": "y" });
-    expect(await setup(io)).toMatchObject({ status: "sealed", templates: ["Meeting"] });
+    expect(await setup(io, await interpreting())).toMatchObject({ status: "sealed", templates: ["Meeting"] });
     expect(io.asked).not.toContain("template-folder:path");
     expect((await readVaultSettings(vault))?.templateFolder).toBe("Templates");
   });
@@ -117,7 +129,7 @@ describe("oms contract setup template-folder discovery", () => {
     await mkdir(path.join(base, "outside"));
     await writeFile(path.join(vault, ".obsidian", "templates.json"), settings);
     const io = scripted({ ...TEMPLATE_ANSWERS, "template-folder:path": "Templates" });
-    expect(await setup(io)).toMatchObject({ status: "sealed", templates: ["Meeting"] });
+    expect(await setup(io, await interpreting())).toMatchObject({ status: "sealed", templates: ["Meeting"] });
     expect(io.asked).not.toContain("template-folder:confirm");
     expect(io.asked.filter(id => id === "template-folder:path")).toHaveLength(1);
     expect((await readVaultSettings(vault))?.templateFolder).toBe("Templates");
@@ -127,7 +139,7 @@ describe("oms contract setup template-folder discovery", () => {
     await writeFile(path.join(vault, ".obsidian", "templates.json"), "not json");
     await writeFile(path.join(vault, ".obsidian", "plugins", "templater-obsidian", "data.json"), JSON.stringify({ templates_folder: "Templates" }));
     const io = scripted({ ...TEMPLATE_ANSWERS, "template-folder:confirm": "" });
-    expect(await setup(io)).toMatchObject({ status: "sealed", templates: ["Meeting"] });
+    expect(await setup(io, await interpreting())).toMatchObject({ status: "sealed", templates: ["Meeting"] });
     expect(io.asked).not.toContain("template-folder:path");
   });
 
