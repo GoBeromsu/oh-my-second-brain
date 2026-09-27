@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The `setup` skill reads each template itself before asking anything.** It now submits `{source, observedHash, fields, headings}` per template with `--interpretations`, handles the `interpretation-required` and `interpretation-rejected` results, and is told plainly that a field left out of an interpretation is a question the owner is never asked, and that `observedHash` must come from reading the bytes rather than from copying the hash OMS printed.
+
 ## [0.18.3] - 2026-09-26
 
 ## [0.18.2] - 2026-09-26

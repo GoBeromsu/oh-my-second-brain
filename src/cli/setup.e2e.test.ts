@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { digestBytes } from "../kernel/conventions/canonical.js";
 import { serializeVaultSettings, SETTINGS_PATH } from "../kernel/vault/settings.js";
 
 /**
@@ -112,6 +113,8 @@ describe("oms setup end to end", () => {
     const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
     const HIDDEN = "zebra-hidden-value";
     const MEETING = "---\nstatus: open\n---\n## Agenda\n";
+    const WITH_NOTES = `${MEETING}## Notes\n`;
+    const WITH_ACTIONS = `${WITH_NOTES}## Actions\n`;
     const FIRST = {
       "folder:Projects:register": true,
       "folder:Projects:meaning": "project notes",
@@ -123,6 +126,7 @@ describe("oms setup end to end", () => {
       "property:status:required": true,
       "property:status:rule": "none",
       "property:status:meaning": "workflow state",
+      "template:Meeting:interpretation": true,
       "template:Meeting:register": true,
       "template:Meeting:field:status:required": true,
       "template:Meeting:field:status:literal": "one-of-allowed",
@@ -132,7 +136,22 @@ describe("oms setup end to end", () => {
       seal: true,
     };
 
-    async function agentVault(): Promise<{ readonly home: string; readonly vault: string; readonly answersFile: (answers: object) => Promise<string> }> {
+    /** The agent's half: what it read in Templates/Meeting.md, bound to the bytes it read. */
+    function interpretation(bytes: string) {
+      return [{
+        source: "Templates/Meeting.md",
+        observedHash: digestBytes(bytes),
+        fields: [{ name: "status", inferredType: "text", literal: "open", variable: null }],
+        headings: [{ title: "Agenda", level: 2, variable: false }, ...bytes.includes("## Notes") ? [{ title: "Notes", level: 2, variable: false }] : [], ...bytes.includes("## Actions") ? [{ title: "Actions", level: 2, variable: false }] : []],
+      }];
+    }
+
+    async function agentVault(): Promise<{
+      readonly home: string;
+      readonly vault: string;
+      readonly answersFile: (answers: object) => Promise<string>;
+      readonly interpreting: (bytes?: string) => Promise<readonly string[]>;
+    }> {
       const { home, vault } = await fixture();
       await mkdir(path.join(vault, "Projects"));
       await mkdir(path.join(vault, "Templates"));
@@ -145,7 +164,13 @@ describe("oms setup end to end", () => {
         await writeFile(file, JSON.stringify(answers));
         return file;
       };
-      return { home, vault, answersFile };
+      /** The `--interpretations` flag pair for the template as it stands, or as given. */
+      const interpreting = async (bytes = MEETING): Promise<readonly string[]> => {
+        const file = path.join(path.dirname(vault), `interpretations-${count++}.json`);
+        await writeFile(file, JSON.stringify(interpretation(bytes)));
+        return ["--interpretations", file];
+      };
+      return { home, vault, answersFile, interpreting };
     }
 
     function json(result: { readonly stdout: string }): Record<string, unknown> {
@@ -157,13 +182,29 @@ describe("oms setup end to end", () => {
       return existsSync(store) ? listing(store) : [];
     }
 
-    it("prints the first questions without a terminal and seals nothing", async () => {
+    it("asks for an interpretation before any question, and seals nothing", async () => {
       const { home, vault } = await agentVault();
       const result = runCli(home, ["setup", "--questions", "--vault", vault]);
+      expect(result.status).toBe(1);
+      expect(json(result)).toMatchObject({
+        status: "interpretation-required",
+        sources: [{ source: "Templates/Meeting.md", sourceHash: digestBytes(MEETING) }],
+      });
+      expect(await storeFiles(home)).toEqual([]);
+    });
+
+    it("prints the first questions without a terminal and seals nothing", async () => {
+      const { home, vault, answersFile, interpreting } = await agentVault();
+      const result = runCli(home, ["setup", "--questions", ...await interpreting(), "--vault", vault]);
       expect(result.status, result.stderr).toBe(0);
       const output = json(result);
       expect(output["status"]).toBe("questions");
-      expect((output["questions"] as { id: string }[]).map(question => question.id)).toEqual([
+      // The interpretation decides which template questions exist, so it is confirmed first.
+      expect((output["questions"] as { id: string }[]).map(question => question.id)).toEqual(["template:Meeting:interpretation"]);
+
+      const confirmed = runCli(home, ["setup", "--answers", await answersFile({ "template:Meeting:interpretation": true }), ...await interpreting(), "--vault", vault]);
+      expect(confirmed.status).toBe(1);
+      expect((json(confirmed)["questions"] as { id: string }[]).map(question => question.id)).toEqual([
         "folder:Projects:register",
         "folder:Templates:register",
         "folder:notes:register",
@@ -175,16 +216,17 @@ describe("oms setup end to end", () => {
     });
 
     it("seals a first contract from answers, reseals a changed template answered as before and refuses a stricter or looser one without its values", async () => {
-      const { home, vault, answersFile } = await agentVault();
-      const first = runCli(home, ["setup", "--answers", await answersFile(FIRST), "--vault", vault]);
+      const { home, vault, answersFile, interpreting } = await agentVault();
+      const first = runCli(home, ["setup", "--answers", await answersFile(FIRST), ...await interpreting(), "--vault", vault]);
       expect(first.status, first.stdout + first.stderr).toBe(0);
       expect(json(first)).toMatchObject({ status: "sealed", folders: 1, properties: 1, templates: ["Meeting"] });
       expect(first.stdout).not.toContain(HIDDEN);
 
-      await writeFile(path.join(vault, "Templates", "Meeting.md"), `${MEETING}## Notes\n`);
+      await writeFile(path.join(vault, "Templates", "Meeting.md"), WITH_NOTES);
       const firstFiles = await storeFiles(home);
       // A sealed template stays exactly as strict: the judge enforces it only where the previous content passed it.
       const tighterTemplate = {
+        "template:Meeting:interpretation": true,
         "template:Meeting:register": true,
         "template:Meeting:field:status:required": true,
         "template:Meeting:field:status:literal": "one-of-allowed",
@@ -194,7 +236,7 @@ describe("oms setup end to end", () => {
         "template:Meeting:apply-folder": "Projects",
         seal: true,
       };
-      const tightened = runCli(home, ["setup", "--answers", await answersFile(tighterTemplate), "--vault", vault]);
+      const tightened = runCli(home, ["setup", "--answers", await answersFile(tighterTemplate), ...await interpreting(WITH_NOTES), "--vault", vault]);
       expect(tightened.status).toBe(1);
       expect(json(tightened)).toMatchObject({
         status: "loosening",
@@ -207,6 +249,7 @@ describe("oms setup end to end", () => {
       expect(await storeFiles(home)).toEqual(firstFiles);
 
       const unchanged = {
+        "template:Meeting:interpretation": true,
         "template:Meeting:register": true,
         "template:Meeting:field:status:required": true,
         "template:Meeting:field:status:literal": "one-of-allowed",
@@ -216,17 +259,18 @@ describe("oms setup end to end", () => {
         "template:Meeting:apply-folder": "Projects",
         seal: true,
       };
-      const questions = runCli(home, ["setup", "--questions", "--vault", vault]);
+      const questions = runCli(home, ["setup", "--questions", ...await interpreting(WITH_NOTES), "--vault", vault]);
       expect(questions.status).toBe(0);
       // The default for the literal's allowed values would be the hidden value; it is never printed.
       expect(questions.stdout).not.toContain(HIDDEN);
-      const second = runCli(home, ["contract", "setup", "--answers", await answersFile(unchanged), "--vault", vault]);
+      const second = runCli(home, ["contract", "setup", "--answers", await answersFile(unchanged), ...await interpreting(WITH_NOTES), "--vault", vault]);
       expect(second.status, second.stdout + second.stderr).toBe(0);
       expect(json(second)["status"]).toBe("sealed");
 
       const sealedFiles = await storeFiles(home);
-      await writeFile(path.join(vault, "Templates", "Meeting.md"), `${MEETING}## Notes\n## Actions\n`);
+      await writeFile(path.join(vault, "Templates", "Meeting.md"), WITH_ACTIONS);
       const looser = {
+        "template:Meeting:interpretation": true,
         "template:Meeting:register": true,
         "template:Meeting:field:status:required": true,
         "template:Meeting:field:status:literal": "one-of-allowed",
@@ -237,7 +281,7 @@ describe("oms setup end to end", () => {
         "template:Meeting:apply-folder": "Projects",
         seal: true,
       };
-      const third = runCli(home, ["setup", "--answers", await answersFile(looser), "--vault", vault]);
+      const third = runCli(home, ["setup", "--answers", await answersFile(looser), ...await interpreting(WITH_ACTIONS), "--vault", vault]);
       expect(third.status).toBe(1);
       const refused = json(third);
       expect(refused["status"]).toBe("loosening");
@@ -253,15 +297,18 @@ describe("oms setup end to end", () => {
     });
 
     it("refuses invalid, unknown, malformed and in-vault answers and seals nothing", async () => {
-      const { home, vault, answersFile } = await agentVault();
+      const { home, vault, answersFile, interpreting } = await agentVault();
+      const interpreted = await interpreting();
       const cases: readonly (readonly [readonly string[], string, string?])[] = [
-        [["--answers", await answersFile({ ...FIRST, "property:status:rule": "sometimes" })], "CONTRACT_ANSWER_INVALID"],
-        [["--answers", await answersFile({ ...FIRST, "folder:Nowhere:register": true })], "CONTRACT_ANSWER_UNKNOWN"],
-        [["--answers", "-"], "CONTRACT_ANSWERS_INVALID", "not json"],
-        [["--answers", await answersFile(["not", "an", "object"])], "CONTRACT_ANSWERS_INVALID"],
-        [["--answers", path.join(vault, "missing.json")], "CONTRACT_ANSWERS_INVALID"],
+        [["--answers", await answersFile({ ...FIRST, "property:status:rule": "sometimes" }), ...interpreted], "CONTRACT_ANSWER_INVALID"],
+        [["--answers", await answersFile({ ...FIRST, "folder:Nowhere:register": true }), ...interpreted], "CONTRACT_ANSWER_UNKNOWN"],
+        [["--answers", "-", ...interpreted], "CONTRACT_ANSWERS_INVALID", "not json"],
+        [["--answers", await answersFile(["not", "an", "object"]), ...interpreted], "CONTRACT_ANSWERS_INVALID"],
+        [["--answers", path.join(vault, "missing.json"), ...interpreted], "CONTRACT_ANSWERS_INVALID"],
         [["--answers", "--questions"], "CONTRACT_ARGS_INVALID"],
         [["--questions", "--answers", "-"], "CONTRACT_ARGS_INVALID"],
+        // A malformed interpretation is agent input, so it is rejected like a malformed answer.
+        [["--answers", await answersFile(FIRST), "--interpretations", "-"], "CONTRACT_INTERPRETATION_INVALID", "not json"],
       ];
       for (const [flags, code, input] of cases) {
         const result = runCli(home, ["setup", ...flags, "--vault", vault], input);
@@ -270,23 +317,29 @@ describe("oms setup end to end", () => {
         expect(output["status"], flags.join(" ")).toBe("rejected");
         expect((output["diagnostics"] as { code: string }[])[0]?.code, flags.join(" ")).toBe(code);
       }
+      // Condition 1: the hash OMS computed is the only one it trusts, so an interpretation read
+      // from other bytes is refused and nothing is sealed.
+      const stale = runCli(home, ["setup", "--answers", await answersFile(FIRST), "--interpretations", await answersFile(interpretation("other bytes")), "--vault", vault]);
+      expect(stale.status).toBe(1);
+      expect(json(stale)).toMatchObject({ status: "refused", reasons: [expect.stringContaining("read from different bytes")] });
       await writeFile(path.join(vault, "answers.json"), JSON.stringify(FIRST));
-      const inside = runCli(home, ["setup", "--answers", path.join(vault, "answers.json"), "--vault", vault]);
+      const inside = runCli(home, ["setup", "--answers", path.join(vault, "answers.json"), ...interpreted, "--vault", vault]);
       expect(inside.status).toBe(1);
       expect(inside.stdout).toContain("keep the answers file outside the vault");
       expect(await storeFiles(home)).toEqual([]);
     });
 
     it("lists what is still unanswered and reads answers from stdin", async () => {
-      const { home, vault } = await agentVault();
-      const partial = runCli(home, ["setup", "--answers", "-", "--vault", vault], JSON.stringify({ "folder:Projects:register": true }));
+      const { home, vault, interpreting } = await agentVault();
+      const interpreted = await interpreting();
+      const partial = runCli(home, ["setup", "--answers", "-", ...interpreted, "--vault", vault], JSON.stringify({ "template:Meeting:interpretation": true, "folder:Projects:register": true }));
       expect(partial.status).toBe(1);
       const output = json(partial);
       expect(output["status"]).toBe("incomplete");
       expect((output["questions"] as { id: string }[]).map(question => question.id)).toContain("folder:Projects:meaning");
       expect(await storeFiles(home)).toEqual([]);
 
-      const full = runCli(home, ["setup", "--answers", "-", "--vault", vault], JSON.stringify(FIRST));
+      const full = runCli(home, ["setup", "--answers", "-", ...interpreted, "--vault", vault], JSON.stringify(FIRST));
       expect(full.status, full.stdout).toBe(0);
       expect(json(full)["status"]).toBe("sealed");
     });

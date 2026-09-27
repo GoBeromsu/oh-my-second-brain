@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { extractTemplate } from "../src/kernel/contract/extract.js";
+import { enumerateTemplateSources } from "../src/kernel/contract/interpretation.js";
 import { looseningChanges } from "../src/kernel/contract/loosening.js";
 import { isSafeName } from "../src/kernel/contract/store.js";
 import type { TemplateContract, VaultContract } from "../src/kernel/contract/types.js";
@@ -79,7 +79,7 @@ describe("what a submitted interpretation could try to widen", () => {
 });
 
 describe("a template that is entirely a Templater JS block", () => {
-  it("extracts as an empty interpretation rather than a refusal, so the interview asks nothing about it", async () => {
+  it("is enumerated as a source like any other, since OMS does not read it", async () => {
     const root = await mkdtemp(join(tmpdir(), "oms-interpretation-"));
     await mkdir(join(root, "T"), { recursive: true });
     await writeFile(join(root, "T/js.template.md"), [
@@ -89,8 +89,9 @@ describe("a template that is entirely a Templater JS block", () => {
       "%>",
       "",
     ].join("\n"), "utf8");
-    const result = await extractTemplate(root, "T/js.template.md");
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.extraction).toMatchObject({ fields: [], headings: [] });
+    const result = await enumerateTemplateSources(root, { path: "T", kind: "folder" });
+    // Nothing here is parseable frontmatter, and that is no longer OMS's problem: it
+    // reports the source and its digest, and the agent interprets the JS.
+    expect(result).toMatchObject({ ok: true, sources: [{ path: "T/js.template.md" }] });
   });
 });

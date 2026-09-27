@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { digestBytes } from "../conventions/canonical.js";
 import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
+import { interpretVault } from "./interpretation-fixture.js";
 import { runInterview } from "./interview.js";
 import { parseAnswers, publicQuestion, scriptedIO, type Answers } from "./scripted-interview.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
@@ -40,6 +41,7 @@ const ANSWERS: Answers = {
   "property:status:required": true,
   "property:status:rule": "none",
   "property:status:meaning": "workflow state",
+  "template:Meeting:interpretation": true,
   "template:Meeting:register": true,
   "template:Meeting:field:status:required": true,
   "template:Meeting:field:status:literal": "one-of-allowed",
@@ -50,7 +52,8 @@ const ANSWERS: Answers = {
 
 async function run(answers: Answers, extra: { readonly reask?: boolean } = {}) {
   const { io, notes } = scriptedIO(answers);
-  return { result: await runInterview({ vault, io, root, nonLoosening: true, ...extra }), notes };
+  const interpretations = await interpretVault(vault);
+  return { result: await runInterview({ vault, io, root, nonLoosening: true, interpretations, ...extra }), notes };
 }
 
 async function sealedContract() {
@@ -60,8 +63,18 @@ async function sealedContract() {
 }
 
 describe("scripted interview questions", () => {
+  it("asks the owner to confirm the interpretation before anything it decides", async () => {
+    const { result, notes } = await run({});
+    if (result.state !== "incomplete") throw new Error(result.state);
+    // The interpretation decides which template questions exist, so nothing else is asked yet.
+    expect(result.questions.map(question => question.id)).toEqual(["template:Meeting:interpretation"]);
+    expect(notes.join("\n")).toContain("property status (text): a fixed value");
+    expect(notes.join("\n")).not.toContain("open");
+    await expect(readdir(root)).rejects.toThrow();
+  });
+
   it("lists the first questions from the interview itself and writes nothing", async () => {
-    const { result } = await run({});
+    const { result } = await run({ "template:Meeting:interpretation": true });
     if (result.state !== "incomplete") throw new Error(result.state);
     expect(result.questions.map(question => question.id)).toEqual([
       "folder:Projects:register",
@@ -74,7 +87,7 @@ describe("scripted interview questions", () => {
   });
 
   it("asks follow-up questions once their parent is answered", async () => {
-    const { result } = await run({ "folder:Projects:register": true, "template:Meeting:register": true });
+    const { result } = await run({ "folder:Projects:register": true, "template:Meeting:interpretation": true, "template:Meeting:register": true });
     if (result.state !== "incomplete") throw new Error(result.state);
     const ids = result.questions.map(question => question.id);
     expect(ids).toEqual(expect.arrayContaining(["folder:Projects:meaning", "folder:Projects:search-exclude", "template:Meeting:field:status:required", "template:Meeting:field:status:literal"]));
@@ -146,6 +159,7 @@ describe("non-loosening reseal", () => {
     const before = await sealedContract();
     await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n## Notes\n");
     const { result } = await run({
+      "template:Meeting:interpretation": true,
       "template:Meeting:register": true,
       "template:Meeting:field:status:required": true,
       "template:Meeting:field:status:literal": "one-of-allowed",
@@ -165,6 +179,7 @@ describe("non-loosening reseal", () => {
     const before = await sealedContract();
     await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n## Notes\n");
     const { result } = await run({
+      "template:Meeting:interpretation": true,
       "template:Meeting:register": true,
       "template:Meeting:field:status:required": true,
       "template:Meeting:field:status:literal": "must-equal",
@@ -187,6 +202,7 @@ describe("non-loosening reseal", () => {
     const before = await sealedContract();
     await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n## Notes\n");
     const { result, notes } = await run({
+      "template:Meeting:interpretation": true,
       "template:Meeting:register": true,
       "template:Meeting:field:status:required": false,
       "template:Meeting:field:status:literal": "example-only",
@@ -213,6 +229,7 @@ describe("non-loosening reseal", () => {
     const before = await sealedContract();
     await writeFile(join(vault, "Templates/Daily.md"), "## Log\n");
     const { result } = await run({
+      "template:Daily:interpretation": true,
       "template:Daily:register": true,
       "template:Daily:heading:Log": true,
       "template:Daily:apply-folder": "Projects/Daily",
@@ -280,7 +297,7 @@ describe("a sealed pattern that today's seal screen refuses", () => {
   it("asks the owner for each refused rule again at a full-authority reseal and keeps the other rules", async () => {
     const owner = async (answers: Answers) => {
       const { io, notes } = scriptedIO(answers);
-      return { result: await runInterview({ vault, io, root }), notes };
+      return { result: await runInterview({ vault, io, root, interpretations: await interpretVault(vault) }), notes };
     };
     const incomplete = await owner({});
     if (incomplete.result.state !== "incomplete") throw new Error(incomplete.result.state);

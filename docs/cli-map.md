@@ -12,8 +12,8 @@ The agent writes notes. `oms_write` takes `{path, content, template?}` with no `
 
 | CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
-| `oms setup` / `oms contract setup` | none | — | Interview the whole vault and seal its contract. Interactive terminal only; refused without a TTY or under `OMS_NON_INTERACTIVE=1`. Writes only `.oms/settings.json` inside the vault. |
-| `oms contract extract --template <path>` | none | — | Show what one template declares, without printing values. |
+| `oms setup` / `oms contract setup` | none | — | Interview the whole vault and seal its contract. Interactive terminal only; refused without a TTY or under `OMS_NON_INTERACTIVE=1`. Needs `--interpretations <file>` when the vault has templates. Writes only `.oms/settings.json` inside the vault. |
+| `oms contract extract --template <path>` | none | — | Show one template source and the `sourceHash` OMS computed for it, so an agent knows what to read and interpret. OMS never parses template text. |
 | `oms contract status` | none | — | Report the seal's posture and each sealed template as `active`, `drift`, or `missing` against the live file. |
 | `oms contract doctor [--fix]` | `oms_doctor` | `validate` | Diagnose the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures. The CLI exits 1 when unhealthy. `--fix` only re-indexes a moved or unindexed vault; the MCP `validate` op returns the agent view and fixes nothing. |
 | none | `oms_search` | `templates` | List sealed template axes. Reports `unavailable` when no contract is sealed. |

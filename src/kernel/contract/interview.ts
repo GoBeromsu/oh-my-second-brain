@@ -2,12 +2,18 @@ import { lstat, readdir, realpath } from "node:fs/promises";
 import { compareCodePoints } from "../conventions/canonical.js";
 import { readVaultSettings, type VaultSettings } from "../vault/settings.js";
 import { normalizeFolderPath, verifyVaultPath } from "../vault/paths.js";
-import { extractTemplate, type Extraction } from "./extract.js";
+import {
+  enumerateTemplateSources,
+  interpretationLines,
+  resolveInterpretations,
+  scopedTemplateName,
+  type InterpretedTemplate,
+  type TemplateInterpretation,
+} from "./interpretation.js";
 import { FIELD_TYPES, readObsidianTemplateFolder, readObsidianTypes } from "./obsidian.js";
 import { looseningChanges, unsafePatternChanges, type LooseningChange } from "./loosening.js";
 import { buildRedactor, hiddenValuesOf, publicTokensOf } from "./redact.js";
 import { PATTERN_SOURCE_LIMIT, patternRefusal } from "./pattern.js";
-import { scanTemplateSources } from "./scan.js";
 import { currentSequence, isSafeName, NO_DECLINED, readDeclined, sealContract, storeRoot, type DeclinedSet, type SealDeps } from "./store.js";
 import type {
   FieldType,
@@ -69,7 +75,14 @@ export type InterviewResult =
   /** Some questions had no answer; they are listed in the order asked. Nothing was sealed. */
   | { readonly state: "incomplete"; readonly questions: readonly Question[] }
   /** A `nonLoosening` reseal would loosen the sealed contract. Changes name fields and kinds only. */
-  | { readonly state: "loosening"; readonly changes: readonly LooseningChange[] };
+  | { readonly state: "loosening"; readonly changes: readonly LooseningChange[] }
+  /**
+   * The template folder holds sources that were not interpreted. Every source OMS
+   * enumerated is listed with the digest OMS computed; interpret each one and run again.
+   */
+  | { readonly state: "interpretation-required"; readonly sources: readonly { readonly source: string; readonly sourceHash: string }[] }
+  /** The owner did not confirm these interpretations. Nothing was sealed; a new interpretation may be submitted. */
+  | { readonly state: "interpretation-rejected"; readonly templates: readonly string[] };
 
 /** Thrown by an IO (or after repeated invalid answers) to end the interview without sealing. */
 export class InterviewAborted extends Error {
@@ -236,8 +249,13 @@ async function askRules(asker: Asker, id: string, name: string, type: FieldType)
 
 interface Discovered {
   readonly folders: readonly string[];
-  readonly templates: readonly { readonly name: string; readonly source: string; readonly extraction: Extraction }[];
+  readonly templates: readonly InterpretedTemplate[];
   readonly observedTypes: ReadonlyMap<string, FieldType>;
+}
+
+/** Sources OMS enumerated that carry no interpretation yet. */
+interface NeedsInterpretation {
+  readonly needed: readonly { readonly source: string; readonly sourceHash: string }[];
 }
 
 async function topLevelFolders(vault: string): Promise<string[]> {
@@ -253,7 +271,19 @@ async function topLevelFolders(vault: string): Promise<string[]> {
   return folders.sort(compareCodePoints);
 }
 
-async function discover(vault: string, templateFolder: string | undefined): Promise<Discovered | { readonly refused: string[] }> {
+/**
+ * The folders and the interpreted templates the seal questions are built from.
+ *
+ * OMS enumerates the template sources and computes each source's digest; it never reads
+ * their text. `interpretations` is what the agent submitted for those sources, and
+ * `resolveInterpretations` refuses anything that names an unknown source, omits one, or
+ * was read from bytes the file no longer holds.
+ */
+async function discover(
+  vault: string,
+  templateFolder: string | undefined,
+  interpretations: readonly TemplateInterpretation[],
+): Promise<Discovered | NeedsInterpretation | { readonly refused: string[] }> {
   const observedTypes = new Map<string, FieldType>();
   try {
     for (const [name, type] of Object.entries(await readObsidianTypes(vault))) observedTypes.set(name, type);
@@ -261,38 +291,26 @@ async function discover(vault: string, templateFolder: string | undefined): Prom
     return { refused: ["The Obsidian property types file is unreadable; fix it in Obsidian first."] };
   }
 
-  const templates: { name: string; source: string; extraction: Extraction }[] = [];
-  const reasons: string[] = [];
-  if (templateFolder !== undefined) {
-    const inventory = await scanTemplateSources(vault, [{ path: templateFolder, kind: "folder" }]);
-    if (!inventory.complete) reasons.push("The template folder could not be scanned completely; fix the reported template files first.");
-    const seen = new Set<string>();
-    for (const found of inventory.sources) {
-      const source = String(found.path);
-      const base = source.slice(source.lastIndexOf("/") + 1);
-      const name = base.endsWith(".md") ? base.slice(0, -3) : base;
-      if (!isSafeName(name)) {
-        reasons.push(`A template file name is not usable as a template name (${JSON.stringify(name)}).`);
-        continue;
-      }
-      if (seen.has(name)) {
-        reasons.push(`Two templates share the name "${name}"; rename one.`);
-        continue;
-      }
-      seen.add(name);
-      const extracted = await extractTemplate(vault, source);
-      if (!extracted.ok) {
-        reasons.push(`Template "${name}" cannot be read (${extracted.diagnostics.map(item => item.code).join(", ")}).`);
-        continue;
-      }
-      templates.push({ name, source, extraction: extracted.extraction });
-      for (const field of extracted.extraction.fields) {
-        if (!observedTypes.has(field.name)) observedTypes.set(field.name, field.inferredType);
-      }
+  if (templateFolder === undefined) return { folders: await topLevelFolders(vault), templates: [], observedTypes };
+
+  const enumerated = await enumerateTemplateSources(vault, { path: templateFolder, kind: "folder" });
+  if (!enumerated.ok) {
+    return { refused: ["The template folder could not be scanned completely; fix the reported template files first."] };
+  }
+  const sources = enumerated.sources;
+  // Nothing to interpret: the interview asks only about folders and Obsidian types.
+  if (sources.length === 0) return { folders: await topLevelFolders(vault), templates: [], observedTypes };
+  if (interpretations.length === 0) {
+    return { needed: sources.map(source => ({ source: source.path, sourceHash: source.digest })) };
+  }
+  const resolved = resolveInterpretations(templateFolder, sources, interpretations);
+  if (!resolved.ok) return { refused: [...resolved.reasons] };
+  const templates = [...resolved.templates].sort((left, right) => compareCodePoints(left.name, right.name));
+  for (const template of templates) {
+    for (const field of template.fields) {
+      if (!observedTypes.has(field.name)) observedTypes.set(field.name, field.inferredType);
     }
   }
-  if (reasons.length > 0) return { refused: reasons };
-  templates.sort((left, right) => compareCodePoints(left.name, right.name));
   return { folders: await topLevelFolders(vault), templates, observedTypes };
 }
 
@@ -354,13 +372,14 @@ async function askProperties(asker: Asker, observed: ReadonlyMap<string, FieldTy
   return Object.keys(result).length === 0 ? null : result;
 }
 
-async function askTemplate(asker: Asker, name: string, source: string, extraction: Extraction): Promise<TemplateContract | null> {
+async function askTemplate(asker: Asker, template: InterpretedTemplate): Promise<TemplateContract | null> {
+  const { name, source } = template;
   const id = `template:${name}`;
   if (!await asker.confirm(`${id}:register`, `Seal the template "${name}"?`)) return null;
   const requiredProperties: string[] = [];
   // No prototype, so a property named `constructor` or `__proto__` is an ordinary key.
   const narrowedRules: Record<string, Rule[]> = Object.create(null) as Record<string, Rule[]>;
-  for (const field of extraction.fields) {
+  for (const field of template.fields) {
     if (await asker.confirm(`${id}:field:${field.name}:required`, `Must notes from "${name}" keep \`${field.name}\`?`)) requiredProperties.push(field.name);
     const literal = field.literal;
     if (field.variable !== null || literal === null || literal === "" || Array.isArray(literal) && literal.length === 0) continue;
@@ -379,7 +398,7 @@ async function askTemplate(asker: Asker, name: string, source: string, extractio
     }
   }
   const requiredHeadings: string[] = [];
-  for (const heading of extraction.headings) {
+  for (const heading of template.headings) {
     if (heading.variable || requiredHeadings.includes(heading.title)) continue;
     if (await asker.confirm(`${id}:heading:${heading.title}`, `Must notes from "${name}" keep the heading "${heading.title}"?`)) requiredHeadings.push(heading.title);
   }
@@ -393,7 +412,7 @@ async function askTemplate(asker: Asker, name: string, source: string, extractio
   });
   return {
     source,
-    sourceHash: extraction.sourceHash,
+    sourceHash: template.sourceHash,
     ...(applyFolder === null ? {} : { applyFolder }),
     requiredProperties,
     narrowedRules,
@@ -476,6 +495,56 @@ function merge<T>(kept: Readonly<Record<string, T>> | null, asked: Readonly<Reco
   return kept === null && asked === null ? null : { ...kept, ...asked };
 }
 
+/**
+ * Template identity now carries the source's scope under the template folder, so a
+ * contract sealed under bare file names must be rekeyed before it is compared with the
+ * next one. Without this, `looseningChanges` reads the sealed `meeting` as `removed` and
+ * `goneTemplates` claims its source disappeared, so a sealed vault could not reseal at
+ * all. The source path is the identity that survives: a sealed entry keeps its answers
+ * and only its key changes. A rekey that would collide keeps the sealed key, and the
+ * collision is then reported by the interpretation check like any other.
+ */
+export function rekeySealedTemplates<T extends { readonly source: string }>(
+  templates: Readonly<Record<string, T>>,
+  templateFolder: string | undefined,
+): Record<string, T> {
+  if (templateFolder === undefined) return { ...templates };
+  const rekeyed: Record<string, T> = {};
+  for (const [name, template] of Object.entries(templates)) {
+    const scoped = scopedTemplateName(templateFolder, template.source);
+    const key = scoped !== name && !isSafeName(scoped) || Object.hasOwn(rekeyed, scoped) ? name : scoped;
+    rekeyed[key] = template;
+  }
+  return rekeyed;
+}
+
+/**
+ * Shows the owner each submitted interpretation and asks them to confirm it before any
+ * question is built from it.
+ *
+ * This is the gate the design needs. The interpretation decides which questions exist at
+ * all, so an interpretation that leaves a field out removes that field's question, and a
+ * first seal has nothing to compare against: `looseningChanges` only runs on a reseal.
+ * Confirming the interpretation itself puts the question set back under the owner, which
+ * is what "the owner's answers are the only gate" has to mean once the questions come
+ * from a submission. A declined interpretation is not a refusal: the agent may read the
+ * template again and submit a new one.
+ */
+async function confirmInterpretations(asker: Asker, templates: readonly InterpretedTemplate[]): Promise<string[]> {
+  const declined: string[] = [];
+  for (const template of templates) {
+    for (const line of interpretationLines(template)) asker.say(line);
+    const confirmed = await asker.confirm(
+      `template:${template.name}:interpretation`,
+      `Is that what the template "${template.name}" declares?`,
+      undefined,
+      true,
+    );
+    if (!confirmed) declined.push(template.name);
+  }
+  return declined;
+}
+
 export async function runInterview(input: {
   readonly vault: string;
   readonly io: InterviewIO;
@@ -483,6 +552,13 @@ export async function runInterview(input: {
   readonly sealDeps?: Partial<SealDeps>;
   /** Ask again about folders, properties and templates declined at an earlier seal. */
   readonly reask?: boolean;
+  /**
+   * What the agent read in each template source. OMS enumerates the sources and computes
+   * their digests itself; a submission that names an unknown source, omits one, or was
+   * read from other bytes is refused. Without it, a vault with templates ends
+   * `interpretation-required` and nothing is sealed.
+   */
+  readonly interpretations?: readonly TemplateInterpretation[];
   /**
    * Answers that did not come from the owner at a terminal: only a first seal or a
    * reseal that adds or tightens is allowed. Loosening stays with the terminal interview.
@@ -512,24 +588,30 @@ export async function runInterview(input: {
       return { state: "refused", reasons: ["The vault settings are unreadable; run `oms contract doctor`."] };
     }
     const baseSeq = state.vaultId === null ? "none" : await currentSequence(state.vaultId, root);
-    const previous = state.view.state === "sealed" ? state.view.contract : null;
+    const sealed = state.view.state === "sealed" ? state.view.contract : null;
     // A sealed pattern refused by today's seal screen can only be replaced, which is looser.
-    const unsafe = input.nonLoosening === true && previous !== null ? unsafePatternChanges(previous) : [];
+    const unsafe = input.nonLoosening === true && sealed !== null ? unsafePatternChanges(sealed) : [];
     if (unsafe.length > 0) return { state: "loosening", changes: unsafe };
-    const pickFolder = settings?.templateFolder === undefined && (previous === null || input.reask === true);
+    const pickFolder = settings?.templateFolder === undefined && (sealed === null || input.reask === true);
     const chosenFolder = pickFolder ? await askTemplateFolder(asker, vault) : null;
     // The template folder decides which questions follow, so it is answered first.
     if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
-    const found = await discover(vault, settings?.templateFolder ?? chosenFolder ?? undefined);
+    const templateFolder = settings?.templateFolder ?? chosenFolder ?? undefined;
+    // Sealed templates are keyed by bare file name up to 0.18.3; scoped identity needs them rekeyed.
+    const previous: VaultContract | null = sealed === null
+      ? null
+      : { ...sealed, templates: rekeySealedTemplates(sealed.templates, templateFolder) };
+    const found = await discover(vault, templateFolder, input.interpretations ?? []);
     if ("refused" in found) return { state: "refused", reasons: found.refused };
+    if ("needed" in found) return { state: "interpretation-required", sources: found.needed };
 
     const earlier: DeclinedSet = input.reask === true || state.vaultId === null ? NO_DECLINED : await readDeclined(state.vaultId, root);
     const newFolders = found.folders.filter(folder => !Object.hasOwn(previous?.folders ?? {}, folder));
     const newProperties = new Map([...found.observedTypes].filter(([name]) => !Object.hasOwn(previous?.properties ?? {}, name)));
-    const changedTemplates = found.templates.filter(template => previous?.templates[template.name]?.sourceHash !== template.extraction.sourceHash);
+    const changedTemplates = found.templates.filter(template => previous?.templates[template.name]?.sourceHash !== template.sourceHash);
     const askFolderList = newFolders.filter(folder => !earlier.folders.includes(folder));
     const askPropertyMap = new Map([...newProperties].filter(([name]) => !earlier.properties.includes(name)));
-    const askTemplateList = changedTemplates.filter(template => earlier.templates[template.name] !== template.extraction.sourceHash);
+    const askTemplateList = changedTemplates.filter(template => earlier.templates[template.name] !== template.sourceHash);
     const goneTemplates = Object.keys(previous?.templates ?? {}).filter(name => !found.templates.some(template => template.name === name)).sort(compareCodePoints);
     if (previous !== null) {
       io.say(askFolderList.length + askPropertyMap.size + askTemplateList.length + goneTemplates.length === 0
@@ -539,6 +621,11 @@ export async function runInterview(input: {
     const skipped = newFolders.length - askFolderList.length + newProperties.size - askPropertyMap.size + changedTemplates.length - askTemplateList.length;
     if (skipped > 0) io.say(`Skipping ${skipped} item(s) declined at an earlier seal; run \`oms contract setup --reask\` to answer them again.`);
 
+    // The interpretation decides which questions exist, so the owner confirms it first.
+    const rejected = await confirmInterpretations(asker, askTemplateList);
+    if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
+    if (rejected.length > 0) return { state: "interpretation-rejected", templates: rejected };
+
     const askedFolders = await askFolders(asker, askFolderList);
     const askedProperties = await askProperties(asker, askPropertyMap);
     const folders = merge(previous?.folders ?? null, askedFolders);
@@ -546,11 +633,11 @@ export async function runInterview(input: {
     const templates: Record<string, TemplateContract> = { ...previous?.templates };
     const declinedTemplates: Record<string, string> = {};
     for (const template of askTemplateList) {
-      const sealed = await askTemplate(asker, template.name, template.source, template.extraction);
-      if (sealed === null) {
+      const answered = await askTemplate(asker, template);
+      if (answered === null) {
         delete templates[template.name];
-        declinedTemplates[template.name] = template.extraction.sourceHash;
-      } else templates[template.name] = sealed;
+        declinedTemplates[template.name] = template.sourceHash;
+      } else templates[template.name] = answered;
     }
     const removedTemplates: string[] = [];
     for (const name of goneTemplates) {
@@ -574,7 +661,7 @@ export async function runInterview(input: {
     if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
     if (!seal) return { state: "aborted" };
 
-    const currentTemplates = new Map(found.templates.map(template => [template.name, template.extraction.sourceHash]));
+    const currentTemplates = new Map(found.templates.map(template => [template.name, template.sourceHash]));
     const declined: DeclinedSet = {
       folders: [
         ...earlier.folders.filter(folder => found.folders.includes(folder) && !Object.hasOwn(folders ?? {}, folder)),

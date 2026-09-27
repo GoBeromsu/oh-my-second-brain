@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeSettings } from "../../../test/fixtures/contract-truth-table.js";
-import { extractTemplate } from "./extract.js";
+import { enumerateTemplateSources } from "./interpretation.js";
 import { insideApplyFolder, judge, PATTERN_VALUE_LIMIT } from "./judge.js";
 import { judgeContent, judgeWrite } from "./judge-write.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
@@ -65,15 +65,17 @@ describe("base path rules", () => {
   });
 });
 
-describe("AC2: extraction is deterministic", () => {
-  it("returns identical results for the same source", async () => {
-    const vault = await temp("oms-judge-extract-");
+describe("AC2: what OMS reads of a template is deterministic", () => {
+  it("returns the same source and digest for the same bytes, and nothing else", async () => {
+    const vault = await temp("oms-judge-enumerate-");
     await mkdir(join(vault, "Templates"));
     await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\ncreated: \"{{date}}\"\ntags: [meeting]\n---\n## Agenda\n## {{title}}\n");
-    const first = await extractTemplate(vault, "Templates/Meeting.md");
-    const second = await extractTemplate(vault, "Templates/Meeting.md");
+    const first = await enumerateTemplateSources(vault, { path: "Templates/Meeting.md", kind: "file" });
+    const second = await enumerateTemplateSources(vault, { path: "Templates/Meeting.md", kind: "file" });
     expect(first.ok).toBe(true);
     expect(second).toEqual(first);
+    // Meaning is the agent's to submit: the digest is all OMS derives from the bytes.
+    expect(JSON.stringify(first)).not.toMatch(/status|Agenda/);
   });
 });
 
