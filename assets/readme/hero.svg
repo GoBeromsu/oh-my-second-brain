@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="640" viewBox="0 0 1600 640" role="img" aria-labelledby="title desc">
+<title id="title">Oh My Second Brain</title><desc id="desc">Your knowledge. Your rules. Any agent. Layered pages connect into a constellation on a dark violet background.</desc>
+<defs>
+<radialGradient id="glow"><stop stop-color="#6b459b" stop-opacity=".36"/><stop offset="1" stop-color="#13121d" stop-opacity="0"/></radialGradient>
+<linearGradient id="bg" x2="1" y2="1"><stop stop-color="#191722"/><stop offset="1" stop-color="#0d0e17"/></linearGradient>
+<linearGradient id="line" x2="0" y2="1"><stop stop-color="#d8c6ff"/><stop offset="1" stop-color="#9d7ad8" stop-opacity=".15"/></linearGradient>
+<linearGradient id="beam" x2="0" y2="1"><stop stop-color="#a681e3" stop-opacity="0"/><stop offset="1" stop-color="#b195ea" stop-opacity=".16"/></linearGradient>
+</defs>
+<rect width="1600" height="640" rx="24" fill="url(#bg)"/>
+<ellipse cx="1204" cy="312" rx="455" ry="361" fill="url(#glow)"/>
+<rect x="22" y="22" width="1556" height="596" rx="12" fill="none" stroke="#c0aee0" stroke-opacity=".13"/>
+<g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+<g transform="translate(76 72)" fill="none" stroke="#c6b2ed" stroke-width="2"><path d="M0 11 18 1 36 11 18 21Z"/><path d="m0 20 18 10 18-10M0 29 18 39 36 29"/></g>
+<text x="131" y="96" fill="#c4b5dd" font-size="18" letter-spacing="4">OH MY SECOND BRAIN</text>
+<text x="76" y="225" fill="#f3eee7" font-size="87" font-weight="650" letter-spacing="-4">Your knowledge.</text>
+<text x="76" y="328" fill="#f3eee7" font-size="87" font-weight="650" letter-spacing="-4">Your rules.</text>
+<text x="76" y="431" fill="#c5a9f4" font-size="87" font-weight="650" letter-spacing="-4">Any agent.</text>
+<text x="80" y="498" fill="#aaa5b6" font-size="24">Bring your knowledge back within reach.</text>
+<path d="M80 552H758" stroke="#aaa5b6" stroke-opacity=".22"/>
+<text x="80" y="589" fill="#c4bdce" font-size="15" letter-spacing="2.5">OBSIDIAN-FIRST</text><circle cx="270" cy="584" r="2" fill="#847295"/>
+<text x="294" y="589" fill="#c4bdce" font-size="15" letter-spacing="2.5">PLAIN MARKDOWN</text><circle cx="505" cy="584" r="2" fill="#847295"/>
+<text x="529" y="589" fill="#c4bdce" font-size="15" letter-spacing="2.5">USER-OWNED</text>
+</g>
+<g fill="none" stroke="#b4a1d9" stroke-opacity=".12"><ellipse cx="1205" cy="329" rx="295" ry="164"/><ellipse cx="1205" cy="329" rx="245" ry="229" transform="rotate(-30 1205 329)"/><ellipse cx="1205" cy="329" rx="247" ry="216" transform="rotate(33 1205 329)"/></g>
+<circle cx="911" cy="103" r="3" fill="#c3b6fa" opacity="0.45"/><circle cx="1084" cy="77" r="2" fill="#c3b6fa" opacity="0.75"/><circle cx="1436" cy="143" r="3" fill="#c3b6fa" opacity="0.75"/><circle cx="1491" cy="352" r="1" fill="#c3b6fa" opacity="0.45"/><circle cx="1358" cy="491" r="3" fill="#c3b6fa" opacity="0.75"/><circle cx="964" cy="476" r="2" fill="#c3b6fa" opacity="0.75"/><circle cx="1056" cy="400" r="1" fill="#c3b6fa" opacity="0.75"/><circle cx="1229" cy="110" r="3" fill="#c3b6fa" opacity="0.45"/><circle cx="1503" cy="526" r="1" fill="#c3b6fa" opacity="0.45"/><circle cx="888" cy="336" r="1" fill="#c3b6fa" opacity="0.75"/><circle cx="1125" cy="528" r="1" fill="#c3b6fa" opacity="0.45"/><circle cx="1390" cy="67" r="2" fill="#c3b6fa" opacity="0.75"/>
+<path d="M1060 165 1205 86 1350 165 1390 326 1205 427 1020 326Z" fill="url(#beam)"/>
+<path d="M1020 413 L1205 312 L1390 413 L1205 514 Z" fill="#151525" stroke="#3e3857" stroke-width="1.5"/><path d="M1020 384 L1205 283 L1390 384 L1205 485 Z" fill="#1c1a2f" stroke="#60527c" stroke-width="1.5"/><path d="M1020 355 L1205 254 L1390 355 L1205 456 Z" fill="#241e3a" stroke="#8e73b8" stroke-width="1.5"/><path d="M1020 326 L1205 225 L1390 326 L1205 427 Z" fill="#30254c" stroke="#c9b7ff" stroke-width="1.5"/>
+<g fill="none" stroke="url(#line)" stroke-width="1.5"><path d="M1205 315V158M1205 218l-108-63M1205 218l114-65M1097 155v-34M1319 153v-32M1205 158l-40-54M1205 158l39-57"/><path d="m1097 155-42 23m264-25 42 24"/></g>
+<g fill="#cdb8f5" stroke="#262134" stroke-width="5"><circle cx="1205" cy="158" r="10"/><circle cx="1097" cy="155" r="9"/><circle cx="1319" cy="153" r="9"/><circle cx="1165" cy="104" r="6"/><circle cx="1244" cy="101" r="6"/><circle cx="1097" cy="121" r="6"/><circle cx="1319" cy="121" r="6"/><circle cx="1055" cy="178" r="6"/><circle cx="1361" cy="177" r="6"/></g>
+<g fill="none" stroke="#c6b2ed" stroke-width="2"><path d="m1151 319 54-29 54 29-54 29Z"/><path d="m1174 332 31-17 31 17M1205 290v25"/></g>
+<text x="1205" y="565" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="15" letter-spacing="4" fill="#9d8db6">A VAULT, NOT A BLACK BOX.</text>
+</svg>
