@@ -88,7 +88,7 @@ Paired randomization, CUR+BI minus CUR (10,000 permutations, seed 20260929):
 How to read these results:
 
 - **Where the gain comes from.** CUR+BI never lowers R@5 for any type, and every R@5 gain is in paraphrase: four more of its six queries reach the top 5. Those are queries whose wording differs from the note by particles or compound boundaries.
-- **Why p stays above 0.05.** The fixture has so few paraphrase queries that four improved pairs have an exact sign-flip p of 2/16 = 0.125. No outcome on this set can reach p < 0.05.
+- **Why p stays above 0.05.** CUR misses R@5 on only five fixture queries, so at most five pairs can differ and the smallest exact two-sided sign-flip p is 2/32 = 0.0625. The observed four improved pairs give 2/16 = 0.125. No outcome on this set can reach p < 0.05.
 - **What tier 1 can decide.** Tier 1 can show a regression. It cannot show significance. The merge decision belongs to tier 3.
 - **Other types.** They are at or near ceiling on this fixture, so this set does not show whether BI changes them.
 
@@ -118,5 +118,5 @@ npm run bench -- --tier 3 --vault /absolute/path/to/vault --queries /absolute/pa
 
 `--vault` and `--queries` can also be supplied as `OMS_BENCH_VAULT` and `OMS_BENCH_QUERIES`. The queries file uses the same schema as `test/fixtures/ko-vault/queries.json`. The merge rule reads the result as follows:
 
-- **Pass.** Overall and per-type R@5 of CUR+BI stay at or above CUR, and the reinforced golden set gives R@5 p < 0.05. The reinforced set is the 34 existing queries plus at least 10 of the owner's own failed queries. Then the channel modules, the index version and the default-path wiring merge together, with a `CHANGELOG-kernel.md` entry.
+- **Pass.** Overall and per-type R@5 of CUR+BI stay at or above CUR, and the reinforced golden set gives R@5 p < 0.05. The reinforced set is the owner's private 34-query golden set (distinct from this 33-query fixture) plus at least 10 of the owner's own failed queries. Then the channel modules, the index version and the default-path wiring merge together, with a `CHANGELOG-kernel.md` entry.
 - **Fail.** Otherwise, the channel stays branch-only.

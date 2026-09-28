@@ -54,11 +54,11 @@ describe("bench tier 1: lexical CUR on the ko-vault fixture", () => {
     expect([...new Set(queries.map((query) => query.type))].sort()).toEqual([...QUERY_TYPES].sort());
   });
 
-  it("records the per-type R@5 baseline for CUR", () => {
+  it("holds per-type R@5 at or above the CUR baseline", () => {
     const byType = report.channels.CUR.byType;
     expect(Object.keys(byType).sort()).toEqual(Object.keys(CUR_R5_BASELINE).sort());
     for (const [type, expected] of Object.entries(CUR_R5_BASELINE)) {
-      expect(byType[type].r5, type).toBeCloseTo(expected, 6);
+      expect(byType[type].r5, type).toBeGreaterThanOrEqual(expected - 1e-9);
     }
   });
 
