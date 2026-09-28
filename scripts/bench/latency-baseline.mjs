@@ -62,7 +62,7 @@ function timeRun(box, args) {
   if (result.status !== 0) {
     throw new Error(`oms ${args.join(" ")} exited ${result.status}${result.error ? ` (${result.error.message})` : ""}: ${result.stderr}`);
   }
-  if (args[0] === "search" && args[1] === "query") {
+  if (args[0] === "search" && args[1] !== undefined && !args[1].startsWith("--")) {
     // A plain query must stay lexical-only, or the baseline would silently measure another path.
     const channels = JSON.parse(result.stdout).receipt?.usedChannels;
     if (JSON.stringify(channels) !== JSON.stringify(["lex"])) {
@@ -135,9 +135,10 @@ console.log(JSON.stringify({
     memoryGiB: Math.round(totalmem() / 2 ** 30),
   },
   results: {
-    noteGet: measure(["note", "get", NFC_NOTE], runs),
-    searchQueryLexical: measure(["search", "query", SEARCH_TEXT], runs),
+    // Engine-free exact read; the note's on-disk spelling is already NFC.
+    searchPathNfc: measure(["search", "--path", NFC_NOTE], runs),
+    searchQueryLexical: measure(["search", SEARCH_TEXT], runs),
     // Engine-free exact read; the NFC spelling of a note whose filename is NFD on disk.
-    searchPath: measure(["search", "--path", NFD_NOTE.normalize("NFC")], runs),
+    searchPathNfd: measure(["search", "--path", NFD_NOTE.normalize("NFC")], runs),
   },
 }, null, 2));
