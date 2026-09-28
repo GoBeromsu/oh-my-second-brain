@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFile, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, truncate, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, symlink, truncate, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,7 @@ import { stateDir } from "./state-dir.js";
 
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, unlink: vi.fn(actual.unlink) };
+  return { ...actual, unlink: vi.fn(actual.unlink), open: vi.fn(actual.open), readdir: vi.fn(actual.readdir) };
 });
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
@@ -262,6 +262,45 @@ describe("gap ledger", () => {
       const current = await markers();
       expect(current).toHaveLength(2);
       expect(current).toContain(old);
+    });
+
+    it("still resolves with the committed records when listing markers to prune fails", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      const [old] = await markers();
+      await rename(ledgerPath(), join(gapsDir(), "events.2026-09-29.jsonl"));
+      vi.mocked(readdir).mockRejectedValueOnce(Object.assign(new Error("EIO: i/o error"), { code: "EIO" }));
+
+      const records = await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(records.map(record => record.id)).toEqual([id]);
+      expect(vi.mocked(readdir)).toHaveBeenCalledWith(gapsDir());
+      expect(await recorded()).toEqual([id]);
+      const current = await markers();
+      expect(current).toHaveLength(2);
+      expect(current).toContain(old);
+    });
+
+    it("keeps the committed event when writing its marker fails, and re-appends it once more", async () => {
+      // A prior, unrelated append settles the state dir and the ledger so the two opens
+      // below are unambiguously the append's and then the marker's.
+      await recordGaps(root, VAULT_ID, [gap("warmup")], { now: () => 0, newId: ids("w1") });
+      const realOpen = vi.mocked(open).getMockImplementation()!;
+      vi.mocked(open).mockImplementationOnce(realOpen).mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+
+      const first = await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      expect(first.map(record => record.id)).toEqual([id]);
+      expect(await recorded()).toEqual(["w1", id]);
+      expect(await markers()).toHaveLength(0);
+
+      // No marker was written, so the choice is not yet seen and repeats once more; this
+      // time the marker write succeeds (no mock left queued).
+      const second = await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(second.map(record => record.id)).toEqual([id]);
+      expect(await recorded()).toEqual(["w1", id, id]);
+      expect(await markers()).toHaveLength(1);
+
+      // The marker written above now covers it, so a third repeat stays closed.
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 3 });
+      expect(await recorded()).toEqual(["w1", id, id]);
     });
 
     it("treats a malformed marker as absent", async () => {
