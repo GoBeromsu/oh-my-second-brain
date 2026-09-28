@@ -22,17 +22,17 @@ Before a note, settings, or derived-state mutation, OMS resolves the target and 
 
 MCP `write {path, content, template?}` resolves and admits the target, judges the whole note against the sealed contract, and saves it atomically only when it is allowed. A denial leaves the file unchanged and returns `{field, kind}` violations and one guidance command. There is no `complete` operation or separate reviewer handshake.
 
-An allowed write is a structural result, not a claim that a note is semantically complete. In Claude Code, native writes inside the configured vault are judged by the guard hook; when the judge cannot run, the hook allows the call with a warning and records the transport failure for `oms contract doctor`. Codex and Hermes have no write hook.
+An allowed write is a structural result, not a claim that a note is semantically complete. In Claude Code, native writes inside the configured vault are judged by the guard hook; when the judge cannot run, the hook allows the call with a warning and records the transport failure for `oms doctor contract`. Codex and Hermes have no write hook.
 
 ## Sealing
 
-`oms setup` requires a verified target and an interactive terminal. It seals the contract under `~/.oms/vaults/<vault-id>/` and writes only `.oms/settings.json` inside the vault; it never modifies notes. A vault with no seal on this machine is not judged. When this machine holds seal evidence that no longer matches the vault, writes are refused as `contract-unreadable` until the user runs `oms setup` again; an unreadable seal is never replaced with an empty contract. `oms contract doctor` diagnoses the seal, and its `--fix` only re-indexes a moved or unindexed vault.
+`oms setup` requires a verified target and an interactive terminal. It seals the contract under `~/.oms/vaults/<vault-id>/` and writes only `.oms/settings.json` inside the vault; it never modifies notes. A vault with no seal on this machine is not judged. When this machine holds seal evidence that no longer matches the vault, writes are refused as `contract-unreadable` until the user runs `oms setup` again; an unreadable seal is never replaced with an empty contract. `oms doctor contract` diagnoses the seal, and its `--fix` only re-indexes a moved or unindexed vault.
 
 ## Read-only and repair operations
 
-`oms index status` has no mutation path. Read-only search and status can use the current-directory fallback. Index repair, index clean, and graph build require verified-target admission. Note backfill is not a repair.
+`oms doctor status` has no mutation path. Read-only search and status can use the current-directory fallback. Index repair, index clean, and graph build require verified-target admission. Note backfill is not a repair.
 
-`oms search query <text>` remains lexical. Read-only search does not depend on the contract: notes that would fail it stay in lexical, vector, HyDE, and typed-axis results. Search does not write notes and does not start a reviewer workflow.
+`oms search <text>` remains lexical. Read-only search does not depend on the contract: notes that would fail it stay in lexical, vector, HyDE, and typed-axis results. Search does not write notes and does not start a reviewer workflow.
 
 `--vec`, `--hyde`, G004 `--expand`, and `--rerank` are explicit channels, and `--max-queries` accepts only integers from 1 through 32. Vector search requires the `OMS_EMBEDDING_PROVIDER` and `OMS_EMBEDDING_MODEL` pair; HyDE additionally requires `OMS_GENERATE_PROVIDER` and `OMS_GENERATE_MODEL`, and reranking requires `OMS_RERANK_PROVIDER` and `OMS_RERANK_MODEL`. Missing or incomplete pairs fail loudly. G004 expansion is available when explicitly selected and makes no replacement, parity, or outperformance claim.
 

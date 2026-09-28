@@ -19,7 +19,7 @@ sealed contract            ~/.oms/vaults/<vault-id>/   outside the vault
 
 The sealed contract is the only structural authority. It holds three axes: folders (meaning and search exclusion), the property pool (meaning, Obsidian type, required flag, and allowed, fixed, pattern, or range rules), and templates (source path, content hash, optional apply folder, and the properties, narrowed rules, and headings each one requires). An axis the user did not seal stays open. OMS does not hardcode property names, folder names, personas, or the meaning of a heading, and it has no Inbox fallback.
 
-The contract is stored per machine outside the vault, so an agent working inside the vault cannot read or edit it. `.oms/settings.json` carries `version`, `vaultId`, `templateFolder`, `embedding`, and `agentRepair`; unknown keys, including the former `templateRoots`, are refused. Any other entry under `.oms/` is ignored and reported by `oms contract doctor` as an unexpected control file.
+The contract is stored per machine outside the vault, so an agent working inside the vault cannot read or edit it. `.oms/settings.json` carries `version`, `vaultId`, `templateFolder`, `embedding`, and `agentRepair`; unknown keys, including the former `templateRoots`, are refused. Any other entry under `.oms/` is ignored and reported by `oms doctor contract` as an unexpected control file.
 
 A template stays the user's own Markdown file. Sealing records what it declares; OMS never rewrites, copies, snapshots, or applies it. A changed hash is drift evidence, not approval, identity, or authentication. OMS does not parse or execute Templater, JavaScript, or a private token language.
 
@@ -32,7 +32,7 @@ The vault contract is recorded in ADR-007, which replaces the former ADR-013 thr
 The agent writes the whole note. One judge decides every write against the seal, in a fixed order: base path rules (control paths, unsafe paths, paths outside the vault, YAML syntax), then the seal's readability, then folders, then properties, then the selected template's apply folder, then the template axis.
 
 - MCP `write {path, content, template?}` judges the note and saves it atomically only when it is allowed. Unknown or missing input keys are refused before any judgement.
-- In Claude Code, native Write, Edit, MultiEdit, and NotebookEdit inside the configured vault reach the same judge through the guard hook, which runs `oms hook pre`. A violation denies the tool call. When the judge cannot run, the call is allowed with a warning and the transport failure is recorded for `oms contract doctor`.
+- In Claude Code, native Write, Edit, MultiEdit, and NotebookEdit inside the configured vault reach the same judge through the guard hook, which runs `oms hook pre`. A violation denies the tool call. When the judge cannot run, the call is allowed with a warning and the transport failure is recorded for `oms doctor contract`.
 - The guard also denies reads and writes under `~/.oms/`, and Grep or Glob patterns that name it.
 - Codex and Hermes have no write hook; their notes are judged only when written through MCP `write`.
 
@@ -42,7 +42,7 @@ Structural results do not evaluate the note's semantic quality. An allowed write
 
 ## Drift, diagnosis, and search
 
-`oms contract status` reports each sealed template as `active`, `drift`, or `missing` against the live file. Drift is reported, never re-sealed silently. `oms contract doctor` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures, and exits 1 when unhealthy. `--fix` only re-indexes a moved or unindexed vault; every other broken seal is recovered by running `oms setup` again. `oms note audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them.
+`oms setup status` reports each sealed template as `active`, `drift`, or `missing` against the live file. Drift is reported, never re-sealed silently. `oms doctor contract` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures, and exits 1 when unhealthy. `--fix` only re-indexes a moved or unindexed vault; every other broken seal is recovered by running `oms setup` again. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them.
 
 Search is independent of the contract. Lexical, vector, HyDE, and typed-axis queries include notes that would fail it, and a missing or damaged contract does not stop search. Sealed template sources and folders marked for search exclusion stay out of ordinary note results. Vector, HyDE, and rerank requests fail loudly when their provider and model pair is missing or unusable. Those failures are not replaced with an empty success or another backend. That is the ADR-005 boundary. Search does not write notes and does not repair anything.
 
@@ -54,15 +54,15 @@ The CLI does not require a host. The three public sets stay independent:
 
 | Set | What it is |
 | --- | --- |
-| Seven skills | `distill`, `doctor`, `link`, `search`, `setup`, `status`, `write`. Host workflows. `distill` and `setup` are tool-less. |
-| Five MCP tools | `write`, `search`, `link`, `status`, `doctor`, from `oms serve mcp`. A subset of the skills. |
-| Fourteen CLI families | `setup`, `contract`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, `status`. Not the skill list and not the tool list. |
+| Six skills | `distill`, `doctor`, `interview`, `search`, `setup`, `write`. Host workflows. `distill` and `setup` are tool-less. |
+| Four MCP tools | `write`, `search`, `interview`, `doctor`, from `oms serve mcp`. A subset of the skills. Only `search` is annotated read-only. |
+| Seven CLI families | `search`, `interview`, `write`, `setup`, `doctor`, `serve`, and the hidden `hook`. Not the skill list and not the tool list. |
 
-Sealing has no MCP operation and no skill. Leaves, discriminators, and removed operations are only in [the CLI map](./cli-map.md). `bridge` is the repository-to-vault target. `link` suggests and checks note wikilinks and does not apply them. `package update` does not sync hosts. `oms serve mcp` and `oms serve http` do not create a vault engine store by starting.
+Sealing has no MCP operation. Leaves, discriminators, and removed operations are only in [the CLI map](./cli-map.md); the 0.18 spellings are mapped in [the migration guide](./migration-0.19.md). `setup bridge` manages the repository-to-vault target. `search --link` suggests and `doctor link-check` checks note wikilinks; neither applies them. `setup package update` does not sync hosts. `oms serve mcp` and `oms serve http` do not create a vault engine store by starting.
 
 ### MCP namespace boundary
 
-The MCP server id is `oms`. Local tool names are `write`, `search`, `link`, `status`, and `doctor`. Qualifying hosts therefore display `oms_write`, `oms_search`, `oms_link`, `oms_status`, and `oms_doctor` exactly once, never `oms_oms_*`. Raw MCP clients call the local names.
+The MCP server id is `oms`. Local tool names are `write`, `search`, `interview`, and `doctor`. Qualifying hosts therefore display `oms_write`, `oms_search`, `oms_interview`, and `oms_doctor` exactly once, never `oms_oms_*`. Raw MCP clients call the local names.
 
 Directly under `src`, the five top-level entries are still assets, cli, kernel, mcp, and vendors. There is no sixth MCP tool. The skill, tool, and command names above are the approved public surface. Retired note, link, and template operations have no compatibility path.
 
