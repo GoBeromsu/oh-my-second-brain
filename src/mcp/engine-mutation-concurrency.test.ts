@@ -127,7 +127,7 @@ async function connected(vault: string, name: string) {
 const flushSdk = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 describe("MCP engine mutation coordination", () => {
-  it("holds repair behind sync disposal while readonly graph status remains independent", async () => {
+  it("holds repair behind sync disposal while read-only doctor status remains independent", async () => {
     const vault = await writeMorningVaultFixture();
     disposable.push(vault);
     boundary.pauseDispose = true;
@@ -136,8 +136,8 @@ describe("MCP engine mutation coordination", () => {
       const sync = client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "sync" } });
       await boundary.disposeEntered;
       const repair = client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "repair", repairMode: "rebuild" } });
-      const graph = await client.callTool({ name: "status", arguments: { op: "graph" } });
-      expect(payload(graph)).toEqual(expect.objectContaining({ available: expect.any(Boolean) }));
+      const graph = await client.callTool({ name: "doctor", arguments: { op: "status" } });
+      expect(payload(graph).engineGraph).toEqual(expect.objectContaining({ available: expect.any(Boolean) }));
       await flushSdk();
       expect(boundary.events).not.toContain("repair-start");
 

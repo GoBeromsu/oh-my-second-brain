@@ -135,7 +135,7 @@ export function cachedUpdateNotice(options: CachedUpdateNoticeOptions): string |
   if (!stampIsFresh(stamp, options.now ?? Date.now())) return null;
   if (compareVersions(options.installedVersion, stamp.latestVersion) >= 0) return null;
 
-  return `Update available for Oh My Second Brain: ${options.installedVersion} -> ${stamp.latestVersion}. Run \`oms package update --yes\` to update OMS, then \`oms host sync\` to refresh host registrations.`;
+  return `Update available for Oh My Second Brain: ${options.installedVersion} -> ${stamp.latestVersion}. Run \`oms setup package update --yes\` to update OMS, then \`oms setup host sync\` to refresh host registrations.`;
 }
 
 function reclaimStaleLock(lockPath: string): void {

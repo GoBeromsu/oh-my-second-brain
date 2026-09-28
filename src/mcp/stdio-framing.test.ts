@@ -222,7 +222,7 @@ describe("MCP stdio framing", () => {
       });
       assertCleanProtocolOutput(probe);
       const tools = frameResult(probe, 2).tools as { readonly name: string }[];
-      expect(tools.map(tool => tool.name)).toEqual(["write", "search", "link", "status", "doctor"]);
+      expect(tools.map(tool => tool.name)).toEqual(["write", "search", "interview", "doctor"]);
     } finally {
       await import("node:fs/promises").then(({ rm }) => rm(vault, { recursive: true, force: true }));
     }

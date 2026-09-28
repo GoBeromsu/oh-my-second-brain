@@ -33,6 +33,7 @@ import {
   scheduleUpdateNoticeRefresh,
 } from "./update-notice.js";
 import { handleDoctor } from "./tools/doctor.js";
+import { handleInterview } from "./tools/interview.js";
 import { handleLink } from "./tools/link.js";
 import { handleSearch, prepareSearch, searchExactRead } from "./tools/search.js";
 import { errorText, isRecord, jsonText, SemanticIndexUnavailableError, stringArg, type ToolContext } from "./tools/shared.js";
@@ -42,7 +43,7 @@ import { writeNote } from "./tools/write.js";
 const SERVER_VERSION = readBundledPackageVersion();
 
 const BASE_SERVER_INSTRUCTIONS =
-  "Oh My Second Brain exposes write, search, link, status, and doctor tools. write and doctor repair operations are gated by a verified vault target (a vault inferred from the current directory is refused); write {path, content, template?} is confined to the vault and saved only when the vault contract allows the note.";
+  "Oh My Second Brain exposes write, search, interview, and doctor tools. search is read-only (op link suggests wikilinks); doctor op status reports vault health and op link-check reports broken links; interview lists the vault questions and the seal state and seals nothing. write and doctor repair operations are gated by a verified vault target (a vault inferred from the current directory is refused); write {path, content, template?} is confined to the vault and saved only when the vault contract allows the note.";
 
 type Operation = {
   readonly op?: string;
@@ -65,10 +66,9 @@ const documentProperties = { target: string, targets: stringArray, notePath: str
 const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: { type: "integer", minimum: 0 }, maxNeighbors: number, useCache: boolean, ...retrieveContextSemanticInputProperties } as const;
 const operations: Record<string, readonly Operation[]> = {
   write: [{ name: "oms_write_note", direct: true, properties: { path: string, content: string, template: string }, required: ["path", "content"] }],
-  search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "templates", name: "oms_list_templates" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }],
-  link: [{ op: "suggest", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "check", name: "oms_link_check", properties: { notePath: string, folder: string }, required: ["notePath"] }],
-  status: [{ name: "oms_graph_status", direct: true }, { op: "graph", name: "oms_graph_status" }],
-  doctor: [{ op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number, repairMode: { ...string, enum: ["rebuild", "drop"] }, dryRun: boolean }, required: ["mode"] }],
+  search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "templates", name: "oms_list_templates" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }, { op: "link", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }],
+  interview: [{ name: "oms_interview", direct: true, properties: { reask: boolean } }],
+  doctor: [{ op: "status", name: "oms_graph_status" }, { op: "link-check", name: "oms_link_check", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number, repairMode: { ...string, enum: ["rebuild", "drop"] }, dryRun: boolean }, required: ["mode"] }],
 };
 export const demotedOperationNames = [...new Set(Object.values(operations)
   .flatMap((toolOperations) => toolOperations.map((operation) => operation.name)))]
@@ -131,13 +131,6 @@ function withBranchProjection(
 function operationSchema(tool: string): Tool["inputSchema"] {
   const toolOperations = operations[tool];
   if (!toolOperations) throw new Error(`Missing MCP operation definition for ${tool}.`);
-  if (tool === "status") {
-    const branches: SchemaBranch[] = [
-      { additionalProperties: false, properties: {}, required: [] },
-      { additionalProperties: false, properties: { op: { ...string, const: "graph" } }, required: ["op"] },
-    ];
-    return withBranchProjection(branches, true);
-  }
   if (toolOperations.length === 1 && toolOperations[0]?.direct) {
     const { properties = {}, required = [] } = toolOperations[0];
     return { type: "object", additionalProperties: false, properties, required: [...required] };
@@ -147,7 +140,7 @@ function operationSchema(tool: string): Tool["inputSchema"] {
   for (const { op, properties = {}, required = [] } of toolOperations) {
     const base = { op: { ...string, const: op }, ...properties };
     const baseRequired = ["op", ...required];
-    if (op === "templates") {
+    if (op === "templates" || op === "status") {
       branches.push({ additionalProperties: false, properties: { op: { ...string, const: op } }, required: ["op"] });
       continue;
     }
@@ -218,32 +211,30 @@ export const omsMcpTools: Tool[] = [
   {
     name: "search",
     title: "Oh My Second Brain search",
-    description: "Retrieve vault context, template metadata, semantic search, and selected documents. `op` selects the operation. `{path}` alone reads one note by its vault-relative path, normalization-insensitively, without the index or a model.",
+    description: "Retrieve vault context, template metadata, semantic search, selected documents, and wikilink suggestions (`op: link`). `op` selects the operation. `{path}` alone reads one note by its vault-relative path, normalization-insensitively, without the index or a model.",
     inputSchema: operationSchema("search"),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
-    name: "link",
-    title: "Oh My Second Brain link",
-    description: "Suggest or check wikilinks; `op` selects the operation. Applying an edit is the agent's job.",
-    inputSchema: operationSchema("link"),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  },
-  {
-    name: "status",
-    title: "Oh My Second Brain status",
-    description: "Read-only health and statistics for the active vault.",
-    inputSchema: operationSchema("status"),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    name: "interview",
+    title: "Oh My Second Brain interview",
+    description: "List the vault interview questions the owner would be asked now, with the contract seal state. Seals nothing: answers go through `oms setup --answers`, and only the owner loosens a seal, with `oms interview` in a terminal.",
+    inputSchema: operationSchema("interview"),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "doctor",
     title: "Oh My Second Brain doctor",
-    description: "Diagnose or repair the vault; `op` selects the operation.",
+    description: "Diagnose or repair the vault; `op` selects the operation. `op: status` is read-only vault health and `op: link-check` reports broken wikilinks.",
     inputSchema: operationSchema("doctor"),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
 ];
+
+/** The tools annotated read-only; `doctor op: status` reports this list. */
+export function readTools(): string[] {
+  return omsMcpTools.filter(tool => tool.annotations?.readOnlyHint === true).map(tool => tool.name);
+}
 
 export interface OMSMcpServerOptions {
   vault: string;
@@ -437,6 +428,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
     if (publicName === "write") return await writeNote(vault, source, args ?? {});
+    if (publicName === "interview") return await handleInterview(ctx, args);
     if (publicName === "search") {
       const exact = await searchExactRead(vault, args);
       if (exact !== undefined) return exact;
@@ -451,20 +443,16 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       args = prepared.args;
     }
     if (name === "oms_graph_status") {
-      return await handleStatus(
-        ctx,
-        publicName === "status" ? op : undefined,
-        omsMcpTools.filter(tool => tool.annotations?.readOnlyHint === true).map(tool => tool.name),
-      );
+      return await handleStatus(ctx, readTools());
     }
 
     try {
-      const handled = publicName === "doctor"
-        ? await handleDoctor(ctx, name, args)
-        : publicName === "search"
-          ? await handleSearch(ctx, publicName, name, args)
-          : publicName === "link"
-            ? await handleLink(ctx, name, args)
+      const handled = name === "oms_link_suggest" || name === "oms_link_check"
+        ? await handleLink(ctx, name, args)
+        : publicName === "doctor"
+          ? await handleDoctor(ctx, name, args)
+          : publicName === "search"
+            ? await handleSearch(ctx, publicName, name, args)
             : undefined;
       return handled ?? errorText(`Unknown Oh My Second Brain tool: ${publicName}`);
     } catch (error) {

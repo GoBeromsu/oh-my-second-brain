@@ -13,12 +13,9 @@ export function runtimeHistory(vault: string): { readonly history?: ReturnType<t
   }
 }
 
-/** MCP `status`: read-only health. `readTools` is the read-only tool list, passed in to avoid importing the server. */
-export async function handleStatus(ctx: ToolContext, op: string | undefined, readTools: readonly string[]): Promise<CallToolResult> {
+/** MCP `doctor op: status`: read-only health. `readTools` is the read-only tool list, passed in to avoid importing the server. */
+export async function handleStatus(ctx: ToolContext, readTools: readonly string[]): Promise<CallToolResult> {
   const { vault, source, engine } = ctx;
-  if (op === "graph") {
-    return jsonText(await engine.adapter.graphStatus(vault));
-  }
   const engineGraph = await engine.adapter.graphStatus(vault).catch(() => null);
   // Posture follows the sealed contract the write surface judges against.
   // An open vault (no contract sealed) stays writable; only an unreadable

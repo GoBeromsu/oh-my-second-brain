@@ -113,9 +113,9 @@ describe("MCP server instructions update nudge", () => {
       expect(instructions).toBeDefined();
       const lines = (instructions ?? "").split("\n");
       expect(lines).toHaveLength(2);
-      expect(lines[0]).toContain("Oh My Second Brain exposes write, search, link, status, and doctor tools");
+      expect(lines[0]).toContain("Oh My Second Brain exposes write, search, interview, and doctor tools");
       expect(lines[1]).toContain(`${current} -> 99.0.0`);
-      expect(lines[1]).toContain("oms package update --yes");
+      expect(lines[1]).toContain("oms setup package update --yes");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

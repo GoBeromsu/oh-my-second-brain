@@ -67,7 +67,7 @@ function expectAdvertisedArguments(tool: Tool, args: Record<string, unknown>): v
 }
 
 describe("MCP detail-tool demotion", () => {
-  it("keeps every demoted implementation reachable behind the five-tool surface", async () => {
+  it("keeps every demoted implementation reachable behind the four-tool surface", async () => {
     const client = new Client({ name: "demotion-test", version: "0" });
     const vault = await mkdtemp(path.join(tmpdir(), "oms-demotion-"));
     const home = await mkdtemp(path.join(tmpdir(), "oms-demotion-home-"));
@@ -83,9 +83,9 @@ describe("MCP detail-tool demotion", () => {
         expectAdvertisedArguments(tool!, arguments_);
         return client.callTool({ name, arguments: arguments_ });
       };
-      expect(names).toEqual(["write", "search", "link", "status", "doctor"]);
+      expect(names).toEqual(["write", "search", "interview", "doctor"]);
       expect(names).not.toEqual(expect.arrayContaining(demotedOperationNames));
-      expect(payload(await call("status", {})).contract).toMatchObject({ contract: "sealed" });
+      expect(payload(await call("doctor", { op: "status" })).contract).toMatchObject({ contract: "sealed" });
       expect(payload(await call("doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
       expect(payload(await call("doctor", { op: "validate" })).contract).toBe("sealed");
       expect(payload(await call("doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
@@ -96,12 +96,12 @@ describe("MCP detail-tool demotion", () => {
       expect(payload(await call("search", { op: "context", folder: "references", useCache: false })).hits).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", target: "references/clean-architecture.md" })).documents).toBeInstanceOf(Array);
       expect(payload(await call("search", { op: "get-document", targets: ["references/clean-architecture.md"] })).documents).toBeInstanceOf(Array);
-      const suggested = payload(await call("link", { op: "suggest", notePath: "references/clean-architecture.md" }));
+      const suggested = payload(await call("search", { op: "link", notePath: "references/clean-architecture.md" }));
       expect(suggested.baseContentHash).toBeTypeOf("string");
       const beforeLinkCheck = await readFile(path.join(vault, "references/clean-architecture.md"));
-      const linkCheck = payload(await call("link", { op: "check", notePath: "references/clean-architecture.md" }));
+      const linkCheck = payload(await call("doctor", { op: "link-check", notePath: "references/clean-architecture.md" }));
       expect(linkCheck.links).toBeInstanceOf(Array);
-      // The read-only link tool leaves the note exactly as the agent saved it.
+      // doctor op link-check is a diagnosis: it leaves the note exactly as the agent saved it.
       expect(await readFile(path.join(vault, "references/clean-architecture.md"))).toEqual(beforeLinkCheck);
       for (const view of ["status", "collections", "contexts"]) {
         const result = await call("search", { op: "index-status", view });

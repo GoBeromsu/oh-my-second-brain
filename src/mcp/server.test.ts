@@ -213,13 +213,11 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const validator = new AjvJsonSchemaValidator();
     const tools = new Map(omsMcpTools.map((tool) => [tool.name, tool]));
     const expectedOps: Record<string, readonly string[]> = {
-      search: ["context", "templates", "query", "index-status", "get-document"],
-      link: ["suggest", "check"],
-      status: ["graph"],
-      doctor: ["audit", "validate", "build-graph", "cleanup", "sync-embeddings"],
+      search: ["context", "templates", "query", "index-status", "get-document", "link"],
+      doctor: ["status", "link-check", "audit", "validate", "build-graph", "cleanup", "sync-embeddings"],
     };
 
-    expect([...tools.keys()].sort()).toEqual(["doctor", "link", "search", "status", "write"]);
+    expect([...tools.keys()].sort()).toEqual(["doctor", "interview", "search", "write"]);
     for (const [name, ops] of Object.entries(expectedOps)) {
       const schema = tools.get(name)?.inputSchema as {
         readonly properties?: Record<string, { readonly enum?: readonly string[]; readonly type?: string; readonly anyOf?: readonly unknown[] }>;
@@ -232,7 +230,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       };
       const op = schema.properties?.["op"];
       expect(op?.enum, name).toEqual([...ops]);
-      expect(schema.required ?? [], name).toEqual(name === "status" || name === "search" ? [] : ["op"]);
+      expect(schema.required ?? [], name).toEqual(name === "search" ? [] : ["op"]);
       for (const branch of schema.oneOf ?? []) {
         expect(branch.additionalProperties, name).toBe(false);
       }
@@ -267,7 +265,6 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const write = validator.getValidator(tools.get("write")!.inputSchema);
     const search = validator.getValidator(tools.get("search")!.inputSchema);
     const doctor = validator.getValidator(tools.get("doctor")!.inputSchema);
-    const status = validator.getValidator(tools.get("status")!.inputSchema);
     const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
     expect(search({ op: "query", query: "architecture", limit: 10, axes: { template: "literature" } }).valid).toBe(true);
     expect(search({ op: "query", limit: 10 }).valid).toBe(false);
@@ -289,8 +286,8 @@ describe("Oh My Second Brain MCP stdio server", () => {
     // The derived-projection repair is retired, so no branch accepts it.
     expect(doctor({ op: "regenerate-types", dryRun: true }).valid).toBe(false);
     expect(doctor({ op: "regenerate-types", dryRun: false, approvedDigest: digest }).valid).toBe(false);
-    expect(status({}).valid).toBe(true);
-    expect(status({ op: "graph", extra: true }).valid).toBe(false);
+    expect([doctor({ op: "status" }).valid, doctor({ op: "status", extra: true }).valid]).toEqual([true, false]);
+    expect(doctor({ op: "link-check", notePath: "notes/a.md" }).valid && search({ op: "link", notePath: "notes/a.md" }).valid).toBe(true);
   });
 
   it("keeps query budget schemas aligned with the runtime contract", () => {
@@ -433,7 +430,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const payload = textPayload(result);
       expect(payload.available).toBe(false);
       const message = typeof payload.reason === "string" ? payload.reason : "";
-      expect(message).toContain("oms index sync");
+      expect(message).toContain("oms doctor sync-embeddings --mode sync");
       expect(message).not.toContain("oms semantic sync");
     } finally {
       await client.close();
@@ -453,7 +450,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       }),
     );
     const skillsWithTools = declaredSkills.filter(({ frontmatter }) => typeof frontmatter["mcp_tool"] === "string");
-    expect(skillsWithTools).toHaveLength(5);
+    expect(skillsWithTools).toHaveLength(4);
     for (const { skill, frontmatter } of skillsWithTools) {
       const tool = toolByName.get(frontmatter["mcp_tool"] as string);
       expect(tool, `${skill} declares an advertised MCP tool`).toBeDefined();
@@ -523,7 +520,6 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const write = validator.getValidator(toolByName.get("write")!.inputSchema);
     const search = validator.getValidator(toolByName.get("search")!.inputSchema);
     const doctor = validator.getValidator(toolByName.get("doctor")!.inputSchema);
-    const status = validator.getValidator(toolByName.get("status")!.inputSchema);
 
     // One write payload: the note bytes, where they go, and an optional template.
     expect(write({ path: "references/a.md", content: "x" }).valid).toBe(true);
@@ -534,9 +530,9 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(write({ op: "check", connectionId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" }).valid).toBe(false);
     expect(write({ op: "complete", checkpoint: { schemaVersion: 1 }, review: {} }).valid).toBe(false);
     expect(write({ op: "note", mode: "create", body: "Retired." }).valid).toBe(false);
-    expect(status({}).valid).toBe(true);
-    expect(status({ op: "graph" }).valid).toBe(true);
-    expect(status({ op: "status" }).valid).toBe(false);
+    expect(doctor({}).valid).toBe(false);
+    expect(doctor({ op: "status" }).valid).toBe(true);
+    expect(doctor({ op: "graph" }).valid).toBe(false);
     expect(search({ op: "templates" }).valid).toBe(true);
     expect(search({ op: "templates", templateId: "literature" }).valid).toBe(false);
     expect(search({ op: "template-scan" }).valid).toBe(false);
@@ -619,7 +615,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
 
       const tools = await client.listTools();
       const names = tools.tools.map((tool) => tool.name);
-      expect(names).toEqual(["write", "search", "link", "status", "doctor"]);
+      expect(names).toEqual(["write", "search", "interview", "doctor"]);
       expect(names).toEqual(harnessSurfaceRegistry.mcpTools.map((tool) => tool.name));
       for (const registryTool of harnessSurfaceRegistry.mcpTools) {
         const tool = tools.tools.find((candidate) => candidate.name === registryTool.name);
@@ -644,7 +640,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       expect(doctorTool?.annotations?.readOnlyHint).toBe(false);
       expect(JSON.stringify(doctorTool?.inputSchema)).toContain("audit");
 
-      const status = await client.callTool({ name: "status", arguments: {} });
+      const status = await client.callTool({ name: "doctor", arguments: { op: "status" } });
       const parsedStatus = textPayload(status);
       expect(parsedStatus.writeTools).toBe("write-gated-by-verified-target-and-contract");
       const writeTool = tools.tools.find((tool) => tool.name === "write");
@@ -796,9 +792,9 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
 
-      const status = textPayload(await client.callTool({ name: "status", arguments: {} }));
+      const status = textPayload(await client.callTool({ name: "doctor", arguments: { op: "status" } }));
       expect(status.writeTools).toBe("write-gated-by-verified-target-and-contract");
-      expect(status.readTools).toEqual(["search", "link", "status"]);
+      expect(status.readTools).toEqual(["search"]);
 
       expect(status.contract).toMatchObject({ contract: "none", row: "never-sealed" });
 
@@ -836,11 +832,11 @@ Valid frontmatter remains available to retrieve.
 
     try {
       await client.connect(transport);
-      expect(textPayload(await client.callTool({ name: "status", arguments: {} })).contract).toMatchObject({ contract: "none" });
+      expect(textPayload(await client.callTool({ name: "doctor", arguments: { op: "status" } })).contract).toMatchObject({ contract: "none" });
 
       await client.callTool({ name: "doctor", arguments: { op: "build-graph",} });
 
-      expect(textPayload(await client.callTool({ name: "status", arguments: {} })).contract).toMatchObject({ contract: "none" });
+      expect(textPayload(await client.callTool({ name: "doctor", arguments: { op: "status" } })).contract).toMatchObject({ contract: "none" });
     } finally {
       await client.close();
       await rm(tmpVault, { recursive: true, force: true });
@@ -863,7 +859,7 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
 
-      const status = textPayload(await client.callTool({ name: "status", arguments: {} }));
+      const status = textPayload(await client.callTool({ name: "doctor", arguments: { op: "status" } }));
       expect(status.contract).toMatchObject({ contract: "none" });
 
       const write = await client.callTool({
@@ -1027,8 +1023,8 @@ Valid frontmatter remains available to retrieve.
       await client.connect(transport);
 
       const suggested = textPayload(await client.callTool({
-        name: "link",
-        arguments: { op: "suggest", notePath },
+        name: "search",
+        arguments: { op: "link", notePath },
       }));
       const candidates = suggested.candidates as { readonly id: string; readonly targetPath: string }[];
       expect(candidates.map(candidate => candidate.targetPath)).toEqual(
@@ -1037,8 +1033,8 @@ Valid frontmatter remains available to retrieve.
       expect(suggested.baseContentHash).toMatch(/^[0-9a-f]{64}$/u);
 
       const checked = textPayload(await client.callTool({
-        name: "link",
-        arguments: { op: "check", notePath },
+        name: "doctor",
+        arguments: { op: "link-check", notePath },
       }));
       expect(checked.unresolved).toEqual(["Missing Term"]);
 
@@ -1069,31 +1065,35 @@ Valid frontmatter remains available to retrieve.
       await client.connect(transport);
 
       // When: notePath is omitted
-      const missing = await client.callTool({ name: "link", arguments: { op: "suggest",} });
+      const missing = await client.callTool({ name: "search", arguments: { op: "link" } });
       // Then: the tool reports a typed argument error
       expect(missing.isError).toBe(true);
       expect(missing.content[0]?.type === "text" ? missing.content[0].text : "").toContain("notePath");
 
       // When: the note does not exist
       const absent = await client.callTool({
-        name: "link",
-        arguments: { op: "suggest", notePath: "notes/does-not-exist.md" },
+        name: "search",
+        arguments: { op: "link", notePath: "notes/does-not-exist.md" },
       });
       // Then: the tool errors instead of inventing an empty suggestion set
       expect(absent.isError).toBe(true);
 
       // When: check omits the note path
-      const noPath = await client.callTool({ name: "link", arguments: { op: "check" } });
+      const noPath = await client.callTool({ name: "doctor", arguments: { op: "link-check" } });
       // Then: the tool refuses with a typed argument error
       expect(noPath.isError).toBe(true);
       expect(noPath.content[0]?.type === "text" ? noPath.content[0].text : "").toContain("notePath");
 
-      // The retired apply operation is not reachable at all.
-      const apply = await client.callTool({
-        name: "link",
-        arguments: { op: "apply", notePath: "notes/sage.md", baseContentHash: "0".repeat(64), candidateIds: [] },
-      });
-      expect(apply.content[0]?.type === "text" ? apply.content[0].text : "").toContain("Unknown operation");
+      // The retired apply operation is not reachable at all: not as a search
+      // or doctor op, and not through the removed 0.18 `link` tool name.
+      for (const name of ["search", "doctor", "link"]) {
+        const apply = await client.callTool({
+          name,
+          arguments: { op: "apply", notePath: "notes/sage.md", baseContentHash: "0".repeat(64), candidateIds: [] },
+        });
+        expect(apply.isError, name).toBe(true);
+        expect(apply.content[0]?.type === "text" ? apply.content[0].text : "").toContain("Unknown operation");
+      }
       expect(await readFile(path.join(tmpVault, "notes", "sage.md"), "utf-8")).toBe("---\ntitle: Sage\n---\n\nBody.\n");
     } finally {
       await client.close();
@@ -1121,7 +1121,7 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
 
-      const status = textPayload(await client.callTool({ name: "status", arguments: {} }));
+      const status = textPayload(await client.callTool({ name: "doctor", arguments: { op: "status" } }));
       expect(status.writeTools).toBe("write-disabled-target-unverified");
 
       const write = textPayload(
@@ -1133,9 +1133,9 @@ Valid frontmatter remains available to retrieve.
       expect(write).toMatchObject({ ok: false, status: "rejected", rejection: { stage: "admission", code: "target-unverified" } });
       expect((write.rejection as Record<string, string>).message).toContain("current directory");
 
-      // Link is read-only, so an unverified target changes nothing about it:
-      // there is no apply to reject, and the booting directory stays empty.
-      const linkApply = await client.callTool({ name: "link", arguments: { op: "apply", notePath: "notes/misrouted.md", baseContentHash: "0".repeat(64), candidateIds: [] } });
+      // Link suggestion is read-only, so an unverified target changes nothing
+      // about it: there is no apply to reject, and the booting directory stays empty.
+      const linkApply = await client.callTool({ name: "search", arguments: { op: "apply", notePath: "notes/misrouted.md", baseContentHash: "0".repeat(64), candidateIds: [] } });
       expect(linkApply.content[0]?.type === "text" ? linkApply.content[0].text : "").toContain("Unknown operation");
       expect(await readdir(tmpCwd)).toEqual([]);
     } finally {
@@ -1394,10 +1394,10 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
 
-      const status = textPayload(await client.callTool({ name: "status", arguments: {} }));
+      const status = textPayload(await client.callTool({ name: "doctor", arguments: { op: "status" } }));
       expect(status.writeTools).toBe("write-gated-by-verified-target-and-contract");
       expect(status.history).toEqual(expect.objectContaining({ verifications: expect.any(Number) }));
-      const graph = textPayload(await client.callTool({ name: "status", arguments: { op: "graph" } }));
+      const graph = status.engineGraph;
       expect(graph).toEqual(expect.objectContaining({ available: expect.any(Boolean) }));
       expect(graph).not.toHaveProperty("writeTools");
       expect(graph).not.toHaveProperty("derivedState");

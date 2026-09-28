@@ -2,7 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { checkLinksForNote, linkCheckPayload, linkSuggestPayload, suggestLinksForNote } from "../link-tools.js";
 import { errorText, jsonText, stringArg, type ToolContext } from "./shared.js";
 
-/** MCP `link`: suggest or check wikilinks. Returns undefined for an operation it does not own. */
+/** MCP `search op: link` and `doctor op: link-check`: suggest or check wikilinks. Returns undefined for an operation it does not own. */
 export async function handleLink(ctx: ToolContext, name: string, args: Record<string, unknown> | undefined): Promise<CallToolResult | undefined> {
   const { vault, source } = ctx;
   if (name === "oms_link_suggest") {

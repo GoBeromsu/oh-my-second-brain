@@ -20,11 +20,11 @@ import { createHash } from "node:crypto";
 import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import Database from "better-sqlite3";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, readlink, rm, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { omsMcpTools } from "./server.js";
+import { omsMcpTools, readTools } from "./server.js";
 
 interface ToolResult {
   readonly content: { type: string; text?: string }[];
@@ -94,7 +94,10 @@ async function snapshotTree(root: string): Promise<Map<string, string>> {
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       const rel = path.relative(root, full);
-      if (entry.isDirectory()) {
+      if (entry.isSymbolicLink()) {
+        // The sealed contract store swaps generations through a symbolic link.
+        snapshot.set(rel, `<link>${await readlink(full)}`);
+      } else if (entry.isDirectory()) {
         snapshot.set(`${rel}/`, "<dir>");
         await walk(full);
       } else {
@@ -190,7 +193,8 @@ async function withClient<T>(vault: string, run: (client: Client) => Promise<T>,
     command: process.execPath,
     args: [distCli, "serve", "mcp"],
     cwd: vault,
-    env: { HOME: emptyHome, OMS_VAULT: vault, PATH: process.env["PATH"] ?? "", XDG_CACHE_HOME: cacheHome },
+    // The update notice is off so any write under HOME/.oms is OMS state, not its cache.
+    env: { HOME: emptyHome, OMS_VAULT: vault, OMS_UPDATE_NOTICE: "0", PATH: process.env["PATH"] ?? "", XDG_CACHE_HOME: cacheHome },
     stderr: "pipe",
   });
   const client = new Client({ name: "oms-readonly-probe", version: "0.0.0" });
@@ -222,6 +226,8 @@ describe("search read-only guarantee", () => {
   it("declares itself read-only", () => {
     const search = omsMcpTools.find((tool) => tool.name === "search");
     expect(search?.annotations?.readOnlyHint).toBe(true);
+    // Annotations are per tool: `search` is the only read-only tool of the four.
+    expect(readTools()).toEqual(["search"]);
   });
 
   it("lists resolved templates without mutating a valid template vault", async () => {
@@ -458,5 +464,51 @@ describe("search read-only guarantee", () => {
     } finally {
       writer.close();
     }
+  }, 180_000);
+});
+
+/**
+ * `doctor` is not annotated read-only because it carries repair ops, but its
+ * `status` op replaced the retired `status` tool and must keep that tool's
+ * promise: it observes and writes nothing, with or without an engine store.
+ */
+describe("doctor status read-only guarantee", () => {
+  it("writes nothing to the vault, the contract store or the engine store", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-readonly-home-"));
+    const vault = await makeTemplateVault(home);
+    vaults.push(vault);
+    const storeDir = path.dirname(engineStorePath(vault));
+    // OMS state under HOME, including the sealed contract. The rest of HOME is
+    // left to the host toolchain.
+    const omsHome = path.join(home, ".oms");
+
+    const statusTwice = (): Promise<Record<string, unknown>[]> => withClient(vault, async (client) => [
+      textPayload(await client.callTool({ name: "doctor", arguments: { op: "status" } })),
+      textPayload(await client.callTool({ name: "doctor", arguments: { op: "status" } })),
+    ], home);
+
+    // No engine store yet: status must not create one.
+    const vaultBefore = await snapshotTree(vault);
+    const homeBefore = await snapshotTree(omsHome);
+    const [first] = await statusTwice();
+    expect(first?.["readTools"]).toEqual(["search"]);
+    expect(diff(vaultBefore, await snapshotTree(vault))).toEqual([]);
+    expect(diff(homeBefore, await snapshotTree(omsHome))).toEqual([]);
+    expect(await snapshotTree(storeDir).then((tree) => [...tree.keys()].some((rel) => rel.includes(path.basename(engineStorePath(vault)))))).toBe(false);
+
+    // With an engine store built by the repair op, status still writes nothing.
+    await withClient(vault, async (client) => {
+      const repaired = await client.callTool({ name: "doctor", arguments: { op: "sync-embeddings", mode: "sync" } });
+      expect(repaired.isError ?? false, rawText(repaired as ToolResult)).toBe(false);
+    }, home);
+    const vaultIndexed = await snapshotTree(vault);
+    const homeIndexed = await snapshotTree(omsHome);
+    const storeIndexed = await snapshotTree(storeDir);
+    expect([...storeIndexed.keys()].some((rel) => rel.includes(path.basename(engineStorePath(vault))))).toBe(true);
+    const [indexed] = await statusTwice();
+    expect(indexed?.["contract"]).toMatchObject({ contract: "sealed" });
+    expect(diff(vaultIndexed, await snapshotTree(vault))).toEqual([]);
+    expect(diff(homeIndexed, await snapshotTree(omsHome))).toEqual([]);
+    expect(diff(storeIndexed, await snapshotTree(storeDir))).toEqual([]);
   }, 180_000);
 });

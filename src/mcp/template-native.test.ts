@@ -32,10 +32,19 @@ describe("template-native MCP surface", () => {
     expect(validate("write", { path: "notes/a.md", content: "body", templateId: "note" })).toBe(false);
   });
 
-  it("keeps link read-only and doctor free of note backfill", () => {
-    expect(validate("link", { op: "suggest", notePath: "notes/a.md" })).toBe(true);
-    expect(validate("link", { op: "check", notePath: "notes/a.md" })).toBe(true);
-    expect(validate("link", { op: "apply", notePath: "notes/a.md", baseContentHash: "0".repeat(64), candidateIds: [] })).toBe(false);
+  it("keeps link suggestion under search, link checking under doctor, and doctor free of note backfill", () => {
+    expect(validate("search", { op: "link", notePath: "notes/a.md" })).toBe(true);
+    expect(validate("search", { op: "link" })).toBe(false);
+    expect(validate("doctor", { op: "link-check", notePath: "notes/a.md" })).toBe(true);
+    expect(validate("doctor", { op: "link-check" })).toBe(false);
+    expect(validate("search", { op: "apply", notePath: "notes/a.md", baseContentHash: "0".repeat(64), candidateIds: [] })).toBe(false);
+    expect(validate("doctor", { op: "apply", notePath: "notes/a.md", baseContentHash: "0".repeat(64), candidateIds: [] })).toBe(false);
+    expect(omsMcpTools.map(tool => tool.name)).not.toContain("link");
+    expect(omsMcpTools.map(tool => tool.name)).not.toContain("status");
+    expect(validate("doctor", { op: "status" })).toBe(true);
+    expect(validate("interview", {})).toBe(true);
+    expect(validate("interview", { reask: true })).toBe(true);
+    expect(validate("interview", { answers: {} })).toBe(false);
     expect(validate("doctor", { op: "validate" })).toBe(true);
     expect(validate("doctor", { op: "backfill-defaults", notePath: "notes/a.md", dryRun: true })).toBe(false);
   });
