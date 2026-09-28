@@ -1,9 +1,11 @@
-import { mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { addSharedCopy, buildTruthTableRow, TRUTH_TABLE_ROWS, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
 import { enumerateTemplateSources } from "./interpretation.js";
 import { guardEventsPath } from "./guard-events.js";
+import { appendInterviewEvent, EVENTS_FILE, pendingLogKey } from "./interview-log.js";
+import { stateDir } from "./state-dir.js";
 import {
   contractDoctor, contractStatus, doctorFix, ROW_FINDING, SHARED_FINDING, STORE_UNREADABLE_FINDING, type DoctorFixResult,
 } from "./status.js";
@@ -137,6 +139,30 @@ describe("contractDoctor", () => {
     const report = await contractDoctor(fixture.vault, "agent", fixture.root);
     expect(report.transportFailures).toEqual({ total: 1, kinds: { timeout: 1 } });
     expect(JSON.stringify(report)).not.toContain("2026-09-25");
+  });
+
+  it("reports corrupt interview log lines by line number, read-only, for the id log and the pending log", async () => {
+    const fixture = await row("sealed");
+    const answered = { type: "answered" as const, questionId: "q", questionDigest: "d", payload: { answer: "yes" } };
+    expect((await contractDoctor(fixture.vault, "agent", fixture.root)).interviewLog).toEqual({ corrupt: [], pendingCorrupt: [], unreadable: false });
+    await appendInterviewEvent(fixture.root, fixture.vaultId, answered);
+    const log = join(stateDir(fixture.root, fixture.vaultId), "interview", EVENTS_FILE);
+    await appendFile(log, "not json\n");
+    const pendingKey = await pendingLogKey(fixture.vault);
+    await appendInterviewEvent(fixture.root, pendingKey, answered);
+    const pending = join(stateDir(fixture.root, pendingKey), "interview", EVENTS_FILE);
+    await appendFile(pending, "{\"type\":\"bogus\"}\n");
+    const before = [await readFile(log, "utf8"), await readFile(pending, "utf8")];
+    const report = await contractDoctor(fixture.vault, "human", fixture.root);
+    expect(report.interviewLog).toEqual({ corrupt: [2], pendingCorrupt: [2], unreadable: false });
+    expect([await readFile(log, "utf8"), await readFile(pending, "utf8")]).toEqual(before);
+  });
+
+  it("reports an interview log it may not read as unreadable instead of failing", async () => {
+    const fixture = await row("sealed");
+    await mkdir(join(fixture.vault, "..", "elsewhere"));
+    await symlink(join(fixture.vault, "..", "elsewhere"), stateDir(fixture.root, fixture.vaultId));
+    expect((await contractDoctor(fixture.vault, "agent", fixture.root)).interviewLog).toEqual({ corrupt: [], pendingCorrupt: [], unreadable: true });
   });
 
   it("lists unexpected control files by their disk names for a person and only counts them for an agent", async () => {

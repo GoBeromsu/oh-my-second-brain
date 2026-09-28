@@ -4,35 +4,52 @@ import { runContractCommand, type ContractCommandDeps } from "./contract-command
  * `oms interview`: the owner's interactive vault interview in a terminal. It is the
  * full-authority seal (it may loosen a sealed contract), so it needs a real terminal
  * and refuses OMS_NON_INTERACTIVE=1. Agents use `oms setup --questions/--answers`.
+ * Each answer is logged beside the contract store, so an interrupted interview
+ * continues where it stopped; `--restart` abandons the logged run and starts over.
  */
 
 export function interviewUsage(): string {
-  return `Usage: oms interview [--reask] [--vault <path>]
+  return `Usage: oms interview [--reask] [--restart] [--vault <path>]
 
 Ask the vault owner about folders, properties and templates in the terminal, then seal
 the contract. It needs an interactive terminal and refuses OMS_NON_INTERACTIVE=1.
 --reask asks again about items declined at an earlier seal.
+An interrupted interview continues from its logged answers; --restart starts over.
 An agent asks the same questions with \`oms setup --questions\` and \`oms setup --answers <file>\`.`;
 }
 
-function checkArgs(argv: readonly string[]): string | undefined {
+interface InterviewArgs {
+  readonly restart: boolean;
+  /** The arguments passed on to `oms setup`: `--reask` and `--vault <path>`. */
+  readonly rest: readonly string[];
+}
+
+/** Parses the flags in one pass, so a flag's value is never read as a flag of its own. */
+function parseArgs(argv: readonly string[]): InterviewArgs | string {
   let vault = false;
   let reask = false;
+  let restart = false;
+  const rest: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]!;
     if (token === "--reask") {
       if (reask) return "interview: duplicate flag --reask";
       reask = true;
+      rest.push(token);
+    } else if (token === "--restart") {
+      if (restart) return "interview: duplicate flag --restart";
+      restart = true;
     } else if (token === "--vault") {
       if (vault) return "interview: duplicate flag --vault";
       const value = argv[++index];
       if (value === undefined || value.startsWith("--")) return "interview: --vault requires a value";
       vault = true;
+      rest.push(token, value);
     } else {
       return `interview: unknown argument ${token}`;
     }
   }
-  return undefined;
+  return { restart, rest };
 }
 
 export async function runInterviewCommand(argv: readonly string[], deps: ContractCommandDeps = {}): Promise<void> {
@@ -41,10 +58,10 @@ export async function runInterviewCommand(argv: readonly string[], deps: Contrac
     console.log(interviewUsage());
     return;
   }
-  const invalid = checkArgs(argv);
-  if (invalid !== undefined) {
+  const args = parseArgs(argv);
+  if (typeof args === "string") {
     process.exitCode = 1;
-    console.error(`[oms] ${invalid}`);
+    console.error(`[oms] ${args}`);
     return;
   }
   const interactive = deps.interactive ?? (process.stdin.isTTY === true && process.env["OMS_NON_INTERACTIVE"] !== "1");
@@ -53,5 +70,5 @@ export async function runInterviewCommand(argv: readonly string[], deps: Contrac
     console.error("[oms] oms interview needs an interactive terminal (and OMS_NON_INTERACTIVE unset). An agent asks the owner with `oms setup --questions` and `oms setup --answers <file>`.");
     return;
   }
-  await runContractCommand(["setup", ...argv], deps);
+  await runContractCommand(["setup", ...args.rest], { ...deps, resume: { ...deps.resume, restart: args.restart } });
 }

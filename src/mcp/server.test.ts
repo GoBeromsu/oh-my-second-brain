@@ -663,6 +663,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       }));
       expect(templateDiagnosis).toMatchObject({ vault: fixtureVault, contract: "none", audience: "agent" });
       expect(templateDiagnosis.findings).toEqual(expect.any(Array));
+      expect(templateDiagnosis.interviewLog).toEqual({ corrupt: [], pendingCorrupt: [], unreadable: false });
       const audit = await client.callTool({
         name: "doctor",
         arguments: { op: "audit", folder: "references" },

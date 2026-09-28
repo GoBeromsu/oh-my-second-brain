@@ -148,7 +148,7 @@ See [architecture](./docs/architecture.md), [conventions](./docs/conventions.md)
 
 `oms setup` in a terminal runs the interactive interview and seals the contract. `oms interview` is the same terminal interview on its own command; it requires a terminal and refuses to run under `OMS_NON_INTERACTIVE=1`.
 
-The `setup` skill asks the owner each question via `oms setup --questions` and submits answers with `oms setup --answers <file|->`. This path can seal a first or stricter contract; a loosening reseal stays with the owner's terminal. The MCP `interview` tool only shows the questions and the seal state; it seals nothing.
+The `setup` skill asks the owner each question via `oms setup --questions` and submits answers with `oms setup --answers <file|->`. This path can seal a first or stricter contract; a loosening reseal stays with the owner's terminal. The MCP `interview` tool continues the interview across calls: `op: questions` is read-only, and `answer`, `confirm`, and `seal` record to the interview log on a verified target. It seals only the proposal the owner confirmed and never reclaims a stale seal lock.
 
 `oms setup extract --template <path>` returns a template source and its computed hash. The agent reads each template and submits its interpretation with `oms setup --interpretations <file>`. The owner confirms that interpretation before it drives the interview.
 
@@ -168,7 +168,7 @@ Model lifecycle is separate: `oms setup model install|select|waive|status`.
 | :--- | :--- |
 | `write` | Judge a whole note against the sealed contract and save an allowed write. |
 | `search` | Retrieve notes, structured context, or wikilink suggestions without changing the vault. |
-| `interview` | Show the vault interview questions and the seal state. It seals nothing. |
+| `interview` | Continue the vault interview: list open questions, record answers, and seal only the proposal the owner confirmed. |
 | `doctor` | Read-only `status`; diagnose the contract, audit notes, check links, and run explicit index maintenance. |
 
 The six skills are `distill`, `doctor`, `interview`, `search`, `setup`, and `write`.

@@ -1,18 +1,20 @@
-import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { digestBytes } from "../kernel/conventions/canonical.js";
 import type { InterviewIO } from "../kernel/contract/interview.js";
+import { appendInterviewEvent, EVENTS_FILE } from "../kernel/contract/interview-log.js";
 import { PATTERN_SOURCE_LIMIT } from "../kernel/contract/pattern.js";
+import { stateDir } from "../kernel/contract/state-dir.js";
 
 const { resolveEffectiveVault } = vi.hoisted(() => ({
   resolveEffectiveVault: vi.fn(async () => ({ vault: process.cwd(), source: "cwd", scope: null })),
 }));
 vi.mock("../kernel/link/link.js", () => ({ resolveEffectiveVault }));
 
-import { VaultSettingsError } from "../kernel/vault/settings.js";
+import { readVaultSettings, VaultSettingsError } from "../kernel/vault/settings.js";
 import { commandDiagnostic, contractUsage, runContractCommand } from "./contract-command.js";
 
 const SECRET = "SECRET-42";
@@ -125,6 +127,7 @@ describe("oms contract", () => {
       orphans: 0,
       transportFailures: { total: 0, kinds: {} },
       unexpectedControlFiles: [],
+      interviewLog: { corrupt: [], pendingCorrupt: [], unreadable: false },
     });
 
     await runContractCommand(["doctor", "--fix", "--vault", vault]);
@@ -141,6 +144,20 @@ describe("oms contract", () => {
     expect(output()).toMatchObject({ contract: "sealed", findings: [{ message: "index unreadable" }] });
     await runContractCommand(["doctor", "--fix", "--vault", vault]);
     expect(output()).toEqual({ status: "reindexed" });
+  });
+
+  it("exits 1 from doctor on corrupt interview log lines and reports them by line number without repairing", async () => {
+    await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
+    const root = path.join(home, ".oms", "vaults");
+    const vaultId = (await readVaultSettings(vault))!.vaultId;
+    await appendInterviewEvent(root, vaultId, { type: "answered", questionId: "q", questionDigest: "d", payload: { answer: "y" } });
+    const events = path.join(stateDir(root, vaultId), "interview", EVENTS_FILE);
+    await appendFile(events, "garbage\n");
+    const before = await readFile(events, "utf8");
+    await runContractCommand(["doctor", "--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toMatchObject({ contract: "sealed", interviewLog: { corrupt: [2], pendingCorrupt: [], unreadable: false } });
+    expect(await readFile(events, "utf8")).toBe(before);
   });
 
   it("AC16: doctor names the unreadable cause and guides to oms setup, and lists unexpected control files", async () => {

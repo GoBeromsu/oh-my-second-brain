@@ -3,8 +3,11 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { enumerateTemplateSources, parseInterpretations, type TemplateInterpretation } from "../kernel/contract/interpretation.js";
+import { resumableIO } from "../kernel/contract/interview-resume.js";
 import { InterviewAborted, runInterview, type InterviewIO, type InterviewResult, type Question } from "../kernel/contract/interview.js";
 import { parseAnswers, publicQuestion, scriptedIO, type Answers } from "../kernel/contract/scripted-interview.js";
+import { StateDirUnsafe } from "../kernel/contract/state-dir.js";
+import { storeRoot, type SealDeps } from "../kernel/contract/store.js";
 import { contractDoctor, contractStatus, doctorFix, ROW_FINDING } from "../kernel/contract/status.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { VaultSettingsError } from "../kernel/vault/settings.js";
@@ -256,7 +259,31 @@ async function setup(vault: string, args: ContractArgs, deps: ContractCommandDep
   const interpretations = await readInterpretations(vault, args.interpretations);
   const terminal = deps.io === undefined ? terminalIO() : null;
   try {
-    printResult(await runInterview({ vault, io: deps.io ?? terminal!.io, interpretations, ...(args.reask ? { reask: true } : {}) }));
+    const owner = deps.io ?? terminal!.io;
+    const resume = deps.resume;
+    const resumed = resume === undefined ? null : await resumableIO({
+      vault,
+      root: resume.root ?? storeRoot(),
+      fallback: owner,
+      restart: resume.restart === true,
+      ...(resume.now === undefined ? {} : { now: resume.now }),
+    });
+    if (resumed !== null && resumed.corrupt.length > 0) {
+      console.error(`[oms] The interview log has ${resumed.corrupt.length} unreadable line(s); they were skipped and left in place.`);
+    }
+    if (resumed !== null && resumed.pending > 0) console.error(`[oms] Continuing the interview with ${resumed.pending} earlier answer(s). Run \`oms interview --restart\` to start over.`);
+    const result = await runInterview({
+      vault,
+      io: resumed?.io ?? owner,
+      interpretations,
+      ...(resume?.root === undefined ? {} : { root: resume.root }),
+      ...(resume?.sealDeps === undefined ? {} : { sealDeps: resume.sealDeps }),
+      ...(args.reask ? { reask: true } : {}),
+    });
+    for (const drift of resumed?.drift ?? []) {
+      console.error(`[oms] Earlier answer to ${drift.questionId} was dropped (${drift.reason === "question-changed" ? "the question changed" : "the interview rejected it"}).`);
+    }
+    printResult(result);
   } finally {
     terminal?.close();
   }
@@ -293,7 +320,8 @@ async function doctor(vault: string, fix: boolean): Promise<void> {
   // Healthy rows carry only their own row finding; any added finding (shared id, unreadable settings or store) needs attention.
   const healthy = (report.row === "sealed" || report.row === "never-sealed")
     && report.findings.every(finding => finding === ROW_FINDING[report.row]) && report.cause === null
-    && report.unsafePatterns.length === 0 && report.staleLocks === 0 && report.orphans === 0 && report.unexpectedControlFiles.length === 0;
+    && report.unsafePatterns.length === 0 && report.staleLocks === 0 && report.orphans === 0 && report.unexpectedControlFiles.length === 0
+    && report.interviewLog.corrupt.length === 0 && report.interviewLog.pendingCorrupt.length === 0 && !report.interviewLog.unreadable;
   if (!healthy) process.exitCode = 1;
   print({
     contract: report.contract,
@@ -305,6 +333,7 @@ async function doctor(vault: string, fix: boolean): Promise<void> {
     orphans: report.orphans,
     unexpectedControlFiles: report.unexpectedControlFiles,
     transportFailures: report.transportFailures,
+    interviewLog: report.interviewLog,
   });
 }
 
@@ -312,6 +341,14 @@ export interface ContractCommandDeps {
   /** Scripted IO for tests; when given, the terminal check is skipped. */
   readonly io?: InterviewIO;
   readonly interactive?: boolean;
+  /** `oms interview`: continue from the interview log; `restart` abandons the logged run first. */
+  readonly resume?: {
+    readonly restart?: boolean;
+    /** Store root and clock for tests; the defaults are ~/.oms/vaults and Date.now. */
+    readonly root?: string;
+    readonly now?: () => number;
+    readonly sealDeps?: Partial<SealDeps>;
+  };
 }
 
 export async function runContractCommand(argv: readonly string[], deps: ContractCommandDeps = {}): Promise<void> {
@@ -366,7 +403,11 @@ const FS_REMEDIATION: Readonly<Record<string, string>> = {
  */
 export function commandDiagnostic(error: unknown): { readonly code: string; readonly remediation: string } {
   if (error instanceof VaultSettingsError) return { code: error.code, remediation: error.message };
-  if (error instanceof Error && /^(CONTRACT_[A-Z_]+|TEMPLATE_SOURCE_UNSAFE):/.test(error.message)) {
+  if (error instanceof StateDirUnsafe) {
+    // The path names the store; only the kind is reported.
+    return { code: error.code, remediation: `STATE_DIR_UNSAFE: the interview state beside the contract store holds an unsafe entry (${error.kind}); it was left untouched. Inspect ~/.oms/vaults, remove the entry yourself, then retry.` };
+  }
+  if (error instanceof Error && /^(CONTRACT_[A-Z_]+|INTERVIEW_[A-Z_]+|TEMPLATE_SOURCE_UNSAFE):/.test(error.message)) {
     return { code: error.message.split(":", 1)[0]!, remediation: error.message };
   }
   const errno = (error as NodeJS.ErrnoException | null)?.code;

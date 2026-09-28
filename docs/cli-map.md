@@ -16,7 +16,7 @@ MCP annotations describe a whole tool, not one of its operations. A tool is anno
 |---|---|---|
 | `oms_search` | `true` | Every search operation, including `path` reads and link suggestions, reads the vault and writes nothing. |
 | `oms_write` | `false` | Saves a note after the judge allows it. |
-| `oms_interview` | `false` | Reads the vault and returns interview questions. It seals nothing, but it shares the setup posture and is not advertised as read-only. |
+| `oms_interview` | `false` | `op: questions` reads the vault and returns the open interview questions. `op: answer`, `op: confirm`, and `op: seal` append to the interview log and seal a confirmed proposal on a verified target, so the tool is not advertised as read-only. |
 | `oms_doctor` | `false` | Its repair operations (`sync-embeddings`, `cleanup`, `build-graph`) mutate managed state. Its diagnosis operations (`status`, `validate`, `audit`, `link-check`) write nothing, and a `cwd`-inferred target still allows them. |
 
 ## Write
@@ -45,7 +45,7 @@ A plain `oms search <text>` is lexical-only. Search is independent of the contra
 
 | CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
-| `oms interview` | `oms_interview` | absent | The CLI runs the interactive interview; it refuses without a TTY or under `OMS_NON_INTERACTIVE=1`. The MCP tool returns the interview questions and seals nothing. |
+| `oms interview` | `oms_interview` | absent | The CLI runs the interactive interview, continuing from the interview log (`--restart` starts over); it refuses without a TTY or under `OMS_NON_INTERACTIVE=1`. The MCP tool continues the same log over `op: questions`, `answer`, `confirm`, and `seal`; it seals only the proposal the owner confirmed and never reclaims a stale seal lock. |
 | `oms setup` | none | — | Interview the whole vault and seal its contract. Interactive terminal only. Writes only `.oms/settings.json` inside the vault. |
 | `oms setup extract --template <path>` | none | — | Show one template source and the `sourceHash` OMS computed for it. OMS never parses template text. |
 | `oms setup status` | none | — | Report the seal's posture and each sealed template as `active`, `drift`, or `missing` against the live file. |

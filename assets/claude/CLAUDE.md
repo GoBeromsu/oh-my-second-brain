@@ -39,8 +39,8 @@ about or guess the contract's location or values.
   template drift without printing any value.
 - `/search link` suggests wikilinks for a note; you apply only the ones the
   user accepts.
-- `/interview` shows the questions the vault interview would ask and the seal
-  state. It seals nothing.
+- `/interview` continues the vault interview: it lists open questions, records
+  the user's answers, and seals only a proposal the user confirmed.
 - `/doctor` runs explicit, supported index and control repairs. It never
   backfills notes. A broken or missing seal is fixed by the user running
   `oms setup`.

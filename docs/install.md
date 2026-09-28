@@ -107,7 +107,7 @@ The installable skill set is `distill`, `doctor`, `interview`, `search`, `setup`
 
 `oms_write` · `oms_search` · `oms_interview` · `oms_doctor`
 
-Only `oms_search` is annotated read-only. `oms_interview` lists interview questions and seals nothing. `oms_doctor` diagnoses the contract and indexes, and `op: status` is its read-only health view. Its repairs are explicit managed-state repairs after verified-target admission, not note backfill. Notes are written by the agent.
+Only `oms_search` is annotated read-only. `oms_interview` lists interview questions read-only by default; its `answer`, `confirm`, and `seal` ops need a verified target and seal only a confirmed proposal. `oms_doctor` diagnoses the contract and indexes, and `op: status` is its read-only health view. Its repairs are explicit managed-state repairs after verified-target admission, not note backfill. Notes are written by the agent.
 
 ## Remove host integrations
 

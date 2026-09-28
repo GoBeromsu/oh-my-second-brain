@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { compareCodePoints } from "../conventions/canonical.js";
 import { detectDrift, type DriftState } from "./drift.js";
 import { readTransportFailures, type TransportFailures } from "./guard-events.js";
+import { pendingLogKey, readInterviewLog } from "./interview-log.js";
 import { unsafePatternChanges, type LooseningChange } from "./loosening.js";
 import { diagnoseStore, readStore, storeExists, storeHousekeeping, storeRoot, writeIndexEntry, type StoreCause } from "./store.js";
 import { resolveSealState, type SealRow } from "./vault-id.js";
@@ -79,6 +80,28 @@ export interface ContractDoctor extends ContractStatus {
   readonly orphans: number;
   /** Hook transport failures the guard wrapper recorded: counts per kind only. */
   readonly transportFailures: TransportFailures;
+  readonly interviewLog: InterviewLogHealth;
+}
+
+/**
+ * The interview log, diagnosed only: lines that did not parse are skipped when the log is
+ * read and are never repaired here. `pendingCorrupt` is the log kept before the first
+ * seal; `unreadable` is a state directory the log may not be read from (unsafe, say).
+ */
+export interface InterviewLogHealth {
+  readonly corrupt: readonly number[];
+  readonly pendingCorrupt: readonly number[];
+  readonly unreadable: boolean;
+}
+
+async function interviewLogHealth(vault: string, vaultId: string | null, root: string): Promise<InterviewLogHealth> {
+  try {
+    const pending = await readInterviewLog(root, await pendingLogKey(vault));
+    const own = vaultId === null ? { corrupt: [] } : await readInterviewLog(root, vaultId);
+    return { corrupt: own.corrupt, pendingCorrupt: pending.corrupt, unreadable: false };
+  } catch {
+    return { corrupt: [], pendingCorrupt: [], unreadable: true };
+  }
 }
 
 /** The person at the CLI sees the entries by name; an agent sees only how many there are. */
@@ -120,7 +143,8 @@ export async function contractDoctor(vault: string, audience: "human" | "agent",
   const read = status.contract === "sealed" && state.vaultId !== null ? await readStore(state.vaultId, root) : null;
   const unsafePatterns = read?.state === "ok" ? unsafePatternChanges(read.contract) : [];
   const recovery = cause === null && unsafePatterns.length === 0 ? null : "oms setup";
-  const report: ContractDoctor = { ...status, cause, recovery, unsafePatterns, ...housekeeping, transportFailures };
+  const interviewLog = await interviewLogHealth(vault, state.vaultId, root);
+  const report: ContractDoctor = { ...status, cause, recovery, unsafePatterns, ...housekeeping, transportFailures, interviewLog };
   const unexpected = await unexpectedControlFiles(vault);
   return audience === "human"
     ? { ...report, audience, unexpectedControlFiles: unexpected }
