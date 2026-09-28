@@ -128,6 +128,15 @@ function walkStrings(value, visit) {
   }
 }
 
+// Below this length a substring check is unreliable: a 1-2 character tier-3
+// query (a single Korean syllable, say) can match inside an unrelated word
+// that happens to share those characters, which fails closed but is a
+// false positive. Below the threshold we only flag an exact value match
+// (the whole JSON string equals the query), which is what a real leak of a
+// short query looks like in an aggregate-only report; at or above it, the
+// existing substring check still fails closed on any leak.
+const MIN_SUBSTRING_LEAK_LENGTH = 3;
+
 /**
  * Throws when a report leaks query text, a document path, or an absolute path.
  * @param {unknown} report
@@ -142,7 +151,8 @@ export function assertReportPrivacy(report, context) {
       throw new Error("report leaks an absolute path");
     }
     for (const text of texts) {
-      if (value.includes(text)) throw new Error("report leaks query text");
+      if (value === text) throw new Error("report leaks query text");
+      if (text.length >= MIN_SUBSTRING_LEAK_LENGTH && value.includes(text)) throw new Error("report leaks query text");
     }
   });
 }
