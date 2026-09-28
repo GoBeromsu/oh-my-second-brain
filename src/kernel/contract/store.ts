@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { compareCodePoints, digestBytes, type Digest } from "../conventions/canonical.js";
 import { parseStrictJson } from "../conventions/strict-json.js";
 import { VAULT_ID_PATTERN } from "../vault/settings.js";
+import { manifestDigestOf, NO_DIGEST, type ContractDigest } from "./digest.js";
 import { ensureDirectory, syncDirectory, writePrivate } from "./fs-private.js";
+import { readSnapshot, readVerifiedDirectory, removeSnapshotTemporaries, SnapshotCorrupt, snapshotInventory, writeSnapshot, type SnapshotRead } from "./generation-snapshot.js";
+import {
+  classifyLineageTail, LineageAppendFailed, lineageAppender, LineageGap, planLineageTail, readLineage, tailDigest, appendLineageEvents,
+  type LineageDraft, type LineageEvent, type LineageGapPolicy, type LineageRead, type LineageReadMode, type LineageTailInput, type SealedGeneration,
+} from "./lineage.js";
 import { isFieldType } from "./obsidian.js";
 import { patternRefusal } from "./pattern.js";
 import type { FolderContract, JsonScalar, PropertyContract, Rule, TemplateContract, VaultContract } from "./types.js";
@@ -39,7 +45,8 @@ export type IndexRead =
 export type StoreRead =
   | { readonly state: "absent" }
   | { readonly state: "unreadable" }
-  | { readonly state: "ok"; readonly contract: VaultContract };
+  /** `digest` is the manifest digest of the generation read: the contract revision. */
+  | { readonly state: "ok"; readonly contract: VaultContract; readonly digest: Digest };
 
 /** What the owner declined at seal time; a template is keyed by the source hash it was declined at. */
 export interface DeclinedSet {
@@ -251,7 +258,7 @@ async function listFiles(directory: string, prefix = ""): Promise<string[] | nul
 export type StoreCause = "link-dangling" | "manifest-mismatch" | "schema-invalid";
 
 type GenerationRead =
-  | { readonly state: "ok"; readonly contract: VaultContract; readonly declined: DeclinedSet }
+  | { readonly state: "ok"; readonly contract: VaultContract; readonly declined: DeclinedSet; readonly digest: Digest }
   | { readonly state: "unreadable"; readonly cause: StoreCause };
 
 function unreadable(cause: StoreCause): GenerationRead {
@@ -304,7 +311,7 @@ async function readGeneration(directory: string): Promise<GenerationRead> {
       return unreadable("schema-invalid");
     }
   }
-  return { state: "ok", contract: { folders, properties, templates }, declined };
+  return { state: "ok", contract: { folders, properties, templates }, declined, digest: manifestDigestOf(manifestRead.bytes) };
 }
 
 async function readResolved(vaultId: string, root: string): Promise<{ readonly state: "absent" } | GenerationRead> {
@@ -329,7 +336,7 @@ async function readResolved(vaultId: string, root: string): Promise<{ readonly s
  */
 export async function readStore(vaultId: string, root: string = storeRoot()): Promise<StoreRead> {
   const read = await readResolved(vaultId, root);
-  if (read.state === "ok") return { state: "ok", contract: read.contract };
+  if (read.state === "ok") return { state: "ok", contract: read.contract, digest: read.digest };
   return read.state === "unreadable" ? { state: "unreadable" } : read;
 }
 
@@ -430,6 +437,10 @@ export interface SealFs {
   readonly rename: typeof rename;
   readonly symlink: typeof symlink;
   readonly rm: typeof rm;
+  /** The directory fsync after the snapshot publish and after the link swap. */
+  readonly sync?: (directory: string) => Promise<void>;
+  /** The rename that publishes a generation snapshot; kept apart from `rename` (the link swap). */
+  readonly snapshotRename?: typeof rename;
 }
 
 /** Everything the seal touches outside its inputs, injectable for tests. */
@@ -530,15 +541,187 @@ export interface SealRequest {
    * swap is a TOCTOU hole.
    */
   readonly freshness?: () => Promise<string | null>;
+  /**
+   * The manifest digest the caller built on ("none" for no contract). Checked under the
+   * lock after `baseSeq`: a different or unreadable linked generation aborts with
+   * CONTRACT_SEAL_CHANGED. Unlike `baseSeq` it also catches a same-seq replacement (ABA).
+   */
+  readonly expectedParentDigest?: ContractDigest;
+  /**
+   * Records the seal once the link is swapped, with the lock still held; defaults to a
+   * `sealed` lineage event attributed to `human-cli`. A failure throws
+   * CONTRACT_LINEAGE_APPEND_FAILED and skips the index write and the GC.
+   */
+  readonly onSealed?: (sealed: SealedGeneration) => Promise<void>;
+  /**
+   * What to do when the lineage does not end at the linked generation. `reanchor`
+   * (default) records an anchor and warns; `refuse` throws CONTRACT_LINEAGE_GAP with
+   * nothing written.
+   */
+  readonly lineageGapPolicy?: LineageGapPolicy;
+}
+
+export interface SealResult {
+  readonly seq: number;
+  /** The linked generation's manifest digest, read under the lock; "none" when there was none. */
+  readonly parentDigest: ContractDigest;
+  readonly digest: Digest;
+  readonly warnings: readonly string[];
+  /** Anchors this seal recorded before its own `sealed` event. */
+  readonly anchors: readonly LineageEvent[];
+}
+
+interface ParentObservation {
+  readonly digest: ContractDigest;
+  readonly generation: number | null;
+  readonly read: SnapshotRead;
+  /** Something is linked but does not verify against its manifest. */
+  readonly unreadable: boolean;
+}
+
+async function observeParent(root: string, vaultId: string, linked: SequenceObservation): Promise<ParentObservation> {
+  if (linked === "none" || linked === "invalid") return { digest: NO_DIGEST, generation: null, read: { state: "missing" }, unreadable: false };
+  const read = await readVerifiedDirectory(join(root, linked === "directory" ? vaultId : `.${vaultId}.${linked}`));
+  if (read.state !== "ok") return { digest: NO_DIGEST, generation: null, read, unreadable: true };
+  return { digest: read.digest, generation: linked === "directory" ? null : linked, read, unreadable: false };
+}
+
+function manifestOf(read: SnapshotRead): Record<string, Digest> {
+  return read.state === "ok" ? Object.fromEntries([...read.files].map(([path, bytes]) => [path, digestBytes(bytes)])) : {};
+}
+
+export interface LineageObservation {
+  readonly parent: ParentObservation;
+  readonly lineage: LineageRead;
+  readonly input: LineageTailInput;
+  /** Retained generations that verify, by ascending sequence (a legacy directory has none). */
+  readonly sources: readonly { readonly generation: number | null; readonly read: Extract<SnapshotRead, { state: "ok" }> }[];
 }
 
 /**
- * CLI only. Under the `.<id>.lock`: check nothing sealed since `baseSeq`, drop orphan
- * generations, write `.<id>.<seq>/` (manifest last), swap the `<id>` link by rename,
- * record the index entry, keep only N and N-1. A failure before the swap leaves the
- * previous contract in place.
+ * Everything the lineage plan reads, all read-only. The seal reads the lineage in
+ * `append` mode (a bad line throws); doctor reads it in `display` mode to report it.
  */
-export async function sealContract(request: SealRequest, root: string = storeRoot(), overrides: Partial<SealDeps> = {}): Promise<void> {
+export async function observeLineage(root: string, vaultId: string, linked: SequenceObservation, mode: LineageReadMode = "append"): Promise<LineageObservation> {
+  const parent = await observeParent(root, vaultId, linked);
+  const sources: { generation: number | null; read: Extract<SnapshotRead, { state: "ok" }> }[] = [];
+  let previousDigest: Digest | null = null;
+  if (typeof linked === "number") {
+    for (const seq of [...retained(await listGenerations(root, vaultId), linked)].sort((left, right) => left - right)) {
+      const read = seq === linked ? parent.read : await readVerifiedDirectory(join(root, `.${vaultId}.${seq}`));
+      if (read.state !== "ok") continue;
+      sources.push({ generation: seq, read });
+      if (seq !== linked) previousDigest = read.digest;
+    }
+  } else if (parent.read.state === "ok") {
+    sources.push({ generation: null, read: parent.read });
+  }
+  const lineage = await readLineage(root, vaultId, mode);
+  const kept = new Set<string>([...(await snapshotInventory(root, vaultId)).digests, ...sources.map(source => source.read.digest)]);
+  return {
+    parent,
+    lineage,
+    sources,
+    input: { parentDigest: parent.digest, parentGeneration: parent.generation, parentManifest: manifestOf(parent.read), previousDigest, retained: kept },
+  };
+}
+
+/**
+ * Under the seal lock: snapshot the retained generations (an existing snapshot is only
+ * verified), clear `.tmp-*` leftovers, and, when the lineage is empty and something is
+ * linked, draft the `bootstrap` anchors that start it. A corrupt snapshot of the linked
+ * generation throws CONTRACT_SNAPSHOT_CORRUPT before anything is written; one of N-1
+ * is left alone and skipped.
+ */
+async function bootstrapUnderLock(root: string, vaultId: string, observed: LineageObservation): Promise<{ readonly created: number; readonly anchors: LineageDraft[] }> {
+  const P = observed.parent.digest;
+  if (P !== NO_DIGEST && (await readSnapshot(root, vaultId, P)).state === "corrupt") throw new SnapshotCorrupt(P);
+  let created = 0;
+  const anchors: LineageDraft[] = [];
+  for (const source of observed.sources) {
+    try {
+      if ((await writeSnapshot(root, vaultId, source.read.files, source.read.manifestBytes)).created) created += 1;
+    } catch (error: unknown) {
+      if (error instanceof SnapshotCorrupt && source.read.digest !== P) continue;
+      throw error;
+    }
+    anchors.push({
+      kind: "recovered",
+      reason: "bootstrap",
+      proposer: "pre-lineage",
+      generation: source.generation,
+      parentDigest: anchors.at(-1)?.digest ?? NO_DIGEST,
+      digest: source.read.digest,
+      mutations: [],
+      manifestDigests: manifestOf(source.read),
+    });
+  }
+  await removeSnapshotTemporaries(root, vaultId);
+  const start = observed.lineage.events.length === 0 && P !== NO_DIGEST;
+  return { created, anchors: start ? anchors : [] };
+}
+
+export interface LineageRecovery {
+  /** Snapshots written (existing ones are only verified). */
+  readonly snapshots: number;
+  readonly anchors: readonly LineageEvent[];
+}
+
+async function underSealLock<T>(root: string, vaultId: string, action: () => Promise<T>): Promise<T> {
+  if (!VAULT_ID_PATTERN.test(vaultId)) throw new TypeError("CONTRACT_VAULT_ID_INVALID: vault id is not a UUID");
+  const deps = sealDeps({});
+  await ensureDirectory(root);
+  await acquireLock(root, vaultId, deps);
+  try {
+    return await action();
+  } finally {
+    await deps.fs.rm(lockPath(root, vaultId), { force: true });
+  }
+}
+
+/**
+ * Snapshots every retained generation (and a legacy `<id>` directory) under the seal lock
+ * and, when the lineage is empty, records `bootstrap` anchors for them in sequence order.
+ * Generations the seal collected before this ran are gone and cannot be recovered.
+ */
+export async function bootstrapSnapshots(root: string, vaultId: string): Promise<LineageRecovery> {
+  return underSealLock(root, vaultId, async () => {
+    const observed = await observeLineage(root, vaultId, await currentSequence(vaultId, root));
+    const boot = await bootstrapUnderLock(root, vaultId, observed);
+    const anchors = await appendLineageEvents(root, vaultId, boot.anchors, { expectTail: tailDigest(observed.lineage.events) });
+    return { snapshots: boot.created, anchors };
+  });
+}
+
+/**
+ * The doctor repair: bootstrap, then bring the lineage up to the linked generation. A
+ * seal that crashed before its event and a lost link are recorded under either policy;
+ * any other gap is anchored only under `reanchor`, and `refuse` throws
+ * CONTRACT_LINEAGE_GAP before anything is written. A lineage already current is a no-op.
+ */
+export async function recoverLineage(root: string, vaultId: string, options: { readonly policy: LineageGapPolicy }): Promise<LineageRecovery> {
+  return underSealLock(root, vaultId, async () => {
+    const observed = await observeLineage(root, vaultId, await currentSequence(vaultId, root));
+    const classified = classifyLineageTail(observed.lineage.events, observed.input);
+    if (classified.outcome === "gap" && options.policy === "refuse") throw new LineageGap(tailDigest(observed.lineage.events), observed.parent.digest);
+    const boot = await bootstrapUnderLock(root, vaultId, observed);
+    const drafts = classified.outcome === "current" ? boot.anchors : [classified.anchor];
+    const anchors = await appendLineageEvents(root, vaultId, drafts, { expectTail: tailDigest(observed.lineage.events) });
+    return { snapshots: boot.created, anchors };
+  });
+}
+
+/**
+ * CLI + evolution seal-gate. Under the `.<id>.lock`: check nothing sealed since `baseSeq`
+ * and that the linked generation is `expectedParentDigest`, plan the lineage tail (a gap
+ * under `refuse` stops here), check freshness, snapshot the retained generations and
+ * record any anchors, drop orphan generations, write `.<id>.<seq>/` (manifest last),
+ * then keep this durability order: publish its snapshot and fsync `generations/`, swap
+ * the `<id>` link by rename and fsync the root, append the lineage event (`onSealed`),
+ * record the index entry, keep only N and N-1. A failure before the swap leaves the
+ * previous contract in place (and possibly an unsealed snapshot, which is never removed).
+ */
+export async function sealContract(request: SealRequest, root: string = storeRoot(), overrides: Partial<SealDeps> = {}): Promise<SealResult> {
   const id = request.vaultId;
   if (!VAULT_ID_PATTERN.test(id)) throw new TypeError("CONTRACT_VAULT_ID_INVALID: vault id is not a UUID");
   const files = contractFiles(request.contract, request.declined);
@@ -548,13 +731,23 @@ export async function sealContract(request: SealRequest, root: string = storeRoo
   try {
     if ((await readIndex(root)).state === "corrupt") throw indexCorrupt();
     const linked = await currentSequence(id, root);
-    if (request.baseSeq !== undefined && linked !== request.baseSeq) {
-      throw new Error("CONTRACT_SEAL_CHANGED: the contract was sealed elsewhere meanwhile; run oms setup again to review the differences");
-    }
+    if (request.baseSeq !== undefined && linked !== request.baseSeq) throw sealChanged();
+    const observed = await observeLineage(root, id, linked);
+    const parentDigest = observed.parent.digest;
+    if (request.expectedParentDigest !== undefined && (observed.parent.unreadable || parentDigest !== request.expectedParentDigest)) throw sealChanged();
+    const warnings: string[] = [];
+    if (observed.parent.unreadable) warnings.push("lineage-parent-unreadable");
+    if (observed.lineage.truncatedTail) warnings.push("lineage-truncated-tail");
+    const plan = planLineageTail(observed.lineage.events, observed.input, request.lineageGapPolicy ?? "reanchor");
+    if (plan.action === "refuse") throw new LineageGap(plan.tailDigest, plan.parentDigest);
     // Under the lock and before the first write, so a source that moved during the
     // interview cannot be sealed as the bytes the owner was asked about.
     const stale = request.freshness === undefined ? null : await request.freshness();
     if (stale !== null) throw new Error(`CONTRACT_SEAL_STALE: ${stale}`);
+
+    const boot = await bootstrapUnderLock(root, id, observed);
+    if (plan.action === "append") warnings.push(...plan.warnings);
+    const anchors = await appendLineageEvents(root, id, [...boot.anchors, ...(plan.action === "append" ? plan.anchors : [])], { expectTail: tailDigest(observed.lineage.events) });
 
     const keep = retained(await listGenerations(root, id), linked);
     for (const seq of await listGenerations(root, id)) {
@@ -575,17 +768,21 @@ export async function sealContract(request: SealRequest, root: string = storeRoo
     const migrated = join(root, `.${id}.${seq - 1}`);
     let movedAside = false;
     let swapped = false;
+    const sync = deps.fs.sync ?? syncDirectory;
+    const digests: Record<string, Digest> = {};
+    let manifestText = "";
     try {
       await mkdir(directory, { mode: 0o700 });
       await ensureDirectory(directory);
-      const digests: Record<string, Digest> = {};
       for (const [path, content] of [...files].sort(([left], [right]) => compareCodePoints(left, right))) {
         if (path.includes("/")) await ensureDirectory(join(directory, TEMPLATES));
         await writePrivate(join(directory, ...path.split("/")), content);
         digests[path] = digestBytes(content);
       }
-      await writePrivate(join(directory, MANIFEST), stringify({ version: MANIFEST_VERSION, files: digests }));
+      manifestText = stringify({ version: MANIFEST_VERSION, files: digests });
+      await writePrivate(join(directory, MANIFEST), manifestText);
       await syncDirectory(directory);
+      await writeSnapshot(root, id, files, manifestText, { ...(deps.fs.snapshotRename === undefined ? {} : { rename: deps.fs.snapshotRename }), sync });
 
       await deps.fs.symlink(generation, temporary);
       if (migrating) {
@@ -594,13 +791,21 @@ export async function sealContract(request: SealRequest, root: string = storeRoo
       }
       await deps.fs.rename(temporary, join(root, id));
       swapped = true;
-      await syncDirectory(root);
+      await sync(root);
     } finally {
       if (!swapped) {
         if (movedAside) await deps.fs.rename(migrated, join(root, id));
         await deps.fs.rm(temporary, { force: true });
         await deps.fs.rm(directory, { recursive: true, force: true });
       }
+    }
+
+    const digest = manifestDigestOf(manifestText);
+    const sealed: SealedGeneration = { root, vaultId: id, seq, parentDigest, digest, manifestDigests: digests };
+    try {
+      await (request.onSealed ?? lineageAppender())(sealed);
+    } catch (error: unknown) {
+      throw new LineageAppendFailed(seq, digest, error);
     }
 
     await writeIndexEntry(request.vaultRealPath, id, root);
@@ -610,9 +815,14 @@ export async function sealContract(request: SealRequest, root: string = storeRoo
       if (!survivors.has(old)) await deps.fs.rm(join(root, `.${id}.${old}`), { recursive: true, force: true });
     }
     await syncDirectory(root);
+    return { seq, parentDigest, digest, warnings, anchors };
   } finally {
     await deps.fs.rm(lockPath(root, id), { force: true });
   }
+}
+
+function sealChanged(): Error {
+  return new Error("CONTRACT_SEAL_CHANGED: the contract was sealed elsewhere meanwhile; run oms setup again to review the differences");
 }
 
 /** Counts only: stale locks (live-but-stale and reclaimed leftovers) and orphan generations. */

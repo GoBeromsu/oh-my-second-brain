@@ -152,4 +152,5 @@ export function formatDenyReason(violations: readonly Violation[]): string {
 export type ContractView =
   | { readonly state: "open" }
   | { readonly state: "unreadable" }
-  | { readonly state: "sealed"; readonly contract: VaultContract };
+  /** `revision` is the manifest digest of the generation the contract was read from; a view built in memory has none. */
+  | { readonly state: "sealed"; readonly contract: VaultContract; readonly revision?: Digest };

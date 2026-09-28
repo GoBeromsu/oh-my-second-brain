@@ -3,6 +3,7 @@ import { mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { digestBytes } from "../conventions/canonical.js";
 import { serializeVaultSettings } from "../vault/settings.js";
+import { lineageAppender } from "./lineage.js";
 import { sealContract } from "./store.js";
 import type { FieldType, Rule, VaultContract } from "./types.js";
 
@@ -56,7 +57,13 @@ export async function writeContractVault(root: string, fixture: ContractVaultFix
   for (const source of sources) await writeAt(root, source.path, source.bytes);
   for (const [notePath, content] of Object.entries(fixture.notes ?? {})) await writeAt(root, notePath, content);
 
-  const sealed = { vaultRealPath: await realpath(root), vaultId, contract: sealedFixtureContract(fixture, sources) };
+  // Fixture seals are attributed to the fixture, so a lineage never mistakes one for a person's.
+  const sealed = {
+    vaultRealPath: await realpath(root),
+    vaultId,
+    contract: sealedFixtureContract(fixture, sources),
+    onSealed: lineageAppender({ proposer: "fixture", evaluator: "none" }),
+  };
   if (fixture.contractStoreRoot === undefined) await sealContract(sealed);
   else await sealContract(sealed, fixture.contractStoreRoot);
 }
