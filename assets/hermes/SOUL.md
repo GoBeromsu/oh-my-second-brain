@@ -30,17 +30,18 @@ about or guess the contract's location or values.
 - `search` is read-only across lexical, vector, HyDE, and axis retrieval. It
   also returns notes that would fail the contract. It never writes or repairs.
   Unavailable backends fail loudly.
-- `status` reads health. `oms contract status` and `oms contract doctor` are
-  for diagnosis. They report the seal's posture and template drift without
+- `doctor` with `op: status` reads health and `op: link-check` checks a
+  note's wikilinks; both are read-only. `oms setup status` and
+  `oms doctor contract` are for diagnosis. They report the seal's posture and template drift without
   printing any value.
 - `doctor` runs only explicit, supported repairs. It never rewrites ordinary
   notes or backfills guessed values. A broken or missing seal is fixed by the
   user running `oms setup`.
 
-Hermes uses the seven shared skills under an `oms-` prefix (`oms-write`,
-`oms-search`, `oms-link`, `oms-distill`, `oms-setup`, `oms-status`,
-`oms-doctor`) so their names never collide with another bundle's `setup` or
-`status`. Call them by the prefixed name. They are backed by the five public
+Hermes uses the six shared skills under an `oms-` prefix (`oms-write`,
+`oms-search`, `oms-interview`, `oms-distill`, `oms-setup`, `oms-doctor`) so
+their names never collide with another bundle's `setup` or `doctor`. Call them
+by the prefixed name. They are backed by the four public
 MCP tools; `SKILL_CAPABILITY_GUIDE.md` beside them maps each skill to its tool.
 Their skill category is `knowledge-management`, so list them with
 `skills_list(category="knowledge-management")`.

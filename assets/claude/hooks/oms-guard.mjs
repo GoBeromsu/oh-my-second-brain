@@ -14,7 +14,7 @@
  *
  * The judge's deny is forwarded as is. When the judge cannot be reached (spawn failure,
  * non-zero exit, timeout, malformed output) the write is allowed with one stderr line and
- * the failure kind is recorded in `~/.oms/guard-events.jsonl` for `oms contract doctor`.
+ * the failure kind is recorded in `~/.oms/guard-events.jsonl` for `oms doctor contract`.
  * A payload that cannot be parsed (or exceeds the stdin cap) is denied when its raw text
  * names a configured vault or `~/.oms`, and otherwise allowed with one stderr line.
  *
@@ -43,10 +43,10 @@ const WRITE_TOOLS = new Set(["write", "edit", "multiedit", "notebookedit"]);
 const READ_TOOLS = new Set(["read", "grep", "glob"]);
 
 const ALLOW = JSON.stringify({ continue: true, suppressOutput: true });
-const CONTROL_PATH_REASON = `[oms] write denied: ${JSON.stringify([{ field: "path", kind: "control-path" }])} Run: oms status`;
-const SEARCH_REASON = `[oms] write denied: ${JSON.stringify([{ field: "path", kind: "control-path" }])} Narrow the search path or glob so it cannot reach ~/.oms. Run: oms status`;
-const UNSAFE_PATH_REASON = `[oms] write denied: ${JSON.stringify([{ field: "path", kind: "path-unsafe" }])} Run: oms status`;
-const INPUT_REASON = `[oms] write denied: ${JSON.stringify([{ field: "input", kind: "unsupported-input" }])} Run: oms host sync`;
+const CONTROL_PATH_REASON = `[oms] write denied: ${JSON.stringify([{ field: "path", kind: "control-path" }])} Run: oms doctor status`;
+const SEARCH_REASON = `[oms] write denied: ${JSON.stringify([{ field: "path", kind: "control-path" }])} Narrow the search path or glob so it cannot reach ~/.oms. Run: oms doctor status`;
+const UNSAFE_PATH_REASON = `[oms] write denied: ${JSON.stringify([{ field: "path", kind: "path-unsafe" }])} Run: oms doctor status`;
+const INPUT_REASON = `[oms] write denied: ${JSON.stringify([{ field: "input", kind: "unsupported-input" }])} Run: oms setup host sync`;
 
 /**
  * Prefer the co-located dist entry via `node <dist>` so the guard does not depend on the
@@ -172,7 +172,7 @@ function recordGuardEvent(kind) {
 function transportFailure(kind) {
   recordGuardEvent(kind);
   if (TRANSPORT_FAILURE_POLICY === "allow-warn") {
-    process.stderr.write("[oms] guard could not reach the judge; write allowed. Run: oms contract doctor\n");
+    process.stderr.write("[oms] guard could not reach the judge; write allowed. Run: oms doctor contract\n");
     allow();
   }
 }

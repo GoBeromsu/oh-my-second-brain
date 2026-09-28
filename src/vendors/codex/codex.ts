@@ -24,7 +24,7 @@ function codexManagedBlockForVault(vault: string): string {
   const args = mcpArgs({ vault } as HostOperationOptions).map(jsonString).join(", ");
   return [
     MANAGED_CODEX_START,
-    "# OMS MCP hookup for Codex CLI. Managed by `oms host install/remove`.",
+    "# OMS MCP hookup for Codex CLI. Managed by `oms setup host install/remove`.",
     "# Codex-native rules live in ~/.codex/rules/oms.md; skills live in ~/.codex/skills/oms-*.",
     "[mcp_servers.oms]",
     'command = "oms"',
