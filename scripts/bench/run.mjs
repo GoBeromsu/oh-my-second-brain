@@ -37,7 +37,7 @@ export const CANDIDATES = 10;
 /**
  * @typedef {{ id: string, query: string, type: string, description: string, expected_files: string[], expected_in_top_k: number }} BenchQuery
  * @typedef {(query: string) => Promise<readonly string[]>} SearchFn
- * @typedef {{ openEngineStoreCore: Function, syncEngineStore: Function, dispatch: Function }} EngineModules
+ * @typedef {{ openEngineStoreCore: Function, syncEngineStore: Function, dispatch: Function, openBigramIndex?: Function, fuseKoreanLexical?: Function }} EngineModules
  */
 
 /**
@@ -96,6 +96,8 @@ const NO_EMBED = new Proxy({}, {
 /**
  * Indexes `vault` lexically into a store at `dbPath` and returns one search function per channel.
  * CUR is the production lexical path: the dispatcher's `lex` sub-query over engine_chunk_fts.
+ * CUR+BI, present when `engine` carries the bigram modules, fuses CUR with the
+ * Korean syllable-bigram index (engine_chunk_bigram) by RRF k=60.
  * @param {EngineModules} engine
  * @param {{ vault: string, dbPath: string }} options
  * @returns {Promise<{ channels: Record<string, SearchFn>, close: () => void }>}
@@ -110,12 +112,31 @@ export async function openLexicalBench(engine, options) {
     throw error;
   }
   const deps = { store, embed: NO_EMBED };
-  /** @type {SearchFn} */
-  const cur = async (query) => {
-    const hits = await engine.dispatch([{ type: "lex", query }], deps, CANDIDATES);
-    return hits.map((/** @type {{ docPath: string }} */ hit) => hit.docPath);
+  const curHits = (/** @type {string} */ query) => engine.dispatch([{ type: "lex", query }], deps, CANDIDATES);
+  const toPaths = (/** @type {{ docPath: string }[]} */ hits) => hits.map((hit) => hit.docPath);
+  /** @type {Record<string, SearchFn>} */
+  const channels = { CUR: async (query) => toPaths(await curHits(query)) };
+  if (!engine.openBigramIndex || !engine.fuseKoreanLexical) return { channels, close: () => store.close() };
+
+  const fuse = engine.fuseKoreanLexical;
+  let bigram;
+  try {
+    bigram = engine.openBigramIndex(options.dbPath);
+    bigram.ensure();
+  } catch (error) {
+    bigram?.close();
+    store.close();
+    throw error;
+  }
+  const index = bigram;
+  channels["CUR+BI"] = async (query) => toPaths(fuse(await curHits(query), index.queryBigram(query, CANDIDATES)));
+  return {
+    channels,
+    close: () => {
+      index.close();
+      store.close();
+    },
   };
-  return { channels: { CUR: cur }, close: () => store.close() };
 }
 
 /**
@@ -219,12 +240,20 @@ async function loadDistEngine() {
   const dist = path.join(REPO_ROOT, "dist", "kernel", "engine");
   if (!existsSync(dist)) throw new Error("dist/ is missing; run `npm run build` first");
   const load = (/** @type {string} */ rel) => import(pathToFileURL(path.join(dist, rel)).href);
-  const [store, sync, dispatcher] = await Promise.all([
+  const [store, sync, dispatcher, bigram, fusion] = await Promise.all([
     load("embed/store.js"),
     load("embed/sync.js"),
     load("retrieval/dispatcher.js"),
+    load("embed/bigram-index.js"),
+    load("retrieval/lexical-fusion.js"),
   ]);
-  return { openEngineStoreCore: store.openEngineStoreCore, syncEngineStore: sync.syncEngineStore, dispatch: dispatcher.dispatch };
+  return {
+    openEngineStoreCore: store.openEngineStoreCore,
+    syncEngineStore: sync.syncEngineStore,
+    dispatch: dispatcher.dispatch,
+    openBigramIndex: bigram.openBigramIndex,
+    fuseKoreanLexical: fusion.fuseKoreanLexical,
+  };
 }
 
 /**

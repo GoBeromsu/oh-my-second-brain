@@ -5,6 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { openEngineStoreCore } from "../../src/kernel/engine/embed/store.js";
 import { syncEngineStore } from "../../src/kernel/engine/embed/sync.js";
 import { dispatch } from "../../src/kernel/engine/retrieval/dispatcher.js";
+import { openBigramIndex } from "../../src/kernel/engine/embed/bigram-index.js";
+import { fuseKoreanLexical } from "../../src/kernel/engine/retrieval/lexical-fusion.js";
 import { KO_VAULT_SOURCE, materializeKoVault } from "../fixtures/ko-vault.mjs";
 import { QUERY_TYPES, loadQueries, openLexicalBench, runQueries } from "../../scripts/bench/run.mjs";
 import { buildReport } from "../../scripts/bench/report.mjs";
@@ -22,7 +24,10 @@ const CUR_R5_BASELINE: Record<string, number> = {
   paraphrase: 1 / 6,
 };
 
-describe("bench tier 1: lexical CUR on the ko-vault fixture", () => {
+// CUR fused with the Korean syllable-bigram channel (branch-only experiment).
+const CUR_BI_R5_BASELINE: Record<string, number> = { ...CUR_R5_BASELINE, paraphrase: 5 / 6 };
+
+describe("bench tier 1: lexical CUR and CUR+BI on the ko-vault fixture", () => {
   let base: string;
   let report: ReturnType<typeof buildReport>;
   const queries = loadQueries(path.join(KO_VAULT_SOURCE, "queries.json"));
@@ -32,7 +37,7 @@ describe("bench tier 1: lexical CUR on the ko-vault fixture", () => {
     const vault = materializeKoVault(path.join(base, "vault"));
     rmSync(path.join(vault, "queries.json"), { force: true });
     const bench = await openLexicalBench(
-      { openEngineStoreCore, syncEngineStore, dispatch },
+      { openEngineStoreCore, syncEngineStore, dispatch, openBigramIndex, fuseKoreanLexical },
       { vault, dbPath: path.join(base, "bench.db") },
     );
     try {
@@ -59,6 +64,14 @@ describe("bench tier 1: lexical CUR on the ko-vault fixture", () => {
     expect(Object.keys(byType).sort()).toEqual(Object.keys(CUR_R5_BASELINE).sort());
     for (const [type, expected] of Object.entries(CUR_R5_BASELINE)) {
       expect(byType[type].r5, type).toBeCloseTo(expected, 6);
+    }
+  });
+
+  it("records the per-type R@5 for CUR+BI and never falls below CUR", () => {
+    const byType = report.channels["CUR+BI"].byType;
+    for (const [type, expected] of Object.entries(CUR_BI_R5_BASELINE)) {
+      expect(byType[type].r5, type).toBeCloseTo(expected, 6);
+      expect(byType[type].r5, type).toBeGreaterThanOrEqual(report.channels.CUR.byType[type].r5);
     }
   });
 
