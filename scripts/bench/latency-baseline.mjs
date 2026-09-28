@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { cpus, tmpdir, totalmem, release, type } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { materializeKoVault, NFC_NOTE } from "../../test/fixtures/ko-vault.mjs";
+import { materializeKoVault, NFC_NOTE, NFD_NOTE } from "../../test/fixtures/ko-vault.mjs";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 const OMS = path.join(REPO, "dist", "cli", "oms.js");
@@ -62,7 +62,7 @@ function timeRun(box, args) {
   if (result.status !== 0) {
     throw new Error(`oms ${args.join(" ")} exited ${result.status}${result.error ? ` (${result.error.message})` : ""}: ${result.stderr}`);
   }
-  if (args[0] === "search") {
+  if (args[0] === "search" && args[1] === "query") {
     // A plain query must stay lexical-only, or the baseline would silently measure another path.
     const channels = JSON.parse(result.stdout).receipt?.usedChannels;
     if (JSON.stringify(channels) !== JSON.stringify(["lex"])) {
@@ -137,5 +137,7 @@ console.log(JSON.stringify({
   results: {
     noteGet: measure(["note", "get", NFC_NOTE], runs),
     searchQueryLexical: measure(["search", "query", SEARCH_TEXT], runs),
+    // Engine-free exact read; the NFC spelling of a note whose filename is NFD on disk.
+    searchPath: measure(["search", "--path", NFD_NOTE.normalize("NFC")], runs),
   },
 }, null, 2));

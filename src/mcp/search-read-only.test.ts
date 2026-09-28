@@ -56,6 +56,7 @@ function advertisedSearchOperations(): { op: string; args: Record<string, unknow
   const schema = search?.inputSchema as {
     readonly oneOf?: readonly {
       readonly properties?: Record<string, { readonly const?: string }>;
+      readonly required?: readonly string[];
     }[];
   };
   const ops = (schema.oneOf ?? [])
@@ -73,7 +74,10 @@ function advertisedSearchOperations(): { op: string; args: Record<string, unknow
     context: { query: "alpha" },
   };
 
-  return ops.map((op) => ({ op, args: { op, ...(argsByOp[op] ?? {}) } }));
+  const operations = ops.map((op) => ({ op, args: { op, ...(argsByOp[op] ?? {}) } }));
+  // The op-less `{path}` exact read is advertised as its own branch.
+  const pathRead = (schema.oneOf ?? []).some((branch) => branch.properties?.["op"] === undefined && branch.required?.includes("path"));
+  return pathRead ? [...operations, { op: "(path)", args: { path: "notes/alpha.md" } }] : operations;
 }
 
 /** Recursive content digest of every file under `root`, keyed by relative path. */

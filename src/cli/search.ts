@@ -10,6 +10,7 @@ import {
 } from "./search-args.js";
 import { searchUsage } from "./search-usage.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
+import { readExactDocument } from "../kernel/search/read-exact.js";
 import {
   retrieveMorningContext,
   type MorningSemanticBackend,
@@ -28,6 +29,14 @@ interface Target {
 function fail(message: string): never {
   throw new Error(`SEARCH_ARGS_INVALID: ${message}`);
 }
+
+/** Injection point: `search --path` must reach `readExactDocument` and never `runEngineSession`. */
+export interface SearchCommandDeps {
+  readonly readExactDocument: typeof readExactDocument;
+  readonly runEngineSession: typeof runEngineSession;
+}
+
+const DEFAULT_DEPS: SearchCommandDeps = { readExactDocument, runEngineSession };
 
 async function target(argv: readonly string[]): Promise<Target> {
   const rest: string[] = [];
@@ -110,8 +119,27 @@ function contextOptions(vault: string, argv: readonly string[]): MorningRetrieve
   };
 }
 
-async function runSearch(argv: readonly string[]): Promise<void> {
+/** `oms search --path <rel>`: an engine-free exact read. Any other argument is refused. */
+async function runPathRead(resolved: Target, deps: SearchCommandDeps): Promise<void> {
+  const [flag, relPath, ...extra] = resolved.argv;
+  if (flag !== "--path") {
+    fail("--path is mutually exclusive with search subcommands, query text, and mode flags");
+  }
+  if (relPath === undefined || relPath.startsWith("--")) fail("--path requires a vault-relative note path");
+  if (extra.length > 0) {
+    fail("--path is mutually exclusive with search subcommands, query text, and mode flags");
+  }
+  const result = await deps.readExactDocument(resolved.vault, relPath);
+  printJson(console.log, result);
+  if (!result.available) process.exitCode = 1;
+}
+
+async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Promise<void> {
   const resolved = await target(argv);
+  if (resolved.argv.includes("--path")) {
+    await runPathRead(resolved, deps);
+    return;
+  }
   const verb = resolved.argv[0];
   if (verb === undefined || verb === "help" || verb === "--help" || verb === "-h") {
     console.log(searchUsage());
@@ -147,14 +175,14 @@ async function runSearch(argv: readonly string[]): Promise<void> {
     if (requestedMode !== "query" && requestedMode !== "search" && requestedMode !== "vsearch") {
       fail("--mode must be query, search, or vsearch");
     }
-    const result = await runEngineSession(resolved.vault, { write: false }, (adapter) =>
+    const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
       adapter.semanticQuery(searchQueryOptions(requestedMode as SemanticSearchMode, resolved.vault, args, query)));
     printJson(console.log, result);
     if (!result.available) process.exitCode = 1;
     return;
   }
   if (verb === "context") {
-    const result = await runEngineSession(resolved.vault, { write: false }, (adapter) =>
+    const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
       retrieveMorningContext(contextOptions(resolved.vault, resolved.argv.slice(1)), backend(adapter, resolved.vault)));
     printJson(console.log, result);
     return;
@@ -164,10 +192,13 @@ async function runSearch(argv: readonly string[]): Promise<void> {
 
 export { searchUsage } from "./search-usage.js";
 
-export async function runSearchCommand(argv: readonly string[]): Promise<void> {
+export async function runSearchCommand(
+  argv: readonly string[],
+  deps: SearchCommandDeps = DEFAULT_DEPS,
+): Promise<void> {
   process.exitCode = 0;
   try {
-    await runSearch(argv);
+    await runSearch(argv, deps);
   } catch (error) {
     process.exitCode = 1;
     console.error(error instanceof Error ? error.message : String(error));

@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms search --path <rel>` reads one note exactly, without opening the index or loading a model.** It is the normalization-insensitive answer to the `oms note get` gap: an NFC request finds an NFD-named note on macOS and Linux alike. The output is the document shape `{available, documents: [{target, path, content, revision}]}`; a missing, ambiguous or escaping path prints `available: false` with a reason and exits 1. `--path` is mutually exclusive with `query`, `context`, `--mode` and every other search argument.
+
 - **`oms setup` takes the template interpretations an agent read.** A vault with templates now ends `interpretation-required`, listing every template source with the `sourceHash` OMS computed, until `--interpretations <file|->` supplies what each one declares; the file stays outside the vault like the answers file. `interpretation-rejected` reports the templates whose interpretation the owner did not confirm, and it is not a refusal — a corrected interpretation may be submitted. `oms contract extract --template <path>` no longer prints fields and headings, since OMS does not parse template text; it reports the source and the hash an interpretation must match.
 
 ## [0.18.3] - 2026-09-26

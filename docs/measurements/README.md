@@ -87,3 +87,11 @@ least `+0.05`, every other class delta to be at least `-0.02`, candidate p95 to
 be no more than `1.5x` baseline p95, and the paired bootstrap CI lower bound
 to be strictly greater than zero. A release is selected only when the
 calculated result passes; otherwise there is no winner.
+
+## CLI latency records
+
+Whole-invocation latency of the built CLI, measured with `npm run bench:latency`
+(`scripts/bench/latency-baseline.mjs`). These are records, not release gates.
+
+- [latency-baseline-0.18.3.md](./latency-baseline-0.18.3.md): the 0.18.3 reference for `note get` and lexical `search query`.
+- [latency-search-path.md](./latency-search-path.md): `oms search --path` measured back to back with 0.18.3, plus where the startup time goes.

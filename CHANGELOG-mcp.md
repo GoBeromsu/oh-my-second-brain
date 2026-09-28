@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- **`search` accepts `{path}` with no `op` for an engine-free exact read of one note.** The call returns the same document shape as `oms search --path`, never opens the engine store or a model, and is refused when combined with `op` or any other argument; the tool schema advertises it as its own `oneOf` branch, so `op` is no longer top-level required for `search`.
+
 ## [0.18.3] - 2026-09-26
 
 ## [0.18.2] - 2026-09-26

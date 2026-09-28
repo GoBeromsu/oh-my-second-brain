@@ -507,7 +507,7 @@ const RETIRED_GUIDANCE_SPELLINGS: readonly {
   { retiredSpelling: "oms semantic", pattern: /\boms\s+semantic\b/g },
   { retiredSpelling: "top-level collection/context/cleanup/http", pattern: /\boms\s+(?:collection|context|cleanup|http)\b/g },
   { retiredSpelling: "top-level query/vsearch/get/multi-get", pattern: /\boms\s+(?:query|vsearch|get|multi-get)\b/g },
-  { retiredSpelling: "old implicit search syntax", pattern: /\boms\s+search\s+(?!(?:query|context)\b)/g },
+  { retiredSpelling: "old implicit search syntax", pattern: /\boms\s+search\s+(?!(?:query|context|--path)\b)/g },
   { retiredSpelling: "old index leaf", pattern: /\boms\s+index\s+(?:cleanup|collections|contexts)\b/g },
   {
     retiredSpelling: "retired top-level command",
@@ -586,6 +586,7 @@ describe("current guidance CLI spellings", () => {
   it("accepts canonical command fixtures", () => {
     const fixtures: CurrentGuidanceFile[] = [
       { category: "shared-skills", path: "accepted-search", content: "`oms search query topic`" },
+      { category: "shared-skills", path: "accepted-search-path", content: "`oms search --path notes/a.md`" },
       { category: "shared-skills", path: "accepted-note-get", content: "`oms note get note-id`" },
       { category: "shared-skills", path: "accepted-status", content: "`oms status`" },
       { category: "shared-skills", path: "accepted-embed", content: "`oms index embed`" },
@@ -612,6 +613,7 @@ describe("current guidance CLI spellings", () => {
       { category: "shared-skills", path: "get", content: "`oms get note.md`" },
       { category: "shared-skills", path: "multi-get", content: "`oms multi-get a.md b.md`" },
       { category: "shared-skills", path: "implicit-search", content: "`oms search topic`" },
+      { category: "shared-skills", path: "implicit-search-flag", content: "`oms search --lex topic`" },
       { category: "shared-skills", path: "index-cleanup", content: "`oms index cleanup`" },
       { category: "shared-skills", path: "index-collections", content: "`oms index collections`" },
       { category: "shared-skills", path: "index-contexts", content: "`oms index contexts`" },
@@ -657,6 +659,7 @@ describe("current guidance CLI spellings", () => {
       "get",
       "multi-get",
       "implicit-search",
+      "implicit-search-flag",
       "index-cleanup",
       "index-collections",
       "index-contexts",
