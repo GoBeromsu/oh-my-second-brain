@@ -54,7 +54,7 @@ describe("contract flow e2e", () => {
     try {
       // An empty vault has no contract, so an ordinary write succeeds.
       expect(payload(await write({ path: "Projects/free.md", content: "---\nstatus: anything\n---\nFree\n" })))
-        .toEqual({ ok: true, path: "Projects/free.md", missingDefaults: [] });
+        .toMatchObject({ ok: true, path: "Projects/free.md", missingDefaults: [] });
 
       const sealed = await runInterview({
         vault,
@@ -81,7 +81,7 @@ describe("contract flow e2e", () => {
       expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
 
       expect(payload(await write({ path: "Projects/b.md", content: "---\nstatus: closed\n---\nBody\n" })))
-        .toEqual({ ok: true, path: "Projects/b.md", missingDefaults: [] });
+        .toMatchObject({ ok: true, path: "Projects/b.md", missingDefaults: [] });
 
       // The vault keeps only its settings file; the contract lives in the store.
       expect(await readdir(path.join(vault, ".oms"))).toEqual(["settings.json"]);

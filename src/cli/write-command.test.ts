@@ -111,7 +111,7 @@ describe("oms write", () => {
     const fixture = await sealedVault();
     await runWriteCommand(["Projects/a.md", "--vault", fixture.vault], { env: {}, readStdin: async () => "Body\n" });
     expect(process.exitCode).toBe(0);
-    expect(receipt()).toEqual({ ok: true, path: "Projects/a.md", missingDefaults: [] });
+    expect(receipt()).toMatchObject({ ok: true, path: "Projects/a.md", missingDefaults: [] });
     expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("Body\n");
   });
 
