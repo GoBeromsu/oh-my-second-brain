@@ -111,6 +111,35 @@ describe("conform", () => {
     expect(result.content).toContain("status: paused");
   });
 
+  it("never defaults a property a template requires, whether or not the template is chosen", () => {
+    const contract: VaultContract = {
+      folders: CONTRACT.folders,
+      properties: { created: { meaning: "creation date", type: "date", default: true, required: false, rules: [] } },
+      templates: {
+        project: { source: "Templates/project.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: ["created"], narrowedRules: {}, requiredHeadings: [] },
+      },
+    };
+    const view: ContractView = { state: "sealed", contract };
+    const content = "---\ntitle: a\n---\nBody\n";
+    const raw = parseNote(content);
+    const before = judge({ path: "Projects/a.md", frontmatter: raw.frontmatter, body: raw.body, selectedTemplate: "project" }, view);
+    expect(before.violations).toContainEqual(expect.objectContaining({ field: "created", kind: "missing" }));
+    for (const template of ["project", undefined]) {
+      const result = conform(content, options({ view, isNew: true, ...(template === undefined ? {} : { template }) }));
+      expect(result).toEqual({ content, applied: [] });
+      const note = parseNote(result.content);
+      const after = judge({ path: "Projects/a.md", frontmatter: note.frontmatter, body: note.body, selectedTemplate: "project" }, view);
+      expect(after.ok).toBe(false);
+      expect(after.violations).toContainEqual(expect.objectContaining({ field: "created", kind: "missing" }));
+    }
+  });
+
+  it("inserts defaults with the note's own CRLF line endings", () => {
+    const result = conform("---\r\nstatus: active\r\n---\r\nBody\r\n", options({ isNew: true, template: "bare" }));
+    expect(result.content).toBe("---\r\nstatus: active\r\ncreated: 2026-09-28\r\nupdated: 2026-09-28T09:05:07\r\n\"review date\": 2026-09-28\r\n---\r\nBody\r\n");
+    expect(conform("Body\r\n", options({ isNew: true, template: "bare" })).content).toBe("---\r\ncreated: 2026-09-28\r\nupdated: 2026-09-28T09:05:07\r\n\"review date\": 2026-09-28\r\n---\r\nBody\r\n");
+  });
+
   it("never supplies a required property the writer left out", () => {
     const result = conform("Body\n", options({ isNew: true }));
     expect(result.content).not.toContain("owner:");

@@ -6,8 +6,9 @@ import type { ConformChange } from "./receipt.js";
 /**
  * Mechanical conformance before the judge: date and title variables, date defaults a new
  * note leaves out, and the chosen template's missing heading skeleton. It never calls the
- * judge, never touches an existing value and never writes a sealed value, so whatever the
- * judge refuses after conform it would have refused before.
+ * judge, never touches an existing value and never supplies a property the contract or a
+ * template requires, so a missing required property is still refused after conform. The
+ * heading skeleton does, by design, satisfy a template's required headings.
  */
 
 export interface ConformOptions {
@@ -103,15 +104,27 @@ function defaultValue(type: FieldType, now: Date): string | null {
   return null;
 }
 
-/** New notes only: a missing unconstrained date or datetime default gets `now`. */
+/**
+ * Names a template requires: the chosen template's, or every template's when none is
+ * chosen, since the judge may still match the note to any of them.
+ */
+function templateRequired(options: ConformOptions, template: TemplateContract | undefined): ReadonlySet<string> {
+  if (template !== undefined) return new Set(template.requiredProperties);
+  if (options.view.state !== "sealed") return new Set();
+  return new Set(Object.values(options.view.contract.templates).flatMap(candidate => candidate.requiredProperties));
+}
+
+/** New notes only: a missing unconstrained, unrequired date or datetime default gets `now`. */
 function addDefaults(content: string, options: ConformOptions, applied: ConformChange[]): string {
   if (!options.isNew || options.view.state !== "sealed") return content;
   const parsed = parseNote(content);
   if (parsed.diagnostics.length > 0) return content;
   const template = selectedTemplate(options);
+  const required = templateRequired(options, template);
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
   const lines: string[] = [];
   for (const [name, property] of Object.entries(options.view.contract.properties ?? {})) {
-    if (!property.default || property.required || Object.hasOwn(parsed.frontmatter, name)) continue;
+    if (!property.default || property.required || required.has(name) || Object.hasOwn(parsed.frontmatter, name)) continue;
     if (property.rules.length > 0 || (template !== undefined && Object.hasOwn(template.narrowedRules, name))) continue;
     const value = defaultValue(property.type, options.now);
     if (value === null) continue;
@@ -119,9 +132,9 @@ function addDefaults(content: string, options: ConformOptions, applied: ConformC
     applied.push({ field: name, action: "default" });
   }
   if (lines.length === 0) return content;
-  if (parsed.frontmatterRange === null) return `---\n${lines.join("\n")}\n---\n${content}`;
+  if (parsed.frontmatterRange === null) return `---${eol}${lines.join(eol)}${eol}---${eol}${content}`;
   const end = parsed.frontmatterRange.end;
-  return `${content.slice(0, end)}\n${lines.join("\n")}${content.slice(end)}`;
+  return `${content.slice(0, end)}${eol}${lines.join(eol)}${content.slice(end)}`;
 }
 
 function observedHeadings(body: string): readonly string[] | null {
