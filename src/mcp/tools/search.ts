@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { deriveTemplateRetrievalAxes } from "../../kernel/engine/retrieval/axes.js";
 import { readSearchTemplateSource } from "../../kernel/engine/retrieval/template-source.js";
@@ -52,7 +51,8 @@ export async function searchExactRead(
   defaults: Readonly<Record<string, unknown>>,
 ): Promise<CallToolResult | undefined> {
   if (args === undefined || !("path" in args)) return undefined;
-  const echoesDefault = (key: string): boolean => Object.hasOwn(defaults, key) && isDeepStrictEqual(args[key], defaults[key]);
+  // The defaults are scalars, and `===` matches JSON Schema `const` equality, so -0 echoes a default 0.
+  const echoesDefault = (key: string): boolean => Object.hasOwn(defaults, key) && args[key] === defaults[key];
   if (Object.keys(args).some((key) => key !== "path" && !echoesDefault(key))) {
     return errorText('SEARCH_ARGS_INVALID: "path" is mutually exclusive with "op" and every other search argument.');
   }

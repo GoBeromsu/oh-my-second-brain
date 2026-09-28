@@ -213,6 +213,15 @@ describe("oms search --link", () => {
     }
   });
 
+  it("refuses a -- terminator with link suggestion rather than forwarding what follows as flags", async () => {
+    const deps = spiedDeps();
+    await runSearchCommand(["--link", "지식/a.md", "--", "--folder", "x", "--vault", vault], deps);
+    expect(process.exitCode).toBe(1);
+    expect(errors).toEqual([expect.stringMatching(/^SEARCH_ARGS_INVALID: --link does not accept a -- terminator/)]);
+    expect(deps.runLinkFamilyCommand).toHaveBeenCalledTimes(0);
+    expect(deps.runEngineSession).toHaveBeenCalledTimes(0);
+  });
+
   it("keeps a later --link as a query filter rather than link suggestion", async () => {
     const deps = spiedDeps();
     const runEngineSession = vi.fn<SearchCommandDeps["runEngineSession"]>(

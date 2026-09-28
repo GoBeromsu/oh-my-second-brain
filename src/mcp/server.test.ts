@@ -12,7 +12,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { parse } from "yaml";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
-import { createOMSMcpServer, omsMcpTools } from "./server.js";
+import { createOMSMcpServer, omsMcpTools, searchPathDefaults } from "./server.js";
+import { searchExactRead } from "./tools/search.js";
 import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
 import type { VaultContract } from "../kernel/contract/types.js";
 import { serializeVaultSettings } from "../kernel/vault/settings.js";
@@ -340,6 +341,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(validate({ path: "notes/a.md", op: "query" }).valid).toBe(false);
     expect(validate({ path: "notes/a.md", query: "a" }).valid).toBe(false);
     expect(validate({ path: "notes/a.md", limit: 10, rerank: false, minScore: 0 }).valid).toBe(true);
+    expect(validate({ path: "notes/a.md", minScore: -0 }).valid).toBe(true);
     expect(validate({ path: "notes/a.md", limit: 1 }).valid).toBe(false);
     expect(validate({ path: "notes/a.md", rerank: true }).valid).toBe(false);
     expect(validate({ path: 1 }).valid).toBe(false);
@@ -375,6 +377,10 @@ describe("Oh My Second Brain MCP stdio server", () => {
       const echoed = await client.callTool({ name: "search", arguments: { path: `지식/${nfc}`, limit: 10, rerank: false, minScore: 0 } });
       expect(echoed.isError).toBeFalsy();
       expect(textPayload(echoed)).toMatchObject({ available: true, documents: [{ path: `지식/${nfd}` }] });
+      // A client may send -0 for the 0 default; JSON Schema `const` treats them as equal, and so does the runtime.
+      const negativeZero = await searchExactRead(vault, { path: `지식/${nfc}`, minScore: -0 }, searchPathDefaults);
+      expect(negativeZero?.isError).toBeFalsy();
+      expect(textPayload(negativeZero!)).toMatchObject({ available: true, documents: [{ path: `지식/${nfd}` }] });
       for (const args of [
         { path: "a.md", op: "query", query: "x" },
         { path: "a.md", limit: 1 },

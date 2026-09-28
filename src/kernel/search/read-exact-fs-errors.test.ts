@@ -68,8 +68,25 @@ describe("readExact filesystem error mapping", () => {
 
   it("stops reading a file that grows past the cap after fstat", async () => {
     const read = vi.fn((buffer: Buffer) => Promise.resolve({ bytesRead: buffer.length }));
-    fake.open = () => Promise.resolve(handle({ read }));
+    const opened = handle({ read });
+    fake.open = () => Promise.resolve(opened);
     await expect(readExact(vault, "a.md")).rejects.toMatchObject({ code: "READ_EXACT_TOO_LARGE" });
     expect(read.mock.calls.length * 64 * 1024).toBeLessThanOrEqual(READ_EXACT_MAX_BYTES + 64 * 1024);
+    expect(opened.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a file of exactly the cap", async () => {
+    let remaining = READ_EXACT_MAX_BYTES;
+    const read = vi.fn((buffer: Buffer) => {
+      const bytesRead = Math.min(buffer.length, remaining);
+      buffer.fill(0x61, 0, bytesRead);
+      remaining -= bytesRead;
+      return Promise.resolve({ bytesRead });
+    });
+    const opened = handle({ stat: () => Promise.resolve({ isFile: () => true, size: READ_EXACT_MAX_BYTES }), read });
+    fake.open = () => Promise.resolve(opened);
+    const result = await readExact(vault, "a.md");
+    expect(result.content.length).toBe(READ_EXACT_MAX_BYTES);
+    expect(opened.close).toHaveBeenCalledTimes(1);
   });
 });

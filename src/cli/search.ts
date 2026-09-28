@@ -165,6 +165,8 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
     );
   }
   if (first === "--link") {
+    // Link suggestion has no query text, so a terminator would forward what follows it as flags.
+    if (terminator !== -1) fail("--link does not accept a -- terminator");
     // A leading --link is link suggestion for one note; later --link stays a query filter.
     // The resolved argv already had --vault removed, so an explicit target is passed on resolved.
     const vault = resolved.source === "explicit" ? ["--vault", resolved.vault] : [];
