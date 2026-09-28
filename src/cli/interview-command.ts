@@ -4,25 +4,32 @@ import { runContractCommand, type ContractCommandDeps } from "./contract-command
  * `oms interview`: the owner's interactive vault interview in a terminal. It is the
  * full-authority seal (it may loosen a sealed contract), so it needs a real terminal
  * and refuses OMS_NON_INTERACTIVE=1. Agents use `oms setup --questions/--answers`.
+ * Each answer is logged beside the contract store, so an interrupted interview
+ * continues where it stopped; `--restart` abandons the logged run and starts over.
  */
 
 export function interviewUsage(): string {
-  return `Usage: oms interview [--reask] [--vault <path>]
+  return `Usage: oms interview [--reask] [--restart] [--vault <path>]
 
 Ask the vault owner about folders, properties and templates in the terminal, then seal
 the contract. It needs an interactive terminal and refuses OMS_NON_INTERACTIVE=1.
 --reask asks again about items declined at an earlier seal.
+An interrupted interview continues from its logged answers; --restart starts over.
 An agent asks the same questions with \`oms setup --questions\` and \`oms setup --answers <file>\`.`;
 }
 
 function checkArgs(argv: readonly string[]): string | undefined {
   let vault = false;
   let reask = false;
+  let restart = false;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]!;
     if (token === "--reask") {
       if (reask) return "interview: duplicate flag --reask";
       reask = true;
+    } else if (token === "--restart") {
+      if (restart) return "interview: duplicate flag --restart";
+      restart = true;
     } else if (token === "--vault") {
       if (vault) return "interview: duplicate flag --vault";
       const value = argv[++index];
@@ -53,5 +60,7 @@ export async function runInterviewCommand(argv: readonly string[], deps: Contrac
     console.error("[oms] oms interview needs an interactive terminal (and OMS_NON_INTERACTIVE unset). An agent asks the owner with `oms setup --questions` and `oms setup --answers <file>`.");
     return;
   }
-  await runContractCommand(["setup", ...argv], deps);
+  const restart = argv.includes("--restart");
+  const rest = argv.filter(token => token !== "--restart");
+  await runContractCommand(["setup", ...rest], { ...deps, resume: { ...deps.resume, restart } });
 }
