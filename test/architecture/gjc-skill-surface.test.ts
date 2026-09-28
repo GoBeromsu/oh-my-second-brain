@@ -167,7 +167,7 @@ describe("Gajae-Code skill surface", () => {
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
     const mirror = path.join(fixture, "skills");
-    for (const name of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+    for (const name of ["distill", "doctor", "interview", "search", "setup", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
       mkdirSync(path.join(mirror, name), { recursive: true });
@@ -180,10 +180,10 @@ describe("Gajae-Code skill surface", () => {
     const selectedSentinelPath = path.join(mirror, "write", "notes.txt");
     writeFileSync(selectedSentinelPath, selectedSentinel);
 
-    expect(syncGjcSkills(["--skill", "write", "--skill", "link"], { sourceRoot: source, destinationRoot: mirror })).toEqual(["write", "link"]);
+    expect(syncGjcSkills(["--skill", "write", "--skill", "interview"], { sourceRoot: source, destinationRoot: mirror })).toEqual(["write", "interview"]);
 
     expect(readFileSync(path.join(mirror, "write", "SKILL.md"))).toEqual(readFileSync(path.join(source, "write", "SKILL.md")));
-    expect(readFileSync(path.join(mirror, "link", "SKILL.md"))).toEqual(readFileSync(path.join(source, "link", "SKILL.md")));
+    expect(readFileSync(path.join(mirror, "interview", "SKILL.md"))).toEqual(readFileSync(path.join(source, "interview", "SKILL.md")));
     expect(readFileSync(path.join(mirror, "doctor", "SKILL.md"), "utf8")).toBe("stale doctor\n");
     expect(readFileSync(sentinelPath)).toEqual(sentinel);
     expect(readFileSync(selectedSentinelPath)).toEqual(selectedSentinel);
@@ -195,7 +195,7 @@ describe("Gajae-Code skill surface", () => {
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
     const mirror = path.join(fixture, "skills");
-    for (const name of ["write", "distill", "doctor", "link", "search", "setup", "status"]) {
+    for (const name of ["write", "distill", "doctor", "interview", "search", "setup"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
     }
@@ -217,17 +217,17 @@ describe("Gajae-Code skill surface", () => {
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
     const mirror = path.join(fixture, "skills");
-    for (const name of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+    for (const name of ["distill", "doctor", "interview", "search", "setup", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
       mkdirSync(path.join(mirror, name), { recursive: true });
       writeFileSync(path.join(mirror, name, "SKILL.md"), `stale ${name}\n`);
     }
-    rmSync(path.join(source, "link", "SKILL.md"));
+    rmSync(path.join(source, "interview", "SKILL.md"));
     const before = readFileSync(path.join(mirror, "write", "SKILL.md"));
     const sibling = readFileSync(path.join(mirror, "doctor", "SKILL.md"));
 
-    expect(() => syncGjcSkills(["--skill", "write", "--skill", "link"], { sourceRoot: source, destinationRoot: mirror })).toThrow("missing source link/SKILL.md");
+    expect(() => syncGjcSkills(["--skill", "write", "--skill", "interview"], { sourceRoot: source, destinationRoot: mirror })).toThrow("missing source interview/SKILL.md");
     expect(readFileSync(path.join(mirror, "write", "SKILL.md"))).toEqual(before);
     expect(readFileSync(path.join(mirror, "doctor", "SKILL.md"))).toEqual(sibling);
     expect(skillDirectories(mirror)).toEqual(skillDirectories(source));
@@ -237,7 +237,7 @@ describe("Gajae-Code skill surface", () => {
     const fixture = mkdtempSync(path.join(tmpdir(), "oms-gjc-skills-"));
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
-    for (const name of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+    for (const name of ["distill", "doctor", "interview", "search", "setup", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
     }
@@ -273,7 +273,7 @@ describe("Gajae-Code skill surface", () => {
     const outside = path.join(fixture, "outside.md");
     const outsideBytes = Buffer.from("outside sentinel\n");
     writeFileSync(outside, outsideBytes);
-    for (const name of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+    for (const name of ["distill", "doctor", "interview", "search", "setup", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
     }
@@ -294,7 +294,7 @@ describe("Gajae-Code skill surface", () => {
     fixtures.push(fixture);
     const source = path.join(fixture, "assets", "skills");
     const mirror = path.join(fixture, "skills");
-    for (const name of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+    for (const name of ["distill", "doctor", "interview", "search", "setup", "write"]) {
       mkdirSync(path.join(source, name), { recursive: true });
       writeFileSync(path.join(source, name, "SKILL.md"), `authored ${name}\n`);
     }
@@ -307,7 +307,7 @@ describe("Gajae-Code skill surface", () => {
       ["--skill", "../write"],
       ["--skill", "contract"],
       ["--skill"],
-      ["--skill", "write", "link"],
+      ["--skill", "write", "interview"],
       ["--skill=write/../../etc"],
       ["write"],
     ]) {
