@@ -53,3 +53,9 @@ test/fixtures/**/.oms/
 # GJC agent session state (goals, ledger, plans). Local tooling scratch, not
 # project content, and it is written by the GJC CLI rather than by hand.
 .gjc/
+
+# Korean retrieval bench (scripts/bench/run.mjs). Reports hold ids and
+# aggregates only, but a tier-3 report comes from a private vault, so the
+# output and any downloaded dataset cache never enter the repository.
+bench-results/
+.bench-cache/
