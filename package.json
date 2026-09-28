@@ -54,7 +54,8 @@
     "release:mcp-smoke": "node scripts/release-artifact-smoke.mjs --mcp-only",
     "release:artifact-smoke": "node scripts/release-artifact-smoke.mjs",
     "release:plugin": "node scripts/release-plugin.mjs",
-    "release:check": "npm run lint && npm run build && npm test && npm run audit && npm run check:docs && npm run check:measurement && npm run release:pack && npm run release:artifact-smoke && npm run release:plugin"
+    "release:check": "npm run lint && npm run build && npm test && npm run audit && npm run check:docs && npm run check:measurement && npm run release:pack && npm run release:artifact-smoke && npm run release:plugin",
+    "bench:latency": "node scripts/bench/latency-baseline.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

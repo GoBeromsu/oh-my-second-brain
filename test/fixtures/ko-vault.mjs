@@ -1,0 +1,27 @@
+import { cpSync, renameSync } from "node:fs";
+import path from "node:path";
+
+/**
+ * Copies the committed ko-vault fixture to `dest` and renames the one NFD note.
+ *
+ * Git stores every fixture path NFC because a committed NFD path shows up as untracked
+ * on macOS checkouts (`core.precomposeunicode=true`). The copy restores the NFD spelling
+ * so the vault really holds both normalizations. Shared by the e2e suite and the bench.
+ */
+
+export const KO_VAULT_SOURCE = path.join(import.meta.dirname, "ko-vault");
+
+/** Vault-relative path of the note materialized with an NFD filename (NFC string). */
+export const NFD_NOTE = "지식/낙상 위험 평가.md";
+
+/** The same note as spelled on disk after materialization: NFC directory, NFD basename. */
+export const NFD_NOTE_ON_DISK = path.posix.join(path.posix.dirname(NFD_NOTE), path.posix.basename(NFD_NOTE).normalize("NFD"));
+
+/** A note whose filename stays NFC. */
+export const NFC_NOTE = "Resources/낙상판정기준.md";
+
+export function materializeKoVault(dest) {
+  cpSync(KO_VAULT_SOURCE, dest, { recursive: true });
+  renameSync(path.join(dest, NFD_NOTE), path.join(dest, NFD_NOTE_ON_DISK));
+  return dest;
+}
