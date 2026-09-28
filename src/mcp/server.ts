@@ -20,6 +20,7 @@ import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { appendRuntimeEvent, createRuntimeEvent, createRuntimeInvocation } from "../kernel/runtime/event-journal.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
 import { retrieveMorningContext } from "../kernel/search/morning.js";
+import { readExactDocument } from "../kernel/search/read-exact.js";
 import { repairDoctor } from "../kernel/doctor/service.js";
 import { makeEngineMorningBackend } from "./engine-morning-backend.js";
 import { atomicWriteNote } from "./note-write.js";
@@ -273,6 +274,11 @@ function operationSchema(tool: string): Tool["inputSchema"] {
     }
     branches.push({ additionalProperties: false, properties: base, required: baseRequired });
   }
+  if (tool === "search") {
+    // Engine-free exact read: `{path}` with no `op`, never combined with other fields.
+    branches.push({ additionalProperties: false, properties: { path: string }, required: ["path"] });
+    return withBranchProjection(branches, true);
+  }
   return withBranchProjection(branches, false);
 }
 const WRITE_KEYS: readonly string[] = ["path", "content", "template"];
@@ -339,7 +345,7 @@ export const omsMcpTools: Tool[] = [
   {
     name: "search",
     title: "Oh My Second Brain search",
-    description: "Retrieve vault context, template metadata, semantic search, and selected documents. `op` selects the operation.",
+    description: "Retrieve vault context, template metadata, semantic search, and selected documents. `op` selects the operation. `{path}` alone reads one note by its vault-relative path, normalization-insensitively, without the index or a model.",
     inputSchema: operationSchema("search"),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
@@ -542,6 +548,19 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
     if (publicName === "write") return await writeNote(vault, source, args ?? {});
+    if (publicName === "search" && args !== undefined && "path" in args) {
+      if (Object.keys(args).some((key) => key !== "path")) {
+        return errorText('SEARCH_ARGS_INVALID: "path" is mutually exclusive with "op" and every other search argument.');
+      }
+      const notePath = args["path"];
+      if (typeof notePath !== "string") return errorText('SEARCH_ARGS_INVALID: "path" must be a vault-relative string.');
+      try {
+        return jsonText(await readExactDocument(vault, notePath));
+      } catch (error) {
+        // readExactDocument already reports path errors as a result; anything left is I/O.
+        return errorText(`Oh My Second Brain MCP error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     const op = stringArg(args, "op");
     let name = resolveOperation(publicName, op);
     if (!name) return errorText(unknownOperationMessage(publicName, op));

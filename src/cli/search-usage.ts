@@ -1,12 +1,17 @@
 export function searchUsage(): string {
   return `OMS search and index:
   oms search query <text> [--lex <text>] [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank|--no-rerank] [-n <limit>]
+  oms search --path <vault-relative path> [--vault <path>]
   oms search context [--template <id>] [--folder <path>] [--property <name> --value <value>] [--wikilink <target>] [--query <text>]
   oms index sync [--collection <name>] [--index <path>]
   oms index embed [--collection <name>] [--index <path>]
   oms index status [--view status|collections|contexts] [--index <path>]
   oms index repair --mode rebuild|drop [--dry-run]
   oms index clean [--index <path>]
+
+--path reads one note exactly, without opening the index or loading a model. It matches the
+path NFC-insensitively, refuses .. and paths that escape the vault, prints the on-disk path and a
+sha256 revision, and cannot be combined with a subcommand, query text, or mode flags.
 
 A plain search is lexical-only. --lex, --vec, and --hyde select explicit typed channels.
 --expand selects only {kind:'expand',profile:'qmd-v2.8.3',maxQueries?}; --max-queries must be

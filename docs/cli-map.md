@@ -48,6 +48,7 @@ Link suggest and check do not edit notes. Bridge operations manage target resolu
 |---|---|---|---|
 | `oms search query` | `oms_search` | `query` | Optional explicit `mode=query|search|vsearch` with `query`; typed `searches` and lexical/vector/HyDE shorthand omit `mode`. |
 | `oms search context` | `oms_search` | `context` | none |
+| `oms search --path <rel>` | `oms_search` | absent | `path` alone; exclusive with `op` and every other argument. Engine-free, normalization-insensitive exact read of one note. |
 | `oms index sync` | `oms_doctor` | `sync-embeddings` | `mode=sync` |
 | `oms index embed` | `oms_doctor` | `sync-embeddings` | `mode=embed` |
 | `oms index repair --mode <mode>` | `oms_doctor` | `sync-embeddings` | `mode=repair`; `repairMode` is `rebuild` or `drop`; optional `dryRun` |

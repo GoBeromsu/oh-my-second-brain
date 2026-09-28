@@ -232,7 +232,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       };
       const op = schema.properties?.["op"];
       expect(op?.enum, name).toEqual([...ops]);
-      expect(schema.required ?? [], name).toEqual(name === "status" ? [] : ["op"]);
+      expect(schema.required ?? [], name).toEqual(name === "status" || name === "search" ? [] : ["op"]);
       for (const branch of schema.oneOf ?? []) {
         expect(branch.additionalProperties, name).toBe(false);
       }
@@ -333,6 +333,67 @@ describe("Oh My Second Brain MCP stdio server", () => {
       (operation.properties?.["op"] as { readonly const?: unknown } | undefined)?.const === "context",
     );
     expect(context?.properties).not.toHaveProperty("semanticStrategy");
+  });
+
+  it("advertises search {path} as an op-less branch that excludes every other argument", () => {
+    const validate = new AjvJsonSchemaValidator().getValidator(omsMcpTools.find((tool) => tool.name === "search")!.inputSchema);
+    expect(validate({ path: "notes/a.md" }).valid).toBe(true);
+    expect(validate({ path: "notes/a.md", op: "query" }).valid).toBe(false);
+    expect(validate({ path: "notes/a.md", query: "a" }).valid).toBe(false);
+    expect(validate({ path: 1 }).valid).toBe(false);
+    expect(validate({}).valid).toBe(false);
+    expect(validate({ op: "context" }).valid).toBe(true);
+  });
+
+  it("reads one note by path through search without an op, normalization-insensitively", async () => {
+    const vault = await mkdtemp(path.join(tmpdir(), "oms-mcp-search-path-"));
+    const nfc = "낙상 위험 평가.md";
+    const nfd = nfc.normalize("NFD");
+    await mkdir(path.join(vault, "지식"), { recursive: true });
+    await writeFile(path.join(vault, "지식", nfd), "# 낙상\n");
+    const { client } = await connectInMemory(vault);
+    try {
+      const read = await client.callTool({ name: "search", arguments: { path: `지식/${nfc}` } });
+      expect(read.isError).toBeFalsy();
+      expect(textPayload(read)).toEqual({
+        available: true,
+        documents: [{
+          target: `지식/${nfc}`,
+          path: `지식/${nfd}`,
+          content: "# 낙상\n",
+          revision: `sha256:${createHash("sha256").update("# 낙상\n").digest("hex")}`,
+        }],
+      });
+      const missing = textPayload(await client.callTool({ name: "search", arguments: { path: "지식/없음.md" } }));
+      expect(missing).toMatchObject({ available: false, documents: [] });
+      expect(String(missing.reason)).toMatch(/^READ_EXACT_NOT_FOUND: /);
+      const escape = textPayload(await client.callTool({ name: "search", arguments: { path: "../x.md" } }));
+      expect(String(escape.reason)).toMatch(/^READ_EXACT_INVALID_PATH: /);
+      for (const args of [{ path: "a.md", op: "query", query: "x" }, { path: "a.md", limit: 1 }, { path: 1 }]) {
+        const refused = await client.callTool({ name: "search", arguments: args });
+        expect(refused.isError, JSON.stringify(args)).toBe(true);
+        const message = refused.content[0]?.type === "text" ? refused.content[0].text : "";
+        expect(message).toMatch(/^SEARCH_ARGS_INVALID: /);
+      }
+      expect(existsSync(path.join(vault, ".oms"))).toBe(false);
+    } finally {
+      await client.close();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("formats an I/O failure of search {path} as an MCP error, such as a missing vault root", async () => {
+    const base = await mkdtemp(path.join(tmpdir(), "oms-mcp-search-path-missing-"));
+    const { client } = await connectInMemory(path.join(base, "no-vault"));
+    try {
+      const result = await client.callTool({ name: "search", arguments: { path: "a.md" } });
+      expect(result.isError).toBe(true);
+      const message = result.content[0]?.type === "text" ? result.content[0].text : "";
+      expect(message).toMatch(/^Oh My Second Brain MCP error: .*ENOENT/);
+    } finally {
+      await client.close();
+      await rm(base, { recursive: true, force: true });
+    }
   });
 
   it("fails loudly for retired semantic-query and axis operation names", async () => {

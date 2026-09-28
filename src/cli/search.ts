@@ -1,7 +1,6 @@
 import path from "node:path";
 
-import { runEngineSession } from "./engine-session.js";
-import { runIndexCommand, validateIndexFamilyArgs } from "./index-command.js";
+import type { runEngineSession } from "./engine-session.js";
 import {
   parseSearchArgs,
   printJson,
@@ -9,12 +8,8 @@ import {
   stringOption,
 } from "./search-args.js";
 import { searchUsage } from "./search-usage.js";
-import { resolveEffectiveVault } from "../kernel/link/link.js";
-import {
-  retrieveMorningContext,
-  type MorningSemanticBackend,
-  type MorningRetrieveOptions,
-} from "../kernel/search/morning.js";
+import { readExactDocument } from "../kernel/search/read-exact.js";
+import type { MorningSemanticBackend, MorningRetrieveOptions } from "../kernel/search/morning.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import type { SemanticSearchMode } from "../kernel/search/semantic-contract.js";
@@ -28,6 +23,20 @@ interface Target {
 function fail(message: string): never {
   throw new Error(`SEARCH_ARGS_INVALID: ${message}`);
 }
+
+/** Injection point: `search --path` must reach `readExactDocument` and never `runEngineSession`. */
+export interface SearchCommandDeps {
+  readonly readExactDocument: typeof readExactDocument;
+  readonly runEngineSession: typeof runEngineSession;
+}
+
+// The engine, index, link and morning-context modules load only on the branches that use them,
+// so `search --path` stays off the engine's import graph.
+const DEFAULT_DEPS: SearchCommandDeps = {
+  readExactDocument,
+  runEngineSession: async (vault, options, fn) =>
+    (await import("./engine-session.js")).runEngineSession(vault, options, fn),
+};
 
 async function target(argv: readonly string[]): Promise<Target> {
   const rest: string[] = [];
@@ -46,6 +55,7 @@ async function target(argv: readonly string[]): Promise<Target> {
   if (explicit !== undefined) {
     return { vault: path.resolve(explicit), source: "explicit", argv: rest };
   }
+  const { resolveEffectiveVault } = await import("../kernel/link/link.js");
   const resolved = await resolveEffectiveVault(process.cwd(), process.env);
   return { vault: resolved.vault, source: resolved.source, argv: rest };
 }
@@ -110,8 +120,31 @@ function contextOptions(vault: string, argv: readonly string[]): MorningRetrieve
   };
 }
 
-async function runSearch(argv: readonly string[]): Promise<void> {
+/** `oms search --path <rel>`: an engine-free exact read. Any other argument is refused. */
+async function runPathRead(resolved: Target, deps: SearchCommandDeps): Promise<void> {
+  const [, relPath, ...extra] = resolved.argv;
+  if (relPath === undefined || relPath.startsWith("--")) fail("--path requires a vault-relative note path");
+  if (extra.length > 0) {
+    fail("--path is mutually exclusive with search subcommands, query text, and mode flags");
+  }
+  const result = await deps.readExactDocument(resolved.vault, relPath);
+  printJson(console.log, result);
+  if (!result.available) process.exitCode = 1;
+}
+
+async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Promise<void> {
   const resolved = await target(argv);
+  if (resolved.argv[0] === "--path") {
+    await runPathRead(resolved, deps);
+    return;
+  }
+  // Tokens after a `--` terminator are query text, never flags.
+  const terminator = resolved.argv.indexOf("--");
+  const flagged = terminator === -1 ? resolved.argv : resolved.argv.slice(0, terminator);
+  const literal = terminator === -1 ? [] : resolved.argv.slice(terminator + 1);
+  if (flagged.includes("--path")) {
+    fail("--path is mutually exclusive with search subcommands, query text, and mode flags");
+  }
   const verb = resolved.argv[0];
   if (verb === undefined || verb === "help" || verb === "--help" || verb === "-h") {
     console.log(searchUsage());
@@ -126,18 +159,18 @@ async function runSearch(argv: readonly string[]): Promise<void> {
     const booleanFlags = new Set([
       "all", "full", "full-path", "expand", "rerank", "no-rerank",
     ]);
-    for (let index = 1; index < resolved.argv.length; index += 1) {
-      const token = resolved.argv[index]!;
+    for (let index = 1; index < flagged.length; index += 1) {
+      const token = flagged[index]!;
       if (!token.startsWith("--") && token !== "-n" && token !== "-c") continue;
       const name = token === "-n" ? "limit" : token === "-c" ? "collection" : token.slice(2);
       if (!valueFlags.has(name) && !booleanFlags.has(name)) fail(`unknown query flag ${token}`);
       if (valueFlags.has(name)) {
-        const value = resolved.argv[++index];
+        const value = flagged[++index];
         if (value === undefined || value.startsWith("--")) fail(`${token} requires a value`);
       }
     }
-    const args = parseSearchArgs(resolved.argv);
-    const query = args.positional.slice(1).join(" ")
+    const args = parseSearchArgs(flagged);
+    const query = [...args.positional.slice(1), ...literal].join(" ")
       || stringOption(args, "lex")
       || stringOption(args, "vec")
       || stringOption(args, "hyde")
@@ -147,14 +180,15 @@ async function runSearch(argv: readonly string[]): Promise<void> {
     if (requestedMode !== "query" && requestedMode !== "search" && requestedMode !== "vsearch") {
       fail("--mode must be query, search, or vsearch");
     }
-    const result = await runEngineSession(resolved.vault, { write: false }, (adapter) =>
+    const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
       adapter.semanticQuery(searchQueryOptions(requestedMode as SemanticSearchMode, resolved.vault, args, query)));
     printJson(console.log, result);
     if (!result.available) process.exitCode = 1;
     return;
   }
   if (verb === "context") {
-    const result = await runEngineSession(resolved.vault, { write: false }, (adapter) =>
+    const { retrieveMorningContext } = await import("../kernel/search/morning.js");
+    const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
       retrieveMorningContext(contextOptions(resolved.vault, resolved.argv.slice(1)), backend(adapter, resolved.vault)));
     printJson(console.log, result);
     return;
@@ -164,10 +198,13 @@ async function runSearch(argv: readonly string[]): Promise<void> {
 
 export { searchUsage } from "./search-usage.js";
 
-export async function runSearchCommand(argv: readonly string[]): Promise<void> {
+export async function runSearchCommand(
+  argv: readonly string[],
+  deps: SearchCommandDeps = DEFAULT_DEPS,
+): Promise<void> {
   process.exitCode = 0;
   try {
-    await runSearch(argv);
+    await runSearch(argv, deps);
   } catch (error) {
     process.exitCode = 1;
     console.error(error instanceof Error ? error.message : String(error));
@@ -177,6 +214,7 @@ export async function runSearchCommand(argv: readonly string[]): Promise<void> {
 export async function runIndexFamilyCommand(argv: readonly string[]): Promise<void> {
   process.exitCode = 0;
   try {
+    const { runIndexCommand, validateIndexFamilyArgs } = await import("./index-command.js");
     validateIndexFamilyArgs(argv);
     const resolved = await target(argv);
     await runIndexCommand({

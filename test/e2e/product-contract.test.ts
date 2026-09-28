@@ -206,9 +206,10 @@ describe("product contract (built CLI, isolated home)", () => {
     expect(json(run)).toMatchObject({ available: true, documents: [{ title: "낙상 위험 평가" }] });
   }, 30_000);
 
-  // Known gap: note get is byte-exact; no normalization-insensitive lookup (PR2 readExact).
+  // Known gap: note get is byte-exact; no normalization-insensitive lookup.
   // macOS APFS resolves the NFC spelling to the NFD-named file; Linux ext4 does not.
-  // Once PR2 lands, every platform should expect the darwin branch.
+  // The fix is `oms search --path` (readExact), asserted platform-independently below;
+  // note get itself is absorbed into that path in PR3, when this test collapses to one branch.
   it("note get on the NFC spelling of the NFD-named note depends on the filesystem", () => {
     const run = oms(["note", "get", NFD_NOTE.normalize("NFC"), "--vault", vault]);
     if (process.platform === "darwin") {
@@ -221,6 +222,27 @@ describe("product contract (built CLI, isolated home)", () => {
       expect(run.status).toBe(1);
       expect(json(run)).toMatchObject({ available: false, documents: [] });
     }
+  });
+
+  it("search --path reads the NFD-named note from its NFC spelling on every platform", async () => {
+    const run = oms(["search", "--path", NFD_NOTE.normalize("NFC"), "--vault", vault]);
+    expect(run.status).toBe(0);
+    const out = json(run) as { available: boolean; documents: { target: string; path: string; content: string; revision: string }[] };
+    expect(out.available).toBe(true);
+    expect(out.documents).toHaveLength(1);
+    const bytes = await readFile(path.join(vault, NFD_NOTE_ON_DISK));
+    expect(out.documents[0]).toEqual({
+      target: NFD_NOTE.normalize("NFC"),
+      path: NFD_NOTE_ON_DISK,
+      content: bytes.toString("utf8"),
+      revision: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    });
+  });
+
+  it("search --path on a missing note is unavailable with exit 1", () => {
+    const run = oms(["search", "--path", "Resources/없음.md", "--vault", vault]);
+    expect(run.status).toBe(1);
+    expect(json(run)).toMatchObject({ available: false, documents: [] });
   });
 
   it("note get on a missing path or a bare title is unavailable with exit 1", () => {
