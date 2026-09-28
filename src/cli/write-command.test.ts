@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,6 +23,16 @@ async function sealedVault(): Promise<TruthTableFixture> {
 
 function receipt(): Record<string, unknown> {
   return JSON.parse(String(log.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+}
+
+async function snapshot(root: string): Promise<Record<string, string>> {
+  const entries: Record<string, string> = {};
+  for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const full = path.join(entry.parentPath, entry.name);
+    entries[path.relative(root, full)] = createHash("sha256").update(await readFile(full)).digest("hex");
+  }
+  return entries;
 }
 
 function stderr(): string {
@@ -68,6 +79,10 @@ describe("oms write", () => {
       [["a.md", "b.md"], "write takes exactly one note path"],
       [["a.md", "--template"], "--template requires a value"],
       [["a.md", "--vault", "x", "--vault", "y"], "--vault may be specified only once"],
+      [["a.md", "--if-match"], "--if-match requires a value"],
+      [["a.md", "--if-match", "--check"], "--if-match requires a value"],
+      [["a.md", "--if-match", "sha256:a", "--if-match", "sha256:b"], "--if-match may be specified only once"],
+      [["a.md", "--check", "--check"], "--check may be specified only once"],
     ] as const) {
       error.mockClear();
       await runWriteCommand(argv, { readStdin, env: {} });
@@ -123,5 +138,47 @@ describe("oms write", () => {
     expect(process.exitCode).toBe(0);
     expect(await readFile(path.join(fixture.vault, "Projects", "b.md"), "utf8")).toBe("B\n");
     expect(await readdir(cwd)).toEqual([]);
+  });
+
+  it("refuses to overwrite an existing note without --if-match and leaves it unchanged", async () => {
+    const fixture = await sealedVault();
+    await mkdir(path.join(fixture.vault, "Projects"), { recursive: true });
+    await writeFile(path.join(fixture.vault, "Projects", "a.md"), "original\n");
+    await runWriteCommand(["Projects/a.md", "--vault", fixture.vault], { env: {}, readStdin: async () => "changed\n" });
+    expect(process.exitCode).toBe(1);
+    expect(receipt()).toMatchObject({ ok: false, code: "WRITE_IF_MATCH_REQUIRED", kind: "if-match-required" });
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("original\n");
+  });
+
+  it("overwrites with the revision --check reported and refuses a stale one", async () => {
+    const fixture = await sealedVault();
+    await mkdir(path.join(fixture.vault, "Projects"), { recursive: true });
+    await writeFile(path.join(fixture.vault, "Projects", "a.md"), "original\n");
+    await runWriteCommand(["Projects/a.md", "--vault", fixture.vault, "--check"], { env: {}, readStdin: async () => "changed\n" });
+    const revision = receipt()["revision"];
+    expect(revision).toBe(`sha256:${createHash("sha256").update("original\n").digest("hex")}`);
+
+    await runWriteCommand(["Projects/a.md", "--vault", fixture.vault, "--if-match", String(revision)], { env: {}, readStdin: async () => "changed\n" });
+    expect(process.exitCode).toBe(0);
+    expect(receipt()).toMatchObject({ ok: true, path: "Projects/a.md" });
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("changed\n");
+
+    await runWriteCommand(["Projects/a.md", "--vault", fixture.vault, "--if-match", String(revision)], { env: {}, readStdin: async () => "again\n" });
+    expect(process.exitCode).toBe(1);
+    expect(receipt()).toMatchObject({ ok: false, code: "WRITE_TARGET_CHANGED", retryable: true });
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("changed\n");
+  });
+
+  it("--check judges and reports without changing a byte on disk", async () => {
+    const fixture = await sealedVault();
+    await mkdir(path.join(fixture.vault, "Projects"), { recursive: true });
+    await writeFile(path.join(fixture.vault, "Projects", "a.md"), "original\n");
+    const before = await snapshot(fixture.base);
+    for (const [note, content] of [["Projects/a.md", "changed\n"], ["Projects/new.md", "Body\n"], ["Loose/a.md", "x\n"]] as const) {
+      await runWriteCommand([note, "--vault", fixture.vault, "--check"], { env: {}, readStdin: async () => content });
+      expect(receipt(), note).toMatchObject({ status: "checked", path: note });
+    }
+    expect(receipt()).toMatchObject({ ok: false, violations: [{ field: "path", kind: "unregistered-folder" }] });
+    expect(await snapshot(fixture.base)).toEqual(before);
   });
 });
