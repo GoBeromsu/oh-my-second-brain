@@ -72,7 +72,7 @@ Related trap: `tsconfig.json` excludes `**/*.test.ts`, so `npm run lint` does **
 
 ## Convention-as-Data
 
-The active convention is the vault contract the user seals with the interactive `oms setup`. It is stored outside the vault under `~/.oms/vaults/<vault-id>/`; the only OMS file inside the vault is `.oms/settings.json`. One judge (`src/kernel/contract/judge.ts`) decides MCP `write` and the Claude guard hook (`oms hook pre`): a violation is refused and disk stays untouched. `oms note audit` and `oms contract doctor` report without rewriting notes. Do not weaken or bypass the judge without an explicit product decision.
+The active convention is the vault contract the user seals with the interactive `oms setup`. It is stored outside the vault under `~/.oms/vaults/<vault-id>/`; the only OMS file inside the vault is `.oms/settings.json`. One judge (`src/kernel/contract/judge.ts`) decides MCP `write` and the Claude guard hook (`oms hook pre`): a violation is refused and disk stays untouched. `oms doctor audit` and `oms doctor contract` report without rewriting notes. Do not weaken or bypass the judge without an explicit product decision.
 
 `write` demands a verified target vault, resolved `explicit` > local `.oms/settings.json` > bridge `links.yaml` > `OMS_VAULT`. A `cwd`-inferred target is read-only and writes are rejected. See [docs/verified-target.md](./docs/verified-target.md).
 
@@ -98,7 +98,7 @@ Three gates run per pull request and fail closed. A gate that scans zero files i
 - No new dependencies without explicit sign-off in the PR description.
 - No `any` without a comment explaining why.
 - Every new branch in `src/` needs a vitest case.
-- The sealed contract lives outside the vault; `.obsidian/types.json` is a read-only observation. Older `.oms/*` files are ignored and reported by `oms contract doctor` as unexpected control files.
+- The sealed contract lives outside the vault; `.obsidian/types.json` is a read-only observation. Older `.oms/*` files are ignored and reported by `oms doctor contract` as unexpected control files.
 - Commit `.oms/settings.json` with the vault when it should travel with the notes. Never commit engine stores or runtime event journals; engine state is rebuildable and runtime history lives outside the vault.
 - See [CONTRIBUTING.md](./CONTRIBUTING.md) for the source-to-doc mapping table and per-change checklists.
 
