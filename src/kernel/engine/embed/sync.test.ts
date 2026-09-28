@@ -357,7 +357,7 @@ describe("syncEngineStore — unconfigured embedding capability", () => {
     expect(result.reason).toMatch(/OMS_EMBEDDING_PROVIDER/);
     expect(result.reason).toMatch(/OMS_EMBEDDING_MODEL/);
     expect(result.reason).toMatch(/\.oms\/settings\.json/);
-    expect(result.reason).toMatch(/oms model install --default/);
+    expect(result.reason).toMatch(/oms setup model install --default/);
   });
 
   it("guides the same way when only the model is missing", async () => {
@@ -371,7 +371,7 @@ describe("syncEngineStore — unconfigured embedding capability", () => {
 
     expect(result.available).toBe(false);
     expect(result.reason).toMatch(/OMS_EMBEDDING_MODEL/);
-    expect(result.reason).toMatch(/oms model install --default/);
+    expect(result.reason).toMatch(/oms setup model install --default/);
   });
 
   it("does not attach capability guidance to an incomplete descriptor shape", async () => {
@@ -394,7 +394,7 @@ describe("syncEngineStore — unconfigured embedding capability", () => {
 
     expect(result.available).toBe(false);
     expect(result.reason).toMatch(/prefixScheme is required/);
-    expect(result.reason).not.toMatch(/oms model install --default/);
+    expect(result.reason).not.toMatch(/oms setup model install --default/);
   });
 
   it("still performs a lex-only sync without any embedding configuration", async () => {

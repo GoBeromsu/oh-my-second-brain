@@ -20,31 +20,31 @@ receipt that the resolver reads.
 Plain queries are lexical-only by default and need no model. Expansion
 (`strategy: { kind: "expand", profile: "qmd-v2.8.3" }`) and reranking
 (`rerank: true`) are explicit; omitting either never changes a plain lexical
-query. The CLI surface is `oms search query`: query mode selects lexical,
+query. The CLI surface is `oms search <text> [--mode]`: query mode selects lexical,
 vector, or HyDE retrieval, accepts one query or a query set, and can opt into
-expansion and reranking. `oms search context` is the separate context view.
+expansion and reranking. `oms search --context` is the separate context view.
 
 Unavailable capabilities fail loudly with their own environment pair,
 `.oms/settings.json` declaration, and a setup remedy:
 
 - **Vector** needs a verified local-GGUF selection from the complete
   `OMS_EMBEDDING_PROVIDER`/`OMS_EMBEDDING_MODEL` pair, vault configuration, or
-  setup default. Install and select the pinned default with `oms model install --default`
-  and `oms model select --default`, then build vectors with
-  `oms index embed`. Index mutation has three exclusive modes:
-  `oms index sync`, `oms index embed`, and `oms index repair`; callers select
+  setup default. Install and select the pinned default with `oms setup model install --default`
+  and `oms setup model select --default`, then build vectors with
+  `oms doctor sync-embeddings --mode embed`. Index mutation has three exclusive modes:
+  `oms doctor sync-embeddings --mode sync`, `oms doctor sync-embeddings --mode embed`, and `oms doctor sync-embeddings --mode repair`; callers select
   one mode rather than combining boolean `embed` or `force` controls.
 - **HyDE** needs *two* — a generate model to write the hypothetical document and
   embed model to embed it: `OMS_GENERATE_PROVIDER` +
   `OMS_GENERATE_MODEL`, and the embed pair. Install a configured generator with
-  `oms model install --descriptor <path>` and `oms model select --descriptor <path>`; there is no default generator.
+  `oms setup model install --descriptor <path>` and `oms setup model select --descriptor <path>`; there is no default generator.
 - **Expansion** is explicit:
   `strategy: { kind: "expand", profile: "qmd-v2.8.3" }`. It needs generate and
   embed capabilities and the same descriptor setup remedy; it validates only
   typed `lex`/`vec`/`hyde` lines and records the plan in the query receipt.
 - **Reranking** is opt-in (`rerank: true`) and default-off. An unconfigured
   reranker needs `OMS_RERANK_PROVIDER` and `OMS_RERANK_MODEL`, or a descriptor
-  installed with `oms model install --descriptor <path>`; it is absent rather than
+  installed with `oms setup model install --descriptor <path>`; it is absent rather than
   a passthrough when unconfigured.
 
 Kernel assembly owns lazy construction of the production reranker: the native
@@ -53,8 +53,8 @@ candidates by default, is shared by concurrent first requests, and is disposed
 exactly once with its assembly. Constructing an engine or serving lexical queries
 loads no model state at all.
 
-Read-only index reporting uses `oms index status`; cleanup uses
-`oms index clean`. The MCP equivalents keep the same separation:
+Read-only index reporting uses `oms doctor status`; cleanup uses
+`oms doctor cleanup`. The MCP equivalents keep the same separation:
 `doctor { op: "sync-embeddings", mode: "sync" | "embed" | "repair" }` mutates,
 while `search { op: "index-status", view: "status" | "collections" |
 "contexts" }` only reports state. Start the MCP server with `oms serve mcp`.

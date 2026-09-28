@@ -71,7 +71,7 @@ afterEach(async () => {
 });
 
 describe("graph command", () => {
-  it("keeps status read-only and delegates a real build to the verified doctor operation", async () => {
+  it("keeps doctor status graph read-only and delegates a real build to the verified doctor operation", async () => {
     const vault = await freshVault();
     const output: unknown[] = [];
     vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
@@ -79,9 +79,8 @@ describe("graph command", () => {
     const before = await fileSnapshot(vault);
     const cacheRoot = vaultCacheRoot(vault);
     const externalBefore = existsSync(cacheRoot) ? await fileSnapshot(cacheRoot) : {};
-    await runGraphCommand(["status", "--vault", vault]);
-    expect(output.pop()).toEqual({ available: false, reason: "Graph cache not built" });
-    expect(process.exitCode).toBe(1);
+    await runStatusCommand(["--vault", vault]);
+    expect((output.pop() as Record<string, unknown>)["graph"]).toEqual({ available: false, reason: "Graph cache not built" });
     expect(await fileSnapshot(vault)).toEqual(before);
     expect(existsSync(cacheRoot) ? await fileSnapshot(cacheRoot) : {}).toEqual(externalBefore);
 
@@ -102,8 +101,8 @@ describe("graph command", () => {
     expect(process.exitCode).toBe(0);
 
     const afterBuild = await fileSnapshot(vault);
-    await runGraphCommand(["status", "--vault", vault]);
-    expect(output.pop()).toMatchObject({ available: true, notes: 2, edges: 3 });
+    await runStatusCommand(["--vault", vault]);
+    expect((output.pop() as Record<string, unknown>)["graph"]).toMatchObject({ available: true, notes: 2, edges: 3 });
     expect(process.exitCode).toBe(0);
     expect(await fileSnapshot(vault)).toEqual(afterBuild);
     const externalAfter = await fileSnapshot(cacheRoot);
@@ -176,7 +175,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { contract: "unreadable", findings: expect.arrayContaining([{ message: "vault settings unreadable", guidance: "oms contract doctor" }]) },
+      convention: { contract: "unreadable", findings: expect.arrayContaining([{ message: "vault settings unreadable", guidance: "oms doctor contract" }]) },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },
@@ -302,5 +301,21 @@ describe("graph command", () => {
       status: "rejected",
       diagnostics: [{ code: "GRAPH_ARGS_INVALID" }],
     });
+  });
+
+  it("has no graph status verb: graph status lives in the doctor status report", async () => {
+    const vault = await freshVault();
+    const output: unknown[] = [];
+    vi.spyOn(console, "log").mockImplementation((value) => output.push(JSON.parse(String(value))));
+    const before = await fileSnapshot(vault);
+
+    await runGraphCommand(["status", "--vault", vault]);
+
+    expect(process.exitCode).toBe(1);
+    expect(output.pop()).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "GRAPH_ARGS_INVALID", remediation: expect.stringContaining("expected build") }],
+    });
+    expect(await fileSnapshot(vault)).toEqual(before);
   });
 });

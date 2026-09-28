@@ -19,7 +19,7 @@ function failureReason(error: unknown): string {
   if (error instanceof VaultSettingsError) return error.message;
   const code = (error as NodeJS.ErrnoException | null)?.code;
   if (typeof code === "string" && /^E[A-Z]+$/.test(code)) return `${code}: the vault or audit folder could not be read`;
-  return "AUDIT_FAILED: the audit could not read the vault. Run: oms contract doctor";
+  return "AUDIT_FAILED: the audit could not read the vault. Run: oms doctor contract";
 }
 
 /** Caps the reported findings per violation kind; the total stays in `violationCount`. */
@@ -64,7 +64,7 @@ export async function runAudit(opts: {
     if (opts.json) console.log(JSON.stringify(result, null, 2));
     else {
       console.log(`\nOh My Second Brain audit: ${result.scannedNotes} note(s), contract ${result.contract}, ${result.violationCount} violation(s).`);
-      if (result.contract === "unreadable") console.log("  contract unreadable. Run: oms contract doctor");
+      if (result.contract === "unreadable") console.log("  contract unreadable. Run: oms doctor contract");
       for (const item of result.violations) console.log(`  ${item.path} — ${item.field}: ${item.kind}`);
       console.log("");
     }

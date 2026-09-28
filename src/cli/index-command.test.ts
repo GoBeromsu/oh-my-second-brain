@@ -112,7 +112,7 @@ describe("index family", () => {
     await runIndexFamilyCommand(["status", "--vault", vault]);
     expect(process.exitCode).toBe(1);
     expect(existsSync(engineStorePath(vault))).toBe(false);
-    expect(console.error).toHaveBeenCalledWith("No engine store; run `oms index sync`.");
+    expect(console.error).toHaveBeenCalledWith("No engine store; run `oms doctor sync-embeddings --mode sync`.");
   });
 
   it("quotes the verified repair command for a corrupt store", async () => {
@@ -120,7 +120,7 @@ describe("index family", () => {
     createCorruptStore(vault);
     await runIndexFamilyCommand(["status", "--vault", vault]);
     expect(process.exitCode).toBe(1);
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("oms index repair --mode rebuild"));
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("oms doctor sync-embeddings --mode repair --repair-mode rebuild"));
   });
 
   it("retains the explicit rebuild repair capability", async () => {
@@ -132,7 +132,7 @@ describe("index family", () => {
     vi.mocked(console.error).mockClear();
     await runIndexFamilyCommand(["status", "--vault", vault]);
     expect(console.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("oms index repair --mode rebuild"),
+      expect.stringContaining("oms doctor sync-embeddings --mode repair --repair-mode rebuild"),
     );
   });
 

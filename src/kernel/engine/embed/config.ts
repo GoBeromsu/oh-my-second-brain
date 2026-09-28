@@ -315,9 +315,9 @@ function envArtifact(
  * installs it, and never one that does not.
  */
 const CAPABILITY_INSTALL_REMEDY: Readonly<Record<ModelCapability, string>> = {
-  embed: "install and select the pinned default with `oms model install --default` and `oms model select --default`",
-  rerank: "install one with `oms model install --descriptor <path>`",
-  generate: "install one with `oms model install --descriptor <path>`",
+  embed: "install and select the pinned default with `oms setup model install --default` and `oms setup model select --default`",
+  rerank: "install one with `oms setup model install --descriptor <path>`",
+  generate: "install one with `oms setup model install --descriptor <path>`",
 };
 
 /**

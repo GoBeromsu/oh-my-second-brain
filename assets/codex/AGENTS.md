@@ -35,12 +35,13 @@ guess the contract's location or values.
   It also returns notes that would fail the contract. It never writes or
   repairs. Unavailable backends fail loudly and are never replaced with a fake
   match.
-- `$oms-status` reads health. `oms contract status` and `oms contract doctor`
+- `$oms-doctor` reads health (`op: status`) and checks wikilinks
+  (`op: link-check`). `oms setup status` and `oms doctor contract`
   are for diagnosis. They report the seal's posture and template drift without
   printing any value.
 - `$oms-doctor` runs explicit, supported index and control repairs. It never
   backfills notes. A broken or missing seal is fixed by the user running
   `oms setup`.
 
-Codex installs seven shared skills (`write`, `search`, `link`, `distill`,
-`setup`, `status`, `doctor`) backed by the five public MCP tools.
+Codex installs six shared skills (`write`, `search`, `interview`, `distill`,
+`setup`, `doctor`) backed by the four public MCP tools.

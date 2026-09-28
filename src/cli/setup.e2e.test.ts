@@ -11,7 +11,7 @@ import { serializeVaultSettings, SETTINGS_PATH } from "../kernel/vault/settings.
 /**
  * `oms setup` end to end, against the built CLI.
  *
- * Setup is the interactive seal (same as `oms contract setup`). The retired
+ * Setup is the interactive seal (same as `oms setup`). The retired
  * approval-token flags are refused with the command that owns each concern,
  * and a non-terminal invocation is refused. None of these paths write to the
  * vault or to the (temporary) home store. The interview itself is exercised
@@ -65,21 +65,21 @@ const RETIRED: readonly (readonly [string, RegExp])[] = [
   ["--yes", /no approval flags/],
   ["--approval-token", /no approval flags/],
   ["--approved-digest", /no approval flags/],
-  ["--install-claude", /oms host install/],
-  ["--models-default", /oms model install --default/],
-  ["--models-descriptor", /oms model install --descriptor/],
-  ["--models-no-default", /oms model waive --yes/],
+  ["--install-claude", /oms setup host install/],
+  ["--models-default", /oms setup model install --default/],
+  ["--models-descriptor", /oms setup model install --descriptor/],
+  ["--models-no-default", /oms setup model waive --yes/],
   ["--template-folder", /setup interview/],
 ];
 
 describe("oms setup end to end", () => {
-  it("prints usage naming the contract setup alias", async () => {
+  it("prints setup usage", async () => {
     const { home } = await fixture();
     const result = runCli(home, ["setup", "--help"]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: oms setup [--reask] [--vault <path>]");
     expect(result.stdout).toContain("oms setup --answers <file|->");
-    expect(result.stdout).toContain("oms contract setup");
+    expect(result.stdout).toContain("oms setup");
   });
 
   it("refuses every retired approval-token flag with its owning command and writes nothing", async () => {
@@ -95,10 +95,10 @@ describe("oms setup end to end", () => {
     expect(existsSync(path.join(home, ".oms", "vaults"))).toBe(false);
   });
 
-  it("refuses a non-terminal setup through both spellings without sealing or issuing settings", async () => {
+  it("refuses a non-terminal setup and interview without sealing or issuing settings", async () => {
     const { home, vault } = await fixture();
     const before = await listing(vault);
-    for (const args of [["setup", "--vault", vault], ["contract", "setup", "--vault", vault]]) {
+    for (const args of [["setup", "--vault", vault], ["interview", "--vault", vault]]) {
       const result = runCli(home, args);
       expect(result.status, args.join(" ")).toBe(1);
       expect(result.stderr, args.join(" ")).toContain("needs an interactive terminal");
@@ -263,7 +263,7 @@ describe("oms setup end to end", () => {
       expect(questions.status).toBe(0);
       // The default for the literal's allowed values would be the hidden value; it is never printed.
       expect(questions.stdout).not.toContain(HIDDEN);
-      const second = runCli(home, ["contract", "setup", "--answers", await answersFile(unchanged), ...await interpreting(WITH_NOTES), "--vault", vault]);
+      const second = runCli(home, ["setup", "--answers", await answersFile(unchanged), ...await interpreting(WITH_NOTES), "--vault", vault]);
       expect(second.status, second.stdout + second.stderr).toBe(0);
       expect(json(second)["status"]).toBe("sealed");
 

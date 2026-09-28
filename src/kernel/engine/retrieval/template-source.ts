@@ -41,7 +41,7 @@ type ReadState =
 function failureReason(error: unknown): string {
   const code = (error as { readonly code?: unknown } | null)?.code;
   const named = typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code) ? code : "CONTRACT_READ_FAILED";
-  return `${named}; run oms contract doctor`;
+  return `${named}; run oms doctor contract`;
 }
 
 function isAbsent(error: unknown): boolean {
@@ -53,7 +53,7 @@ async function readState(vault: string): Promise<ReadState> {
   try {
     const { view, row, settingsInvalid } = await resolveSealState(vault);
     if (view.state === "sealed") return { state: "sealed", contract: view.contract };
-    if (view.state === "unreadable") return { state: "unreadable", reason: "the sealed contract is unreadable; run oms contract doctor" };
+    if (view.state === "unreadable") return { state: "unreadable", reason: "the sealed contract is unreadable; run oms doctor contract" };
     return { state: "open", finding: settingsInvalid ? SETTINGS_INVALID_FINDING : ROW_FINDING[row] };
   } catch (error: unknown) {
     return isAbsent(error) ? { state: "open", finding: null } : { state: "unreadable", reason: failureReason(error) };
@@ -104,7 +104,7 @@ function globalAxes(contract: VaultContract): GlobalAxes {
   return axes;
 }
 
-/** Same wording and guidance as `oms contract doctor`, so status and doctor agree. A null finding means the vault path is missing. */
+/** Same wording and guidance as `oms doctor contract`, so status and doctor agree. A null finding means the vault path is missing. */
 function openContractMessage(finding: DoctorFinding | null): string {
   if (finding === null) return "vault not found; no contract applies";
   const guidance = finding.guidance === null ? "" : `; run ${finding.guidance}`;

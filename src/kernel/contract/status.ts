@@ -9,7 +9,7 @@ import { resolveSealState, type SealRow } from "./vault-id.js";
 import type { Guidance } from "./types.js";
 
 /**
- * Contract posture for `oms contract status` and `doctor`. Read-only except `doctorFix`,
+ * Contract posture for `oms setup status` and `doctor`. Read-only except `doctorFix`,
  * which only re-indexes. Output never carries a vault id, a store path or a rule value.
  */
 
@@ -34,16 +34,16 @@ export interface ContractStatus {
 export const ROW_FINDING: Readonly<Record<SealRow, DoctorFinding>> = {
   "never-sealed": { message: "contract: none", guidance: "oms setup" },
   "synced-second-machine": { message: "vaultId present, no local store", guidance: "oms setup" },
-  "store-without-index": { message: "index entry missing", guidance: "oms contract doctor --fix" },
-  "vault-moved": { message: "vault moved", guidance: "oms contract doctor --fix" },
+  "store-without-index": { message: "index entry missing", guidance: "oms doctor contract --fix" },
+  "vault-moved": { message: "vault moved", guidance: "oms doctor contract --fix" },
   "sealed": { message: "contract: sealed", guidance: null },
   "index-without-store": { message: "contract store missing", guidance: "oms setup" },
-  "vault-id-tampered": { message: "vault id mismatch", guidance: "oms contract doctor" },
-  "index-corrupt": { message: "index unreadable", guidance: "oms contract doctor --fix" },
+  "vault-id-tampered": { message: "vault id mismatch", guidance: "oms doctor contract" },
+  "index-corrupt": { message: "index unreadable", guidance: "oms doctor contract --fix" },
 };
 
-export const SHARED_FINDING: DoctorFinding = { message: "vault id shared", guidance: "oms contract doctor" };
-export const SETTINGS_INVALID_FINDING: DoctorFinding = { message: "vault settings unreadable", guidance: "oms contract doctor" };
+export const SHARED_FINDING: DoctorFinding = { message: "vault id shared", guidance: "oms doctor contract" };
+export const SETTINGS_INVALID_FINDING: DoctorFinding = { message: "vault settings unreadable", guidance: "oms doctor contract" };
 export const STORE_UNREADABLE_FINDING: DoctorFinding = { message: "contract store unreadable", guidance: "oms setup" };
 
 export async function contractStatus(vault: string, root: string = storeRoot()): Promise<ContractStatus> {

@@ -256,18 +256,18 @@ describe("installHermes transaction", () => {
     }
     expect((await readdir(skills)).sort()).toEqual([
       "SKILL_CAPABILITY_GUIDE.md",
-      "oms-distill", "oms-doctor", "oms-link", "oms-search", "oms-setup", "oms-status", "oms-write",
+      "oms-distill", "oms-doctor", "oms-interview", "oms-search", "oms-setup", "oms-write",
     ]);
     const writeSource = await readFile("assets/skills/write/SKILL.md", "utf8");
     expect(writeSource).toMatch(/^---\nname: write\n/);
     expect(await readFile(path.join(skills, "oms-write", "SKILL.md"), "utf8"))
       .toBe(namespaceSkillMarkdown("write", writeSource).markdown);
-    for (const skill of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+    for (const skill of ["distill", "doctor", "interview", "search", "setup", "write"]) {
       const staged = await readFile(path.join(skills, `oms-${skill}`, "SKILL.md"), "utf8");
       expect(staged).toMatch(new RegExp(`^---\\r?\\nname: oms-${skill}\\r?\\n`));
-      expect(staged).not.toMatch(/`(distill|doctor|link|search|setup|status|write)` skill/);
-      expect(staged).not.toMatch(/(^|[\s`(])\/(distill|doctor|link|search|setup|status|write)\b/m);
-      expect(staged).not.toMatch(/^# (distill|doctor|link|search|setup|status|write)\b/m);
+      expect(staged).not.toMatch(/`(distill|doctor|interview|search|setup|write)` skill/);
+      expect(staged).not.toMatch(/(^|[\s`(])\/(distill|doctor|interview|search|setup|write)\b/m);
+      expect(staged).not.toMatch(/^# (distill|doctor|interview|search|setup|write)\b/m);
     }
     const guide = await readFile(path.join(skills, "SKILL_CAPABILITY_GUIDE.md"), "utf8");
     expect(guide).toContain("| `oms-write` | MCP tool `write` on the `oms` server");
@@ -334,6 +334,28 @@ describe("installHermes transaction", () => {
     await writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"0.10.1"}\n');
     await expect(installHermes(options, host)).resolves.toMatchObject({ changed: true });
     expect((await readdir(skills)).filter(entry => !entry.startsWith("oms-"))).toEqual(["SKILL_CAPABILITY_GUIDE.md"]);
+  });
+
+  it("adopts an unrecorded 0.18 prefixed layout that still carries oms-link and oms-status", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-"));
+    temporaryDirectories.push(home);
+    const host = harnessSurfaceRegistry.hosts.find((candidate) => candidate.runtime === "hermes");
+    if (!host) throw new Error("Hermes surface missing");
+    const options = { action: "install" as const, runtime: "hermes" as const, vault: "/vault", homeDir: home, adapterRoot: path.resolve(".") };
+    const hermes = path.join(home, ".hermes");
+    const skills = path.join(hermes, "skills", "knowledge-management", "oms");
+    for (const skill of ["distill", "doctor", "link", "search", "setup", "status", "write"]) {
+      await mkdir(path.join(skills, `oms-${skill}`), { recursive: true });
+      await writeFile(path.join(skills, `oms-${skill}`, "SKILL.md"), `---\nname: oms-${skill}\n---\n`);
+    }
+    await writeFile(path.join(skills, "SKILL_CAPABILITY_GUIDE.md"), "guide\n");
+    await mkdir(path.join(hermes, "adapters", "oms"), { recursive: true });
+    await writeFile(path.join(hermes, "adapters", "oms", "hermes-manifest.json"), '{"version":"0.18.2"}\n');
+    await expect(installHermes(options, host)).resolves.toMatchObject({ changed: true });
+    expect((await readdir(skills)).sort()).toEqual([
+      "SKILL_CAPABILITY_GUIDE.md",
+      "oms-distill", "oms-doctor", "oms-interview", "oms-search", "oms-setup", "oms-write",
+    ]);
   });
 
   it.each([

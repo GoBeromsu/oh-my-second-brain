@@ -74,11 +74,11 @@ afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("oms package update isolated e2e", () => {
+describe("oms setup package update isolated e2e", () => {
   it("refuses a non-TTY update without --yes and leaves the cwd untouched", () => {
     const cwd = makeTempRoot("oms-update-non-tty-");
     const home = makeTempRoot("oms-update-home-");
-    const result = runCli(["package", "update"], cwd, {
+    const result = runCli(["setup", "package", "update"], cwd, {
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
     });
@@ -91,14 +91,14 @@ describe("oms package update isolated e2e", () => {
   it("keeps --dry-run non-mutating while separating package install from host sync", () => {
     const cwd = makeTempRoot("oms-update-dry-run-");
     const home = makeTempRoot("oms-update-home-");
-    const result = runCli(["package", "update", "--dry-run"], cwd, {
+    const result = runCli(["setup", "package", "update", "--dry-run"], cwd, {
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
     });
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("npm install -g oh-my-second-brain@latest");
-    expect(result.stdout).toContain("oms host sync");
+    expect(result.stdout).toContain("oms setup host sync");
     expect(result.stdout).not.toContain("reconcile");
     expect(readdirSync(cwd)).toEqual([]);
   });
@@ -112,7 +112,7 @@ describe("oms package update isolated e2e", () => {
     writeFileSync(owned, `${JSON.stringify({ version: 1, vaultId: "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c" })}\n`, "utf-8");
     const before = readFileSync(owned, "utf-8");
 
-    const result = runCli(["package", "check"], cwd, {
+    const result = runCli(["setup", "package", "check"], cwd, {
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
     });
@@ -136,7 +136,7 @@ describe("oms package update isolated e2e", () => {
       .digest("hex");
     const hostMarker = path.join(home, "host-sync-ran");
 
-    const result = runCli(["package", "update", "--yes"], cwd, {
+    const result = runCli(["setup", "package", "update", "--yes"], cwd, {
       HOME: home,
     });
 
@@ -162,7 +162,7 @@ describe("oms package update isolated e2e", () => {
     writeFileSync(owned, "must remain unchanged\n", "utf-8");
     const before = readFileSync(owned, "utf-8");
 
-    const result = runCli(["package", "update", "--yes"], cwd, {
+    const result = runCli(["setup", "package", "update", "--yes"], cwd, {
       PATH: `${bin}${path.delimiter}${process.env["PATH"] ?? ""}`,
     }, cli);
 

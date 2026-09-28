@@ -127,7 +127,7 @@ export async function loadFolderIntentProjection(
   let folders: Readonly<Record<string, FolderContract>> | null = null;
   try {
     const view = (await resolveSealState(vault)).view;
-    if (view.state === "unreadable") throw new Error("the sealed contract is unreadable; run oms contract doctor");
+    if (view.state === "unreadable") throw new Error("the sealed contract is unreadable; run oms doctor contract");
     if (view.state === "sealed") folders = view.contract.folders;
   } catch (error: unknown) {
     if (!isAbsent(error)) {

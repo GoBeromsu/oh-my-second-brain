@@ -35,6 +35,6 @@ A vault with no sealed contract accepts any note inside it. A contract that cann
 
 ## Host file tools
 
-In Claude Code, native writes into the vault go through the same judge in the PreToolUse hook. When the hook cannot reach the judge, it allows the write with one warning and records the failure for `oms contract doctor`. Codex and Hermes declare no write hook, so use MCP `write` for vault notes there.
+In Claude Code, native writes into the vault go through the same judge in the PreToolUse hook. When the hook cannot reach the judge, it allows the write with one warning and records the failure for `oms doctor contract`. Codex and Hermes declare no write hook, so use MCP `write` for vault notes there.
 
-The surface is five MCP tools and seven skills.
+The surface is four MCP tools (write, search, interview, doctor) and six skills.

@@ -118,54 +118,47 @@ function advertisedTools(serverSource: string): string[] {
 }
 
 const CLI_FAMILIES = [
-  "oms bridge",
-  "oms contract",
-  "oms graph",
+  "oms doctor",
   "oms hook",
-  "oms host",
-  "oms index",
-  "oms link",
-  "oms model",
-  "oms note",
-  "oms package",
+  "oms interview",
   "oms search",
   "oms serve",
   "oms setup",
-  "oms status",
+  "oms write",
 ] as const;
 
-const MCP_TOOLS = ["doctor", "link", "search", "status", "write"] as const;
+const MCP_TOOLS = ["doctor", "interview", "search", "write"] as const;
 
 const CLI_SURFACES = [
-  "oms bridge add|remove|status",
-  "oms contract setup|extract|status|doctor",
-  "oms graph build|status",
+  "oms doctor contract|audit|link-check",
+  "oms doctor status",
+  "oms doctor sync-embeddings|cleanup|build-graph",
   "oms hook pre",
-  "oms host install|remove|sync|status",
-  "oms index sync|embed|repair|status|clean",
-  "oms link suggest|check",
-  "oms model install|select|waive|status",
-  "oms note audit|get",
-  "oms package check|update",
-  "oms search query|context",
+  "oms interview",
+  "oms search --path|--context|--link",
+  "oms search <text>",
   "oms serve mcp|http",
   "oms setup",
-  "oms status",
+  "oms setup bridge add|remove|status",
+  "oms setup extract|status",
+  "oms setup host install|remove|sync|status",
+  "oms setup model install|select|waive|status",
+  "oms setup package check|update",
+  "oms write <path>",
 ] as const;
 
 const CURRENT_CLI_SURFACES = [
-  "oms search query",
-  "oms search context",
-  "oms index sync|embed|repair|status|clean",
-  "oms index status --view status|collections|contexts",
-  "oms note audit|get",
-  "oms host install|remove|sync|status",
-  "oms package check|update",
+  "oms search <text>",
+  "oms search --path|--context|--link",
+  "oms doctor status",
+  "oms doctor sync-embeddings|cleanup|build-graph",
+  "oms setup host install|remove|sync|status",
+  "oms setup package check|update",
   "oms serve mcp|http",
 ] as const;
 
 const RETIRED_TOP_LEVEL =
-  /\boms (?:doctor|audit|reconcile|linkify|embed|doc|mcp|lint|install|uninstall|update)\b/gu;
+  /\boms (?:audit|reconcile|linkify|embed|doc|mcp|lint|install|uninstall|update|contract|note|link|index|graph|bridge|host|model|package|status)\b/gu;
 
 describe("README.md and README.ko.md agree on product facts", () => {
   it("advertises the same MCP tools both languages, matching the server", async () => {
@@ -183,20 +176,18 @@ describe("README.md and README.ko.md agree on product facts", () => {
     expect(toolNames(section(ko, SECTIONS.mcp[KO], KO))).toEqual(advertised);
   });
 
-  it("enumerates seven shared skills, including tool-less distill and setup, distinct from the five tools", async () => {
+  it("enumerates six shared skills, including tool-less distill and setup, distinct from the four tools", async () => {
     const skills = [
       "distill",
       "doctor",
-      "link",
+      "interview",
       "search",
       "setup",
-      "status",
       "write",
     ];
     expect([...HARNESS_SHARED_SKILLS]).toEqual(skills);
-    expect(MCP_TOOLS).toHaveLength(5);
+    expect(MCP_TOOLS).toHaveLength(4);
     for (const tool of MCP_TOOLS) expect(skills).toContain(tool);
-    expect(MCP_TOOLS).not.toContain("interview");
     expect(MCP_TOOLS).not.toContain("distill");
     expect(MCP_TOOLS).not.toContain("setup");
     expect(MCP_TOOLS).not.toContain("template");
@@ -209,7 +200,7 @@ describe("README.md and README.ko.md agree on product facts", () => {
   it("lists the complete current CLI families and synchronized canonical surfaces", async () => {
     const [en, ko] = await Promise.all([read(EN), read(KO)]);
     expect([...HARNESS_CLI_COMMANDS].map((command) => `oms ${command.name}`).sort()).toEqual([...CLI_FAMILIES]);
-    expect(CLI_FAMILIES).toHaveLength(14);
+    expect(CLI_FAMILIES).toHaveLength(7);
     for (const [file, source] of [[EN, en], [KO, ko]] as const) {
       const cli = section(source, SECTIONS.cli[file], file);
       expect(cliCommands(cli)).toEqual(CLI_FAMILIES);

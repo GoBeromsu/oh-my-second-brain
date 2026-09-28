@@ -12,13 +12,13 @@ Oh My Second Brain is an Obsidian-first, user-owned convention layer: Obsidian i
 |---|---|---|
 | `src/kernel/` | All domain logic: conventions, ontology, engine, graph, link, capture, search, setup, update, install resolution, harness registry | `CHANGELOG-kernel.md` |
 | `src/cli/` | The `oms` command surface | `CHANGELOG-cli.md` |
-| `src/mcp/` | MCP server, the five public tools, schemas | `CHANGELOG-mcp.md` |
+| `src/mcp/` | MCP server, the four public tools, schemas | `CHANGELOG-mcp.md` |
 | `src/vendors/` | Per-host integration: `claude/`, `codex/`, `hermes/` | `CHANGELOG-vendors.md` |
 | `src/assets/` | The shared skill-source location contract | `CHANGELOG-assets.md` |
 
 Outside `src/`:
 
-- `assets/skills/` — the seven skills, authored **once**. There are no per-vendor copies.
+- `assets/skills/` — the six skills, authored **once**. There are no per-vendor copies.
 - `assets/{claude,codex,hermes}/` — host runtime assets (hooks, rules, guidance).
 - `.claude-plugin/`, `.codex-plugin/`, `.mcp.json`, `.mcp.codex.json` — vendor plugin manifests at the repository root.
 - `core/ontology/` — legacy default schemas; nothing reads them at runtime and the package excludes them. `core/AGENTS.md` — separately-owned vault SSOT.
@@ -32,13 +32,13 @@ Outside `src/`:
 
 `cli/` and `mcp/` import `kernel/`, with one deliberate exception class: the CLI is the composition root, so it selects host adapters, invokes host hooks, and starts the MCP or HTTP server. Those edges are enumerated with reasons in `CLI_ENTRYPOINT_EXCEPTIONS` in `test/architecture/import-boundary.test.ts`, and the assertion is exact-match — a new forbidden edge fails, and so does a stale exception. Every other path in `cli/` and `mcp/` must resolve into `kernel/`.
 
-**The public surface is three distinct sets, not one.** Seven skills (`write`, `search`, `link`, `distill`, `setup`, `status`, `doctor`). Five MCP tools (`write`, `search`, `link`, `status`, `doctor`) are a strict subset. CLI command families are an independent allowlist: `setup`, `contract`, `note`, `link`, `bridge`, `search`, `index`, `graph`, `host`, `package`, `model`, `serve`, `hook`, and `status`. Never collapse these into equality; `test/architecture/surface-parity.test.ts` guards it.
+**The public surface is three distinct sets, not one.** Six skills (`write`, `search`, `interview`, `distill`, `setup`, `doctor`). Four MCP tools (`write`, `search`, `interview`, `doctor`) are a strict subset. CLI command families are an independent allowlist: `search`, `interview`, `write`, `setup`, `doctor`, `serve`, and the hidden `hook`; `host`, `model`, `package`, and `bridge` are `setup` leaves. Never collapse these into equality; `test/architecture/surface-parity.test.ts` guards it.
 
-**Detail operations are demoted, never deleted.** The 18 former detail tools route through the five public tools by an `op` parameter (`oms_doctor` + `op: "sync-embeddings"`, `oms_search` + `op: "query"`). Adding a capability means adding an `op`, not a sixth tool.
+**Detail operations are demoted, never deleted.** The 18 former detail tools route through the four public tools by an `op` parameter (`oms_doctor` + `op: "sync-embeddings"`, `oms_search` + `op: "query"`). Adding a capability means adding an `op`, not a fifth tool.
 
-**`status` reads, `doctor` writes.** `status` is read-only health and statistics. The MCP `doctor` tool diagnoses and repairs; CLI diagnosis is placed under the object it checks (`contract doctor`, `note audit`). Every mutating repair op routes through the verified-target write kernel and returns a receipt with a server-verified postcondition; a `cwd`-inferred target rejects repair while still allowing diagnosis.
+**Diagnosis reads, repair writes.** `doctor status` (MCP `doctor` + `op: "status"`) is read-only health and statistics. The `doctor` family diagnoses (`doctor contract`, `doctor audit`, `doctor link-check`) and repairs (`sync-embeddings`, `cleanup`, `build-graph`). Every mutating repair op routes through the verified-target write kernel and returns a receipt with a server-verified postcondition; a `cwd`-inferred target rejects repair while still allowing diagnosis.
 
-`oms_search` is annotated read-only. Its search paths resolve an existing read-only engine store or use an in-memory ephemeral core without creating a store. `oms serve mcp` and `oms serve http` also do not create a vault store merely by starting.
+Annotations are per tool: `oms_search` is the only tool annotated read-only (`readTools == [search]`). Its search paths resolve an existing read-only engine store or use an in-memory ephemeral core without creating a store. `oms serve mcp` and `oms serve http` also do not create a vault store merely by starting.
 Index creation and embedding synchronization remain `oms_doctor` + `op: "sync-embeddings"` with the exclusive `sync`, `embed`, or `repair` mode.
 
 The complete CLI-to-MCP mapping is maintained in [docs/cli-map.md](./docs/cli-map.md).
@@ -72,7 +72,7 @@ Related trap: `tsconfig.json` excludes `**/*.test.ts`, so `npm run lint` does **
 
 ## Convention-as-Data
 
-The active convention is the vault contract the user seals with the interactive `oms setup`. It is stored outside the vault under `~/.oms/vaults/<vault-id>/`; the only OMS file inside the vault is `.oms/settings.json`. One judge (`src/kernel/contract/judge.ts`) decides MCP `write` and the Claude guard hook (`oms hook pre`): a violation is refused and disk stays untouched. `oms note audit` and `oms contract doctor` report without rewriting notes. Do not weaken or bypass the judge without an explicit product decision.
+The active convention is the vault contract the user seals with the interactive `oms setup`. It is stored outside the vault under `~/.oms/vaults/<vault-id>/`; the only OMS file inside the vault is `.oms/settings.json`. One judge (`src/kernel/contract/judge.ts`) decides MCP `write` and the Claude guard hook (`oms hook pre`): a violation is refused and disk stays untouched. `oms doctor audit` and `oms doctor contract` report without rewriting notes. Do not weaken or bypass the judge without an explicit product decision.
 
 `write` demands a verified target vault, resolved `explicit` > local `.oms/settings.json` > bridge `links.yaml` > `OMS_VAULT`. A `cwd`-inferred target is read-only and writes are rejected. See [docs/verified-target.md](./docs/verified-target.md).
 
@@ -98,7 +98,7 @@ Three gates run per pull request and fail closed. A gate that scans zero files i
 - No new dependencies without explicit sign-off in the PR description.
 - No `any` without a comment explaining why.
 - Every new branch in `src/` needs a vitest case.
-- The sealed contract lives outside the vault; `.obsidian/types.json` is a read-only observation. Older `.oms/*` files are ignored and reported by `oms contract doctor` as unexpected control files.
+- The sealed contract lives outside the vault; `.obsidian/types.json` is a read-only observation. Older `.oms/*` files are ignored and reported by `oms doctor contract` as unexpected control files.
 - Commit `.oms/settings.json` with the vault when it should travel with the notes. Never commit engine stores or runtime event journals; engine state is rebuildable and runtime history lives outside the vault.
 - See [CONTRIBUTING.md](./CONTRIBUTING.md) for the source-to-doc mapping table and per-change checklists.
 

@@ -29,7 +29,7 @@ export function errorText(message: string): CallToolResult {
 
 export class SemanticIndexUnavailableError extends Error {
   constructor() {
-    super("The semantic index has not been built yet. Run `oms index sync` to build it.");
+    super("The semantic index has not been built yet. Run `oms doctor sync-embeddings --mode sync` to build it.");
   }
 }
 

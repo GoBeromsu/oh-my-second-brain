@@ -77,8 +77,8 @@ function appendRepairCommands(
     if (result.messages.some((message) => message.startsWith("FAILED:"))) {
       result.messages.push(
         action === "install" && vault !== undefined
-          ? `Repair: oms host install --runtime ${result.runtime} --vault ${vault} --yes`
-          : `Repair: oms host remove --runtime ${result.runtime} --yes`,
+          ? `Repair: oms setup host install --runtime ${result.runtime} --vault ${vault} --yes`
+          : `Repair: oms setup host remove --runtime ${result.runtime} --yes`,
       );
     }
   }
@@ -130,7 +130,7 @@ function formatResultsWithPointer(
   return `${formatHostOperationResults(results, dryRun)}\n\npointer: ${pointer.operation} ${pointer.changed ? "changed" : "unchanged"}${pointer.dryRun ? " (dry-run)" : ""} ${pointer.path}`;
 }
 
-/** Runs `oms host install` or `oms host remove`. */
+/** Runs `oms setup host install` or `oms setup host remove`. */
 async function runHostInstallOrRemove(
   action: "install" | "uninstall",
   context: HostCommandContext,
@@ -155,7 +155,7 @@ async function runHostInstallOrRemove(
   return operation.failed ? 1 : 0;
 }
 
-/** `oms host sync` re-stamps every selected host from the current pointer. */
+/** `oms setup host sync` re-stamps every selected host from the current pointer. */
 async function runHostSync(context: HostCommandContext): Promise<number> {
   let pointer: HostVaultPointerReceipt;
   try {
@@ -171,7 +171,7 @@ async function runHostSync(context: HostCommandContext): Promise<number> {
     return 1;
   }
   if (pointer.pointer === undefined) {
-    console.error("[oms] No OMS host vault pointer exists; run `oms host install --vault <absolute-vault>` first.");
+    console.error("[oms] No OMS host vault pointer exists; run `oms setup host install --vault <absolute-vault>` first.");
     return 1;
   }
 
@@ -263,10 +263,10 @@ async function rawHostContext(options: RawHostOptions, mutation: boolean): Promi
 }
 
 export function hostUsage(): string {
-  return "Usage: oms host install|remove|sync|status [--runtime claude|codex|hermes|auto|all] [--vault <path>]";
+  return "Usage: oms setup host install|remove|sync|status [--runtime claude|codex|hermes|auto|all] [--vault <path>]";
 }
 
-/** Strict raw handler for the public `oms host` family. */
+/** Strict raw handler for the public `oms setup host` family. */
 export async function runHostCommand(argv: readonly string[]): Promise<void> {
   process.exitCode = 0;
   try {

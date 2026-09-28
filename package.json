@@ -25,6 +25,7 @@
     "docs/architecture.md",
     "docs/conventions.md",
     "docs/cli-map.md",
+    "docs/migration-0.19.md",
     "docs/verified-target.md",
     "scripts/install.sh",
     "scripts/uninstall.sh",

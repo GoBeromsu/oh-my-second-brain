@@ -24,10 +24,10 @@ import { absolute, pathExists, readJson } from "./repo-root.js";
  * Every case resolves a manifest's declared skill path relative to the manifest
  * root and checks the real filesystem. A manifest that merely contains the right
  * string is not evidence: the string has to point at a directory that exists and
- * holds the seven shared skills.
+ * holds the six shared skills.
  */
 
-const CANONICAL_SKILLS = ["distill", "doctor", "link", "search", "setup", "status", "write"] as const;
+const CANONICAL_SKILLS = ["distill", "doctor", "interview", "search", "setup", "write"] as const;
 
 interface ClaudeManifest {
   readonly name: string;
@@ -113,9 +113,9 @@ async function packedFiles(root: string): Promise<readonly string[]> {
 }
 
 describe("packaged vendor discovery", () => {
-  it("keeps exactly the seven canonical skills in one authored location", async () => {
+  it("keeps exactly the six canonical skills in one authored location", async () => {
     expect([...HARNESS_SHARED_SKILLS]).toEqual([...CANONICAL_SKILLS]);
-    expect(CANONICAL_SKILLS).toHaveLength(7);
+    expect(CANONICAL_SKILLS).toHaveLength(6);
     for (const skill of CANONICAL_SKILLS) {
       await expect(pathExists(`assets/skills/${skill}/SKILL.md`), skill).resolves.toBe(true);
     }
@@ -192,12 +192,11 @@ describe("packaged vendor discovery", () => {
         expect(frontmatter.mcp_args, `${skill}.mcp_args`).toBeDefined();
       }
     }
-    expect(mcpSkillCount).toBe(5);
+    expect(mcpSkillCount).toBe(4);
     expect([...HARNESS_MCP_TOOLS].map((tool) => tool.name).sort()).toEqual([
       "doctor",
-      "link",
+      "interview",
       "search",
-      "status",
       "write",
     ]);
   });

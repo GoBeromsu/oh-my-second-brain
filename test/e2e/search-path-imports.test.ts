@@ -95,8 +95,8 @@ describe("oms search --path import graph (built CLI, isolated home)", () => {
     for (const needle of FORBIDDEN) expect(run.loaded.filter(url => url.includes(needle))).toEqual([]);
   });
 
-  it("control: search query does load the engine, so the trace can see it", () => {
-    const run = tracedRun(["search", "query", "body", "--vault", vault], "query.trace");
+  it("control: a plain search does load the engine, so the trace can see it", () => {
+    const run = tracedRun(["search", "body", "--vault", vault], "query.trace");
     expect(run.status).toBe(0);
     expect(run.loaded.some(url => url.includes("/dist/cli/engine-session.js"))).toBe(true);
   });

@@ -133,9 +133,7 @@ async function run(parsed: Parsed): Promise<void> {
 }
 
 export function noteUsage(): string {
-  return `Usage: oms note <verb> [options]
-
-Leaves: audit | get
+  return `Usage: oms doctor audit [options] | oms search --path <path>
 
   audit [--folder <folder>] [--max-per-template <count>] [--json] [--vault <vault>]
   get <target...> | get --note-path <path> (--from-line <line>|--line-count <count>)`;

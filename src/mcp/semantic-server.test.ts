@@ -48,7 +48,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       expect((before.hits as unknown[]).length).toBe(0);
 
       await writeFile(path.join(vault, "references", "Freshness.md"), "---\ntemplate: reference\ntitle: Freshness\nsource-url: https://example.com/freshness\ntags: []\n---\n\nfreshness-marker\n");
-      await execFileAsync(process.execPath, [distCli, "index", "sync", "--vault", vault], {
+      await execFileAsync(process.execPath, [distCli, "doctor", "sync-embeddings", "--mode", "sync", "--vault", vault], {
         cwd: repoRoot,
         env: {
           ...process.env,
@@ -194,7 +194,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
         expect(syncText).toMatch(/OMS_EMBEDDING_PROVIDER/);
         expect(syncText).toMatch(/OMS_EMBEDDING_MODEL/);
         expect(syncText).toMatch(/\.oms\/settings\.json/);
-        expect(syncText).toMatch(/oms model install --default/);
+        expect(syncText).toMatch(/oms setup model install --default/);
 
         const plainQuery = textPayload(await client.callTool(queryCall));
         expect(plainQuery.available).toBe(true);
@@ -216,7 +216,7 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
         expect(vecText).toMatch(/OMS_EMBEDDING_PROVIDER/);
         expect(vecText).toMatch(/OMS_EMBEDDING_MODEL/);
         expect(vecText).toMatch(/\.oms\/settings\.json/);
-        expect(vecText).toMatch(/oms model install --default/);
+        expect(vecText).toMatch(/oms setup model install --default/);
         // The remedy must be the embed one. Naming the rerank or generate pair here
         // would send an agent to install a model that cannot serve a vector request.
         expect(vecText).not.toMatch(/OMS_RERANK_PROVIDER|OMS_GENERATE_PROVIDER/);

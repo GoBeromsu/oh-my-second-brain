@@ -1,13 +1,17 @@
 export function searchUsage(): string {
-  return `OMS search and index:
-  oms search query <text> [--lex <text>] [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank|--no-rerank] [-n <limit>]
+  return `OMS search:
+  oms search <text> [--mode query|search|vsearch] [--lex <text>] [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank|--no-rerank] [-n <limit>]
   oms search --path <vault-relative path> [--vault <path>]
-  oms search context [--template <id>] [--folder <path>] [--property <name> --value <value>] [--wikilink <target>] [--query <text>]
-  oms index sync [--collection <name>] [--index <path>]
-  oms index embed [--collection <name>] [--index <path>]
-  oms index status [--view status|collections|contexts] [--index <path>]
-  oms index repair --mode rebuild|drop [--dry-run]
-  oms index clean [--index <path>]
+  oms search --context [--template <id>] [--folder <path>] [--property <name> --value <value>] [--wikilink <target>] [--query <text>]
+  oms search --link <note> [--folder <name>] [--json] [--vault <path>]
+
+The index is built and inspected under doctor:
+  oms doctor sync-embeddings --mode sync|embed|repair [--collection <name>] [--index <path>] [--repair-mode rebuild|drop] [--dry-run]
+  oms doctor cleanup [--index <path>]
+  oms doctor status
+
+A leading --link suggests wikilinks for one note; --link after query text filters results.
+Use \`oms search -- <text>\` when the text itself starts with a flag or is the word query.
 
 --path reads one note exactly, without opening the index or loading a model. It matches the
 path NFC-insensitively, refuses .. and paths that escape the vault, prints the on-disk path and a
@@ -20,6 +24,6 @@ an integer from 1 through 32. Reranking is opt-in with --rerank; --no-rerank exp
 Vector search needs the embed capability: OMS_EMBEDDING_PROVIDER and OMS_EMBEDDING_MODEL.
 HyDE needs both the generate pair (OMS_GENERATE_PROVIDER and OMS_GENERATE_MODEL) and the embed
 pair. Reranking needs OMS_RERANK_PROVIDER and OMS_RERANK_MODEL. Configure installed models with
-oms model install --default or oms model install --descriptor <path>, then oms model select;
+oms setup model install --default or oms setup model install --descriptor <path>, then oms setup model select;
 incomplete or unavailable capability pairs fail loudly rather than falling back.`;
 }

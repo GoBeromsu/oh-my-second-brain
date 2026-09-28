@@ -56,7 +56,7 @@ describe("Codex managed OMS registration", () => {
   it("does not recognize retired or unrelated launch arguments", () => {
     const registration = (args: string) => [
       "# BEGIN OMS MANAGED MCP",
-      "# OMS MCP hookup for Codex CLI. Managed by `oms host install/remove`.",
+      "# OMS MCP hookup for Codex CLI. Managed by `oms setup host install/remove`.",
       "# Codex-native rules live in ~/.codex/rules/oms.md; skills live in ~/.codex/skills/oms-*.",
       "[mcp_servers.oms]",
       'command = "oms"',
@@ -70,6 +70,12 @@ describe("Codex managed OMS registration", () => {
 
     expect(isCodexOmsRegistration(registration('["mcp", "--vault", "/vault"]'))).toBe(false);
     expect(isCodexOmsRegistration(registration('["serve", "http", "--vault", "/vault"]'))).toBe(false);
+  });
+
+  it("points an ambiguous managed block at the setup host leaves", () => {
+    const unterminated = "# BEGIN OMS MANAGED MCP\n[mcp_servers.oms]\n";
+    expect(() => isCodexOmsRegistration(unterminated, "/home/.codex/config.toml"))
+      .toThrow(/oms setup host install` or `oms setup host remove/);
   });
 
   it("preserves an unowned custom OMS table during removal", async () => {
@@ -141,16 +147,15 @@ describe("Codex legacy oms-reviewer cleanup", () => {
     const skills = [
       "distill",
       "doctor",
-      "link",
+      "interview",
       "search",
       "setup",
-      "status",
       "write",
     ].map(skill => path.join(home, ".codex", "skills", `oms-${skill}`));
     await isolate(home, async () => {
       const result = await installCodex(operation(home, "install", { dryRun: true }), host);
       expect(result.changed).toBe(false);
-      expect(host.skillDirs).toEqual(["distill", "doctor", "link", "search", "setup", "status", "write"]);
+      expect(host.skillDirs).toEqual(["distill", "doctor", "interview", "search", "setup", "write"]);
       expect(result.paths.filter(candidate => candidate.includes(`${path.sep}skills${path.sep}`))).toEqual(skills);
       expect(result.paths.some(candidate => candidate.endsWith(`${path.sep}oms-setup`))).toBe(true);
       expect(result.paths).not.toContain(paths(home).role);

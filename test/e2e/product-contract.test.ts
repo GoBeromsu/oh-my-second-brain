@@ -153,8 +153,8 @@ describe("product contract (built CLI, isolated home)", () => {
     expect(readdirSync(path.join(vault, path.dirname(NFC_NOTE)))).toContain(path.basename(NFC_NOTE).normalize("NFC"));
   });
 
-  it("search query is lexical-only and finds the Korean compound-word note", () => {
-    const run = oms(["search", "query", "낙상판정기준", "--vault", vault]);
+  it("search is lexical-only and finds the Korean compound-word note", () => {
+    const run = oms(["search", "낙상판정기준", "--vault", vault]);
     expect(run.status).toBe(0);
     const out = json(run) as { available: boolean; hits: { path: string; evidence: { lexical: boolean; vector: boolean } }[]; receipt: { usedChannels: string[] } };
     expect(out.available).toBe(true);
@@ -164,65 +164,49 @@ describe("product contract (built CLI, isolated home)", () => {
     for (const hit of out.hits) expect(hit.evidence).toMatchObject({ lexical: true, vector: false });
   });
 
-  it("search query reaches the NFD-named note", () => {
-    const run = oms(["search", "query", "고위험군 중재", "--vault", vault]);
+  it("search reaches the NFD-named note", () => {
+    const run = oms(["search", "고위험군 중재", "--vault", vault]);
     expect(run.status).toBe(0);
     const out = json(run) as { hits: { path: string }[] };
     expect(out.hits.map(hit => hit.path.normalize("NFC"))).toContain(NFD_NOTE);
   });
 
-  it("search query with no match returns an empty, available result", () => {
-    const run = oms(["search", "query", "zzzqqq", "--vault", vault]);
+  it("search with no match returns an empty, available result", () => {
+    const run = oms(["search", "zzzqqq", "--vault", vault]);
     expect(run.status).toBe(0);
     expect(json(run)).toMatchObject({ available: true, hits: [], totalCount: 0 });
   });
 
-  it("note get reads the NFC note by path", async () => {
-    const run = oms(["note", "get", NFC_NOTE, "--vault", vault]);
+  it("search --path reads the NFC note by path", async () => {
+    const run = oms(["search", "--path", NFC_NOTE, "--vault", vault]);
     expect(run.status).toBe(0);
-    const out = json(run) as { available: boolean; documents: { path: string; title: string; content: string }[] };
+    const out = json(run) as { available: boolean; documents: { path: string; content: string }[] };
     expect(out.available).toBe(true);
     expect(out.documents).toHaveLength(1);
-    expect(out.documents[0]!.title).toBe("낙상판정기준");
+    expect(out.documents[0]!.path).toBe(NFC_NOTE);
     expect(out.documents[0]!.content).toBe(await readFile(path.join(vault, NFC_NOTE), "utf8"));
   });
 
-  it("note get reads the NFD-named note by its on-disk spelling on every platform", async () => {
-    const run = oms(["note", "get", NFD_NOTE_ON_DISK, "--vault", vault]);
+  it("search --path reads the NFD-named note by its on-disk spelling on every platform", async () => {
+    const run = oms(["search", "--path", NFD_NOTE_ON_DISK, "--vault", vault]);
     expect(run.status).toBe(0);
-    const out = json(run) as { available: boolean; documents: { path: string; title: string; content: string }[] };
+    const out = json(run) as { available: boolean; documents: { path: string; content: string }[] };
     expect(out.available).toBe(true);
     expect(out.documents).toHaveLength(1);
-    expect(out.documents[0]!.title).toBe("낙상 위험 평가");
+    expect(out.documents[0]!.path).toBe(NFD_NOTE_ON_DISK);
     expect(out.documents[0]!.content).toBe(await readFile(path.join(vault, NFD_NOTE_ON_DISK), "utf8"));
   });
 
-  it("note get accepts the NFD hit path that search returns", () => {
-    const search = json(oms(["search", "query", "고위험군 중재", "--vault", vault])) as { hits: { path: string }[] };
+  it("search --path accepts the NFD hit path that search returns", async () => {
+    const search = json(oms(["search", "고위험군 중재", "--vault", vault])) as { hits: { path: string }[] };
     const hit = search.hits.find(candidate => candidate.path.normalize("NFC") === NFD_NOTE);
     expect(hit).toBeDefined();
-    const run = oms(["note", "get", hit!.path, "--vault", vault]);
+    const run = oms(["search", "--path", hit!.path, "--vault", vault]);
     expect(run.status).toBe(0);
-    expect(json(run)).toMatchObject({ available: true, documents: [{ title: "낙상 위험 평가" }] });
+    const out = json(run) as { available: boolean; documents: { content: string }[] };
+    expect(out.available).toBe(true);
+    expect(out.documents[0]!.content).toBe(await readFile(path.join(vault, NFD_NOTE_ON_DISK), "utf8"));
   }, 30_000);
-
-  // Known gap: note get is byte-exact; no normalization-insensitive lookup.
-  // macOS APFS resolves the NFC spelling to the NFD-named file; Linux ext4 does not.
-  // The fix is `oms search --path` (readExact), asserted platform-independently below;
-  // note get itself is absorbed into that path in PR3, when this test collapses to one branch.
-  it("note get on the NFC spelling of the NFD-named note depends on the filesystem", () => {
-    const run = oms(["note", "get", NFD_NOTE.normalize("NFC"), "--vault", vault]);
-    if (process.platform === "darwin") {
-      expect(run.status).toBe(0);
-      const out = json(run) as { available: boolean; documents: { path: string; title: string }[] };
-      expect(out.available).toBe(true);
-      expect(out.documents[0]!.title).toBe("낙상 위험 평가");
-      expect(out.documents[0]!.path.normalize("NFC")).toBe(NFD_NOTE);
-    } else {
-      expect(run.status).toBe(1);
-      expect(json(run)).toMatchObject({ available: false, documents: [] });
-    }
-  });
 
   it("search --path reads the NFD-named note from its NFC spelling on every platform", async () => {
     const run = oms(["search", "--path", NFD_NOTE.normalize("NFC"), "--vault", vault]);
@@ -239,15 +223,9 @@ describe("product contract (built CLI, isolated home)", () => {
     });
   });
 
-  it("search --path on a missing note is unavailable with exit 1", () => {
-    const run = oms(["search", "--path", "Resources/없음.md", "--vault", vault]);
-    expect(run.status).toBe(1);
-    expect(json(run)).toMatchObject({ available: false, documents: [] });
-  });
-
-  it("note get on a missing path or a bare title is unavailable with exit 1", () => {
+  it("search --path on a missing path or a bare title is unavailable with exit 1", () => {
     for (const target of ["Resources/없음.md", "낙상판정기준"]) {
-      const run = oms(["note", "get", target, "--vault", vault]);
+      const run = oms(["search", "--path", target, "--vault", vault]);
       expect(run.status).toBe(1);
       expect(json(run)).toMatchObject({ available: false, documents: [] });
     }
@@ -265,7 +243,7 @@ describe("product contract (built CLI, isolated home)", () => {
     await client.connect(transport);
     try {
       const tools = await client.listTools();
-      expect(tools.tools.map(tool => tool.name).sort()).toEqual(["doctor", "link", "search", "status", "write"]);
+      expect(tools.tools.map(tool => tool.name).sort()).toEqual(["doctor", "interview", "search", "write"]);
 
       const allowedPath = "Projects/새 프로젝트.md";
       const allowedContent = "---\nstatus: 진행중\n---\n# 새 프로젝트\n\n[[낙상판정기준]] 참고.\n";
@@ -303,7 +281,7 @@ describe("product contract (built CLI, isolated home)", () => {
     const out = json(run) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
     expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput?.permissionDecisionReason).toBe(
-      '[oms] write denied: [{"field":"status","kind":"not-allowed"}] Run: oms status',
+      '[oms] write denied: [{"field":"status","kind":"not-allowed"}] Run: oms doctor status',
     );
     expect(existsSync(target)).toBe(false);
   });
@@ -320,8 +298,8 @@ describe("product contract (built CLI, isolated home)", () => {
     expect(json(run)).toEqual({ continue: true, suppressOutput: true });
   });
 
-  it("contract doctor reports the sealed contract for the fixture vault", () => {
-    const run = oms(["contract", "doctor", "--vault", vault]);
+  it("doctor contract reports the sealed contract for the fixture vault", () => {
+    const run = oms(["doctor", "contract", "--vault", vault]);
     expect(run.status).toBe(0);
     expect(json(run)).toMatchObject({
       contract: "sealed",

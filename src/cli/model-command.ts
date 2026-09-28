@@ -162,7 +162,7 @@ async function status(parsed: ParsedModelArgs): Promise<void> {
 }
 
 export function modelUsage(): string {
-  return "Usage: oms model install|select|waive|status [options]\n  install --default|--descriptor <path> --dry-run\n  select --default|--descriptor <path> [--vault <path>] --dry-run\n  Apply install/select with --yes --approved-digest <digest>.";
+  return "Usage: oms setup model install|select|waive|status [options]\n  install --default|--descriptor <path> --dry-run\n  select --default|--descriptor <path> [--vault <path>] --dry-run\n  Apply install/select with --yes --approved-digest <digest>.";
 }
 
 export async function runModelCommand(argv: readonly string[]): Promise<void> {

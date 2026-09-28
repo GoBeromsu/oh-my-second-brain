@@ -49,7 +49,7 @@ describe("package updater", () => {
     expect(result.success).toBe(false);
     expect(result.mutated).toBe(false);
     expect(calls).toEqual([]);
-    expect(formatUpdateResult(result)).toContain("oms package update --yes");
+    expect(formatUpdateResult(result)).toContain("oms setup package update --yes");
   });
 
   it("keeps check mode read-only", async () => {
@@ -79,7 +79,7 @@ describe("package updater", () => {
       "npm prefix -g",
       "npm install -g oh-my-second-brain@latest",
     ]);
-    expect(result.message).toContain("newly installed `oms host sync`");
+    expect(result.message).toContain("newly installed `oms setup host sync`");
   });
 
   it("does nothing when the installed package is already latest", async () => {
@@ -138,7 +138,7 @@ describe("package updater", () => {
     expect(result.mutated).toBe(false);
     expect(calls).toEqual(["npm prefix -g"]);
     expect(result.message).toContain("npm --prefix /opt/oms install -g oh-my-second-brain@latest");
-    expect(result.message).toContain("newly installed `oms host sync`");
+    expect(result.message).toContain("newly installed `oms setup host sync`");
   });
 
   it("rejects an unresolvable running binary without attempting installation", async () => {
@@ -152,7 +152,7 @@ describe("package updater", () => {
     expect(result.mutated).toBe(false);
     expect(calls).toEqual([]);
     expect(result.message).toContain("npm install -g oh-my-second-brain@latest");
-    expect(result.message).toContain("oms host sync");
+    expect(result.message).toContain("oms setup host sync");
   });
 
   it("does not invoke a host command when installation fails", async () => {
@@ -181,7 +181,7 @@ describe("package updater", () => {
     expect(result.packageMutated).toBe(false);
     expect(calls).toEqual(["npm prefix -g"]);
     expect(result.message).toContain("npm --prefix /opt/oms install -g oh-my-second-brain@latest");
-    expect(result.message).toContain("newly installed `oms host sync`");
+    expect(result.message).toContain("newly installed `oms setup host sync`");
   });
 
   it("recognizes a Windows global package layout without invoking its host binary", async () => {
@@ -212,7 +212,7 @@ describe("package updater", () => {
     const notice = await checkUpdateNotice({ currentVersion: "0.1.7", latestVersion: "0.1.8" });
     const formatted = formatUpdateNotice(notice);
 
-    expect(formatted).toContain("oms package update --yes");
-    expect(formatted).toContain("newly installed `oms host sync`");
+    expect(formatted).toContain("oms setup package update --yes");
+    expect(formatted).toContain("newly installed `oms setup host sync`");
   });
 });

@@ -33,12 +33,17 @@ about or guess the contract's location or values.
 - `/search` is read-only across lexical, vector, HyDE, and axis retrieval. It
   also returns notes that would fail the contract. It never writes or repairs.
   Unavailable backends fail loudly and are never replaced with a fake match.
-- `/status` reads health. `oms contract status` and `oms contract doctor` are
-  for diagnosis. They report the seal's posture and template drift without
-  printing any value.
+- `/doctor status` reads health, and `/doctor link-check` checks a note's
+  wikilinks; both are read-only. `oms doctor status`, `oms setup status`, and
+  `oms doctor contract` are for diagnosis. They report the seal's posture and
+  template drift without printing any value.
+- `/search link` suggests wikilinks for a note; you apply only the ones the
+  user accepts.
+- `/interview` shows the questions the vault interview would ask and the seal
+  state. It seals nothing.
 - `/doctor` runs explicit, supported index and control repairs. It never
   backfills notes. A broken or missing seal is fixed by the user running
   `oms setup`.
 
-Seven skills share five MCP tools: `write`, `search`, `link`, `distill`,
-`setup`, `status`, and `doctor`. `distill` and `setup` have no tool.
+Six skills share four MCP tools: `write`, `search`, `interview`, `distill`,
+`setup`, and `doctor`. `distill` and `setup` have no tool.

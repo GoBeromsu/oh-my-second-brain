@@ -624,7 +624,7 @@ export async function storeHousekeeping(vaultId: string, root: string = storeRoo
 }
 
 function indexCorrupt(): Error {
-  return new Error("CONTRACT_INDEX_CORRUPT: the vault index is unreadable; run oms contract doctor --fix to rebuild it");
+  return new Error("CONTRACT_INDEX_CORRUPT: the vault index is unreadable; run oms doctor contract --fix to rebuild it");
 }
 
 /** The index is shared by every vault, so its read-modify-write runs under one root-wide lock. */

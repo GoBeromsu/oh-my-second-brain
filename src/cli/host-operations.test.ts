@@ -92,7 +92,7 @@ describe("host installer/uninstaller", () => {
   it("fails closed for ambiguous Codex managed markers while preserving config bytes", async () => {
     const managedBlock = [
       "# BEGIN OMS MANAGED MCP",
-      "# OMS MCP hookup for Codex CLI. Managed by `oms host install/remove`.",
+      "# OMS MCP hookup for Codex CLI. Managed by `oms setup host install/remove`.",
       "[mcp_servers.oms]",
       'command = "oms"',
       "# END OMS MANAGED MCP",
@@ -168,7 +168,7 @@ describe("host installer/uninstaller", () => {
     const suffix = '[mcp_servers.oms.unmanaged]\nvalue = "preserve me"\n\n[other]\nvalue = "preserve me too"\n';
     const managedBlock = [
       "# BEGIN OMS MANAGED MCP",
-      "# OMS MCP hookup for Codex CLI. Managed by `oms host install/remove`.",
+      "# OMS MCP hookup for Codex CLI. Managed by `oms setup host install/remove`.",
       "# Codex-native rules live in ~/.codex/rules/oms.md; skills live in ~/.codex/skills/oms-*.",
       "[mcp_servers.oms]",
       'command = "oms"',

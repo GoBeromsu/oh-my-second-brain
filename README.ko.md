@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/oh-my-second-brain"><img src="https://img.shields.io/npm/v/oh-my-second-brain?style=flat-square&amp;color=8b9daa&amp;label=npm" alt="npm 버전" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%E2%89%A520-80b89b?style=flat-square" alt="Node.js 20 이상" /></a>
-  <a href="#mcp-도구와-에이전트-연결"><img src="https://img.shields.io/badge/MCP-5_tools-97a8b1?style=flat-square" alt="MCP 도구 5개" /></a>
+  <a href="#mcp-도구와-에이전트-연결"><img src="https://img.shields.io/badge/MCP-4_tools-97a8b1?style=flat-square" alt="MCP 도구 4개" /></a>
   <a href="https://github.com/GoBeromsu/oh-my-second-brain/blob/main/package.json"><img src="https://img.shields.io/badge/license-MIT-d7c7a8?style=flat-square" alt="패키지 라이선스 MIT" /></a>
 </p>
 
@@ -56,7 +56,7 @@ setup으로 볼트 규약을 봉인한다. 지원되는 쓰기 경로는 저장 
 <tr>
 <td width="50%" valign="top">
 <h3>호스트를 넘어 연결하기</h3>
-Claude Code, Codex, Hermes의 네이티브 통합을 사용한다. MCP 도구 5개와 공통 워크플로 스킬 7개를 제공한다.
+Claude Code, Codex, Hermes의 네이티브 통합을 사용한다. MCP 도구 4개와 공통 워크플로 스킬 6개를 제공한다.
 </td>
 <td width="50%" valign="top">
 <h3>추측 대신 상태 확인</h3>
@@ -82,7 +82,7 @@ oms --help
 
 ```bash
 oms setup --vault /path/to/vault
-oms contract status --vault /path/to/vault
+oms setup status --vault /path/to/vault
 ```
 
 ### 3. 에이전트 연결
@@ -90,7 +90,7 @@ oms contract status --vault /path/to/vault
 사용하는 호스트의 통합 기능을 설치한다.
 
 ```bash
-oms host install --runtime claude --vault /path/to/vault --yes
+oms setup host install --runtime claude --vault /path/to/vault --yes
 ```
 
 `claude` 대신 `codex` 또는 `hermes`를 쓸 수 있다. 세 호스트를 모두 설치하려면 `all`을 쓴다. CLI만 사용한다면 호스트 설치는 선택 사항이다. Hermes 프로필, 모델 설정, 제거 방법은 [설치 가이드](./docs/install.md)를 참고한다.
@@ -99,10 +99,10 @@ oms host install --runtime claude --vault /path/to/vault --yes
 
 ```bash
 # 파생 검색 색인을 명시적으로 만든다.
-oms index sync --vault /path/to/vault
+oms doctor sync-embeddings --mode sync --vault /path/to/vault
 
 # vector 모델 없이 lexical 검색부터 시작한다.
-oms search query "프로젝트 결정" --vault /path/to/vault
+oms search "프로젝트 결정" --vault /path/to/vault
 ```
 
 **연결한 에이전트에게 이렇게 요청할 수 있다.**
@@ -133,9 +133,9 @@ oms search query "프로젝트 결정" --vault /path/to/vault
 <summary><strong>볼트 계약 자세히 보기</strong></summary>
 
 - **의미는 사용자 소유다.** 폴더, 속성 pool, 템플릿을 함께 인터뷰한다. 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다.
-- **볼트 안의 제어 파일은 하나다.** `.oms/settings.json`에 `version`, `vaultId`, `templateFolder`, `embedding`, `agentRepair`를 둔다. 다른 `.oms/` 항목은 무시하고 `oms contract doctor`가 예상하지 않은 제어 파일로 보고한다. `.obsidian/types.json`은 읽기 전용 관측값이며 봉인을 덮어쓰지 않는다.
+- **볼트 안의 제어 파일은 하나다.** `.oms/settings.json`에 `version`, `vaultId`, `templateFolder`, `embedding`, `agentRepair`를 둔다. 다른 `.oms/` 항목은 무시하고 `oms doctor contract`가 예상하지 않은 제어 파일로 보고한다. `.obsidian/types.json`은 읽기 전용 관측값이며 봉인을 덮어쓰지 않는다.
 - **템플릿은 원본으로 남는다.** OMS는 템플릿이 선언하는 것을 기록한다. 다시 쓰거나 복사하거나 노트에 적용하지 않으며, Templater·JavaScript·전용 token 언어를 해석하거나 실행하지 않는다.
-- **변경은 드러난다.** `oms contract status`는 템플릿 상태를 `active`, `drift`, `missing`으로 보고한다. 변경된 템플릿을 조용히 재봉인하지 않는다.
+- **변경은 드러난다.** `oms setup status`는 템플릿 상태를 `active`, `drift`, `missing`으로 보고한다. 변경된 템플릿을 조용히 재봉인하지 않는다.
 - **판정자는 하나다.** 거부 시 `{field, kind}` 위반과 안내 명령 하나만 반환한다. 규칙 값, 저장소 경로, 계약 본문은 반환하지 않는다.
 - **봉인 증거가 맞지 않으면 쓰기를 거부한다.** 이 기기의 증거가 볼트와 어긋나면 `contract-unreadable`로 거부하고 소유자가 `oms setup`을 다시 실행해야 한다. 봉인이 아예 없는 기기에서는 판정하지 않는 것과 구별한다.
 
@@ -146,15 +146,15 @@ oms search query "프로젝트 결정" --vault /path/to/vault
 <details>
 <summary><strong>설정, 템플릿 해석, 복구</strong></summary>
 
-`oms setup`은 `oms contract setup`의 별칭이다. 대화형 인터뷰는 터미널이 필요하고 `OMS_NON_INTERACTIVE=1`이면 실행을 거부한다.
+터미널에서 `oms setup`을 실행하면 대화형 인터뷰를 거쳐 계약을 봉인한다. `oms interview`는 같은 터미널 인터뷰를 독립 명령으로 제공하며, 터미널이 필요하고 `OMS_NON_INTERACTIVE=1`이면 실행을 거부한다.
 
-`setup` 스킬은 `oms setup --questions`로 질문을 받아 소유자에게 하나씩 묻고, `oms setup --answers <file|->`로 답을 제출한다. 이 경로는 첫 봉인이나 더 엄격한 계약만 봉인하며, 계약을 느슨하게 하는 재봉인은 소유자의 터미널에서 한다.
+`setup` 스킬은 `oms setup --questions`로 질문을 받아 소유자에게 하나씩 묻고, `oms setup --answers <file|->`로 답을 제출한다. 이 경로는 첫 봉인이나 더 엄격한 계약만 봉인하며, 계약을 느슨하게 하는 재봉인은 소유자의 터미널에서 한다. MCP `interview` 도구는 질문과 봉인 상태만 보여 주며 아무것도 봉인하지 않는다.
 
-`oms contract extract --template <path>`는 템플릿 원문과 계산한 hash를 반환한다. 에이전트는 각 템플릿을 읽어 `oms setup --interpretations <file>`로 해석을 제출한다. 소유자가 그 해석을 확인한 다음 인터뷰에 사용한다.
+`oms setup extract --template <path>`는 템플릿 원문과 계산한 hash를 반환한다. 에이전트는 각 템플릿을 읽어 `oms setup --interpretations <file>`로 해석을 제출한다. 소유자가 그 해석을 확인한 다음 인터뷰에 사용한다.
 
-`oms contract doctor`는 봉인, 오래된 lock, 고아 generation, 예상하지 않은 제어 파일, hook 전송 실패를 진단한다. `--fix`는 이동했거나 색인되지 않은 볼트를 다시 색인할 뿐이다. 다른 봉인 문제는 `oms setup`으로 복구한다.
+`oms doctor contract`는 봉인, 오래된 lock, 고아 generation, 예상하지 않은 제어 파일, hook 전송 실패를 진단한다. `--fix`는 이동했거나 색인되지 않은 볼트를 다시 색인할 뿐이다. 다른 봉인 문제는 `oms setup`으로 복구한다.
 
-모델 수명주기는 별도다: `oms model install|select|waive|status`.
+모델 수명주기는 별도다: `oms setup model install|select|waive|status`.
 
 </details>
 
@@ -162,19 +162,18 @@ oms search query "프로젝트 결정" --vault /path/to/vault
 
 **하나의 도메인 커널, 호스트에 맞는 연결 방식.**
 
-`write` · `search` · `link` · `status` · `doctor`
+`write` · `search` · `interview` · `doctor`
 
 | MCP 도구 | 역할 |
 | :--- | :--- |
 | `write` | 노트 전체를 봉인된 계약으로 판정하고 허용된 쓰기를 저장한다. |
-| `search` | 볼트를 바꾸지 않고 노트나 구조화된 맥락을 찾는다. |
-| `link` | 편집을 적용하지 않고 wikilink를 제안하거나 검사한다. |
-| `status` | 변경 없이 상태와 통계를 확인한다. |
-| `doctor` | 계약 진단, 노트 감사, 명시적인 색인 유지보수를 수행한다. |
+| `search` | 볼트를 바꾸지 않고 노트, 구조화된 맥락, wikilink 제안을 찾는다. |
+| `interview` | 볼트 인터뷰 질문과 봉인 상태를 보여 준다. 아무것도 봉인하지 않는다. |
+| `doctor` | 읽기 전용 `status`, 계약 진단, 노트 감사, 링크 검사, 명시적인 색인 유지보수를 수행한다. |
 
-7개 스킬은 `distill`, `doctor`, `link`, `search`, `setup`, `status`, `write`다.
+6개 스킬은 `distill`, `doctor`, `interview`, `search`, `setup`, `write`다.
 
-`distill`과 `setup`은 대응 MCP 도구가 없는 워크플로다. 봉인에는 MCP 작업이 없고, 세부 기능은 다섯 도구 아래의 `op` 값으로 제공한다.
+`distill`과 `setup`은 대응 MCP 도구가 없는 워크플로다. 봉인에는 MCP 작업이 없고, 세부 기능은 네 도구 아래의 `op` 값으로 제공한다. 도구 annotation은 도구별로 정한다. `write`와 `doctor` 복구는 변경을 일으키고 `interview`는 보수적으로 두므로 읽기 전용으로 표시한 도구는 `search`뿐이다.
 
 | 호스트 | 통합 방식 | 쓰기 검사 |
 | :--- | :--- | :--- |
@@ -185,16 +184,16 @@ oms search query "프로젝트 결정" --vault /path/to/vault
 > [!NOTE]
 > Claude hook은 판정된 계약 위반을 거부하지만, hook 자체를 실행할 수 없으면 경고와 함께 쓰기를 허용한다. Codex와 Hermes의 기본 파일 쓰기는 OMS 판정자를 거치지 않는다. 파일시스템 전체를 통제하는 sandbox가 아니다.
 
-Gajae-Code에서는 `gjc plugin install oms@oms`로 marketplace plugin을 설치한다. 패키지 루트 `skills/` 경로에서 스킬 7개를 발견한다. 자세한 내용은 [호스트 asset](./docs/adapters.md)을 참고한다.
+Gajae-Code에서는 `gjc plugin install oms@oms`로 marketplace plugin을 설치한다. 패키지 루트 `skills/` 경로에서 스킬 6개를 발견한다. 자세한 내용은 [호스트 asset](./docs/adapters.md)을 참고한다.
 
 <details>
 <summary><strong>호스트 유지보수와 볼트 선택</strong></summary>
 
-호스트 설치는 `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`에 서명된 유지보수 포인터를 기록하고, 관리하는 호스트 항목에 `oms serve mcp --vault /path/to/vault`를 설정한다. `oms host install|remove|sync|status`만 이 포인터로 통합을 유지보수한다.
+호스트 설치는 `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json`에 서명된 유지보수 포인터를 기록하고, 관리하는 호스트 항목에 `oms serve mcp --vault /path/to/vault`를 설정한다. `oms setup host install|remove|sync|status`만 이 포인터로 통합을 유지보수한다.
 
 런타임은 이 포인터를 읽지 않는다. 우선순위는 **명시적 target → 로컬 볼트 제어 파일 → bridge → `OMS_VAULT` → 현재 디렉터리**다. 현재 디렉터리 fallback은 읽기 전용으로, 봉인·노트 쓰기·파생 상태 복구에는 쓸 수 없다.
 
-`oms package update`는 패키지만 갱신한다. 설치된 호스트 asset은 `oms host sync`로 따로 동기화한다. [검증된 target](./docs/verified-target.md)을 참고한다.
+`oms setup package update`는 패키지만 갱신한다. 설치된 호스트 asset은 `oms setup host sync`로 따로 동기화한다. [검증된 target](./docs/verified-target.md)을 참고한다.
 
 </details>
 
@@ -204,7 +203,7 @@ Gajae-Code에서는 `gjc plugin install oms@oms`로 marketplace plugin을 설치
 
 | 기능 | 선택 방법 | 필요 조건 |
 | :--- | :--- | :--- |
-| Lexical 검색 | `oms search query <text>` | vector 모델 불필요. |
+| Lexical 검색 | `oms search <text>` | vector 모델 불필요. |
 | Vector 검색 | `--vec <text>` | 완전한 `OMS_EMBEDDING_PROVIDER` / `OMS_EMBEDDING_MODEL` 쌍. |
 | HyDE | `--hyde <text>` | embedding 쌍과 `OMS_GENERATE_PROVIDER` / `OMS_GENERATE_MODEL`. |
 | 질의 확장 | `--expand` | 명시적인 G004 확장. `--max-queries`는 1–32. |
@@ -212,37 +211,38 @@ Gajae-Code에서는 `gjc plugin install oms@oms`로 marketplace plugin을 설치
 
 모델 선택이 없거나 불완전하거나 설치되지 않았다면 다른 기능으로 조용히 대체하지 않고 오류를 알린다. 사용 가능한 검색 선택지이며, 다른 엔진과의 동등성이나 우월성을 주장하지 않는다.
 
-구조화된 맥락은 `oms search context`로 조회한다. 색인 작업은 명시적으로 실행하며 `oms index sync`, `oms index embed`, `oms index repair`는 서로 다른 모드다. 전체 작업은 [CLI 맵](./docs/cli-map.md)을 참고한다.
+구조화된 맥락은 `oms search --context`, 노트 하나를 정확히 읽을 때는 `oms search --path <note>`를 쓴다. 색인 작업은 명시적으로 실행하며 `oms doctor sync-embeddings --mode sync|embed|repair`는 서로 다른 세 모드 중 하나를 고른다. 전체 작업은 [CLI 맵](./docs/cli-map.md)을 참고한다.
 
 ## CLI 레퍼런스
 
-`oms`는 `oh-my-second-brain`의 짧은 별칭이며 CLI family는 14개다. 노트 질의는 `oms search query`, 구조화 맥락 조회는 `oms search context`를 쓴다.
+`oms`는 `oh-my-second-brain`의 짧은 별칭이며 CLI family는 7개다. 0.19에서 0.18 family를 교체했다. [0.19 마이그레이션 가이드](./docs/migration-0.19.md)를 참고한다.
 
 ```text
-oms setup                                 볼트를 인터뷰하고 계약 봉인
-oms contract setup|extract|status|doctor   계약 봉인·조회·진단
-oms search query|context                  노트 검색 또는 구조화 맥락 조회
-oms note audit|get                        기존 노트 감사 또는 읽기
-oms link suggest|check                    wikilink 제안 또는 검사
-oms index sync|embed|repair|status|clean    파생 검색 상태 관리
-oms graph build|status                    노트 그래프 생성 또는 조회
-oms bridge add|remove|status               저장소-볼트 bridge 관리
-oms host install|remove|sync|status        호스트 asset과 MCP 등록 관리
-oms model install|select|waive|status      로컬 모델 선택 관리
-oms package check|update                  OMS 패키지 확인 또는 갱신
-oms serve mcp|http                        MCP 또는 로컬 HTTP 서버 시작
-oms hook pre                              Claude 쓰기를 계약으로 판정
-oms status                                읽기 전용 통합 상태 표시
+oms search <text>                               노트 검색. 기본은 lexical
+oms search --path|--context|--link              노트 하나 읽기, 맥락 조회, 링크 제안
+oms interview                                   터미널에서 볼트 소유자를 인터뷰하고 봉인
+oms write <path>                                계약이 허용하면 stdin의 노트를 저장
+oms setup                                       계약 봉인 (에이전트는 --questions/--answers)
+oms setup extract|status                        템플릿 원문 또는 계약 상태 표시
+oms setup host install|remove|sync|status       호스트 asset과 MCP 등록 관리
+oms setup model install|select|waive|status     로컬 모델 선택 관리
+oms setup package check|update                  OMS 패키지 확인 또는 갱신
+oms setup bridge add|remove|status              저장소-볼트 bridge 관리
+oms doctor status                               읽기 전용 볼트 상태 표시
+oms doctor contract|audit|link-check            계약, 노트, wikilink 진단
+oms doctor sync-embeddings|cleanup|build-graph  파생 색인과 그래프 유지보수
+oms serve mcp|http                              MCP 또는 로컬 HTTP 서버 시작
+oms hook pre                                    Claude 쓰기를 계약으로 판정
 ```
 
 <details>
 <summary><strong>명령 동작과 폐기된 작업</strong></summary>
 
-인식되는 모든 명령은 `--help`와 `-h`를 받으며 exit 0, 부작용 없음으로 끝난다. 알 수 없는 명령과 `--help`를 함께 쓰면 exit 1이다.
+인식되는 모든 명령은 `--help`와 `-h`를 받으며 exit 0, 부작용 없음으로 끝난다. 알 수 없는 명령과 `--help`를 함께 쓰면 exit 1이다. 0.19에서 제거된 family는 exit 1로 끝나며 대체 명령을 알려 준다.
 
-`oms note audit`는 노트를 다시 쓰지 않고 `{path, field, kind}` 항목을 보고한다. 노트는 MCP `write {path, content, template?}`로 전체 내용을 쓴다. 선택 사항인 `template`은 따르는 봉인된 템플릿 이름이다. 완료 호출이나 리뷰어 대화는 없다.
+`oms doctor audit`는 노트를 다시 쓰지 않고 `{path, field, kind}` 항목을 보고한다. 노트는 `oms write <path> < note.md` 또는 MCP `write {path, content, template?}`로 전체 내용을 쓴다. 둘 다 같은 검증된 target 쓰기 경로를 거친다. 선택 사항인 `template`은 따르는 봉인된 템플릿 이름이다. 완료 호출이나 리뷰어 대화는 없다.
 
-`oms index status --view status|collections|contexts`는 읽기 전용 view 세 개를 제공한다. `oms index clean`은 제거 가능한 파생 상태를 지운다.
+`oms doctor cleanup`은 제거 가능한 파생 상태를 지운다. `oms doctor build-graph`는 노트 그래프를 다시 만든다.
 
 노트 `create`, `append`, `update`, `backfill`은 폐기된 작업이다. `link apply`, 노트 렌더러, 폐기된 작업을 위한 호환 경로는 없다.
 

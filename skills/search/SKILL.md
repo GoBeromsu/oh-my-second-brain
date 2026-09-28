@@ -15,7 +15,7 @@ Retrieve vault knowledge without changing the vault. Search does not depend on c
 ## Usage
 
 ```text
-/search <query|context|templates|index-status|get-document>
+/search <query|context|templates|index-status|get-document|link>
 ```
 
 - `query` accepts three shapes. `mode: "query" | "search" | "vsearch"` with a `query` string; a bare `query` string with no `mode`; or typed retrieval with `searches`, `vec`, or `hyde` and no `mode` or `query`. `mode` never combines with `searches`. Lexical retrieval reads no contract and stays available when no embedding provider is configured.
@@ -23,6 +23,9 @@ Retrieve vault knowledge without changing the vault. Search does not depend on c
 - `templates` lists the sealed templates and their declared axes, or shows one template.
 - `index-status` requires `view: "status" | "collections" | "contexts"`.
 - `get-document` requires exactly one of `target`, `targets`, or `notePath` with its window.
+- `link` suggests `[[wikilinks]]` for one note (`notePath`, optional `folder`). Suggestions are anchored to a term note's basename or alias, cover the first occurrence of each target only, and report an ambiguous span instead of resolving it. `oms search --link <path>` is the CLI counterpart.
+
+A link suggestion is not consent, and search has no apply operation. Show the candidates and insert only the links the user accepts, with the host's file tools at the reported span; if the note changed since, suggest again. Save the note through MCP `write` so the contract judges it, then check it with `doctor { op: "link-check", notePath }`.
 
 Template source files are never returned as notes. Expansion is explicit only for `search { op: "query" }` through its closed strategy object and never changes a plain lexical query. Folder meanings from the sealed folder contract come back as `folderIntents`.
 
@@ -37,4 +40,4 @@ A typed axis fails loudly on an undeclared field. Remove the typed axis rather t
 
 Search never creates `.oms` and never mutates templates, notes, the contract, or indexes. A search call does not grant edit rights.
 
-The surface is five MCP tools and seven skills.
+The surface is four MCP tools (write, search, interview, doctor) and six skills.

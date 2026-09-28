@@ -7,8 +7,8 @@ import { buildTruthTableRow, type TruthTableFixture } from "../../test/fixtures/
 import type { JudgeInput, VaultContract, Violation } from "../kernel/contract/types.js";
 
 /**
- * AC11: MCP `write` and the Claude hook translator hand the same `JudgeInput` to the
- * one judge for the same note, and the final verdicts match.
+ * AC11: MCP `write`, CLI `oms write` and the Claude hook translator hand the same
+ * `JudgeInput` to the one judge for the same note, and the final verdicts match.
  */
 
 const judgeSpy = vi.hoisted(() => ({ calls: [] as unknown[][] }));
@@ -26,6 +26,7 @@ vi.mock("../kernel/contract/judge.js", async (importOriginal) => {
 const { createOMSMcpServer } = await import("./server.js");
 const { translatePreToolUse } = await import("../vendors/claude/hook/pre-tool-use.js");
 const { formatDenyReason } = await import("../kernel/contract/types.js");
+const { runWriteCommand } = await import("../cli/write-command.js");
 
 const CONTRACT: VaultContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false }, Loose: { meaning: "loose notes", searchExclude: false } },
@@ -109,17 +110,43 @@ const ROWS: readonly Row[] = [
 ];
 
 let fixture: TruthTableFixture;
+/** CLI writes land in their own sealed vault so an allowed write cannot turn MCP's new note into an edit. */
+let cliFixture: TruthTableFixture;
 let client: Client;
 const originalHome = process.env["HOME"];
 
-beforeAll(async () => {
-  fixture = await buildTruthTableRow("sealed", CONTRACT);
-  process.env["HOME"] = path.join(fixture.base, "home");
+async function seedPrevious(target: TruthTableFixture): Promise<void> {
   for (const row of ROWS) {
     if (row.previous === undefined) continue;
-    await mkdir(path.dirname(path.join(fixture.vault, row.path)), { recursive: true });
-    await writeFile(path.join(fixture.vault, row.path), row.previous);
+    await mkdir(path.dirname(path.join(target.vault, row.path)), { recursive: true });
+    await writeFile(path.join(target.vault, row.path), row.previous);
   }
+}
+
+/** Runs `oms write` against the CLI vault with an injected stdin and an empty env, returning its receipt. */
+async function cliWrite(row: Row): Promise<{ ok: boolean; violations?: Violation[] }> {
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  process.env["HOME"] = path.join(cliFixture.base, "home");
+  try {
+    await runWriteCommand([row.path, "--vault", cliFixture.vault], { env: {}, cwd: cliFixture.vault, readStdin: async () => row.content });
+    expect(error).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(row.ok ? 0 : 1);
+    return JSON.parse(String(log.mock.calls[0]?.[0])) as { ok: boolean; violations?: Violation[] };
+  } finally {
+    process.env["HOME"] = path.join(fixture.base, "home");
+    process.exitCode = 0;
+    log.mockRestore();
+    error.mockRestore();
+  }
+}
+
+beforeAll(async () => {
+  fixture = await buildTruthTableRow("sealed", CONTRACT);
+  cliFixture = await buildTruthTableRow("sealed", CONTRACT);
+  process.env["HOME"] = path.join(fixture.base, "home");
+  await seedPrevious(fixture);
+  await seedPrevious(cliFixture);
   const server = createOMSMcpServer({ vault: fixture.vault, source: "explicit" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: "judge-parity", version: "0.0.0" });
@@ -131,6 +158,7 @@ afterAll(async () => {
   if (originalHome === undefined) delete process.env["HOME"];
   else process.env["HOME"] = originalHome;
   await fixture.cleanup();
+  await cliFixture.cleanup();
 });
 
 beforeEach(() => {
@@ -144,11 +172,14 @@ function hookPayload(row: Row): string {
     : { tool_name: "Edit", tool_input: { file_path: filePath, ...row.edit }, cwd: fixture.vault });
 }
 
-describe("MCP write and the hook translator share one judge", () => {
+describe("MCP write, CLI write and the hook translator share one judge", () => {
   it.each(ROWS)("$name", async (row) => {
     // The hook only reads, so it runs first; an allowed MCP write then changes the file.
     const hook = await translatePreToolUse(hookPayload(row), fixture.vault);
     const hookCalls = judgeSpy.calls.splice(0);
+
+    const cli = await cliWrite(row);
+    const cliCalls = judgeSpy.calls.splice(0);
 
     const result = await client.callTool({ name: "write", arguments: { path: row.path, content: row.content } });
     const mcpCalls = judgeSpy.calls.splice(0);
@@ -158,15 +189,21 @@ describe("MCP write and the hook translator share one judge", () => {
     if (row.input === null) {
       expect(hookCalls).toEqual([]);
       expect(mcpCalls).toEqual([]);
+      expect(cliCalls).toEqual([]);
     } else {
       expect(hookCalls).toHaveLength(1);
       expect(mcpCalls).toHaveLength(1);
       expect(hookCalls[0]![0]).toEqual(row.input);
       expect(mcpCalls[0]![0]).toEqual(row.input);
       expect(mcpCalls[0]![1]).toEqual(hookCalls[0]![1]);
+      expect(cliCalls).toHaveLength(1);
+      expect(cliCalls[0]![0]).toEqual(row.input);
+      expect(cliCalls[0]![1]).toEqual(hookCalls[0]![1]);
     }
 
     expect(payload.ok).toBe(row.ok);
+    expect(cli.ok).toBe(row.ok);
+    expect(cli.violations).toEqual(payload.violations);
     expect(result.isError === true).toBe(!row.ok);
     if (row.ok) {
       expect(hook.response).toEqual({ continue: true, suppressOutput: true });

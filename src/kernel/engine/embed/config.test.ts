@@ -188,7 +188,7 @@ describe("strict capability resolution", () => {
     expect(unavailable.guidance).toContain("OMS_GENERATE_MODEL");
     expect(unavailable.guidance).not.toContain(["models", "json"].join("."));
     expect(resolveModelCapability({ capability: "embed", env: {} }).guidance).toContain(".oms/settings.json");
-    expect(unavailable.guidance).toContain("oms model install --descriptor");
+    expect(unavailable.guidance).toContain("oms setup model install --descriptor");
   });
 
   it("resolves all three capabilities independently", () => {

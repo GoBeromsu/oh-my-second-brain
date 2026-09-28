@@ -1,4 +1,4 @@
-import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
+import { HARNESS_HIDDEN_CLI_COMMANDS, harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import type { HarnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 
 interface MainUsageCommand {
@@ -9,32 +9,32 @@ interface MainUsageCommand {
 
 const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
   {
-    name: "setup",
-    line: "  setup    Interview the vault and seal its contract (interactive; re-run to re-seal).",
-    detailLines: [
-      "             Writes only .oms/settings.json inside the vault; same as `oms contract setup`.",
-      "             Models: `oms model install|select`. Host integrations: `oms host install`.",
-    ],
+    name: "search",
+    line: "  search    Search notes, read one note (--path), gather context, or suggest links.",
   },
-  { name: "contract", line: "  contract Set up, extract, inspect, and diagnose the sealed vault contract." },
-  { name: "note", line: "  note     Audit or get notes. The agent writes the note." },
-  { name: "link", line: "  link     Suggest or check vault wikilinks." },
-  { name: "bridge", line: "  bridge   Add, remove, or inspect external-repository vault bridges." },
-  { name: "search", line: "  search   Query notes or inspect search context." },
-  { name: "index", line: "  index    Sync, embed, repair, inspect, or clean the vault index." },
-  { name: "graph", line: "  graph    Build or inspect the vault graph." },
-  { name: "host", line: "  host     Install, remove, sync, or inspect host integrations." },
-  { name: "package", line: "  package  Check for or apply package updates." },
-  { name: "model", line: "  model    Install, select, waive, or inspect embedding models." },
-  { name: "serve", line: "  serve    Start the MCP stdio server or local HTTP runtime." },
   {
-    name: "hook",
-    line: "  hook     Run the Claude Code vault guard hook.",
+    name: "interview",
+    line: "  interview Ask the vault owner about the vault in a terminal and seal the contract.",
+  },
+  {
+    name: "write",
+    line: "  write     Save a note from stdin only when the sealed contract allows it.",
+  },
+  {
+    name: "setup",
+    line: "  setup     Seal the vault contract; configure hosts, models, the package and bridges.",
     detailLines: [
-      "             pre  Read PreToolUse JSON from stdin; ask the contract judge for a verdict.",
+      "              Writes only .oms/settings.json inside the vault.",
+      "              Leaves: extract, status, host, model, package, bridge.",
     ],
   },
-  { name: "status", line: "  status   Show read-only vault health and statistics." },
+  {
+    name: "doctor",
+    line: "  doctor    Diagnose and repair: status, contract, audit, link-check, sync-embeddings,",
+    detailLines: ["              cleanup, build-graph. `doctor status` is read-only."],
+  },
+  { name: "serve", line: "  serve     Start the MCP stdio server or local HTTP runtime." },
+  { name: "hook", line: "  hook      Run the Claude Code vault guard hook." },
 ];
 
 export function mainUsageCommandNames(
@@ -46,9 +46,10 @@ export function mainUsageCommandNames(
 
 function commandLines(registry: HarnessSurfaceRegistry): string {
   const registered = new Set(registry.cliCommands.map((command) => command.name));
+  const hidden = new Set(HARNESS_HIDDEN_CLI_COMMANDS);
   const lines: string[] = [];
   for (const command of MAIN_USAGE_COMMANDS) {
-    if (!registered.has(command.name)) continue;
+    if (!registered.has(command.name) || hidden.has(command.name)) continue;
     lines.push(command.line);
     if (command.detailLines !== undefined) lines.push(...command.detailLines);
   }
@@ -60,20 +61,13 @@ export function cliUsageText(registry: HarnessSurfaceRegistry = harnessSurfaceRe
 oh-my-second-brain — Oh My Second Brain convention layer for Obsidian vaults
 
 Usage:
-  oh-my-second-brain setup [--vault <path>]
-  oh-my-second-brain contract <setup|extract|status|doctor> [options]
-  oh-my-second-brain note <audit|get> [options]
-  oh-my-second-brain link <suggest|check> [options]
-  oh-my-second-brain bridge <add|remove|status> [options]
-  oh-my-second-brain search <query|context> [options]
-  oh-my-second-brain index <sync|embed|repair|status|clean> [options]
-  oh-my-second-brain graph <build|status> [options]
-  oh-my-second-brain host <install|remove|sync|status> [options]
-  oh-my-second-brain package <check|update> [options]
-  oh-my-second-brain model <install|select|waive|status> [options]
+  oh-my-second-brain search <text> [--mode <mode>] [options]
+  oh-my-second-brain search --path <note> | --context [options] | --link <note> [options]
+  oh-my-second-brain interview [--reask] [--vault <path>]
+  oh-my-second-brain write <path> [--template <template>] [--vault <path>] < note.md
+  oh-my-second-brain setup [extract|status|host|model|package|bridge] [options]
+  oh-my-second-brain doctor <status|contract|audit|link-check|sync-embeddings|cleanup|build-graph> [options]
   oh-my-second-brain serve <mcp|http> [options]
-  oh-my-second-brain hook pre [--vault <path>]
-  oh-my-second-brain status [options]
   oh-my-second-brain --version | -v
 
 Compatibility alias: oms <command>

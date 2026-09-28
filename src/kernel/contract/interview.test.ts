@@ -174,7 +174,7 @@ describe("runInterview", () => {
   it("refuses a vault whose id was changed or is shared with a copy", async () => {
     await interview({ vault, io: scripted(BASE_ANSWERS), root });
     await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: "0d2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c", templateFolder: "Templates" }));
-    await expect(interview({ vault, io: scripted(BASE_ANSWERS), root })).rejects.toThrow(/^CONTRACT_VAULT_ID_TAMPERED: .*oms contract doctor/);
+    await expect(interview({ vault, io: scripted(BASE_ANSWERS), root })).rejects.toThrow(/^CONTRACT_VAULT_ID_TAMPERED: .*oms doctor contract/);
 
     await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateFolder: "Templates" }));
     const copy = join(base, "copy");
@@ -347,7 +347,7 @@ describe("diff-only rerun (R24)", () => {
     const quiet = scripted({ seal: "y" });
     expect((await interview({ vault, io: quiet, root })).state).toBe("sealed");
     expect(quiet.asked).toEqual(["seal"]);
-    expect(quiet.said.some(line => line.includes("oms contract setup --reask"))).toBe(true);
+    expect(quiet.said.some(line => line.includes("oms setup --reask"))).toBe(true);
     expect(await readDeclined(VAULT_ID, root)).toEqual(declined);
 
     await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n");

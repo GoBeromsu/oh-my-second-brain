@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/oh-my-second-brain"><img src="https://img.shields.io/npm/v/oh-my-second-brain?style=flat-square&amp;color=8b9daa&amp;label=npm" alt="npm version" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%E2%89%A520-80b89b?style=flat-square" alt="Node.js 20 or later" /></a>
-  <a href="#mcp-tools--integrations"><img src="https://img.shields.io/badge/MCP-5_tools-97a8b1?style=flat-square" alt="5 MCP tools" /></a>
+  <a href="#mcp-tools--integrations"><img src="https://img.shields.io/badge/MCP-4_tools-97a8b1?style=flat-square" alt="4 MCP tools" /></a>
   <a href="https://github.com/GoBeromsu/oh-my-second-brain/blob/main/package.json"><img src="https://img.shields.io/badge/license-MIT-d7c7a8?style=flat-square" alt="Package license: MIT" /></a>
 </p>
 
@@ -56,11 +56,11 @@ Keep using your Markdown notes and templates. Setup does not rewrite them, and t
 <tr>
 <td width="50%" valign="top">
 <h3>Connect across hosts</h3>
-Use native integrations for Claude Code, Codex, and Hermes, with five MCP tools and seven shared workflow skills.
+Use native integrations for Claude Code, Codex, and Hermes, with four MCP tools and six shared workflow skills.
 </td>
 <td width="50%" valign="top">
 <h3>Inspect, don't guess</h3>
-Check contract state, audit notes, inspect indexes, and review wikilink suggestions. Search and status stay read-only.
+Check contract state, audit notes, inspect indexes, and review wikilink suggestions. Search and `doctor status` stay read-only.
 </td>
 </tr>
 </table>
@@ -82,7 +82,7 @@ Run setup in your terminal. The interview covers folders, properties, and templa
 
 ```bash
 oms setup --vault /path/to/vault
-oms contract status --vault /path/to/vault
+oms setup status --vault /path/to/vault
 ```
 
 ### 3. Connect your agent
@@ -90,7 +90,7 @@ oms contract status --vault /path/to/vault
 Install the integration for the host you use:
 
 ```bash
-oms host install --runtime claude --vault /path/to/vault --yes
+oms setup host install --runtime claude --vault /path/to/vault --yes
 ```
 
 Replace `claude` with `codex` or `hermes`; use `all` to install all three. Host integration is optional if you only need the CLI. See the [installation guide](./docs/install.md) for Hermes profiles, model setup, and removal.
@@ -99,10 +99,10 @@ Replace `claude` with `codex` or `hermes`; use `all` to install all three. Host 
 
 ```bash
 # Build the derived search index explicitly.
-oms index sync --vault /path/to/vault
+oms doctor sync-embeddings --mode sync --vault /path/to/vault
 
 # Start with lexical search. No vector model required.
-oms search query "project decisions" --vault /path/to/vault
+oms search "project decisions" --vault /path/to/vault
 ```
 
 **Try asking your connected agent:**
@@ -133,9 +133,9 @@ These are example requests, not captured run results. Available workflows and wr
 <summary><strong>The vault contract, in detail</strong></summary>
 
 - **Meaning is user-owned.** The interview covers folders, the property pool, and templates together. OMS hardcodes no property names, folders, or personas and has no Inbox fallback.
-- **One control file inside the vault.** `.oms/settings.json` holds `version`, `vaultId`, `templateFolder`, `embedding`, and `agentRepair`. Other `.oms/` entries are ignored and reported as unexpected control files by `oms contract doctor`. `.obsidian/types.json` is a read-only observation, not an override of the seal.
+- **One control file inside the vault.** `.oms/settings.json` holds `version`, `vaultId`, `templateFolder`, `embedding`, and `agentRepair`. Other `.oms/` entries are ignored and reported as unexpected control files by `oms doctor contract`. `.obsidian/types.json` is a read-only observation, not an override of the seal.
 - **Templates stay yours.** OMS records what each template declares. It never rewrites, copies, or applies the template, and does not parse or execute Templater, JavaScript, or a private token language.
-- **Drift is visible.** `oms contract status` reports templates as `active`, `drift`, or `missing`. It never silently re-seals a changed template.
+- **Drift is visible.** `oms setup status` reports templates as `active`, `drift`, or `missing`. It never silently re-seals a changed template.
 - **One judge, bounded feedback.** Denied writes return `{field, kind}` violations and one guidance command, not rule values, store paths, or the contract body.
 - **Mismatched seal evidence blocks writes.** When this machine's evidence no longer matches the vault, writes fail with `contract-unreadable` until the owner runs `oms setup` again. A machine with no seal is a different case: its vault is not contract-judged.
 
@@ -146,15 +146,15 @@ See [architecture](./docs/architecture.md), [conventions](./docs/conventions.md)
 <details>
 <summary><strong>Setup, template interpretation, and recovery</strong></summary>
 
-`oms setup` is an alias of `oms contract setup`. Its interactive interview requires a terminal and refuses to run under `OMS_NON_INTERACTIVE=1`.
+`oms setup` in a terminal runs the interactive interview and seals the contract. `oms interview` is the same terminal interview on its own command; it requires a terminal and refuses to run under `OMS_NON_INTERACTIVE=1`.
 
-The `setup` skill asks the owner each question via `oms setup --questions` and submits answers with `oms setup --answers <file|->`. This path can seal a first or stricter contract; a loosening reseal stays with the owner's terminal.
+The `setup` skill asks the owner each question via `oms setup --questions` and submits answers with `oms setup --answers <file|->`. This path can seal a first or stricter contract; a loosening reseal stays with the owner's terminal. The MCP `interview` tool only shows the questions and the seal state; it seals nothing.
 
-`oms contract extract --template <path>` returns a template source and its computed hash. The agent reads each template and submits its interpretation with `oms setup --interpretations <file>`. The owner confirms that interpretation before it drives the interview.
+`oms setup extract --template <path>` returns a template source and its computed hash. The agent reads each template and submits its interpretation with `oms setup --interpretations <file>`. The owner confirms that interpretation before it drives the interview.
 
-`oms contract doctor` diagnoses seal problems, stale locks, orphaned generations, unexpected control files, and hook transport failures. Its `--fix` only re-indexes a moved or unindexed vault. Other broken seals are recovered through `oms setup`.
+`oms doctor contract` diagnoses seal problems, stale locks, orphaned generations, unexpected control files, and hook transport failures. Its `--fix` only re-indexes a moved or unindexed vault. Other broken seals are recovered through `oms setup`.
 
-Model lifecycle is separate: `oms model install|select|waive|status`.
+Model lifecycle is separate: `oms setup model install|select|waive|status`.
 
 </details>
 
@@ -162,19 +162,18 @@ Model lifecycle is separate: `oms model install|select|waive|status`.
 
 **One domain kernel, with host-native integrations.**
 
-`write` · `search` · `link` · `status` · `doctor`
+`write` · `search` · `interview` · `doctor`
 
 | MCP tool | Purpose |
 | :--- | :--- |
 | `write` | Judge a whole note against the sealed contract and save an allowed write. |
-| `search` | Retrieve notes or structured context without changing the vault. |
-| `link` | Suggest or check wikilinks without applying edits. |
-| `status` | Inspect health and statistics without mutation. |
-| `doctor` | Diagnose the contract, audit notes, and perform explicit index maintenance. |
+| `search` | Retrieve notes, structured context, or wikilink suggestions without changing the vault. |
+| `interview` | Show the vault interview questions and the seal state. It seals nothing. |
+| `doctor` | Read-only `status`; diagnose the contract, audit notes, check links, and run explicit index maintenance. |
 
-The seven skills are `distill`, `doctor`, `link`, `search`, `setup`, `status`, and `write`.
+The six skills are `distill`, `doctor`, `interview`, `search`, `setup`, and `write`.
 
-`distill` and `setup` are tool-less workflows; sealing has no MCP operation. Detail capabilities use `op` values under the five tools.
+`distill` and `setup` are tool-less workflows; sealing has no MCP operation. Detail capabilities use `op` values under the four tools. Tool annotations are per tool: only `search` is marked read-only, because `write` and the `doctor` repairs mutate and `interview` is kept conservative.
 
 | Host | Integration | Write checks |
 | :--- | :--- | :--- |
@@ -185,16 +184,16 @@ The seven skills are `distill`, `doctor`, `link`, `search`, `setup`, `status`, a
 > [!NOTE]
 > Claude's hook rejects a judged contract violation, but allows the write with a warning if the hook itself cannot run. Native file writes in Codex and Hermes do not pass through the OMS judge. This is not a filesystem-wide sandbox.
 
-For Gajae-Code, install the marketplace plugin with `gjc plugin install oms@oms`; it discovers the seven skills at the package-root `skills/` path. See [host assets](./docs/adapters.md) for integration details.
+For Gajae-Code, install the marketplace plugin with `gjc plugin install oms@oms`; it discovers the six skills at the package-root `skills/` path. See [host assets](./docs/adapters.md) for integration details.
 
 <details>
 <summary><strong>Host maintenance and vault targeting</strong></summary>
 
-Host installation stores a signed maintenance pointer at `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json` and stamps `oms serve mcp --vault /path/to/vault` into managed host entries. Only `oms host install|remove|sync|status` use that pointer to maintain integrations.
+Host installation stores a signed maintenance pointer at `${XDG_CONFIG_HOME:-~/.config}/oms/vault.json` and stamps `oms serve mcp --vault /path/to/vault` into managed host entries. Only `oms setup host install|remove|sync|status` use that pointer to maintain integrations.
 
 Runtime target resolution does not read it. Precedence is **explicit target → local vault controls → bridge → `OMS_VAULT` → current directory**. The current-directory fallback is read-only: sealing, note writes, and derived-state repair cannot use it.
 
-`oms package update` updates the package only. Run `oms host sync` separately to synchronize installed host assets. See [verified targets](./docs/verified-target.md).
+`oms setup package update` updates the package only. Run `oms setup host sync` separately to synchronize installed host assets. See [verified targets](./docs/verified-target.md).
 
 </details>
 
@@ -204,7 +203,7 @@ Runtime target resolution does not read it. Precedence is **explicit target → 
 
 | Capability | How to select it | Requirement |
 | :--- | :--- | :--- |
-| Lexical search | `oms search query <text>` | No vector model required. |
+| Lexical search | `oms search <text>` | No vector model required. |
 | Vector search | `--vec <text>` | Complete `OMS_EMBEDDING_PROVIDER` / `OMS_EMBEDDING_MODEL` pair. |
 | HyDE | `--hyde <text>` | Embedding pair plus `OMS_GENERATE_PROVIDER` / `OMS_GENERATE_MODEL`. |
 | Query expansion | `--expand` | Explicit G004 expansion; `--max-queries` accepts 1–32. |
@@ -212,37 +211,38 @@ Runtime target resolution does not read it. Precedence is **explicit target → 
 
 Missing, incomplete, or uninstalled model selections fail loudly rather than silently switching to another capability. These are available retrieval options, not a claim of parity or superiority over another engine.
 
-Use `oms search context` for structured context. Indexing is explicit: `oms index sync`, `oms index embed`, and `oms index repair` are distinct modes. See [the CLI map](./docs/cli-map.md) for all operations.
+Use `oms search --context` for structured context and `oms search --path <note>` to read one note exactly. Indexing is explicit: `oms doctor sync-embeddings --mode sync|embed|repair` selects one of three distinct modes. See [the CLI map](./docs/cli-map.md) for all operations.
 
 ## CLI reference
 
-`oms` is the short alias of `oh-my-second-brain`, with fourteen CLI families. Use `oms search query` for note queries and `oms search context` for structured context.
+`oms` is the short alias of `oh-my-second-brain`, with seven CLI families. 0.19 replaced the 0.18 families; see the [0.19 migration guide](./docs/migration-0.19.md).
 
 ```text
-oms setup                                 Interview the vault and seal its contract
-oms contract setup|extract|status|doctor   Seal, inspect, or diagnose the contract
-oms search query|context                  Search notes or retrieve structured context
-oms note audit|get                        Audit existing notes or read them
-oms link suggest|check                    Suggest or check wikilinks
-oms index sync|embed|repair|status|clean    Manage derived search state
-oms graph build|status                    Build or inspect the note graph
-oms bridge add|remove|status               Manage repository-to-vault bridges
-oms host install|remove|sync|status        Manage host assets and MCP registrations
-oms model install|select|waive|status      Manage local model selection
-oms package check|update                  Check or update the OMS package
-oms serve mcp|http                        Start the MCP or local HTTP server
-oms hook pre                              Judge a Claude write against the contract
-oms status                                Show read-only aggregate status
+oms search <text>                               Search notes; lexical by default
+oms search --path|--context|--link              Read one note, gather context, or suggest links
+oms interview                                   Interview the vault owner in a terminal and seal
+oms write <path>                                Save a note from stdin when the contract allows it
+oms setup                                       Seal the contract (--questions/--answers for agents)
+oms setup extract|status                        Show a template source or the contract posture
+oms setup host install|remove|sync|status       Manage host assets and MCP registrations
+oms setup model install|select|waive|status     Manage local model selection
+oms setup package check|update                  Check or update the OMS package
+oms setup bridge add|remove|status              Manage repository-to-vault bridges
+oms doctor status                               Show read-only vault health
+oms doctor contract|audit|link-check            Diagnose the contract, notes, or wikilinks
+oms doctor sync-embeddings|cleanup|build-graph  Maintain the derived index and graph
+oms serve mcp|http                              Start the MCP or local HTTP server
+oms hook pre                                    Judge a Claude write against the contract
 ```
 
 <details>
-<summary><strong>Command behavior and retired operations</strong></summary>
+<summary><strong>Command behavior and removed commands</strong></summary>
 
-Every recognized command accepts `--help` and `-h`, exits 0, and has no side effects. An unknown command combined with `--help` exits 1.
+Every recognized command accepts `--help` and `-h`, exits 0, and has no side effects. An unknown command combined with `--help` exits 1. A family removed in 0.19 exits 1 and names its replacement.
 
-`oms note audit` reports `{path, field, kind}` entries without rewriting notes. Notes are written as whole content through MCP `write {path, content, template?}`; `template` optionally names the sealed template being followed. There is no completion call or reviewer conversation.
+`oms doctor audit` reports `{path, field, kind}` entries without rewriting notes. Notes are written as whole content through `oms write <path> < note.md` or MCP `write {path, content, template?}`; both take the same verified-target write path, and `template` optionally names the sealed template being followed. There is no completion call or reviewer conversation.
 
-`oms index status --view status|collections|contexts` offers three read-only views. `oms index clean` removes eligible derived state.
+`oms doctor cleanup` removes eligible derived state. `oms doctor build-graph` rebuilds the note graph.
 
 Note `create`, `append`, `update`, and `backfill` are retired operations. There is no `link apply`, note renderer, or compatibility path for those retired operations.
 

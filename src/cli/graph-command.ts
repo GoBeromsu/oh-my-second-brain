@@ -6,18 +6,19 @@ import { assembleGraphOnlyEngine, type AssembledEngine } from "../kernel/engine/
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 
 interface ParsedGraphCommand {
-  readonly verb: "build" | "status";
+  readonly verb: "build";
   readonly vault: string | undefined;
 }
 
 function usage(): string {
-  return "Usage: oms graph <build|status> [--vault <path>]";
+  return "Usage: oms doctor build-graph [--vault <path>]";
 }
 
 function parse(argv: readonly string[]): ParsedGraphCommand {
   const verb = argv[0];
-  if (verb !== "build" && verb !== "status") {
-    throw new Error(`GRAPH_ARGS_INVALID: expected build or status, received ${verb ?? "(none)"}`);
+  // Graph status is the `graph` section of the read-only `oms doctor status` report.
+  if (verb !== "build") {
+    throw new Error(`GRAPH_ARGS_INVALID: expected build, received ${verb ?? "(none)"}`);
   }
   let vault: string | undefined;
   for (let index = 1; index < argv.length; index += 1) {
@@ -50,7 +51,7 @@ export async function runGraphCommand(argv: readonly string[]): Promise<void> {
   process.exitCode = 0;
   const helpOnly = argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h");
   const verbHelp = argv.length === 2 &&
-    (argv[0] === "build" || argv[0] === "status") &&
+    argv[0] === "build" &&
     (argv[1] === "--help" || argv[1] === "-h");
   if (helpOnly || verbHelp) {
     console.log(usage());
@@ -61,14 +62,6 @@ export async function runGraphCommand(argv: readonly string[]): Promise<void> {
   try {
     const parsed = parse(argv);
     const resolved = await target(parsed.vault);
-
-    if (parsed.verb === "status") {
-      engine = assembleGraphOnlyEngine({ vault: resolved.vault });
-      const status = await engine.adapter.graphStatus(resolved.vault);
-      print(status);
-      if (!status.available) process.exitCode = 1;
-      return;
-    }
 
     const result = await repairDoctor({
       operation: "build-graph",

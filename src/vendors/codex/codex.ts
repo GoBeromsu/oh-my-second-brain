@@ -24,7 +24,7 @@ function codexManagedBlockForVault(vault: string): string {
   const args = mcpArgs({ vault } as HostOperationOptions).map(jsonString).join(", ");
   return [
     MANAGED_CODEX_START,
-    "# OMS MCP hookup for Codex CLI. Managed by `oms host install/remove`.",
+    "# OMS MCP hookup for Codex CLI. Managed by `oms setup host install/remove`.",
     "# Codex-native rules live in ~/.codex/rules/oms.md; skills live in ~/.codex/skills/oms-*.",
     "[mcp_servers.oms]",
     'command = "oms"',
@@ -78,7 +78,7 @@ class CodexManagedBlockAmbiguousError extends Error {
       : markers.map((marker) => `${marker.token} (line ${marker.line})`).join(", ");
     super(
       `Ambiguous OMS managed MCP markers in ${configPath}: ${locations}. `
-      + "No changes were made. Manually remove every OMS managed MCP block and its markers, then rerun oms install or uninstall.",
+      + "No changes were made. Manually remove every OMS managed MCP block and its markers, then rerun `oms setup host install` or `oms setup host remove`.",
     );
     this.name = "CodexManagedBlockAmbiguousError";
   }

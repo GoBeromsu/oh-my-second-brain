@@ -26,14 +26,18 @@ const HERMES_SKILL_CATEGORY = "knowledge-management";
 const HERMES_SKILL_NAME = "oms";
 
 const HERMES_MCP_ENTRY_PATH = ["mcp_servers", "oms"] as const;
-const HERMES_SKILLS = ["distill", "doctor", "link", "search", "setup", "status", "write"] as const;
+const HERMES_SKILLS = ["distill", "doctor", "interview", "search", "setup", "write"] as const;
 // Hermes resolves skills by bare name across every installed bundle, so generic
-// names such as `setup` and `status` collide with other hosts' skills. The Hermes
+// names such as `setup` and `doctor` collide with other hosts' skills. The Hermes
 // copy is namespaced at install time; the shared sources stay unprefixed.
 const HERMES_SKILL_PREFIX = "oms-";
 const HERMES_CAPABILITY_GUIDE = "SKILL_CAPABILITY_GUIDE.md";
 const hermesSkillName = (skill: string): string => `${HERMES_SKILL_PREFIX}${skill}`;
 const HERMES_INSTALLED_SKILLS = HERMES_SKILLS.map(hermesSkillName);
+// The skill set shipped through 0.18, before `link` and `status` folded into
+// `search` and `doctor`. An unrecorded install from those versions carries it.
+const LEGACY_HERMES_SKILLS = ["distill", "doctor", "link", "search", "setup", "status", "write"] as const;
+const LEGACY_HERMES_INSTALLED_SKILLS = LEGACY_HERMES_SKILLS.map(hermesSkillName);
 
 type StagedSkill = { readonly name: string; readonly description: string; readonly mcpTool: string | null };
 
@@ -77,7 +81,7 @@ function renderCapabilityGuide(skills: readonly StagedSkill[]): string {
     "",
     "Hermes lists these skills under the `knowledge-management` category. Each is",
     "prefixed with `oms-` so it never shares a bare name with another bundle's skill;",
-    "call them by the prefixed name. Runtime operations go through the five MCP tools",
+    "call them by the prefixed name. Runtime operations go through the four MCP tools",
     "that `oms serve mcp` exposes.",
     "",
     "| Skill | Route | Purpose |",
@@ -200,12 +204,17 @@ async function verifyHermesUninstall(configPath: string, targets: readonly strin
   }
 }
 
-/** Returns the skill directories of a recognized OMS layout: the bare pre-namespace one or the `oms-` one. */
+/**
+ * Returns the skill directories of a recognized OMS layout: the bare pre-namespace
+ * one (always the 0.18 skill set), or an `oms-` one with the 0.18 or current set.
+ */
 function canonicalSkillLayout(entries: readonly string[]): readonly string[] | null {
   const matches = (expected: readonly string[]): boolean =>
     entries.length === expected.length && expected.every(entry => entries.includes(entry));
-  if (matches(HERMES_SKILLS)) return HERMES_SKILLS;
-  if (matches([...HERMES_INSTALLED_SKILLS, HERMES_CAPABILITY_GUIDE])) return HERMES_INSTALLED_SKILLS;
+  if (matches(LEGACY_HERMES_SKILLS)) return LEGACY_HERMES_SKILLS;
+  for (const prefixed of [HERMES_INSTALLED_SKILLS, LEGACY_HERMES_INSTALLED_SKILLS]) {
+    if (matches([...prefixed, HERMES_CAPABILITY_GUIDE])) return prefixed;
+  }
   return null;
 }
 
@@ -262,7 +271,7 @@ async function legacyOwnershipEvidence(skillTarget: string, adapterManifestTarge
     const skills = canonicalSkillLayout(entries.map(entry => entry.name));
     if (skills === null) return false;
     if (entries.some(entry => entry.isDirectory() !== skills.includes(entry.name))) return false;
-    if (skills === HERMES_INSTALLED_SKILLS && !lstatSync(path.join(skillTarget, HERMES_CAPABILITY_GUIDE)).isFile()) return false;
+    if (skills !== LEGACY_HERMES_SKILLS && !lstatSync(path.join(skillTarget, HERMES_CAPABILITY_GUIDE)).isFile()) return false;
     return skills.every(skill => {
       const skillFile = path.join(skillTarget, skill, "SKILL.md");
       return existsSync(skillFile) && lstatSync(skillFile).isFile();

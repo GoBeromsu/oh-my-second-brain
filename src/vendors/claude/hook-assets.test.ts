@@ -20,7 +20,7 @@ import { HOOK_MATCHER, READ_MATCHER } from "./claude-hooks.js";
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const GUARD_SOURCE = path.join(REPO_ROOT, "assets", "claude", "hooks", "oms-guard.mjs");
 const ALLOW = '{"continue":true,"suppressOutput":true}\n';
-const DENY = JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: '[oms] write denied: [{"field":"status","kind":"not-allowed"}] Run: oms contract doctor' } });
+const DENY = JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: '[oms] write denied: [{"field":"status","kind":"not-allowed"}] Run: oms doctor contract' } });
 const temporaryDirectories: string[] = [];
 
 const STUB_CLI = `
@@ -127,7 +127,7 @@ describe("oms-guard.mjs routing", () => {
     const target = fixture();
     const result = runHook(target, { tool_name: "Read", tool_input: { file_path: path.join(target.home, ".oms", "vaults", "x", "folders.json") } });
     expect(JSON.parse(result.stdout)).toEqual({
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: '[oms] write denied: [{"field":"path","kind":"control-path"}] Run: oms status' },
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: '[oms] write denied: [{"field":"path","kind":"control-path"}] Run: oms doctor status' },
     });
     expect(existsSync(target.capture)).toBe(false);
   });
@@ -147,7 +147,7 @@ describe("oms-guard.mjs transport failures", () => {
       const result = runHook(target, writePayload(target), stub);
       expect(result.status).toBe(0);
       expect(result.stdout).toBe(ALLOW);
-      expect(result.stderr).toBe("[oms] guard could not reach the judge; write allowed. Run: oms contract doctor\n");
+      expect(result.stderr).toBe("[oms] guard could not reach the judge; write allowed. Run: oms doctor contract\n");
       const events = guardEvents(target);
       expect(events).toHaveLength(1);
       expect(events[0]?.kind).toBe(kind);

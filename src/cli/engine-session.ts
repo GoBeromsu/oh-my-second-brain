@@ -33,7 +33,7 @@ export function ensureEmbeddingCapability(
 ): void {
   if (!embeddingConfigPresent(vault, modelCacheDir, modelEnv)) {
     throw new Error(
-      `Embedding capability is unavailable for ${vault}. Configure OMS_EMBEDDING_PROVIDER and OMS_EMBEDDING_MODEL, set embedding.model in .oms/settings.json, or run oms model install --default and oms model select --default.`,
+      `Embedding capability is unavailable for ${vault}. Configure OMS_EMBEDDING_PROVIDER and OMS_EMBEDDING_MODEL, set embedding.model in .oms/settings.json, or run oms setup model install --default and oms setup model select --default.`,
     );
   }
 }

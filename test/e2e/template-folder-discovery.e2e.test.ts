@@ -8,7 +8,7 @@ import type { InterviewIO, Question } from "../../src/kernel/contract/interview.
 import { readVaultSettings } from "../../src/kernel/vault/settings.js";
 
 /**
- * `oms contract setup --vault` finding the template folder from the vault's Obsidian
+ * `oms setup --vault` finding the template folder from the vault's Obsidian
  * settings, with a temporary HOME. The CLI binary refuses a non-interactive terminal, so
  * the command runs in process with a scripted IO in place of the terminal.
  */
@@ -86,7 +86,7 @@ async function setup(io: InterviewIO, flags: readonly string[] = []): Promise<Re
   return output();
 }
 
-describe("oms contract setup template-folder discovery", () => {
+describe("oms setup template-folder discovery", () => {
   it("offers the folder named by .obsidian/templates.json and seals its templates once confirmed", async () => {
     expect(homedir()).toBe(home);
     await writeFile(path.join(vault, ".obsidian", "templates.json"), JSON.stringify({ folder: "Templates" }));
