@@ -10,12 +10,12 @@ interface PackageArguments {
 
 function packageUsage(): string {
   return [
-    "Usage: oms package <check|update> [options]",
+    "Usage: oms setup package <check|update> [options]",
     "",
-    "  oms package check [--timeout-ms <milliseconds>]",
-    "  oms package update [--dry-run | --yes] [--timeout-ms <milliseconds>]",
+    "  oms setup package check [--timeout-ms <milliseconds>]",
+    "  oms setup package update [--dry-run | --yes] [--timeout-ms <milliseconds>]",
     "",
-    "Package updates never modify host integrations. After an update, run `oms host sync` explicitly.",
+    "Package updates never modify host integrations. After an update, run `oms setup host sync` explicitly.",
   ].join("\n");
 }
 
@@ -35,12 +35,12 @@ function parsePackageArguments(argv: readonly string[]): PackageArguments {
     seen.add(argument);
 
     if (argument === "--dry-run") {
-      if (verb !== "update") throw new Error("--dry-run is valid only for `oms package update`.");
+      if (verb !== "update") throw new Error("--dry-run is valid only for `oms setup package update`.");
       dryRun = true;
       continue;
     }
     if (argument === "--yes") {
-      if (verb !== "update") throw new Error("--yes is valid only for `oms package update`.");
+      if (verb !== "update") throw new Error("--yes is valid only for `oms setup package update`.");
       yes = true;
       continue;
     }
@@ -83,7 +83,7 @@ export async function runPackageCommand(argv: readonly string[]): Promise<void> 
   } catch (error) {
     process.exitCode = 1;
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`[oms package] ${message}`);
+    console.error(`[oms setup package] ${message}`);
     console.error(packageUsage());
   }
 }

@@ -161,7 +161,7 @@ describe("oms search --path", () => {
     const runEngineSession = vi.fn<SearchCommandDeps["runEngineSession"]>(
       (_vault, _options, fn) => fn({ semanticQuery } as never),
     );
-    await runSearchCommand(["query", "--", "--path", "--vault", vault], { ...deps, runEngineSession });
+    await runSearchCommand(["--", "--path", "--vault", vault], { ...deps, runEngineSession });
     expect(errors).toEqual([]);
     expect(process.exitCode).toBe(0);
     expect(runEngineSession).toHaveBeenCalledTimes(1);
@@ -174,7 +174,7 @@ describe("oms search --path", () => {
     const runEngineSession = vi.fn<SearchCommandDeps["runEngineSession"]>(
       () => Promise.resolve({ available: true, hits: [] } as never),
     );
-    await runSearchCommand(["query", "topic", "--vault", vault], { ...deps, runEngineSession });
+    await runSearchCommand(["topic", "--vault", vault], { ...deps, runEngineSession });
     expect(process.exitCode).toBe(0);
     expect(runEngineSession).toHaveBeenCalledTimes(1);
     expect(deps.readExactDocument).toHaveBeenCalledTimes(0);

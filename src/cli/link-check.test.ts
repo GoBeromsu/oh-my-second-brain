@@ -59,13 +59,13 @@ describe("runLinkCheck", () => {
     expect(await runLinkCheck({ vault })).toBe(0);
     const concise = String(log.mock.calls[0]?.[0]);
     expect(concise).toContain("… and 3 more");
-    expect(concise).toContain("Run `oms link check --verbose`");
+    expect(concise).toContain("Run `oms doctor link-check --verbose`");
 
     log.mockClear();
     expect(await runLinkCheck({ vault, verbose: true })).toBe(0);
     const verbose = String(log.mock.calls[0]?.[0]);
     expect(verbose).toContain("extra-20.md");
-    expect(verbose).not.toContain("Run `oms link check --verbose`");
+    expect(verbose).not.toContain("Run `oms doctor link-check --verbose`");
   });
 
   it("emits the exact read-only JSON receipt", async () => {

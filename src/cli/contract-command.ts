@@ -10,24 +10,24 @@ import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { VaultSettingsError } from "../kernel/vault/settings.js";
 
 export function contractUsage(): string {
-  return `Usage: oms contract <setup|extract|status|doctor> [options]
+  return `Usage: the sealed contract is set up with oms setup and diagnosed with oms doctor.
 
-  setup [--reask] [--vault <path>]
+  oms setup [--reask] [--vault <path>]
             Interview the whole vault (folders, properties, templates) and seal the contract.
             --reask asks again about items declined at an earlier seal.
-  setup --questions [--reask] [--vault <path>]
+  oms setup --questions [--reask] [--vault <path>]
             Print the interview questions as JSON. Seals nothing.
-  setup --answers <file|-> [--reask] [--vault <path>]
+  oms setup --answers <file|-> [--reask] [--vault <path>]
             Run the same interview from a JSON object of answers by question id (- reads stdin)
             and seal. Missing answers are listed; an invalid or unknown answer seals nothing.
-  setup --interpretations <file|-> ...
+  oms setup --interpretations <file|-> ...
             What each template source declares, read by the agent. Required when the vault has
             templates: setup never parses template text. Pass it with --questions or --answers.
-  extract --template <path> [--vault <path>]
+  oms setup extract --template <path> [--vault <path>]
             Show the template source to interpret and the hash OMS computed for it.
-  status [--vault <path>]
+  oms setup status [--vault <path>]
             Show the contract posture and template drift. Hidden values are never printed.
-  doctor [--fix] [--vault <path>]
+  oms doctor contract [--fix] [--vault <path>]
             Diagnose the seal. --fix only re-indexes a moved or unindexed vault.
 
 setup in a terminal has full authority, including loosening a sealed contract.
@@ -250,7 +250,7 @@ async function setup(vault: string, args: ContractArgs, deps: ContractCommandDep
   const interactive = deps.interactive ?? (process.stdin.isTTY === true && process.env["OMS_NON_INTERACTIVE"] !== "1");
   if (deps.io === undefined && !interactive) {
     process.exitCode = 1;
-    console.error("[oms] contract setup needs an interactive terminal. Run it yourself in a terminal, or let an agent ask you with `oms setup --questions` and `oms setup --answers <file>`.");
+    console.error("[oms] oms setup needs an interactive terminal. Run `oms setup` or `oms interview` yourself in a terminal, or let an agent ask you with `oms setup --questions` and `oms setup --answers <file>`.");
     return;
   }
   const interpretations = await readInterpretations(vault, args.interpretations);
@@ -330,11 +330,11 @@ export async function runContractCommand(argv: readonly string[], deps: Contract
         : { vault: path.resolve(args.vault), source: "explicit" };
     } catch {
       // Resolution messages name bridge and vault paths; only the fixed code is reported.
-      throw new Error("CONTRACT_VAULT_UNRESOLVED: the vault could not be resolved. Pass --vault <path> or run: oms status");
+      throw new Error("CONTRACT_VAULT_UNRESOLVED: the vault could not be resolved. Pass --vault <path> or run: oms doctor status");
     }
     const writes = args.verb === "setup" || args.verb === "doctor" && args.fix;
     if (writes && target.source === "cwd") {
-      throw new Error(`CONTRACT_ARGS_INVALID: contract ${args.verb} writes and requires --vault or an existing verified vault/bridge/env target`);
+      throw new Error(`CONTRACT_ARGS_INVALID: ${args.verb === "setup" ? "setup" : "doctor contract --fix"} writes and requires --vault or an existing verified vault/bridge/env target`);
     }
     const vault = target.vault;
     if (args.verb === "setup" && (args.questions || args.answers !== undefined)) await scriptedSetup(vault, args);
@@ -356,8 +356,8 @@ const FS_REMEDIATION: Readonly<Record<string, string>> = {
   EPERM: "The operation is not permitted on the vault or the contract store. Check their ownership and permissions, then retry.",
   ENOSPC: "No space left on the device. Free disk space, then retry.",
   EROFS: "The vault or the contract store is on a read-only filesystem.",
-  ENOENT: "A file disappeared while the command ran. Retry, then run: oms contract doctor",
-  ELOOP: "A symlink loop was found. Run: oms contract doctor",
+  ENOENT: "A file disappeared while the command ran. Retry, then run: oms doctor contract",
+  ELOOP: "A symlink loop was found. Run: oms doctor contract",
 };
 
 /**
@@ -371,7 +371,7 @@ export function commandDiagnostic(error: unknown): { readonly code: string; read
   }
   const errno = (error as NodeJS.ErrnoException | null)?.code;
   if (typeof errno === "string" && /^E[A-Z]+$/.test(errno)) {
-    return { code: "CONTRACT_FS_ERROR", remediation: `${errno}: ${FS_REMEDIATION[errno] ?? "A filesystem operation failed. Run: oms contract doctor"}` };
+    return { code: "CONTRACT_FS_ERROR", remediation: `${errno}: ${FS_REMEDIATION[errno] ?? "A filesystem operation failed. Run: oms doctor contract"}` };
   }
-  return { code: "CONTRACT_COMMAND_FAILED", remediation: "The contract command failed. Run: oms contract doctor" };
+  return { code: "CONTRACT_COMMAND_FAILED", remediation: "The contract command failed. Run: oms doctor contract" };
 }

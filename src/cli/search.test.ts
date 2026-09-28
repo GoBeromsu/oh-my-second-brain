@@ -35,7 +35,7 @@ afterEach(() => {
 
 describe("search family", () => {
   it("runs a plain query lexically and preserves expansion and reranking", async () => {
-    await runSearchCommand(["query", "plain query", "--vault", "/vault"]);
+    await runSearchCommand(["plain query", "--vault", "/vault"]);
     expect(process.exitCode).toBe(0);
     expect(calls.queries[0]).toEqual(expect.objectContaining({
       query: "plain query",
@@ -44,7 +44,7 @@ describe("search family", () => {
     }));
 
     await runSearchCommand([
-      "query", "expanded", "--expand", "--max-queries", "2", "--rerank",
+      "expanded", "--expand", "--max-queries", "2", "--rerank",
       "--vault", "/vault",
     ]);
     expect(calls.queries[1]).toEqual(expect.objectContaining({
@@ -54,23 +54,23 @@ describe("search family", () => {
     }));
   });
 
-  it("accepts all public query modes and rejects retired leaves", async () => {
+  it("accepts all public query modes and rejects the removed query and context leaves", async () => {
     for (const mode of ["query", "search", "vsearch"]) {
-      await runSearchCommand(["query", "needle", "--mode", mode, "--vault", "/vault"]);
+      await runSearchCommand(["needle", "--mode", mode, "--vault", "/vault"]);
       expect(process.exitCode).toBe(0);
     }
-    for (const retired of ["semantic", "doc", "serve"]) {
+    for (const retired of ["query", "context"]) {
       await runSearchCommand([retired, "--vault", "/vault"]);
       expect(process.exitCode).toBe(1);
     }
   });
 
   it("keeps explicit typed channels and rejects a missing query", async () => {
-    await runSearchCommand(["query", "--vec", "vector text", "--vault", "/vault"]);
+    await runSearchCommand(["--vec", "vector text", "--vault", "/vault"]);
     expect(process.exitCode).toBe(0);
     expect(calls.queries[0]).toEqual(expect.objectContaining({ vec: "vector text" }));
 
-    await runSearchCommand(["query", "--vault", "/vault"]);
+    await runSearchCommand(["--rerank", "--vault", "/vault"]);
     expect(process.exitCode).toBe(1);
   });
 
@@ -78,7 +78,7 @@ describe("search family", () => {
     const vault = await writeMorningVaultFixture();
     try {
       await runSearchCommand([
-        "context", "--query", "Agent Retrieval", "--limit", "2", "--vault", vault,
+        "--context", "--query", "Agent Retrieval", "--limit", "2", "--vault", vault,
       ]);
       expect(process.exitCode).toBe(0);
       const receipt = JSON.parse(vi.mocked(console.log).mock.calls[0]![0] as string);

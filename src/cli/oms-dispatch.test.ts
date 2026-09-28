@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { mainUsageCommandNames } from "./usage.js";
+import { REMOVED_0_19_FAMILIES, REMOVED_FAMILY_GUIDANCE } from "./removed-families.js";
 import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
 import { serializeVaultSettings } from "../kernel/vault/settings.js";
 
@@ -17,7 +18,7 @@ const repoRoot = path.resolve(__dirname, "../..");
 const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 
 // This suite runs CLI commands that write host state under `$HOME` - e.g.
-// `oms host install` writes a stamp-only pointer and wires hook entries into
+// `oms setup host install` writes a stamp-only pointer and wires hook entries into
 // `$HOME/.claude/settings.json` (see upsertClaudeHooks in
 // src/vendors/claude/claude-hooks.ts) - so the isolation below is load-bearing
 // today, not merely precautionary. Every runCli() call gets HOME/USERPROFILE
@@ -134,7 +135,7 @@ describe("oms CLI dispatch", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("Compatibility alias: oms <command>");
-    for (const command of ["setup", "contract", "note", "link", "bridge", "search", "index", "graph", "host", "package", "model", "serve", "hook", "status"]) {
+    for (const command of ["search", "interview", "write", "setup", "doctor", "serve"]) {
       expect(result.stdout).toContain(command);
     }
     expect(result.stdout).not.toMatch(/semantic/u);
@@ -151,7 +152,7 @@ describe("oms CLI dispatch", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toMatch(/Usage:|OMS search and index:/u);
+    expect(result.stdout).toMatch(/Usage:|OMS search:/u);
     expect(result.stdout).not.toContain("Update available");
     expect(snapshotDir(vault)).toBe(beforeVault);
     expect(snapshotDir(smokeHome)).toBe(beforeHome);
@@ -192,24 +193,36 @@ describe("oms CLI dispatch", () => {
   });
 
   it.each([
-    ["doctor", "oms contract doctor"],
-    ["template", "oms contract setup|extract|status|doctor"],
-    ["audit", "oms note audit"],
-    ["reconcile", "oms host sync"],
-    ["linkify", "oms link suggest"],
-    ["embed", "oms index embed"],
-    ["doc", "oms note get"],
+    ["template", "oms setup extract"],
+    ["audit", "oms doctor audit"],
+    ["reconcile", "oms setup host sync"],
+    ["linkify", "oms search --link"],
+    ["embed", "oms doctor sync-embeddings --mode embed"],
+    ["doc", "oms search --path"],
     ["mcp", "oms serve mcp"],
-    ["lint", "oms link check"],
-    ["install", "oms host install"],
-    ["uninstall", "oms host remove"],
-    ["update", "oms package update"],
+    ["lint", "oms doctor link-check"],
+    ["install", "oms setup host install"],
+    ["uninstall", "oms setup host remove"],
+    ["update", "oms setup package update"],
   ])("rejects retired %s with actionable guidance", (command, guidance) => {
     const result = runCli([command]);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`Command \`${command}\` is retired`);
     expect(result.stderr).toContain(guidance);
+  });
+
+  it.each(REMOVED_0_19_FAMILIES)("rejects the removed 0.19 family %s with a one-line migration and runs nothing", async (command) => {
+    const vault = await makeVault();
+    const beforeVault = snapshotDir(vault);
+    const beforeHome = snapshotDir(smokeHome);
+    const result = runCli([command, "status", "--vault", vault]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim().split("\n")).toEqual([`[oms] Command \`${command}\` was removed in 0.19. ${REMOVED_FAMILY_GUIDANCE[command]}`]);
+    expect(snapshotDir(vault)).toBe(beforeVault);
+    expect(snapshotDir(smokeHome)).toBe(beforeHome);
   });
 
   it("reports unknown hook subcommand with exit code 1", () => {
@@ -245,7 +258,7 @@ describe("oms CLI dispatch", () => {
   });
 
   it("rejects unsupported runtime before host operations", () => {
-    const result = runCli(["host", "install", "--runtime", "banana", "--dry-run"]);
+    const result = runCli(["setup", "host", "install", "--runtime", "banana", "--dry-run"]);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toBe("");
@@ -253,7 +266,7 @@ describe("oms CLI dispatch", () => {
   });
 
   it("rejects unsupported package options in the package handler", () => {
-    const result = runCli(["package", "update", "--bogus", "--dry-run"]);
+    const result = runCli(["setup", "package", "update", "--bogus", "--dry-run"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -286,8 +299,8 @@ describe("oms CLI dispatch", () => {
 
   it("routes contract and link diagnostics for an empty temp vault", async () => {
     const vault = await makeVault();
-    const doctor = runCli(["contract", "status", "--vault", vault]);
-    const lint = runCli(["link", "check", "--vault", vault, "--json"]);
+    const doctor = runCli(["setup", "status", "--vault", vault]);
+    const lint = runCli(["doctor", "link-check", "--vault", vault, "--json"]);
 
     expect(doctor.status).toBe(0);
     expect(doctor.stderr).toBe("");
@@ -310,7 +323,7 @@ describe("oms CLI dispatch", () => {
 
   it("refuses the retired setup dry-run and writes nothing", async () => {
     const vault = await makeVault();
-    const doctor = runCli(["contract", "status", "--vault", vault]);
+    const doctor = runCli(["setup", "status", "--vault", vault]);
     expect(doctor.status).toBe(0);
     expect(doctor.stderr).toBe("");
     expect(jsonObject(doctor.stdout)).toEqual(expect.objectContaining({ contract: "none" }));
@@ -335,7 +348,7 @@ describe("oms CLI dispatch", () => {
     });
     await mkdir(path.join(vault, "notes"), { recursive: true });
     await writeFile(path.join(vault, "notes", "Alpha.md"), "---\ntitle: Alpha\n---\nAlpha.\n");
-    const audit = runCli(["note", "audit", "--vault", vault, "--folder", "notes", "--json"]);
+    const audit = runCli(["doctor", "audit", "--vault", vault, "--folder", "notes", "--json"]);
     expect(audit.status, `${audit.stdout}\n${audit.stderr}`).toBe(0);
     expect(audit.stderr).toBe("");
     // The audit re-judges against the sealed contract the child HOME holds.
@@ -352,7 +365,7 @@ describe("oms CLI dispatch", () => {
 
   it("G002-CLI-001 rejects audit folder scopes that are not top-level folders", async () => {
     const fixtureVault = await makeVault();
-    const audit = runCli(["note", "audit", "--vault", fixtureVault, "--folder", "references/missing", "--json"]);
+    const audit = runCli(["doctor", "audit", "--vault", fixtureVault, "--folder", "references/missing", "--json"]);
 
     expect(audit.status).toBe(1);
     expect(audit.stdout).toBe("");
@@ -363,7 +376,7 @@ describe("oms CLI dispatch", () => {
     const vault = await makeVault();
     await mkdir(path.join(vault, ".oms"), { recursive: true });
 
-    const audit = runCli(["note", "audit", "--vault", vault, "--json"]);
+    const audit = runCli(["doctor", "audit", "--vault", vault, "--json"]);
 
     expect(audit.status, `${audit.stdout}\n${audit.stderr}`).toBe(0);
     expect(audit.stderr).toBe("");
@@ -371,20 +384,20 @@ describe("oms CLI dispatch", () => {
     expect(audit.stdout).not.toContain("bundled");
   });
 
-  it("dispatches index status and rejects retired command names", async () => {
+  it("reports the engine through doctor status and rejects retired command names", async () => {
     const vault = await makeVault();
-    // A never-synced vault has no disk store: status must say so with sync
-    // guidance rather than reporting an ephemeral in-memory store as available.
-    const missing = runCli(["index", "status", "--vault", vault]);
-    expect(missing.status).toBe(1);
-    expect(missing.stderr).toContain("oms index sync");
+    // A never-synced vault has no disk store: status must say so rather than
+    // reporting an ephemeral in-memory store as available.
+    const missing = runCli(["doctor", "status", "--vault", vault]);
+    expect(missing.status).toBe(0);
+    expect(jsonObject(missing.stdout).engine).toEqual(expect.objectContaining({ available: false }));
 
-    expect(runCli(["index", "sync", "--vault", vault]).status).toBe(0);
-    const nested = runCli(["index", "status", "--vault", vault]);
+    expect(runCli(["doctor", "sync-embeddings", "--mode", "sync", "--vault", vault]).status).toBe(0);
+    const nested = runCli(["doctor", "status", "--vault", vault]);
     const alias = runCli(["semantic", "--vault", vault]);
 
     expect(nested.status).toBe(0);
-    expect(nested.stdout).toContain('"available": true');
+    expect(jsonObject(nested.stdout).engine).toEqual(expect.objectContaining({ available: true }));
     expect(alias.status).toBe(1);
     expect(alias.stderr).toContain("[oms] Unknown command: semantic");
   });
@@ -400,19 +413,22 @@ describe("oms CLI dispatch", () => {
     },
   );
 
-  it("permits the top-level status command", async () => {
+  it("reports vault health through doctor status", async () => {
     const vault = await makeVault();
-    const result = runCli(["status", "--vault", vault]);
+    const result = runCli(["doctor", "status", "--vault", vault]);
 
-    expect(result.stderr).not.toContain("[oms] Unknown command: status");
-    expect(jsonObject(result.stdout)).toEqual(expect.objectContaining({ vault }));
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(jsonObject(result.stdout)).toEqual(expect.objectContaining({ vault, source: "explicit" }));
   });
 
-  it("permits index embed as a family leaf", async () => {
-    const result = runCli(["index", "embed"]);
+  it("routes doctor sync-embeddings --mode embed and refuses a cwd-inferred target", () => {
+    const result = runCli(["doctor", "sync-embeddings", "--mode", "embed"]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).not.toContain("unknown index command");
+    expect(result.stderr).not.toContain("Unknown doctor leaf");
+    expect(result.stderr).not.toContain("unknown mode");
+    expect(result.stderr).toContain("Index mutations require --vault");
   });
 
   it("creates a vault bridge and resolves diagnostics through it", async () => {
@@ -430,7 +446,7 @@ describe("oms CLI dispatch", () => {
 
     await issueSettings(vault);
 
-    const link = runCli(["bridge", "add", "--vault", vault, "--folder", "notes"], undefined, undefined, repo);
+    const link = runCli(["setup", "bridge", "add", "--vault", vault, "--folder", "notes"], undefined, undefined, repo);
     expect(link.status, `${link.stdout}\n${link.stderr}`).toBe(0);
     expect(link.stderr).toBe("");
     expect(link.stdout).toContain("Oh My Second Brain vault bridge ready.");
@@ -444,13 +460,13 @@ describe("oms CLI dispatch", () => {
     expect(agents).toContain("<!-- oms:begin -->");
     expect(agents).toContain(`- Connected vault: ${path.basename(vault)}`);
     expect(agents).not.toContain(vault);
-    expect(agents).toContain("`oms search query \"what context should I know for this change?\"`");
+    expect(agents).toContain("`oms search \"what context should I know for this change?\"`");
     expect(agents).toContain("`oms serve mcp`");
 
-    const doctor = runCli(["contract", "status"], undefined, undefined, repo);
+    const doctor = runCli(["setup", "status"], undefined, undefined, repo);
     expect(doctor.status).toBe(0);
     expect(doctor.stdout).toContain('"contract":');
-    const search = runCli(["search", "query", "--lex", "Alpha"], undefined, undefined, repo);
+    const search = runCli(["search", "--lex", "Alpha"], undefined, undefined, repo);
     expect(search.status).toBe(0);
     expect(search.stderr).toBe("");
     const searchJson = jsonObject(search.stdout);
@@ -470,7 +486,7 @@ describe("oms CLI dispatch", () => {
     await writeFile(notePath, "---\ntemplate: note\ntitle: Sage\n---\n\nThe sage pursues Ataraxia daily.\n", "utf-8");
     const before = await readFile(notePath, "utf-8");
 
-    const report = runCli(["link", "suggest", "notes/Sage.md", "--vault", vault, "--json"]);
+    const report = runCli(["search", "--link", "notes/Sage.md", "--vault", vault, "--json"]);
     expect(report.status).toBe(0);
     expect(report.stdout).toContain("notes/Sage.md");
     const proposal = jsonObject(report.stdout) as {
@@ -480,20 +496,20 @@ describe("oms CLI dispatch", () => {
     expect(proposal.candidates[0]?.renderedReplacement).toBe("[[Ataraxia]]");
     expect(await readFile(notePath, "utf-8")).toBe(before);
 
-    // Applying an edit is the agent's job: the retired leaf is refused and the
+    // Applying an edit is the agent's job: the removed family is refused and the
     // note keeps its exact bytes.
     const applied = runCli(["link", "apply", "notes/Sage.md", "--vault", vault, "--yes"]);
     expect(applied.status).toBe(1);
-    expect(applied.stderr).toContain("unknown link command apply");
+    expect(applied.stderr).toContain("Command `link` was removed in 0.19");
 
-    const checked = runCli(["link", "check", "notes/Sage.md", "--vault", vault, "--json"]);
+    const checked = runCli(["doctor", "link-check", "notes/Sage.md", "--vault", vault, "--json"]);
     expect(checked.status).toBe(0);
     expect(await readFile(notePath, "utf-8")).toBe(before);
   });
 
   it("routes host sync dry-run through the scoped Claude cleanup plan", async () => {
     const vault = await makeVault();
-    const result = runCli(["host", "sync", "--runtime", "claude", "--vault", vault, "--dry-run"]);
+    const result = runCli(["setup", "host", "sync", "--runtime", "claude", "--vault", vault, "--dry-run"]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("claude mcp remove oms --scope local");
@@ -502,7 +518,7 @@ describe("oms CLI dispatch", () => {
   });
 
   it("routes host remove through the host family", async () => {
-    const result = runCli(["host", "remove", "--runtime", "claude", "--dry-run", "--json"]);
+    const result = runCli(["setup", "host", "remove", "--runtime", "claude", "--dry-run", "--json"]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
@@ -512,10 +528,10 @@ describe("oms CLI dispatch", () => {
   it("given installed vault A moved away, when all hosts install B, then the signed pointer and stamps contain only B", async () => {
     const first = await makeVault();
     const second = await makeVault();
-    expect(runCli(["host", "install", "--runtime", "all", "--vault", first, "--yes", "--json"]).status).toBe(0);
+    expect(runCli(["setup", "host", "install", "--runtime", "all", "--vault", first, "--yes", "--json"]).status).toBe(0);
     const canonicalFirst = await realpath(first);
     await rm(first, { recursive: true });
-    expect(runCli(["host", "install", "--runtime", "all", "--vault", second, "--yes", "--json"]).status).toBe(0);
+    expect(runCli(["setup", "host", "install", "--runtime", "all", "--vault", second, "--yes", "--json"]).status).toBe(0);
     const canonicalSecond = await realpath(second);
     const pointer = JSON.parse(
       await readFile(path.join(smokeHome, ".config", "oms", "vault.json"), "utf-8"),
@@ -538,7 +554,7 @@ describe("oms CLI dispatch", () => {
 
   it("returns stable cleanup fields for host JSON output", async () => {
     const vault = await makeVault();
-    const result = runCli(["host", "install", "--runtime", "claude", "--vault", vault, "--dry-run", "--json"]);
+    const result = runCli(["setup", "host", "install", "--runtime", "claude", "--vault", vault, "--dry-run", "--json"]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");

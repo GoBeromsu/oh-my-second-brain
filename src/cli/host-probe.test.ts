@@ -243,13 +243,12 @@ describe("discoverHostInstallAssets", () => {
     const expectedSkills = [
       "distill",
       "doctor",
-      "link",
+      "interview",
       "search",
       "setup",
-      "status",
       "write",
     ].map(skill => path.join(home.codex, "skills", `oms-${skill}`));
-    expect(host.skillDirs).toEqual(["distill", "doctor", "link", "search", "setup", "status", "write"]);
+    expect(host.skillDirs).toEqual(["distill", "doctor", "interview", "search", "setup", "write"]);
     expect(installed.paths.filter(candidate => candidate.includes(`${path.sep}skills${path.sep}`)).sort()).toEqual([...expectedSkills].sort());
     expect(installed.paths.some(candidate => candidate.endsWith(`${path.sep}oms-setup`))).toBe(true);
 

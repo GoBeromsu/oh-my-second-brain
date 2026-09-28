@@ -145,55 +145,67 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
   if (flagged.includes("--path")) {
     fail("--path is mutually exclusive with search subcommands, query text, and mode flags");
   }
-  const verb = resolved.argv[0];
-  if (verb === undefined || verb === "help" || verb === "--help" || verb === "-h") {
+  const first = resolved.argv[0];
+  if (first === undefined || first === "help" || first === "--help" || first === "-h") {
     console.log(searchUsage());
     return;
   }
-  if (verb === "query") {
-    const valueFlags = new Set([
-      "collection", "limit", "index", "min-score", "chunk-strategy", "cursor",
-      "collection-path", "mode", "folder", "field", "link", "intent", "lex",
-      "vec", "hyde", "candidate-limit", "max-queries",
-    ]);
-    const booleanFlags = new Set([
-      "all", "full", "full-path", "expand", "rerank", "no-rerank",
-    ]);
-    for (let index = 1; index < flagged.length; index += 1) {
-      const token = flagged[index]!;
-      if (!token.startsWith("--") && token !== "-n" && token !== "-c") continue;
-      const name = token === "-n" ? "limit" : token === "-c" ? "collection" : token.slice(2);
-      if (!valueFlags.has(name) && !booleanFlags.has(name)) fail(`unknown query flag ${token}`);
-      if (valueFlags.has(name)) {
-        const value = flagged[++index];
-        if (value === undefined || value.startsWith("--")) fail(`${token} requires a value`);
-      }
-    }
-    const args = parseSearchArgs(flagged);
-    const query = [...args.positional.slice(1), ...literal].join(" ")
-      || stringOption(args, "lex")
-      || stringOption(args, "vec")
-      || stringOption(args, "hyde")
-      || "";
-    if (!query) fail("search query requires query text or --lex, --vec, or --hyde");
-    const requestedMode = stringOption(args, "mode") ?? "query";
-    if (requestedMode !== "query" && requestedMode !== "search" && requestedMode !== "vsearch") {
-      fail("--mode must be query, search, or vsearch");
-    }
-    const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
-      adapter.semanticQuery(searchQueryOptions(requestedMode as SemanticSearchMode, resolved.vault, args, query)));
-    printJson(console.log, result);
-    if (!result.available) process.exitCode = 1;
+  if (first === "query" || first === "context") {
+    fail(
+      first === "query"
+        ? "`search query` was removed in 0.19; run `oms search <text>` (use `oms search -- query ...` to search for the word itself)"
+        : "`search context` was removed in 0.19; run `oms search --context [options]`",
+    );
+  }
+  if (first === "--link") {
+    // A leading --link is link suggestion for one note; later --link stays a query filter.
+    const linkIndex = argv.indexOf("--link");
+    const { runLinkFamilyCommand } = await import("./link-command.js");
+    await runLinkFamilyCommand(["suggest", ...argv.slice(0, linkIndex), ...argv.slice(linkIndex + 1)]);
     return;
   }
-  if (verb === "context") {
+  if (first === "--context") {
     const { retrieveMorningContext } = await import("../kernel/search/morning.js");
     const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
       retrieveMorningContext(contextOptions(resolved.vault, resolved.argv.slice(1)), backend(adapter, resolved.vault)));
     printJson(console.log, result);
     return;
   }
-  fail(`unknown search subcommand ${verb}`);
+  if (flagged.includes("--context")) fail("--context must be the first search argument");
+  const valueFlags = new Set([
+    "collection", "limit", "index", "min-score", "chunk-strategy", "cursor",
+    "collection-path", "mode", "folder", "field", "link", "intent", "lex",
+    "vec", "hyde", "candidate-limit", "max-queries",
+  ]);
+  const booleanFlags = new Set([
+    "all", "full", "full-path", "expand", "rerank", "no-rerank",
+  ]);
+  for (let index = 0; index < flagged.length; index += 1) {
+    const token = flagged[index]!;
+    if (!token.startsWith("--") && token !== "-n" && token !== "-c") continue;
+    const name = token === "-n" ? "limit" : token === "-c" ? "collection" : token.slice(2);
+    if (!valueFlags.has(name) && !booleanFlags.has(name)) fail(`unknown query flag ${token}`);
+    if (valueFlags.has(name)) {
+      const value = flagged[++index];
+      if (value === undefined || value.startsWith("--")) fail(`${token} requires a value`);
+    }
+  }
+  // The query parser treats its first positional as the verb, so the implicit verb is supplied here.
+  const args = parseSearchArgs(["query", ...flagged]);
+  const query = [...args.positional.slice(1), ...literal].join(" ")
+    || stringOption(args, "lex")
+    || stringOption(args, "vec")
+    || stringOption(args, "hyde")
+    || "";
+  if (!query) fail("search requires query text or --lex, --vec, or --hyde");
+  const requestedMode = stringOption(args, "mode") ?? "query";
+  if (requestedMode !== "query" && requestedMode !== "search" && requestedMode !== "vsearch") {
+    fail("--mode must be query, search, or vsearch");
+  }
+  const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
+    adapter.semanticQuery(searchQueryOptions(requestedMode as SemanticSearchMode, resolved.vault, args, query)));
+  printJson(console.log, result);
+  if (!result.available) process.exitCode = 1;
 }
 
 export { searchUsage } from "./search-usage.js";

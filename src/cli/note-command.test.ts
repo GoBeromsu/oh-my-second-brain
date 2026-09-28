@@ -46,7 +46,7 @@ describe("note command", () => {
   it("documents every public leaf and rejects retired leaves with no alias", async () => {
     const usage = noteUsage();
     for (const verb of ["audit", "get"]) expect(usage).toContain(verb);
-    expect(usage).toContain("Leaves: audit | get");
+    expect(usage).toContain("Usage: oms doctor audit [options] | oms search --path <path>");
     expect(usage).not.toMatch(/\bguide\b/u);
     expect(usage).not.toMatch(/\bcheck\b/u);
     expect(usage).not.toMatch(/\bcomplete\b/u);

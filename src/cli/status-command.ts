@@ -9,7 +9,7 @@ import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
 
 function usage(): string {
-  return "Usage: oms status [--vault <path>]";
+  return "Usage: oms doctor status [--vault <path>]";
 }
 
 function parseVault(argv: readonly string[]): string | undefined {
@@ -46,7 +46,7 @@ export async function collectStatus(resolved: { readonly vault: string; readonly
     convention = await contractStatus(resolved.vault);
   } catch {
     // The error text may name the store; only the fixed guidance is shown.
-    convention = { contract: "unreadable", findings: [{ message: "contract status unavailable", guidance: "oms contract doctor" }] };
+    convention = { contract: "unreadable", findings: [{ message: "contract status unavailable", guidance: "oms doctor contract" }] };
   }
 
   let history: unknown;

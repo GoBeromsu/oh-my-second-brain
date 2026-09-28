@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { update, currentVersion, format } = vi.hoisted(() => ({
   update: vi.fn(),
   currentVersion: vi.fn(async () => "0.12.2"),
-  format: vi.fn((result: { readonly message: string }) => `[oms package] ${result.message}`),
+  format: vi.fn((result: { readonly message: string }) => `[oms setup package] ${result.message}`),
 }));
 
 vi.mock("../kernel/update/update.js", () => ({
@@ -48,7 +48,7 @@ describe("package command", () => {
       interactive: process.stdin.isTTY === true,
       timeoutMs: 2500,
     });
-    expect(log).toHaveBeenCalledWith("[oms package] receipt");
+    expect(log).toHaveBeenCalledWith("[oms setup package] receipt");
     expect(process.exitCode).toBe(0);
   });
 
@@ -76,7 +76,7 @@ describe("package command", () => {
 
     await runPackageCommand(["update", "--yes"]);
 
-    expect(log).toHaveBeenCalledWith("[oms package] npm update failed: denied");
+    expect(log).toHaveBeenCalledWith("[oms setup package] npm update failed: denied");
     expect(process.exitCode).toBe(1);
   });
 
@@ -84,13 +84,13 @@ describe("package command", () => {
     await runPackageCommand(["check", "--yes"]);
 
     expect(update).not.toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith("[oms package] --yes is valid only for `oms package update`.");
+    expect(error).toHaveBeenCalledWith("[oms setup package] --yes is valid only for `oms setup package update`.");
     expect(process.exitCode).toBe(1);
 
     error.mockClear();
     process.exitCode = undefined;
     await runPackageCommand(["upgrade"]);
-    expect(error).toHaveBeenCalledWith("[oms package] Unknown package command: upgrade.");
+    expect(error).toHaveBeenCalledWith("[oms setup package] Unknown package command: upgrade.");
     expect(process.exitCode).toBe(1);
   });
 
@@ -98,7 +98,7 @@ describe("package command", () => {
     await runPackageCommand(["update", "--dry-run", "--yes"]);
 
     expect(update).not.toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith("[oms package] --dry-run and --yes cannot be combined.");
+    expect(error).toHaveBeenCalledWith("[oms setup package] --dry-run and --yes cannot be combined.");
     expect(process.exitCode).toBe(1);
   });
 
@@ -106,7 +106,7 @@ describe("package command", () => {
     await runPackageCommand(["--help"]);
 
     expect(update).not.toHaveBeenCalled();
-    expect(String(log.mock.calls[0]?.[0])).toContain("oms host sync");
+    expect(String(log.mock.calls[0]?.[0])).toContain("oms setup host sync");
     expect(process.exitCode).toBe(0);
   });
 });

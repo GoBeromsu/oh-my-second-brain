@@ -15,9 +15,9 @@ import { buildTruthTableRow, TRUTH_TABLE_ROWS, type TruthTableFixture } from "..
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const WRAPPER = path.join(REPO_ROOT, "assets", "claude", "hooks", "oms-guard.mjs");
 const ALLOW = '{"continue":true,"suppressOutput":true}\n';
-const WARNING = "[oms] guard could not reach the judge; write allowed. Run: oms contract doctor\n";
+const WARNING = "[oms] guard could not reach the judge; write allowed. Run: oms doctor contract\n";
 const CONTROL_DENY = formatDenyReason([{ field: "path", kind: "control-path" }]);
-const SEARCH_DENY = `[oms] write denied: ${JSON.stringify([{ field: "path", kind: "control-path" }])} Narrow the search path or glob so it cannot reach ~/.oms. Run: oms status`;
+const SEARCH_DENY = `[oms] write denied: ${JSON.stringify([{ field: "path", kind: "control-path" }])} Narrow the search path or glob so it cannot reach ~/.oms. Run: oms doctor status`;
 const UNSAFE_DENY = formatDenyReason([{ field: "path", kind: "path-unsafe" }]);
 const INPUT_DENY = formatDenyReason([{ field: "input", kind: "unsupported-input" }]);
 

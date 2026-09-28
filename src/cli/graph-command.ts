@@ -11,7 +11,7 @@ interface ParsedGraphCommand {
 }
 
 function usage(): string {
-  return "Usage: oms graph <build|status> [--vault <path>]";
+  return "Usage: oms doctor build-graph [--vault <path>] | oms doctor status [--vault <path>]";
 }
 
 function parse(argv: readonly string[]): ParsedGraphCommand {

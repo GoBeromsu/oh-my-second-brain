@@ -176,7 +176,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { contract: "unreadable", findings: expect.arrayContaining([{ message: "vault settings unreadable", guidance: "oms contract doctor" }]) },
+      convention: { contract: "unreadable", findings: expect.arrayContaining([{ message: "vault settings unreadable", guidance: "oms doctor contract" }]) },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },

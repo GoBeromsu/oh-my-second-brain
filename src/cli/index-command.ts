@@ -103,7 +103,7 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
       return 1;
     }
     if (args.positional.length !== 2) {
-      writeError("Usage: oms index repair --mode rebuild|drop [--dry-run]");
+      writeError("Usage: oms doctor sync-embeddings --mode repair --repair-mode rebuild|drop [--dry-run]");
       return 1;
     }
     if (typeof args.options["mode"] === "string" && args.options["mode"].includes("\u0000")) {
@@ -111,11 +111,11 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
       return 1;
     }
     if (mode === undefined) {
-      writeError('CLI "oms index repair" requires "--mode rebuild" or "--mode drop".');
+      writeError('CLI "oms doctor sync-embeddings --mode repair" requires "--repair-mode rebuild" or "--repair-mode drop".');
       return 1;
     }
     if (mode !== "rebuild" && mode !== "drop") {
-      writeError('CLI "oms index repair --mode" must be "rebuild" or "drop".');
+      writeError('CLI "oms doctor sync-embeddings --repair-mode" must be "rebuild" or "drop".');
       return 1;
     }
     if (!onlyOptions(["mode", "dryRun"])) return 1;
@@ -139,7 +139,7 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
   if (command === "sync") {
     if (!ensureMutableTarget()) return 1;
     if (args.positional.length !== 2 || !onlyOptions(["collection", "index", "chunkStrategy", "maxDocsPerBatch", "maxBatchMb"])) {
-      if (args.positional.length !== 2) writeError("Usage: oms index sync [options]");
+      if (args.positional.length !== 2) writeError("Usage: oms doctor sync-embeddings --mode sync [options]");
       return 1;
     }
     return runEngineSession(vault, { write: true, embed: false }, async (adapter) => {
@@ -160,7 +160,7 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
   if (command === "embed") {
     if (!ensureMutableTarget()) return 1;
     if (args.positional.length !== 2 || !onlyOptions(["collection", "index", "chunkStrategy", "maxDocsPerBatch", "maxBatchMb"])) {
-      if (args.positional.length !== 2) writeError("Usage: oms index embed [options]");
+      if (args.positional.length !== 2) writeError("Usage: oms doctor sync-embeddings --mode embed [options]");
       return 1;
     }
     return runEngineSession(vault, { write: true, embed: true }, async (adapter) => {
@@ -187,11 +187,11 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
       || (view !== "status" && view !== "collections" && view !== "contexts")
       || !onlyOptions(["index", "collection"])
     ) {
-      writeError("Usage: oms index status [--view status|collections|contexts] [--index <path>]");
+      writeError("Usage: oms doctor status [--view status|collections|contexts] [--index <path>]");
       return 1;
     }
     if (!existsSync(engineStorePath(vault))) {
-      writeError("No engine store; run `oms index sync`.");
+      writeError("No engine store; run `oms doctor sync-embeddings --mode sync`.");
       return 1;
     }
     try {
@@ -221,7 +221,7 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
       });
     } catch (error) {
       if (engineStoreDiagnostic(error) === "corrupt-or-incompatible" && error instanceof Error) {
-        writeError(`${error.message} Run "oms index repair --mode rebuild" to create a fresh store.`);
+        writeError(`${error.message} Run "oms doctor sync-embeddings --mode repair --repair-mode rebuild" to create a fresh store.`);
         return 1;
       }
       throw error;
@@ -231,7 +231,7 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
   if (command === "clean") {
     if (!ensureMutableTarget()) return 1;
     if (args.positional.length !== 2 || !onlyOptions(["index"])) {
-      if (args.positional.length !== 2) writeError("Usage: oms index clean [--index <path>]");
+      if (args.positional.length !== 2) writeError("Usage: oms doctor cleanup [--index <path>]");
       return 1;
     }
     return runEngineSession(vault, { write: true }, async (adapter) => {
