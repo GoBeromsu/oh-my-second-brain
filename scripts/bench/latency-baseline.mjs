@@ -4,8 +4,8 @@
 // Usage: node scripts/bench/latency-baseline.mjs [--n <runs>]   (or OMS_BENCH_N; default 30)
 //
 // Each sample is the wall time of one `node dist/cli/oms.js ...` subprocess.
-//   cold: every sample gets a fresh vault copy and a fresh isolated home, so no process
-//         or on-disk state from an earlier sample can help it.
+//   cold: fresh OMS state (vault copy + home) per sample, so no on-disk state from an
+//         earlier sample can help it. OS file caches and the Node binary stay warm.
 //   warm: one vault copy and home; one discarded warm-up run, then N samples back to back.
 // Every subprocess runs with HOME, USERPROFILE, XDG_* and every OMS_* home pointed into a
 // temp dir, so the real ~/.oms and any real vault are never read or written.
@@ -59,7 +59,16 @@ function timeRun(box, args) {
   const start = performance.now();
   const result = spawnSync(process.execPath, [OMS, ...args, "--vault", box.vault], { cwd: box.base, env: box.env, encoding: "utf8" });
   const ms = performance.now() - start;
-  if (result.status !== 0) throw new Error(`oms ${args.join(" ")} exited ${result.status}: ${result.stderr}`);
+  if (result.status !== 0) {
+    throw new Error(`oms ${args.join(" ")} exited ${result.status}${result.error ? ` (${result.error.message})` : ""}: ${result.stderr}`);
+  }
+  if (args[0] === "search") {
+    // A plain query must stay lexical-only, or the baseline would silently measure another path.
+    const channels = JSON.parse(result.stdout).receipt?.usedChannels;
+    if (JSON.stringify(channels) !== JSON.stringify(["lex"])) {
+      throw new Error(`expected search receipt.usedChannels ["lex"], got ${JSON.stringify(channels)}`);
+    }
+  }
   return ms;
 }
 
