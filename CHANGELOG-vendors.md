@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- **Host guidance and the Claude guard name the 0.19 commands.** Deny reasons and the guard's transport-failure warning now point at `oms doctor contract`, `oms doctor status`, and `oms setup host sync`, and a new test spawns the real guard to prove every command it prints dispatches in the built CLI. The Claude, Codex, and Hermes registrations install the six shared skills (`interview` replaces `link` and `status`); run `oms setup host sync` after upgrading.
+
 ## [0.18.3] - 2026-09-26
 
 ## [0.18.2] - 2026-09-26

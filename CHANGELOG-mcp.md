@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- **Breaking: the MCP server exposes four tools: `write`, `search`, `interview`, and `doctor`.** The `link` tool is removed; suggest links with `search` `op: "link"` and check them with `doctor` `op: "link-check"`. The `status` tool is removed; `doctor` `op: "status"` reports the same health read-only and creates no engine store. The new `interview` tool lists the questions the owner would be asked now, with the seal state, and seals nothing: answers still go through `oms setup --answers`, and loosening stays with the owner's terminal. Annotations are per tool, so `readTools` is now `[search]`. Hosts display `oms_write`, `oms_search`, `oms_interview`, and `oms_doctor`.
+
 - **`search` accepts `{path}` with no `op` for an engine-free exact read of one note.** The call returns the same document shape as `oms search --path`, never opens the engine store or a model, and is refused when combined with `op` or any other argument. A path the caller got wrong returns `available: false`, while an I/O failure such as a missing vault root returns the same `Oh My Second Brain MCP error` result as every other tool; the tool schema advertises it as its own `oneOf` branch, so `op` is no longer top-level required for `search`.
 
 ## [0.18.3] - 2026-09-26
