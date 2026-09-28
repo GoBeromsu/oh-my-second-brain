@@ -73,6 +73,9 @@ export async function updateKeywordIndex(options: KeywordUpdateOptions, deps: Pa
   } catch {
     return "failed";
   }
+  // Check-then-open, deliberately unlocked: a store created after this check is picked up
+  // by the next write, and one removed between this check and the sync may be recreated
+  // by the sync. The window is the few calls before the sync takes its writer lock.
   if (!exists(dbPath)) return "skipped";
   try {
     const result = await sync({ vault: options.vault, files: [options.relPath], embed: false, dbPath });
@@ -104,7 +107,9 @@ export function listDirtyQueue(dbPath: string): string[] {
 
 /**
  * Before an embedding sync: re-marks every queued note, so a lexical-only sync that ran
- * since the write cannot hide the stale vectors. Returns the queued paths.
+ * since the write cannot hide the stale vectors. Returns the queued paths. Harmless when
+ * the sync then turns out unavailable: a queued note's vectors are stale either way, and
+ * the marks only make the next available sync re-embed them.
  */
 export function prepareDirtyDrain(dbPath: string): string[] {
   if (!existsSync(dbPath)) return [];
