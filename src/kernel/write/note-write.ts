@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { link, lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
-import { syncDirectory } from "../kernel/contract/fs-private.js";
+import { syncDirectory } from "../contract/fs-private.js";
 
 /**
  * The note write behind MCP `write`. Unlike the private contract store, a note is vault

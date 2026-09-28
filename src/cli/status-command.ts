@@ -37,6 +37,69 @@ function diagnostic(error: unknown): {
   };
 }
 
+/** The status report for an already-resolved vault; every section degrades to its own diagnostic. */
+export async function collectStatus(resolved: { readonly vault: string; readonly source: string }): Promise<Record<string, unknown>> {
+  // Status is an observation, not a control dump: posture, findings and drift
+  // states only, never a rule value, a vault id or a store path.
+  let convention: unknown;
+  try {
+    convention = await contractStatus(resolved.vault);
+  } catch {
+    // The error text may name the store; only the fixed guidance is shown.
+    convention = { contract: "unreadable", findings: [{ message: "contract status unavailable", guidance: "oms contract doctor" }] };
+  }
+
+  let history: unknown;
+  try {
+    history = summarizeRuntimeHistory({ vaultPath: resolved.vault });
+  } catch (error: unknown) {
+    history = { status: "unavailable", diagnostics: [diagnostic(error)] };
+  }
+
+  let engine: unknown;
+  if (!existsSync(engineStorePath(resolved.vault))) {
+    engine = { available: false as const, reason: "Engine store not found" };
+  } else {
+    try {
+      engine = await runEngineSession(
+        resolved.vault,
+        { write: false },
+        (adapter) => adapter.semanticStatus({ vault: resolved.vault }),
+      );
+    } catch (error: unknown) {
+      engine = {
+        available: false,
+        reason: error instanceof Error ? error.message : String(error),
+        diagnostics: [diagnostic(error)],
+      };
+    }
+  }
+
+  let graph: unknown;
+  try {
+    const graphEngine = engineAssembly.assembleGraphOnlyEngine({ vault: resolved.vault });
+    try {
+      graph = await graphEngine.adapter.graphStatus(resolved.vault);
+    } finally {
+      await graphEngine.dispose();
+    }
+  } catch (error: unknown) {
+    graph = {
+      available: false,
+      reason: error instanceof Error ? error.message : String(error),
+      diagnostics: [diagnostic(error)],
+    };
+  }
+  return {
+    vault: resolved.vault,
+    source: resolved.source,
+    convention,
+    history,
+    engine,
+    graph,
+  };
+}
+
 export async function runStatusCommand(argv: readonly string[]): Promise<void> {
   process.exitCode = 0;
   if (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h")) {
@@ -49,66 +112,7 @@ export async function runStatusCommand(argv: readonly string[]): Promise<void> {
     const resolved = explicit === undefined
       ? await resolveEffectiveVault(process.cwd(), process.env)
       : { vault: path.resolve(explicit), source: "explicit" as const };
-
-    // Status is an observation, not a control dump: posture, findings and drift
-    // states only, never a rule value, a vault id or a store path.
-    let convention: unknown;
-    try {
-      convention = await contractStatus(resolved.vault);
-    } catch {
-      // The error text may name the store; only the fixed guidance is shown.
-      convention = { contract: "unreadable", findings: [{ message: "contract status unavailable", guidance: "oms contract doctor" }] };
-    }
-
-    let history: unknown;
-    try {
-      history = summarizeRuntimeHistory({ vaultPath: resolved.vault });
-    } catch (error: unknown) {
-      history = { status: "unavailable", diagnostics: [diagnostic(error)] };
-    }
-
-    let engine: unknown;
-    if (!existsSync(engineStorePath(resolved.vault))) {
-      engine = { available: false as const, reason: "Engine store not found" };
-    } else {
-      try {
-        engine = await runEngineSession(
-          resolved.vault,
-          { write: false },
-          (adapter) => adapter.semanticStatus({ vault: resolved.vault }),
-        );
-      } catch (error: unknown) {
-        engine = {
-          available: false,
-          reason: error instanceof Error ? error.message : String(error),
-          diagnostics: [diagnostic(error)],
-        };
-      }
-    }
-
-    let graph: unknown;
-    try {
-      const graphEngine = engineAssembly.assembleGraphOnlyEngine({ vault: resolved.vault });
-      try {
-        graph = await graphEngine.adapter.graphStatus(resolved.vault);
-      } finally {
-        await graphEngine.dispose();
-      }
-    } catch (error: unknown) {
-      graph = {
-        available: false,
-        reason: error instanceof Error ? error.message : String(error),
-        diagnostics: [diagnostic(error)],
-      };
-    }
-    console.log(JSON.stringify({
-      vault: resolved.vault,
-      source: resolved.source,
-      convention,
-      history,
-      engine,
-      graph,
-    }, null, 2));
+    console.log(JSON.stringify(await collectStatus(resolved), null, 2));
   } catch (error: unknown) {
     process.exitCode = 1;
     console.log(JSON.stringify({
