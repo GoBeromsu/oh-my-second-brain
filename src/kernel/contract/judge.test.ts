@@ -43,8 +43,8 @@ describe("GUIDANCE totality", () => {
 
   it("formats a deny reason with the first violation's guidance", () => {
     expect(formatDenyReason([{ field: "contract", kind: "contract-unreadable" }, { field: "x", kind: "missing" }]))
-      .toBe('[oms] write denied: [{"field":"contract","kind":"contract-unreadable"},{"field":"x","kind":"missing"}] Run: oms contract doctor');
-    expect(formatDenyReason([])).toBe("[oms] write denied: [] Run: oms status");
+      .toBe('[oms] write denied: [{"field":"contract","kind":"contract-unreadable"},{"field":"x","kind":"missing"}] Run: oms doctor contract');
+    expect(formatDenyReason([])).toBe("[oms] write denied: [] Run: oms doctor status");
   });
 });
 

@@ -105,40 +105,40 @@ export interface Verdict {
 
 /** The only command names agent-facing output may contain. */
 export const GUIDANCE = [
-  "oms contract doctor",
-  "oms contract doctor --fix",
-  "oms status",
-  "oms host sync",
+  "oms doctor contract",
+  "oms doctor contract --fix",
+  "oms doctor status",
+  "oms setup host sync",
   "oms setup",
 ] as const;
 export type Guidance = (typeof GUIDANCE)[number];
 
 /** Total: exactly one guidance per kind. */
 export const GUIDANCE_FOR: Readonly<Record<ViolationKind, Guidance>> = {
-  "control-path": "oms status",
-  "yaml-syntax": "oms status",
-  "path-unsafe": "oms status",
-  "outside-vault": "oms status",
-  "contract-unreadable": "oms contract doctor",
-  "unregistered-folder": "oms status",
-  "unknown-property": "oms status",
-  "missing": "oms status",
-  "type": "oms status",
-  "not-allowed": "oms status",
-  "not-fixed": "oms status",
-  "pattern": "oms status",
-  "range": "oms status",
-  "unsubstituted-variable": "oms status",
-  "heading-missing": "oms status",
-  "folder-mismatch": "oms status",
-  "template-mismatch": "oms status",
-  "unsupported-input": "oms host sync",
+  "control-path": "oms doctor status",
+  "yaml-syntax": "oms doctor status",
+  "path-unsafe": "oms doctor status",
+  "outside-vault": "oms doctor status",
+  "contract-unreadable": "oms doctor contract",
+  "unregistered-folder": "oms doctor status",
+  "unknown-property": "oms doctor status",
+  "missing": "oms doctor status",
+  "type": "oms doctor status",
+  "not-allowed": "oms doctor status",
+  "not-fixed": "oms doctor status",
+  "pattern": "oms doctor status",
+  "range": "oms doctor status",
+  "unsubstituted-variable": "oms doctor status",
+  "heading-missing": "oms doctor status",
+  "folder-mismatch": "oms doctor status",
+  "template-mismatch": "oms doctor status",
+  "unsupported-input": "oms setup host sync",
 };
 
 /** The first violation picks the one guidance; the reason carries `{field, kind}` only. */
 export function formatDenyReason(violations: readonly Violation[]): string {
   const list = violations.map(violation => ({ field: violation.field, kind: violation.kind }));
-  const guidance = violations.length === 0 ? "oms status" : GUIDANCE_FOR[violations[0]!.kind];
+  const guidance = violations.length === 0 ? "oms doctor status" : GUIDANCE_FOR[violations[0]!.kind];
   return `[oms] write denied: ${JSON.stringify(list)} Run: ${guidance}`;
 }
 

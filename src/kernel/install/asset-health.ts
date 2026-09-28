@@ -51,7 +51,7 @@ export interface InstalledAssetInspection {
 }
 
 export function installRemediationCommand(vault: string, host: string): string {
-  return `oms host install --runtime ${host} --vault ${JSON.stringify(vault)}`;
+  return `oms setup host install --runtime ${host} --vault ${JSON.stringify(vault)}`;
 }
 
 function remediation(asset: InstalledAssetDeclaration, vault: string): string {

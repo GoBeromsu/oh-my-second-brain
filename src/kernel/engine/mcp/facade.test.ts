@@ -459,7 +459,7 @@ folders:
     expect(reason).toMatch(/OMS_RERANK_PROVIDER/);
     expect(reason).toMatch(/OMS_RERANK_MODEL/);
     expect(reason).not.toMatch(/\.oms\/settings\.json/);
-    expect(reason).toMatch(/oms model install --descriptor/);
+    expect(reason).toMatch(/oms setup model install --descriptor/);
     // A programmatic caller still learns about injection.
     expect(reason).toMatch(/assembleEngine\(\)/);
   });

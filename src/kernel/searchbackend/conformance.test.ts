@@ -355,7 +355,7 @@ function searchBackendConformance(
         expect(result.reason ?? "").toMatch(/OMS_EMBEDDING_PROVIDER/);
         expect(result.reason ?? "").toMatch(/OMS_EMBEDDING_MODEL/);
         expect(result.reason ?? "").toMatch(/\.oms\/settings\.json/);
-        expect(result.reason ?? "").toMatch(/oms model install --default/);
+        expect(result.reason ?? "").toMatch(/oms setup model install --default/);
         expect(result.receipt.requestedStrategy).toBe("expand");
       } finally {
         await dispose();

@@ -244,7 +244,7 @@ async function resolveNpmTopology(
     packagePrefix = runningPackagePrefix(options);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return { ok: false, error: `${detail} Run \`npm prefix -g\`, install from that prefix with \`npm install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run \`oms host sync\`.` };
+    return { ok: false, error: `${detail} Run \`npm prefix -g\`, install from that prefix with \`npm install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run \`oms setup host sync\`.` };
   }
 
   const prefixResult = await runner("npm", ["prefix", "-g"], { timeoutMs });
@@ -253,14 +253,14 @@ async function resolveNpmTopology(
     const detail = prefixResult.stderr.trim() || prefixResult.stdout.trim() || "npm prefix -g failed";
     return {
       ok: false,
-      error: `Unable to resolve npm's global prefix: ${detail}. Run \`npm prefix -g\`, then \`npm install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` and \`oms host sync\`.`,
+      error: `Unable to resolve npm's global prefix: ${detail}. Run \`npm prefix -g\`, then \`npm install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\` and \`oms setup host sync\`.`,
     };
   }
 
   if (!samePrefix(packagePrefix, npmPrefix)) {
     return {
       ok: false,
-      error: `Refusing to update: running OMS binary belongs to ${packagePrefix} (version ${options.currentVersion ?? "unknown"}), but npm prefix -g resolved ${npmPrefix} (target version ${options.latestVersion ?? "latest"}). Run \`npm --prefix ${packagePrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run the newly installed \`oms host sync\`.`,
+      error: `Refusing to update: running OMS binary belongs to ${packagePrefix} (version ${options.currentVersion ?? "unknown"}), but npm prefix -g resolved ${npmPrefix} (target version ${options.latestVersion ?? "latest"}). Run \`npm --prefix ${packagePrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run the newly installed \`oms setup host sync\`.`,
     };
   }
   try {
@@ -269,7 +269,7 @@ async function resolveNpmTopology(
     const detail = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
-      error: `Refusing to update: npm global prefix ${npmPrefix} is not writable: ${detail}. After restoring write access, run \`npm --prefix ${npmPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run the newly installed \`oms host sync\`.`,
+      error: `Refusing to update: npm global prefix ${npmPrefix} is not writable: ${detail}. After restoring write access, run \`npm --prefix ${npmPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run the newly installed \`oms setup host sync\`.`,
     };
   }
   return { ok: true };
@@ -397,7 +397,7 @@ export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult
     packageMutated: updateAvailable,
     mutated: updateAvailable,
     message: updateAvailable
-      ? `Successfully updated Oh My Second Brain from ${currentVersion ?? "unknown"} to ${latest.version}. Run the newly installed \`oms host sync\` to refresh host integrations.`
+      ? `Successfully updated Oh My Second Brain from ${currentVersion ?? "unknown"} to ${latest.version}. Run the newly installed \`oms setup host sync\` to refresh host integrations.`
       : `Oh My Second Brain is already up to date (${currentVersion ?? latest.version}).`,
     commands: updateAvailable ? commands : [],
     errors: [],
@@ -430,7 +430,7 @@ export async function checkUpdateNotice(
 }
 
 export function formatUpdateResult(result: UpdateResult): string {
-  const lines = [`[oms package] ${result.message}`];
+  const lines = [`[oms setup package] ${result.message}`];
   if (result.updateAvailable && !result.mutated) {
     lines.push("");
     lines.push("Planned commands:");
@@ -438,7 +438,7 @@ export function formatUpdateResult(result: UpdateResult): string {
       lines.push(`  ${command}`);
     }
     lines.push("");
-    lines.push("Run `oms package update --yes` to install the package. Then run the newly installed `oms host sync` to refresh host integrations.");
+    lines.push("Run `oms setup package update --yes` to install the package. Then run the newly installed `oms setup host sync` to refresh host integrations.");
   }
   if (result.errors.length > 0) {
     lines.push("");
@@ -454,6 +454,6 @@ export function formatUpdateNotice(notice: UpdateNotice | null): string {
   if (notice === null) return "";
   return [
     `[oms] Update available: ${notice.currentVersion ?? "unknown"} -> ${notice.latestVersion}.`,
-    "Run `oms package check` to inspect the release or `oms package update --yes` to install it. Then run the newly installed `oms host sync` to refresh host integrations.",
+    "Run `oms setup package check` to inspect the release or `oms setup package update --yes` to install it. Then run the newly installed `oms setup host sync` to refresh host integrations.",
   ].join("\n");
 }

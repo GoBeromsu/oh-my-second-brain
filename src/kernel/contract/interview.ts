@@ -599,21 +599,21 @@ export async function runInterview(input: {
   try {
     const state = await resolveSealState(vault, root);
     if (state.row === "vault-id-tampered") {
-      throw new Error("CONTRACT_VAULT_ID_TAMPERED: the vault id in .oms/settings.json does not match the id this vault was sealed with; restore the original .oms/settings.json or run `oms contract doctor`");
+      throw new Error("CONTRACT_VAULT_ID_TAMPERED: the vault id in .oms/settings.json does not match the id this vault was sealed with; restore the original .oms/settings.json or run `oms doctor contract`");
     }
     if (state.shared) {
-      throw new Error("CONTRACT_VAULT_ID_SHARED: another existing vault uses this vault id (a copied vault); remove .oms/settings.json in the copy, then run `oms contract setup` again");
+      throw new Error("CONTRACT_VAULT_ID_SHARED: another existing vault uses this vault id (a copied vault); remove .oms/settings.json in the copy, then run `oms setup` again");
     }
     // A first seal on this machine (no store yet) or a reseal of a readable seal; every recovery row stays with the terminal.
     const firstOrReseal = state.row === "never-sealed" || state.row === "synced-second-machine" || (state.row === "sealed" && state.view.state === "sealed");
     if (input.nonLoosening === true && !firstOrReseal) {
-      return { state: "refused", reasons: ["The seal needs recovery first; run `oms contract doctor`, then run `oms setup` yourself in a terminal."] };
+      return { state: "refused", reasons: ["The seal needs recovery first; run `oms doctor contract`, then run `oms setup` yourself in a terminal."] };
     }
     let settings: VaultSettings | null;
     try {
       settings = await readVaultSettings(vault);
     } catch {
-      return { state: "refused", reasons: ["The vault settings are unreadable; run `oms contract doctor`."] };
+      return { state: "refused", reasons: ["The vault settings are unreadable; run `oms doctor contract`."] };
     }
     const baseSeq = state.vaultId === null ? "none" : await currentSequence(state.vaultId, root);
     const sealed = state.view.state === "sealed" ? state.view.contract : null;
@@ -647,7 +647,7 @@ export async function runInterview(input: {
         : "Asking only about what is new or changed since the last seal; existing answers are kept.");
     }
     const skipped = newFolders.length - askFolderList.length + newProperties.size - askPropertyMap.size + changedTemplates.length - askTemplateList.length;
-    if (skipped > 0) io.say(`Skipping ${skipped} item(s) declined at an earlier seal; run \`oms contract setup --reask\` to answer them again.`);
+    if (skipped > 0) io.say(`Skipping ${skipped} item(s) declined at an earlier seal; run \`oms setup --reask\` to answer them again.`);
 
     // The interpretation decides which questions exist, so the owner confirms it first.
     const rejected = await confirmInterpretations(asker, askTemplateList);

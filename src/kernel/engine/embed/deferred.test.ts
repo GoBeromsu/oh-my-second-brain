@@ -50,7 +50,7 @@ describe("deferred graph-only embedding primitives", () => {
     expect(reason).toMatch(/OMS_EMBEDDING_PROVIDER/);
     expect(reason).toMatch(/OMS_EMBEDDING_MODEL/);
     expect(reason).toMatch(/\.oms\/settings\.json/);
-    expect(reason).toMatch(/oms model install --default/);
+    expect(reason).toMatch(/oms setup model install --default/);
     expect(reason).not.toMatch(/UPSTAGE_API_KEY/);
     // It must not advertise the rerank/generate remedies, which would not help.
     expect(reason).not.toMatch(/OMS_RERANK_PROVIDER|OMS_GENERATE_PROVIDER/);

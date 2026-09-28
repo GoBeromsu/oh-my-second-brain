@@ -121,14 +121,14 @@ describe("readSearchTemplateSource", () => {
     expect(open?.message).not.toContain("oms setup");
   });
 
-  it("points unreadable vault settings at doctor, as oms contract doctor does", async () => {
+  it("points unreadable vault settings at doctor, as oms doctor contract does", async () => {
     const vault = await makeVault();
     await mkdir(path.join(vault, ".oms"), { recursive: true });
     await writeFile(path.join(vault, ".oms", "settings.json"), "{not json\n");
     const read = await readSearchTemplateSource(vault);
     const open = read.diagnostics.find(item => item.code === "CONTRACT_OPEN");
     expect(open?.message).toContain("vault settings unreadable");
-    expect(open?.message).toContain("run oms contract doctor");
+    expect(open?.message).toContain("run oms doctor contract");
   });
 
   it("reports an unreadable seal as unavailable metadata instead of throwing", async () => {
@@ -150,7 +150,7 @@ describe("readSearchTemplateSource", () => {
     try {
       const read = await readSearchTemplateSource(vault);
       const unreadable = read.diagnostics.find(item => item.code === "CONTRACT_UNREADABLE");
-      expect(unreadable?.message).toMatch(/^sealed contract is unavailable: [A-Z][A-Z0-9_]*; run oms contract doctor$/);
+      expect(unreadable?.message).toMatch(/^sealed contract is unavailable: [A-Z][A-Z0-9_]*; run oms doctor contract$/);
       expect(JSON.stringify(read)).not.toContain(storeRoot());
     } finally {
       await chmod(storeRoot(), 0o700);

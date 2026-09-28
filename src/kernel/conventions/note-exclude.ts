@@ -265,13 +265,13 @@ async function readSealed(vault: string): Promise<{
   try {
     const view = (await resolveSealState(vault)).view;
     if (view.state === "unreadable") {
-      return { paths: [], globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, "the sealed contract is unreadable; run oms contract doctor")], classification: "unreadable" };
+      return { paths: [], globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, "the sealed contract is unreadable; run oms doctor contract")], classification: "unreadable" };
     }
     if (view.state === "sealed") contract = view.contract;
   } catch (error: unknown) {
     const code = nodeCode(error);
     if (code !== "ENOENT" && code !== "ENOTDIR") {
-      return { paths: [], globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, `${code ?? "CONTRACT_READ_FAILED"}; run oms contract doctor`)], classification: "unreadable" };
+      return { paths: [], globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, `${code ?? "CONTRACT_READ_FAILED"}; run oms doctor contract`)], classification: "unreadable" };
     }
   }
   if (contract === null) return { paths: [], globs: [], diagnostics: [], classification: "open" };

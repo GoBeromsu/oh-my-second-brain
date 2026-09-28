@@ -77,35 +77,29 @@ export interface HarnessSurfaceRegistry {
 export const HARNESS_SHARED_SKILLS: readonly string[] = [
   "distill",
   "doctor",
-  "link",
+  "interview",
   "search",
   "setup",
-  "status",
   "write",
 ];
 
 export const HARNESS_CLI_COMMANDS: readonly HarnessCliCommandSurface[] = [
+  { name: "search", owner: "semantic-engine", stability: "stable" },
+  { name: "interview", owner: "cli", stability: "stable" },
+  { name: "write", owner: "capture", stability: "stable" },
   { name: "setup", owner: "cli", stability: "stable" },
-  { name: "contract", owner: "cli", stability: "experimental" },
-  { name: "note", owner: "capture", stability: "stable" },
-  { name: "link", owner: "capture", stability: "stable" },
-  { name: "bridge", owner: "install", stability: "stable" },
-  { name: "search", owner: "semantic-engine", stability: "experimental" },
-  { name: "index", owner: "semantic-engine", stability: "experimental" },
-  { name: "graph", owner: "semantic-engine", stability: "experimental" },
-  { name: "host", owner: "install", stability: "stable" },
-  { name: "package", owner: "release", stability: "stable" },
-  { name: "model", owner: "semantic-engine", stability: "stable" },
+  { name: "doctor", owner: "cli", stability: "stable" },
   { name: "serve", owner: "semantic-engine", stability: "experimental" },
   { name: "hook", owner: "hook", stability: "stable" },
-  { name: "status", owner: "cli", stability: "stable" },
 ];
+
+/** CLI families that run but are not listed in the main usage. */
+export const HARNESS_HIDDEN_CLI_COMMANDS: readonly string[] = ["hook"];
 
 export const HARNESS_MCP_TOOLS: readonly HarnessMcpToolSurface[] = [
   { name: "write", owner: "capture", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
   { name: "search", owner: "retrieval", posture: "read", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
-  { name: "link", owner: "capture", posture: "read", destructive: false, idempotent: true, openWorld: false, stability: "stable" },
-  { name: "status", owner: "mcp", posture: "read", destructive: false, idempotent: true, openWorld: false, stability: "stable" },
+  { name: "interview", owner: "mcp", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
   { name: "doctor", owner: "mcp", posture: "write", destructive: false, idempotent: false, openWorld: false, stability: "stable" },
 ];
 
@@ -177,6 +171,7 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       "docs/architecture.md",
       "docs/conventions.md",
       "docs/cli-map.md",
+      "docs/migration-0.19.md",
       "docs/verified-target.md",
       "scripts/install.sh",
       "scripts/uninstall.sh",
@@ -210,17 +205,15 @@ export const harnessSurfaceRegistry: HarnessSurfaceRegistry = {
       ".mcp.codex.json",
       "assets/skills/distill/SKILL.md",
       "assets/skills/doctor/SKILL.md",
-      "assets/skills/link/SKILL.md",
+      "assets/skills/interview/SKILL.md",
       "assets/skills/search/SKILL.md",
       "assets/skills/setup/SKILL.md",
-      "assets/skills/status/SKILL.md",
       "assets/skills/write/SKILL.md",
       "skills/distill/SKILL.md",
       "skills/doctor/SKILL.md",
-      "skills/link/SKILL.md",
+      "skills/interview/SKILL.md",
       "skills/search/SKILL.md",
       "skills/setup/SKILL.md",
-      "skills/status/SKILL.md",
       "skills/write/SKILL.md",
       "assets/claude/hooks/oms-guard.mjs",
       "assets/claude/CLAUDE.md",

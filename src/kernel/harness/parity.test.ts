@@ -39,49 +39,20 @@ describe("harness registry parity", () => {
       .filter((command) => command.owner === "semantic-engine")
       .map((command) => command.name);
 
-    expect(commands).toEqual(["search", "index", "graph", "model", "serve"]);
-    expect(commands).not.toEqual(expect.arrayContaining(["doc", "embed", "semantic"]));
-    expect(harnessSurfaceRegistry.cliCommands.map((command) => command.name)).toContain("status");
+    expect(commands).toEqual(["search", "serve"]);
+    expect(commands).not.toEqual(expect.arrayContaining(["doc", "embed", "semantic", "index", "graph", "model"]));
+    expect(harnessSurfaceRegistry.cliCommands.map((command) => command.name)).not.toContain("status");
   });
 
-  it("keeps fourteen CLI families distinct from seven shared skills and five MCP tools", () => {
+  it("keeps six CLI families plus the hidden hook distinct from six shared skills and four MCP tools", () => {
     const commands = harnessSurfaceRegistry.cliCommands.map((command) => command.name);
-    expect(commands).toEqual([
-      "setup",
-      "contract",
-      "note",
-      "link",
-      "bridge",
-      "search",
-      "index",
-      "graph",
-      "host",
-      "package",
-      "model",
-      "serve",
-      "hook",
-      "status",
-    ]);
+    expect(commands).toEqual(["search", "interview", "write", "setup", "doctor", "serve", "hook"]);
     const skills = [...harnessSurfaceRegistry.hosts[0]!.skillDirs].sort();
-    expect(skills).toEqual([
-      "distill",
-      "doctor",
-      "link",
-      "search",
-      "setup",
-      "status",
-      "write",
-    ]);
+    expect(skills).toEqual(["distill", "doctor", "interview", "search", "setup", "write"]);
     expect([...commands].sort()).not.toEqual(skills);
-    expect(harnessSurfaceRegistry.mcpTools.map((tool) => tool.name)).toEqual([
-      "write",
-      "search",
-      "link",
-      "status",
-      "doctor",
-    ]);
+    expect(harnessSurfaceRegistry.mcpTools.map((tool) => tool.name)).toEqual(["write", "search", "interview", "doctor"]);
     expect(harnessSurfaceRegistry.mcpTools.map((tool) => tool.name)).not.toEqual(
-      expect.arrayContaining(["interview", "distill", "template"]),
+      expect.arrayContaining(["link", "status", "distill", "template"]),
     );
   });
 
@@ -91,17 +62,13 @@ describe("harness registry parity", () => {
     );
   });
 
-  it("records link as read-only and write as mixed", () => {
-    const link = harnessSurfaceRegistry.mcpTools.find((tool) => tool.name === "link");
+  it("records search as the only read tool and write as mixed", () => {
+    const search = harnessSurfaceRegistry.mcpTools.find((tool) => tool.name === "search");
     const write = harnessSurfaceRegistry.mcpTools.find((tool) => tool.name === "write");
 
-    expect(link).toMatchObject({
-      posture: "read",
-      destructive: false,
-      idempotent: true,
-      openWorld: false,
-    });
-    // Approved control commit mutates, so write stays a write tool. guide/check/complete do not.
+    expect(search).toMatchObject({ posture: "read", destructive: false, openWorld: false });
+    expect(harnessSurfaceRegistry.mcpTools.filter((tool) => tool.posture === "read").map((tool) => tool.name)).toEqual(["search"]);
+    // Approved control commit mutates, so write stays a write tool.
     expect(write).toMatchObject({
       posture: "write",
       destructive: false,
@@ -127,7 +94,9 @@ describe("harness registry parity", () => {
     // once the deletion lands.
     const declared = new Set(harnessSurfaceRegistry.hosts.map((host) => [...host.skillDirs].sort().join(",")));
     expect(declared.size, "hosts declare divergent skill sets").toBe(1);
-    await expect(fileExists("assets/skills/interview/SKILL.md"), "retired interview skill").resolves.toBe(false);
+    await expect(fileExists("assets/skills/interview/SKILL.md"), "interview skill").resolves.toBe(true);
+    await expect(fileExists("assets/skills/link/SKILL.md"), "retired link skill").resolves.toBe(false);
+    await expect(fileExists("assets/skills/status/SKILL.md"), "retired status skill").resolves.toBe(false);
     await expect(fileExists("assets/skills/template/SKILL.md"), "retired template skill").resolves.toBe(false);
   });
 
@@ -190,7 +159,7 @@ describe("harness registry parity", () => {
       "assets/skills/write/SKILL.md",
       "skills/write/SKILL.md",
     ]));
-    for (const retired of ["assets/skills/interview/SKILL.md", "skills/interview/SKILL.md", "assets/skills/template/SKILL.md", "skills/template/SKILL.md"]) {
+    for (const retired of ["assets/skills/link/SKILL.md", "skills/status/SKILL.md", "assets/skills/template/SKILL.md", "skills/template/SKILL.md"]) {
       expect(harnessSurfaceRegistry.packageAssets.releaseRequiredPaths).not.toContain(retired);
     }
     expect(harnessSurfaceRegistry.packageAssets.releaseRequiredPaths).not.toEqual(expect.arrayContaining([

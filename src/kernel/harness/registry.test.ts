@@ -119,7 +119,7 @@ describe("validateHarnessRegistry", () => {
     const base = cloneRegistry();
     const missingLink: HarnessSurfaceRegistry = {
       ...base,
-      mcpTools: base.mcpTools.filter((tool) => tool.name !== "link"),
+      mcpTools: base.mcpTools.filter((tool) => tool.name !== "interview"),
     };
     const unregistered: HarnessSurfaceRegistry = {
       ...base,
@@ -127,7 +127,7 @@ describe("validateHarnessRegistry", () => {
         ...base.mcpTools,
         {
           ...base.mcpTools[1]!,
-          name: "interview",
+          name: "status",
         },
       ],
     };
@@ -137,7 +137,7 @@ describe("validateHarnessRegistry", () => {
         expect.objectContaining({
           code: "missing_surface",
           surface: "mcpTools",
-          value: "link",
+          value: "interview",
         }),
       ]),
     );
@@ -146,7 +146,7 @@ describe("validateHarnessRegistry", () => {
         expect.objectContaining({
           code: "unregistered_surface",
           surface: "mcpTools",
-          value: "interview",
+          value: "status",
         }),
       ]),
     );
@@ -156,7 +156,7 @@ describe("validateHarnessRegistry", () => {
     const base = cloneRegistry();
     const missingNote: HarnessSurfaceRegistry = {
       ...base,
-      cliCommands: base.cliCommands.filter((command) => command.name !== "note"),
+      cliCommands: base.cliCommands.filter((command) => command.name !== "write"),
     };
     const unregistered: HarnessSurfaceRegistry = {
       ...base,
@@ -171,7 +171,7 @@ describe("validateHarnessRegistry", () => {
         expect.objectContaining({
           code: "missing_surface",
           surface: "cliCommands",
-          value: "note",
+          value: "write",
         }),
       ]),
     );
