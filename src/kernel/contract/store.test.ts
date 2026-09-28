@@ -98,13 +98,13 @@ describe("contract store", () => {
     const counts = [{ kind: "count", min: 1, max: 3 }, { kind: "count", min: 0 }, { kind: "count", max: 2 }, { kind: "count" }] as const;
     const contract: VaultContract = { ...CONTRACT, properties: { tags: { meaning: "labels", type: "list", default: false, required: false, rules: [...counts] } } };
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract, digest: MANIFEST_DIGEST });
   });
 
   it("stores a count rule whose min exceeds its max", async () => {
     const contract: VaultContract = { ...CONTRACT, properties: { tags: { meaning: "labels", type: "list", default: false, required: false, rules: [{ kind: "count", min: 3, max: 1 }] } } };
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract, digest: MANIFEST_DIGEST });
   });
 
   it("still refuses a malformed count rule", async () => {
