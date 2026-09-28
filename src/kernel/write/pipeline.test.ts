@@ -284,6 +284,37 @@ describe("runWritePipeline", () => {
     expect({ vault: await snapshot(fixture.vault), store: await snapshot(store) }).toEqual(before);
   });
 
+  it("check folds the ifMatch precondition into a save as well", async () => {
+    const fixture = await sealedVault();
+    await mkdir(path.join(fixture.vault, "Projects"));
+    const original = "---\nstatus: active\n---\noriginal\n";
+    await writeFile(path.join(fixture.vault, "Projects", "a.md"), original);
+    const before = await snapshot(fixture.vault);
+    const content = "---\nstatus: active\nmood: calm\n---\nchanged\n";
+    const check = async (ifMatch?: string) => {
+      const outcome = await runWritePipeline(request(fixture, "Projects/a.md", content, { check: true, ...(ifMatch === undefined ? {} : { ifMatch }) }), { now: () => NOW });
+      return outcome.kind === "checked" ? outcome.check.resolution : null;
+    };
+    expect(await check()).toMatchObject({ action: "save", wouldDraft: false, precondition: "if-match-required" });
+    expect(await check(sha256("stale\n"))).toMatchObject({ action: "save", precondition: "changed" });
+    const valid = await check(sha256(original));
+    expect(valid).toMatchObject({ action: "save", gaps: [{ field: "mood" }] });
+    expect(valid).not.toHaveProperty("precondition");
+    expect(await snapshot(fixture.vault)).toEqual(before);
+  });
+
+  it("check gives a refusal no precondition, even with a stale ifMatch", async () => {
+    const fixture = await sealedVault({
+      ...CONTRACT,
+      properties: { ...CONTRACT.properties!, status: { ...CONTRACT.properties!["status"]!, rules: [{ kind: "allowed", values: [] }] } },
+    });
+    await mkdir(path.join(fixture.vault, "Projects"));
+    await writeFile(path.join(fixture.vault, "Projects", "a.md"), "---\nstatus: active\n---\noriginal\n");
+    const refused = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: paused\n---\n", { check: true, ifMatch: sha256("stale\n") }), { now: () => NOW });
+    expect(refused).toMatchObject({ kind: "checked", check: { resolution: { action: "refuse" } } });
+    expect(refused.kind === "checked" ? refused.check.resolution : null).not.toHaveProperty("precondition");
+  });
+
   it("check predicts the write for an extra optional key: the same action and dropped fields, with nothing written", async () => {
     const fixture = await sealedVault();
     const store = path.join(fixture.base, "home", ".oms");

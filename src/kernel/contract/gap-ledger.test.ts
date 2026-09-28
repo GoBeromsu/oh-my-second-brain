@@ -1,12 +1,18 @@
-import { appendFile, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { appendFile, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, truncate, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GAP_EVENTS_FILE, choiceGapId, openGaps, readGapDraft, readGapLedger, recordGaps, resolveGap, writeGapDraft,
   type GapEvent, type GapInput,
 } from "./gap-ledger.js";
 import { stateDir } from "./state-dir.js";
+
+vi.mock("node:fs/promises", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, unlink: vi.fn(actual.unlink) };
+});
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const NOTE_REV = `sha256:${"a".repeat(64)}`;
@@ -208,6 +214,54 @@ describe("gap ledger", () => {
       expect(await recorded()).toEqual([id]);
       await recordGaps(root, VAULT_ID, [choice()], { now: () => 3 });
       expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.at)).toEqual([2]);
+    });
+
+    it("counts no marker while the ledger's only line is cut short", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      const [old] = await markers();
+      const partial = '{"type":"gap"';
+      await writeFile(ledgerPath(), partial);
+      // Named as if the cut-short line identified the ledger.
+      const unclosed = createHash("sha256").update(partial).digest("hex").slice(0, 16);
+      await writeFile(join(gapsDir(), `${unclosed}.${id}.seen`), "0");
+
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.at)).toEqual([2]);
+      const current = await markers();
+      expect(current).toHaveLength(1);
+      expect(current).not.toContain(old);
+      expect(current[0]!.startsWith(`${unclosed}.`)).toBe(false);
+    });
+
+    it("appends an open choice once more over legacy markers and keeps a resolved one closed", async () => {
+      const other = gap("template", { notePath: "Inbox/b.md", axis: "template", kind: "choice", wanted: { field: "template", value: ["Review", "Standup"] } });
+      const otherId = choiceGapId(other);
+      await recordGaps(root, VAULT_ID, [choice(), other], { now: () => 1 });
+      await resolveGap(root, VAULT_ID, otherId, "chose Review", { now: () => 2 });
+      for (const marker of await markers()) await rm(join(gapsDir(), marker));
+      await writeFile(join(gapsDir(), `${id}.seen`), "");
+      await writeFile(join(gapsDir(), `${otherId}.seen`), "");
+
+      await recordGaps(root, VAULT_ID, [choice(), other], { now: () => 3 });
+      expect(await recorded()).toEqual([id, otherId, otherId, id, otherId]);
+      expect(openGaps((await readGapLedger(root, VAULT_ID)).events).map(record => record.id)).toEqual([id]);
+      await recordGaps(root, VAULT_ID, [choice(), other], { now: () => 4 });
+      expect(await recorded()).toHaveLength(5);
+    });
+
+    it("still resolves with the committed records when pruning a stale marker fails", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      const [old] = await markers();
+      await rename(ledgerPath(), join(gapsDir(), "events.2026-09-29.jsonl"));
+      vi.mocked(unlink).mockRejectedValueOnce(Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }));
+
+      const records = await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(records.map(record => record.id)).toEqual([id]);
+      expect(vi.mocked(unlink)).toHaveBeenCalledWith(join(gapsDir(), old!));
+      expect(await recorded()).toEqual([id]);
+      const current = await markers();
+      expect(current).toHaveLength(2);
+      expect(current).toContain(old);
     });
 
     it("treats a malformed marker as absent", async () => {

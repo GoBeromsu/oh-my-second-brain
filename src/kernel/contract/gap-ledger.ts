@@ -31,8 +31,16 @@ import type { JsonScalar } from "./types.js";
  * stays closed until the contract or the candidates change. `<ledger>` names the current
  * `events.jsonl` by a hash of its first line, which an append-only file never changes, so
  * after the ledger is moved aside every marker is stale and the next repeat of a choice
- * lands in the fresh ledger. The first append to a fresh ledger deletes the stale markers,
- * so markers never outnumber the distinct choices of the current ledger. A marker holds
+ * lands in the fresh ledger. Two ledgers whose first lines are byte-identical share a name,
+ * so the second one inherits the first one's markers; that needs the same first event at
+ * the same millisecond, and a no-fit gap's random id rules it out.
+ *
+ * The first append to a fresh ledger deletes the stale markers, best effort, so markers
+ * are normally bounded by the distinct choices of the current ledger. Some leak until the
+ * next rotation: those left by a crash between the append and the prune or by a failed
+ * delete, those of a ledger whose first line was cut short past 4 KiB (its name is taken
+ * from the prefix, so the ledger never counts as fresh), and those a writer still holding
+ * a moved-aside file adds after the prune. A marker holds
  * the byte offset its event starts at; once that event falls out of the default 16 MiB
  * read window the marker no longer counts and the next repeat is appended again. A reader
  * that passes a smaller `maxBytes` can still miss a choice that is inside the default window.
@@ -281,16 +289,18 @@ async function writeMarker(path: string, offset: number): Promise<void> {
   }
 }
 
-/** Deletes every marker that does not belong to the ledger named `identity`. */
+/**
+ * Deletes every marker that does not belong to the ledger named `identity`. Best effort:
+ * the events are already committed, and a marker left behind only costs disk space.
+ */
 async function pruneMarkers(dir: string, identity: string): Promise<void> {
-  for (const name of await readdir(dir)) {
-    if (!name.endsWith(SEEN_SUFFIX) || name.startsWith(`${identity}.`)) continue;
-    try {
-      await unlink(join(dir, name));
-    } catch (error) {
-      // A concurrent prune got there first.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  try {
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith(SEEN_SUFFIX) || name.startsWith(`${identity}.`)) continue;
+      await unlink(join(dir, name)).catch(() => undefined);
     }
+  } catch {
+    // An unreadable directory keeps its stale markers until a later rotation sweeps them.
   }
 }
 
