@@ -100,3 +100,11 @@ Korean retrieval quality and in-process retrieval latency are measured with `npm
 (`scripts/bench/run.mjs`). These are also records, not release gates.
 
 - [ko-retrieval-ablation.md](./ko-retrieval-ablation.md): tier-1 CUR vs CUR+BI (syllable-bigram channel) per query type, the MIRACL-ko license verdict, the ablation stages not yet run, and the pending tier-3 command.
+
+## Contract lineage records
+
+Disk and seal cost of contract lineage snapshots and events, measured with
+`node scripts/bench/lineage-snapshots.mjs` against the built kernel. These are
+records, not release gates.
+
+- [contract-lineage-snapshots.md](./contract-lineage-snapshots.md): one snapshot's bytes and the cumulative snapshot and lineage size over 1000 seals, with and without dedup, for the fixture and a synthetic 10-template contract.
