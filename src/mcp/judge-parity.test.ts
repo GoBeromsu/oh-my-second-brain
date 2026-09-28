@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -123,13 +124,20 @@ async function seedPrevious(target: TruthTableFixture): Promise<void> {
   }
 }
 
+/** An edit names the revision it replaces, as the write pipeline requires of every overwrite. */
+function ifMatchOf(row: Row): string | undefined {
+  return row.previous === undefined ? undefined : `sha256:${createHash("sha256").update(row.previous).digest("hex")}`;
+}
+
 /** Runs `oms write` against the CLI vault with an injected stdin and an empty env, returning its receipt. */
 async function cliWrite(row: Row): Promise<{ ok: boolean; violations?: Violation[] }> {
   const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
   const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
   process.env["HOME"] = path.join(cliFixture.base, "home");
   try {
-    await runWriteCommand([row.path, "--vault", cliFixture.vault], { env: {}, cwd: cliFixture.vault, readStdin: async () => row.content });
+    const ifMatch = ifMatchOf(row);
+    const argv = ifMatch === undefined ? [row.path] : [row.path, "--if-match", ifMatch];
+    await runWriteCommand([...argv, "--vault", cliFixture.vault], { env: {}, cwd: cliFixture.vault, readStdin: async () => row.content });
     expect(error).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(row.ok ? 0 : 1);
     return JSON.parse(String(log.mock.calls[0]?.[0])) as { ok: boolean; violations?: Violation[] };
@@ -181,7 +189,7 @@ describe("MCP write, CLI write and the hook translator share one judge", () => {
     const cli = await cliWrite(row);
     const cliCalls = judgeSpy.calls.splice(0);
 
-    const result = await client.callTool({ name: "write", arguments: { path: row.path, content: row.content } });
+    const result = await client.callTool({ name: "write", arguments: { path: row.path, content: row.content, ...(row.previous === undefined ? {} : { ifMatch: ifMatchOf(row) }) } });
     const mcpCalls = judgeSpy.calls.splice(0);
     const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
     const payload = JSON.parse(text) as { ok: boolean; violations?: Violation[] };

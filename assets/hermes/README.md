@@ -19,7 +19,7 @@ skills are listed under `knowledge-management`. Filter with
 `skills_list(category="knowledge-management")`; the category
 `knowledge-management/oms` matches nothing.
 
-Agents write notes with MCP `write {path, content, template?}`. OMS judges each
+Agents write notes with MCP `write {path, content, template?, ifMatch?, check?}`. OMS judges each
 note against the contract the user sealed with `oms setup`. A denial returns
 only `{field, kind}` and a guidance command. There is no completion operation
 and no reviewer protocol, so deciding whether a note is worth keeping and

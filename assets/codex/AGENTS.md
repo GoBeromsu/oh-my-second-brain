@@ -14,7 +14,7 @@ the only OMS file.
 
 ## Writing
 
-Write vault notes with MCP `write {path, content, template?}` (`$oms-write`). A
+Write vault notes with MCP `write {path, content, template?, ifMatch?, check?}` (`$oms-write`). A
 denial gives only `{field, kind}` and a guidance command. Never ask about or
 guess the contract's location or values.
 

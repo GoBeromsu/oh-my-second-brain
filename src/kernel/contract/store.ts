@@ -20,6 +20,9 @@ import type { FolderContract, JsonScalar, PropertyContract, Rule, TemplateContra
 
 const MAX_STORE_FILE_BYTES = 4 * 1024 * 1024;
 const MANIFEST = "manifest.json";
+/** Version 2 adds the optional `TemplateContract.meaning`; a version 1 manifest still reads. */
+const MANIFEST_VERSION = 2;
+const READABLE_MANIFEST_VERSIONS: readonly unknown[] = [1, MANIFEST_VERSION];
 const FOLDERS = "folders.json";
 const PROPERTIES = "properties.json";
 const TEMPLATES = "templates";
@@ -112,11 +115,12 @@ function isPropertyContract(value: unknown): value is PropertyContract {
 }
 
 function isTemplateContract(value: unknown): value is TemplateContract {
-  if (!record(value) || !onlyKeys(value, ["source", "sourceHash", "requiredProperties", "narrowedRules", "requiredHeadings"], ["applyFolder"])) return false;
+  if (!record(value) || !onlyKeys(value, ["source", "sourceHash", "requiredProperties", "narrowedRules", "requiredHeadings"], ["applyFolder", "meaning"])) return false;
   const narrowed = value["narrowedRules"];
   return typeof value["source"] === "string"
     && typeof value["sourceHash"] === "string" && /^sha256:[0-9a-f]{64}$/.test(value["sourceHash"])
     && (value["applyFolder"] === undefined || typeof value["applyFolder"] === "string")
+    && (value["meaning"] === undefined || typeof value["meaning"] === "string")
     && isStrings(value["requiredProperties"]) && isStrings(value["requiredHeadings"])
     && record(narrowed) && Object.values(narrowed).every(isRules);
 }
@@ -256,7 +260,7 @@ async function readGeneration(directory: string): Promise<GenerationRead> {
   if (manifestRead.state !== "ok") return unreadable("manifest-mismatch");
   let manifest: unknown;
   try { manifest = parseBytes(manifestRead.bytes); } catch { return unreadable("manifest-mismatch"); }
-  if (!record(manifest) || !onlyKeys(manifest, ["version", "files"]) || manifest["version"] !== 1) return unreadable("manifest-mismatch");
+  if (!record(manifest) || !onlyKeys(manifest, ["version", "files"]) || !READABLE_MANIFEST_VERSIONS.includes(manifest["version"])) return unreadable("manifest-mismatch");
   const files = manifest["files"];
   if (!record(files) || !Object.values(files).every(digest => typeof digest === "string")) return unreadable("manifest-mismatch");
   const listed = await listFiles(directory);
@@ -574,7 +578,7 @@ export async function sealContract(request: SealRequest, root: string = storeRoo
         await writePrivate(join(directory, ...path.split("/")), content);
         digests[path] = digestBytes(content);
       }
-      await writePrivate(join(directory, MANIFEST), stringify({ version: 1, files: digests }));
+      await writePrivate(join(directory, MANIFEST), stringify({ version: MANIFEST_VERSION, files: digests }));
       await syncDirectory(directory);
 
       await deps.fs.symlink(generation, temporary);

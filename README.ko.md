@@ -134,7 +134,7 @@ oms search "프로젝트 결정" --vault /path/to/vault
 
 - **의미는 사용자 소유다.** 폴더, 속성 pool, 템플릿을 함께 인터뷰한다. 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다.
 - **볼트 안의 제어 파일은 하나다.** `.oms/settings.json`에 `version`, `vaultId`, `templateFolder`, `embedding`, `agentRepair`를 둔다. 다른 `.oms/` 항목은 무시하고 `oms doctor contract`가 예상하지 않은 제어 파일로 보고한다. `.obsidian/types.json`은 읽기 전용 관측값이며 봉인을 덮어쓰지 않는다.
-- **템플릿은 원본으로 남는다.** OMS는 템플릿이 선언하는 것을 기록한다. 다시 쓰거나 복사하거나 노트에 적용하지 않으며, Templater·JavaScript·전용 token 언어를 해석하거나 실행하지 않는다.
+- **템플릿은 원본으로 남는다.** OMS는 템플릿이 선언하는 것을 기록한다. 템플릿 파일을 다시 쓰거나 복사하지 않으며, Templater·JavaScript·전용 token 언어를 해석하거나 실행하지 않는다. 쓰기는 작성 중인 노트의 기계적인 부분만 채운다. `{{title}}`·`{{date}}`·`{{time}}` 변수, 새 노트의 date·datetime 기본값, 선택한 템플릿에서 빠진 heading이다. 필수 값을 대신 채우지는 않는다.
 - **변경은 드러난다.** `oms setup status`는 템플릿 상태를 `active`, `drift`, `missing`으로 보고한다. 변경된 템플릿을 조용히 재봉인하지 않는다.
 - **판정자는 하나다.** 거부 시 `{field, kind}` 위반과 안내 명령 하나만 반환한다. 규칙 값, 저장소 경로, 계약 본문은 반환하지 않는다.
 - **봉인 증거가 맞지 않으면 쓰기를 거부한다.** 이 기기의 증거가 볼트와 어긋나면 `contract-unreadable`로 거부하고 소유자가 `oms setup`을 다시 실행해야 한다. 봉인이 아예 없는 기기에서는 판정하지 않는 것과 구별한다.
@@ -240,7 +240,7 @@ oms hook pre                                    Claude 쓰기를 계약으로 �
 
 인식되는 모든 명령은 `--help`와 `-h`를 받으며 exit 0, 부작용 없음으로 끝난다. 알 수 없는 명령과 `--help`를 함께 쓰면 exit 1이다. 0.19에서 제거된 family는 exit 1로 끝나며 대체 명령을 알려 준다.
 
-`oms doctor audit`는 노트를 다시 쓰지 않고 `{path, field, kind}` 항목을 보고한다. 노트는 `oms write <path> < note.md` 또는 MCP `write {path, content, template?}`로 전체 내용을 쓴다. 둘 다 같은 검증된 target 쓰기 경로를 거친다. 선택 사항인 `template`은 따르는 봉인된 템플릿 이름이다. 완료 호출이나 리뷰어 대화는 없다.
+`oms doctor audit`는 노트를 다시 쓰지 않고 `{path, field, kind}` 항목을 보고한다. 노트는 `oms write <path> < note.md` 또는 MCP `write {path, content, template?, ifMatch?, check?}`로 전체 내용을 쓴다. 둘 다 같은 쓰기 파이프라인을 거친다. 선택 사항인 `template`은 따르는 봉인된 템플릿 이름이다. 기존 노트를 덮어쓰려면 현재 `sha256:` revision을 `ifMatch`(`--if-match`)로 넘겨야 하고, `check`(`--check`)는 디스크를 건드리지 않고 판정만 한다. 허용된 쓰기는 새 revision이 담긴 receipt를 돌려주고, 엔진 저장소가 있으면 같은 호출에서 키워드 인덱스를 갱신하므로 노트를 바로 검색할 수 있다. 완료 호출이나 리뷰어 대화는 없다.
 
 `oms doctor cleanup`은 제거 가능한 파생 상태를 지운다. `oms doctor build-graph`는 노트 그래프를 다시 만든다.
 

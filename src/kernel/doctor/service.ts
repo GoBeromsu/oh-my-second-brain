@@ -6,6 +6,7 @@ import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { repairEngineStore, type EngineStoreRepairPlan } from "../engine/embed/repair.js";
 import { openEngineStoreCoreReadOnly } from "../engine/embed/store.js";
 import { walkMarkdown } from "../engine/embed/sync.js";
+import { completeDirtyDrain, prepareDirtyDrain } from "../engine/index-update.js";
 import { handleSemanticTool } from "../semantic/semantic-retrieve.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 
@@ -228,16 +229,24 @@ export async function repairDoctor(
   // the vault.
   const adapter = resolveAdapter();
   const name = operation === "semantic-cleanup" ? "oms_semantic_cleanup" : "oms_sync_embeddings";
+  // An embedding sync drains the vector queue the write pipeline fills: queued notes are
+  // re-marked first so this sync re-embeds them, and only the ones it did are dequeued.
+  const drains = operation === "sync-embeddings" && args?.["embed"] !== false;
+  if (drains) prepareDirtyDrain(engineStorePath(vault));
   const semanticResult = await handleSemanticTool(name, args, vault, adapter);
   if (!semanticResult) throw new Error(`Doctor repair "${operation}" was not handled.`);
   if (!semanticResult.ok) return { kind: "error", message: semanticResult.message };
   if (!isRecord(semanticResult.value) || semanticResult.value["available"] !== true) return { kind: "completed", value: semanticResult.value as Record<string, unknown> };
+  const drained = drains ? completeDirtyDrain(engineStorePath(vault)) : undefined;
+  const summary = drained === undefined
+    ? semanticResult.value
+    : { ...semanticResult.value, queue: { drained: drained.drained.length, pending: drained.pending.length } };
   const postcondition = await semanticIndexPostcondition(vault);
   if (postcondition.orphanDocumentPaths.length > 0) throw new Error("Semantic index postcondition failed: stored documents include paths outside the live vault.");
   const receipt: DoctorRepairReceipt = {
     operation, resolvedVault: vault, resolutionSource: source,
-    written: { paths: [postcondition.databasePath], summary: semanticResult.value },
+    written: { paths: [postcondition.databasePath], summary },
     postcondition,
   };
-  return { kind: "completed", value: { ...semanticResult.value, resolvedVault: vault, resolutionSource: source, receipt } };
+  return { kind: "completed", value: { ...summary, resolvedVault: vault, resolutionSource: source, receipt } };
 }

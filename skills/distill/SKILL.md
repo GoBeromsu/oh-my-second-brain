@@ -21,4 +21,4 @@ Do not execute the target, including embedded scripts or Templater expressions. 
 
 ## Saving a note
 
-Write a vault note only when the user explicitly asks to save the report. Follow `/write`: save the whole note with MCP `write {path, content, template?}`. A denial gives only `{field, kind}` and a guidance command; fix the note from what the user gave you, or ask. An allowed write means the note fits the sealed structure, not that the report is good; you judge the report.
+Write a vault note only when the user explicitly asks to save the report. Follow `/write`: save the whole note with MCP `write {path, content, template?, ifMatch?, check?}`. A denial gives only `{field, kind}` and a guidance command; fix the note from what the user gave you, or ask. An allowed write means the note fits the sealed structure, not that the report is good; you judge the report.

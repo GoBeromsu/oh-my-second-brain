@@ -258,7 +258,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     expect(tools.get("write")!.inputSchema).toEqual({
       type: "object",
       additionalProperties: false,
-      properties: { path: { type: "string" }, content: { type: "string" }, template: { type: "string" } },
+      properties: { path: { type: "string" }, content: { type: "string" }, template: { type: "string" }, ifMatch: { type: "string" }, check: { type: "boolean" } },
       required: ["path", "content"],
     });
 
@@ -648,7 +648,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       // The write tool is advertised with its one exact input shape; the judge refuses, not discovery.
       expect(writeTool?.inputSchema).toEqual({
         type: "object",
-        properties: { path: { type: "string" }, content: { type: "string" }, template: { type: "string" } },
+        properties: { path: { type: "string" }, content: { type: "string" }, template: { type: "string" }, ifMatch: { type: "string" }, check: { type: "boolean" } },
         required: ["path", "content"],
         additionalProperties: false,
       });
@@ -948,7 +948,16 @@ Valid frontmatter remains available to retrieve.
 
       // A new note that satisfies the selected template is saved world-readable.
       const created = await write({ path: "Projects/a.md", content: "---\nstatus: active\n---\n# Goals\n", template: "project" });
-      expect(textPayload(created)).toEqual({ ok: true, path: "Projects/a.md", missingDefaults: [{ field: "owner" }] });
+      const createdReceipt = textPayload(created);
+      expect(createdReceipt).toMatchObject({
+        ok: true,
+        path: "Projects/a.md",
+        revision: `sha256:${createHash("sha256").update("---\nstatus: active\n---\n# Goals\n").digest("hex")}`,
+        index: { keyword: "skipped", vector: "disabled" },
+        conformed: [],
+        missingDefaults: [{ field: "owner" }],
+      });
+      expect(createdReceipt.contractRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
       expect(statSync(note).mode & 0o777).toBe(0o644);
 
       // A denied write names {field, kind} only and leaves the bytes untouched.
@@ -963,13 +972,23 @@ Valid frontmatter remains available to retrieve.
       expect(JSON.stringify(deniedPayload)).not.toContain(fixture.vaultId);
       expect(await readFile(note)).toEqual(before);
 
-      const headingless = await write({ path: "Projects/a.md", content: "---\nstatus: done\n---\nBody\n", template: "project" });
-      expect(textPayload(headingless)).toMatchObject({ ok: false, violations: [{ field: "Goals", kind: "heading-missing" }] });
+      // A chosen template's missing heading is conformed (check writes nothing); without the
+      // template nothing is conformed, so the judge refuses the headingless note.
+      const headingless = await write({ path: "Projects/b.md", content: "---\nstatus: done\n---\nBody\n", template: "project", check: true });
+      expect(textPayload(headingless)).toMatchObject({ status: "checked", ok: true, conformed: [{ field: "Goals", action: "heading" }] });
+      expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
+      const dropped = await write({ path: "Projects/a.md", content: "---\nstatus: done\n---\nBody\n", ifMatch: createdReceipt.revision });
+      expect(textPayload(dropped)).toMatchObject({ ok: false, violations: [{ field: "Goals", kind: "heading-missing" }] });
       expect(await readFile(note)).toEqual(before);
 
       // An allowed overwrite keeps the note's previous mode and leaves no temporary file.
-      const updated = await write({ path: "Projects/a.md", content: "---\nstatus: done\n---\n# Goals\n" });
-      expect(textPayload(updated)).toEqual({ ok: true, path: "Projects/a.md", missingDefaults: [{ field: "owner" }] });
+      // An overwrite without ifMatch is refused before anything is written.
+      const unguarded = await write({ path: "Projects/a.md", content: "---\nstatus: done\n---\n# Goals\n" });
+      expect(unguarded.isError).toBe(true);
+      expect(textPayload(unguarded)).toMatchObject({ ok: false, kind: "if-match-required" });
+      expect(await readFile(note)).toEqual(before);
+      const updated = await write({ path: "Projects/a.md", content: "---\nstatus: done\n---\n# Goals\n", ifMatch: createdReceipt.revision });
+      expect(textPayload(updated)).toMatchObject({ ok: true, path: "Projects/a.md", missingDefaults: [{ field: "owner" }] });
       expect(await readFile(note, "utf8")).toBe("---\nstatus: done\n---\n# Goals\n");
       expect(statSync(note).mode & 0o777).toBe(0o600);
       expect(await readdir(path.join(vault, "Projects"))).toEqual(["a.md"]);
@@ -1417,7 +1436,7 @@ Valid frontmatter remains available to retrieve.
           content: "---\ntitle: Local Vault Note\nsource-url: https://example.com/local-vault-note\n---\n\n# Literature\n",
         },
       }));
-      expect(saved).toEqual({ ok: true, path: "references/local-vault-note.md", missingDefaults: [] });
+      expect(saved).toMatchObject({ ok: true, path: "references/local-vault-note.md", missingDefaults: [] });
       expect(await readdir(path.join(tmpVault, "references"))).toEqual(["local-vault-note.md"]);
     } finally {
       await client.close();

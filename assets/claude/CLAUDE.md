@@ -9,7 +9,7 @@ outside the vault, and it is not yours to read.
 
 ## Writing
 
-Write vault notes with MCP `write {path, content, template?}` (the `/write`
+Write vault notes with MCP `write {path, content, template?, ifMatch?, check?}` (the `/write`
 skill). A denial gives only `{field, kind}` and a guidance command. Never ask
 about or guess the contract's location or values.
 

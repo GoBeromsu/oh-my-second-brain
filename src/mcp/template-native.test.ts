@@ -20,9 +20,12 @@ describe("template-native MCP surface", () => {
     expect(validate("search", { op: "get-document", target: "notes/a.md", targets: ["notes/a.md"] })).toBe(false);
   });
 
-  it("advertises one write payload: {path, content, template?}", () => {
+  it("advertises one write payload: {path, content, template?, ifMatch?, check?}", () => {
     expect(validate("write", { path: "notes/a.md", content: "body" })).toBe(true);
     expect(validate("write", { path: "notes/a.md", content: "body", template: "note" })).toBe(true);
+    expect(validate("write", { path: "notes/a.md", content: "body", ifMatch: `sha256:${"0".repeat(64)}`, check: true })).toBe(true);
+    expect(validate("write", { path: "notes/a.md", content: "body", check: "yes" })).toBe(false);
+    expect(validate("write", { path: "notes/a.md", content: "body", ifMatch: 1 })).toBe(false);
     expect(validate("write", { path: "notes/a.md" })).toBe(false);
     expect(validate("write", { content: "body" })).toBe(false);
     // Retired guide/check/template branches have no schema at all.

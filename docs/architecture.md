@@ -31,7 +31,7 @@ The vault contract is recorded in ADR-007, which replaces the former ADR-013 thr
 
 The agent writes the whole note. One judge decides every write against the seal, in a fixed order: base path rules (control paths, unsafe paths, paths outside the vault, YAML syntax), then the seal's readability, then folders, then properties, then the selected template's apply folder, then the template axis.
 
-- MCP `write {path, content, template?}` judges the note and saves it atomically only when it is allowed. Unknown or missing input keys are refused before any judgement.
+- MCP `write {path, content, template?, ifMatch?, check?}` judges the note and saves it atomically only when it is allowed. Unknown or missing input keys are refused before any judgement.
 - In Claude Code, native Write, Edit, MultiEdit, and NotebookEdit inside the configured vault reach the same judge through the guard hook, which runs `oms hook pre`. A violation denies the tool call. When the judge cannot run, the call is allowed with a warning and the transport failure is recorded for `oms doctor contract`.
 - The guard also denies reads and writes under `~/.oms/`, and Grep or Glob patterns that name it.
 - Codex and Hermes have no write hook; their notes are judged only when written through MCP `write`.

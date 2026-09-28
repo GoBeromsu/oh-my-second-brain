@@ -85,7 +85,7 @@ oms doctor sync-embeddings|cleanup|build-graph
 oms serve mcp|http
 ```
 
-The agent writes notes, through MCP `write {path, content, template?}`, `oms write <path>` with the note on stdin, or, in Claude Code, through native tools judged by the guard hook. A write that violates the sealed contract is refused and the file stays unchanged. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them. There is no completion command or reviewer handshake; the agent and user decide whether a note is worth keeping. The command table is [the CLI map](./cli-map.md), and the 0.18 spellings are mapped in [the migration guide](./migration-0.19.md).
+The agent writes notes, through MCP `write {path, content, template?, ifMatch?, check?}`, `oms write <path>` with the note on stdin, or, in Claude Code, through native tools judged by the guard hook. A write that violates the sealed contract is refused and the file stays unchanged. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them. There is no completion command or reviewer handshake; the agent and user decide whether a note is worth keeping. The command table is [the CLI map](./cli-map.md), and the 0.18 spellings are mapped in [the migration guide](./migration-0.19.md).
 
 A plain `oms search <text>` is lexical-only. Every non-lexical channel is explicit: `--vec`, `--hyde`, G004 `--expand`, and `--rerank`. G004 expansion is available only when selected; no replacement, parity, or outperformance claim is made. Search still returns notes that would fail the contract, and a missing or damaged contract does not stop it.
 

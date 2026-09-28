@@ -102,7 +102,7 @@ describe("Issue #58: Verified-target admission", () => {
         name: "write",
         arguments: { path: "references/new-note.md", content: "---\nstatus: open\n---\n\nBody.\n" },
       }));
-      expect(saved).toEqual({ ok: true, path: "references/new-note.md", missingDefaults: [] });
+      expect(saved).toMatchObject({ ok: true, path: "references/new-note.md", missingDefaults: [] });
       expect(await readFile(note, "utf8")).toBe("---\nstatus: open\n---\n\nBody.\n");
     } finally {
       await client.close();

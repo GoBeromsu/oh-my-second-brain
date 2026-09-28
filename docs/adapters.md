@@ -15,7 +15,7 @@ Claude's manifest keeps an explicit skill array. Codex's manifest keeps one shar
 
 The MCP server is started with `oms serve mcp`; `oms serve http` starts the HTTP surface. Neither server creates a vault engine store merely by starting. Claude uses `.mcp.json`, Codex uses `.mcp.codex.json`, and Hermes receives its registration in `~/.hermes/config.yaml`.
 
-All hosts expose the same four MCP tools: `write`, `search`, `interview`, and `doctor`. Skills are host workflows, not tool names. `distill` and `setup` are tool-less. The `write` tool takes `{path, content, template?}`: the agent supplies the whole note, and OMS judges it against the sealed contract and saves it only when it is allowed. See [the CLI map](./cli-map.md).
+All hosts expose the same four MCP tools: `write`, `search`, `interview`, and `doctor`. Skills are host workflows, not tool names. `distill` and `setup` are tool-less. The `write` tool takes `{path, content, template?, ifMatch?, check?}`: the agent supplies the whole note, and OMS judges it against the sealed contract and saves it only when it is allowed. See [the CLI map](./cli-map.md).
 
 Agents write and repair notes. A denied write leaves the file unchanged and returns `{field, kind}` violations and one guidance command. OMS has no completion operation or reviewer handshake. Search stays read-only and does not depend on the contract. Sealing happens only through the interactive `oms setup`; no host, skill, or MCP operation seals.
 

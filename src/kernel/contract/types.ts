@@ -36,6 +36,8 @@ export interface TemplateContract {
   readonly source: string;
   readonly sourceHash: Digest;
   readonly applyFolder?: string;
+  /** One-line meaning of the template; absent in contracts sealed before it existed. */
+  readonly meaning?: string;
   readonly requiredProperties: readonly string[];
   readonly narrowedRules: Readonly<Record<string, readonly Rule[]>>;
   readonly requiredHeadings: readonly string[];

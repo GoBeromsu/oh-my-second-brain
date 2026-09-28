@@ -134,7 +134,7 @@ These are example requests, not captured run results. Available workflows and wr
 
 - **Meaning is user-owned.** The interview covers folders, the property pool, and templates together. OMS hardcodes no property names, folders, or personas and has no Inbox fallback.
 - **One control file inside the vault.** `.oms/settings.json` holds `version`, `vaultId`, `templateFolder`, `embedding`, and `agentRepair`. Other `.oms/` entries are ignored and reported as unexpected control files by `oms doctor contract`. `.obsidian/types.json` is a read-only observation, not an override of the seal.
-- **Templates stay yours.** OMS records what each template declares. It never rewrites, copies, or applies the template, and does not parse or execute Templater, JavaScript, or a private token language.
+- **Templates stay yours.** OMS records what each template declares. It never rewrites or copies a template file, and does not parse or execute Templater, JavaScript, or a private token language. A write only fills what is mechanical in the note being written: `{{title}}`, `{{date}}` and `{{time}}` variables, date and datetime defaults on a new note, and the chosen template's missing headings. It never supplies a required value.
 - **Drift is visible.** `oms setup status` reports templates as `active`, `drift`, or `missing`. It never silently re-seals a changed template.
 - **One judge, bounded feedback.** Denied writes return `{field, kind}` violations and one guidance command, not rule values, store paths, or the contract body.
 - **Mismatched seal evidence blocks writes.** When this machine's evidence no longer matches the vault, writes fail with `contract-unreadable` until the owner runs `oms setup` again. A machine with no seal is a different case: its vault is not contract-judged.
@@ -240,7 +240,7 @@ oms hook pre                                    Judge a Claude write against the
 
 Every recognized command accepts `--help` and `-h`, exits 0, and has no side effects. An unknown command combined with `--help` exits 1. A family removed in 0.19 exits 1 and names its replacement.
 
-`oms doctor audit` reports `{path, field, kind}` entries without rewriting notes. Notes are written as whole content through `oms write <path> < note.md` or MCP `write {path, content, template?}`; both take the same verified-target write path, and `template` optionally names the sealed template being followed. There is no completion call or reviewer conversation.
+`oms doctor audit` reports `{path, field, kind}` entries without rewriting notes. Notes are written as whole content through `oms write <path> < note.md` or MCP `write {path, content, template?, ifMatch?, check?}`; both take the same write pipeline, and `template` optionally names the sealed template being followed. Overwriting an existing note needs `ifMatch` (`--if-match`) with its current `sha256:` revision; `check` (`--check`) judges without touching disk. An allowed write returns a receipt with the new revision and updates the keyword index of an existing engine store in the same call, so the note is searchable at once. There is no completion call or reviewer conversation.
 
 `oms doctor cleanup` removes eligible derived state. `oms doctor build-graph` rebuilds the note graph.
 

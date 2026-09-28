@@ -35,7 +35,11 @@ The judge, the sealed contract, and the verified-target rules are unchanged. Onl
 
 ## CLI write and interview
 
-`oms write <path>` reads the note from stdin and goes through the same verified-target write kernel and judge as the MCP `write` tool. A `cwd`-inferred target is refused, and a violation leaves the file unchanged.
+`oms write <path>` reads the note from stdin and goes through the same write pipeline and judge as the MCP `write` tool. A `cwd`-inferred target is refused, and a violation leaves the file unchanged.
+
+**Breaking: overwriting an existing note needs `ifMatch`.** In 0.18 MCP `write {path, content}` silently replaced an existing note. In 0.19 it is refused with `WRITE_IF_MATCH_REQUIRED` and nothing is written. Pass the note's current `sha256:` revision as `ifMatch` (`--if-match` on the CLI); a previous receipt or `check: true` (`--check`) reports it. A stale revision returns the retryable `WRITE_TARGET_CHANGED`. Creating a new note needs no `ifMatch`; sending one for a note that does not exist returns the retryable `WRITE_TARGET_ABSENT`.
+
+The write result grows from `{ok, path, missingDefaults}` to the receipt `{ok, path, revision, contractRevision, index: {keyword, vector}, conformed, missingDefaults}`.
 
 `oms interview` is the interactive interview. Like `oms setup`, it refuses to run without a TTY or under `OMS_NON_INTERACTIVE=1`.
 

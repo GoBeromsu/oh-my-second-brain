@@ -20,7 +20,7 @@ The precedence is the same for CLI and MCP runtime behavior. Host installation d
 
 Before a note, settings, or derived-state mutation, OMS resolves the target and verifies the requested path is confined to it. Admission happens before that write, so rejection modifies nothing.
 
-MCP `write {path, content, template?}` resolves and admits the target, judges the whole note against the sealed contract, and saves it atomically only when it is allowed. A denial leaves the file unchanged and returns `{field, kind}` violations and one guidance command. There is no `complete` operation or separate reviewer handshake.
+MCP `write {path, content, template?, ifMatch?, check?}` resolves and admits the target, judges the whole note against the sealed contract, and saves it atomically only when it is allowed. A denial leaves the file unchanged and returns `{field, kind}` violations and one guidance command. There is no `complete` operation or separate reviewer handshake.
 
 An allowed write is a structural result, not a claim that a note is semantically complete. In Claude Code, native writes inside the configured vault are judged by the guard hook; when the judge cannot run, the hook allows the call with a warning and records the transport failure for `oms doctor contract`. Codex and Hermes have no write hook.
 

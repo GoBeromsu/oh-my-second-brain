@@ -1,11 +1,13 @@
 import path from "node:path";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { verifiedWriteNote, verifiedWritePayload } from "../kernel/write/verified-write.js";
+import { writePayload } from "../kernel/write/payload.js";
+import { runWritePipeline } from "../kernel/write/pipeline.js";
 
 /**
- * `oms write <path> [--template <t>] < stdin`: the CLI face of the verified-target
- * write. The same kernel path as MCP `write`: one judge, a denied or rejected write
- * leaves disk untouched, and a vault inferred from the current directory is refused.
+ * `oms write <path> [--template <t>] [--if-match <rev>] [--check] < stdin`: the CLI face
+ * of the write pipeline. The same kernel path as MCP `write`: one judge, a denied or
+ * rejected write leaves disk untouched, and a vault inferred from the current directory
+ * is refused. `--check` judges only and never touches disk.
  */
 
 export interface WriteCommandDeps {
@@ -16,32 +18,48 @@ export interface WriteCommandDeps {
 }
 
 export function writeUsage(): string {
-  return `Usage: oms write <vault-relative path> [--template <template>] [--vault <path>] < note.md
+  return `Usage: oms write <vault-relative path> [--template <template>] [--if-match sha256:<rev>] [--check] [--vault <path>] < note.md
 
-Reads the whole note (frontmatter and body) from stdin and saves it only when the sealed
-vault contract allows it. The target vault must be verified: --vault, the vault's own
+Reads the whole note (frontmatter and body) from stdin, applies mechanical fixes (date and
+title variables, date defaults, template headings) and saves it only when the sealed vault
+contract allows it. Overwriting an existing note needs --if-match with its current revision,
+as a previous receipt or --check reports it. --check judges and prints the frame without
+touching disk. The target vault of a write must be verified: --vault, the vault's own
 .oms/settings.json, a bridge link, or OMS_VAULT. A vault inferred from the current directory
-is read-only, so the write is refused. Prints a JSON receipt; exits 1 when nothing was written.`;
+is read-only, so the write is refused. Prints JSON; exits 1 when nothing was written or the
+check found violations.`;
 }
 
 interface WriteArgs {
   readonly notePath: string;
   readonly template: string | undefined;
   readonly vault: string | undefined;
+  readonly ifMatch: string | undefined;
+  readonly check: boolean;
 }
 
 function parseWriteArgs(argv: readonly string[]): WriteArgs {
   let notePath: string | undefined;
   let template: string | undefined;
   let vault: string | undefined;
+  let ifMatch: string | undefined;
+  let check = false;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]!;
-    if (token === "--template" || token === "--vault") {
+    if (token === "--check") {
+      if (check) throw new Error("--check may be specified only once");
+      check = true;
+      continue;
+    }
+    if (token === "--template" || token === "--vault" || token === "--if-match") {
       const value = argv[++index];
       if (value === undefined || value.startsWith("--")) throw new Error(`${token} requires a value`);
       if (token === "--template") {
         if (template !== undefined) throw new Error("--template may be specified only once");
         template = value;
+      } else if (token === "--if-match") {
+        if (ifMatch !== undefined) throw new Error("--if-match may be specified only once");
+        ifMatch = value;
       } else {
         if (vault !== undefined) throw new Error("--vault may be specified only once");
         vault = value;
@@ -53,7 +71,7 @@ function parseWriteArgs(argv: readonly string[]): WriteArgs {
     notePath = token;
   }
   if (notePath === undefined || notePath.length === 0) throw new Error("write requires a vault-relative note path");
-  return { notePath, template, vault };
+  return { notePath, template, vault, ifMatch, check };
 }
 
 async function readProcessStdin(): Promise<string> {
@@ -86,12 +104,14 @@ export async function runWriteCommand(argv: readonly string[], deps: WriteComman
     const args = parseWriteArgs(argv);
     const target = await resolveTarget(args.vault, deps.cwd ?? process.cwd(), deps.env ?? process.env);
     const content = await (deps.readStdin ?? readProcessStdin)();
-    const payload = verifiedWritePayload(await verifiedWriteNote({
+    const payload = writePayload(await runWritePipeline({
       vault: target.vault,
       source: target.source,
       path: args.notePath,
       content,
       template: args.template,
+      ifMatch: args.ifMatch,
+      check: args.check,
     }));
     console.log(JSON.stringify(payload, null, 2));
     if (!payload.ok) process.exitCode = 1;
