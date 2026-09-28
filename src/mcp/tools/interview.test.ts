@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTruthTableRow, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
-import { readInterviewLog } from "../../kernel/contract/interview-log.js";
-import { readStore, SEAL_LOCK_STALE_MS } from "../../kernel/contract/store.js";
+import { pendingLogKey, readInterviewLog } from "../../kernel/contract/interview-log.js";
+import { stateDir } from "../../kernel/contract/state-dir.js";
+import { currentSequence, readStore, SEAL_LOCK_STALE_MS } from "../../kernel/contract/store.js";
+import { ensureVaultId, resolveSealState } from "../../kernel/contract/vault-id.js";
 import { readVaultSettings } from "../../kernel/vault/settings.js";
 import { omsMcpTools } from "../server.js";
 import { handleInterview, type InterviewToolDeps } from "./interview.js";
@@ -169,13 +171,18 @@ describe("MCP interview seal", () => {
 
     const early = payload(await handleInterview(context(vault), { op: "seal" }, deps));
     expect(early).toMatchObject({ ok: false, status: "rejected", rejection: { code: "INTERVIEW_CONFIRM_REQUIRED" } });
-    const vaultId = (await readVaultSettings(vault))!.vaultId;
-    expect((await readStore(vaultId, root)).state).toBe("absent");
 
     const confirmed = payload(await handleInterview(context(vault), { op: "confirm", proposed }, deps));
     expect(confirmed).toMatchObject({ ok: true, status: "confirmed", proposed });
+    // Nothing inside the vault is written before the seal: the log is keyed by the pending key.
+    await expect(stat(path.join(vault, ".oms", "settings.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readVaultSettings(vault)).toBeNull();
+    expect((await resolveSealState(vault, root)).row).toBe("never-sealed");
+    expect((await readInterviewLog(root, await pendingLogKey(vault))).events.map(event => event.type)).toContain("proposed");
+
     const sealed = payload(await handleInterview(context(vault), { op: "seal" }, deps));
     expect(sealed).toMatchObject({ ok: true, status: "sealed" });
+    const vaultId = (await readVaultSettings(vault))!.vaultId;
     expect((await readStore(vaultId, root)).state).toBe("ok");
     const types = (await readInterviewLog(root, vaultId)).events.map(event => event.type);
     expect(types.at(-1)).toBe("sealed");
@@ -192,8 +199,8 @@ describe("MCP interview seal", () => {
     expect(smuggled).toMatchObject({ ok: false, status: "rejected", rejection: { code: "INTERVIEW_SEAL_NOT_AN_ANSWER" } });
     const seal = payload(await handleInterview(context(vault), { op: "seal" }, deps));
     expect(seal).toMatchObject({ ok: false, status: "rejected", rejection: { code: "INTERVIEW_CONFIRM_REQUIRED" } });
-    const vaultId = (await readVaultSettings(vault))!.vaultId;
-    expect((await readStore(vaultId, root)).state).toBe("absent");
+    expect(await readVaultSettings(vault)).toBeNull();
+    expect((await resolveSealState(vault, root)).row).toBe("never-sealed");
   });
 
   it("confirms nothing when nothing was proposed", async () => {
@@ -224,9 +231,10 @@ describe("MCP interview seal", () => {
     const reclaim = vi.fn(async () => true);
     const isPidAlive = vi.fn(() => false);
     const deps: InterviewToolDeps = { now: () => now, root, sealDeps: { now: () => now, isPidAlive, confirmStaleReclaim: reclaim } };
+    // A vault whose id was issued by an earlier seal attempt, so the lock path is known.
+    const vaultId = await ensureVaultId(vault);
     const proposed = await answerAll(vault, deps);
     await handleInterview(context(vault), { op: "confirm", proposed }, deps);
-    const vaultId = (await readVaultSettings(vault))!.vaultId;
     const lock = path.join(root, `.${vaultId}.lock`);
     await writeFile(lock, JSON.stringify({ pid: 999_999, host: "other-host", startedAt: now - SEAL_LOCK_STALE_MS - 1 }));
     const before = await snapshot(root);
@@ -245,11 +253,50 @@ describe("MCP interview seal", () => {
     const { vault, root } = await freshVault();
     const now = 1_750_000_000_000;
     const deps: InterviewToolDeps = { now: () => now, root, sealDeps: { now: () => now, host: "this-host", isPidAlive: () => true } };
+    const vaultId = await ensureVaultId(vault);
     const proposed = await answerAll(vault, deps);
     await handleInterview(context(vault), { op: "confirm", proposed }, deps);
-    const vaultId = (await readVaultSettings(vault))!.vaultId;
     await writeFile(path.join(root, `.${vaultId}.lock`), JSON.stringify({ pid: 1, host: "this-host", startedAt: now }));
     const body = payload(await handleInterview(context(vault), { op: "seal" }, deps));
     expect(body).toMatchObject({ ok: false, status: "rejected", rejection: { code: "CONTRACT_SEAL_BUSY", retryable: true } });
+  });
+
+  it("still reports sealed, with a warning, when the sealed event cannot be logged", async () => {
+    const { vault, root } = await freshVault();
+    const deps = { ...clock(), root };
+    const vaultId = await ensureVaultId(vault);
+    const proposed = await answerAll(vault, deps);
+    await handleInterview(context(vault), { op: "confirm", proposed }, deps);
+    const events = path.join(stateDir(root, vaultId), "interview", "events.jsonl");
+    await chmod(events, 0o400);
+    try {
+      const body = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+      expect(body).toMatchObject({ ok: true, status: "sealed" });
+      expect(JSON.stringify(body)).toContain("INTERVIEW_LOG_UNRECORDED");
+    } finally {
+      await chmod(events, 0o600);
+    }
+    expect((await readStore(vaultId, root)).state).toBe("ok");
+  });
+
+  it("does not seal a new generation when a retried seal finds the confirmed contract already sealed", async () => {
+    const { vault, root } = await freshVault();
+    const deps = { ...clock(), root };
+    const proposed = await answerAll(vault, deps);
+    await handleInterview(context(vault), { op: "confirm", proposed }, deps);
+    expect(payload(await handleInterview(context(vault), { op: "seal" }, deps))).toMatchObject({ ok: true, status: "sealed" });
+    const vaultId = (await readVaultSettings(vault))!.vaultId;
+    const generation = await currentSequence(vaultId, root);
+
+    // The seal finished but its log entry was lost.
+    const events = path.join(stateDir(root, vaultId), "interview", "events.jsonl");
+    const lines = (await readFile(events, "utf8")).split("\n").filter(line => line !== "");
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ type: "sealed" });
+    await writeFile(events, `${lines.slice(0, -1).join("\n")}\n`);
+
+    const retried = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+    expect(retried).toMatchObject({ ok: true, status: "sealed" });
+    expect(await currentSequence(vaultId, root)).toBe(generation);
+    expect((await readInterviewLog(root, vaultId)).events.at(-1)?.type).toBe("sealed");
   });
 });

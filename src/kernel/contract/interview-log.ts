@@ -1,14 +1,22 @@
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { join } from "node:path";
+import { realpath, rename, rm, rmdir } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { hashCanonical } from "../conventions/canonical.js";
 import type { Question } from "./interview.js";
-import { ensureStateDir, existingStateDir, openStateFile } from "./state-dir.js";
+import { checkStateFile, ensureStateDir, existingStateDir, openStateFile, stateDir } from "./state-dir.js";
 
 /**
- * The interview's append-only event log, `<root>/.<id>.state/interview/events.jsonl`.
+ * The interview's append-only event log, `<root>/.<key>.state/interview/events.jsonl`,
+ * where the key is the vault id or, before the first seal, a pending key.
  * One JSON object per line, appended with O_APPEND and fsynced before the call returns.
  * A line that does not parse (a write cut short) is skipped and reported, never
  * truncated or rewritten; the next append starts on a fresh line after it.
+ *
+ * `seq` is one more than the highest sequence already in the file. Appends are
+ * serialized within a process only; there is no cross-process lock, so two processes
+ * appending at once may write the same `seq`. Readers therefore rely on line order, and
+ * `seq` only orders events within one writer's run.
  */
 
 export const INTERVIEW_EVENT_TYPES = ["asked", "answered", "proposed", "sealed", "abandoned"] as const;
@@ -33,6 +41,20 @@ export interface InterviewLog {
 }
 
 export const EVENTS_FILE = "events.jsonl";
+
+/**
+ * The key a vault's interview is logged under before it has a vault id: derived from the
+ * vault's real path, so every process finds the same log, and never written into the vault.
+ */
+export async function pendingLogKey(vault: string): Promise<string> {
+  let path: string;
+  try {
+    path = await realpath(vault);
+  } catch {
+    path = resolve(vault);
+  }
+  return `pending-${createHash("sha256").update(path, "utf8").digest("hex")}`;
+}
 const MAX_LOG_BYTES = 16 * 1024 * 1024;
 const TYPES: ReadonlySet<string> = new Set(INTERVIEW_EVENT_TYPES);
 
@@ -103,7 +125,7 @@ export async function readInterviewLog(root: string, vaultId: string): Promise<I
   return { events, corrupt };
 }
 
-/** Appends run one at a time per log in this process, so each takes the next sequence number. */
+/** Appends run one at a time per log within this process, so each takes the next sequence number. */
 const queues = new Map<string, Promise<unknown>>();
 
 function serialize<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -144,4 +166,36 @@ export async function appendInterviewEvent(root: string, vaultId: string, input:
     }
     return event;
   });
+}
+
+/**
+ * Moves the log kept under `from` (a pending key) to `to` (the vault id issued at seal).
+ * When `to` has no log yet the file is renamed as it is, corrupt lines included;
+ * otherwise the parsed events of `from` are appended to it with their original times and
+ * the old file is removed. The emptied pending directories are removed when possible.
+ * Nothing happens when `from` has no log.
+ */
+export async function migrateInterviewLog(root: string, from: string, to: string): Promise<void> {
+  const sourceDir = await existingStateDir(root, from);
+  if (sourceDir === null) return;
+  const source = join(sourceDir, EVENTS_FILE);
+  await serialize(source, async () => {
+    if (!await checkStateFile(source)) return;
+    const target = join(await ensureStateDir(root, to, "interview"), EVENTS_FILE);
+    const renamed = await serialize(target, async () => {
+      if (await checkStateFile(target)) return false;
+      await rename(source, target);
+      return true;
+    });
+    if (renamed) return;
+    const { events } = parseLog(await readText(source));
+    for (const event of events) {
+      const { type, questionId, questionDigest: digest, payload } = event;
+      await appendInterviewEvent(root, to, { type, questionId, questionDigest: digest, payload }, () => event.at);
+    }
+    await rm(source, { force: true });
+  });
+  // Best effort: another writer may have started a new pending log meanwhile.
+  await rmdir(sourceDir).catch(() => undefined);
+  await rmdir(stateDir(root, from)).catch(() => undefined);
 }

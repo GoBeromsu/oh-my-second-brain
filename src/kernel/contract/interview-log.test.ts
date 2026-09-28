@@ -1,8 +1,8 @@
-import { appendFile, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendInterviewEvent, EVENTS_FILE, questionDigest, readInterviewLog } from "./interview-log.js";
+import { appendInterviewEvent, EVENTS_FILE, migrateInterviewLog, pendingLogKey, questionDigest, readInterviewLog } from "./interview-log.js";
 import { stateDir } from "./state-dir.js";
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
@@ -87,5 +87,49 @@ describe("interview event log", () => {
     expect(questionDigest(text)).not.toBe(questionDigest({ ...text, prompt: "What now?" }));
     const choice = { id: "q", prompt: "Pick", kind: "choice" as const, options: ["a"] };
     expect(questionDigest(choice)).not.toBe(questionDigest({ ...choice, options: ["b"] }));
+  });
+});
+
+describe("pending interview log", () => {
+  const PENDING = `pending-${"b".repeat(64)}`;
+
+  it("keys a vault without an id by the digest of its real path, the same through a symlink", async () => {
+    const vault = join(base, "vault");
+    await mkdir(vault);
+    await symlink(vault, join(base, "alias"));
+    const key = await pendingLogKey(vault);
+    expect(key).toMatch(/^pending-[0-9a-f]{64}$/);
+    expect(await pendingLogKey(vault)).toBe(key);
+    expect(await pendingLogKey(join(base, "alias"))).toBe(key);
+    expect(await pendingLogKey(join(base, "other"))).not.toBe(key);
+  });
+
+  it("moves a pending log to the vault id when the id has no log yet", async () => {
+    await appendInterviewEvent(root, PENDING, answered("a", "1"), () => 1);
+    await appendFile(join(stateDir(root, PENDING), "interview", EVENTS_FILE), "garbage\n");
+    await migrateInterviewLog(root, PENDING, VAULT_ID);
+    const moved = await readInterviewLog(root, VAULT_ID);
+    expect(moved.events.map(event => event.questionId)).toEqual(["a"]);
+    expect(moved.corrupt).toHaveLength(1);
+    expect(await readInterviewLog(root, PENDING)).toEqual({ events: [], corrupt: [] });
+    await expect(stat(stateDir(root, PENDING))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("appends a pending log after the events the vault id already has, keeping their times", async () => {
+    await appendInterviewEvent(root, VAULT_ID, answered("old", "0"), () => 1);
+    await appendInterviewEvent(root, PENDING, answered("a", "1"), () => 2);
+    await appendInterviewEvent(root, PENDING, answered("b", "2"), () => 3);
+    await migrateInterviewLog(root, PENDING, VAULT_ID);
+    const { events } = await readInterviewLog(root, VAULT_ID);
+    expect(events.map(event => event.questionId)).toEqual(["old", "a", "b"]);
+    expect(events.map(event => event.seq)).toEqual([1, 2, 3]);
+    expect(events.map(event => event.at)).toEqual([1, 2, 3]);
+    expect(await readInterviewLog(root, PENDING)).toEqual({ events: [], corrupt: [] });
+  });
+
+  it("does nothing when there is no pending log", async () => {
+    await migrateInterviewLog(root, PENDING, VAULT_ID);
+    expect(await readInterviewLog(root, VAULT_ID)).toEqual({ events: [], corrupt: [] });
+    await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

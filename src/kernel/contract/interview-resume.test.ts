@@ -1,14 +1,15 @@
-import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
+import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import { interpretVault } from "./interpretation-fixture.js";
 import { runInterview, type InterviewIO, type Question } from "./interview.js";
-import { readInterviewLog } from "./interview-log.js";
+import { pendingLogKey, readInterviewLog } from "./interview-log.js";
 import { confirmedProposal, currentRun, latestProposal, pendingAnswers, resumableIO } from "./interview-resume.js";
 import type { Answers } from "./scripted-interview.js";
 import { readStore } from "./store.js";
+import { resolveSealState } from "./vault-id.js";
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const NOW = 1_800_000_000_000;
@@ -56,6 +57,19 @@ const TERMINAL: Answers = {
   seal: true,
 };
 
+/** A vault never sealed: no `.oms/settings.json`, no templates. */
+async function makeFreshVault(name: string): Promise<{ readonly vault: string; readonly root: string }> {
+  const vault = join(base, name, "vault");
+  const root = join(base, name, "home", ".oms", "vaults");
+  await mkdir(join(vault, "Projects"), { recursive: true });
+  await writeFile(join(vault, "Projects/Alpha.md"), "---\nstatus: active\n---\nbody\n");
+  return { vault, root };
+}
+
+async function exists(path: string): Promise<boolean> {
+  return access(path).then(() => true, () => false);
+}
+
 class Interrupted extends Error {}
 
 /** A terminal that answers from TERMINAL, and is closed (Ctrl-C) when asked its question number `stopAt`. */
@@ -66,7 +80,7 @@ function terminal(stopAt = Number.POSITIVE_INFINITY): { readonly io: InterviewIO
     ask: async (question: Question) => {
       if (asked.length + 1 >= stopAt) throw new Interrupted(question.id);
       asked.push(question.id);
-      const value = TERMINAL[question.id];
+      const value = question.id === "template-folder:path" ? "" : TERMINAL[question.id];
       if (value === undefined) return null;
       if (typeof value === "boolean") return question.kind === "confirm" ? (value ? "yes" : "no") : String(value);
       return String(value);
@@ -161,6 +175,46 @@ describe("continuing an interrupted interview", () => {
     const events = (await readInterviewLog(root, VAULT_ID)).events;
     expect(events.at(-1)?.type).toBe("abandoned");
     expect(pendingAnswers(events).size).toBe(0);
+  });
+
+  it("logs a never-sealed vault under its pending key and writes nothing into the vault before the seal", async () => {
+    const { vault, root } = await makeFreshVault("fresh");
+    const pending = await pendingLogKey(vault);
+    const first = terminal(4);
+    await expect(interview(vault, root, first.io)).rejects.toThrow(Interrupted);
+    const logged = (await readInterviewLog(root, pending)).events;
+    expect(logged.filter(event => event.type === "answered").map(event => event.questionId)).toEqual(first.asked);
+    // Each question put to the terminal is logged as asked, including the one interrupted.
+    const asked = logged.filter(event => event.type === "asked").map(event => event.questionId);
+    expect(asked.slice(0, -1)).toEqual(first.asked);
+    expect(asked).toHaveLength(first.asked.length + 1);
+    expect(await exists(join(vault, ".oms"))).toBe(false);
+    expect((await resolveSealState(vault, root)).row).toBe("never-sealed");
+
+    // A new process picks the answers up from the pending log.
+    const second = terminal();
+    const { result, resumed } = await interview(vault, root, second.io);
+    expect(resumed.pending).toBe(first.asked.length);
+    for (const id of first.asked) expect(second.asked).not.toContain(id);
+    expect(result.state).toBe("sealed");
+
+    // The seal issued the id, and the pending log now lives under it.
+    const vaultId = (await readVaultSettings(vault))!.vaultId;
+    const events = (await readInterviewLog(root, vaultId)).events;
+    expect(events.filter(event => event.type === "answered").map(event => event.questionId)).toEqual(expect.arrayContaining(first.asked));
+    expect(events.at(-1)?.type).toBe("sealed");
+    expect((await readInterviewLog(root, pending)).events).toEqual([]);
+    expect((await resolveSealState(vault, root)).row).toBe("sealed");
+  });
+
+  it("abandons a never-sealed interview without writing settings", async () => {
+    const { vault, root } = await makeFreshVault("fresh-abandon");
+    await expect(interview(vault, root, terminal(4).io)).rejects.toThrow(Interrupted);
+    const resumed = await resumableIO({ vault, root, restart: true, now: () => NOW });
+    expect(resumed.pending).toBe(0);
+    expect((await readInterviewLog(root, await pendingLogKey(vault))).events.at(-1)?.type).toBe("abandoned");
+    expect(await exists(join(vault, SETTINGS_PATH))).toBe(false);
+    expect((await resolveSealState(vault, root)).row).toBe("never-sealed");
   });
 
   it("confirms only the latest proposal", () => {

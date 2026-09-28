@@ -1,14 +1,17 @@
 import { readVaultSettings } from "../vault/settings.js";
 import type { InterviewIO, InterviewRecord } from "./interview.js";
-import { appendInterviewEvent, questionDigest, readInterviewLog, type InterviewEvent } from "./interview-log.js";
+import { appendInterviewEvent, migrateInterviewLog, pendingLogKey, questionDigest, readInterviewLog, type InterviewEvent } from "./interview-log.js";
 import { replayIO, type Answers, type ReplayDrift, type ReplayedAnswer } from "./scripted-interview.js";
-import { ensureVaultId } from "./vault-id.js";
 
 /**
  * Continuing an interview from its event log. The run in progress is everything after
  * the last `sealed` or `abandoned` event; its `answered` events are replayed in order
  * (a later answer to the same question wins). The seal question and the stale-lock
  * question are never replayed: sealing is always a fresh decision.
+ *
+ * Until the first seal a vault has no id, and nothing is written into the vault before
+ * the seal: the log is kept under a pending key derived from the vault's real path. Once
+ * the seal has issued the id, the next write moves the pending log under the id.
  */
 
 /** Questions whose logged answer is never replayed. */
@@ -58,19 +61,33 @@ export function confirmedProposal(events: readonly InterviewEvent[]): string | n
   return confirmed ? digest : null;
 }
 
-/** The vault id the log is kept under; issued (as a seal would) the first time something is logged. */
-export async function logVaultId(vault: string): Promise<string> {
-  const settings = await readVaultSettings(vault);
-  return settings?.vaultId ?? ensureVaultId(vault);
+/**
+ * The key the next event is logged under: the vault id when the vault has one (a pending
+ * log is moved under it first), otherwise the pending key. It never issues a vault id.
+ */
+export async function interviewLogKey(vault: string, root: string): Promise<string> {
+  const pending = await pendingLogKey(vault);
+  const vaultId = (await readVaultSettings(vault))?.vaultId ?? null;
+  if (vaultId === null) return pending;
+  await migrateInterviewLog(root, pending, vaultId);
+  return vaultId;
 }
 
 /** Appends each interview record to the log as it happens. */
 export function logRecorder(vault: string, root: string, now: () => number = Date.now): (event: InterviewRecord) => Promise<void> {
   return async event => {
-    const vaultId = await logVaultId(vault);
+    const key = await interviewLogKey(vault, root);
     switch (event.type) {
+      case "asked":
+        await appendInterviewEvent(root, key, {
+          type: "asked",
+          questionId: event.question.id,
+          questionDigest: questionDigest(event.question),
+          payload: {},
+        }, now);
+        return;
       case "answered":
-        await appendInterviewEvent(root, vaultId, {
+        await appendInterviewEvent(root, key, {
           type: "answered",
           questionId: event.question.id,
           questionDigest: questionDigest(event.question),
@@ -78,16 +95,24 @@ export function logRecorder(vault: string, root: string, now: () => number = Dat
         }, now);
         return;
       case "proposed":
-        await appendInterviewEvent(root, vaultId, { type: "proposed", questionId: null, questionDigest: null, payload: { digest: event.digest } }, now);
+        await appendInterviewEvent(root, key, {
+          type: "proposed",
+          questionId: null,
+          questionDigest: null,
+          payload: { digest: event.digest, removedTemplates: [...event.removedTemplates], baseSeq: event.baseSeq },
+        }, now);
         return;
       case "sealed":
-        await appendInterviewEvent(root, vaultId, { type: "sealed", questionId: null, questionDigest: null, payload: { vaultId: event.vaultId } }, now);
+        await appendInterviewEvent(root, key, { type: "sealed", questionId: null, questionDigest: null, payload: { vaultId: event.vaultId } }, now);
         return;
     }
   };
 }
 
-/** The logged events for a vault, or none when it has no vault id yet. Nothing is created. */
+/**
+ * The logged events for a vault: its pending log (from before the first seal) followed by
+ * the log under its vault id, if it has one. Nothing is created or moved.
+ */
 export async function vaultLog(vault: string, root: string): Promise<{ readonly vaultId: string | null; readonly events: readonly InterviewEvent[]; readonly corrupt: readonly number[] }> {
   let vaultId: string | null;
   try {
@@ -96,8 +121,17 @@ export async function vaultLog(vault: string, root: string): Promise<{ readonly 
     // Unreadable settings: the interview itself refuses, so there is nothing to continue.
     vaultId = null;
   }
-  if (vaultId === null) return { vaultId, events: [], corrupt: [] };
-  return { vaultId, ...await readInterviewLog(root, vaultId) };
+  const pending = await readInterviewLog(root, await pendingLogKey(vault));
+  if (vaultId === null) return { vaultId, ...pending };
+  const own = await readInterviewLog(root, vaultId);
+  if (pending.events.length === 0 && pending.corrupt.length === 0) return { vaultId, ...own };
+  // A pending log not yet moved under the id is older than it; its sequence comes first.
+  const offset = pending.events.reduce((max, event) => Math.max(max, event.seq), 0);
+  return {
+    vaultId,
+    events: [...pending.events, ...own.events.map(event => ({ ...event, seq: event.seq + offset }))],
+    corrupt: [...pending.corrupt, ...own.corrupt],
+  };
 }
 
 export interface ResumedIO {
@@ -128,8 +162,11 @@ export async function resumableIO(options: {
   const now = options.now ?? Date.now;
   const log = await vaultLog(options.vault, options.root);
   let events = log.events;
-  if (options.restart === true && log.vaultId !== null) {
-    await appendInterviewEvent(options.root, log.vaultId, { type: "abandoned", questionId: null, questionDigest: null, payload: {} }, now);
+  if (options.restart === true) {
+    if (events.length > 0) {
+      const key = await interviewLogKey(options.vault, options.root);
+      await appendInterviewEvent(options.root, key, { type: "abandoned", questionId: null, questionDigest: null, payload: {} }, now);
+    }
     events = [];
   }
   const replay = pendingAnswers(events);

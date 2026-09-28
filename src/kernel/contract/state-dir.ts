@@ -1,5 +1,5 @@
 import { constants, type Stats } from "node:fs";
-import { chmod, lstat, mkdir, open, type FileHandle } from "node:fs/promises";
+import { lstat, mkdir, open, type FileHandle } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { VAULT_ID_PATTERN } from "../vault/settings.js";
 
@@ -11,6 +11,9 @@ import { VAULT_ID_PATTERN } from "../vault/settings.js";
  * lists nor removes it. Every component from `root` down is checked with lstat before
  * and after creation, and a file is opened with O_NOFOLLOW. Anything that is not what
  * it should be is refused with STATE_DIR_UNSAFE and left exactly as found.
+ *
+ * The key is a vault id, or `pending-<sha256 hex>` for a vault that has not been sealed
+ * yet (see interview-resume.ts): the pending state never writes inside the vault.
  */
 
 export const STATE_SUBDIRS = ["interview", "evolution", "generations"] as const;
@@ -32,14 +35,29 @@ export class StateDirUnsafe extends Error {
   readonly code = "STATE_DIR_UNSAFE";
 
   constructor(readonly path: string, readonly kind: UnsafeKind) {
-    super(`STATE_DIR_UNSAFE: ${path} is unsafe (${kind}); it was left untouched`);
+    super(`STATE_DIR_UNSAFE: ${path} is unsafe (${kind}); it was left untouched. ${remedy(path, kind)}`);
     this.name = "StateDirUnsafe";
   }
 }
 
+function remedy(path: string, kind: UnsafeKind): string {
+  if (kind === "shared-writable") return `Remove group and other write access: \`chmod go-w ${path}\`.`;
+  if (kind === "foreign-owner") return `It belongs to another user: \`chown\` it to the current user or remove it.`;
+  return "Remove it (or replace it with a real directory) and run the command again.";
+}
+
+/** The key of a vault not sealed yet: `pending-` and a sha256 hex digest. */
+export const PENDING_KEY_PATTERN = /^pending-[0-9a-f]{64}$/;
+
 export function stateDir(root: string, id: string): string {
-  if (!VAULT_ID_PATTERN.test(id)) throw new TypeError("CONTRACT_VAULT_ID_INVALID: vault id is not a UUID");
+  if (!VAULT_ID_PATTERN.test(id) && !PENDING_KEY_PATTERN.test(id)) throw new TypeError("CONTRACT_VAULT_ID_INVALID: vault id is not a UUID");
   return join(root, `.${id}.state`);
+}
+
+/** Test seams: the uid treated as this user, and a hook right after a directory is created. */
+export interface StateDirOptions {
+  readonly uid?: number;
+  readonly afterCreate?: (path: string) => Promise<void>;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -58,8 +76,7 @@ function kindOf(info: Stats): UnsafeKind {
 }
 
 /** Owner and mode checks need POSIX ids; Windows reports neither meaningfully. */
-function ownership(path: string, info: Stats): void {
-  const uid = process.getuid?.();
+function ownership(path: string, info: Stats, uid: number | undefined = process.getuid?.()): void {
   if (uid === undefined || process.platform === "win32") return;
   if (info.uid !== uid) throw new StateDirUnsafe(path, "foreign-owner");
   if ((info.mode & 0o022) !== 0) throw new StateDirUnsafe(path, "shared-writable");
@@ -74,9 +91,9 @@ async function statOrNull(path: string): Promise<Stats | null> {
   }
 }
 
-function checkDirectory(path: string, info: Stats): void {
+function checkDirectory(path: string, info: Stats, uid?: number): void {
   if (!info.isDirectory()) throw new StateDirUnsafe(path, kindOf(info));
-  ownership(path, info);
+  ownership(path, info, uid);
 }
 
 /** `root`, then each component below it down to `target`. */
@@ -87,11 +104,37 @@ function chain(root: string, target: string): string[] {
   return out;
 }
 
-async function checkChain(paths: readonly string[]): Promise<void> {
+async function checkChain(paths: readonly string[], uid?: number): Promise<void> {
   for (const path of paths) {
     const info = await statOrNull(path);
     if (info === null) throw new StateDirUnsafe(path, "other");
-    checkDirectory(path, info);
+    checkDirectory(path, info, uid);
+  }
+}
+
+/**
+ * Sets 0700 on a directory just created, through a handle opened without following a
+ * link, so a component swapped for a symlink after mkdir is refused instead of chmod-ing
+ * whatever it points at. Windows has no directory handles or POSIX modes; it is skipped.
+ */
+async function restrict(path: string, uid?: number): Promise<void> {
+  if (process.platform === "win32") return;
+  let handle: FileHandle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  } catch (error: unknown) {
+    const code = errorCode(error);
+    if (code === "ELOOP" || code === "EMLINK" || code === "ENOTDIR") throw new StateDirUnsafe(path, "symlink");
+    if (code === "ENOENT") throw new StateDirUnsafe(path, "other");
+    throw error;
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isDirectory()) throw new StateDirUnsafe(path, kindOf(info));
+    if (uid !== undefined && info.uid !== uid) throw new StateDirUnsafe(path, "foreign-owner");
+    await handle.chmod(0o700);
+  } finally {
+    await handle.close();
   }
 }
 
@@ -101,13 +144,14 @@ async function checkChain(paths: readonly string[]): Promise<void> {
  * not group- or other-writable), created only when absent, and checked again after
  * creation because Node has no openat to walk by directory handle.
  */
-export async function ensureStateDir(root: string, id: string, subdir: StateSubdir = "interview"): Promise<string> {
+export async function ensureStateDir(root: string, id: string, subdir: StateSubdir = "interview", options: StateDirOptions = {}): Promise<string> {
+  const uid = options.uid ?? process.getuid?.();
   const target = join(stateDir(root, id), subdir);
   const paths = chain(root, target);
   for (const [index, path] of paths.entries()) {
     const info = await statOrNull(path);
     if (info !== null) {
-      checkDirectory(path, info);
+      checkDirectory(path, info, uid);
       continue;
     }
     // Only the store root may need parents; everything below it is created one level at a time.
@@ -119,12 +163,13 @@ export async function ensureStateDir(root: string, id: string, subdir: StateSubd
       // Created concurrently by another append: it gets the same checks as one found in place.
       const raced = await statOrNull(path);
       if (raced === null) throw new StateDirUnsafe(path, "other");
-      checkDirectory(path, raced);
+      checkDirectory(path, raced, uid);
       continue;
     }
-    await chmod(path, 0o700);
+    await options.afterCreate?.(path);
+    await restrict(path, uid);
   }
-  await checkChain(paths);
+  await checkChain(paths, uid);
   return target;
 }
 
@@ -132,12 +177,13 @@ export async function ensureStateDir(root: string, id: string, subdir: StateSubd
  * The same checks as ensureStateDir without creating anything: the directory path when
  * every component exists and is safe, null when one is missing.
  */
-export async function existingStateDir(root: string, id: string, subdir: StateSubdir = "interview"): Promise<string | null> {
+export async function existingStateDir(root: string, id: string, subdir: StateSubdir = "interview", options: StateDirOptions = {}): Promise<string | null> {
+  const uid = options.uid ?? process.getuid?.();
   const target = join(stateDir(root, id), subdir);
   for (const path of chain(root, target)) {
     const info = await statOrNull(path);
     if (info === null) return null;
-    checkDirectory(path, info);
+    checkDirectory(path, info, uid);
   }
   return target;
 }

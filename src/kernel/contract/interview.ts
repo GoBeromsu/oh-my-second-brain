@@ -15,7 +15,7 @@ import { FIELD_TYPES, readObsidianTemplateFolder, readObsidianTypes } from "./ob
 import { looseningChanges, unsafePatternChanges, type LooseningChange } from "./loosening.js";
 import { buildRedactor, hiddenValuesOf, publicTokensOf } from "./redact.js";
 import { PATTERN_SOURCE_LIMIT, patternRefusal } from "./pattern.js";
-import { currentSequence, isSafeName, NO_DECLINED, readDeclined, sealContract, storeRoot, type DeclinedSet, type SealDeps } from "./store.js";
+import { currentSequence, isSafeName, NO_DECLINED, readDeclined, sealContract, storeRoot, type DeclinedSet, type SealDeps, type SequenceObservation } from "./store.js";
 import type {
   FieldType,
   FolderContract,
@@ -64,9 +64,14 @@ export interface InterviewIO {
 }
 
 export type InterviewRecord =
+  /** A question put to the person (the terminal), not one answered from the log or a script. */
+  | { readonly type: "asked"; readonly question: Question }
   | { readonly type: "answered"; readonly question: Question; readonly answer: string }
-  /** `digest` covers the contract and the removed templates the seal question is about. */
-  | { readonly type: "proposed"; readonly digest: string }
+  /**
+   * `digest` covers the contract and the removed templates the seal question is about;
+   * `baseSeq` is the sealed generation the proposal was made against.
+   */
+  | { readonly type: "proposed"; readonly digest: string; readonly removedTemplates: readonly string[]; readonly baseSeq: SequenceObservation }
   | { readonly type: "sealed"; readonly vaultId: string };
 
 /** The digest of what the seal question proposes, as recorded in `proposed`. */
@@ -83,6 +88,8 @@ export type InterviewResult =
     readonly templates: readonly string[];
     /** Sealed templates whose source file was gone and that the user removed. */
     readonly removedTemplates?: readonly string[];
+    /** The contract is sealed, but something after the seal (such as logging it) failed. */
+    readonly warnings?: readonly string[];
   }
   | { readonly state: "refused"; readonly reasons: readonly string[] }
   | { readonly state: "aborted" }
@@ -701,7 +708,7 @@ export async function runInterview(input: {
 
     preview(io, contract);
     if (removedTemplates.length > 0) io.say(`  removed templates: ${removedTemplates.join(", ")}`);
-    await io.record?.({ type: "proposed", digest: proposalDigest(contract, removedTemplates) });
+    await io.record?.({ type: "proposed", digest: proposalDigest(contract, removedTemplates), removedTemplates, baseSeq });
     const seal = await asker.confirm(SEAL_QUESTION.id, SEAL_QUESTION.prompt);
     if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
     if (!seal) return { state: "aborted" };
@@ -734,10 +741,16 @@ export async function runInterview(input: {
       declined,
       freshness: () => templateSourcesUnchanged(vault, templateFolder, found.sources),
     }, root, deps);
-    await io.record?.({ type: "sealed", vaultId });
     if (chosenFolder !== null) {
       const current = await readVaultSettings(vault);
       if (current !== null) await writeVaultSettings(vault, { ...current, templateFolder: chosenFolder });
+    }
+    // The contract is sealed by now: a failure to log that is a warning, not a failed seal.
+    const warnings: string[] = [];
+    try {
+      await io.record?.({ type: "sealed", vaultId });
+    } catch (error: unknown) {
+      warnings.push(`INTERVIEW_LOG_UNRECORDED: the seal was not logged (${error instanceof Error ? error.message : String(error)})`);
     }
     return {
       state: "sealed",
@@ -746,6 +759,7 @@ export async function runInterview(input: {
       properties: Object.keys(properties ?? {}).length,
       templates: Object.keys(templates),
       ...(removedTemplates.length === 0 ? {} : { removedTemplates }),
+      ...(warnings.length === 0 ? {} : { warnings }),
     };
   } catch (error: unknown) {
     if (error instanceof InterviewAborted) return { state: "aborted" };

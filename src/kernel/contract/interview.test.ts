@@ -200,6 +200,21 @@ describe("template folder discovery", () => {
     expect(store.state === "ok" && store.contract.templates["Meeting"]?.source).toBe("Templates/Meeting.md");
   });
 
+  it("persists the template folder and still reports sealed, with a warning, when the seal cannot be logged", async () => {
+    await writeFile(join(vault, ".obsidian/templates.json"), JSON.stringify({ folder: "Templates" }));
+    const io: InterviewIO = {
+      ...scripted({ ...BASE_ANSWERS, "template-folder:confirm": "" }),
+      record: async event => {
+        if (event.type === "sealed") throw new Error("disk full");
+      },
+    };
+    const result = await interview({ vault, io, root });
+    expect(result).toMatchObject({ state: "sealed", templates: ["Meeting"] });
+    expect(result.state === "sealed" && result.warnings).toEqual(["INTERVIEW_LOG_UNRECORDED: the seal was not logged (disk full)"]);
+    expect((await readVaultSettings(vault))?.templateFolder).toBe("Templates");
+    expect((await readStore(VAULT_ID, root)).state).toBe("ok");
+  });
+
   it("offers the Templater folder and asks for another folder when the owner declines it", async () => {
     await mkdir(join(vault, "Other"));
     await mkdir(join(vault, ".obsidian/plugins/templater-obsidian"), { recursive: true });

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,5 +182,58 @@ describe("interview state beside the contract store", () => {
 
   it("rejects a vault id that is not a UUID", () => {
     expect(() => stateDir(root, "../escape")).toThrow("CONTRACT_VAULT_ID_INVALID");
+  });
+
+  it("accepts a pending key for a vault not sealed yet", () => {
+    const key = `pending-${"a".repeat(64)}`;
+    expect(stateDir(root, key)).toBe(join(root, `.${key}.state`));
+    expect(() => stateDir(root, "pending-xyz")).toThrow("CONTRACT_VAULT_ID_INVALID");
+  });
+
+  it("refuses an entry owned by another user and names the fix", async () => {
+    if (process.platform === "win32") return;
+    await ensureStateDir(root, VAULT_ID);
+    const other = process.getuid!() + 1;
+    const error = await ensureStateDir(root, VAULT_ID, "interview", { uid: other }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(StateDirUnsafe);
+    expect((error as StateDirUnsafe).kind).toBe("foreign-owner");
+    expect((error as StateDirUnsafe).message).toContain("chown");
+    expect(await existingStateDir(root, VAULT_ID, "interview", { uid: other }).catch((caught: unknown) => (caught as StateDirUnsafe).kind)).toBe("foreign-owner");
+  });
+
+  it("refuses a group- or other-writable entry and names the chmod that fixes it", async () => {
+    if (process.platform === "win32") return;
+    await ensureStateDir(root, VAULT_ID);
+    const shared = stateDir(root, VAULT_ID);
+    await chmod(shared, 0o722);
+    const error = await appendInterviewEvent(root, VAULT_ID, answered("q")).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(StateDirUnsafe);
+    expect((error as StateDirUnsafe).kind).toBe("shared-writable");
+    expect((error as StateDirUnsafe).message).toContain(`chmod go-w ${shared}`);
+    expect((await stat(shared)).mode & 0o777).toBe(0o722);
+  });
+
+  it("refuses a symlink in a parent component of the state directory", async () => {
+    if (process.platform === "win32") return;
+    const real = join(base, "elsewhere");
+    await mkdir(real, { recursive: true, mode: 0o700 });
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    await symlink(real, stateDir(root, VAULT_ID));
+    await expectUnsafe(ensureStateDir(root, VAULT_ID), "symlink");
+    expect(await readdir(real)).toEqual([]);
+  });
+
+  it("re-checks a directory right after creating it and refuses one swapped for a symlink", async () => {
+    if (process.platform === "win32") return;
+    const decoy = join(base, "decoy");
+    await mkdir(decoy, { mode: 0o755 });
+    const afterCreate = async (path: string): Promise<void> => {
+      if (path !== stateDir(root, VAULT_ID)) return;
+      await rm(path, { recursive: true });
+      await symlink(decoy, path);
+    };
+    await expectUnsafe(ensureStateDir(root, VAULT_ID, "interview", { afterCreate }), "symlink");
+    expect((await stat(decoy)).mode & 0o777).toBe(0o755);
+    expect(await readdir(decoy)).toEqual([]);
   });
 });

@@ -2,11 +2,12 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { admitWriteTarget } from "../../kernel/capture/safe.js";
 import { parseInterpretations, type TemplateInterpretation } from "../../kernel/contract/interpretation.js";
 import { appendInterviewEvent, questionDigest } from "../../kernel/contract/interview-log.js";
-import { confirmedProposal, latestProposal, logRecorder, logVaultId, resumableIO, vaultLog } from "../../kernel/contract/interview-resume.js";
-import { runInterview, SEAL_QUESTION, type InterviewRecord, type InterviewResult } from "../../kernel/contract/interview.js";
+import { confirmedProposal, interviewLogKey, latestProposal, logRecorder, resumableIO, vaultLog } from "../../kernel/contract/interview-resume.js";
+import { proposalDigest, runInterview, SEAL_QUESTION, type InterviewRecord, type InterviewResult } from "../../kernel/contract/interview.js";
 import { parseAnswers, publicQuestion, type Answers } from "../../kernel/contract/scripted-interview.js";
 import { contractStatus } from "../../kernel/contract/status.js";
-import { storeRoot, type SealDeps } from "../../kernel/contract/store.js";
+import { currentSequence, readStore, storeRoot, type SealDeps } from "../../kernel/contract/store.js";
+import { readVaultSettings } from "../../kernel/vault/settings.js";
 import { errorText, isRecord, jsonText, type ToolContext } from "./shared.js";
 
 /**
@@ -18,7 +19,9 @@ import { errorText, isRecord, jsonText, type ToolContext } from "./shared.js";
  *   and returns its digest with the public preview.
  * - `confirm` records the owner's yes to exactly that proposal digest.
  * - `seal` seals only when the log holds that confirmation and the interview, run again
- *   from the log, still proposes the same digest.
+ *   from the log, still proposes the same digest. A retry after a seal whose log entry
+ *   was lost finds the confirmed contract already sealed and records the seal instead of
+ *   sealing a new generation.
  *
  * `answer`, `confirm` and `seal` need a verified target vault; a vault inferred from
  * the working directory may only list questions. The seal never reclaims a stale lock:
@@ -202,8 +205,7 @@ async function confirm(vault: string, root: string, now: () => number, args: Rec
       remediation: "Call op \"questions\", show the owner the current preview, and confirm the digest it proposes.",
     });
   }
-  const vaultId = await logVaultId(vault);
-  await appendInterviewEvent(root, vaultId, {
+  await appendInterviewEvent(root, await interviewLogKey(vault, root), {
     type: "answered",
     questionId: SEAL_QUESTION.id,
     questionDigest: questionDigest(SEAL_QUESTION),
@@ -222,6 +224,8 @@ async function seal(vault: string, root: string, now: () => number, args: Record
       : { code: "INTERVIEW_CONFIRM_REQUIRED", message: "The owner has not confirmed the latest proposal.", recoverable: true, remediation: "Show the owner the preview, then call op \"confirm\" with the proposed digest before op \"seal\"." });
   }
   const log = logRecorder(vault, root, now);
+  const already = await alreadySealed(vault, root, events, confirmed, log);
+  if (already !== null) return report(vault, root, already, { notes: [], drift: [], proposed: confirmed });
   const resumed = await resumableIO({
     vault,
     root,
@@ -249,4 +253,36 @@ async function seal(vault: string, root: string, now: () => number, args: Record
     throw error;
   }
   return report(vault, root, result, { notes: resumed.notes, drift: resumed.drift, proposed: confirmed });
+}
+
+/**
+ * The confirmed proposal is already the sealed contract, sealed after the proposal was
+ * made: an earlier `seal` finished but its log entry was lost. The missing `sealed` event
+ * is recorded (a failure is a warning) and no new generation is sealed. Null otherwise.
+ */
+async function alreadySealed(vault: string, root: string, events: Parameters<typeof latestProposal>[0], confirmed: string, log: (event: InterviewRecord) => Promise<void>): Promise<InterviewResult | null> {
+  const payload = latestProposal(events)?.payload ?? {};
+  const removed = payload["removedTemplates"];
+  if (!Array.isArray(removed) || !removed.every(name => typeof name === "string")) return null;
+  const vaultId = (await readVaultSettings(vault))?.vaultId ?? null;
+  if (vaultId === null) return null;
+  if (await currentSequence(vaultId, root) === payload["baseSeq"]) return null;
+  const store = await readStore(vaultId, root);
+  if (store.state !== "ok" || proposalDigest(store.contract, removed) !== confirmed) return null;
+  const warnings: string[] = [];
+  try {
+    await log({ type: "sealed", vaultId });
+  } catch (error: unknown) {
+    warnings.push(`INTERVIEW_LOG_UNRECORDED: the seal was not logged (${message(error)})`);
+  }
+  const { contract } = store;
+  return {
+    state: "sealed",
+    vaultIdCreated: false,
+    folders: Object.keys(contract.folders ?? {}).length,
+    properties: Object.keys(contract.properties ?? {}).length,
+    templates: Object.keys(contract.templates),
+    ...(removed.length === 0 ? {} : { removedTemplates: removed }),
+    ...(warnings.length === 0 ? {} : { warnings }),
+  };
 }

@@ -96,6 +96,7 @@ export interface ReplayDrift {
  * no answer. A logged answer is used only while its question digest still matches;
  * otherwise it is dropped, reported as drift, and the question is answered as if new.
  * Replayed answers are already in the log, so `record` is not told about them again.
+ * A question handed to `fallback` is recorded as `asked` first.
  */
 export function replayIO(options: {
   readonly replay: ReadonlyMap<string, ReplayedAnswer>;
@@ -142,7 +143,10 @@ export function replayIO(options: {
         scripted.add(question.id);
         return answerText(question, answers[question.id]!);
       }
-      return fallback === undefined ? null : fallback.ask(question);
+      if (fallback === undefined) return null;
+      // Only a question put to the person is logged as asked; replayed and scripted ones are not.
+      await io.record?.({ type: "asked", question });
+      return fallback.ask(question);
     },
     record: async event => {
       if (event.type === "answered" && replayed.get(event.question.id) === event.answer) return;

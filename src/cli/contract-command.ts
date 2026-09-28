@@ -320,7 +320,8 @@ async function doctor(vault: string, fix: boolean): Promise<void> {
   // Healthy rows carry only their own row finding; any added finding (shared id, unreadable settings or store) needs attention.
   const healthy = (report.row === "sealed" || report.row === "never-sealed")
     && report.findings.every(finding => finding === ROW_FINDING[report.row]) && report.cause === null
-    && report.unsafePatterns.length === 0 && report.staleLocks === 0 && report.orphans === 0 && report.unexpectedControlFiles.length === 0;
+    && report.unsafePatterns.length === 0 && report.staleLocks === 0 && report.orphans === 0 && report.unexpectedControlFiles.length === 0
+    && report.interviewLog.corrupt.length === 0 && report.interviewLog.pendingCorrupt.length === 0 && !report.interviewLog.unreadable;
   if (!healthy) process.exitCode = 1;
   print({
     contract: report.contract,
@@ -332,6 +333,7 @@ async function doctor(vault: string, fix: boolean): Promise<void> {
     orphans: report.orphans,
     unexpectedControlFiles: report.unexpectedControlFiles,
     transportFailures: report.transportFailures,
+    interviewLog: report.interviewLog,
   });
 }
 
