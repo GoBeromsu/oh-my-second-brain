@@ -127,6 +127,7 @@ describe("oms search --path", () => {
     [["--path", "a.md", "--lex", "topic"]],
     [["context", "--path", "a.md"]],
     [["--path", "a.md", "b.md"]],
+    [["query", "--path", "a.md", "--", "topic"]],
   ])("refuses --path combined with other search arguments: %j", async (argv) => {
     const deps = spiedDeps();
     await runSearchCommand([...argv, "--vault", vault], deps);
@@ -152,6 +153,20 @@ describe("oms search --path", () => {
     expect(logs).toEqual([]);
     expect(errors.join("\n")).toMatch(/ENOENT/);
     expect(deps.runEngineSession).toHaveBeenCalledTimes(0);
+  });
+
+  it("treats --path after a -- terminator as query text, not path mode", async () => {
+    const deps = spiedDeps();
+    const semanticQuery = vi.fn(() => Promise.resolve({ available: true, hits: [] }));
+    const runEngineSession = vi.fn<SearchCommandDeps["runEngineSession"]>(
+      (_vault, _options, fn) => fn({ semanticQuery } as never),
+    );
+    await runSearchCommand(["query", "--", "--path", "--vault", vault], { ...deps, runEngineSession });
+    expect(errors).toEqual([]);
+    expect(process.exitCode).toBe(0);
+    expect(runEngineSession).toHaveBeenCalledTimes(1);
+    expect(semanticQuery).toHaveBeenCalledWith(expect.objectContaining({ query: "--path" }));
+    expect(deps.readExactDocument).toHaveBeenCalledTimes(0);
   });
 
   it("still routes search query through the injected engine gateway", async () => {

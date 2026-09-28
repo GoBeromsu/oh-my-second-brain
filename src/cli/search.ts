@@ -122,10 +122,7 @@ function contextOptions(vault: string, argv: readonly string[]): MorningRetrieve
 
 /** `oms search --path <rel>`: an engine-free exact read. Any other argument is refused. */
 async function runPathRead(resolved: Target, deps: SearchCommandDeps): Promise<void> {
-  const [flag, relPath, ...extra] = resolved.argv;
-  if (flag !== "--path") {
-    fail("--path is mutually exclusive with search subcommands, query text, and mode flags");
-  }
+  const [, relPath, ...extra] = resolved.argv;
   if (relPath === undefined || relPath.startsWith("--")) fail("--path requires a vault-relative note path");
   if (extra.length > 0) {
     fail("--path is mutually exclusive with search subcommands, query text, and mode flags");
@@ -137,9 +134,16 @@ async function runPathRead(resolved: Target, deps: SearchCommandDeps): Promise<v
 
 async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Promise<void> {
   const resolved = await target(argv);
-  if (resolved.argv.includes("--path")) {
+  if (resolved.argv[0] === "--path") {
     await runPathRead(resolved, deps);
     return;
+  }
+  // Tokens after a `--` terminator are query text, never flags.
+  const terminator = resolved.argv.indexOf("--");
+  const flagged = terminator === -1 ? resolved.argv : resolved.argv.slice(0, terminator);
+  const literal = terminator === -1 ? [] : resolved.argv.slice(terminator + 1);
+  if (flagged.includes("--path")) {
+    fail("--path is mutually exclusive with search subcommands, query text, and mode flags");
   }
   const verb = resolved.argv[0];
   if (verb === undefined || verb === "help" || verb === "--help" || verb === "-h") {
@@ -155,18 +159,18 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
     const booleanFlags = new Set([
       "all", "full", "full-path", "expand", "rerank", "no-rerank",
     ]);
-    for (let index = 1; index < resolved.argv.length; index += 1) {
-      const token = resolved.argv[index]!;
+    for (let index = 1; index < flagged.length; index += 1) {
+      const token = flagged[index]!;
       if (!token.startsWith("--") && token !== "-n" && token !== "-c") continue;
       const name = token === "-n" ? "limit" : token === "-c" ? "collection" : token.slice(2);
       if (!valueFlags.has(name) && !booleanFlags.has(name)) fail(`unknown query flag ${token}`);
       if (valueFlags.has(name)) {
-        const value = resolved.argv[++index];
+        const value = flagged[++index];
         if (value === undefined || value.startsWith("--")) fail(`${token} requires a value`);
       }
     }
-    const args = parseSearchArgs(resolved.argv);
-    const query = args.positional.slice(1).join(" ")
+    const args = parseSearchArgs(flagged);
+    const query = [...args.positional.slice(1), ...literal].join(" ")
       || stringOption(args, "lex")
       || stringOption(args, "vec")
       || stringOption(args, "hyde")
