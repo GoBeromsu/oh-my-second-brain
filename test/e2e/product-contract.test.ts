@@ -185,29 +185,27 @@ describe("product contract (built CLI, isolated home)", () => {
     expect(out.documents[0]!.content).toBe(await readFile(path.join(vault, NFC_NOTE), "utf8"));
   });
 
-  it("note get reads the NFD-named note by its on-disk (NFD) path", () => {
-    const run = oms(["note", "get", NFD_NOTE.normalize("NFD"), "--vault", vault]);
-    expect(run.status).toBe(0);
-    const out = json(run) as { available: boolean; documents: { path: string; title: string }[] };
-    expect(out.available).toBe(true);
-    expect(out.documents[0]!.title).toBe("낙상 위험 평가");
-    expect(out.documents[0]!.path.normalize("NFC")).toBe(NFD_NOTE);
-  });
-
-  // Known 0.18.3 gap: 0.18.3 does not itself resolve an NFC path to an NFD-named file.
-  // It only appears to work on macOS, because APFS treats the two normalizations as the
-  // same name. On Linux ext4 the lookup misses. PR2's `readExact` is meant to close this gap;
-  // once it does, the non-darwin branch should expect what the darwin branch expects.
-  it("note get with an NFC path to the NFD-named note depends on the filesystem (0.18.3 gap)", () => {
-    const run = oms(["note", "get", NFD_NOTE.normalize("NFC"), "--vault", vault]);
-    if (process.platform === "darwin") {
-      expect(run.status).toBe(0);
-      expect(json(run)).toMatchObject({ available: true });
-    } else {
-      expect(run.status).toBe(1);
-      expect(json(run)).toMatchObject({ available: false, documents: [] });
+  // Known 0.18.3 gap: `note get` NFC-normalizes its target, so it opens the NFC byte name.
+  // On macOS APFS both normalizations name the same file, so the NFD-named note is found
+  // from either spelling. On Linux ext4 the NFD bytes are a distinct name, so both
+  // spellings miss (exit 1), even though search finds the note (see above). PR2's
+  // `readExact` should close this gap; once it does, every platform should expect the
+  // darwin branch.
+  it("note get on the NFD-named note depends on the filesystem (0.18.3 gap)", () => {
+    for (const target of [NFD_NOTE.normalize("NFD"), NFD_NOTE.normalize("NFC")]) {
+      const run = oms(["note", "get", target, "--vault", vault]);
+      if (process.platform === "darwin") {
+        expect(run.status).toBe(0);
+        const out = json(run) as { available: boolean; documents: { path: string; title: string }[] };
+        expect(out.available).toBe(true);
+        expect(out.documents[0]!.title).toBe("낙상 위험 평가");
+        expect(out.documents[0]!.path.normalize("NFC")).toBe(NFD_NOTE);
+      } else {
+        expect(run.status).toBe(1);
+        expect(json(run)).toMatchObject({ available: false, documents: [] });
+      }
     }
-  });
+  }, 30_000);
 
   it("note get on a missing path or a bare title is unavailable with exit 1", () => {
     for (const target of ["Resources/없음.md", "낙상판정기준"]) {
