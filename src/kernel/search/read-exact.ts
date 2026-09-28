@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { nfcEquals, toNfc } from "../text/nfc.js";
 
@@ -49,6 +50,9 @@ function segmentsOf(relPath: string): string[] {
   if (path.isAbsolute(relPath) || relPath.startsWith("/") || isWindowsAbsolute(relPath)) {
     throw new ReadExactError("READ_EXACT_INVALID_PATH", `path must be vault-relative, got ${JSON.stringify(relPath)}`);
   }
+  if (/[\\/]$/.test(relPath)) {
+    throw new ReadExactError("READ_EXACT_INVALID_PATH", `path must name a file, not end in a separator, got ${JSON.stringify(relPath)}`);
+  }
   const segments = relPath.split(/[\\/]+/).filter((segment) => segment.length > 0 && segment !== ".");
   if (segments.includes("..")) {
     throw new ReadExactError("READ_EXACT_INVALID_PATH", `path must not contain "..", got ${JSON.stringify(relPath)}`);
@@ -59,7 +63,8 @@ function segmentsOf(relPath: string): string[] {
 
 function isWithin(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative === ""
+    || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 function notFound(relPath: string): ReadExactError {
@@ -91,6 +96,25 @@ async function listDirectory(directory: string, relPath: string): Promise<string
   }
 }
 
+/** Resolves `candidate` through any symlink and refuses it when the real path leaves the vault. */
+async function containedRealpath(root: string, candidate: string, relPath: string): Promise<string> {
+  let resolved: string;
+  try {
+    resolved = await realpath(candidate);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notFound(relPath);
+    throw error;
+  }
+  if (!isWithin(root, resolved)) {
+    throw new ReadExactError("READ_EXACT_ESCAPE", `${JSON.stringify(relPath)} resolves outside the vault`);
+  }
+  return resolved;
+}
+
+// O_NOFOLLOW refuses a final component swapped for a symlink after realpath; O_NONBLOCK keeps
+// a FIFO from blocking the open. Windows lacks both, so each falls back to 0 there.
+const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+
 export async function readExact(vaultRoot: string, relPath: string): Promise<ReadExactResult> {
   const segments = segmentsOf(relPath);
   const root = await realpath(vaultRoot);
@@ -100,24 +124,21 @@ export async function readExact(vaultRoot: string, relPath: string): Promise<Rea
     const entry = matchEntry(await listDirectory(current, relPath), segment, relPath);
     if (entry === undefined) throw notFound(relPath);
     onDisk.push(entry);
-    current = path.join(current, entry);
+    // Every directory is contained before it is listed, so a symlink out of the vault
+    // cannot reveal which names exist behind it.
+    current = await containedRealpath(root, path.join(current, entry), relPath);
   }
 
-  let resolved: string;
+  const handle = await open(current, OPEN_FLAGS);
+  let bytes: Buffer;
   try {
-    resolved = await realpath(current);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notFound(relPath);
-    throw error;
+    if (!(await handle.stat()).isFile()) {
+      throw new ReadExactError("READ_EXACT_NOT_FILE", `${JSON.stringify(relPath)} is not a file`);
+    }
+    bytes = await handle.readFile();
+  } finally {
+    await handle.close();
   }
-  if (!isWithin(root, resolved)) {
-    throw new ReadExactError("READ_EXACT_ESCAPE", `${JSON.stringify(relPath)} resolves outside the vault`);
-  }
-  if (!(await stat(resolved)).isFile()) {
-    throw new ReadExactError("READ_EXACT_NOT_FILE", `${JSON.stringify(relPath)} is not a file`);
-  }
-
-  const bytes = await readFile(resolved);
   return {
     path: onDisk.join("/"),
     content: bytes.toString("utf8"),

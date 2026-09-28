@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -151,6 +152,40 @@ describe("readExact", () => {
     symlinkSync(path.join(base, "outside"), path.join(vault, "out"), "dir");
     expect((await rejection(readExact(vault, "out/secret.md"))).code).toBe("READ_EXACT_ESCAPE");
   });
+
+  it("reads names that begin with two dots at the vault root", async () => {
+    writeFileSync(path.join(vault, "..dots.md"), "dots");
+    mkdirSync(path.join(vault, "..notes"));
+    writeFileSync(path.join(vault, "..notes", "x.md"), "nested");
+    expect(await readExact(vault, "..dots.md")).toMatchObject({ path: "..dots.md", content: "dots" });
+    expect(await readExact(vault, "..notes/x.md")).toMatchObject({ path: "..notes/x.md", content: "nested" });
+  });
+
+  it("refuses a directory symlink out of the vault before listing it, so missing names do not leak", async () => {
+    mkdirSync(path.join(base, "outside"));
+    writeFileSync(path.join(base, "outside", "secret.md"), "secret");
+    symlinkSync(path.join(base, "outside"), path.join(vault, "lnk"), "dir");
+    expect((await rejection(readExact(vault, "lnk/secret.md"))).code).toBe("READ_EXACT_ESCAPE");
+    expect((await rejection(readExact(vault, "lnk/nope.md"))).code).toBe("READ_EXACT_ESCAPE");
+  });
+
+  it("raises READ_EXACT_NOT_FOUND for a dangling symlink", async () => {
+    symlinkSync(path.join(vault, "gone.md"), path.join(vault, "dangling.md"));
+    expect((await rejection(readExact(vault, "dangling.md"))).code).toBe("READ_EXACT_NOT_FOUND");
+  });
+
+  it("rejects a path that ends in a separator", async () => {
+    writeFileSync(path.join(vault, "지식", NFC_NAME), "x");
+    for (const bad of ["지식/", "지식\\", `지식/${NFC_NAME}/`]) {
+      expect((await rejection(readExact(vault, bad))).code).toBe("READ_EXACT_INVALID_PATH");
+    }
+  });
+
+  it("rejects a FIFO as not a file without blocking on it", async () => {
+    if (process.platform === "win32") return;
+    execFileSync("mkfifo", [path.join(vault, "pipe.md")]);
+    expect((await rejection(readExact(vault, "pipe.md"))).code).toBe("READ_EXACT_NOT_FILE");
+  }, 2000);
 
   it("follows a symlink that stays inside the vault", async () => {
     writeFileSync(path.join(vault, "지식", NFC_NAME), "inside");
