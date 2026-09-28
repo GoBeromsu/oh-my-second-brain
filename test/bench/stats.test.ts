@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { bootstrapMeanCI, pairedRandomizationTest, seededRandom } from "../../scripts/bench/stats.mjs";
+import { bootstrapMeanCI, pairedRandomizationTest, quantile, seededRandom } from "../../scripts/bench/stats.mjs";
 
 describe("bench stats", () => {
+  it("computes a type-7 (linear interpolation) quantile against known values", () => {
+    // Reference values are numpy's/R's default ("linear"/type-7) quantile,
+    // which floor(q * n) indexing does not reproduce: it would give 1 for
+    // q=0.25 here instead of the correctly-interpolated 2.
+    const data = [1, 2, 3, 4, 5];
+    expect(quantile(data, 0)).toBe(1);
+    expect(quantile(data, 0.25)).toBe(2);
+    expect(quantile(data, 0.5)).toBe(3);
+    expect(quantile(data, 0.75)).toBe(4);
+    expect(quantile(data, 1)).toBe(5);
+    // An even-length input interpolates between its two middle values.
+    expect(quantile([1, 2, 3, 4], 0.5)).toBe(2.5);
+    // A single-element input has nothing to interpolate between.
+    expect(quantile([7], 0.3)).toBe(7);
+  });
+
   it("draws a reproducible stream for a seed", () => {
     const a = seededRandom(7);
     const b = seededRandom(7);

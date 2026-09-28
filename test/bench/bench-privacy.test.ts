@@ -68,6 +68,22 @@ describe("bench privacy", () => {
     expect(() => assertReportPrivacy({ "/leak": 1 }, texts)).toThrow(/absolute path/);
   });
 
+  it("does not flag a short tier-3 query that only coincides inside unrelated text", () => {
+    // "ab" is below the substring-match floor, so it must not fire just
+    // because it happens to occur inside an unrelated longer string.
+    const texts = { queryTexts: ["ab"] };
+    expect(() => assertReportPrivacy({ note: "table" }, texts)).not.toThrow();
+  });
+
+  it("still flags a real leak of a short query, and a substring leak of a longer one", () => {
+    // A short query still fails closed when a field's value IS the query,
+    // which is what an actual leak of a short query looks like.
+    expect(() => assertReportPrivacy({ note: "ab" }, { queryTexts: ["ab"] })).toThrow(/query text/);
+    // A longer query (at or above the substring floor) is still caught even
+    // when embedded inside a larger string, not just on an exact match.
+    expect(() => assertReportPrivacy({ note: "prefix 낙상판정기준 suffix" }, { queryTexts: ["낙상판정기준"] })).toThrow(/query text/);
+  });
+
   it("refuses tier 3 without an explicit vault and queries file", () => {
     expect(() => resolveTier3Vault({}, {})).toThrow(/explicit vault/);
     expect(() => resolveTier3Vault({ vault: "  " }, {})).toThrow(/explicit vault/);

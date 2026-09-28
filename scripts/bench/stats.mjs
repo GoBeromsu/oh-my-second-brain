@@ -52,6 +52,24 @@ export function pairedRandomizationTest(baseline, candidate, options = {}) {
 }
 
 /**
+ * Linear-interpolation quantile (Hyndman & Fan type 7 — R's and NumPy's
+ * default). `floor(q * n)` indexing is biased low: it always rounds toward
+ * the lower observation instead of interpolating between the two it falls
+ * between.
+ * @param {readonly number[]} sorted ascending values
+ * @param {number} q in [0, 1]
+ * @returns {number}
+ */
+export function quantile(sorted, q) {
+  const n = sorted.length;
+  if (n === 1) return sorted[0];
+  const h = (n - 1) * Math.min(1, Math.max(0, q));
+  const lo = Math.floor(h);
+  const hi = Math.min(n - 1, lo + 1);
+  return sorted[lo] + (h - lo) * (sorted[hi] - sorted[lo]);
+}
+
+/**
  * Percentile bootstrap confidence interval of the mean.
  * @param {readonly number[]} values
  * @param {{ resamples?: number, alpha?: number, seed?: number }} [options]
@@ -70,6 +88,5 @@ export function bootstrapMeanCI(values, options = {}) {
     means.push(sum / values.length);
   }
   means.sort((a, b) => a - b);
-  const at = (/** @type {number} */ q) => means[Math.min(means.length - 1, Math.max(0, Math.floor(q * means.length)))];
-  return { mean: mean(values), lower: at(alpha / 2), upper: at(1 - alpha / 2) };
+  return { mean: mean(values), lower: quantile(means, alpha / 2), upper: quantile(means, 1 - alpha / 2) };
 }

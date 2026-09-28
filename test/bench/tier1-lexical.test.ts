@@ -6,7 +6,7 @@ import { openEngineStoreCore } from "../../src/kernel/engine/embed/store.js";
 import { syncEngineStore } from "../../src/kernel/engine/embed/sync.js";
 import { dispatch } from "../../src/kernel/engine/retrieval/dispatcher.js";
 import { KO_VAULT_SOURCE, materializeKoVault } from "../fixtures/ko-vault.mjs";
-import { QUERY_TYPES, loadQueries, openLexicalBench, runQueries } from "../../scripts/bench/run.mjs";
+import { QUERY_TYPES, loadQueries, openLexicalBench, runQueries, sandboxEnv } from "../../scripts/bench/run.mjs";
 import { buildReport } from "../../scripts/bench/report.mjs";
 
 // Tier 1 of the Korean retrieval bench against the production lexical path (CUR).
@@ -22,13 +22,36 @@ const CUR_R5_BASELINE: Record<string, number> = {
   paraphrase: 1 / 6,
 };
 
+// This test calls openLexicalBench directly, so it never goes through
+// run.mjs's own CLI (main() calls sandboxEnv before touching the engine).
+// Sandbox the same keys ourselves so this in-process bench run can never
+// read from, or write into, the operator's real HOME/XDG directories, and
+// restore whatever was there afterward so it doesn't leak into other tests.
+const SANDBOXED_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "OMS_RUNTIME_ROOT",
+  "OMS_AUTO_UPDATE_STATE_DIR",
+  "OMS_CLAUDE_HOME",
+  "OMS_CODEX_HOME",
+  "OMS_HERMES_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "OMS_VAULT",
+] as const;
+
 describe("bench tier 1: lexical CUR on the ko-vault fixture", () => {
   let base: string;
   let report: ReturnType<typeof buildReport>;
+  let savedEnv: Record<string, string | undefined>;
   const queries = loadQueries(path.join(KO_VAULT_SOURCE, "queries.json"));
 
   beforeAll(async () => {
     base = mkdtempSync(path.join(tmpdir(), "oms-ko-bench-test-"));
+    savedEnv = Object.fromEntries(SANDBOXED_ENV_KEYS.map((key) => [key, process.env[key]]));
+    sandboxEnv(path.join(base, "sandbox"));
     const vault = materializeKoVault(path.join(base, "vault"));
     rmSync(path.join(vault, "queries.json"), { force: true });
     const bench = await openLexicalBench(
@@ -47,6 +70,10 @@ describe("bench tier 1: lexical CUR on the ko-vault fixture", () => {
   }, 60_000);
 
   afterAll(() => {
+    for (const key of SANDBOXED_ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
     rmSync(base, { recursive: true, force: true });
   });
 
