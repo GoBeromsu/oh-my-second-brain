@@ -160,6 +160,30 @@ describe("oms contract", () => {
     expect(await readFile(events, "utf8")).toBe(before);
   });
 
+  it("gaps reads without creating a ledger, reports gaps without their wanted value and exits 1 on a corrupt line", async () => {
+    await runContractCommand(["gaps", "--vault", vault]);
+    expect(process.exitCode).toBe(0);
+    expect(output()).toMatchObject({ contract: "open", contractRevision: null, ledger: "ok", open: 0, contradictions: [] });
+    await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
+    const root = path.join(home, ".oms", "vaults");
+    const vaultId = (await readVaultSettings(vault))!.vaultId;
+    const gapsDir = path.join(stateDir(root, vaultId), "gaps");
+    await runContractCommand(["gaps", "--vault", vault]);
+    expect(process.exitCode).toBe(0);
+    expect(output()).toMatchObject({ contract: "sealed", ledger: "ok", open: 0, gaps: [], corruptLines: [] });
+    await expect(readdir(gapsDir)).rejects.toThrow();
+    const { recordGaps } = await import("../kernel/contract/gap-ledger.js");
+    await recordGaps(root, vaultId, [{
+      notePath: "Projects/a.md", noteRevision: digestBytes("a"), contractRevision: digestBytes("old"),
+      axis: "property", kind: "no-fit", chosen: null, wanted: { field: "mood", value: SECRET }, reason: "dropped: unknown-property",
+    }]);
+    await appendFile(path.join(gapsDir, "events.jsonl"), "garbage\n");
+    await runContractCommand(["gaps", "--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toMatchObject({ open: 1, byAxis: { property: 1 }, gaps: [{ notePath: "Projects/a.md", field: "mood", drafted: false, stale: true }], corruptLines: [2] });
+    expect(printed()).not.toContain(SECRET);
+  });
+
   it("AC16: doctor names the unreadable cause and guides to oms setup, and lists unexpected control files", async () => {
     await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
     const root = path.join(home, ".oms", "vaults");

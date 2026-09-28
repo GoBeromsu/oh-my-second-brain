@@ -214,7 +214,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const tools = new Map(omsMcpTools.map((tool) => [tool.name, tool]));
     const expectedOps: Record<string, readonly string[]> = {
       search: ["context", "templates", "query", "index-status", "get-document", "link"],
-      doctor: ["status", "link-check", "audit", "validate", "build-graph", "cleanup", "sync-embeddings"],
+      doctor: ["status", "link-check", "audit", "validate", "gaps", "build-graph", "cleanup", "sync-embeddings"],
     };
 
     expect([...tools.keys()].sort()).toEqual(["doctor", "interview", "search", "write"]);

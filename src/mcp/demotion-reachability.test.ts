@@ -88,6 +88,7 @@ describe("MCP detail-tool demotion", () => {
       expect(payload(await call("doctor", { op: "status" })).contract).toMatchObject({ contract: "sealed" });
       expect(payload(await call("doctor", { op: "audit", folder: "references" })).scannedNotes).toBeTypeOf("number");
       expect(payload(await call("doctor", { op: "validate" })).contract).toBe("sealed");
+      expect(payload(await call("doctor", { op: "gaps" }))).toMatchObject({ contract: "sealed", ledger: "ok", open: 0, gaps: [], contradictions: [] });
       expect(payload(await call("doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
       // The derived projection repair is retired: the explicit contract is the

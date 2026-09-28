@@ -14,6 +14,9 @@ export function doctorUsage(): string {
             it never creates a missing store.
   contract [--fix] [--vault <path>]
             Diagnose the sealed contract. --fix only re-indexes a moved or unindexed vault.
+  gaps [--vault <path>]
+            Report open gaps between written notes and the sealed contract, and
+            contradictions inside the contract. Wanted values are never printed.
   audit [--folder <path>] [--max-per-template <n>] [--json] [--vault <path>]
             Report notes that do not match the sealed contract. Notes are never rewritten.
   link-check [<note>] [--vault <path>]
@@ -85,6 +88,11 @@ export async function runDoctorCommand(argv: readonly string[]): Promise<void> {
       await runContractCommand(["doctor", ...rest]);
       return;
     }
+    case "gaps": {
+      const { runContractCommand } = await import("./contract-command.js");
+      await runContractCommand(["gaps", ...rest]);
+      return;
+    }
     case "audit": {
       const { runNoteCommand } = await import("./note-command.js");
       await runNoteCommand(["audit", ...rest]);
@@ -116,6 +124,6 @@ export async function runDoctorCommand(argv: readonly string[]): Promise<void> {
       return;
     }
     default:
-      fail(`Unknown doctor leaf: ${leaf}. Leaves: status, contract, audit, link-check, sync-embeddings, cleanup, build-graph.`);
+      fail(`Unknown doctor leaf: ${leaf}. Leaves: status, contract, gaps, audit, link-check, sync-embeddings, cleanup, build-graph.`);
   }
 }

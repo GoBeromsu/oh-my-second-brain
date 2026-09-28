@@ -126,4 +126,12 @@ describe("oms doctor", () => {
     expect(report).toHaveProperty("graph");
     expect(existsSync(engineStorePath(vault))).toBe(false);
   });
+
+  it("routes gaps to the read-only gap report and creates no store", async () => {
+    const vault = await makeVault();
+    await runDoctorCommand(["gaps", "--vault", vault]);
+    expect(process.exitCode).toBe(0);
+    expect(JSON.parse(stdout())).toMatchObject({ contract: "open", contractRevision: null, ledger: "ok", open: 0, gaps: [], contradictions: [] });
+    expect(existsSync(path.join(process.env["HOME"]!, ".oms"))).toBe(false);
+  });
 });
