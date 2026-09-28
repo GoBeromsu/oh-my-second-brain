@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-28
+
 - **`oms write` takes `--if-match sha256:<rev>` and `--check`.** Overwriting an existing note without `--if-match` exits 1 with `WRITE_IF_MATCH_REQUIRED` and leaves the file unchanged; a stale revision reports the retryable `WRITE_TARGET_CHANGED`, and `--if-match` for a note that does not exist reports the retryable `WRITE_TARGET_ABSENT`. `--check` prints the frame, the note's current revision and any violations and writes nothing, not even an index row. Each flag may be given once, and `--if-match` requires a value. The receipt is the one MCP `write` returns.
 
 - **`oms interview` continues an interrupted interview, and `--restart` starts over.** Every answer is logged beside the contract store, so closing the terminal mid-interview no longer loses the answers already given: the next `oms interview` replays them, says how many it continued with, asks only what is left, and reports any logged answer it dropped because its question changed. `--restart` logs the earlier run as abandoned and asks everything again. It still refuses without a TTY or under `OMS_NON_INTERACTIVE=1`, and a refused run logs nothing. A vault that was never sealed gets no `.oms/settings.json` until the seal; its answers are logged under a pending key outside the vault. `--vault --restart` is refused as a missing `--vault` value rather than read as a restart. `oms doctor contract` reports corrupt interview log lines by line number under `interviewLog`, exits 1, and repairs nothing. An unsafe entry in the state directory is reported as `STATE_DIR_UNSAFE` without echoing its path.
