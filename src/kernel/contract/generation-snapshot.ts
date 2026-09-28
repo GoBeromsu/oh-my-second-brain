@@ -207,22 +207,34 @@ async function sizeOf(path: string): Promise<number> {
   return total;
 }
 
-/** What `generations/` holds, read-only; empty when it does not exist. */
+async function listSnapshots(directory: string): Promise<{ readonly digests: Digest[]; readonly unexpected: string[] }> {
+  const digests: Digest[] = [];
+  const unexpected: string[] = [];
+  // Node lstats an entry itself when the file system reports no type, so `isDirectory()` is exact.
+  const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+  for (const entry of entries) {
+    if (DIGEST_HEX_PATTERN.test(entry.name) && entry.isDirectory()) digests.push(`sha256:${entry.name}`);
+    else unexpected.push(entry.name);
+  }
+  return { digests, unexpected };
+}
+
+/**
+ * The snapshot digests in `generations/`, by name only (a name is its content digest):
+ * one readdir, no per-snapshot stat or size walk. The seal reads this on every seal.
+ */
+export async function snapshotDigests(root: string, vaultId: string): Promise<readonly Digest[]> {
+  const directory = await existingStateDir(root, vaultId, "generations");
+  return directory === null ? [] : (await listSnapshots(directory)).digests;
+}
+
+/** What `generations/` holds, with sizes, read-only; empty when it does not exist. Doctor only. */
 export async function snapshotInventory(root: string, vaultId: string): Promise<SnapshotInventory> {
   const directory = await existingStateDir(root, vaultId, "generations");
   if (directory === null) return { digests: [], unexpected: [], bytes: 0 };
-  const digests: Digest[] = [];
-  const unexpected: string[] = [];
+  const { digests, unexpected } = await listSnapshots(directory);
   let bytes = 0;
-  for (const entry of (await readdir(directory)).sort()) {
-    const path = join(directory, entry);
-    if (DIGEST_HEX_PATTERN.test(entry) && (await lstat(path)).isDirectory()) {
-      digests.push(`sha256:${entry}`);
-      bytes += await sizeOf(path);
-    } else {
-      unexpected.push(entry);
-    }
-  }
+  for (const digest of digests) bytes += await sizeOf(join(directory, digest.slice("sha256:".length)));
   return { digests, unexpected, bytes };
 }
 

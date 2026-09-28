@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTruthTableRow } from "../../../test/fixtures/contract-truth-table.js";
 import type { Digest } from "../conventions/canonical.js";
 import { digestHex, manifestDigestOf } from "./digest.js";
-import { readSnapshot, readVerifiedDirectory, removeSnapshotTemporaries, snapshotInventory, SNAPSHOT_TEMPORARY_PREFIX, writeSnapshot } from "./generation-snapshot.js";
+import { readSnapshot, readVerifiedDirectory, removeSnapshotTemporaries, snapshotDigests, snapshotInventory, SNAPSHOT_TEMPORARY_PREFIX, writeSnapshot } from "./generation-snapshot.js";
 import { lineageHealth, lineageNeedsAttention } from "./lineage-health.js";
 import { readLineage } from "./lineage.js";
 import { stateDir } from "./state-dir.js";
@@ -86,6 +86,18 @@ describe("generation snapshots", () => {
       if (read.state === "ok") expect(manifestDigestOf(read.manifestBytes)).toBe(digest);
     }
     expect(await generationDirs()).toEqual([`.${ID}.4`, `.${ID}.5`]);
+  });
+
+  it("lists the seal's snapshot digests by name alone, matching the doctor inventory", async () => {
+    expect(await snapshotDigests(root, ID)).toEqual([]);
+    await seal(1);
+    await seal(2);
+    await writeFile(join(generationsDir(), "f".repeat(64)), "not a snapshot");
+    await mkdir(join(generationsDir(), "stray"));
+    const inventory = await snapshotInventory(root, ID);
+    expect(await snapshotDigests(root, ID)).toEqual(inventory.digests);
+    expect(inventory.digests).toHaveLength(2);
+    expect(inventory.unexpected).toEqual(["f".repeat(64), "stray"].sort());
   });
 
   it("is never collected by the seal GC, storeHousekeeping or a seq restart", async () => {

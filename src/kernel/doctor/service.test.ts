@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { access, chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,8 +10,13 @@ import { engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../e
 import { writeContractVault } from "../contract/contract-vault-fixture.js";
 import { appendLineageEvents, LINEAGE_FILE } from "../contract/lineage.js";
 import { stateDir } from "../contract/state-dir.js";
-import { storeRoot } from "../contract/store.js";
+import { sealContract, storeRoot, writeIndexEntry } from "../contract/store.js";
+import * as lineageHealthModule from "../contract/lineage-health.js";
+import { lineageHealth, type LineageHealth } from "../contract/lineage-health.js";
+import type { VaultContract } from "../contract/types.js";
+import * as vaultIdModule from "../contract/vault-id.js";
 import { resolveSealState } from "../contract/vault-id.js";
+import { serializeVaultSettings } from "../vault/settings.js";
 import { syncEngineStore } from "../engine/embed/sync.js";
 import { listDirtyQueue, updateKeywordIndex } from "../engine/index-update.js";
 import { repairDoctor } from "./service.js";
@@ -513,6 +519,78 @@ describe("doctor lineage repairs", () => {
       expect(result).toEqual({ kind: "error", message: "STATE_DIR_UNSAFE: the contract store holds an unsafe entry (shared-writable); it was left untouched" });
     } finally {
       await chmod(state, 0o700);
+    }
+  });
+
+  /** A first seal whose lineage append failed: linked, but never indexed (F1). */
+  async function unindexedFirstSeal(): Promise<{ vault: string; id: string }> {
+    const vault = path.join(home, "vault");
+    const id = randomUUID();
+    await mkdir(path.join(vault, ".oms"), { recursive: true });
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: id, templateFolder: "Templates" }));
+    const contract: VaultContract = { folders: { notes: { meaning: "Notes.", searchExclude: false } }, properties: {}, templates: {} };
+    await expect(sealContract({ vaultRealPath: await realpath(vault), vaultId: id, contract, onSealed: async () => { throw new Error("disk full"); } }))
+      .rejects.toMatchObject({ code: "CONTRACT_LINEAGE_APPEND_FAILED", seq: 1 });
+    return { vault, id };
+  }
+
+  async function expectRecoveredSeal(vault: string, id: string, result: Awaited<ReturnType<typeof repairDoctor>>): Promise<void> {
+    expect(result).toMatchObject({ kind: "completed", value: { receipt: { operation: "lineage-recover", written: { paths: expect.arrayContaining(["index.json", "lineage/events.jsonl"]) } } } });
+    expect((await resolveSealState(vault)).row).toBe("sealed");
+    const index = JSON.parse(await readFile(path.join(storeRoot(), "index.json"), "utf8")) as { vaults: Record<string, string> };
+    expect(index.vaults[await realpath(vault)]).toBe(id);
+    expect((await lineageHealth(id)).findings.map(finding => finding.kind)).toEqual([]);
+    expect(await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined })).toMatchObject({
+      kind: "completed", value: { snapshots: 0, anchors: [], receipt: { written: { paths: [] } } },
+    });
+  }
+
+  it("completes a first seal whose lineage append failed: reindexes, records the lineage, reads sealed", async () => {
+    const { vault, id } = await unindexedFirstSeal();
+    expect((await resolveSealState(vault)).row).toBe("store-without-index");
+    await expectRecoveredSeal(vault, id, await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined }));
+  });
+
+  it("completes such a seal when the vault also reads as moved", async () => {
+    const { vault, id } = await unindexedFirstSeal();
+    const old = path.join(home, "old-vault");
+    await mkdir(old);
+    await writeIndexEntry(await realpath(old), id);
+    expect((await resolveSealState(vault)).row).toBe("vault-moved");
+    await expectRecoveredSeal(vault, id, await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined }));
+  });
+
+  it("refuses an unindexed vault whose store is missing", async () => {
+    const vault = path.join(home, "unsealed");
+    await mkdir(path.join(vault, ".oms"), { recursive: true });
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: randomUUID(), templateFolder: "Templates" }));
+    expect(await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined })).toEqual({ kind: "error", message: expect.stringMatching(/^CONTRACT_NOT_SEALED: /) });
+    expect(await access(path.join(storeRoot(), "index.json")).then(() => true, () => false)).toBe(false);
+  });
+
+  it("throws when an unrecorded seal survives the repair (postcondition)", async () => {
+    const { vault } = await sealedVault();
+    const spy = vi.spyOn(lineageHealthModule, "lineageHealth").mockResolvedValue({ events: 1, snapshots: 1, snapshotBytes: 0, findings: [{ kind: "lineage-gap", detail: "left", recovery: null }] } as unknown as LineageHealth);
+    try {
+      await expect(repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined })).rejects.toThrow("Contract lineage postcondition failed: lineage-gap remains.");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("throws when the vault does not read as sealed after the repair (postcondition)", async () => {
+    const { vault } = await unindexedFirstSeal();
+    const actual = vaultIdModule.resolveSealState;
+    let calls = 0;
+    const spy = vi.spyOn(vaultIdModule, "resolveSealState").mockImplementation(async (...args) => {
+      const state = await actual(...args);
+      calls += 1;
+      return calls === 1 ? state : { ...state, row: "index-corrupt" };
+    });
+    try {
+      await expect(repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined })).rejects.toThrow("Contract lineage postcondition failed: the vault reads as index-corrupt, not sealed.");
+    } finally {
+      spy.mockRestore();
     }
   });
 

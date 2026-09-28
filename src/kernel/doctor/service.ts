@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../engine/paths.js";
 import Database from "better-sqlite3";
 import { admitWriteTarget } from "../capture/safe.js";
@@ -199,30 +199,51 @@ function contractErrorMessage(error: unknown): string | null {
   return null;
 }
 
+/**
+ * Rows lineage recovery accepts. A first seal whose lineage append failed stops before
+ * `writeIndexEntry` and reads back as `store-without-index` (or `vault-moved` when an old
+ * index path also names the id); recovery records its index entry, so the documented
+ * `oms doctor lineage-recover` finishes that seal instead of refusing it.
+ */
+const LINEAGE_RECOVERABLE: ReadonlySet<string> = new Set(["sealed", "store-without-index", "vault-moved"]);
+
 async function repairLineage(operation: "lineage-recover" | "lineage-reanchor", vault: string, source: WriteTargetSource): Promise<DoctorRepairResult> {
-  const state = await resolveSealState(vault);
-  if (state.row !== "sealed" || state.vaultId === null) {
+  const root = storeRoot();
+  const state = await resolveSealState(vault, root);
+  const vaultId = state.vaultId;
+  const unindexed = state.row !== "sealed";
+  if (!LINEAGE_RECOVERABLE.has(state.row) || vaultId === null || (unindexed && state.view.state !== "sealed")) {
     return { kind: "error", message: "CONTRACT_NOT_SEALED: the vault has no readable sealed contract here; run oms doctor contract" };
   }
-  const root = storeRoot();
   let recovered;
+  let health: Awaited<ReturnType<typeof lineageHealth>> | undefined;
   try {
-    recovered = await recoverLineage(root, state.vaultId, { policy: operation === "lineage-reanchor" ? "reanchor" : "refuse" });
+    recovered = await recoverLineage(root, vaultId, {
+      policy: operation === "lineage-reanchor" ? "reanchor" : "refuse",
+      reindex: unindexed ? await realpath(vault) : undefined,
+      // The postcondition is read under the seal lock, so no concurrent seal lands between
+      // the repair and the check that it holds.
+      verify: async () => {
+        health = await lineageHealth(vaultId, root);
+        const left = health.findings.filter(finding => LINEAGE_UNRECORDED.has(finding.kind)).map(finding => finding.kind);
+        if (left.length > 0) throw new Error(`Contract lineage postcondition failed: ${left.join(", ")} remains.`);
+        const row = (await resolveSealState(vault, root)).row;
+        if (row !== "sealed") throw new Error(`Contract lineage postcondition failed: the vault reads as ${row}, not sealed.`);
+      },
+    });
   } catch (error: unknown) {
     const message = contractErrorMessage(error);
     if (message === null) throw error;
     return { kind: "error", message };
   }
-  const health = await lineageHealth(state.vaultId, root);
-  const left = health.findings.filter(finding => LINEAGE_UNRECORDED.has(finding.kind)).map(finding => finding.kind);
-  if (left.length > 0) throw new Error(`Contract lineage postcondition failed: ${left.join(", ")} remains.`);
+  const verified = health!;
   const receipt: DoctorRepairReceipt = {
     operation, resolvedVault: vault, resolutionSource: source,
     written: {
-      paths: [...(recovered.anchors.length > 0 ? ["lineage/events.jsonl"] : []), ...(recovered.snapshots > 0 ? ["generations/"] : [])],
+      paths: [...(unindexed ? ["index.json"] : []), ...(recovered.anchors.length > 0 ? ["lineage/events.jsonl"] : []), ...(recovered.snapshots > 0 ? ["generations/"] : [])],
       summary: { snapshots: recovered.snapshots, anchors: recovered.anchors.length },
     },
-    postcondition: { kind: "contract-lineage", events: health.events, snapshots: health.snapshots },
+    postcondition: { kind: "contract-lineage", events: verified.events, snapshots: verified.snapshots },
   };
   return { kind: "completed", value: { snapshots: recovered.snapshots, anchors: recovered.anchors.map(anchor => ({ eventSeq: anchor.eventSeq, reason: anchor.reason ?? null, digest: anchor.digest })), resolvedVault: vault, resolutionSource: source, receipt } };
 }

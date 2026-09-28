@@ -196,6 +196,9 @@ export function chainViolation(previous: LineageEvent | undefined, event: Lineag
   }
   switch (event.reason) {
     case "bootstrap":
+      // `retained` is the on-disk snapshot set (see observeLineage), not the store's
+      // `retained()` N/N-1 generations: snapshots outlive generation GC, so a bootstrap
+      // parent the seal has since collected still verifies.
       return event.parentDigest === NO_DIGEST || retained.has(event.parentDigest) ? null : `bootstrap anchor ${event.eventSeq} names a parent that is not retained`;
     case "seq-restart":
       return event.parentDigest === NO_DIGEST && event.digest === NO_DIGEST && (event.priorTail ?? NO_DIGEST) === expected ? null : `seq-restart anchor ${event.eventSeq} is malformed`;

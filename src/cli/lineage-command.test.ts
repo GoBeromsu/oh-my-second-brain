@@ -3,6 +3,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const thrown = vi.hoisted(() => ({ value: undefined as unknown }));
+vi.mock("../kernel/doctor/service.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../kernel/doctor/service.js")>();
+  return {
+    ...actual,
+    repairDoctor: async (...args: Parameters<typeof actual.repairDoctor>) => {
+      if (thrown.value !== undefined) throw thrown.value;
+      return actual.repairDoctor(...args);
+    },
+  };
+});
+
 import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
 import { resolveSealState } from "../kernel/contract/vault-id.js";
 import { storeRoot } from "../kernel/contract/store.js";
@@ -29,6 +41,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  thrown.value = undefined;
   vi.restoreAllMocks();
   process.exitCode = 0;
   for (const [name, value] of Object.entries(saved)) {
@@ -88,6 +101,23 @@ describe("oms doctor lineage-recover and lineage-reanchor", () => {
     await runLineageCommand("lineage-recover", ["--vault", missing]);
     expect(process.exitCode).toBe(1);
     expect(output()).toEqual({ status: "rejected", diagnostics: [{ code: "ENOENT", remediation: expect.stringContaining("no such file or directory") }] });
+    expect(JSON.stringify(output())).not.toContain(base);
+  });
+
+  it("reports a non-Error failure under the generic code with its paths redacted", async () => {
+    thrown.value = `store write failed at ${path.join(base, "home", ".oms", "vaults", "index.json")} and '${path.join(base, "with space", "x")}'`;
+    await runLineageCommand("lineage-recover", ["--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "rejected", diagnostics: [{ code: "CONTRACT_LINEAGE_REPAIR_FAILED", remediation: "store write failed at <path> and '<path>'" }] });
+  });
+
+  it("keeps an Error's code only when its prefix is a code, and redacts its paths", async () => {
+    thrown.value = new Error(`Contract lineage postcondition failed at ${path.join(base, "store")}`);
+    await runLineageCommand("lineage-recover", ["--vault", vault]);
+    expect(output()).toEqual({ status: "rejected", diagnostics: [{ code: "CONTRACT_LINEAGE_REPAIR_FAILED", remediation: "Contract lineage postcondition failed at <path>" }] });
+    thrown.value = new Error("CONTRACT_LINEAGE_GAP: the lineage/events.jsonl chain has a gap");
+    await runLineageCommand("lineage-recover", ["--vault", vault]);
+    expect(output()).toEqual({ status: "rejected", diagnostics: [{ code: "CONTRACT_LINEAGE_GAP", remediation: "CONTRACT_LINEAGE_GAP: the lineage/events.jsonl chain has a gap" }] });
   });
 
   it("rejects a vault inferred from the working directory", async () => {

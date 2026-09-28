@@ -57,12 +57,20 @@ export async function runLineageCommand(leaf: LineageLeaf, argv: readonly string
     print(result.value);
   } catch (error: unknown) {
     process.exitCode = 1;
-    print({
-      status: "rejected",
-      diagnostics: [{
-        code: error instanceof Error ? error.message.split(":", 1)[0] : "CONTRACT_LINEAGE_REPAIR_FAILED",
-        remediation: error instanceof Error ? error.message : String(error),
-      }],
-    });
+    print({ status: "rejected", diagnostics: [failure(error)] });
   }
+}
+
+const FAILURE_CODE = /^[A-Z][A-Z0-9_]+$/;
+/** Absolute POSIX or Windows paths, quoted (may hold spaces) or bare: the store lives under the user's home and stays out of the report. */
+const QUOTED_PATH = /(['"`])(?:[A-Za-z]:)?[\\/][^'"`]*\1/g;
+const ABSOLUTE_PATH = /(?<![\w.])(?:[A-Za-z]:)?(?:[\\/][^\s'"`,()\\/]+)+[\\/]?/g;
+
+function failure(error: unknown): { readonly code: string; readonly remediation: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const prefix = message.split(":", 1)[0]!;
+  return {
+    code: error instanceof Error && FAILURE_CODE.test(prefix) ? prefix : "CONTRACT_LINEAGE_REPAIR_FAILED",
+    remediation: message.replace(QUOTED_PATH, "$1<path>$1").replace(ABSOLUTE_PATH, "<path>"),
+  };
 }

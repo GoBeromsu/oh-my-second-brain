@@ -113,6 +113,16 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
     디렉터리를 fsync한다. 임시 링크 `.<id>.link-tmp`를 만들어 `rename()` 한 번으로 `<id>`를
     교체한다. 교체 전에 실패하면 이전 계약이 그대로 남는다.
   - 교체 뒤 `index.json` 항목을 쓰고(`writeIndexEntry` 호출, store.ts:585) 세대는 N과 N-1만 남긴다(`retained`, store.ts:411-415).
+- **계약 lineage** (`src/kernel/contract/lineage.ts`, `src/kernel/contract/generation-snapshot.ts`)
+  - 봉인마다 `<root>/.<id>.state/lineage/events.jsonl`에 사건 하나를 붙이고, 봉인한 세대를
+    `generations/<hex>/` 스냅샷으로 한 번 남긴다. 세대의 digest는 그 세대 `manifest.json`
+    바이트의 sha256이다(`src/kernel/contract/digest.ts`).
+  - **스냅샷 digest는 템플릿 계약을 포함한다.** manifest가 `templates/<template-name>.json`의
+    파일별 digest를 담으므로, 템플릿 계약 바이트가 바뀌면 세대 digest도 바뀐다.
+  - 예정된 axes-only 계약으로 저장 형태가 바뀌면 그 뒤 첫 봉인에서 **모든 digest가 한 번 바뀐다.**
+    lineage는 이를 새 세대 하나로 기록할 뿐이다. 부모 digest는 직전 세대 그대로이므로 사슬은
+    끊기지 않고, 별도 이전(migration)이나 재고정(reanchor)이 필요 없다. 그 전의 스냅샷은
+    그대로 남아 이전 세대를 계속 읽을 수 있다.
 - **볼트 `.oms/`에는 `settings.json` 하나만 둔다.**
   - 계약, 공개 JSON, 원본 해시는 볼트에 두지 않는다.
   - `models.json`은 `settings.json`의 `embedding`으로 합쳤다. 허용 키는

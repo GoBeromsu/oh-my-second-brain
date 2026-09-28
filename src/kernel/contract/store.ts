@@ -7,7 +7,7 @@ import { parseStrictJson } from "../conventions/strict-json.js";
 import { VAULT_ID_PATTERN } from "../vault/settings.js";
 import { manifestDigestOf, NO_DIGEST, type ContractDigest } from "./digest.js";
 import { ensureDirectory, syncDirectory, writePrivate } from "./fs-private.js";
-import { readSnapshot, readVerifiedDirectory, removeSnapshotTemporaries, SnapshotCorrupt, snapshotInventory, writeSnapshot, type SnapshotRead } from "./generation-snapshot.js";
+import { readSnapshot, readVerifiedDirectory, removeSnapshotTemporaries, SnapshotCorrupt, snapshotDigests, writeSnapshot, type SnapshotRead } from "./generation-snapshot.js";
 import {
   classifyLineageTail, LineageAppendFailed, lineageAppender, LineageGap, planLineageTail, readLineage, tailDigest, appendLineageEvents,
   type LineageDraft, type LineageEvent, type LineageGapPolicy, type LineageRead, type LineageReadMode, type LineageTailInput, type SealedGeneration,
@@ -617,7 +617,10 @@ export async function observeLineage(root: string, vaultId: string, linked: Sequ
     sources.push({ generation: null, read: parent.read });
   }
   const lineage = await readLineage(root, vaultId, mode);
-  const kept = new Set<string>([...(await snapshotInventory(root, vaultId)).digests, ...sources.map(source => source.read.digest)]);
+  // What a chain may name is every snapshot on disk, not only `retained()` generations: a
+  // bootstrap anchor's parent, or any older event's digest, stays verifiable after the seal
+  // collected its generation because snapshots are never collected. Names are enough here.
+  const kept = new Set<string>([...await snapshotDigests(root, vaultId), ...sources.map(source => source.read.digest)]);
   return {
     parent,
     lineage,
@@ -693,13 +696,25 @@ export async function bootstrapSnapshots(root: string, vaultId: string): Promise
   });
 }
 
+export interface LineageRecoveryOptions {
+  readonly policy: LineageGapPolicy;
+  /**
+   * The vault realpath whose index entry the seal never wrote: a first seal whose
+   * lineage append failed stops before `writeIndexEntry`. Recorded after the lineage,
+   * in the seal's own order, so an indexed vault always has its lineage.
+   */
+  readonly reindex?: string;
+  /** Runs last, still under the seal lock, so no concurrent seal can move what it reads. */
+  readonly verify?: () => Promise<void>;
+}
+
 /**
  * The doctor repair: bootstrap, then bring the lineage up to the linked generation. A
  * seal that crashed before its event and a lost link are recorded under either policy;
  * any other gap is anchored only under `reanchor`, and `refuse` throws
  * CONTRACT_LINEAGE_GAP before anything is written. A lineage already current is a no-op.
  */
-export async function recoverLineage(root: string, vaultId: string, options: { readonly policy: LineageGapPolicy }): Promise<LineageRecovery> {
+export async function recoverLineage(root: string, vaultId: string, options: LineageRecoveryOptions): Promise<LineageRecovery> {
   return underSealLock(root, vaultId, async () => {
     const observed = await observeLineage(root, vaultId, await currentSequence(vaultId, root));
     const classified = classifyLineageTail(observed.lineage.events, observed.input);
@@ -707,6 +722,8 @@ export async function recoverLineage(root: string, vaultId: string, options: { r
     const boot = await bootstrapUnderLock(root, vaultId, observed);
     const drafts = classified.outcome === "current" ? boot.anchors : [classified.anchor];
     const anchors = await appendLineageEvents(root, vaultId, drafts, { expectTail: tailDigest(observed.lineage.events) });
+    if (options.reindex !== undefined) await writeIndexEntry(options.reindex, vaultId, root);
+    await options.verify?.();
     return { snapshots: boot.created, anchors };
   });
 }
