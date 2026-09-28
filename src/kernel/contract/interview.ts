@@ -1,5 +1,5 @@
 import { lstat, readdir, realpath } from "node:fs/promises";
-import { compareCodePoints } from "../conventions/canonical.js";
+import { compareCodePoints, hashCanonical } from "../conventions/canonical.js";
 import { readVaultSettings, type VaultSettings } from "../vault/settings.js";
 import { normalizeFolderPath, verifyVaultPath } from "../vault/paths.js";
 import {
@@ -59,6 +59,19 @@ export interface InterviewIO {
    */
   ask(question: Question): Promise<string | null>;
   say(line: string): void;
+  /** Optional: told each accepted answer, the proposal before the seal question, and the seal. */
+  record?(event: InterviewRecord): Promise<void>;
+}
+
+export type InterviewRecord =
+  | { readonly type: "answered"; readonly question: Question; readonly answer: string }
+  /** `digest` covers the contract and the removed templates the seal question is about. */
+  | { readonly type: "proposed"; readonly digest: string }
+  | { readonly type: "sealed"; readonly vaultId: string };
+
+/** The digest of what the seal question proposes, as recorded in `proposed`. */
+export function proposalDigest(contract: VaultContract, removedTemplates: readonly string[]): string {
+  return hashCanonical("oms-interview-proposal-v1", { contract, removedTemplates });
 }
 
 export type InterviewResult =
@@ -96,7 +109,7 @@ export class InterviewAborted extends Error {
 const LITERAL_CHOICES = ["must-equal", "one-of-allowed", "example-only"] as const;
 const RULE_CHOICES = ["none", "one-of-allowed", "must-equal", "pattern", "range"] as const;
 const MAX_ATTEMPTS = 3;
-const SEAL_QUESTION = { id: "seal", prompt: "Seal this contract?", kind: "confirm" } as const satisfies Question;
+export const SEAL_QUESTION = { id: "seal", prompt: "Seal this contract?", kind: "confirm" } as const satisfies Question;
 
 /** A rejected answer; the question is asked again with this message. */
 class Invalid {
@@ -126,7 +139,10 @@ class Asker {
         return placeholder();
       }
       const parsed = parse(answer);
-      if (!(parsed instanceof Invalid)) return parsed;
+      if (!(parsed instanceof Invalid)) {
+        await this.io.record?.({ type: "answered", question, answer });
+        return parsed;
+      }
       this.io.say(`  ${parsed.error}`);
     }
     throw new InterviewAborted(`too many invalid answers to ${question.id}`);
@@ -685,6 +701,7 @@ export async function runInterview(input: {
 
     preview(io, contract);
     if (removedTemplates.length > 0) io.say(`  removed templates: ${removedTemplates.join(", ")}`);
+    await io.record?.({ type: "proposed", digest: proposalDigest(contract, removedTemplates) });
     const seal = await asker.confirm(SEAL_QUESTION.id, SEAL_QUESTION.prompt);
     if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
     if (!seal) return { state: "aborted" };
@@ -717,6 +734,7 @@ export async function runInterview(input: {
       declined,
       freshness: () => templateSourcesUnchanged(vault, templateFolder, found.sources),
     }, root, deps);
+    await io.record?.({ type: "sealed", vaultId });
     if (chosenFolder !== null) {
       const current = await readVaultSettings(vault);
       if (current !== null) await writeVaultSettings(vault, { ...current, templateFolder: chosenFolder });
