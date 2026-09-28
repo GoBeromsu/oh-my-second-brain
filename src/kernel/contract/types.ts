@@ -15,7 +15,9 @@ export type Rule =
   | { readonly kind: "allowed"; readonly values: readonly JsonScalar[] }
   | { readonly kind: "fixed"; readonly value: JsonScalar }
   | { readonly kind: "pattern"; readonly regex: string }
-  | { readonly kind: "range"; readonly min?: number | string; readonly max?: number | string };
+  | { readonly kind: "range"; readonly min?: number | string; readonly max?: number | string }
+  /** How many members the value has: a list counts its items, anything else counts as one. */
+  | { readonly kind: "count"; readonly min?: number; readonly max?: number };
 
 export interface FolderContract {
   readonly meaning: string;
@@ -75,6 +77,7 @@ export type ViolationKind =
   | "not-fixed"
   | "pattern"
   | "range"
+  | "count"
   | "unsubstituted-variable"
   | "heading-missing"
   | "folder-mismatch"
@@ -84,7 +87,7 @@ export type ViolationKind =
 export const VIOLATION_KINDS: readonly ViolationKind[] = [
   "control-path", "yaml-syntax", "path-unsafe", "outside-vault", "contract-unreadable",
   "unregistered-folder", "unknown-property", "missing", "type", "not-allowed", "not-fixed",
-  "pattern", "range", "unsubstituted-variable", "heading-missing", "folder-mismatch",
+  "pattern", "range", "count", "unsubstituted-variable", "heading-missing", "folder-mismatch",
   "template-mismatch", "unsupported-input",
 ];
 
@@ -130,6 +133,7 @@ export const GUIDANCE_FOR: Readonly<Record<ViolationKind, Guidance>> = {
   "not-fixed": "oms doctor status",
   "pattern": "oms doctor status",
   "range": "oms doctor status",
+  "count": "oms doctor status",
   "unsubstituted-variable": "oms doctor status",
   "heading-missing": "oms doctor status",
   "folder-mismatch": "oms doctor status",

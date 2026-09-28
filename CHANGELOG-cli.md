@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms doctor gaps` reports open contract gaps and contradictions.** It prints the same read-only report as the MCP `doctor` `op: gaps`. It exits 1 only when the contract contradicts itself, the ledger cannot be read, or a ledger line is corrupt; open gaps are the ledger doing its job, and `ledger: "truncated"` is a warning that leaves the exit code alone. `oms write` follows the new write pipeline, so a write that only adds keys the frame has no place for is saved without them and reports the dropped fields in its receipt. `oms write --check` prints the `resolution` the write would apply.
+
 ## [0.19.0] - 2026-09-28
 
 - **`oms write` takes `--if-match sha256:<rev>` and `--check`.** Overwriting an existing note without `--if-match` exits 1 with `WRITE_IF_MATCH_REQUIRED` and leaves the file unchanged; a stale revision reports the retryable `WRITE_TARGET_CHANGED`, and `--if-match` for a note that does not exist reports the retryable `WRITE_TARGET_ABSENT`. `--check` prints the frame, the note's current revision and any violations and writes nothing, not even an index row. Each flag may be given once, and `--if-match` requires a value. The receipt is the one MCP `write` returns.

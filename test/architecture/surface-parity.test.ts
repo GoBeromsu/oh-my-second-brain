@@ -410,6 +410,7 @@ function assertServerOperationInventory(): void {
     "audit",
     "build-graph",
     "cleanup",
+    "gaps",
     "link-check",
     "status",
     "sync-embeddings",

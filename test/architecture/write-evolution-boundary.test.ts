@@ -12,6 +12,17 @@ import { absolute, assertNonVacuous, collectFiles, findImports, isProductionTs, 
 
 const STORE = "src/kernel/contract/store.ts";
 const NOTE_WRITE = "src/kernel/write/note-write";
+/**
+ * The contract-side modules a write uses to record and report gaps, and the mutation
+ * model a later evolution will apply. They describe contract changes; they never seal one.
+ */
+const GAP_MODULES = [
+  "src/kernel/contract/gap-ledger.ts",
+  "src/kernel/contract/mutation.ts",
+  "src/kernel/contract/contradiction.ts",
+  "src/kernel/contract/revision.ts",
+  "src/kernel/contract/gaps-report.ts",
+];
 
 async function sourceFileOf(resolved: string): Promise<string | null> {
   for (const candidate of [`${resolved}.ts`, `${resolved}/index.ts`]) {
@@ -50,9 +61,10 @@ function mentions(source: string, name: string): boolean {
 }
 
 describe("write / evolution boundary", () => {
-  it("nothing reachable from src/kernel/write names sealContract", async () => {
-    const roots = await collectFiles("src/kernel/write", isProductionTs);
+  it("nothing reachable from src/kernel/write or the gap modules names sealContract", async () => {
+    const roots = [...await collectFiles("src/kernel/write", isProductionTs), ...GAP_MODULES];
     assertNonVacuous(roots, "write kernel production files");
+    for (const file of GAP_MODULES) expect(await pathExists(file), file).toBe(true);
     const closure = await importClosure(roots);
     expect(closure.length).toBeGreaterThan(roots.length);
     const offenders: string[] = [];

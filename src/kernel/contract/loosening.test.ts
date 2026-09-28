@@ -187,6 +187,19 @@ describe("looseningChanges", () => {
     }
   });
 
+  it("accepts a tightened count and reports a widened, unbounded or removed one", () => {
+    const tags = (rules: readonly Rule[]) => withProperty("tags", property(rules, { type: "list" }));
+    const sealed = tags([{ kind: "count", min: 1, max: 3 }]);
+    for (const count of [{ min: 1, max: 3 }, { min: 2, max: 3 }, { min: 1, max: 2 }]) {
+      expect(looseningChanges(sealed, tags([{ kind: "count", ...count }]))).toEqual([]);
+    }
+    for (const count of [{ min: 0, max: 3 }, { min: 1, max: 4 }, { max: 3 }, { min: 1 }]) {
+      expect(looseningChanges(sealed, tags([{ kind: "count", ...count }]))).toEqual([{ field: "properties.tags", kind: "count-widened" }]);
+    }
+    expect(looseningChanges(sealed, tags([]))).toEqual([{ field: "properties.tags", kind: "rule-removed" }]);
+    expect(looseningChanges(tags([]), sealed)).toEqual([]);
+  });
+
   it("reports template loosening by field path only", () => {
     const sealed = SEALED.templates["Meeting"]!;
     expect(looseningChanges(SEALED, withTemplate(undefined))).toEqual([{ field: "templates.Meeting", kind: "removed" }]);

@@ -30,7 +30,7 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
   },
   {
     name: "doctor",
-    line: "  doctor    Diagnose and repair: status, contract, audit, link-check, sync-embeddings,",
+    line: "  doctor    Diagnose and repair: status, contract, gaps, audit, link-check, sync-embeddings,",
     detailLines: ["              cleanup, build-graph. `doctor status` is read-only."],
   },
   { name: "serve", line: "  serve     Start the MCP stdio server or local HTTP runtime." },

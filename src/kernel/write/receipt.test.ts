@@ -24,6 +24,23 @@ describe("write receipt", () => {
     });
   });
 
+  it("names the revision read once by the pipeline instead of recomputing it from the view", () => {
+    const precomputed = sha("contract read once");
+    const base = { path: "a.md", content: "x", view: SEALED, keyword: "skipped", conformed: [], missingDefaults: [] } as const;
+    expect(buildReceipt({ ...base, contractRevision: precomputed }).contractRevision).toBe(precomputed);
+    expect(buildReceipt({ ...base, contractRevision: null }).contractRevision).toBeNull();
+    expect(buildReceipt(base).contractRevision).toBe(contractRevision(SEALED));
+  });
+
+  it("lists recorded gaps and a failed ledger only when there is something to say", () => {
+    const base = { path: "a.md", content: "x", view: SEALED, keyword: "skipped", conformed: [], missingDefaults: [] } as const;
+    const gap = { id: "g1", axis: "value", kind: "no-fit", field: "status" } as const;
+    expect(buildReceipt({ ...base, gaps: [] })).not.toHaveProperty("gaps");
+    expect(buildReceipt({ ...base, gaps: [gap] }).gaps).toEqual([gap]);
+    expect(buildReceipt({ ...base, gapLedger: "failed" }).gapLedger).toBe("failed");
+    expect(buildReceipt(base)).not.toHaveProperty("gapLedger");
+  });
+
   it("queues vectors only when the keyword update reached the store", () => {
     for (const keyword of ["failed", "skipped"] as const) {
       const receipt = buildReceipt({ path: "a.md", content: "", view: SEALED, keyword, conformed: [], missingDefaults: [] });

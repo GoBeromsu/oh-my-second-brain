@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { auditVault } from "../../kernel/contract/audit.js";
+import { gapsReport } from "../../kernel/contract/gaps-report.js";
 import { contractDoctor } from "../../kernel/contract/status.js";
 import { repairDoctor } from "../../kernel/doctor/service.js";
 import type { McpEngineAdapter } from "../../kernel/engine/mcp/facade.js";
@@ -69,6 +70,10 @@ export async function handleDoctor(ctx: ToolContext, name: string, args: Record<
       const doctor = await contractDoctor(vault, "agent");
       return jsonText({ vault, folder: folder ?? null, contract: doctor.contract, scannedNotes: 0, clean: false, violations: [], findings: doctor.findings });
     }
+  }
+
+  if (name === "oms_contract_gaps") {
+    return jsonText({ vault, ...await gapsReport(vault) });
   }
 
   if (name === "oms_validate_templates") {

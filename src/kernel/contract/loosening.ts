@@ -20,6 +20,7 @@ export type LooseningKind =
   | "fixed-changed"
   | "pattern-changed"
   | "range-widened"
+  | "count-widened"
   | "heading-dropped"
   | "apply-folder-changed"
   | "apply-folder-overlap"
@@ -55,6 +56,7 @@ function implies(next: Rule, sealed: Rule, single: boolean): boolean {
   if (sealed.kind === "fixed" && next.kind === "allowed") return single && next.values.length > 0 && next.values.every(value => sameScalar(sealed.value, value));
   if (sealed.kind === "pattern" && next.kind === "pattern") return sealed.regex === next.regex;
   if (sealed.kind === "range" && next.kind === "range") return boundHolds(sealed.min, next.min, true) && boundHolds(sealed.max, next.max, false);
+  if (sealed.kind === "count" && next.kind === "count") return boundHolds(sealed.min, next.min, true) && boundHolds(sealed.max, next.max, false);
   return false;
 }
 
@@ -63,6 +65,7 @@ const WIDENED: Readonly<Record<Rule["kind"], LooseningKind>> = {
   fixed: "fixed-changed",
   pattern: "pattern-changed",
   range: "range-widened",
+  count: "count-widened",
 };
 
 /** `type` is the field's type under `next`, which the judge checks before any rule. */

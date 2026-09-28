@@ -32,6 +32,12 @@ describe("writePayload", () => {
     expect(deniedWritePayload([{ field: "ifMatch", kind: "unsupported-input" }])).toMatchObject({ ok: false, violations: [{ field: "ifMatch", kind: "unsupported-input" }] });
   });
 
+  it("carries the draft ref of a drafted note and nothing of its content", () => {
+    const payload = writePayload({ kind: "denied", violations: [{ field: "path", kind: "unregistered-folder" }], draftRef: "draft-00000000-0000-4000-8000-000000000001.md" });
+    expect(payload).toMatchObject({ ok: false, draftRef: "draft-00000000-0000-4000-8000-000000000001.md", violations: [{ field: "path", kind: "unregistered-folder" }] });
+    expect(writePayload({ kind: "denied", violations: [] })).not.toHaveProperty("draftRef");
+  });
+
   it("asks for ifMatch on an overwrite", () => {
     expect(writePayload({ kind: "if-match-required" })).toMatchObject({ ok: false, code: "WRITE_IF_MATCH_REQUIRED", kind: "if-match-required" });
   });

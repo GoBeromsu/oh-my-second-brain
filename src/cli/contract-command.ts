@@ -8,6 +8,7 @@ import { InterviewAborted, runInterview, type InterviewIO, type InterviewResult,
 import { parseAnswers, publicQuestion, scriptedIO, type Answers } from "../kernel/contract/scripted-interview.js";
 import { StateDirUnsafe } from "../kernel/contract/state-dir.js";
 import { storeRoot, type SealDeps } from "../kernel/contract/store.js";
+import { gapsReport } from "../kernel/contract/gaps-report.js";
 import { contractDoctor, contractStatus, doctorFix, ROW_FINDING } from "../kernel/contract/status.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { VaultSettingsError } from "../kernel/vault/settings.js";
@@ -39,7 +40,7 @@ they seal a first contract or a stricter one, never a looser one. Loosening, and
 seal that needs recovery first, is left to \`oms setup\` run by the owner in a terminal.`;
 }
 
-const VERBS = ["setup", "extract", "status", "doctor"] as const;
+const VERBS = ["setup", "extract", "status", "doctor", "gaps"] as const;
 type Verb = (typeof VERBS)[number];
 
 interface ContractArgs {
@@ -55,7 +56,7 @@ interface ContractArgs {
 
 function parse(argv: readonly string[]): ContractArgs {
   const [verb, ...rest] = argv;
-  if (verb === undefined) throw new Error("CONTRACT_ARGS_INVALID: missing subcommand (setup, extract, status, or doctor)");
+  if (verb === undefined) throw new Error("CONTRACT_ARGS_INVALID: missing subcommand (setup, extract, status, doctor, or gaps)");
   if (!(VERBS as readonly string[]).includes(verb)) throw new Error(`CONTRACT_ARGS_INVALID: unknown subcommand ${verb}`);
   let vault: string | undefined;
   let template: string | undefined;
@@ -309,6 +310,13 @@ async function extract(vault: string, template: string): Promise<void> {
   });
 }
 
+/** Open gaps are the ledger doing its job; only a contradiction or an unreadable ledger needs attention, and a truncated one is a warning. */
+async function gaps(vault: string): Promise<void> {
+  const report = await gapsReport(vault);
+  if (report.contradictions.length > 0 || report.ledger === "unreadable" || report.corruptLines.length > 0) process.exitCode = 1;
+  print(report);
+}
+
 async function doctor(vault: string, fix: boolean): Promise<void> {
   if (fix) {
     const result = await doctorFix(vault);
@@ -380,7 +388,8 @@ export async function runContractCommand(argv: readonly string[], deps: Contract
     else if (args.verb === "status") {
       const status = await contractStatus(vault);
       print({ contract: status.contract, findings: status.findings, templates: status.templates });
-    } else await doctor(vault, args.fix);
+    } else if (args.verb === "gaps") await gaps(vault);
+    else await doctor(vault, args.fix);
   } catch (error: unknown) {
     process.exitCode = 1;
     print({ status: "rejected", diagnostics: [commandDiagnostic(error)] });

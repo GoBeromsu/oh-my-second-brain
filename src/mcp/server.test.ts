@@ -214,7 +214,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
     const tools = new Map(omsMcpTools.map((tool) => [tool.name, tool]));
     const expectedOps: Record<string, readonly string[]> = {
       search: ["context", "templates", "query", "index-status", "get-document", "link"],
-      doctor: ["status", "link-check", "audit", "validate", "build-graph", "cleanup", "sync-embeddings"],
+      doctor: ["status", "link-check", "audit", "validate", "gaps", "build-graph", "cleanup", "sync-embeddings"],
     };
 
     expect([...tools.keys()].sort()).toEqual(["doctor", "interview", "search", "write"]);
@@ -960,10 +960,11 @@ Valid frontmatter remains available to retrieve.
       expect(createdReceipt.contractRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
       expect(statSync(note).mode & 0o777).toBe(0o644);
 
-      // A denied write names {field, kind} only and leaves the bytes untouched.
+      // A denied write names {field, kind} only and leaves the bytes untouched. The ifMatch
+      // check runs first, so the overwrite names the current revision to reach the judge.
       await chmod(note, 0o600);
       const before = await readFile(note);
-      const denied = await write({ path: "Projects/a.md", content: "---\nstatus: nope\n---\n# Goals\n" });
+      const denied = await write({ path: "Projects/a.md", content: "---\nstatus: nope\n---\n# Goals\n", ifMatch: createdReceipt.revision });
       expect(denied.isError).toBe(true);
       const deniedPayload = textPayload(denied);
       expect(deniedPayload).toMatchObject({ ok: false, violations: [{ field: "status", kind: "not-allowed" }] });

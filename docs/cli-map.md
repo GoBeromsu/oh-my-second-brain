@@ -17,7 +17,7 @@ MCP annotations describe a whole tool, not one of its operations. A tool is anno
 | `oms_search` | `true` | Every search operation, including `path` reads and link suggestions, reads the vault and writes nothing. |
 | `oms_write` | `false` | Saves a note after the judge allows it. |
 | `oms_interview` | `false` | `op: questions` reads the vault and returns the open interview questions. `op: answer`, `op: confirm`, and `op: seal` append to the interview log and seal a confirmed proposal on a verified target, so the tool is not advertised as read-only. |
-| `oms_doctor` | `false` | Its repair operations (`sync-embeddings`, `cleanup`, `build-graph`) mutate managed state. Its diagnosis operations (`status`, `validate`, `audit`, `link-check`) write nothing, and a `cwd`-inferred target still allows them. |
+| `oms_doctor` | `false` | Its repair operations (`sync-embeddings`, `cleanup`, `build-graph`) mutate managed state. Its diagnosis operations (`status`, `validate`, `gaps`, `audit`, `link-check`) write nothing, and a `cwd`-inferred target still allows them. |
 
 ## Write
 
@@ -68,6 +68,7 @@ Sealing has no MCP operation. The sealed contract lives outside the vault under 
 |---|---|---|---|
 | `oms doctor status` | `oms_doctor` | `status` | Read-only health: contract posture, engine, and graph. Creates no store. With `--view`, `--index`, or `--collection` it prints the search-index view instead (see `index-status` under Search). |
 | `oms doctor contract [--fix]` | `oms_doctor` | `validate` | Diagnose the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures. `--fix` only re-indexes a moved or unindexed vault; the MCP op fixes nothing. |
+| `oms doctor gaps` | `oms_doctor` | `gaps` | Report the open gaps a write recorded against the sealed contract (`{id, notePath, axis, kind, field, drafted, stale}`, counted by axis and kind) and the contradictions inside the contract. Never prints a wanted value and creates no store, state directory, or ledger. The CLI exits 1 on a contradiction or an unreadable ledger. |
 | `oms doctor audit` | `oms_doctor` | `audit` | Report `{path, field, kind}` entries for existing notes. Never rewrites a note. |
 | `oms doctor link-check [<note>]` | `oms_doctor` | `link-check` | Report broken wikilinks. |
 | `oms doctor sync-embeddings --mode sync|embed|repair` | `oms_doctor` | `sync-embeddings` | `mode` is exclusive; repair takes `repairMode=rebuild|drop` and optional `dryRun`. |
