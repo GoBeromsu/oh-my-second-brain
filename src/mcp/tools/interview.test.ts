@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTruthTableRow, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
+import { readInterviewLog } from "../../kernel/contract/interview-log.js";
+import { readStore, SEAL_LOCK_STALE_MS } from "../../kernel/contract/store.js";
+import { readVaultSettings } from "../../kernel/vault/settings.js";
 import { omsMcpTools } from "../server.js";
-import { handleInterview } from "./interview.js";
+import { handleInterview, type InterviewToolDeps } from "./interview.js";
 import type { ToolContext } from "./shared.js";
 
 const fixtures: TruthTableFixture[] = [];
@@ -45,6 +48,11 @@ function context(vault: string): ToolContext {
 function payload(result: Awaited<ReturnType<typeof handleInterview>>): Record<string, unknown> {
   const first = result.content[0];
   return JSON.parse(first?.type === "text" ? first.text : "{}") as Record<string, unknown>;
+}
+
+/** A vault inferred from the working directory: never a write target. */
+function cwdContext(vault: string): ToolContext {
+  return { vault, source: "cwd" } as unknown as ToolContext;
 }
 
 function useHome(home: string): void {
@@ -86,7 +94,7 @@ describe("MCP interview", () => {
     expect(result.isError).not.toBe(true);
     expect(body["status"]).toBe("questions");
     expect(Array.isArray(body["questions"]) && body["questions"].length).toBeGreaterThan(0);
-    expect(String(body["next"])).toContain("This tool seals nothing");
+    expect(String(body["next"])).toContain("op \"answer\"");
     expect(await snapshot(base)).toEqual(before);
   });
 
@@ -99,17 +107,149 @@ describe("MCP interview", () => {
     for (const args of [{}, { reask: true }]) {
       const body = payload(await handleInterview(context(fixture.vault), args));
       expect(body["contract"]).toMatchObject({ contract: "sealed", row: "sealed" });
-      expect(["questions", "refused"]).toContain(body["status"]);
+      expect(["questions", "proposed", "refused"]).toContain(body["status"]);
     }
     expect(await snapshot(fixture.base)).toEqual(before);
   });
 
-  it("accepts only an optional reask flag and has no seal operation", () => {
+  it("accepts the interview ops and nothing else", () => {
     const tool = omsMcpTools.find((candidate) => candidate.name === "interview");
     const validate = new AjvJsonSchemaValidator().getValidator(tool!.inputSchema);
     expect(validate({}).valid).toBe(true);
     expect(validate({ reask: true }).valid).toBe(true);
-    expect(validate({ op: "seal" }).valid).toBe(false);
+    for (const op of ["questions", "answer", "confirm", "seal"]) expect(validate({ op }).valid).toBe(true);
+    expect(validate({ op: "reclaim" }).valid).toBe(false);
+    expect(validate({ op: "seal", confirmStaleReclaim: true }).valid).toBe(false);
     expect(tool!.annotations?.readOnlyHint).not.toBe(true);
+  });
+});
+
+/** A fresh vault without templates, its HOME and store root, all under one tmp dir. */
+async function freshVault(): Promise<{ base: string; vault: string; root: string }> {
+  const base = await realpath(await mkdtemp(path.join(tmpdir(), "oms-mcp-interview-seal-")));
+  scratch.push(base);
+  const vault = path.join(base, "vault");
+  const home = path.join(base, "home");
+  await mkdir(path.join(vault, "Projects"), { recursive: true });
+  await writeFile(path.join(vault, "Projects", "Alpha.md"), "---\nstatus: active\n---\n# Alpha\n");
+  await mkdir(home);
+  useHome(home);
+  return { base, vault, root: path.join(home, ".oms", "vaults") };
+}
+
+function defaultAnswer(question: Record<string, unknown>): string | number | boolean {
+  const fallback = question["default"];
+  if (typeof fallback === "string" || typeof fallback === "number" || typeof fallback === "boolean") return fallback;
+  const choices = question["choices"];
+  if (Array.isArray(choices) && typeof choices[0] === "string") return choices[0];
+  return question["kind"] === "confirm" ? true : "";
+}
+
+/** Answers every open question with its default, one call per round, until a proposal comes back. */
+async function answerAll(vault: string, deps: InterviewToolDeps): Promise<string> {
+  for (let round = 0; round < 10; round += 1) {
+    const body = payload(await handleInterview(context(vault), {}, deps));
+    if (body["status"] === "proposed") return String(body["proposed"]);
+    expect(body["status"]).toBe("questions");
+    const answers = Object.fromEntries((body["questions"] as Record<string, unknown>[]).map(question => [String(question["id"]), defaultAnswer(question)]));
+    const answered = payload(await handleInterview(context(vault), { op: "answer", answers }, deps));
+    if (answered["status"] === "proposed") return String(answered["proposed"]);
+  }
+  throw new Error("the interview never proposed a contract");
+}
+
+describe("MCP interview seal", () => {
+  const clock = (): InterviewToolDeps => ({ now: () => 1_750_000_000_000 });
+
+  it("records answers, then seals only after a confirm citing the latest proposal", async () => {
+    const { vault, root } = await freshVault();
+    const deps = { ...clock(), root };
+    const proposed = await answerAll(vault, deps);
+    expect(proposed).toMatch(/^[0-9a-f]{64}$|^sha256:/);
+
+    const early = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+    expect(early).toMatchObject({ ok: false, status: "rejected", rejection: { code: "INTERVIEW_CONFIRM_REQUIRED" } });
+    const vaultId = (await readVaultSettings(vault))!.vaultId;
+    expect((await readStore(vaultId, root)).state).toBe("absent");
+
+    const confirmed = payload(await handleInterview(context(vault), { op: "confirm", proposed }, deps));
+    expect(confirmed).toMatchObject({ ok: true, status: "confirmed", proposed });
+    const sealed = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+    expect(sealed).toMatchObject({ ok: true, status: "sealed" });
+    expect((await readStore(vaultId, root)).state).toBe("ok");
+    const types = (await readInterviewLog(root, vaultId)).events.map(event => event.type);
+    expect(types.at(-1)).toBe("sealed");
+    expect(types).toContain("proposed");
+  });
+
+  it("rejects a confirm that cites an older proposal, and a seal answered through op answer", async () => {
+    const { vault, root } = await freshVault();
+    const deps = { ...clock(), root };
+    await answerAll(vault, deps);
+    const stale = payload(await handleInterview(context(vault), { op: "confirm", proposed: "0".repeat(64) }, deps));
+    expect(stale).toMatchObject({ ok: false, status: "rejected", rejection: { code: "INTERVIEW_CONFIRM_STALE" } });
+    const smuggled = payload(await handleInterview(context(vault), { op: "answer", answers: { seal: true } }, deps));
+    expect(smuggled).toMatchObject({ ok: false, status: "rejected", rejection: { code: "INTERVIEW_SEAL_NOT_AN_ANSWER" } });
+    const seal = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+    expect(seal).toMatchObject({ ok: false, status: "rejected", rejection: { code: "INTERVIEW_CONFIRM_REQUIRED" } });
+    const vaultId = (await readVaultSettings(vault))!.vaultId;
+    expect((await readStore(vaultId, root)).state).toBe("absent");
+  });
+
+  it("confirms nothing when nothing was proposed", async () => {
+    const { vault, root } = await freshVault();
+    const before = await snapshot(path.dirname(vault));
+    const body = payload(await handleInterview(context(vault), { op: "confirm", proposed: "x" }, { ...clock(), root }));
+    expect(body).toMatchObject({ ok: false, status: "rejected", rejection: { code: "INTERVIEW_NOTHING_PROPOSED" } });
+    expect(await snapshot(path.dirname(vault))).toEqual(before);
+  });
+
+  it("rejects answer, confirm and seal on a working-directory target and leaves disk unchanged", async () => {
+    const { base, vault, root } = await freshVault();
+    const deps = { ...clock(), root };
+    await answerAll(vault, deps);
+    const before = await snapshot(base);
+    for (const args of [{ op: "answer", answers: { anything: "x" } }, { op: "confirm", proposed: "x" }, { op: "seal" }]) {
+      const result = await handleInterview(cwdContext(vault), args, deps);
+      expect(result.isError).not.toBe(true);
+      expect(payload(result)).toMatchObject({ ok: false, status: "rejected", rejection: { code: "target-unverified" } });
+    }
+    expect(payload(await handleInterview(cwdContext(vault), {}, deps))["status"]).toBe("proposed");
+    expect(await snapshot(base)).toEqual(before);
+  });
+
+  it("maps a stale seal lock to INTERVIEW_SEAL_LOCK_STALE and never reclaims it", async () => {
+    const { vault, root } = await freshVault();
+    const now = 1_750_000_000_000;
+    const reclaim = vi.fn(async () => true);
+    const isPidAlive = vi.fn(() => false);
+    const deps: InterviewToolDeps = { now: () => now, root, sealDeps: { now: () => now, isPidAlive, confirmStaleReclaim: reclaim } };
+    const proposed = await answerAll(vault, deps);
+    await handleInterview(context(vault), { op: "confirm", proposed }, deps);
+    const vaultId = (await readVaultSettings(vault))!.vaultId;
+    const lock = path.join(root, `.${vaultId}.lock`);
+    await writeFile(lock, JSON.stringify({ pid: 999_999, host: "other-host", startedAt: now - SEAL_LOCK_STALE_MS - 1 }));
+    const before = await snapshot(root);
+
+    const result = await handleInterview(context(vault), { op: "seal" }, deps);
+    expect(result.isError).not.toBe(true);
+    const body = payload(result);
+    expect(body).toMatchObject({ ok: false, status: "rejected", rejection: { code: "INTERVIEW_SEAL_LOCK_STALE", recoverable: false } });
+    expect(String((body["rejection"] as Record<string, unknown>)["remediation"])).toContain("in a terminal");
+    expect(reclaim).not.toHaveBeenCalled();
+    expect(await snapshot(root)).toEqual(before);
+    expect((await readStore(vaultId, root)).state).toBe("absent");
+  });
+
+  it("passes a busy seal lock through as retryable", async () => {
+    const { vault, root } = await freshVault();
+    const now = 1_750_000_000_000;
+    const deps: InterviewToolDeps = { now: () => now, root, sealDeps: { now: () => now, host: "this-host", isPidAlive: () => true } };
+    const proposed = await answerAll(vault, deps);
+    await handleInterview(context(vault), { op: "confirm", proposed }, deps);
+    const vaultId = (await readVaultSettings(vault))!.vaultId;
+    await writeFile(path.join(root, `.${vaultId}.lock`), JSON.stringify({ pid: 1, host: "this-host", startedAt: now }));
+    const body = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+    expect(body).toMatchObject({ ok: false, status: "rejected", rejection: { code: "CONTRACT_SEAL_BUSY", retryable: true } });
   });
 });

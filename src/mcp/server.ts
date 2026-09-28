@@ -43,7 +43,7 @@ import { writeNote } from "./tools/write.js";
 const SERVER_VERSION = readBundledPackageVersion();
 
 const BASE_SERVER_INSTRUCTIONS =
-  "Oh My Second Brain exposes write, search, interview, and doctor tools. search is read-only (op link suggests wikilinks); doctor op status reports vault health and op link-check reports broken links; interview lists the vault questions and the seal state and seals nothing. write and doctor repair operations are gated by a verified vault target (a vault inferred from the current directory is refused); write {path, content, template?} is confined to the vault and saved only when the vault contract allows the note.";
+  "Oh My Second Brain exposes write, search, interview, and doctor tools. search is read-only (op link suggests wikilinks); doctor op status reports vault health and op link-check reports broken links; interview continues the vault interview across calls: op questions is read-only; op answer records answers, op confirm records the owner's yes to the proposed digest, and op seal seals only that confirmed proposal, all three on a verified vault target; a stale seal lock is left for the owner to reclaim in a terminal. write and doctor repair operations are gated by a verified vault target (a vault inferred from the current directory is refused); write {path, content, template?} is confined to the vault and saved only when the vault contract allows the note.";
 
 type Operation = {
   readonly op?: string;
@@ -67,7 +67,7 @@ const contextProperties = { template: string, folder: string, property: string, 
 const operations: Record<string, readonly Operation[]> = {
   write: [{ name: "oms_write_note", direct: true, properties: { path: string, content: string, template: string }, required: ["path", "content"] }],
   search: [{ op: "context", name: "oms_retrieve_context", properties: contextProperties }, { op: "templates", name: "oms_list_templates" }, { op: "query", name: "oms_semantic_query", properties: searchProperties }, { op: "index-status", name: "oms_index_status", properties: { view: { ...string, enum: ["status", "collections", "contexts"] }, index: string }, required: ["view"] }, { op: "get-document", name: "oms_get_document", properties: documentProperties }, { op: "link", name: "oms_link_suggest", properties: { notePath: string, folder: string }, required: ["notePath"] }],
-  interview: [{ name: "oms_interview", direct: true, properties: { reask: boolean } }],
+  interview: [{ name: "oms_interview", direct: true, properties: { op: { ...string, enum: ["questions", "answer", "confirm", "seal"] }, answers: { type: "object" }, proposed: string, reask: boolean, interpretations: { anyOf: [{ type: "array" }, { type: "object" }] } } }],
   doctor: [{ op: "status", name: "oms_graph_status" }, { op: "link-check", name: "oms_link_check", properties: { notePath: string, folder: string }, required: ["notePath"] }, { op: "audit", name: "oms_vault_audit", properties: { folder: string } }, { op: "validate", name: "oms_validate_templates" }, { op: "build-graph", name: "oms_graph_build" }, { op: "cleanup", name: "oms_semantic_cleanup", properties: { collection: string, index: string } }, { op: "sync-embeddings", name: "oms_sync_embeddings", properties: { mode: { ...string, enum: ["sync", "embed", "repair"] }, collection: string, index: string, chunkStrategy: string, maxDocsPerBatch: number, maxBatchMb: number, repairMode: { ...string, enum: ["rebuild", "drop"] }, dryRun: boolean }, required: ["mode"] }],
 };
 export const demotedOperationNames = [...new Set(Object.values(operations)
@@ -218,7 +218,7 @@ export const omsMcpTools: Tool[] = [
   {
     name: "interview",
     title: "Oh My Second Brain interview",
-    description: "List the vault interview questions the owner would be asked now, with the contract seal state. Seals nothing: answers go through `oms setup --answers`, and only the owner loosens a seal, with `oms interview` in a terminal.",
+    description: "Continue the vault interview across calls, with the contract seal state. `op: questions` (default, read-only) lists the unanswered questions; `op: answer {answers}` records answers and, once all are answered, returns the proposed digest and preview; `op: confirm {proposed}` records the owner's yes to that digest; `op: seal` seals only the confirmed proposal. answer, confirm and seal need a verified vault target. A stale seal lock is never reclaimed here, and only the owner loosens a seal, with `oms interview` in a terminal.",
     inputSchema: operationSchema("interview"),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },

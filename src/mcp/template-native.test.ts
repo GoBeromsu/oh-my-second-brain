@@ -44,7 +44,10 @@ describe("template-native MCP surface", () => {
     expect(validate("doctor", { op: "status" })).toBe(true);
     expect(validate("interview", {})).toBe(true);
     expect(validate("interview", { reask: true })).toBe(true);
-    expect(validate("interview", { answers: {} })).toBe(false);
+    expect(validate("interview", { op: "answer", answers: {} })).toBe(true);
+    expect(validate("interview", { op: "confirm", proposed: "digest" })).toBe(true);
+    expect(validate("interview", { op: "reclaim" })).toBe(false);
+    expect(validate("interview", { op: "seal", confirmStaleReclaim: true })).toBe(false);
     expect(validate("doctor", { op: "validate" })).toBe(true);
     expect(validate("doctor", { op: "backfill-defaults", notePath: "notes/a.md", dryRun: true })).toBe(false);
   });
