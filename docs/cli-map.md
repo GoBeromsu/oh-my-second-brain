@@ -29,7 +29,7 @@ Both entrypoints call the same verified-target write kernel. Unknown or missing 
 
 Both run one pipeline: frame the target, conform mechanically (template variables, date and datetime defaults on a new note, the chosen template's missing headings), judge, write, then update the keyword index of an existing engine store. Conform never supplies a required value or changes a value the judge would refuse.
 
-- Overwriting an existing note needs `ifMatch` (`--if-match`) set to its current `sha256:` revision; without it nothing is written and the result is `WRITE_IF_MATCH_REQUIRED`. A stale revision returns the retryable `WRITE_TARGET_CHANGED`.
+- Overwriting an existing note needs `ifMatch` (`--if-match`) set to its current `sha256:` revision; without it nothing is written and the result is `WRITE_IF_MATCH_REQUIRED`. A stale revision returns the retryable `WRITE_TARGET_CHANGED`; `ifMatch` for a note that does not exist returns the retryable `WRITE_TARGET_ABSENT` (retry without it to create the note).
 - `check` (`--check`) judges and returns the frame, the current revision and the violations without touching disk, the engine store or the contract store.
 - A written note returns the receipt `{ok, path, revision, contractRevision, index: {keyword, vector}, conformed, missingDefaults}`. `index.keyword` is `updated` when an engine store exists, `skipped` when none does (the write never creates one), and `failed` when the store could not be updated; the note is written in every case. `index.vector` is `pending` after a keyword update, until `oms doctor sync-embeddings --mode embed` drains the queue, and `disabled` otherwise.
 
