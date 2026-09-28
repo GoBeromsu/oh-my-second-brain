@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { open, readdir, realpath } from "node:fs/promises";
+import { open, readdir, realpath, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { nfcEquals, toNfc } from "../text/nfc.js";
 
@@ -30,7 +30,8 @@ export type ReadExactErrorCode =
   | "READ_EXACT_NOT_FOUND"
   | "READ_EXACT_AMBIGUOUS"
   | "READ_EXACT_ESCAPE"
-  | "READ_EXACT_NOT_FILE";
+  | "READ_EXACT_NOT_FILE"
+  | "READ_EXACT_TOO_LARGE";
 
 export class ReadExactError extends Error {
   constructor(readonly code: ReadExactErrorCode, detail: string) {
@@ -115,6 +116,37 @@ async function containedRealpath(root: string, candidate: string, relPath: strin
 // a FIFO from blocking the open. Windows lacks both, so each falls back to 0 there.
 const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 
+/** A note larger than this is refused before its bytes are read. */
+export const READ_EXACT_MAX_BYTES = 16 * 1024 * 1024;
+const READ_CHUNK_BYTES = 64 * 1024;
+
+function notFile(relPath: string): ReadExactError {
+  return new ReadExactError("READ_EXACT_NOT_FILE", `${JSON.stringify(relPath)} is not a file`);
+}
+
+function tooLarge(relPath: string): ReadExactError {
+  return new ReadExactError("READ_EXACT_TOO_LARGE", `${JSON.stringify(relPath)} exceeds ${READ_EXACT_MAX_BYTES} bytes`);
+}
+
+// Windows reports a directory as EISDIR at open or read time instead of through the stat check.
+function isDirectoryError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === "EISDIR";
+}
+
+/** Reads to EOF, refusing once the total passes the cap, so a file that grows after fstat stays bounded. */
+async function readCapped(handle: FileHandle, relPath: string): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+    if (bytesRead === 0) return Buffer.concat(chunks, total);
+    total += bytesRead;
+    if (total > READ_EXACT_MAX_BYTES) throw tooLarge(relPath);
+    chunks.push(chunk.subarray(0, bytesRead));
+  }
+}
+
 export async function readExact(vaultRoot: string, relPath: string): Promise<ReadExactResult> {
   const segments = segmentsOf(relPath);
   const root = await realpath(vaultRoot);
@@ -129,13 +161,21 @@ export async function readExact(vaultRoot: string, relPath: string): Promise<Rea
     current = await containedRealpath(root, path.join(current, entry), relPath);
   }
 
-  const handle = await open(current, OPEN_FLAGS);
+  let handle: FileHandle;
+  try {
+    handle = await open(current, OPEN_FLAGS);
+  } catch (error) {
+    if (isDirectoryError(error)) throw notFile(relPath);
+    throw error;
+  }
   let bytes: Buffer;
   try {
-    if (!(await handle.stat()).isFile()) {
-      throw new ReadExactError("READ_EXACT_NOT_FILE", `${JSON.stringify(relPath)} is not a file`);
-    }
-    bytes = await handle.readFile();
+    const info = await handle.stat();
+    if (!info.isFile()) throw notFile(relPath);
+    if (info.size > READ_EXACT_MAX_BYTES) throw tooLarge(relPath);
+    bytes = await readCapped(handle, relPath).catch((error: unknown) => {
+      throw isDirectoryError(error) ? notFile(relPath) : error;
+    });
   } finally {
     await handle.close();
   }
@@ -161,7 +201,7 @@ export interface ReadExactDocumentResult {
 /**
  * `readExact` wrapped in the document-result shape shared by `oms search --path` and
  * the MCP `search` `path` parameter. A path the caller got wrong (invalid, missing,
- * ambiguous, escaping, not a file) is an unavailable result; an I/O failure is thrown.
+ * ambiguous, escaping, not a file, too large) is an unavailable result; an I/O failure is thrown.
  */
 export async function readExactDocument(vaultRoot: string, relPath: string): Promise<ReadExactDocumentResult> {
   try {

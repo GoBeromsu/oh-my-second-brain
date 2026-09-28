@@ -45,6 +45,11 @@ async function target(argv: readonly string[]): Promise<Target> {
   let explicit: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]!;
+    // Tokens after a `--` terminator are query text, so a later `--vault` is not the flag.
+    if (token === "--") {
+      rest.push(...argv.slice(index));
+      break;
+    }
     if (token !== "--vault") {
       rest.push(token);
       continue;

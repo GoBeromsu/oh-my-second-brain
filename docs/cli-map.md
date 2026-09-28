@@ -39,7 +39,7 @@ Both run one pipeline: frame the target, conform mechanically (template variable
 |---|---|---|---|
 | `oms search <text>` | `oms_search` | `query` | Optional explicit `mode=query|search|vsearch`; typed `searches` and lexical/vector/HyDE shorthand omit `mode`. |
 | `oms search --context` | `oms_search` | `context` | none |
-| `oms search --path <rel>` | `oms_search` | absent | `path` alone; exclusive with `op` and every other argument. Engine-free, normalization-insensitive exact read of one note. |
+| `oms search --path <rel>` | `oms_search` | absent | `path` alone; exclusive with `op` and every other argument, except `limit: 10`, `rerank: false` and `minScore: 0`, the schema defaults some clients echo on every call. Engine-free, normalization-insensitive exact read of one note, refused with `READ_EXACT_TOO_LARGE` above 16 MiB. After a `--` terminator the CLI reads every token, including `--vault`, as query text. |
 | `oms search --link <note>` | `oms_search` | `link` | `notePath` required, `folder` optional. Suggests wikilinks without writing them. |
 | none | `oms_search` | `templates` | List sealed template axes. Reports `unavailable` when no contract is sealed. |
 | none | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window). |
