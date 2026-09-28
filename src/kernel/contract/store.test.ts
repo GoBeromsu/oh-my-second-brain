@@ -92,6 +92,38 @@ describe("contract store", () => {
     expect(manifest.version).toBe(2);
   });
 
+  it("round-trips count rules", async () => {
+    const counts = [{ kind: "count", min: 1, max: 3 }, { kind: "count", min: 0 }, { kind: "count", max: 2 }, { kind: "count" }] as const;
+    const contract: VaultContract = { ...CONTRACT, properties: { tags: { meaning: "labels", type: "list", default: false, required: false, rules: [...counts] } } };
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract }, root);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract });
+  });
+
+  it("stores a count rule whose min exceeds its max", async () => {
+    const contract: VaultContract = { ...CONTRACT, properties: { tags: { meaning: "labels", type: "list", default: false, required: false, rules: [{ kind: "count", min: 3, max: 1 }] } } };
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract }, root);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract });
+  });
+
+  it("still refuses a malformed count rule", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    const dir = await generation();
+    const manifestPath = join(dir, "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { files: Record<string, string> };
+    const store = async (rule: object): Promise<void> => {
+      const properties = `${JSON.stringify({ version: 1, properties: { tags: { meaning: "labels", type: "list", default: false, required: false, rules: [rule] } } })}\n`;
+      await writeFile(join(dir, "properties.json"), properties);
+      await writeFile(manifestPath, JSON.stringify({ ...manifest, files: { ...manifest.files, "properties.json": digestBytes(properties) } }));
+    };
+    await store({ kind: "count", min: 0, max: 2 });
+    expect(await diagnoseStore(ID, root)).toBe("ok");
+    for (const rule of [{ kind: "count", min: "1" }, { kind: "count", max: 1.5 }, { kind: "count", min: -1 }, { kind: "count", max: 2, extra: true }]) {
+      await store(rule);
+      expect(await diagnoseStore(ID, root)).toBe("schema-invalid");
+      expect(await readStore(ID, root)).toEqual({ state: "unreadable" });
+    }
+  });
+
   it("still reads a version 1 manifest", async () => {
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
     const manifest = join(await generation(), "manifest.json");

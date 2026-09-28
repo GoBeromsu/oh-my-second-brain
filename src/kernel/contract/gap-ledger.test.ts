@@ -1,12 +1,18 @@
-import { appendFile, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { appendFile, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, symlink, truncate, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GAP_EVENTS_FILE, choiceGapId, openGaps, readGapDraft, readGapLedger, recordGaps, resolveGap, writeGapDraft,
   type GapEvent, type GapInput,
 } from "./gap-ledger.js";
 import { stateDir } from "./state-dir.js";
+
+vi.mock("node:fs/promises", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, unlink: vi.fn(actual.unlink), open: vi.fn(actual.open), readdir: vi.fn(actual.readdir) };
+});
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const NOTE_REV = `sha256:${"a".repeat(64)}`;
@@ -163,7 +169,7 @@ describe("gap ledger", () => {
     const first = await recordGaps(root, VAULT_ID, [choice(["Standup", "Review"])], { now: () => 1 });
     const id = choiceGapId(choice(["Review", "Standup"]));
     expect(first.map(record => record.id)).toEqual([id]);
-    expect(await readdir(gapsDir())).toEqual(expect.arrayContaining([GAP_EVENTS_FILE, `${id}.seen`]));
+    expect((await readdir(gapsDir())).filter(name => name.endsWith(`.${id}.seen`))).toHaveLength(1);
     const again = await recordGaps(root, VAULT_ID, [choice(["Review", "Standup"], { noteRevision: `sha256:${"c".repeat(64)}` }), gap("mood")], { now: () => 2, newId: ids("g1") });
     expect(again.map(record => record.id)).toEqual([id, "g1"]);
     expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.id)).toEqual([id, "g1"]);
@@ -175,6 +181,137 @@ describe("gap ledger", () => {
     expect(choiceGapId(choice(["Review", "Daily"]))).not.toBe(id);
     await recordGaps(root, VAULT_ID, [revised]);
     expect(openGaps((await readGapLedger(root, VAULT_ID)).events).map(record => record.id)).toEqual(["g1", choiceGapId(revised)]);
+  });
+
+  describe("choice markers", () => {
+    const choice = (): GapInput => gap("template", { axis: "template", kind: "choice", wanted: { field: "template", value: ["Review", "Standup"] } });
+    const id = choiceGapId(choice());
+    const markers = async (): Promise<string[]> => (await readdir(gapsDir())).filter(name => name.endsWith(".seen"));
+    const recorded = async (): Promise<string[]> => (await readGapLedger(root, VAULT_ID)).events.map(event => event.id);
+
+    it("records a repeated choice anew once the ledger is moved aside, and sweeps the old markers", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(await recorded()).toEqual([id]);
+      const [old] = await markers();
+      await writeFile(join(gapsDir(), `${id}.seen`), "");
+      await rename(ledgerPath(), join(gapsDir(), "events.2026-09-29.jsonl"));
+
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 3 });
+      expect(await recorded()).toEqual([id]);
+      const current = await markers();
+      expect(current).toHaveLength(1);
+      expect(current).not.toContain(old);
+      expect(current[0]!.endsWith(`.${id}.seen`)).toBe(true);
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 4 });
+      expect(await recorded()).toEqual([id]);
+    });
+
+    it("records a repeated choice anew once its event falls out of the read window", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      await truncate(ledgerPath(), 16 * 1024 * 1024 + 1);
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(await recorded()).toEqual([id]);
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 3 });
+      expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.at)).toEqual([2]);
+    });
+
+    it("counts no marker while the ledger's only line is cut short", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      const [old] = await markers();
+      const partial = '{"type":"gap"';
+      await writeFile(ledgerPath(), partial);
+      // Named as if the cut-short line identified the ledger.
+      const unclosed = createHash("sha256").update(partial).digest("hex").slice(0, 16);
+      await writeFile(join(gapsDir(), `${unclosed}.${id}.seen`), "0");
+
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.at)).toEqual([2]);
+      const current = await markers();
+      expect(current).toHaveLength(1);
+      expect(current).not.toContain(old);
+      expect(current[0]!.startsWith(`${unclosed}.`)).toBe(false);
+    });
+
+    it("appends an open choice once more over legacy markers and keeps a resolved one closed", async () => {
+      const other = gap("template", { notePath: "Inbox/b.md", axis: "template", kind: "choice", wanted: { field: "template", value: ["Review", "Standup"] } });
+      const otherId = choiceGapId(other);
+      await recordGaps(root, VAULT_ID, [choice(), other], { now: () => 1 });
+      await resolveGap(root, VAULT_ID, otherId, "chose Review", { now: () => 2 });
+      for (const marker of await markers()) await rm(join(gapsDir(), marker));
+      await writeFile(join(gapsDir(), `${id}.seen`), "");
+      await writeFile(join(gapsDir(), `${otherId}.seen`), "");
+
+      await recordGaps(root, VAULT_ID, [choice(), other], { now: () => 3 });
+      expect(await recorded()).toEqual([id, otherId, otherId, id, otherId]);
+      expect(openGaps((await readGapLedger(root, VAULT_ID)).events).map(record => record.id)).toEqual([id]);
+      await recordGaps(root, VAULT_ID, [choice(), other], { now: () => 4 });
+      expect(await recorded()).toHaveLength(5);
+    });
+
+    it("still resolves with the committed records when pruning a stale marker fails", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      const [old] = await markers();
+      await rename(ledgerPath(), join(gapsDir(), "events.2026-09-29.jsonl"));
+      vi.mocked(unlink).mockRejectedValueOnce(Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }));
+
+      const records = await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(records.map(record => record.id)).toEqual([id]);
+      expect(vi.mocked(unlink)).toHaveBeenCalledWith(join(gapsDir(), old!));
+      expect(await recorded()).toEqual([id]);
+      const current = await markers();
+      expect(current).toHaveLength(2);
+      expect(current).toContain(old);
+    });
+
+    it("still resolves with the committed records when listing markers to prune fails", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      const [old] = await markers();
+      await rename(ledgerPath(), join(gapsDir(), "events.2026-09-29.jsonl"));
+      vi.mocked(readdir).mockRejectedValueOnce(Object.assign(new Error("EIO: i/o error"), { code: "EIO" }));
+
+      const records = await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(records.map(record => record.id)).toEqual([id]);
+      expect(vi.mocked(readdir)).toHaveBeenCalledWith(gapsDir());
+      expect(await recorded()).toEqual([id]);
+      const current = await markers();
+      expect(current).toHaveLength(2);
+      expect(current).toContain(old);
+    });
+
+    it("keeps the committed event when writing its marker fails, and re-appends it once more", async () => {
+      // A prior, unrelated append settles the state dir and the ledger so the two opens
+      // below are unambiguously the append's and then the marker's.
+      await recordGaps(root, VAULT_ID, [gap("warmup")], { now: () => 0, newId: ids("w1") });
+      const realOpen = vi.mocked(open).getMockImplementation()!;
+      vi.mocked(open).mockImplementationOnce(realOpen).mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+
+      const first = await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      expect(first.map(record => record.id)).toEqual([id]);
+      expect(await recorded()).toEqual(["w1", id]);
+      expect(await markers()).toHaveLength(0);
+
+      // No marker was written, so the choice is not yet seen and repeats once more; this
+      // time the marker write succeeds (no mock left queued).
+      const second = await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(second.map(record => record.id)).toEqual([id]);
+      expect(await recorded()).toEqual(["w1", id, id]);
+      expect(await markers()).toHaveLength(1);
+
+      // The marker written above now covers it, so a third repeat stays closed.
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 3 });
+      expect(await recorded()).toEqual(["w1", id, id]);
+    });
+
+    it("treats a malformed marker as absent", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      const [marker] = await markers();
+      await writeFile(join(gapsDir(), marker!), "not an offset");
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.at)).toEqual([1, 2]);
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 3 });
+      expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.at)).toEqual([1, 2]);
+    });
   });
 
   it("refuses a ledger that is not a regular file", async () => {

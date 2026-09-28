@@ -60,7 +60,12 @@ export interface CheckResolution {
   readonly gaps: readonly Omit<ReceiptGap, "id">[];
   /** True when the write would keep the note as a draft beside the gap ledger. */
   readonly wouldDraft: boolean;
+  /** Present when the write would stop at the `ifMatch` check first, keeping no draft and recording no gap. */
+  readonly precondition?: Precondition;
 }
+
+/** Why the `ifMatch` check would stop a write: the outcome kind, or the retry state. */
+export type Precondition = "if-match-required" | "changed" | "absent";
 
 export type WriteOutcome =
   | { readonly kind: "rejected"; readonly rejection: WriteRejection }
@@ -96,6 +101,20 @@ function titleOf(notePath: string): string {
 function folderOf(notePath: string): string | undefined {
   const folder = path.posix.dirname(notePath);
   return folder === "." ? undefined : folder;
+}
+
+/**
+ * An overwrite must name the revision it replaces; a new note must not expect one. Reads
+ * only what the target resolution already holds, so `check` can predict it too.
+ */
+function preconditionOf(previousContent: string | null | undefined, ifMatch: string | undefined): Precondition | undefined {
+  if (previousContent !== undefined) {
+    if (ifMatch === undefined) return "if-match-required";
+    if (previousContent === null || noteRevision(previousContent) !== ifMatch) return "changed";
+    return undefined;
+  }
+  // The caller expected to replace a note that is not there; retrying without ifMatch creates it.
+  return ifMatch === undefined ? undefined : "absent";
 }
 
 function gapInputs(findings: readonly GapFinding[], notePath: string, content: string, revision: Digest, draftRef?: string) {
@@ -161,8 +180,11 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
     rejudge: content => judgeReadyTarget(resolved, content, template),
   });
 
+  // A refusal comes first, so a refused write never reaches the ifMatch check.
+  const precondition = resolution.action === "refuse" ? undefined : preconditionOf(resolved.previousContent, ifMatch);
   if (request.check === true) {
     const findings = resolution.action === "refuse" ? [] : resolution.findings;
+    const wouldDraft = resolution.action === "draft" && ledger !== null && precondition === undefined;
     return {
       kind: "checked",
       check: {
@@ -174,21 +196,15 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
         missingDefaults: verdict.missingDefaults,
         conformed: conformed.applied,
         frame,
-        resolution: { action: resolution.action, gaps: unrecorded(findings), wouldDraft: resolution.action === "draft" && ledger !== null },
+        resolution: { action: resolution.action, gaps: unrecorded(findings), wouldDraft, ...(precondition === undefined ? {} : { precondition }) },
       },
     };
   }
   if (resolution.action === "refuse") return { kind: "denied", violations: verdict.violations };
 
-  // An overwrite must name the revision it replaces; a new note must not expect one. This
-  // runs before the draft, so a stale or missing ifMatch keeps nothing and records nothing.
-  if (resolved.previousContent !== undefined) {
-    if (ifMatch === undefined) return { kind: "if-match-required" };
-    if (resolved.previousContent === null || noteRevision(resolved.previousContent) !== ifMatch) return { kind: "retry", state: "changed" };
-  } else if (ifMatch !== undefined) {
-    // The caller expected to replace a note that is not there; retrying without ifMatch creates it.
-    return { kind: "retry", state: "absent" };
-  }
+  // This runs before the draft, so a stale or missing ifMatch keeps nothing and records nothing.
+  if (precondition === "if-match-required") return { kind: "if-match-required" };
+  if (precondition !== undefined) return { kind: "retry", state: precondition };
 
   if (resolution.action === "draft") {
     if (ledger === null || revision === null) return { kind: "denied", violations: verdict.violations };
