@@ -17,7 +17,7 @@ MCP annotations describe a whole tool, not one of its operations. A tool is anno
 | `oms_search` | `true` | Every search operation, including `path` reads and link suggestions, reads the vault and writes nothing. |
 | `oms_write` | `false` | Saves a note after the judge allows it. |
 | `oms_interview` | `false` | `op: questions` reads the vault and returns the open interview questions. `op: answer`, `op: confirm`, and `op: seal` append to the interview log and seal a confirmed proposal on a verified target, so the tool is not advertised as read-only. |
-| `oms_doctor` | `false` | Its repair operations (`sync-embeddings`, `cleanup`, `build-graph`) mutate managed state. Its diagnosis operations (`status`, `validate`, `gaps`, `audit`, `link-check`) write nothing, and a `cwd`-inferred target still allows them. |
+| `oms_doctor` | `false` | Its repair operations (`sync-embeddings`, `cleanup`, `build-graph`, `lineage-recover`, `lineage-reanchor`) mutate managed state. Its diagnosis operations (`status`, `validate`, `gaps`, `audit`, `link-check`) write nothing, and a `cwd`-inferred target still allows them. |
 
 ## Write
 
@@ -74,6 +74,8 @@ Sealing has no MCP operation. The sealed contract lives outside the vault under 
 | `oms doctor sync-embeddings --mode sync|embed|repair` | `oms_doctor` | `sync-embeddings` | `mode` is exclusive; repair takes `repairMode=rebuild|drop` and optional `dryRun`. |
 | `oms doctor cleanup` | `oms_doctor` | `cleanup` | Remove derived index entries for notes that no longer exist. |
 | `oms doctor build-graph` | `oms_doctor` | `build-graph` | Rebuild the vault graph. |
+| `oms doctor lineage-recover` | `oms_doctor` | `lineage-recover` | Under the seal lock, snapshot kept generations the lineage has not recorded and append the events the chain can account for (a missed seal, a seq restart, a pre-lineage store). A gap the chain cannot explain is refused with `CONTRACT_LINEAGE_GAP` and nothing is written. Rerunning is a no-op. |
+| `oms doctor lineage-reanchor` | `oms_doctor` | `lineage-reanchor` | As `lineage-recover`, but a gap is recorded as a gap-anchor event so the lineage continues from the linked generation. |
 
 Every mutating doctor op requires verified-target admission and returns a receipt with a server-verified postcondition.
 

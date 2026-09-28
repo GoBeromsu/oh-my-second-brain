@@ -61,6 +61,15 @@ describe("oms doctor", () => {
     expect(stderr()).toContain("sync-embeddings");
   });
 
+  it("routes lineage-recover and lineage-reanchor to their leaf", async () => {
+    await runDoctorCommand(["lineage-recover", "--help"]);
+    expect(stdout()).toContain("Usage: oms doctor lineage-recover [--vault <path>]");
+    await runDoctorCommand(["lineage-reanchor", "--bogus"]);
+    expect(process.exitCode).toBe(1);
+    expect(stdout()).toContain("CONTRACT_ARGS_INVALID: doctor lineage-reanchor received unknown argument --bogus");
+    expect(doctorUsage()).toContain("lineage-reanchor [--vault <path>]");
+  });
+
   it("validates sync-embeddings modes before any index work", async () => {
     for (const [argv, message] of [
       [[], "--mode <sync|embed|repair> is required"],

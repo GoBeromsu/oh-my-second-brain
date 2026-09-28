@@ -1,12 +1,16 @@
 import { rmSync } from "node:fs";
-import { access, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assembleCoreSemanticEngine, assembleGraphOnlyEngine } from "../engine/assemble.js";
 import * as engineStoreRepair from "../engine/embed/repair.js";
 import { engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../engine/paths.js";
 import { writeContractVault } from "../contract/contract-vault-fixture.js";
+import { appendLineageEvents, LINEAGE_FILE } from "../contract/lineage.js";
+import { stateDir } from "../contract/state-dir.js";
+import { storeRoot } from "../contract/store.js";
+import { resolveSealState } from "../contract/vault-id.js";
 import { syncEngineStore } from "../engine/embed/sync.js";
 import { listDirtyQueue, updateKeywordIndex } from "../engine/index-update.js";
 import { repairDoctor } from "./service.js";
@@ -416,6 +420,110 @@ describe("doctor sync-embeddings drains the write queue", () => {
       expect(listDirtyQueue(engineStorePath(vault))).toEqual(["notes/note.md"]);
     } finally {
       await engine.dispose();
+    }
+  });
+});
+
+describe("doctor lineage repairs", () => {
+  const FOREIGN = `sha256:${"e".repeat(64)}` as const;
+  const saved = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
+  let home: string;
+
+  beforeEach(async () => {
+    home = await realpath(await mkdtemp(path.join(tmpdir(), "oms-doctor-lineage-home-")));
+    process.env["HOME"] = home;
+    process.env["USERPROFILE"] = home;
+  });
+
+  afterEach(async () => {
+    process.env["HOME"] = saved.HOME;
+    process.env["USERPROFILE"] = saved.USERPROFILE;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  async function sealedVault(): Promise<{ vault: string; id: string; digest: string }> {
+    const vault = await makeVault();
+    const state = await resolveSealState(vault);
+    if (state.row !== "sealed" || state.vaultId === null) throw new Error(`fixture vault is ${state.row}`);
+    const lineage = (await readFile(path.join(stateDir(storeRoot(), state.vaultId), "lineage", LINEAGE_FILE), "utf8")).trim().split("\n");
+    return { vault, id: state.vaultId, digest: (JSON.parse(lineage.at(-1)!) as { digest: string }).digest };
+  }
+
+  it("refuses a vault whose contract is not sealed", async () => {
+    const { vault, id } = await sealedVault();
+    await rm(path.join(storeRoot(), id));
+    for (const operation of ["lineage-recover", "lineage-reanchor"] as const) {
+      expect(await repairDoctor({ operation, vault, source: "vault", args: undefined })).toEqual({ kind: "error", message: expect.stringMatching(/^CONTRACT_NOT_SEALED: /) });
+    }
+  });
+
+  it("rejects a cwd target before reading the store", async () => {
+    const { vault } = await sealedVault();
+    expect(await repairDoctor({ operation: "lineage-recover", vault, source: "cwd", args: undefined })).toMatchObject({ kind: "rejected", value: { rejection: { code: "target-unverified" } } });
+  });
+
+  it("records a lost lineage and recreated snapshots with a read-back receipt", async () => {
+    const { vault, id, digest } = await sealedVault();
+    const state = stateDir(storeRoot(), id);
+    await rm(path.join(state, "lineage", LINEAGE_FILE));
+    await rm(path.join(state, "generations"), { recursive: true });
+    const result = await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined });
+    expect(result).toMatchObject({
+      kind: "completed",
+      value: {
+        snapshots: 1,
+        anchors: [{ eventSeq: 1, reason: "bootstrap", digest }],
+        receipt: {
+          operation: "lineage-recover", resolvedVault: vault, resolutionSource: "vault",
+          written: { paths: ["lineage/events.jsonl", "generations/"], summary: { snapshots: 1, anchors: 1 } },
+          postcondition: { kind: "contract-lineage", events: 1, snapshots: 1 },
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(home);
+  });
+
+  it("reports nothing written for a current lineage", async () => {
+    const { vault } = await sealedVault();
+    expect(await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined })).toMatchObject({
+      kind: "completed",
+      value: { snapshots: 0, anchors: [], receipt: { written: { paths: [], summary: { snapshots: 0, anchors: 0 } }, postcondition: { events: 1, snapshots: 1 } } },
+    });
+  });
+
+  it("leaves a gap to lineage-reanchor and anchors it there", async () => {
+    const { vault, id, digest } = await sealedVault();
+    await appendLineageEvents(storeRoot(), id, [{ kind: "sealed", generation: 99, parentDigest: digest as typeof FOREIGN, digest: FOREIGN, mutations: [], manifestDigests: {} }]);
+    const lineage = path.join(stateDir(storeRoot(), id), "lineage", LINEAGE_FILE);
+    const before = await readFile(lineage, "utf8");
+    expect(await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined })).toEqual({ kind: "error", message: expect.stringMatching(/^CONTRACT_LINEAGE_GAP: .*oms doctor lineage-reanchor/) });
+    expect(await readFile(lineage, "utf8")).toBe(before);
+    expect(await repairDoctor({ operation: "lineage-reanchor", vault, source: "vault", args: undefined })).toMatchObject({
+      kind: "completed",
+      value: { anchors: [{ eventSeq: 3, reason: "gap-anchor", digest }], receipt: { operation: "lineage-reanchor", written: { paths: ["lineage/events.jsonl"] }, postcondition: { events: 3 } } },
+    });
+  });
+
+  it("names an unsafe store entry by its kind, never by its path", async () => {
+    const { vault, id } = await sealedVault();
+    const state = stateDir(storeRoot(), id);
+    await chmod(state, 0o777);
+    try {
+      const result = await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined });
+      expect(result).toEqual({ kind: "error", message: "STATE_DIR_UNSAFE: the contract store holds an unsafe entry (shared-writable); it was left untouched" });
+    } finally {
+      await chmod(state, 0o700);
+    }
+  });
+
+  it("rethrows a store failure that carries no contract code", async () => {
+    const { vault, id } = await sealedVault();
+    const generations = path.join(stateDir(storeRoot(), id), "generations");
+    await chmod(generations, 0o300);
+    try {
+      await expect(repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined })).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      await chmod(generations, 0o700);
     }
   });
 });

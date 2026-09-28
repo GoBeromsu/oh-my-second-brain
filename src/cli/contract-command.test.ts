@@ -128,6 +128,7 @@ describe("oms contract", () => {
       transportFailures: { total: 0, kinds: {} },
       unexpectedControlFiles: [],
       interviewLog: { corrupt: [], pendingCorrupt: [], unreadable: false },
+      lineage: { events: 1, snapshots: 1, snapshotBytes: expect.any(Number), findings: [] },
     });
 
     await runContractCommand(["doctor", "--fix", "--vault", vault]);

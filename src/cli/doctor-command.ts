@@ -27,7 +27,12 @@ export function doctorUsage(): string {
   cleanup [--index <path>] [--vault <path>]
             Remove index entries for notes that no longer exist.
   build-graph [--vault <path>]
-            Rebuild the vault graph.`;
+            Rebuild the vault graph.
+  lineage-recover [--vault <path>]
+            Record seals the contract lineage missed and snapshot kept generations.
+            A gap the chain cannot account for is refused.
+  lineage-reanchor [--vault <path>]
+            As lineage-recover, and also anchor a gap so the lineage continues.`;
 }
 
 const SYNC_MODES = ["sync", "embed", "repair"] as const;
@@ -123,7 +128,13 @@ export async function runDoctorCommand(argv: readonly string[]): Promise<void> {
       await runGraphCommand(["build", ...rest]);
       return;
     }
+    case "lineage-recover":
+    case "lineage-reanchor": {
+      const { runLineageCommand } = await import("./lineage-command.js");
+      await runLineageCommand(leaf, rest);
+      return;
+    }
     default:
-      fail(`Unknown doctor leaf: ${leaf}. Leaves: status, contract, gaps, audit, link-check, sync-embeddings, cleanup, build-graph.`);
+      fail(`Unknown doctor leaf: ${leaf}. Leaves: status, contract, gaps, audit, link-check, sync-embeddings, cleanup, build-graph, lineage-recover, lineage-reanchor.`);
   }
 }

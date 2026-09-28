@@ -155,6 +155,13 @@ describe("import-direction gate", () => {
     expect(await findImports(files, (resolved) => underAny(resolved, [CLI, MCP, VENDORS, ASSETS]))).toEqual([]);
   });
 
+  it("keeps the contract store free of evolution imports", async () => {
+    const contract = `${KERNEL}/contract`;
+    const files = await collectFiles(contract, isProductionTs);
+    assertNonVacuous(files, contract);
+    expect(await findImports(files, (resolved) => underAny(resolved, [`${KERNEL}/evolution`]))).toEqual([]);
+  });
+
   it("rejects a .mts kernel module importing an MCP surface", async () => {
     const fixture = "src/kernel/import-boundary-escape.mts";
     await writeFile(absolute(fixture), 'import "../mcp/server.js";\n');

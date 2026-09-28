@@ -9,6 +9,7 @@ import { parseAnswers, publicQuestion, scriptedIO, type Answers } from "../kerne
 import { StateDirUnsafe } from "../kernel/contract/state-dir.js";
 import { storeRoot, type SealDeps } from "../kernel/contract/store.js";
 import { gapsReport } from "../kernel/contract/gaps-report.js";
+import { lineageNeedsAttention } from "../kernel/contract/lineage-health.js";
 import { contractDoctor, contractStatus, doctorFix, ROW_FINDING } from "../kernel/contract/status.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { VaultSettingsError } from "../kernel/vault/settings.js";
@@ -329,7 +330,8 @@ async function doctor(vault: string, fix: boolean): Promise<void> {
   const healthy = (report.row === "sealed" || report.row === "never-sealed")
     && report.findings.every(finding => finding === ROW_FINDING[report.row]) && report.cause === null
     && report.unsafePatterns.length === 0 && report.staleLocks === 0 && report.orphans === 0 && report.unexpectedControlFiles.length === 0
-    && report.interviewLog.corrupt.length === 0 && report.interviewLog.pendingCorrupt.length === 0 && !report.interviewLog.unreadable;
+    && report.interviewLog.corrupt.length === 0 && report.interviewLog.pendingCorrupt.length === 0 && !report.interviewLog.unreadable
+    && !lineageNeedsAttention(report.lineage);
   if (!healthy) process.exitCode = 1;
   print({
     contract: report.contract,
@@ -342,6 +344,7 @@ async function doctor(vault: string, fix: boolean): Promise<void> {
     unexpectedControlFiles: report.unexpectedControlFiles,
     transportFailures: report.transportFailures,
     interviewLog: report.interviewLog,
+    lineage: report.lineage,
   });
 }
 
