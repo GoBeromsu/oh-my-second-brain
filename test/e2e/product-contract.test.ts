@@ -11,7 +11,7 @@ import { sealContract } from "../../src/kernel/contract/store.js";
 import type { VaultContract } from "../../src/kernel/contract/types.js";
 import { writeSettings } from "../fixtures/contract-truth-table.js";
 // @ts-expect-error -- plain .mjs fixture helper shared with the bench script; it has no type declarations.
-import { materializeKoVault, NFC_NOTE, NFD_NOTE } from "../fixtures/ko-vault.mjs";
+import { materializeKoVault, NFC_NOTE, NFD_NOTE, NFD_NOTE_ON_DISK } from "../fixtures/ko-vault.mjs";
 
 /**
  * Product-contract snapshot of the built CLI (0.18.3 behaviour).
@@ -34,15 +34,17 @@ type TreeSnapshot = { readonly exists: false } | { readonly exists: true; readon
  * legitimately rewrites while the suite runs:
  * - the SQLite WAL/SHM sidecars under `runtime/`
  * - the event journal under `runtime/`
+ * - directory entries under `runtime/`, which such a process may create or remove
  * - the update-notice cache
  * They are excluded so the snapshot does not give false failures on dev machines. Everything
  * else, including `vaults/**` and `config.yaml`, is still compared by sha256: the suite must
  * never create, change or remove it.
  */
-function isVolatile(rel: string): boolean {
+function isVolatile(rel: string, isDirectory: boolean): boolean {
   const posix = rel.split(path.sep).join("/");
   if (posix === "update-notice-cache.json") return true;
-  return posix.startsWith("runtime/") && /(\.sqlite-wal|\.sqlite-shm|\/events\.sqlite)$/.test(posix);
+  if (!posix.startsWith("runtime/")) return false;
+  return isDirectory || /(\.sqlite-wal|\.sqlite-shm|\/events\.sqlite)$/.test(posix);
 }
 
 function snapshotTree(root: string): TreeSnapshot {
@@ -52,13 +54,13 @@ function snapshotTree(root: string): TreeSnapshot {
     for (const name of readdirSync(dir).sort()) {
       const full = path.join(dir, name);
       const rel = path.relative(root, full);
-      if (isVolatile(rel)) continue;
       const stat = lstatSync(full);
-      if (stat.isSymbolicLink()) entries[rel] = `symlink:${readlinkSync(full)}`;
-      else if (stat.isDirectory()) {
-        entries[rel] = "dir";
+      if (stat.isSymbolicLink()) {
+        if (!isVolatile(rel, false)) entries[rel] = `symlink:${readlinkSync(full)}`;
+      } else if (stat.isDirectory()) {
+        if (!isVolatile(rel, true)) entries[rel] = "dir";
         walk(full);
-      } else entries[rel] = `sha256:${createHash("sha256").update(readFileSync(full)).digest("hex")}`;
+      } else if (!isVolatile(rel, false)) entries[rel] = `sha256:${createHash("sha256").update(readFileSync(full)).digest("hex")}`;
     }
   };
   walk(root);
@@ -102,7 +104,7 @@ function oms(args: readonly string[], input?: string, extraEnv: NodeJS.ProcessEn
     env: { ...env, ...extraEnv },
     input,
     encoding: "utf8",
-    timeout: 60_000,
+    timeout: 20_000,
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -185,27 +187,41 @@ describe("product contract (built CLI, isolated home)", () => {
     expect(out.documents[0]!.content).toBe(await readFile(path.join(vault, NFC_NOTE), "utf8"));
   });
 
-  // Known 0.18.3 gap: `note get` NFC-normalizes its target, so it opens the NFC byte name.
-  // On macOS APFS both normalizations name the same file, so the NFD-named note is found
-  // from either spelling. On Linux ext4 the NFD bytes are a distinct name, so both
-  // spellings miss (exit 1), even though search finds the note (see above). PR2's
-  // `readExact` should close this gap; once it does, every platform should expect the
-  // darwin branch.
-  it("note get on the NFD-named note depends on the filesystem (0.18.3 gap)", () => {
-    for (const target of [NFD_NOTE.normalize("NFD"), NFD_NOTE.normalize("NFC")]) {
-      const run = oms(["note", "get", target, "--vault", vault]);
-      if (process.platform === "darwin") {
-        expect(run.status).toBe(0);
-        const out = json(run) as { available: boolean; documents: { path: string; title: string }[] };
-        expect(out.available).toBe(true);
-        expect(out.documents[0]!.title).toBe("낙상 위험 평가");
-        expect(out.documents[0]!.path.normalize("NFC")).toBe(NFD_NOTE);
-      } else {
-        expect(run.status).toBe(1);
-        expect(json(run)).toMatchObject({ available: false, documents: [] });
-      }
-    }
+  it("note get reads the NFD-named note by its on-disk spelling on every platform", async () => {
+    const run = oms(["note", "get", NFD_NOTE_ON_DISK, "--vault", vault]);
+    expect(run.status).toBe(0);
+    const out = json(run) as { available: boolean; documents: { path: string; title: string; content: string }[] };
+    expect(out.available).toBe(true);
+    expect(out.documents).toHaveLength(1);
+    expect(out.documents[0]!.title).toBe("낙상 위험 평가");
+    expect(out.documents[0]!.content).toBe(await readFile(path.join(vault, NFD_NOTE_ON_DISK), "utf8"));
+  });
+
+  it("note get accepts the NFD hit path that search returns", () => {
+    const search = json(oms(["search", "query", "고위험군 중재", "--vault", vault])) as { hits: { path: string }[] };
+    const hit = search.hits.find(candidate => candidate.path.normalize("NFC") === NFD_NOTE);
+    expect(hit).toBeDefined();
+    const run = oms(["note", "get", hit!.path, "--vault", vault]);
+    expect(run.status).toBe(0);
+    expect(json(run)).toMatchObject({ available: true, documents: [{ title: "낙상 위험 평가" }] });
   }, 30_000);
+
+  // Known gap: note get is byte-exact; no normalization-insensitive lookup (PR2 readExact).
+  // macOS APFS resolves the NFC spelling to the NFD-named file; Linux ext4 does not.
+  // Once PR2 lands, every platform should expect the darwin branch.
+  it("note get on the NFC spelling of the NFD-named note depends on the filesystem", () => {
+    const run = oms(["note", "get", NFD_NOTE.normalize("NFC"), "--vault", vault]);
+    if (process.platform === "darwin") {
+      expect(run.status).toBe(0);
+      const out = json(run) as { available: boolean; documents: { path: string; title: string }[] };
+      expect(out.available).toBe(true);
+      expect(out.documents[0]!.title).toBe("낙상 위험 평가");
+      expect(out.documents[0]!.path.normalize("NFC")).toBe(NFD_NOTE);
+    } else {
+      expect(run.status).toBe(1);
+      expect(json(run)).toMatchObject({ available: false, documents: [] });
+    }
+  });
 
   it("note get on a missing path or a bare title is unavailable with exit 1", () => {
     for (const target of ["Resources/없음.md", "낙상판정기준"]) {
