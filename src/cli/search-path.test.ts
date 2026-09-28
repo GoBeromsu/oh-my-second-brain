@@ -59,10 +59,12 @@ afterEach(() => {
 function spiedDeps(): SearchCommandDeps & {
   readonly readExactDocument: ReturnType<typeof vi.fn<SearchCommandDeps["readExactDocument"]>>;
   readonly runEngineSession: ReturnType<typeof vi.fn>;
+  readonly runLinkFamilyCommand: ReturnType<typeof vi.fn<SearchCommandDeps["runLinkFamilyCommand"]>>;
 } {
   return {
     readExactDocument: vi.fn<SearchCommandDeps["readExactDocument"]>(readExactDocument),
     runEngineSession: vi.fn(() => Promise.reject(new Error("engine must not open for search --path"))),
+    runLinkFamilyCommand: vi.fn<SearchCommandDeps["runLinkFamilyCommand"]>(() => Promise.resolve()),
   };
 }
 
@@ -178,5 +180,33 @@ describe("oms search --path", () => {
     expect(process.exitCode).toBe(0);
     expect(runEngineSession).toHaveBeenCalledTimes(1);
     expect(deps.readExactDocument).toHaveBeenCalledTimes(0);
+  });
+});
+
+describe("oms search --link", () => {
+  it("forwards the resolved argv, not the raw argv, to link suggestion", async () => {
+    for (const argv of [
+      ["--vault", vault, "--link", "지식/a.md", "--json"],
+      ["--link", "지식/a.md", "--vault", vault, "--json"],
+      ["--link", "지식/a.md", "--json", "--vault", vault],
+    ]) {
+      const deps = spiedDeps();
+      await runSearchCommand(argv, deps);
+      expect(process.exitCode, argv.join(" ")).toBe(0);
+      expect(deps.runLinkFamilyCommand, argv.join(" ")).toHaveBeenCalledWith(
+        ["suggest", "지식/a.md", "--json", "--vault", vault],
+      );
+      expect(deps.runEngineSession).toHaveBeenCalledTimes(0);
+    }
+  });
+
+  it("keeps a later --link as a query filter rather than link suggestion", async () => {
+    const deps = spiedDeps();
+    const runEngineSession = vi.fn<SearchCommandDeps["runEngineSession"]>(
+      () => Promise.resolve({ available: true, hits: [] } as never),
+    );
+    await runSearchCommand(["topic", "--link", "지식/a.md", "--vault", vault], { ...deps, runEngineSession });
+    expect(deps.runLinkFamilyCommand).toHaveBeenCalledTimes(0);
+    expect(runEngineSession).toHaveBeenCalledTimes(1);
   });
 });

@@ -28,6 +28,7 @@ function fail(message: string): never {
 export interface SearchCommandDeps {
   readonly readExactDocument: typeof readExactDocument;
   readonly runEngineSession: typeof runEngineSession;
+  readonly runLinkFamilyCommand: (argv: readonly string[]) => Promise<void>;
 }
 
 // The engine, index, link and morning-context modules load only on the branches that use them,
@@ -36,6 +37,7 @@ const DEFAULT_DEPS: SearchCommandDeps = {
   readExactDocument,
   runEngineSession: async (vault, options, fn) =>
     (await import("./engine-session.js")).runEngineSession(vault, options, fn),
+  runLinkFamilyCommand: async (argv) => (await import("./link-command.js")).runLinkFamilyCommand(argv),
 };
 
 async function target(argv: readonly string[]): Promise<Target> {
@@ -159,9 +161,9 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
   }
   if (first === "--link") {
     // A leading --link is link suggestion for one note; later --link stays a query filter.
-    const linkIndex = argv.indexOf("--link");
-    const { runLinkFamilyCommand } = await import("./link-command.js");
-    await runLinkFamilyCommand(["suggest", ...argv.slice(0, linkIndex), ...argv.slice(linkIndex + 1)]);
+    // The resolved argv already had --vault removed, so an explicit target is passed on resolved.
+    const vault = resolved.source === "explicit" ? ["--vault", resolved.vault] : [];
+    await deps.runLinkFamilyCommand(["suggest", ...resolved.argv.slice(1), ...vault]);
     return;
   }
   if (first === "--context") {
