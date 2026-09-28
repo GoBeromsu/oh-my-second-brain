@@ -78,7 +78,7 @@ class CodexManagedBlockAmbiguousError extends Error {
       : markers.map((marker) => `${marker.token} (line ${marker.line})`).join(", ");
     super(
       `Ambiguous OMS managed MCP markers in ${configPath}: ${locations}. `
-      + "No changes were made. Manually remove every OMS managed MCP block and its markers, then rerun oms install or uninstall.",
+      + "No changes were made. Manually remove every OMS managed MCP block and its markers, then rerun `oms setup host install` or `oms setup host remove`.",
     );
     this.name = "CodexManagedBlockAmbiguousError";
   }

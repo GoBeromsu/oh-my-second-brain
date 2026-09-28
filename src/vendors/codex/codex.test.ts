@@ -72,6 +72,12 @@ describe("Codex managed OMS registration", () => {
     expect(isCodexOmsRegistration(registration('["serve", "http", "--vault", "/vault"]'))).toBe(false);
   });
 
+  it("points an ambiguous managed block at the setup host leaves", () => {
+    const unterminated = "# BEGIN OMS MANAGED MCP\n[mcp_servers.oms]\n";
+    expect(() => isCodexOmsRegistration(unterminated, "/home/.codex/config.toml"))
+      .toThrow(/oms setup host install` or `oms setup host remove/);
+  });
+
   it("preserves an unowned custom OMS table during removal", async () => {
     const home = await temporaryHome();
     const configPath = path.join(home, ".codex", "config.toml");
