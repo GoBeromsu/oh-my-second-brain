@@ -255,12 +255,33 @@ describe("runWritePipeline", () => {
     // A required status outside the allowed values has no valid form: it would be drafted.
     const content = "---\nstatus: paused\n---\nchanged\n";
     const checked = await runWritePipeline(request(fixture, "Projects/a.md", content, { check: true }), { now: () => NOW });
-    expect(checked).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", wouldDraft: true } } });
+    expect(checked).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", wouldDraft: false, precondition: "if-match-required" } } });
     expect(await runWritePipeline(request(fixture, "Projects/a.md", content), { now: () => NOW })).toEqual({ kind: "if-match-required" });
     expect(await runWritePipeline(request(fixture, "Projects/a.md", content, { ifMatch: sha256("stale\n") }), { now: () => NOW })).toEqual({ kind: "retry", state: "changed" });
     expect(await runWritePipeline(request(fixture, "Projects/b.md", content, { ifMatch: sha256("stale\n") }), { now: () => NOW })).toEqual({ kind: "retry", state: "absent" });
     expect(await snapshot(store)).toEqual(before);
     expect(await readFile(target, "utf8")).toBe("---\nstatus: active\n---\noriginal\n");
+  });
+
+  it("check folds the ifMatch precondition into its prediction and still writes nothing", async () => {
+    const fixture = await sealedVault({ ...CONTRACT, properties: { ...CONTRACT.properties!, status: { ...CONTRACT.properties!["status"]!, required: true } } });
+    await mkdir(path.join(fixture.vault, "Projects"));
+    const original = "---\nstatus: active\n---\noriginal\n";
+    await writeFile(path.join(fixture.vault, "Projects", "a.md"), original);
+    const store = path.join(fixture.base, "home", ".oms");
+    const before = { vault: await snapshot(fixture.vault), store: await snapshot(store) };
+    const content = "---\nstatus: paused\n---\nchanged\n";
+    const check = async (notePath: string, ifMatch?: string) => {
+      const outcome = await runWritePipeline(request(fixture, notePath, content, { check: true, ...(ifMatch === undefined ? {} : { ifMatch }) }), { now: () => NOW });
+      return outcome.kind === "checked" ? outcome.check.resolution : null;
+    };
+    expect(await check("Projects/a.md")).toEqual({ action: "draft", gaps: expect.any(Array), wouldDraft: false, precondition: "if-match-required" });
+    expect(await check("Projects/a.md", sha256("stale\n"))).toMatchObject({ action: "draft", wouldDraft: false, precondition: "changed" });
+    expect(await check("Projects/b.md", sha256("stale\n"))).toMatchObject({ action: "draft", wouldDraft: false, precondition: "absent" });
+    const valid = await check("Projects/a.md", sha256(original));
+    expect(valid).toMatchObject({ action: "draft", wouldDraft: true });
+    expect(valid).not.toHaveProperty("precondition");
+    expect({ vault: await snapshot(fixture.vault), store: await snapshot(store) }).toEqual(before);
   });
 
   it("check predicts the write for an extra optional key: the same action and dropped fields, with nothing written", async () => {

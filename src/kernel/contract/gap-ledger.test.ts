@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -163,7 +163,7 @@ describe("gap ledger", () => {
     const first = await recordGaps(root, VAULT_ID, [choice(["Standup", "Review"])], { now: () => 1 });
     const id = choiceGapId(choice(["Review", "Standup"]));
     expect(first.map(record => record.id)).toEqual([id]);
-    expect(await readdir(gapsDir())).toEqual(expect.arrayContaining([GAP_EVENTS_FILE, `${id}.seen`]));
+    expect((await readdir(gapsDir())).filter(name => name.endsWith(`.${id}.seen`))).toHaveLength(1);
     const again = await recordGaps(root, VAULT_ID, [choice(["Review", "Standup"], { noteRevision: `sha256:${"c".repeat(64)}` }), gap("mood")], { now: () => 2, newId: ids("g1") });
     expect(again.map(record => record.id)).toEqual([id, "g1"]);
     expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.id)).toEqual([id, "g1"]);
@@ -175,6 +175,50 @@ describe("gap ledger", () => {
     expect(choiceGapId(choice(["Review", "Daily"]))).not.toBe(id);
     await recordGaps(root, VAULT_ID, [revised]);
     expect(openGaps((await readGapLedger(root, VAULT_ID)).events).map(record => record.id)).toEqual(["g1", choiceGapId(revised)]);
+  });
+
+  describe("choice markers", () => {
+    const choice = (): GapInput => gap("template", { axis: "template", kind: "choice", wanted: { field: "template", value: ["Review", "Standup"] } });
+    const id = choiceGapId(choice());
+    const markers = async (): Promise<string[]> => (await readdir(gapsDir())).filter(name => name.endsWith(".seen"));
+    const recorded = async (): Promise<string[]> => (await readGapLedger(root, VAULT_ID)).events.map(event => event.id);
+
+    it("records a repeated choice anew once the ledger is moved aside, and sweeps the old markers", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(await recorded()).toEqual([id]);
+      const [old] = await markers();
+      await writeFile(join(gapsDir(), `${id}.seen`), "");
+      await rename(ledgerPath(), join(gapsDir(), "events.2026-09-29.jsonl"));
+
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 3 });
+      expect(await recorded()).toEqual([id]);
+      const current = await markers();
+      expect(current).toHaveLength(1);
+      expect(current).not.toContain(old);
+      expect(current[0]!.endsWith(`.${id}.seen`)).toBe(true);
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 4 });
+      expect(await recorded()).toEqual([id]);
+    });
+
+    it("records a repeated choice anew once its event falls out of the read window", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      await truncate(ledgerPath(), 16 * 1024 * 1024 + 1);
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect(await recorded()).toEqual([id]);
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 3 });
+      expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.at)).toEqual([2]);
+    });
+
+    it("treats a malformed marker as absent", async () => {
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 1 });
+      const [marker] = await markers();
+      await writeFile(join(gapsDir(), marker!), "not an offset");
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 2 });
+      expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.at)).toEqual([1, 2]);
+      await recordGaps(root, VAULT_ID, [choice()], { now: () => 3 });
+      expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.at)).toEqual([1, 2]);
+    });
   });
 
   it("refuses a ledger that is not a regular file", async () => {

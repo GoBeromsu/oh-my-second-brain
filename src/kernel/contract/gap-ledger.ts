@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import type { FileHandle } from "node:fs/promises";
+import { readdir, unlink, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { compareCodePoints, type Digest } from "../conventions/canonical.js";
 import { ensureStateDir, existingStateDir, openStateFile } from "./state-dir.js";
@@ -25,10 +25,17 @@ import type { JsonScalar } from "./types.js";
  * `events.<date>.jsonl`): the next append creates a fresh ledger, and the old file stays
  * readable as plain JSON lines.
  *
- * A ② choice is recorded once per note, set of candidates and contract revision. Its id
- * is derived from that key, and a `<id>.seen` marker beside the ledger keeps a repeated
- * identical write from appending it again, so a resolved choice stays closed until the
- * contract or the candidates change.
+ * A ② choice is recorded once per note, set of candidates and contract revision, per
+ * ledger. Its id is derived from that key, and a `<ledger>.<id>.seen` marker beside the
+ * ledger keeps a repeated identical write from appending it again, so a resolved choice
+ * stays closed until the contract or the candidates change. `<ledger>` names the current
+ * `events.jsonl` by a hash of its first line, which an append-only file never changes, so
+ * after the ledger is moved aside every marker is stale and the next repeat of a choice
+ * lands in the fresh ledger. The first append to a fresh ledger deletes the stale markers,
+ * so markers never outnumber the distinct choices of the current ledger. A marker holds
+ * the byte offset its event starts at; once that event falls out of the default 16 MiB
+ * read window the marker no longer counts and the next repeat is appended again. A reader
+ * that passes a smaller `maxBytes` can still miss a choice that is inside the default window.
  */
 
 export const GAP_AXES = ["folder", "property", "value", "template"] as const;
@@ -87,6 +94,10 @@ export interface GapLedgerDeps {
 export const GAP_EVENTS_FILE = "events.jsonl";
 const MAX_LEDGER_BYTES = 16 * 1024 * 1024;
 const SCAN_CHUNK_BYTES = 1024 * 1024;
+/** How much of a first line longer than this names the ledger; the prefix never changes either. */
+const IDENTITY_BYTES = 4096;
+const SEEN_SUFFIX = ".seen";
+const OFFSET = /^(0|[1-9][0-9]*)$/;
 const NEWLINE = 0x0a;
 const AXES: ReadonlySet<string> = new Set(GAP_AXES);
 const KINDS: ReadonlySet<string> = new Set(GAP_KINDS);
@@ -230,24 +241,56 @@ function recordedOnce(event: GapEvent): boolean {
   return event.type === "gap" && event.kind === "choice";
 }
 
-function seenMarker(dir: string, id: string): string {
-  return join(dir, `${id}.seen`);
+/**
+ * Names the ledger by its first line, or null while it has none (absent, empty, or one
+ * cut-short line): such a ledger is fresh and no marker counts for it.
+ */
+async function ledgerIdentity(handle: FileHandle, size: number): Promise<string | null> {
+  const head = Buffer.alloc(Math.min(size, IDENTITY_BYTES));
+  const { bytesRead } = await handle.read(head, 0, head.length, 0);
+  const newline = head.subarray(0, bytesRead).indexOf(NEWLINE);
+  if (newline === -1 && bytesRead < IDENTITY_BYTES) return null;
+  const first = newline === -1 ? head : head.subarray(0, newline + 1);
+  return createHash("sha256").update(first).digest("hex").slice(0, 16);
 }
 
-async function markerExists(path: string): Promise<boolean> {
+function seenMarker(dir: string, identity: string, id: string): string {
+  return join(dir, `${identity}.${id}${SEEN_SUFFIX}`);
+}
+
+/** True when the marker's event starts inside the default read window of a `size`-byte ledger. */
+async function seenInWindow(path: string, size: number): Promise<boolean> {
   const handle = await openStateFile(path, constants.O_RDONLY);
   if (handle === null) return false;
-  await handle.close();
-  return true;
+  try {
+    const text = (await handle.readFile()).toString("utf8");
+    // A malformed marker counts as absent: at worst the choice is appended once more.
+    return OFFSET.test(text) && size - Number(text) <= MAX_LEDGER_BYTES;
+  } finally {
+    await handle.close();
+  }
 }
 
-async function writeMarker(path: string): Promise<void> {
+async function writeMarker(path: string, offset: number): Promise<void> {
+  const handle = await openStateFile(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC);
+  if (handle === null) throw new Error(`GAP_LEDGER_UNWRITABLE: ${path} could not be opened`);
   try {
-    const handle = await openStateFile(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);
-    await handle?.close();
-  } catch (error) {
-    // Another append marked the same choice first; the fold keeps one record per id.
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    await handle.write(String(offset));
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Deletes every marker that does not belong to the ledger named `identity`. */
+async function pruneMarkers(dir: string, identity: string): Promise<void> {
+  for (const name of await readdir(dir)) {
+    if (!name.endsWith(SEEN_SUFFIX) || name.startsWith(`${identity}.`)) continue;
+    try {
+      await unlink(join(dir, name));
+    } catch (error) {
+      // A concurrent prune got there first.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
 }
 
@@ -256,26 +299,40 @@ async function appendEvents(root: string, vaultId: string, events: readonly GapE
   const dir = await ensureStateDir(root, vaultId, "gaps");
   const path = join(dir, GAP_EVENTS_FILE);
   await serialize(path, async () => {
-    const pending: GapEvent[] = [];
-    for (const event of events) {
-      if (!recordedOnce(event) || !await markerExists(seenMarker(dir, event.id))) pending.push(event);
-    }
-    if (pending.length === 0) return;
     const handle = await openStateFile(path, constants.O_RDWR | constants.O_APPEND | constants.O_CREAT);
     if (handle === null) throw new Error(`GAP_LEDGER_UNWRITABLE: ${path} could not be opened`);
+    let identity: string | null;
+    let fresh: boolean;
+    const offsets = new Map<string, number>();
     try {
-      // Only the last byte decides whether a cut-short line needs closing, whatever the ledger's size.
       const { size } = await handle.stat();
+      identity = await ledgerIdentity(handle, size);
+      fresh = identity === null;
+      const pending: GapEvent[] = [];
+      for (const event of events) {
+        if (!recordedOnce(event) || identity === null || !await seenInWindow(seenMarker(dir, identity, event.id), size)) pending.push(event);
+      }
+      if (pending.length === 0) return;
+      // Only the last byte decides whether a cut-short line needs closing, whatever the ledger's size.
       const last = Buffer.alloc(1);
       const endsClean = size === 0 || (await handle.read(last, 0, 1, size - 1)).bytesRead === 1 && last[0] === NEWLINE;
+      const lines = pending.map(event => `${JSON.stringify(event)}\n`);
+      let offset = size + (endsClean ? 0 : 1);
+      for (const [index, event] of pending.entries()) {
+        if (recordedOnce(event)) offsets.set(event.id, offset);
+        offset += Buffer.byteLength(lines[index]!);
+      }
       // A cut-short last line keeps its bytes; the new events start on the next line.
-      await handle.write(`${endsClean ? "" : "\n"}${pending.map(event => `${JSON.stringify(event)}\n`).join("")}`);
+      await handle.write(`${endsClean ? "" : "\n"}${lines.join("")}`);
       await handle.sync();
+      identity ??= await ledgerIdentity(handle, offset);
     } finally {
       await handle.close();
     }
+    if (identity === null) return;
+    if (fresh) await pruneMarkers(dir, identity);
     // The marker follows the append, so a failed append never hides a choice from the next write.
-    for (const event of pending) if (recordedOnce(event)) await writeMarker(seenMarker(dir, event.id));
+    for (const [id, offset] of offsets) await writeMarker(seenMarker(dir, identity, id), offset);
   });
 }
 

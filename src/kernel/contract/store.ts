@@ -81,6 +81,11 @@ function isBound(value: unknown): boolean {
   return value === undefined || typeof value === "string" || typeof value === "number" && Number.isFinite(value);
 }
 
+/** A count bound is a member count: absent, or a whole number no less than zero. */
+function isCountBound(value: unknown): boolean {
+  return value === undefined || Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
 function isRule(value: unknown): value is Rule {
   if (!record(value)) return false;
   switch (value["kind"]) {
@@ -91,6 +96,7 @@ function isRule(value: unknown): value is Rule {
       try { new RegExp(value["regex"], "u"); return true; } catch { return false; }
     }
     case "range": return onlyKeys(value, ["kind"], ["min", "max"]) && isBound(value["min"]) && isBound(value["max"]);
+    case "count": return onlyKeys(value, ["kind"], ["min", "max"]) && isCountBound(value["min"]) && isCountBound(value["max"]);
     default: return false;
   }
 }
