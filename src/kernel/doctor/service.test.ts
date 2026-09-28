@@ -7,6 +7,8 @@ import { assembleCoreSemanticEngine, assembleGraphOnlyEngine } from "../engine/a
 import * as engineStoreRepair from "../engine/embed/repair.js";
 import { engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../engine/paths.js";
 import { writeContractVault } from "../contract/contract-vault-fixture.js";
+import { syncEngineStore } from "../engine/embed/sync.js";
+import { listDirtyQueue, updateKeywordIndex } from "../engine/index-update.js";
 import { repairDoctor } from "./service.js";
 
 let roots: string[] = [];
@@ -355,5 +357,65 @@ describe("doctor repair service", () => {
     await expect(access(engineNodeCachePath(vault))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access(path.join(vault, ".oms", "cache"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access(path.join(vault, ".oms", "engine-store.sqlite"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("doctor sync-embeddings drains the write queue", () => {
+  async function queuedVault(): Promise<string> {
+    const vault = await makeVault();
+    expect((await syncEngineStore({ vault, embed: false })).available).toBe(true);
+    expect(await updateKeywordIndex({ vault, relPath: "notes/note.md" })).toBe("updated");
+    expect(listDirtyQueue(engineStorePath(vault))).toEqual(["notes/note.md"]);
+    return vault;
+  }
+
+  it("dequeues notes the embedding sync re-embedded and reports the counts", async () => {
+    const vault = await queuedVault();
+    const engine = assembleCoreSemanticEngine({ vault });
+    try {
+      // A lexical pass rewrites the re-marked digests, which is what a real re-embed leaves behind.
+      const sync = vi.spyOn(engine.adapter, "syncEmbeddings").mockImplementation(async options => ({ ...(await syncEngineStore({ ...options, embed: false })), available: true }));
+      const result = await repairDoctor({ operation: "sync-embeddings", vault, source: "vault", resolveAdapter: () => engine.adapter });
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ kind: "completed", value: { queue: { drained: 1, pending: 0 } } });
+      expect(listDirtyQueue(engineStorePath(vault))).toEqual([]);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("keeps a note queued when the sync did not re-embed it", async () => {
+    const vault = await queuedVault();
+    const engine = assembleCoreSemanticEngine({ vault });
+    try {
+      vi.spyOn(engine.adapter, "syncEmbeddings").mockImplementation(async options => ({
+        available: true, collection: "vault", dbPath: engineStorePath(options.vault), scanned: 0, added: 0, updated: 0, skipped: 0,
+      }));
+      const result = await repairDoctor({ operation: "sync-embeddings", vault, source: "vault", resolveAdapter: () => engine.adapter });
+      expect(result).toMatchObject({ kind: "completed", value: { queue: { drained: 0, pending: 1 } } });
+      expect(listDirtyQueue(engineStorePath(vault))).toEqual(["notes/note.md"]);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("leaves the queue alone for a lexical-only sync or an unavailable embedder", async () => {
+    const vault = await queuedVault();
+    const engine = assembleCoreSemanticEngine({ vault });
+    try {
+      const lexical = await repairDoctor({ operation: "sync-embeddings", vault, source: "vault", args: { embed: false }, resolveAdapter: () => engine.adapter });
+      expect(lexical.kind).toBe("completed");
+      if (lexical.kind === "completed") expect(lexical.value).not.toHaveProperty("queue");
+      expect(listDirtyQueue(engineStorePath(vault))).toEqual(["notes/note.md"]);
+
+      vi.spyOn(engine.adapter, "syncEmbeddings").mockImplementation(async options => ({
+        available: false, reason: "no provider", collection: "vault", dbPath: engineStorePath(options.vault), scanned: 0, added: 0, updated: 0, skipped: 0,
+      }));
+      const unavailable = await repairDoctor({ operation: "sync-embeddings", vault, source: "vault", resolveAdapter: () => engine.adapter });
+      expect(unavailable).toMatchObject({ kind: "completed", value: { available: false } });
+      expect(listDirtyQueue(engineStorePath(vault))).toEqual(["notes/note.md"]);
+    } finally {
+      await engine.dispose();
+    }
   });
 });

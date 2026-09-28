@@ -84,6 +84,24 @@ describe("contract store", () => {
     expect(await readStore(ID, root)).toEqual({ state: "ok", contract: open });
   });
 
+  it("round-trips a template meaning", async () => {
+    const meant: VaultContract = { ...CONTRACT, templates: { Meeting: { ...CONTRACT.templates["Meeting"]!, meaning: "one meeting" } } };
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: meant }, root);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: meant });
+    const manifest = JSON.parse(await readFile(join(await generation(), "manifest.json"), "utf8")) as { version: number };
+    expect(manifest.version).toBe(2);
+  });
+
+  it("still reads a version 1 manifest", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    const manifest = join(await generation(), "manifest.json");
+    const parsed = JSON.parse(await readFile(manifest, "utf8")) as { version: number };
+    await writeFile(manifest, JSON.stringify({ ...parsed, version: 1 }));
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    await writeFile(manifest, JSON.stringify({ ...parsed, version: 3 }));
+    expect(await readStore(ID, root)).toEqual({ state: "unreadable" });
+  });
+
   it("treats an altered file as unreadable", async () => {
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
     await writeFile(join(await generation(), "folders.json"), "{\"version\":1,\"folders\":{}}\n");

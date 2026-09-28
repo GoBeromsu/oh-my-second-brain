@@ -99,7 +99,7 @@ function selectedTemplate(options: ConformOptions): TemplateContract | undefined
 
 function defaultValue(type: FieldType, now: Date): string | null {
   if (type === "date") return formatDate(now, "YYYY-MM-DD");
-  if (type === "datetime") return formatDate(now, "YYYY-MM-DDTHH:mm:ss");
+  if (type === "datetime") return `${formatDate(now, "YYYY-MM-DD")}T${formatDate(now, "HH:mm:ss")}`;
   return null;
 }
 
