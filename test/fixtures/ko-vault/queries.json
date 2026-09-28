@@ -1,0 +1,40 @@
+[
+  { "id": "exact-01", "query": "낙상판정기준", "type": "exact", "description": "Compound proper noun that is also a note title", "expected_files": ["Resources/낙상판정기준.md"], "expected_in_top_k": 3 },
+  { "id": "exact-02", "query": "Morse Fall Scale", "type": "exact", "description": "English proper noun title", "expected_files": ["Resources/Morse Fall Scale.md"], "expected_in_top_k": 3 },
+  { "id": "exact-03", "query": "다제내성균 격리", "type": "exact", "description": "Exact body keywords, one note", "expected_files": ["Areas/감염 관리.md"], "expected_in_top_k": 3 },
+  { "id": "exact-04", "query": "IRB 승인", "type": "exact", "description": "Acronym plus Korean noun in one note", "expected_files": ["Areas/연구 윤리.md"], "expected_in_top_k": 3 },
+  { "id": "exact-05", "query": "와파린", "type": "exact", "description": "Single drug name inside a table", "expected_files": ["Resources/약물 상호작용표.md"], "expected_in_top_k": 3 },
+
+  { "id": "para-01", "query": "낙상판정기준을 어디서 확인하나", "type": "paraphrase", "description": "Particle attached to the compound (을)", "expected_files": ["Resources/낙상판정기준.md"], "expected_in_top_k": 5 },
+  { "id": "para-02", "query": "위험평가", "type": "paraphrase", "description": "Spaced title written as one compound", "expected_files": ["지식/낙상 위험 평가.md"], "expected_in_top_k": 5 },
+  { "id": "para-03", "query": "단계분류", "type": "paraphrase", "description": "Infix of the compound 욕창단계분류", "expected_files": ["지식/욕창단계분류.md"], "expected_in_top_k": 5 },
+  { "id": "para-04", "query": "환자가 넘어졌을 때 판정 방법", "type": "paraphrase", "description": "Synonym for 낙상 with inflected verb", "expected_files": ["Resources/낙상판정기준.md"], "expected_in_top_k": 5 },
+  { "id": "para-05", "query": "몸의 자세를 바꿔주는 간격", "type": "paraphrase", "description": "Pure paraphrase of 체위변경 with no lexical overlap", "expected_files": ["Projects/욕창 관리 개선.md"], "expected_in_top_k": 5 },
+  { "id": "para-06", "query": "손 씻기 다섯 가지 시점", "type": "paraphrase", "description": "Pure paraphrase of 손위생 5 moments", "expected_files": ["지식/손위생지침.md"], "expected_in_top_k": 5 },
+
+  { "id": "mixed-01", "query": "near miss 보고", "type": "mixed", "description": "English term inside Korean sentence", "expected_files": ["Areas/환자 안전.md", "Daily/2026-09-03.md"], "expected_in_top_k": 5 },
+  { "id": "mixed-02", "query": "BM25 한국어 토크나이저", "type": "mixed", "description": "Acronym plus Korean nouns", "expected_files": ["Resources/BM25 검색.md"], "expected_in_top_k": 5 },
+  { "id": "mixed-03", "query": "EMR 알림 체위변경", "type": "mixed", "description": "Acronym plus Korean compound", "expected_files": ["Projects/욕창 관리 개선.md"], "expected_in_top_k": 5 },
+  { "id": "mixed-04", "query": "search tuning 복합어", "type": "mixed", "description": "English alias plus Korean noun", "expected_files": ["Projects/Search Engine 튜닝.md", "Daily/2026-09-02.md"], "expected_in_top_k": 5 },
+  { "id": "mixed-05", "query": "just culture 투약오류", "type": "mixed", "description": "English phrase plus Korean compound", "expected_files": ["Projects/투약오류 감소.md"], "expected_in_top_k": 5 },
+
+  { "id": "alias-01", "query": "MFS", "type": "alias", "description": "Abbreviation declared as an alias", "expected_files": ["Resources/Morse Fall Scale.md"], "expected_in_top_k": 3 },
+  { "id": "alias-02", "query": "Braden Scale", "type": "alias", "description": "English alias of a Korean title", "expected_files": ["Resources/브레이든 척도.md"], "expected_in_top_k": 3 },
+  { "id": "alias-03", "query": "Fall Criteria", "type": "alias", "description": "English alias of a Korean compound title", "expected_files": ["Resources/낙상판정기준.md"], "expected_in_top_k": 3 },
+  { "id": "alias-04", "query": "Hand Hygiene", "type": "alias", "description": "English alias of a Korean title", "expected_files": ["지식/손위생지침.md"], "expected_in_top_k": 3 },
+  { "id": "alias-05", "query": "Pressure Injury Staging", "type": "alias", "description": "English alias sharing words with another alias", "expected_files": ["지식/욕창단계분류.md"], "expected_in_top_k": 3 },
+  { "id": "alias-06", "query": "모스 척도", "type": "alias", "description": "Shortened Korean alias", "expected_files": ["Resources/Morse Fall Scale.md"], "expected_in_top_k": 5 },
+
+  { "id": "meta-01", "query": "template project status 보류", "type": "metadata", "description": "Only project note on hold", "expected_files": ["Projects/EMR 연동.md"], "expected_in_top_k": 5 },
+  { "id": "meta-02", "query": "template daily status 진행중", "type": "metadata", "description": "Only daily note in progress", "expected_files": ["Daily/2026-09-04.md"], "expected_in_top_k": 5 },
+  { "id": "meta-03", "query": "tags fall-prevention", "type": "metadata", "description": "Hyphenated English tag", "expected_files": ["Projects/낙상예방 프로젝트.md"], "expected_in_top_k": 5 },
+  { "id": "meta-04", "query": "tags medication-safety", "type": "metadata", "description": "Hyphenated English tag", "expected_files": ["Projects/투약오류 감소.md"], "expected_in_top_k": 5 },
+  { "id": "meta-05", "query": "template knowledge status 보류", "type": "metadata", "description": "Only knowledge note on hold", "expected_files": ["지식/임상추론.md"], "expected_in_top_k": 5 },
+
+  { "id": "neg-01", "query": "와파린 아스피린 출혈 위험", "type": "hard_negative", "description": "위험 appears in many fall notes; only the table is right", "expected_files": ["Resources/약물 상호작용표.md"], "expected_in_top_k": 3 },
+  { "id": "neg-02", "query": "수면제 복용 환자 낙상 재평가", "type": "hard_negative", "description": "Fall notes are distractors; the drug table is the answer", "expected_files": ["Resources/약물 상호작용표.md"], "expected_in_top_k": 3 },
+  { "id": "neg-03", "query": "MFS 45 이상 고위험", "type": "hard_negative", "description": "고위험 also appears in fall-risk and medication notes", "expected_files": ["Resources/Morse Fall Scale.md"], "expected_in_top_k": 3 },
+  { "id": "neg-04", "query": "브레이든 18점 이하 2시간 체위변경", "type": "hard_negative", "description": "The Braden resource is a distractor; the project note holds the rule", "expected_files": ["Projects/욕창 관리 개선.md"], "expected_in_top_k": 3 },
+  { "id": "neg-05", "query": "손위생 관찰 20건 중 18건 준수", "type": "hard_negative", "description": "Hand hygiene notes are distractors; the daily note holds the count", "expected_files": ["Daily/2026-09-03.md"], "expected_in_top_k": 3 },
+  { "id": "neg-06", "query": "낙상 손상 정도 중증 골절", "type": "hard_negative", "description": "Many notes mention 낙상; only the criteria note grades injury", "expected_files": ["Resources/낙상판정기준.md"], "expected_in_top_k": 3 }
+]
