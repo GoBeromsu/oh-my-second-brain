@@ -45,7 +45,7 @@ export type WriteOutcome =
   | { readonly kind: "rejected"; readonly rejection: WriteRejection }
   | { readonly kind: "denied"; readonly violations: readonly Violation[] }
   | { readonly kind: "if-match-required" }
-  | { readonly kind: "retry"; readonly state: "changed" | "vanished" }
+  | { readonly kind: "retry"; readonly state: "changed" | "vanished" | "absent" }
   | { readonly kind: "checked"; readonly check: WriteCheck }
   | { readonly kind: "written"; readonly receipt: WriteReceipt };
 
@@ -110,7 +110,8 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
     if (ifMatch === undefined) return { kind: "if-match-required" };
     if (resolved.previousContent === null || noteRevision(resolved.previousContent) !== ifMatch) return { kind: "retry", state: "changed" };
   } else if (ifMatch !== undefined) {
-    return { kind: "retry", state: "vanished" };
+    // The caller expected to replace a note that is not there; retrying without ifMatch creates it.
+    return { kind: "retry", state: "absent" };
   }
 
   const written = await atomicWriteNote(resolved.absolutePath, conformed.content, resolved.previousContent, deps.noteWrite);

@@ -34,8 +34,8 @@ const fixtures: TruthTableFixture[] = [];
 const scratch: string[] = [];
 let savedEnv: Record<string, string | undefined>;
 
-async function sealedVault(): Promise<TruthTableFixture> {
-  const fixture = await buildTruthTableRow("sealed", CONTRACT);
+async function sealedVault(contract: VaultContract = CONTRACT): Promise<TruthTableFixture> {
+  const fixture = await buildTruthTableRow("sealed", contract);
   fixtures.push(fixture);
   const home = path.join(fixture.base, "home");
   process.env["HOME"] = home;
@@ -184,10 +184,32 @@ describe("runWritePipeline", () => {
     expect(await readFile(target, "utf8")).toBe("changed\n");
   });
 
-  it("returns vanished when ifMatch is given for a note that does not exist", async () => {
+  it("returns absent when ifMatch is given for a note that does not exist, and creates it without ifMatch", async () => {
     const fixture = await sealedVault();
-    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "x\n", { ifMatch: sha256("x\n") }));
-    expect(outcome).toEqual({ kind: "retry", state: "vanished" });
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "x\n", { ifMatch: sha256("x\n") }), { now: () => NOW });
+    expect(outcome).toEqual({ kind: "retry", state: "absent" });
+    expect(await readdir(fixture.vault)).not.toContain("Projects");
+    const retried = await runWritePipeline(request(fixture, "Projects/a.md", "x\n"), { updateIndex: async () => "skipped", now: () => NOW });
+    expect(retried).toMatchObject({ kind: "written", receipt: { path: "Projects/a.md" } });
+  });
+
+  it("never defaults a date property a template requires, with or without the template", async () => {
+    const required: VaultContract = {
+      ...CONTRACT,
+      templates: { project: { ...CONTRACT.templates["project"]!, requiredProperties: ["created"] } },
+    };
+    const fixture = await sealedVault(required);
+    const content = "---\nstatus: active\n---\n## Goals\n";
+    for (const template of ["project", undefined]) {
+      const extra = template === undefined ? {} : { template };
+      const checked = await runWritePipeline(request(fixture, "Projects/a.md", content, { ...extra, check: true }), { now: () => NOW });
+      expect(checked).toMatchObject({ kind: "checked", check: { conformed: [] } });
+      if (template !== undefined) {
+        expect(checked).toMatchObject({ check: { ok: false, violations: [{ field: "created", kind: "missing" }] } });
+        const outcome = await runWritePipeline(request(fixture, "Projects/a.md", content, extra), { now: () => NOW });
+        expect(outcome).toEqual({ kind: "denied", violations: [expect.objectContaining({ field: "created", kind: "missing" })] });
+      }
+    }
     expect(await readdir(fixture.vault)).not.toContain("Projects");
   });
 

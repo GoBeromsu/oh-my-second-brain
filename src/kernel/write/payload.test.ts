@@ -36,9 +36,10 @@ describe("writePayload", () => {
     expect(writePayload({ kind: "if-match-required" })).toMatchObject({ ok: false, code: "WRITE_IF_MATCH_REQUIRED", kind: "if-match-required" });
   });
 
-  it("marks changed and vanished targets as retryable", () => {
+  it("marks changed, vanished and absent targets as retryable", () => {
     expect(writePayload({ kind: "retry", state: "changed" })).toMatchObject({ ok: false, code: "WRITE_TARGET_CHANGED", retryable: true });
     expect(writePayload({ kind: "retry", state: "vanished" })).toMatchObject({ ok: false, code: "WRITE_TARGET_VANISHED", retryable: true });
+    expect(writePayload({ kind: "retry", state: "absent" })).toMatchObject({ ok: false, code: "WRITE_TARGET_ABSENT", retryable: true, reason: expect.stringContaining("without ifMatch") });
   });
 
   it("flattens a check result", () => {
