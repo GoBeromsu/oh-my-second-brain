@@ -9,6 +9,9 @@ export function doctorUsage(): string {
 
   status [--vault <path>]
             Read-only vault health: contract posture, history, engine and graph.
+  status [--view status|collections|contexts] [--index <path>] [--collection <name>] [--vault <path>]
+            Read-only search-index view. --view, --index or --collection selects it;
+            it never creates a missing store.
   contract [--fix] [--vault <path>]
             Diagnose the sealed contract. --fix only re-indexes a moved or unindexed vault.
   audit [--folder <path>] [--max-per-template <n>] [--json] [--vault <path>]
@@ -25,6 +28,9 @@ export function doctorUsage(): string {
 }
 
 const SYNC_MODES = ["sync", "embed", "repair"] as const;
+
+/** Flags that select the read-only search-index view of `doctor status` instead of the vault report. */
+const INDEX_STATUS_FLAGS = new Set(["--view", "--index", "--collection"]);
 
 function fail(message: string): void {
   process.exitCode = 1;
@@ -65,6 +71,11 @@ export async function runDoctorCommand(argv: readonly string[]): Promise<void> {
   }
   switch (leaf) {
     case "status": {
+      if (rest.some((token) => INDEX_STATUS_FLAGS.has(token))) {
+        const { runIndexFamilyCommand } = await import("./search.js");
+        await runIndexFamilyCommand(["status", ...rest]);
+        return;
+      }
       const { runStatusCommand } = await import("./status-command.js");
       await runStatusCommand(rest);
       return;

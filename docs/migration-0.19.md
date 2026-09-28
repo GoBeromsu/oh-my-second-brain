@@ -17,7 +17,8 @@ The judge, the sealed contract, and the verified-target rules are unchanged. Onl
 | `oms note get` | `oms search --path <note>` | `search` with `path` |
 | `oms search query <text>`, `oms search context` | `oms search <text> [--mode ...]`, `oms search --context` | `search` with `op: query` / `op: context` |
 | `oms link suggest`, `oms link check` | `oms search --link <note>`, `oms doctor link-check <note>` | `search` with `op: link`, `doctor` with `op: link-check` |
-| `oms status`, `oms graph status`, `oms index status` | `oms doctor status` (read-only) | `doctor` with `op: status` |
+| `oms status`, `oms graph status` | `oms doctor status` (read-only; the report carries the `graph` section) | `doctor` with `op: status` |
+| `oms index status [--view status|collections|contexts]` | `oms doctor status --view status|collections|contexts [--index <path>] [--collection <name>]` (read-only; never creates a store) | `search` with `op: index-status` |
 | `oms contract doctor`, `oms note audit` | `oms doctor contract`, `oms doctor audit` | `doctor` with `op: validate` / `op: audit` |
 | `oms index sync|embed|repair`, `oms index clean`, `oms graph build` | `oms doctor sync-embeddings --mode sync|embed|repair`, `oms doctor cleanup`, `oms doctor build-graph` | `doctor` ops unchanged |
 | `oms contract setup|extract|status` | `oms setup`, `oms setup extract`, `oms setup status` | none |

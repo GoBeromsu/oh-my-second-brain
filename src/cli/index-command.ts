@@ -187,7 +187,7 @@ export async function runIndexCommand(options: IndexCommandOptions): Promise<num
       || (view !== "status" && view !== "collections" && view !== "contexts")
       || !onlyOptions(["index", "collection"])
     ) {
-      writeError("Usage: oms doctor status [--view status|collections|contexts] [--index <path>]");
+      writeError("Usage: oms doctor status [--view status|collections|contexts] [--index <path>] [--collection <name>] [--vault <path>]");
       return 1;
     }
     if (!existsSync(engineStorePath(vault))) {

@@ -9,7 +9,7 @@ import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { summarizeRuntimeHistory } from "../kernel/runtime/event-summary.js";
 
 function usage(): string {
-  return "Usage: oms doctor status [--vault <path>]";
+  return "Usage: oms doctor status [--vault <path>] | oms doctor status [--view status|collections|contexts] [--index <path>] [--collection <name>] [--vault <path>]";
 }
 
 function parseVault(argv: readonly string[]): string | undefined {

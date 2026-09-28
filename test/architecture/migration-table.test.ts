@@ -31,6 +31,7 @@ const CLI_PROBES: Readonly<Record<string, { readonly argv: readonly string[]; re
   "search --context": { argv: ["search", "--context"], marker: "unknown context flag" },
   "search --link": { argv: ["search", "--link", "note.md"], marker: "LINK_ARGS_INVALID" },
   "doctor status": { argv: ["doctor", "status"], marker: "STATUS_ARGS_INVALID" },
+  "doctor status --view": { argv: ["doctor", "status", "--view", "status"], marker: "is not valid for index status" },
   "doctor contract": { argv: ["doctor", "contract"], marker: "CONTRACT_ARGS_INVALID" },
   "doctor audit": { argv: ["doctor", "audit"], marker: "NOTE_ARGS_INVALID" },
   "doctor link-check": { argv: ["doctor", "link-check"], marker: "LINK_ARGS_INVALID" },

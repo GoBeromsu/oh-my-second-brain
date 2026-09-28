@@ -37,7 +37,7 @@ Both entrypoints call the same verified-target write kernel. Unknown or missing 
 | `oms search --link <note>` | `oms_search` | `link` | `notePath` required, `folder` optional. Suggests wikilinks without writing them. |
 | none | `oms_search` | `templates` | List sealed template axes. Reports `unavailable` when no contract is sealed. |
 | none | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window). |
-| none | `oms_search` | `index-status` | `view=status|collections|contexts` |
+| `oms doctor status --view status|collections|contexts` | `oms_search` | `index-status` | `view=status|collections|contexts`; the CLI also takes `--index <path>` and `--collection <name>`. Read-only; never creates a store. |
 
 A plain `oms search <text>` is lexical-only. Search is independent of the contract: lexical, vector, HyDE, and typed-axis queries still include notes that would fail it, and a missing or damaged contract does not stop search. Search does not write notes and does not create an engine store.
 
@@ -60,7 +60,7 @@ Sealing has no MCP operation. The sealed contract lives outside the vault under 
 
 | CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
-| `oms doctor status` | `oms_doctor` | `status` | Read-only health: contract posture, engine, and graph. Creates no store. |
+| `oms doctor status` | `oms_doctor` | `status` | Read-only health: contract posture, engine, and graph. Creates no store. With `--view`, `--index`, or `--collection` it prints the search-index view instead (see `index-status` under Search). |
 | `oms doctor contract [--fix]` | `oms_doctor` | `validate` | Diagnose the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures. `--fix` only re-indexes a moved or unindexed vault; the MCP op fixes nothing. |
 | `oms doctor audit` | `oms_doctor` | `audit` | Report `{path, field, kind}` entries for existing notes. Never rewrites a note. |
 | `oms doctor link-check [<note>]` | `oms_doctor` | `link-check` | Report broken wikilinks. |
