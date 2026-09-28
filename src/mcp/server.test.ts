@@ -382,6 +382,20 @@ describe("Oh My Second Brain MCP stdio server", () => {
     }
   });
 
+  it("formats an I/O failure of search {path} as an MCP error, such as a missing vault root", async () => {
+    const base = await mkdtemp(path.join(tmpdir(), "oms-mcp-search-path-missing-"));
+    const { client } = await connectInMemory(path.join(base, "no-vault"));
+    try {
+      const result = await client.callTool({ name: "search", arguments: { path: "a.md" } });
+      expect(result.isError).toBe(true);
+      const message = result.content[0]?.type === "text" ? result.content[0].text : "";
+      expect(message).toMatch(/^Oh My Second Brain MCP error: .*ENOENT/);
+    } finally {
+      await client.close();
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
   it("fails loudly for retired semantic-query and axis operation names", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,

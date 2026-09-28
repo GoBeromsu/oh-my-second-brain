@@ -554,7 +554,12 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       }
       const notePath = args["path"];
       if (typeof notePath !== "string") return errorText('SEARCH_ARGS_INVALID: "path" must be a vault-relative string.');
-      return jsonText(await readExactDocument(vault, notePath));
+      try {
+        return jsonText(await readExactDocument(vault, notePath));
+      } catch (error) {
+        // readExactDocument already reports path errors as a result; anything left is I/O.
+        return errorText(`Oh My Second Brain MCP error: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     const op = stringArg(args, "op");
     let name = resolveOperation(publicName, op);

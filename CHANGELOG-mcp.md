@@ -4,7 +4,7 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
-- **`search` accepts `{path}` with no `op` for an engine-free exact read of one note.** The call returns the same document shape as `oms search --path`, never opens the engine store or a model, and is refused when combined with `op` or any other argument; the tool schema advertises it as its own `oneOf` branch, so `op` is no longer top-level required for `search`.
+- **`search` accepts `{path}` with no `op` for an engine-free exact read of one note.** The call returns the same document shape as `oms search --path`, never opens the engine store or a model, and is refused when combined with `op` or any other argument. A path the caller got wrong returns `available: false`, while an I/O failure such as a missing vault root returns the same `Oh My Second Brain MCP error` result as every other tool; the tool schema advertises it as its own `oneOf` branch, so `op` is no longer top-level required for `search`.
 
 ## [0.18.3] - 2026-09-26
 
