@@ -8,17 +8,18 @@ import { resolveSealState, type SealState } from "../contract/vault-id.js";
 import type { Digest } from "../conventions/canonical.js";
 import type { WriteRejection, WriteTargetSource } from "../conventions/write-protocol.js";
 import { updateKeywordIndex, type KeywordUpdateOptions } from "../engine/index-update.js";
-import { resolveAmbiguity, type GapFinding } from "./ambiguity.js";
+import { resolveAmbiguity, type GapFinding, type Resolution } from "./ambiguity.js";
 import { conform } from "./conform.js";
 import { frameFor, type WriteFrame } from "./frame.js";
 import { atomicWriteNote, type NoteWriteDeps } from "./note-write.js";
-import { buildReceipt, contractRevision, noteRevision, type ConformChange, type KeywordIndexState, type ReceiptGap, type WriteReceipt } from "./receipt.js";
+import { buildReceipt, contractRevision, noteRevision, type ConformChange, type GapLedgerState, type KeywordIndexState, type ReceiptGap, type WriteReceipt } from "./receipt.js";
 
 /**
  * The one write path behind MCP `write` and CLI `oms write`:
- * frame -> conform -> judge -> ambiguity -> if-match -> atomic save -> gap ledger ->
- * keyword index -> vector queue. A refused write leaves the vault untouched; `check` stops
- * after the judge and writes nothing anywhere.
+ * frame -> conform -> judge -> ambiguity -> if-match -> draft or atomic save -> gap
+ * ledger -> keyword index -> vector queue. A refused write leaves the vault untouched;
+ * `check` runs the same ambiguity resolution, reports what the write would do, and writes
+ * nothing anywhere.
  *
  * The seal state is read once. The contract revision derived from it is the one the
  * judge, every recorded gap and the receipt name, so a seal landing mid-write cannot
@@ -48,6 +49,17 @@ export interface WriteCheck {
   readonly missingDefaults: readonly string[];
   readonly conformed: readonly ConformChange[];
   readonly frame: WriteFrame;
+  /** What the real write would do with the same content; `ok` stays the judge's verdict on it as written. */
+  readonly resolution: CheckResolution;
+}
+
+/** A write's ambiguity resolution as `check` predicts it: fields only, never values. */
+export interface CheckResolution {
+  readonly action: Resolution["action"];
+  /** The gaps the write would meet: fields it would drop or draft, and open choices. */
+  readonly gaps: readonly Omit<ReceiptGap, "id">[];
+  /** True when the write would keep the note as a draft beside the gap ledger. */
+  readonly wouldDraft: boolean;
 }
 
 export type WriteOutcome =
@@ -97,6 +109,11 @@ function gapInputs(findings: readonly GapFinding[], notePath: string, content: s
   }));
 }
 
+/** The gaps as the receipt lists them when the ledger did not record them: no ids. */
+function unrecorded(findings: readonly GapFinding[]): readonly ReceiptGap[] {
+  return findings.map(finding => ({ axis: finding.axis, kind: finding.kind, field: finding.wanted.field }));
+}
+
 export async function runWritePipeline(request: WriteRequest, overrides: Partial<WritePipelineDeps> = {}): Promise<WriteOutcome> {
   const deps: WritePipelineDeps = {
     noteWrite: {},
@@ -134,7 +151,18 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
   });
   const verdict = judgeReadyTarget(resolved, conformed.content, template);
 
+  const resolution = resolveAmbiguity({
+    view: resolved.view,
+    path: resolved.path,
+    content: conformed.content,
+    template,
+    previousContent: resolved.previousContent ?? undefined,
+    verdict,
+    rejudge: content => judgeReadyTarget(resolved, content, template),
+  });
+
   if (request.check === true) {
+    const findings = resolution.action === "refuse" ? [] : resolution.findings;
     return {
       kind: "checked",
       check: {
@@ -146,32 +174,14 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
         missingDefaults: verdict.missingDefaults,
         conformed: conformed.applied,
         frame,
+        resolution: { action: resolution.action, gaps: unrecorded(findings), wouldDraft: resolution.action === "draft" && ledger !== null },
       },
     };
   }
-  const resolution = resolveAmbiguity({
-    view: resolved.view,
-    path: resolved.path,
-    content: conformed.content,
-    template,
-    previousContent: resolved.previousContent ?? undefined,
-    verdict,
-    rejudge: content => judgeReadyTarget(resolved, content, template),
-  });
   if (resolution.action === "refuse") return { kind: "denied", violations: verdict.violations };
-  if (resolution.action === "draft") {
-    if (ledger === null || revision === null) return { kind: "denied", violations: verdict.violations };
-    try {
-      const draftRef = await writeGapDraft(ledger.root, ledger.vaultId, conformed.content, deps.gapLedger);
-      await recordGaps(ledger.root, ledger.vaultId, gapInputs(resolution.findings, resolved.path, conformed.content, revision, draftRef), deps.gapLedger);
-      return { kind: "denied", violations: verdict.violations, draftRef };
-    } catch {
-      // The judge refused the note either way; a ledger that cannot be written only loses the draft.
-      return { kind: "denied", violations: verdict.violations };
-    }
-  }
 
-  // An overwrite must name the revision it replaces; a new note must not expect one.
+  // An overwrite must name the revision it replaces; a new note must not expect one. This
+  // runs before the draft, so a stale or missing ifMatch keeps nothing and records nothing.
   if (resolved.previousContent !== undefined) {
     if (ifMatch === undefined) return { kind: "if-match-required" };
     if (resolved.previousContent === null || noteRevision(resolved.previousContent) !== ifMatch) return { kind: "retry", state: "changed" };
@@ -180,17 +190,40 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
     return { kind: "retry", state: "absent" };
   }
 
+  if (resolution.action === "draft") {
+    if (ledger === null || revision === null) return { kind: "denied", violations: verdict.violations };
+    let draftRef: string;
+    try {
+      draftRef = await writeGapDraft(ledger.root, ledger.vaultId, conformed.content, deps.gapLedger);
+    } catch {
+      // The judge refused the note either way; a state dir that cannot be written only loses the draft.
+      return { kind: "denied", violations: verdict.violations };
+    }
+    try {
+      await recordGaps(ledger.root, ledger.vaultId, gapInputs(resolution.findings, resolved.path, conformed.content, revision, draftRef), deps.gapLedger);
+    } catch {
+      // The draft is kept; its ref still reaches the caller even though no gap points at it.
+    }
+    return { kind: "denied", violations: verdict.violations, draftRef };
+  }
+
   const written = await atomicWriteNote(resolved.absolutePath, resolution.content, resolved.previousContent, deps.noteWrite);
   if (written !== "written") return { kind: "retry", state: written };
   let gaps: readonly ReceiptGap[] = [];
-  let gapLedger: "failed" | undefined;
-  if (ledger !== null && revision !== null && resolution.findings.length > 0) {
-    try {
-      const records = await recordGaps(ledger.root, ledger.vaultId, gapInputs(resolution.findings, resolved.path, resolution.content, revision), deps.gapLedger);
-      gaps = records.map(record => ({ id: record.id, axis: record.axis, kind: record.kind, field: record.wanted.field }));
-    } catch {
-      // The note is saved; the receipt says its gaps were not recorded instead of failing the write.
-      gapLedger = "failed";
+  let gapLedger: GapLedgerState | undefined;
+  if (resolution.findings.length > 0) {
+    if (ledger === null || revision === null) {
+      gaps = unrecorded(resolution.findings);
+      gapLedger = "unavailable";
+    } else {
+      try {
+        const records = await recordGaps(ledger.root, ledger.vaultId, gapInputs(resolution.findings, resolved.path, resolution.content, revision), deps.gapLedger);
+        gaps = records.map(record => ({ id: record.id, axis: record.axis, kind: record.kind, field: record.wanted.field }));
+      } catch {
+        // The note is saved; the receipt still lists what it dropped, without ids, instead of failing the write.
+        gaps = unrecorded(resolution.findings);
+        gapLedger = "failed";
+      }
     }
   }
   const keyword = await deps.updateIndex({ vault: path.resolve(vault), relPath: resolved.path });

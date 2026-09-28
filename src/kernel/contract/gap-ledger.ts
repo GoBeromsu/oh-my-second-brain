@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { join } from "node:path";
-import type { Digest } from "../conventions/canonical.js";
+import { compareCodePoints, type Digest } from "../conventions/canonical.js";
 import { ensureStateDir, existingStateDir, openStateFile } from "./state-dir.js";
 import type { JsonScalar } from "./types.js";
 
@@ -17,6 +18,17 @@ import type { JsonScalar } from "./types.js";
  * and fsynced, a cut-short line skipped and reported but never rewritten, and appends
  * serialized within a process. The open gap set is a pure fold over the events, so
  * replaying the same events always gives the same set.
+ *
+ * The ledger never refuses an append for its size. A read keeps only the newest
+ * `maxBytes` (16 MiB by default) and says so with `truncated`; gaps recorded before that
+ * window are no longer reported. To start over, move `events.jsonl` aside (for example to
+ * `events.<date>.jsonl`): the next append creates a fresh ledger, and the old file stays
+ * readable as plain JSON lines.
+ *
+ * A ② choice is recorded once per note, set of candidates and contract revision. Its id
+ * is derived from that key, and a `<id>.seen` marker beside the ledger keeps a repeated
+ * identical write from appending it again, so a resolved choice stays closed until the
+ * contract or the candidates change.
  */
 
 export const GAP_AXES = ["folder", "property", "value", "template"] as const;
@@ -58,6 +70,13 @@ export interface GapLedger {
   readonly events: readonly GapEvent[];
   /** 1-based line numbers that did not parse as an event. */
   readonly corrupt: readonly number[];
+  /** Present when the ledger outgrew the read window and only its newest events were read. */
+  readonly truncated?: true;
+}
+
+export interface GapLedgerReadOptions {
+  /** How many of the ledger's newest bytes a read keeps; older events are skipped. */
+  readonly maxBytes?: number;
 }
 
 export interface GapLedgerDeps {
@@ -67,6 +86,8 @@ export interface GapLedgerDeps {
 
 export const GAP_EVENTS_FILE = "events.jsonl";
 const MAX_LEDGER_BYTES = 16 * 1024 * 1024;
+const SCAN_CHUNK_BYTES = 1024 * 1024;
+const NEWLINE = 0x0a;
 const AXES: ReadonlySet<string> = new Set(GAP_AXES);
 const KINDS: ReadonlySet<string> = new Set(GAP_KINDS);
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
@@ -111,40 +132,63 @@ function parseEvent(line: string): GapEvent | null {
   return event as unknown as GapEvent;
 }
 
-function parseLedger(text: string): GapLedger & { readonly endsClean: boolean } {
+function parseLedger(text: string): GapLedger {
   const events: GapEvent[] = [];
   const corrupt: number[] = [];
-  const lines = text.split("\n");
-  // A final newline leaves one empty element behind; anything else there is a cut-short line.
-  const endsClean = lines.at(-1) === "";
-  if (endsClean) lines.pop();
-  for (const [index, line] of lines.entries()) {
+  // A final newline leaves one empty element behind; a cut-short last line is reported corrupt.
+  for (const [index, line] of text.split("\n").entries()) {
     if (line === "") continue;
     const event = parseEvent(line);
     if (event === null) corrupt.push(index + 1);
     else events.push(event);
   }
-  return { events, corrupt, endsClean };
+  return { events, corrupt };
 }
 
-async function readText(path: string): Promise<string> {
-  const handle = await openStateFile(path, constants.O_RDONLY);
-  if (handle === null) return "";
+/** Newlines in the first `end` bytes, counted a chunk at a time so memory stays bounded. */
+async function countLines(handle: FileHandle, end: number): Promise<number> {
+  const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, end));
+  let lines = 0;
+  for (let position = 0; position < end;) {
+    const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, end - position), position);
+    if (bytesRead === 0) break;
+    for (let index = 0; index < bytesRead; index += 1) if (buffer[index] === NEWLINE) lines += 1;
+    position += bytesRead;
+  }
+  return lines;
+}
+
+/**
+ * Every event in append order. An absent ledger or state directory reads as empty; nothing
+ * is created. A ledger larger than `maxBytes` is read from its newest `maxBytes` only,
+ * starting at the first whole line, and comes back `truncated`; corrupt line numbers stay
+ * counted from the start of the file.
+ */
+export async function readGapLedger(root: string, vaultId: string, options: GapLedgerReadOptions = {}): Promise<GapLedger> {
+  const maxBytes = options.maxBytes ?? MAX_LEDGER_BYTES;
+  const dir = await existingStateDir(root, vaultId, "gaps");
+  if (dir === null) return { events: [], corrupt: [] };
+  const handle = await openStateFile(join(dir, GAP_EVENTS_FILE), constants.O_RDONLY);
+  if (handle === null) return { events: [], corrupt: [] };
   try {
-    const info = await handle.stat();
-    if (info.size > MAX_LEDGER_BYTES) throw new Error(`GAP_LEDGER_TOO_LARGE: ${path} exceeds ${MAX_LEDGER_BYTES} bytes`);
-    return (await handle.readFile()).toString("utf8");
+    const { size } = await handle.stat();
+    if (size <= maxBytes) {
+      const { events, corrupt } = parseLedger((await handle.readFile()).toString("utf8"));
+      return { events, corrupt };
+    }
+    // One byte before the window is read too, so a window opening exactly on a line keeps it.
+    const start = size - maxBytes - 1;
+    const window = Buffer.alloc(maxBytes + 1);
+    const { bytesRead } = await handle.read(window, 0, window.length, start);
+    // The window may open mid-line; that partial line is skipped with everything before it.
+    const cut = window.subarray(0, bytesRead).indexOf(NEWLINE) + 1;
+    const skippedLines = cut === 0 ? 0 : await countLines(handle, start + cut);
+    const text = cut === 0 ? "" : window.subarray(cut, bytesRead).toString("utf8");
+    const { events, corrupt } = parseLedger(text);
+    return { events, corrupt: corrupt.map(line => line + skippedLines), truncated: true };
   } finally {
     await handle.close();
   }
-}
-
-/** Every event in append order. An absent ledger or state directory reads as empty; nothing is created. */
-export async function readGapLedger(root: string, vaultId: string): Promise<GapLedger> {
-  const dir = await existingStateDir(root, vaultId, "gaps");
-  if (dir === null) return { events: [], corrupt: [] };
-  const { events, corrupt } = parseLedger(await readText(join(dir, GAP_EVENTS_FILE)));
-  return { events, corrupt };
 }
 
 /**
@@ -181,29 +225,75 @@ function serialize<T>(key: string, task: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** A ② choice is recorded once per key; see the module comment. */
+function recordedOnce(event: GapEvent): boolean {
+  return event.type === "gap" && event.kind === "choice";
+}
+
+function seenMarker(dir: string, id: string): string {
+  return join(dir, `${id}.seen`);
+}
+
+async function markerExists(path: string): Promise<boolean> {
+  const handle = await openStateFile(path, constants.O_RDONLY);
+  if (handle === null) return false;
+  await handle.close();
+  return true;
+}
+
+async function writeMarker(path: string): Promise<void> {
+  try {
+    const handle = await openStateFile(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);
+    await handle?.close();
+  } catch (error) {
+    // Another append marked the same choice first; the fold keeps one record per id.
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+}
+
 async function appendEvents(root: string, vaultId: string, events: readonly GapEvent[]): Promise<void> {
   if (events.length === 0) return;
-  const path = join(await ensureStateDir(root, vaultId, "gaps"), GAP_EVENTS_FILE);
+  const dir = await ensureStateDir(root, vaultId, "gaps");
+  const path = join(dir, GAP_EVENTS_FILE);
   await serialize(path, async () => {
-    const current = parseLedger(await readText(path));
-    // A cut-short last line keeps its bytes; the new events start on the next line.
-    const text = `${current.endsClean ? "" : "\n"}${events.map(event => `${JSON.stringify(event)}\n`).join("")}`;
-    const handle = await openStateFile(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT);
+    const pending: GapEvent[] = [];
+    for (const event of events) {
+      if (!recordedOnce(event) || !await markerExists(seenMarker(dir, event.id))) pending.push(event);
+    }
+    if (pending.length === 0) return;
+    const handle = await openStateFile(path, constants.O_RDWR | constants.O_APPEND | constants.O_CREAT);
     if (handle === null) throw new Error(`GAP_LEDGER_UNWRITABLE: ${path} could not be opened`);
     try {
-      await handle.write(text);
+      // Only the last byte decides whether a cut-short line needs closing, whatever the ledger's size.
+      const { size } = await handle.stat();
+      const last = Buffer.alloc(1);
+      const endsClean = size === 0 || (await handle.read(last, 0, 1, size - 1)).bytesRead === 1 && last[0] === NEWLINE;
+      // A cut-short last line keeps its bytes; the new events start on the next line.
+      await handle.write(`${endsClean ? "" : "\n"}${pending.map(event => `${JSON.stringify(event)}\n`).join("")}`);
       await handle.sync();
     } finally {
       await handle.close();
     }
+    // The marker follows the append, so a failed append never hides a choice from the next write.
+    for (const event of pending) if (recordedOnce(event)) await writeMarker(seenMarker(dir, event.id));
   });
 }
 
-/** Records `gaps` in one fsynced append and returns them with their ids and time. */
+/** The stable id of a ② choice: its note, its sorted candidates and the contract revision. */
+export function choiceGapId(gap: Pick<GapInput, "notePath" | "wanted" | "contractRevision">): string {
+  const candidates = Array.isArray(gap.wanted.value) ? gap.wanted.value.map(String).sort(compareCodePoints) : [];
+  const key = JSON.stringify([gap.notePath, candidates, gap.contractRevision]);
+  return `choice-${createHash("sha256").update(key).digest("hex")}`;
+}
+
+/**
+ * Records `gaps` in one fsynced append and returns them with their ids and time. A ②
+ * choice takes its stable id and is appended only the first time it is seen.
+ */
 export async function recordGaps(root: string, vaultId: string, gaps: readonly GapInput[], overrides: Partial<GapLedgerDeps> = {}): Promise<readonly GapRecord[]> {
   const deps = defaults(overrides);
   const at = deps.now();
-  const records = gaps.map(gap => ({ id: deps.newId(), at, ...gap }));
+  const records = gaps.map(gap => ({ id: gap.kind === "choice" ? choiceGapId(gap) : deps.newId(), at, ...gap }));
   await appendEvents(root, vaultId, records.map(record => ({ type: "gap" as const, ...record })));
   return records;
 }

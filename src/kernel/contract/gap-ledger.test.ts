@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  GAP_EVENTS_FILE, openGaps, readGapDraft, readGapLedger, recordGaps, resolveGap, writeGapDraft,
+  GAP_EVENTS_FILE, choiceGapId, openGaps, readGapDraft, readGapLedger, recordGaps, resolveGap, writeGapDraft,
   type GapEvent, type GapInput,
 } from "./gap-ledger.js";
 import { stateDir } from "./state-dir.js";
@@ -126,10 +126,59 @@ describe("gap ledger", () => {
     expect(await readGapDraft(root, VAULT_ID, "../events.jsonl")).toBeNull();
   });
 
-  it("refuses a ledger that is too large or not a regular file", async () => {
+  it("keeps appending past the read window and reads the newest events, marked truncated", async () => {
+    await recordGaps(root, VAULT_ID, [gap("a"), gap("b")], { now: () => 1, newId: ids("g1", "g2") });
+    await appendFile(ledgerPath(), "not json\n");
+    await recordGaps(root, VAULT_ID, [gap("c")], { now: () => 2, newId: ids("g3") });
+    const whole = await readGapLedger(root, VAULT_ID);
+    expect(whole).toEqual({ events: expect.any(Array), corrupt: [3] });
+    const size = (await stat(ledgerPath())).size;
+    const lastLine = (await readFile(ledgerPath(), "utf8")).trimEnd().split("\n").at(-1)!;
+    // A window a few bytes wider than the last two lines cuts into the second event mid-line.
+    const window = lastLine.length + "not json\n".length + 2;
+    const read = await readGapLedger(root, VAULT_ID, { maxBytes: window });
+    expect(read.truncated).toBe(true);
+    expect(read.events.map(event => event.id)).toEqual(["g3"]);
+    expect(read.corrupt).toEqual([3]);
+    const newest = await readGapLedger(root, VAULT_ID, { maxBytes: lastLine.length + 1 });
+    expect(newest).toMatchObject({ corrupt: [], truncated: true });
+    expect(newest.events.map(event => event.id)).toEqual(["g3"]);
+    await recordGaps(root, VAULT_ID, [gap("d")], { now: () => 3, newId: ids("g4") });
+    expect((await stat(ledgerPath())).size).toBeGreaterThan(size);
+    expect((await readGapLedger(root, VAULT_ID, { maxBytes: window })).events.map(event => event.id)).toEqual(["g4"]);
+  });
+
+  it("appends to and reads the newest window of a ledger past the default cap without throwing", async () => {
     await recordGaps(root, VAULT_ID, [gap("a")], { newId: ids("g1") });
     await truncate(ledgerPath(), 16 * 1024 * 1024 + 1);
-    await expect(readGapLedger(root, VAULT_ID)).rejects.toThrow("GAP_LEDGER_TOO_LARGE");
+    await recordGaps(root, VAULT_ID, [gap("b")], { newId: ids("g2") });
+    const read = await readGapLedger(root, VAULT_ID);
+    expect(read.truncated).toBe(true);
+    expect(read.events.map(event => event.id)).toEqual(["g2"]);
+  });
+
+  it("records a repeated template choice once, keeps it closed once resolved, and records it anew under a new contract", async () => {
+    const choice = (candidates: string[], extra: Partial<GapInput> = {}): GapInput =>
+      gap("template", { axis: "template", kind: "choice", wanted: { field: "template", value: candidates }, ...extra });
+    const first = await recordGaps(root, VAULT_ID, [choice(["Standup", "Review"])], { now: () => 1 });
+    const id = choiceGapId(choice(["Review", "Standup"]));
+    expect(first.map(record => record.id)).toEqual([id]);
+    expect(await readdir(gapsDir())).toEqual(expect.arrayContaining([GAP_EVENTS_FILE, `${id}.seen`]));
+    const again = await recordGaps(root, VAULT_ID, [choice(["Review", "Standup"], { noteRevision: `sha256:${"c".repeat(64)}` }), gap("mood")], { now: () => 2, newId: ids("g1") });
+    expect(again.map(record => record.id)).toEqual([id, "g1"]);
+    expect((await readGapLedger(root, VAULT_ID)).events.map(event => event.id)).toEqual([id, "g1"]);
+    await resolveGap(root, VAULT_ID, id, "picked Review");
+    await recordGaps(root, VAULT_ID, [choice(["Review", "Standup"])]);
+    expect(openGaps((await readGapLedger(root, VAULT_ID)).events).map(record => record.id)).toEqual(["g1"]);
+    const revised = choice(["Review", "Standup"], { contractRevision: `sha256:${"d".repeat(64)}` });
+    expect(choiceGapId(revised)).not.toBe(id);
+    expect(choiceGapId(choice(["Review", "Daily"]))).not.toBe(id);
+    await recordGaps(root, VAULT_ID, [revised]);
+    expect(openGaps((await readGapLedger(root, VAULT_ID)).events).map(record => record.id)).toEqual(["g1", choiceGapId(revised)]);
+  });
+
+  it("refuses a ledger that is not a regular file", async () => {
+    await recordGaps(root, VAULT_ID, [gap("a")], { newId: ids("g1") });
     await rm(ledgerPath());
     const elsewhere = join(base, "elsewhere.jsonl");
     await writeFile(elsewhere, "");

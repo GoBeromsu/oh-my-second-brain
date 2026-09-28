@@ -214,8 +214,85 @@ describe("runWritePipeline", () => {
       { now: () => NOW, updateIndex: async () => "skipped", gapLedger: { newId: () => { throw new Error("no ids"); } } },
     );
     expect(outcome).toMatchObject({ kind: "written", receipt: { ok: true, gapLedger: "failed" } });
-    expect(outcome.kind === "written" ? outcome.receipt.gaps : "absent").toBeUndefined();
+    // The dropped field is still reported, without an id, so the loss is never silent.
+    expect(outcome.kind === "written" ? outcome.receipt.gaps : "absent").toEqual([{ axis: "value", kind: "no-fit", field: "status" }]);
     expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nBody\n");
+  });
+
+  it("saves the nearest valid form and lists the dropped fields without ids when the vault has no ledger", async () => {
+    const fixture = await sealedVault();
+    const resolveSeal = vi.fn(async (vault: string) => ({ ...(await resolveSealState(vault, fixture.root)), vaultId: null }));
+    const outcome = await runWritePipeline(
+      request(fixture, "Projects/a.md", "---\nstatus: paused\nmood: calm\n---\nBody\n"),
+      { now: () => NOW, updateIndex: async () => "skipped", resolveSealState: resolveSeal },
+    );
+    expect(outcome).toMatchObject({ kind: "written", receipt: { ok: true, gapLedger: "unavailable" } });
+    expect(outcome.kind === "written" ? outcome.receipt.gaps : "absent").toEqual([
+      { axis: "property", kind: "no-fit", field: "mood" },
+      { axis: "value", kind: "no-fit", field: "status" },
+    ]);
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nBody\n");
+    expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
+  });
+
+  it("still returns the draft ref when the draft is kept but its gaps cannot be recorded", async () => {
+    const fixture = await sealedVault();
+    const uuid = "00000000-0000-4000-8000-000000000002";
+    const newId = vi.fn().mockReturnValueOnce(uuid).mockImplementation(() => { throw new Error("no ids"); });
+    const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"), { now: () => NOW, gapLedger: { newId } });
+    expect(outcome).toEqual({ kind: "denied", violations: [expect.objectContaining({ kind: "unregistered-folder" })], draftRef: `draft-${uuid}.md` });
+    expect(await readGapDraft(fixture.root, fixture.vaultId, `draft-${uuid}.md`)).toBe("---\ncreated: 2026-09-28\n---\nx\n");
+    expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
+  });
+
+  it("checks the ifMatch before drafting, so a stale or missing ifMatch keeps no draft and records nothing", async () => {
+    const fixture = await sealedVault({ ...CONTRACT, properties: { ...CONTRACT.properties!, status: { ...CONTRACT.properties!["status"]!, required: true } } });
+    await mkdir(path.join(fixture.vault, "Projects"));
+    const target = path.join(fixture.vault, "Projects", "a.md");
+    await writeFile(target, "---\nstatus: active\n---\noriginal\n");
+    const store = path.join(fixture.base, "home", ".oms");
+    const before = await snapshot(store);
+    // A required status outside the allowed values has no valid form: it would be drafted.
+    const content = "---\nstatus: paused\n---\nchanged\n";
+    const checked = await runWritePipeline(request(fixture, "Projects/a.md", content, { check: true }), { now: () => NOW });
+    expect(checked).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", wouldDraft: true } } });
+    expect(await runWritePipeline(request(fixture, "Projects/a.md", content), { now: () => NOW })).toEqual({ kind: "if-match-required" });
+    expect(await runWritePipeline(request(fixture, "Projects/a.md", content, { ifMatch: sha256("stale\n") }), { now: () => NOW })).toEqual({ kind: "retry", state: "changed" });
+    expect(await runWritePipeline(request(fixture, "Projects/b.md", content, { ifMatch: sha256("stale\n") }), { now: () => NOW })).toEqual({ kind: "retry", state: "absent" });
+    expect(await snapshot(store)).toEqual(before);
+    expect(await readFile(target, "utf8")).toBe("---\nstatus: active\n---\noriginal\n");
+  });
+
+  it("check predicts the write for an extra optional key: the same action and dropped fields, with nothing written", async () => {
+    const fixture = await sealedVault();
+    const store = path.join(fixture.base, "home", ".oms");
+    const before = { vault: await snapshot(fixture.vault), store: await snapshot(store) };
+    const content = "---\nstatus: active\nmood: calm\n---\nBody\n";
+    const checked = await runWritePipeline(request(fixture, "Projects/a.md", content, { check: true }), { now: () => NOW });
+    expect(checked).toMatchObject({
+      kind: "checked",
+      check: { ok: false, violations: [{ field: "mood", kind: "unknown-property" }], resolution: { action: "save", gaps: [{ axis: "property", kind: "no-fit", field: "mood" }], wouldDraft: false } },
+    });
+    expect({ vault: await snapshot(fixture.vault), store: await snapshot(store) }).toEqual(before);
+
+    const written = await runWritePipeline(request(fixture, "Projects/a.md", content), { now: () => NOW, updateIndex: async () => "skipped" });
+    expect(written.kind).toBe("written");
+    const receipt = written.kind === "written" ? written.receipt : null;
+    const predicted = checked.kind === "checked" ? checked.check.resolution.gaps : [];
+    expect(receipt?.gaps?.map(({ id: _id, ...gap }) => gap)).toEqual(predicted);
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\nstatus: active\ncreated: 2026-09-28\n---\nBody\n");
+  });
+
+  it("check reports a refusal and a draft that has no ledger to go to", async () => {
+    const fixture = await sealedVault({
+      ...CONTRACT,
+      properties: { ...CONTRACT.properties!, status: { ...CONTRACT.properties!["status"]!, rules: [{ kind: "allowed", values: [] }] } },
+    });
+    const refused = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: active\n---\n", { check: true }), { now: () => NOW });
+    expect(refused).toMatchObject({ kind: "checked", check: { ok: false, resolution: { action: "refuse", gaps: [], wouldDraft: false } } });
+    const resolveSeal = vi.fn(async (vault: string) => ({ ...(await resolveSealState(vault, fixture.root)), vaultId: null }));
+    const unfiled = await runWritePipeline(request(fixture, "Loose/a.md", "x\n", { check: true }), { now: () => NOW, resolveSealState: resolveSeal });
+    expect(unfiled).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", gaps: [{ axis: "folder", field: "path" }], wouldDraft: false } } });
   });
 
   it("records an open template choice and saves the note as written", async () => {
@@ -381,7 +458,10 @@ describe("runWritePipeline", () => {
         frame: { contract: "sealed", folder: { path: "Projects", meaning: "project notes" }, template: { name: "project", meaning: "one project", requiredHeadings: ["Goals"] } },
       },
     });
-    expect(checks[2]).toMatchObject({ kind: "checked", check: { ok: false, violations: [{ field: "status" }] } });
+    expect(checks[2]).toMatchObject({
+      kind: "checked",
+      check: { ok: false, violations: [{ field: "status" }], resolution: { action: "save", gaps: [{ axis: "value", kind: "no-fit", field: "status" }], wouldDraft: false } },
+    });
     for (const check of checks) {
       expect(check.kind === "checked" ? check.check.contractRevision : null).toMatch(/^sha256:[0-9a-f]{64}$/);
     }

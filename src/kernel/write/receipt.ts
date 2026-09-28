@@ -11,12 +11,14 @@ export interface ConformChange {
   readonly action: "variable" | "default" | "heading";
 }
 
+export type GapLedgerState = "failed" | "unavailable";
 export type KeywordIndexState = "updated" | "failed" | "skipped";
 export type VectorIndexState = "pending" | "disabled";
 
-/** A gap this write recorded in the ledger; the field, never the value. */
+/** A gap this write met; the field, never the value. */
 export interface ReceiptGap {
-  readonly id: string;
+  /** The ledger id; absent when the gap could not be recorded (see `gapLedger`). */
+  readonly id?: string;
   readonly axis: GapAxis;
   readonly kind: GapKind;
   readonly field: string;
@@ -40,10 +42,14 @@ export interface WriteReceipt {
   readonly index: IndexState;
   readonly conformed: readonly ConformChange[];
   readonly missingDefaults: readonly { readonly field: string }[];
-  /** Gaps recorded for this write; absent when there were none. */
+  /** Gaps this write met; absent when there were none. */
   readonly gaps?: readonly ReceiptGap[];
-  /** Present when the note was saved but its gaps could not be recorded. */
-  readonly gapLedger?: "failed";
+  /**
+   * Present when the note was saved but its gaps were not recorded: `failed` when the
+   * ledger could not be written, `unavailable` when the vault has no ledger (no vault id).
+   * `gaps` still lists them, without ids.
+   */
+  readonly gapLedger?: GapLedgerState;
 }
 
 export function noteRevision(content: string): Digest {
@@ -60,7 +66,7 @@ export interface ReceiptInput {
   /** The revision read once for the whole write; when given it wins over one derived from `view`. */
   readonly contractRevision?: Digest | null;
   readonly gaps?: readonly ReceiptGap[];
-  readonly gapLedger?: "failed";
+  readonly gapLedger?: GapLedgerState;
 }
 
 /** The vector index only has work queued when the keyword update reached the store. */

@@ -27,8 +27,12 @@ export interface GapEntry {
 export interface GapsReport {
   readonly contract: "open" | "sealed" | "unreadable";
   readonly contractRevision: Digest | null;
-  /** `unreadable` when the ledger exists but could not be read (too large or an unsafe state entry). */
-  readonly ledger: "ok" | "unreadable";
+  /**
+   * `truncated` when the ledger outgrew the read window and only its newest events were
+   * read (a warning: move the ledger aside to rotate it); `unreadable` when it exists but
+   * could not be read (an unsafe state entry or an I/O error).
+   */
+  readonly ledger: "ok" | "truncated" | "unreadable";
   readonly open: number;
   readonly byAxis: Readonly<Record<GapAxis, number>>;
   readonly byKind: Readonly<Record<GapKind, number>>;
@@ -59,6 +63,7 @@ export async function gapsReport(vault: string, overrides: Partial<GapsReportDep
   if (seal.vaultId !== null) {
     try {
       ledger = await deps.readGapLedger(deps.root, seal.vaultId);
+      if (ledger.truncated === true) ledgerState = "truncated";
     } catch {
       ledgerState = "unreadable";
     }

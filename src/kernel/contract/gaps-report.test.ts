@@ -77,11 +77,20 @@ describe("gapsReport", () => {
     expect(report).toMatchObject({ contract: "unreadable", contractRevision: null, open: 1, gaps: [{ id: "g1", stale: true }], contradictions: [] });
   });
 
+  it("reports a ledger read past its window as truncated, with the gaps it did read", async () => {
+    const report = await gapsReport("/vault", {
+      root: "/store",
+      resolveSealState: seal(SEALED),
+      readGapLedger: async () => ({ events: [event("g9")], corrupt: [], truncated: true }),
+    });
+    expect(report).toMatchObject({ ledger: "truncated", open: 1, gaps: [{ id: "g9" }] });
+  });
+
   it("reports an unreadable ledger instead of throwing", async () => {
     const report = await gapsReport("/vault", {
       root: "/store",
       resolveSealState: seal(SEALED),
-      readGapLedger: async () => { throw new Error("GAP_LEDGER_TOO_LARGE"); },
+      readGapLedger: async () => { throw new Error("STATE_DIR_UNSAFE"); },
     });
     expect(report).toMatchObject({ contract: "sealed", ledger: "unreadable", open: 0, gaps: [], corruptLines: [] });
   });

@@ -310,7 +310,7 @@ async function extract(vault: string, template: string): Promise<void> {
   });
 }
 
-/** Open gaps are the ledger doing its job; only a contradiction or an unreadable ledger needs attention. */
+/** Open gaps are the ledger doing its job; only a contradiction or an unreadable ledger needs attention, and a truncated one is a warning. */
 async function gaps(vault: string): Promise<void> {
   const report = await gapsReport(vault);
   if (report.contradictions.length > 0 || report.ledger === "unreadable" || report.corruptLines.length > 0) process.exitCode = 1;

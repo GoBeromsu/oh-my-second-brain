@@ -4,7 +4,7 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
-- **`doctor` gains `op: "gaps"`, and `write` saves a repaired form instead of refusing a gap.** `op: gaps` is read-only. It reports the sealed contract revision, the open gaps in the ledger by id, note path, axis, kind and field (never the wanted value), whether each gap is drafted or stale, the corrupt ledger lines, and the contradictions in the sealed contract. It creates no store, state directory or ledger. A `write` refused only for keys it added is now saved without them. The receipt lists the recorded gaps, and a denied write whose note was kept as a draft carries an opaque `draftRef`.
+- **`doctor` gains `op: "gaps"`, and `write` saves a repaired form instead of refusing a gap.** `op: gaps` is read-only. It reports the sealed contract revision, the open gaps in the ledger by id, note path, axis, kind and field (never the wanted value), whether each gap is drafted or stale, the corrupt ledger lines, and the contradictions in the sealed contract. It creates no store, state directory or ledger. A `write` refused only for keys it added is now saved without them. The receipt lists every dropped field; a gap the ledger could not record has no `id` and the receipt carries `gapLedger: "failed"` or `"unavailable"`. A denied write whose note was kept as a draft carries an opaque `draftRef`. `check: true` adds `resolution: {action, gaps, wouldDraft}`, the same resolution the write would apply, and still writes nothing. `op: gaps` reports `ledger: "truncated"` when the ledger outgrew the read window.
 
 ## [0.19.0] - 2026-09-28
 

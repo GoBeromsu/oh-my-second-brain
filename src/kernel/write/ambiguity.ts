@@ -114,7 +114,8 @@ export function templateChoices(contract: VaultContract, notePath: string, templ
     axis: "template",
     kind: "choice",
     chosen: recommended,
-    wanted: { field: "template" },
+    // The candidates, never note content: they key the choice so a repeat is recorded once.
+    wanted: { field: "template", value: candidates },
     reason: `${candidates.length} templates apply to the folder and none was selected`,
   }];
 }

@@ -71,7 +71,7 @@ describe("① and ② with an accepting verdict", () => {
     const note = input("Meetings/a.md", "---\ntitle: A\nstatus: open\n---\n");
     expect(resolveAmbiguity(note)).toEqual({
       action: "save", content: note.content, verdict: note.verdict,
-      findings: [{ axis: "template", kind: "choice", chosen: "Review", wanted: { field: "template" }, reason: "2 templates apply to the folder and none was selected" }],
+      findings: [{ axis: "template", kind: "choice", chosen: "Review", wanted: { field: "template", value: ["Review", "Standup"] }, reason: "2 templates apply to the folder and none was selected" }],
     });
   });
 

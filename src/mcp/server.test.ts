@@ -960,10 +960,11 @@ Valid frontmatter remains available to retrieve.
       expect(createdReceipt.contractRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
       expect(statSync(note).mode & 0o777).toBe(0o644);
 
-      // A denied write names {field, kind} only and leaves the bytes untouched.
+      // A denied write names {field, kind} only and leaves the bytes untouched. The ifMatch
+      // check runs first, so the overwrite names the current revision to reach the judge.
       await chmod(note, 0o600);
       const before = await readFile(note);
-      const denied = await write({ path: "Projects/a.md", content: "---\nstatus: nope\n---\n# Goals\n" });
+      const denied = await write({ path: "Projects/a.md", content: "---\nstatus: nope\n---\n# Goals\n", ifMatch: createdReceipt.revision });
       expect(denied.isError).toBe(true);
       const deniedPayload = textPayload(denied);
       expect(deniedPayload).toMatchObject({ ok: false, violations: [{ field: "status", kind: "not-allowed" }] });
