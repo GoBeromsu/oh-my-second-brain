@@ -23,9 +23,15 @@ MCP annotations describe a whole tool, not one of its operations. A tool is anno
 
 | CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
-| `oms write <path>` (content on stdin) | `oms_write` | absent | Judge the whole note against the sealed contract and save it only when allowed. MCP takes `{path, content, template?}`. |
+| `oms write <path> [--template <t>] [--if-match sha256:<rev>] [--check]` (content on stdin) | `oms_write` | absent | Judge the whole note against the sealed contract and save it only when allowed. MCP takes `{path, content, template?, ifMatch?, check?}`. |
 
 Both entrypoints call the same verified-target write kernel. Unknown or missing input keys are refused before any judgement. A denial leaves the file unchanged and returns only `{field, kind}` violations and one guidance command. A `cwd`-inferred target is refused.
+
+Both run one pipeline: frame the target, conform mechanically (template variables, date and datetime defaults on a new note, the chosen template's missing headings), judge, write, then update the keyword index of an existing engine store. Conform never supplies a required value or changes a value the judge would refuse.
+
+- Overwriting an existing note needs `ifMatch` (`--if-match`) set to its current `sha256:` revision; without it nothing is written and the result is `WRITE_IF_MATCH_REQUIRED`. A stale revision returns the retryable `WRITE_TARGET_CHANGED`.
+- `check` (`--check`) judges and returns the frame, the current revision and the violations without touching disk, the engine store or the contract store.
+- A written note returns the receipt `{ok, path, revision, contractRevision, index: {keyword, vector}, conformed, missingDefaults}`. `index.keyword` is `updated` when an engine store exists, `skipped` when none does (the write never creates one), and `failed` when the store could not be updated; the note is written in every case. `index.vector` is `pending` after a keyword update, until `oms doctor sync-embeddings --mode embed` drains the queue, and `disabled` otherwise.
 
 ## Search
 

@@ -9,7 +9,7 @@ sealed contract is not yours to read.
 |---|---|
 | seal or change the vault contract | ask the user to run `oms setup` in a terminal |
 | install host integration | `oms setup host install --runtime codex --vault <path> --yes`, only when authorized |
-| write a note | `$oms-write`: MCP `write {path, content, template?}` |
+| write a note | `$oms-write`: MCP `write {path, content, template?, ifMatch?, check?}` |
 | retrieve knowledge | `$oms-search`; read-only, with no validation or repair side effects |
 | inspect health | `$oms-doctor` (`op: status`); `oms setup status` for the seal and template drift |
 | diagnose the seal | `oms doctor contract` |
@@ -17,7 +17,7 @@ sealed contract is not yours to read.
 
 ## Boundaries
 
-- Write vault notes with MCP `write {path, content, template?}`. A denial gives
+- Write vault notes with MCP `write {path, content, template?, ifMatch?, check?}`. A denial gives
   only `{field, kind}` and a guidance command. Never ask about or guess the
   contract's location or values.
 - A denied write leaves the file unchanged. Fix the content from what the user

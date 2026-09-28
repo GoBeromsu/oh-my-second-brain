@@ -15,19 +15,23 @@ The user owns meaning. The agent writes the note. OMS judges the bytes against t
 /write <note-path> [template]
 ```
 
-Write vault notes with MCP `write {path, content, template?}`. A denial gives only `{field, kind}` and a guidance command. Never ask about or guess the contract's location or values.
+Write vault notes with MCP `write {path, content, template?, ifMatch?, check?}`. A denial gives only `{field, kind}` and a guidance command. Never ask about or guess the contract's location or values.
 
 Document reads stay on `search { op: "get-document" }`.
 
 ## Write
 
 ```text
-write { path, content, template? }
+write { path, content, template?, ifMatch?, check? }
 ```
 
-`path` is vault-relative. `content` is the whole note. `template` names a sealed template when the note follows one; omit it otherwise. There are no other fields.
+`path` is vault-relative. `content` is the whole note. `template` names a sealed template when the note follows one; omit it otherwise. `ifMatch` is the `sha256:` revision of the note you are replacing. `check: true` judges without writing. There are no other fields.
 
-The judge answers allow or deny. Allow writes the note atomically and returns `{ ok: true, path }`. Deny writes nothing and returns `{ ok: false, violations: [{ field, kind }], reason }`. A violation names a field and a kind only; it never quotes a rule. Read the kinds, fix the note, and write again. Do not guess missing values and do not weaken the contract so the note passes; when you cannot fix a violation from what the user gave you, ask.
+OMS fills only what is mechanical before it judges: template variables such as `{{title}}` and `{{date}}`, date and datetime defaults on a new note, and the chosen template's missing headings. It never supplies a required value or changes one the judge would refuse.
+
+The judge answers allow or deny. Allow writes the note atomically and returns the receipt `{ ok: true, path, revision, contractRevision, index: { keyword, vector }, conformed, missingDefaults }`; the note is searchable by keyword in the next call when the vault has an index. Deny writes nothing and returns `{ ok: false, violations: [{ field, kind }], reason }`. A violation names a field and a kind only; it never quotes a rule. Read the kinds, fix the note, and write again. Do not guess missing values and do not weaken the contract so the note passes; when you cannot fix a violation from what the user gave you, ask.
+
+To replace an existing note, pass its current revision as `ifMatch`: a previous receipt or `write { path, content, check: true }` reports it. Without `ifMatch` the overwrite is refused with `WRITE_IF_MATCH_REQUIRED` and nothing is written; `WRITE_TARGET_CHANGED` means the note moved on, so read it again before retrying. `check` also returns the frame for the target (folder meaning, the property and template fields to satisfy, and which may stay absent) and touches nothing on disk.
 
 Placement is explicit: an explicit path, otherwise the folder meaning the user approved, otherwise ask. There is no Inbox fallback.
 
