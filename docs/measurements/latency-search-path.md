@@ -2,6 +2,8 @@
 
 This record compares the new engine-free exact read, `oms search --path`, with the 0.18.3 CLI. Both were measured in the same session on the same machine, back to back, as [latency-baseline-0.18.3.md](./latency-baseline-0.18.3.md) requires. It measures whole CLI invocations. It is not a release gate.
 
+The PR build loads each command family only when it is dispatched, so this record also shows how that changes the startup cost every command pays.
+
 ## How it was measured
 
 - **Baseline.** `origin/main` at `632e612b` (0.18.3), built in a separate worktree. It ran its own `scripts/bench/latency-baseline.mjs`, since 0.18.3 has no `--path`.
@@ -20,47 +22,50 @@ This record compares the new engine-free exact read, `oms search --path`, with t
 | OS | macOS 26.4.1 (Darwin 25.4.0), arm64 |
 | Node | v24.21.0 |
 | Date | 2026-09-28 |
-| Load | Busy: 1-minute load average about 28 on 10 cores during the runs |
+| Load | Busy: 1-minute load average fell from about 34 to about 23 on 10 cores across the runs |
 
 ## Results (ms, N = 30)
 
 | Build | Command | Mode | p50 | p95 | min | max | mean |
 |---|---|---|---|---|---|---|---|
-| 0.18.3 | `note get` | cold | 377.3 | 630.4 | 237.1 | 1333.3 | 423.4 |
-| 0.18.3 | `note get` | warm | 385.0 | 646.9 | 245.1 | 814.0 | 409.4 |
-| 0.18.3 | `search query` (lexical) | cold | 468.7 | 874.4 | 341.8 | 1635.5 | 542.3 |
-| 0.18.3 | `search query` (lexical) | warm | 458.3 | 930.9 | 306.7 | 1307.0 | 540.6 |
-| PR | `note get` | cold | 370.5 | 531.9 | 250.3 | 551.9 | 390.3 |
-| PR | `note get` | warm | 254.4 | 393.4 | 212.1 | 416.0 | 264.3 |
-| PR | `search query` (lexical) | cold | 541.2 | 978.3 | 323.6 | 1316.2 | 578.1 |
-| PR | `search query` (lexical) | warm | 434.6 | 798.5 | 289.6 | 864.8 | 488.5 |
-| PR | `search --path` | cold | 346.6 | 793.8 | 223.8 | 899.5 | 397.9 |
-| PR | `search --path` | warm | 587.5 | 923.4 | 329.0 | 1017.4 | 637.8 |
+| 0.18.3 | `note get` | cold | 505.8 | 913.0 | 339.7 | 1379.3 | 561.1 |
+| 0.18.3 | `note get` | warm | 625.3 | 1299.0 | 285.6 | 1598.0 | 714.8 |
+| 0.18.3 | `search query` (lexical) | cold | 549.2 | 1148.3 | 401.5 | 1367.4 | 640.0 |
+| 0.18.3 | `search query` (lexical) | warm | 440.1 | 723.6 | 314.2 | 867.7 | 492.2 |
+| PR | `note get` | cold | 178.4 | 315.9 | 118.0 | 417.2 | 205.3 |
+| PR | `note get` | warm | 214.8 | 416.0 | 111.6 | 425.1 | 236.0 |
+| PR | `search query` (lexical) | cold | 347.7 | 686.8 | 244.2 | 749.4 | 391.2 |
+| PR | `search query` (lexical) | warm | 327.0 | 664.6 | 201.9 | 837.4 | 379.4 |
+| PR | `search --path` | cold | 87.8 | 177.3 | 57.1 | 192.4 | 101.8 |
+| PR | `search --path` | warm | 87.7 | 202.7 | 60.1 | 229.0 | 101.3 |
 
 ## Where the time goes
 
-Separate probe, same session: 21 interleaved subprocess samples each, isolated home.
+Separate probe, same session, right after the bench: 21 interleaved subprocess samples each, isolated home. The PR `search --path` row reads one note from a one-note vault.
 
-| Invocation | p50 | min |
-|---|---|---|
-| `node -e 0` (bare Node startup) | 58 | 40 |
-| `node` importing `dist/kernel/search/read-exact.js` | 72 | 52 |
-| `node` importing `dist/cli/search.js` | 162 | 100 |
-| `oms --version` (no command runs at all) | 425 | 265 |
+| Invocation | 0.18.3 p50 | 0.18.3 min | PR p50 | PR min |
+|---|---|---|---|---|
+| `node -e 0` (bare Node startup) | 57 | 40 | 65 | 44 |
+| `node` importing `dist/kernel/search/read-exact.js` | — | — | 84 | 51 |
+| `node` importing `dist/cli/search.js` | 165 | 94 | 88 | 55 |
+| `oms --version` (no command runs at all) | 410 | 254 | 90 | 52 |
+| `oms search --path n/a.md` | — | — | 91 | 57 |
+
+A load-hook trace of `oms search --path` on the PR build lists 12 modules and no package from `node_modules`:
+- the entrypoint, argument parser, update notice and usage modules;
+- `cli/search.js` with its argument and usage modules;
+- `kernel/search/read-exact.js` and `kernel/text/nfc.js`.
+
+The same trace on the build before lazy loading listed 88 modules, including `better-sqlite3` and `sqlite-vec`.
 
 ## Reading the numbers
 
-- **The 150 ms p50 target is not met.**
-  - `search --path` has a cold p50 of 347 ms and a warm p50 of 588 ms.
-  - Its fastest sample (224 ms) is already over the target.
-- **The read is not the cause.**
-  - readExact and its imports add about 14 ms over bare Node startup.
-  - The directory walk and file read for one note are a few more.
-- **The cost is CLI startup.**
-  - `src/cli/oms.ts` statically imports every command module before it dispatches. That includes the MCP server, the HTTP server, the host hooks, and the search and engine modules.
-  - As a result, `oms --version` alone has a p50 of 425 ms and a minimum of 265 ms on this machine. Every command, `search --path` included, pays that before running.
-  - Meeting the target needs lazy, per-command loading in the entrypoint. That is a separate change from this PR.
-- **The machine was busy.** Load was about 28 on 10 cores during the runs.
-  - The ordering inside the PR run is noise, not signal. For example, warm `search --path` came out slower than cold, and warm `note get` came out faster than the 0.18.3 warm run.
-  - Read the min column and the startup probe for the floor, not the differences between p50s.
-  - Within that noise, `search --path` is in the same band as `note get`. It is not in the `search query` band, because it opens no engine store and builds no ephemeral core.
+- **The 150 ms p50 target is met.** `search --path` has a p50 of 88 ms cold and warm, and a p95 under 210 ms on a busy machine.
+- **What changed.**
+  - `src/cli/oms.ts` used to import every command module before it dispatched. That included the MCP server, the HTTP server, the host hooks, and the search engine with its native SQLite modules.
+  - It now imports each command family inside its dispatch branch. `cli/search.ts` loads the engine session, the index command, vault link resolution and the morning-context module only on the branches that use them.
+- **Startup is now close to bare Node.**
+  - `oms --version` dropped from a p50 of 410 ms to 90 ms. That is about 25 ms over `node -e 0`.
+  - `search --path` adds almost nothing on top of that: the exact read of one note is a few milliseconds.
+- **Every command benefits.** `note get` and `search query` no longer load modules they do not use, so their p50s fell by roughly 300-400 ms and 100-200 ms. `search query` still opens the engine, so it stays in its own band.
+- **The machine was busy.** Load was 23-34 on 10 cores. Read the min column and the startup probe for the floor, and treat small differences between p50s as noise.

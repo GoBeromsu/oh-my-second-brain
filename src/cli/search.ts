@@ -1,7 +1,6 @@
 import path from "node:path";
 
-import { runEngineSession } from "./engine-session.js";
-import { runIndexCommand, validateIndexFamilyArgs } from "./index-command.js";
+import type { runEngineSession } from "./engine-session.js";
 import {
   parseSearchArgs,
   printJson,
@@ -9,13 +8,8 @@ import {
   stringOption,
 } from "./search-args.js";
 import { searchUsage } from "./search-usage.js";
-import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { readExactDocument } from "../kernel/search/read-exact.js";
-import {
-  retrieveMorningContext,
-  type MorningSemanticBackend,
-  type MorningRetrieveOptions,
-} from "../kernel/search/morning.js";
+import type { MorningSemanticBackend, MorningRetrieveOptions } from "../kernel/search/morning.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import type { SemanticSearchMode } from "../kernel/search/semantic-contract.js";
@@ -36,7 +30,13 @@ export interface SearchCommandDeps {
   readonly runEngineSession: typeof runEngineSession;
 }
 
-const DEFAULT_DEPS: SearchCommandDeps = { readExactDocument, runEngineSession };
+// The engine, index, link and morning-context modules load only on the branches that use them,
+// so `search --path` stays off the engine's import graph.
+const DEFAULT_DEPS: SearchCommandDeps = {
+  readExactDocument,
+  runEngineSession: async (vault, options, fn) =>
+    (await import("./engine-session.js")).runEngineSession(vault, options, fn),
+};
 
 async function target(argv: readonly string[]): Promise<Target> {
   const rest: string[] = [];
@@ -55,6 +55,7 @@ async function target(argv: readonly string[]): Promise<Target> {
   if (explicit !== undefined) {
     return { vault: path.resolve(explicit), source: "explicit", argv: rest };
   }
+  const { resolveEffectiveVault } = await import("../kernel/link/link.js");
   const resolved = await resolveEffectiveVault(process.cwd(), process.env);
   return { vault: resolved.vault, source: resolved.source, argv: rest };
 }
@@ -182,6 +183,7 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
     return;
   }
   if (verb === "context") {
+    const { retrieveMorningContext } = await import("../kernel/search/morning.js");
     const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
       retrieveMorningContext(contextOptions(resolved.vault, resolved.argv.slice(1)), backend(adapter, resolved.vault)));
     printJson(console.log, result);
@@ -208,6 +210,7 @@ export async function runSearchCommand(
 export async function runIndexFamilyCommand(argv: readonly string[]): Promise<void> {
   process.exitCode = 0;
   try {
+    const { runIndexCommand, validateIndexFamilyArgs } = await import("./index-command.js");
     validateIndexFamilyArgs(argv);
     const resolved = await target(argv);
     await runIndexCommand({

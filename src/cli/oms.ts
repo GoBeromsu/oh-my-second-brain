@@ -2,29 +2,14 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runPreToolUse } from "../vendors/claude/hook/pre-tool-use.js";
 import type { WriteTarget } from "../kernel/capture/safe.js";
-import { resolveEffectiveVault } from "../kernel/link/link.js";
-import { runMcpServer } from "../mcp/server.js";
 import { parseCliArgs } from "./args.js";
-import { runGraphCommand } from "./graph-command.js";
-import { runHostCommand, runModelCommand } from "./host-commands.js";
-import { runBridgeCommand, runLinkFamilyCommand } from "./link-command.js";
-import { contractUsage, runContractCommand } from "./contract-command.js";
-import { runNoteCommand } from "./note-command.js";
-import { runPackageCommand } from "./package-command.js";
-import { runSearchCommand, runIndexFamilyCommand } from "./search.js";
-import { runServeHttp } from "./serve-http.js";
-import { runSetup, setupUsage } from "./setup-command.js";
-import { runStatusCommand } from "./status-command.js";
 import { maybePrintUpdateNotice, readCurrentPackageVersion } from "./update-notice.js";
 import { mainUsageCommandNames, printUsage } from "./usage.js";
 
-export { buildClaudeInstallPlan } from "./claude-install-plan.js";
-export type { ClaudeInstallPlan } from "./claude-install-plan.js";
-export {
-  runSetup,
-} from "./setup-command.js";
+// Command modules load on dispatch, not at startup: each family pulls in only its own
+// dependency graph, so `oms search --path` never loads the MCP server, HTTP server or engine.
+
 export { maybePrintUpdateNotice } from "./update-notice.js";
 
 function isKnownCommand(command: string | undefined): boolean {
@@ -61,8 +46,27 @@ function parseVaultFlag(argv: readonly string[]): string | undefined {
 
 async function effectiveTarget(explicitVault: string | undefined): Promise<WriteTarget> {
   if (explicitVault !== undefined) return { vault: explicitVault, source: "explicit" };
+  const { resolveEffectiveVault } = await import("../kernel/link/link.js");
   const resolved = await resolveEffectiveVault(process.cwd(), process.env);
   return { vault: resolved.vault, source: resolved.source };
+}
+
+async function runHookCommand(argv: readonly string[]): Promise<void> {
+  process.exitCode = 0;
+  const [leaf, ...leafArgs] = argv;
+  if (leaf === "--help" || leaf === "-h") {
+    console.log("Usage: oms hook pre [--vault <path>]");
+    return;
+  }
+  if (leaf === "pre" && leafArgs.length === 1 && (leafArgs[0] === "--help" || leafArgs[0] === "-h")) {
+    console.log("Usage: oms hook pre [--vault <path>]");
+    return;
+  }
+  if (leaf === "pre-tool-use") throw new Error("Hook leaf `pre-tool-use` is retired. Use `oms hook pre`.");
+  if (leaf !== "pre") throw new Error("Usage: oms hook pre [--vault <path>]");
+  const target = await effectiveTarget(parseVaultFlag(leafArgs));
+  const { runPreToolUse } = await import("../vendors/claude/hook/pre-tool-use.js");
+  await runPreToolUse({ vault: target.vault });
 }
 
 async function runServeCommand(argv: readonly string[]): Promise<void> {
@@ -86,6 +90,7 @@ async function runServeCommand(argv: readonly string[]): Promise<void> {
   }
   if (leaf === "mcp") {
     const target = await effectiveTarget(parseVaultFlag(leafArgs));
+    const { runMcpServer } = await import("../mcp/server.js");
     await runMcpServer(target);
     return;
   }
@@ -117,28 +122,12 @@ async function runServeCommand(argv: readonly string[]): Promise<void> {
       }
     }
     const target = await effectiveTarget(explicitVault);
+    const { runServeHttp } = await import("./serve-http.js");
     const server = await runServeHttp({ vault: target.vault, index: indexPath, host, port });
     console.log(JSON.stringify({ status: "listening", url: server.url, vault: target.vault, source: target.source }));
     return;
   }
   throw new Error("Usage: oms serve <mcp|http> [options]");
-}
-
-async function runHookCommand(argv: readonly string[]): Promise<void> {
-  process.exitCode = 0;
-  const [leaf, ...leafArgs] = argv;
-  if (leaf === "--help" || leaf === "-h") {
-    console.log("Usage: oms hook pre [--vault <path>]");
-    return;
-  }
-  if (leaf === "pre" && leafArgs.length === 1 && (leafArgs[0] === "--help" || leafArgs[0] === "-h")) {
-    console.log("Usage: oms hook pre [--vault <path>]");
-    return;
-  }
-  if (leaf === "pre-tool-use") throw new Error("Hook leaf `pre-tool-use` is retired. Use `oms hook pre`.");
-  if (leaf !== "pre") throw new Error("Usage: oms hook pre [--vault <path>]");
-  const target = await effectiveTarget(parseVaultFlag(leafArgs));
-  await runPreToolUse({ vault: target.vault });
 }
 
 async function main(): Promise<void> {
@@ -162,8 +151,8 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    if (parsedArgs.command === "contract") console.log(contractUsage());
-    else if (parsedArgs.command === "setup") console.log(setupUsage());
+    if (parsedArgs.command === "contract") console.log((await import("./contract-command.js")).contractUsage());
+    else if (parsedArgs.command === "setup") console.log((await import("./setup-command.js")).setupUsage());
     else printUsage();
     process.exitCode = 0;
     return;
@@ -171,32 +160,43 @@ async function main(): Promise<void> {
   const { command } = parsedArgs;
 
   if (command === "contract") {
+    const { runContractCommand } = await import("./contract-command.js");
     await runContractCommand(argv.slice(1));
   } else if (command === "setup") {
+    const { runSetup } = await import("./setup-command.js");
     await runSetup(argv.slice(1));
     if (process.exitCode === 0) await maybePrintUpdateNotice();
   } else if (command === "note") {
+    const { runNoteCommand } = await import("./note-command.js");
     await runNoteCommand(argv.slice(1));
   } else if (command === "link") {
     if (argv[1]?.startsWith("-") && argv[1] !== "--help" && argv[1] !== "-h") {
       console.error("[oms] Repository linking moved to `oms bridge add|remove|status`.");
       process.exitCode = 1;
     } else {
+      const { runLinkFamilyCommand } = await import("./link-command.js");
       await runLinkFamilyCommand(argv.slice(1));
     }
   } else if (command === "bridge") {
+    const { runBridgeCommand } = await import("./link-command.js");
     await runBridgeCommand(argv.slice(1));
   } else if (command === "search") {
+    const { runSearchCommand } = await import("./search.js");
     await runSearchCommand(argv.slice(1));
   } else if (command === "index") {
+    const { runIndexFamilyCommand } = await import("./search.js");
     await runIndexFamilyCommand(argv.slice(1));
   } else if (command === "graph") {
+    const { runGraphCommand } = await import("./graph-command.js");
     await runGraphCommand(argv.slice(1));
   } else if (command === "host") {
+    const { runHostCommand } = await import("./host-commands.js");
     await runHostCommand(argv.slice(1));
   } else if (command === "package") {
+    const { runPackageCommand } = await import("./package-command.js");
     await runPackageCommand(argv.slice(1));
   } else if (command === "model") {
+    const { runModelCommand } = await import("./host-commands.js");
     await runModelCommand(argv.slice(1));
   } else if (command === "serve") {
     try {
@@ -213,6 +213,7 @@ async function main(): Promise<void> {
       process.exitCode = 1;
     }
   } else if (command === "status") {
+    const { runStatusCommand } = await import("./status-command.js");
     await runStatusCommand(argv.slice(1));
   } else if (command === undefined) {
     // No command at all is a request for help, not an error.
