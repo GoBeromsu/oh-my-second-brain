@@ -10,23 +10,32 @@ export type WritePayload =
     readonly violations: readonly { readonly field: string; readonly kind: string }[];
     readonly missingDefaults: readonly { readonly field: string }[];
   })
-  | { readonly ok: false; readonly violations: readonly { readonly field: string; readonly kind: string }[]; readonly reason: string }
+  | { readonly ok: false; readonly violations: readonly { readonly field: string; readonly kind: string }[]; readonly reason: string; readonly draftRef?: string }
   | { readonly ok: false; readonly status: "rejected"; readonly rejection: WriteRejection }
   | { readonly ok: false; readonly code: "WRITE_IF_MATCH_REQUIRED"; readonly kind: "if-match-required"; readonly reason: string }
   | { readonly ok: false; readonly code: "WRITE_TARGET_CHANGED" | "WRITE_TARGET_VANISHED" | "WRITE_TARGET_ABSENT"; readonly retryable: true; readonly reason: string };
 
-/** Denied-write payload for input-shape violations found before the kernel runs. */
-export function deniedWritePayload(violations: readonly Violation[]): WritePayload {
+type DeniedPayload = Extract<WritePayload, { readonly violations: unknown; readonly reason: string }>;
+
+function denied(violations: readonly Violation[]): DeniedPayload {
   const list = violations.map(violation => ({ field: violation.field, kind: violation.kind }));
   return { ok: false, violations: list, reason: formatDenyReason(list) };
+}
+
+/** Denied-write payload for input-shape violations found before the kernel runs. */
+export function deniedWritePayload(violations: readonly Violation[]): WritePayload {
+  return denied(violations);
 }
 
 export function writePayload(outcome: WriteOutcome): WritePayload {
   switch (outcome.kind) {
     case "rejected":
       return { ok: false, status: "rejected", rejection: outcome.rejection };
-    case "denied":
-      return deniedWritePayload(outcome.violations);
+    case "denied": {
+      const payload = denied(outcome.violations);
+      // The draft name is an opaque ledger ref; the note's content never leaves the store.
+      return outcome.draftRef === undefined ? payload : { ...payload, draftRef: outcome.draftRef };
+    }
     case "if-match-required":
       return {
         ok: false,

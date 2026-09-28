@@ -141,6 +141,41 @@ describe("value rules", () => {
   });
 });
 
+describe("count rule", () => {
+  const view = sealed({
+    properties: {
+      tags: property({ type: "list", rules: [{ kind: "count", min: 1, max: 2 }] }),
+      atLeast: property({ type: "list", rules: [{ kind: "count", min: 2 }] }),
+      atMost: property({ type: "list", rules: [{ kind: "count", max: 1 }] }),
+      one: property({ rules: [{ kind: "count", max: 1 }] }),
+      none: property({ rules: [{ kind: "count", max: 0 }] }),
+    },
+  });
+  const verdict = (frontmatter: Record<string, unknown>) => judge({ path: "a.md", frontmatter, body: "" }, view);
+
+  it("counts the items of a list against min and max", () => {
+    expect(verdict({ tags: ["a"] }).ok).toBe(true);
+    expect(verdict({ tags: ["a", "b"] }).ok).toBe(true);
+    expect(verdict({ tags: ["a", "b", "c"] }).violations).toEqual([{ field: "tags", kind: "count" }]);
+  });
+
+  it("applies a min-only or max-only bound", () => {
+    expect(verdict({ atLeast: ["a", "b", "c", "d"] }).ok).toBe(true);
+    expect(verdict({ atLeast: ["a"] }).violations).toEqual([{ field: "atLeast", kind: "count" }]);
+    expect(verdict({ atMost: [] }).ok).toBe(true);
+    expect(verdict({ atMost: ["a", "b"] }).violations).toEqual([{ field: "atMost", kind: "count" }]);
+  });
+
+  it("counts a scalar as one member and leaves an absent or empty value to the required check", () => {
+    expect(verdict({ one: "x" }).ok).toBe(true);
+    expect(verdict({ none: "x" }).violations).toEqual([{ field: "none", kind: "count" }]);
+    expect(verdict({}).ok).toBe(true);
+    expect(verdict({ tags: [] }).ok).toBe(true);
+    const required = sealed({ properties: { tags: property({ type: "list", required: true, rules: [{ kind: "count", min: 1 }] }) } });
+    expect(judge({ path: "a.md", frontmatter: { tags: [] }, body: "" }, required).violations).toEqual([{ field: "tags", kind: "missing" }]);
+  });
+});
+
 describe("AC16: an unreadable contract denies every write", () => {
   it("denies against an unreadable view", () => {
     expect(judge({ path: "Projects/a.md", frontmatter: {}, body: "" }, { state: "unreadable" }).violations)

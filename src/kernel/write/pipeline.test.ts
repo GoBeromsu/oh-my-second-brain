@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTruthTableRow, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
+import { openGaps, readGapDraft, readGapLedger } from "../contract/gap-ledger.js";
+import { contractRevision } from "../contract/revision.js";
+import { sealContract } from "../contract/store.js";
 import type { VaultContract } from "../contract/types.js";
+import { resolveSealState } from "../contract/vault-id.js";
 import { syncEngineStore } from "../engine/embed/sync.js";
 import { engineStorePath } from "../engine/paths.js";
 import { runWritePipeline, type WriteRequest } from "./pipeline.js";
@@ -142,11 +146,131 @@ describe("runWritePipeline", () => {
     expect(updateIndex).toHaveBeenCalledWith({ vault: fixture.vault, relPath: "Projects/Alpha.md" });
   });
 
-  it("still denies a value outside allowed after conform", async () => {
+  it("saves the nearest valid form when a new optional value is outside allowed, and records the gap", async () => {
     const fixture = await sealedVault();
-    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: paused\n---\nBody\n"), { now: () => NOW });
-    expect(outcome).toMatchObject({ kind: "denied", violations: [{ field: "status" }] });
+    const outcome = await runWritePipeline(
+      request(fixture, "Projects/a.md", "---\nstatus: paused\n---\nBody\n"),
+      { now: () => NOW, updateIndex: async () => "skipped", gapLedger: { now: () => 7, newId: () => "gap-1" } },
+    );
+    const written = await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8");
+    expect(written).toBe("---\ncreated: 2026-09-28\n---\nBody\n");
+    expect(outcome).toMatchObject({ kind: "written", receipt: { revision: sha256(written), gaps: [{ id: "gap-1", axis: "value", kind: "no-fit", field: "status" }] } });
+    const receipt = outcome.kind === "written" ? outcome.receipt : null;
+    const ledger = await readGapLedger(fixture.root, fixture.vaultId);
+    expect(ledger).toEqual({
+      corrupt: [],
+      events: [{
+        type: "gap",
+        id: "gap-1",
+        at: 7,
+        notePath: "Projects/a.md",
+        noteRevision: sha256(written),
+        contractRevision: receipt?.contractRevision,
+        axis: "value",
+        kind: "no-fit",
+        chosen: null,
+        wanted: { field: "status", value: "paused" },
+        reason: "dropped: not-allowed",
+      }],
+    });
+  });
+
+  it("keeps a note with no valid form as a draft beside the ledger and leaves the vault untouched", async () => {
+    const fixture = await sealedVault();
+    const before = await snapshot(fixture.vault);
+    // The draft keeps the conformed note: the date default is filled before the judge runs.
+    const DRAFTED = "---\ncreated: 2026-09-28\n---\nx\n";
+    const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"), { now: () => NOW, gapLedger: { newId: () => "00000000-0000-4000-8000-000000000001" } });
+    expect(outcome).toEqual({
+      kind: "denied",
+      violations: [expect.objectContaining({ field: "path", kind: "unregistered-folder" })],
+      draftRef: "draft-00000000-0000-4000-8000-000000000001.md",
+    });
+    expect(await snapshot(fixture.vault)).toEqual(before);
+    expect(await readGapDraft(fixture.root, fixture.vaultId, "draft-00000000-0000-4000-8000-000000000001.md")).toBe(DRAFTED);
+    const [gap] = openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events);
+    expect(gap).toMatchObject({ axis: "folder", kind: "no-fit", notePath: "Loose/a.md", noteRevision: sha256(DRAFTED), draftRef: "draft-00000000-0000-4000-8000-000000000001.md", reason: "drafted: unregistered-folder" });
+  });
+
+  it("denies without a draft when the draft cannot be kept", async () => {
+    const fixture = await sealedVault();
+    const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"), { gapLedger: { newId: () => "not-a-uuid" } });
+    expect(outcome).toEqual({ kind: "denied", violations: [expect.objectContaining({ field: "path", kind: "unregistered-folder" })] });
+    expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
+  });
+
+  it("denies without a draft when the sealed vault has no id to file the gap under", async () => {
+    const fixture = await sealedVault();
+    const resolveSeal = vi.fn(async (vault: string) => ({ ...(await resolveSealState(vault, fixture.root)), vaultId: null }));
+    const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"), { resolveSealState: resolveSeal });
+    expect(outcome).toEqual({ kind: "denied", violations: [expect.objectContaining({ kind: "unregistered-folder" })] });
+    expect(resolveSeal).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves the note and marks the receipt when its gaps cannot be recorded", async () => {
+    const fixture = await sealedVault();
+    const outcome = await runWritePipeline(
+      request(fixture, "Projects/a.md", "---\nstatus: paused\n---\nBody\n"),
+      { now: () => NOW, updateIndex: async () => "skipped", gapLedger: { newId: () => { throw new Error("no ids"); } } },
+    );
+    expect(outcome).toMatchObject({ kind: "written", receipt: { ok: true, gapLedger: "failed" } });
+    expect(outcome.kind === "written" ? outcome.receipt.gaps : "absent").toBeUndefined();
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nBody\n");
+  });
+
+  it("records an open template choice and saves the note as written", async () => {
+    const template = CONTRACT.templates["project"]!;
+    const fixture = await sealedVault({
+      ...CONTRACT,
+      templates: {
+        project: { ...template, applyFolder: "Projects", requiredHeadings: [] },
+        review: { ...template, source: "Templates/review.md", applyFolder: "Projects", requiredHeadings: [] },
+      },
+    });
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: active\n---\nBody\n"), { now: () => NOW, updateIndex: async () => "skipped" });
+    expect(outcome).toMatchObject({ kind: "written", receipt: { gaps: [{ axis: "template", kind: "choice", field: "template" }] } });
+    const [gap] = openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events);
+    expect(gap).toMatchObject({ chosen: "project", reason: "2 templates apply to the folder and none was selected" });
+  });
+
+  it("refuses a write the contract contradicts on the field and records nothing", async () => {
+    const fixture = await sealedVault({
+      ...CONTRACT,
+      properties: { ...CONTRACT.properties!, status: { ...CONTRACT.properties!["status"]!, rules: [{ kind: "allowed", values: [] }] } },
+    });
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: active\n---\nBody\n"), { now: () => NOW });
+    expect(outcome).toEqual({ kind: "denied", violations: [expect.objectContaining({ field: "status" })] });
     expect(await readdir(fixture.vault)).not.toContain("Projects");
+    expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
+  });
+
+  it("names one contract revision in the receipt and every gap when a seal lands mid-write", async () => {
+    const fixture = await sealedVault();
+    const vaultRealPath = await realpath(fixture.vault);
+    const resealed: VaultContract = {
+      ...CONTRACT,
+      properties: { ...CONTRACT.properties!, created: { ...CONTRACT.properties!["created"]!, meaning: "creation date, resealed" } },
+    };
+    const seen: string[] = [];
+    const resolveSeal = vi.fn(async (vault: string) => {
+      const state = await resolveSealState(vault, fixture.root);
+      seen.push(String(contractRevision(state.view)));
+      // Another process seals a new contract right after this write read the seal state.
+      await sealContract({ vaultRealPath, vaultId: fixture.vaultId, contract: resealed }, fixture.root);
+      return state;
+    });
+    const outcome = await runWritePipeline(
+      request(fixture, "Projects/a.md", "---\nstatus: paused\n---\nBody\n"),
+      { now: () => NOW, updateIndex: async () => "skipped", resolveSealState: resolveSeal },
+    );
+    expect(resolveSeal).toHaveBeenCalledTimes(1);
+    const [sealedRevision] = seen;
+    expect(sealedRevision).toMatch(/^sha256:/);
+    expect(contractRevision((await resolveSealState(fixture.vault, fixture.root)).view)).not.toBe(sealedRevision);
+    expect(outcome).toMatchObject({ kind: "written", receipt: { contractRevision: sealedRevision } });
+    const events = (await readGapLedger(fixture.root, fixture.vaultId)).events;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ contractRevision: sealedRevision });
   });
 
   it("requires ifMatch to overwrite an existing note and leaves its bytes unchanged", async () => {
@@ -207,7 +331,7 @@ describe("runWritePipeline", () => {
       if (template !== undefined) {
         expect(checked).toMatchObject({ check: { ok: false, violations: [{ field: "created", kind: "missing" }] } });
         const outcome = await runWritePipeline(request(fixture, "Projects/a.md", content, extra), { now: () => NOW });
-        expect(outcome).toEqual({ kind: "denied", violations: [expect.objectContaining({ field: "created", kind: "missing" })] });
+        expect(outcome).toEqual({ kind: "denied", violations: [expect.objectContaining({ field: "created", kind: "missing" })], draftRef: expect.stringMatching(/^draft-/) });
       }
     }
     expect(await readdir(fixture.vault)).not.toContain("Projects");

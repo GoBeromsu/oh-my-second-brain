@@ -87,6 +87,10 @@ function ruleKind(rule: Rule, value: unknown): ViolationKind | null {
       return members(value).every(member => (typeof member === "string" || typeof member === "number" || typeof member === "boolean") && fullMatch(rule.regex, String(member)) === true) ? null : "pattern";
     case "range":
       return members(value).every(member => inRange(member, rule)) ? null : "range";
+    case "count": {
+      const count = members(value).length;
+      return (rule.min === undefined || count >= rule.min) && (rule.max === undefined || count <= rule.max) ? null : "count";
+    }
   }
 }
 
