@@ -221,7 +221,7 @@ Use `oms search --context` for structured context and `oms search --path <note>`
 oms search <text>                               Search notes; lexical by default
 oms search --path|--context|--link              Read one note, gather context, or suggest links
 oms interview                                   Interview the vault owner in a terminal and seal
-oms write <path> [--if-match|--check]          Save a note from stdin when the contract allows it
+oms write <path>                                Save a note from stdin when the contract allows it
 oms setup                                       Seal the contract (--questions/--answers for agents)
 oms setup extract|status                        Show a template source or the contract posture
 oms setup host install|remove|sync|status       Manage host assets and MCP registrations
