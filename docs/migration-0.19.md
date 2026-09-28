@@ -30,7 +30,7 @@ The judge, the sealed contract, and the verified-target rules are unchanged. Onl
 
 - The `link` tool is gone. Suggest links with `search` and `op: "link"`; check them with `doctor` and `op: "link-check"`.
 - The `status` tool is gone. Read health with `doctor` and `op: "status"`. It is read-only and creates no engine store.
-- The new `interview` tool lists the questions the owner would be asked now, with the seal state. It seals nothing: answers still go through `oms setup --answers`, and only the owner loosens a seal, from a terminal.
+- The new `interview` tool continues the interview across calls. `op: questions` lists the open questions with the seal state; `answer`, `confirm`, and `seal` need a verified target and seal only the proposal the owner confirmed. Only the owner loosens a seal, from a terminal.
 - Annotations are per tool. Only `search` is annotated read-only; `write`, `interview`, and `doctor` are not. See [the CLI map](./cli-map.md#annotations-are-per-tool).
 
 ## CLI write and interview
