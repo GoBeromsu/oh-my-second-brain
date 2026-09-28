@@ -4,6 +4,7 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms search` stops looking for `--vault` after a `--` terminator.** A query such as `oms search --vault notes -- --vault elsewhere` searches `notes` for the text `--vault elsewhere` instead of reading the second `--vault` as the flag. `oms search --link <note>` refuses a `--` terminator with `SEARCH_ARGS_INVALID` rather than forwarding the tokens after it to link suggestion as flags.
 - **`oms doctor gaps` reports open contract gaps and contradictions.** It prints the same read-only report as the MCP `doctor` `op: gaps`. It exits 1 only when the contract contradicts itself, the ledger cannot be read, or a ledger line is corrupt; open gaps are the ledger doing its job, and `ledger: "truncated"` is a warning that leaves the exit code alone. `oms write` follows the new write pipeline, so a write that only adds keys the frame has no place for is saved without them and reports the dropped fields in its receipt. `oms write --check` prints the `resolution` the write would apply.
 
 ## [0.19.0] - 2026-09-28

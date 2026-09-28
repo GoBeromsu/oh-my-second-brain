@@ -163,12 +163,25 @@ describe("oms search --path", () => {
     const runEngineSession = vi.fn<SearchCommandDeps["runEngineSession"]>(
       (_vault, _options, fn) => fn({ semanticQuery } as never),
     );
-    await runSearchCommand(["--", "--path", "--vault", vault], { ...deps, runEngineSession });
+    await runSearchCommand(["--vault", vault, "--", "--path"], { ...deps, runEngineSession });
     expect(errors).toEqual([]);
     expect(process.exitCode).toBe(0);
     expect(runEngineSession).toHaveBeenCalledTimes(1);
     expect(semanticQuery).toHaveBeenCalledWith(expect.objectContaining({ query: "--path" }));
     expect(deps.readExactDocument).toHaveBeenCalledTimes(0);
+  });
+
+  it("treats --vault after a -- terminator as query text, not the vault flag", async () => {
+    const deps = spiedDeps();
+    const semanticQuery = vi.fn(() => Promise.resolve({ available: true, hits: [] }));
+    const runEngineSession = vi.fn<SearchCommandDeps["runEngineSession"]>(
+      (_vault, _options, fn) => fn({ semanticQuery } as never),
+    );
+    await runSearchCommand(["--vault", vault, "--", "--vault", "elsewhere"], { ...deps, runEngineSession });
+    expect(errors).toEqual([]);
+    expect(process.exitCode).toBe(0);
+    expect(runEngineSession).toHaveBeenCalledWith(path.resolve(vault), expect.anything(), expect.any(Function));
+    expect(semanticQuery).toHaveBeenCalledWith(expect.objectContaining({ query: "--vault elsewhere" }));
   });
 
   it("still routes search query through the injected engine gateway", async () => {
@@ -198,6 +211,15 @@ describe("oms search --link", () => {
       );
       expect(deps.runEngineSession).toHaveBeenCalledTimes(0);
     }
+  });
+
+  it("refuses a -- terminator with link suggestion rather than forwarding what follows as flags", async () => {
+    const deps = spiedDeps();
+    await runSearchCommand(["--link", "지식/a.md", "--", "--folder", "x", "--vault", vault], deps);
+    expect(process.exitCode).toBe(1);
+    expect(errors).toEqual([expect.stringMatching(/^SEARCH_ARGS_INVALID: --link does not accept a -- terminator/)]);
+    expect(deps.runLinkFamilyCommand).toHaveBeenCalledTimes(0);
+    expect(deps.runEngineSession).toHaveBeenCalledTimes(0);
   });
 
   it("keeps a later --link as a query filter rather than link suggestion", async () => {

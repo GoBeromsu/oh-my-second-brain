@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { matchEntry, readExact, readExactDocument, ReadExactError } from "./read-exact.js";
+import { matchEntry, READ_EXACT_MAX_BYTES, readExact, readExactDocument, ReadExactError } from "./read-exact.js";
 
 const NFC_NAME = "낙상 위험 평가.md";
 const NFD_NAME = NFC_NAME.normalize("NFD");
@@ -186,6 +186,20 @@ describe("readExact", () => {
     execFileSync("mkfifo", [path.join(vault, "pipe.md")]);
     expect((await rejection(readExact(vault, "pipe.md"))).code).toBe("READ_EXACT_NOT_FILE");
   }, 2000);
+
+  it("refuses a file over the size cap before reading it", async () => {
+    writeFileSync(path.join(vault, "big.md"), "");
+    truncateSync(path.join(vault, "big.md"), READ_EXACT_MAX_BYTES + 1);
+    const error = await rejection(readExact(vault, "big.md"));
+    expect(error.code).toBe("READ_EXACT_TOO_LARGE");
+    expect((await readExactDocument(vault, "big.md")).reason).toMatch(/^READ_EXACT_TOO_LARGE: /);
+  });
+
+  it("reads a file larger than one read chunk in full", async () => {
+    const text = "가".repeat(100_000);
+    writeFileSync(path.join(vault, "long.md"), text);
+    expect(await readExact(vault, "long.md")).toMatchObject({ content: text, revision: sha256(text) });
+  });
 
   it("follows a symlink that stays inside the vault", async () => {
     writeFileSync(path.join(vault, "지식", NFC_NAME), "inside");

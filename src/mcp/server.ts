@@ -62,6 +62,10 @@ const fieldPredicate = { type: "object", additionalProperties: false, properties
 const queryAxes = { type: "object", additionalProperties: false, properties: { template: string, folder: axisValue, field: { type: "object", additionalProperties: { anyOf: [axisValue, fieldPredicate] } }, link: axisValue } };
 const expandStrategy = { type: "object", additionalProperties: false, properties: { kind: { ...string, enum: ["expand"] }, profile: { ...string, enum: ["qmd-v2.8.3"] }, maxQueries: { type: "integer", minimum: 1, maximum: 32 } }, required: ["kind", "profile"] } as const;
 const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, strategy: expandStrategy, collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { type: "integer", minimum: 0, default: 10 }, candidateLimit: { type: "integer", minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, intent: string, lex: string, vec: string, hyde: string, index: string } as const;
+// Some clients echo every schema default with each call, so `search {path}` accepts these unchanged.
+export const searchPathDefaults: Readonly<Record<string, unknown>> = Object.fromEntries(
+  Object.entries(searchProperties).flatMap(([field, schema]) => ("default" in schema ? [[field, schema.default]] : [])),
+);
 const documentProperties = { target: string, targets: stringArray, notePath: string, fromLine: number, lineCount: number, lineLimit: number, maxBytes: number, lineNumbers: boolean, fullPath: boolean, collection: string, collections: stringArray, index: string } as const;
 const contextProperties = { template: string, folder: string, property: string, value: string, wikilink: string, query: string, limit: { type: "integer", minimum: 0 }, maxNeighbors: number, useCache: boolean, ...retrieveContextSemanticInputProperties } as const;
 const operations: Record<string, readonly Operation[]> = {
@@ -179,8 +183,9 @@ function operationSchema(tool: string): Tool["inputSchema"] {
     branches.push({ additionalProperties: false, properties: base, required: baseRequired });
   }
   if (tool === "search") {
-    // Engine-free exact read: `{path}` with no `op`, never combined with other fields.
-    branches.push({ additionalProperties: false, properties: { path: string }, required: ["path"] });
+    // Engine-free exact read: `{path}` with no `op`, never combined with other fields except a default echoed unchanged.
+    const echoedDefaults = Object.fromEntries(Object.entries(searchPathDefaults).map(([field, value]) => [field, { const: value }]));
+    branches.push({ additionalProperties: false, properties: { path: string, ...echoedDefaults }, required: ["path"] });
     return withBranchProjection(branches, true);
   }
   return withBranchProjection(branches, false);
@@ -430,7 +435,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     if (publicName === "write") return await writeNote(vault, source, args ?? {});
     if (publicName === "interview") return await handleInterview(ctx, args);
     if (publicName === "search") {
-      const exact = await searchExactRead(vault, args);
+      const exact = await searchExactRead(vault, args, searchPathDefaults);
       if (exact !== undefined) return exact;
     }
     const op = stringArg(args, "op");

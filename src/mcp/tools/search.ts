@@ -41,10 +41,19 @@ function recordTemplateList(vault: string, templates: readonly { readonly id: st
   }
 }
 
-/** `search {path}`: the engine-free exact read. Returns undefined when `path` is absent. */
-export async function searchExactRead(vault: string, args: Record<string, unknown> | undefined): Promise<CallToolResult | undefined> {
+/**
+ * `search {path}`: the engine-free exact read. Returns undefined when `path` is absent.
+ * A field equal to its schema default in `defaults` is tolerated; any other field is refused.
+ */
+export async function searchExactRead(
+  vault: string,
+  args: Record<string, unknown> | undefined,
+  defaults: Readonly<Record<string, unknown>>,
+): Promise<CallToolResult | undefined> {
   if (args === undefined || !("path" in args)) return undefined;
-  if (Object.keys(args).some((key) => key !== "path")) {
+  // The defaults are scalars, and `===` matches JSON Schema `const` equality, so -0 echoes a default 0.
+  const echoesDefault = (key: string): boolean => Object.hasOwn(defaults, key) && args[key] === defaults[key];
+  if (Object.keys(args).some((key) => key !== "path" && !echoesDefault(key))) {
     return errorText('SEARCH_ARGS_INVALID: "path" is mutually exclusive with "op" and every other search argument.');
   }
   const notePath = args["path"];

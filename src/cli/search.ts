@@ -45,6 +45,11 @@ async function target(argv: readonly string[]): Promise<Target> {
   let explicit: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]!;
+    // Tokens after a `--` terminator are query text, so a later `--vault` is not the flag.
+    if (token === "--") {
+      rest.push(...argv.slice(index));
+      break;
+    }
     if (token !== "--vault") {
       rest.push(token);
       continue;
@@ -160,6 +165,8 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
     );
   }
   if (first === "--link") {
+    // Link suggestion has no query text, so a terminator would forward what follows it as flags.
+    if (terminator !== -1) fail("--link does not accept a -- terminator");
     // A leading --link is link suggestion for one note; later --link stays a query filter.
     // The resolved argv already had --vault removed, so an explicit target is passed on resolved.
     const vault = resolved.source === "explicit" ? ["--vault", resolved.vault] : [];
