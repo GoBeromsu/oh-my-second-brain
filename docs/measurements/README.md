@@ -95,3 +95,8 @@ Whole-invocation latency of the built CLI, measured with `npm run bench:latency`
 
 - [latency-baseline-0.18.3.md](./latency-baseline-0.18.3.md): the 0.18.3 reference for `note get` and lexical `search query`.
 - [latency-search-path.md](./latency-search-path.md): `oms search --path` measured back to back with 0.18.3, plus where the startup time goes.
+
+Korean retrieval quality and in-process retrieval latency are measured with `npm run bench`
+(`scripts/bench/run.mjs`). These are also records, not release gates.
+
+- [ko-retrieval-ablation.md](./ko-retrieval-ablation.md): tier-1 CUR vs CUR+BI (syllable-bigram channel) per query type, the MIRACL-ko license verdict, the ablation stages not yet run, and the pending tier-3 command.
