@@ -277,6 +277,18 @@ describe("sealGate human", () => {
     expect(await kinds()).toContain("lineage.reanchored");
   });
 
+  it("refuses when the store no longer has the parent the owner was shown", async () => {
+    const request = await issue(WIDER, { state: "awaiting-human" });
+    const shown = await readStore(ID, root);
+    const mismatch = { root, vaultId: ID, vaultRealPath: vault, requestId: request.requestId, mode: "human" as const, expectedParentDigest: FOREIGN };
+    await expect(sealGate(mismatch, { now: () => NOW })).rejects.toThrow(/^EVOLUTION_PARENT_MOVED:/);
+    expect((await readEvolutionEvents(root, ID)).events.at(-1)).toMatchObject({ kind: "seal.parent-moved", detail: { expectedParentDigest: FOREIGN } });
+    expect(await readStore(ID, root)).toEqual(shown);
+    expect(await stateOf(request)).toBe("awaiting-human");
+    const matching = { ...mismatch, expectedParentDigest: shown.state === "ok" ? shown.digest : "" };
+    expect((await sealGate(matching, { now: () => NOW })).outcome).toBe("sealed");
+  });
+
   it("refuses an open request and records nothing", async () => {
     const request = await issue(TIGHTER);
     await expect(run(request, "human")).rejects.toThrow(/^EVOLUTION_REQUEST_CLOSED:/);

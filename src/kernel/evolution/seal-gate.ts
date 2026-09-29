@@ -92,6 +92,11 @@ export interface SealGateInput {
   readonly vaultRealPath: string;
   readonly requestId: string;
   readonly mode: SealMode;
+  /**
+   * Human mode: the sealed digest the owner saw when the prompt opened. A different digest
+   * now means the contract was sealed while the owner was answering: EVOLUTION_PARENT_MOVED.
+   */
+  readonly expectedParentDigest?: string;
 }
 
 export interface SealGateDeps {
@@ -163,6 +168,13 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
   const { root, vaultId } = input;
   const stored = await readRequest(root, vaultId, input.requestId);
   if (stored === null) throw new SealGateError("EVOLUTION_REQUEST_UNKNOWN", `request ${input.requestId} does not exist`);
+  if (input.expectedParentDigest !== undefined) {
+    const current = await readStore(vaultId, root);
+    if (current.state !== "ok" || current.digest !== input.expectedParentDigest) {
+      await appendEvolutionEvent(root, vaultId, { kind: "seal.parent-moved", at: now, requestId: stored.requestId, detail: { expectedParentDigest: input.expectedParentDigest } });
+      throw new SealGateError("EVOLUTION_PARENT_MOVED", "the contract was sealed while the owner was answering; nothing was sealed. Evolve again from the current contract");
+    }
+  }
   const { events } = await lineageTail(root, vaultId);
   const request = await settleRequest(root, vaultId, stored, events, now);
   const wanted = input.mode === "autonomous" ? "open" : "awaiting-human";
