@@ -325,7 +325,8 @@ describe("translatePreToolUse path rules", () => {
     expect((await decide(vault, payload("Read", { file_path: join(vault, "Projects/a.md") })))).toEqual({ decision: "allow", reason: null, warning: null });
   });
 
-  it("judges a Write over an unreadable existing file as new and warns that it could not be read", async () => {
+  // Root ignores permission bits, so the denial this test relies on never happens.
+  it.skipIf(process.getuid?.() === 0)("judges a Write over an unreadable existing file as new and warns that it could not be read", async () => {
     const sealedRow = await row("sealed");
     const note = join(sealedRow.vault, "Projects/a.md");
     await mkdir(join(sealedRow.vault, "Projects"), { recursive: true });

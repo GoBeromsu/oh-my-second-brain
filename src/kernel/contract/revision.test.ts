@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeContractVault } from "./contract-vault-fixture.js";
+import { writeContractVault } from "../../../test/fixtures/contract-vault-fixture.js";
 import { contractRevision } from "./revision.js";
 import { readStore, sealContract } from "./store.js";
 import type { VaultContract } from "./types.js";

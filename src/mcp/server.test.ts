@@ -14,7 +14,7 @@ import { parse } from "yaml";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import { createOMSMcpServer, omsMcpTools, searchPathDefaults } from "./server.js";
 import { searchExactRead } from "./tools/search.js";
-import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
+import { writeContractVault } from "../../test/fixtures/contract-vault-fixture.js";
 import type { VaultContract } from "../kernel/contract/types.js";
 import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../kernel/vault/settings.js";
 import { buildTruthTableRow } from "../../test/fixtures/contract-truth-table.js";

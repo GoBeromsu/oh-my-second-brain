@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { digestBytes } from "../conventions/canonical.js";
 import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import { decideWrite, judgeReadyTarget, resolveWriteTarget, type WriteTarget } from "./judge-write.js";
-import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { sealLegacyGeneration } from "../../../test/fixtures/legacy-store-fixture.js";
 import { bootstrapSnapshots } from "./store.js";
 import type { ContractView, PropertyContract } from "./types.js";
 import { resolveSealState } from "./vault-id.js";

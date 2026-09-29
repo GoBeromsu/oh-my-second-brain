@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rm } from "node:fs/promises";
-import { writeMorningVaultFixture } from "../kernel/search/morning-test-fixtures.js";
+import { writeMorningVaultFixture } from "../../test/fixtures/morning-test-fixtures.js";
 
 const calls: { sessions: unknown[]; queries: unknown[] } = { sessions: [], queries: [] };
 

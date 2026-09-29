@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sealLegacyGeneration } from "../../src/kernel/contract/legacy-store-fixture.js";
+import { sealLegacyGeneration } from "./legacy-store-fixture.js";
 import type { TemplatedContract } from "../../src/kernel/contract/legacy.js";
 import { bootstrapSnapshots, sealContract, writeIndexEntry } from "../../src/kernel/contract/store.js";
 import type { VaultContract } from "../../src/kernel/contract/types.js";

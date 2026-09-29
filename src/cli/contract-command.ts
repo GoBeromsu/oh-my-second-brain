@@ -234,8 +234,9 @@ async function setup(vault: string, args: ContractArgs, deps: ContractCommandDep
       restart: resume.restart === true,
       ...(resume.now === undefined ? {} : { now: resume.now }),
     });
-    if (resumed !== null && resumed.corrupt.length > 0) {
-      console.error(`[oms] The interview log has ${resumed.corrupt.length} unreadable line(s); they were skipped and left in place.`);
+    const unreadable = resumed === null ? 0 : resumed.corrupt.length + resumed.pendingCorrupt.length;
+    if (unreadable > 0) {
+      console.error(`[oms] The interview log has ${unreadable} unreadable line(s); they were skipped and left in place.`);
     }
     if (resumed !== null && resumed.pending > 0) console.error(`[oms] Continuing the interview with ${resumed.pending} earlier answer(s). Run \`oms interview --restart\` to start over.`);
     const result = await runInterview({

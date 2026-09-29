@@ -15,7 +15,7 @@ vi.mock("../kernel/doctor/service.js", async importOriginal => {
   };
 });
 
-import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
+import { writeContractVault } from "../../test/fixtures/contract-vault-fixture.js";
 import { resolveSealState } from "../kernel/contract/vault-id.js";
 import { storeRoot } from "../kernel/contract/store.js";
 import { runLineageCommand } from "./lineage-command.js";

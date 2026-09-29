@@ -7,7 +7,7 @@ import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { hasNestedQuantifier, InterviewAborted, runInterview, type InterviewIO, type Question } from "./interview.js";
 import { judge } from "./judge.js";
 import { digestBytes } from "../conventions/canonical.js";
-import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { sealLegacyGeneration } from "../../../test/fixtures/legacy-store-fixture.js";
 import { bootstrapSnapshots, readDeclined, readStore } from "./store.js";
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";

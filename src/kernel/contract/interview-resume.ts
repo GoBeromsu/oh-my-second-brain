@@ -119,8 +119,16 @@ export function logRecorder(vault: string, root: string, now: () => number = Dat
  * `migrateInterviewLog` gives them once the move happens, including after a move cut short
  * part way: pending events already copied under the id are not listed twice. Nothing is
  * created or moved.
+ *
+ * Unparsable lines are reported per file, numbered as in that file: `corrupt` for the log
+ * under the vault id and `pendingCorrupt` for the pending log, as `oms doctor contract` does.
  */
-export async function vaultLog(vault: string, root: string): Promise<{ readonly vaultId: string | null; readonly events: readonly InterviewEvent[]; readonly corrupt: readonly number[] }> {
+export async function vaultLog(vault: string, root: string): Promise<{
+  readonly vaultId: string | null;
+  readonly events: readonly InterviewEvent[];
+  readonly corrupt: readonly number[];
+  readonly pendingCorrupt: readonly number[];
+}> {
   let vaultId: string | null;
   try {
     vaultId = (await readVaultSettings(vault))?.vaultId ?? null;
@@ -129,9 +137,9 @@ export async function vaultLog(vault: string, root: string): Promise<{ readonly 
     vaultId = null;
   }
   const pending = await readInterviewLog(root, await pendingLogKey(vault));
-  if (vaultId === null) return { vaultId, ...pending };
+  if (vaultId === null) return { vaultId, events: pending.events, corrupt: [], pendingCorrupt: pending.corrupt };
   const own = await readInterviewLog(root, vaultId);
-  if (pending.events.length === 0 && pending.corrupt.length === 0) return { vaultId, ...own };
+  if (pending.events.length === 0 && pending.corrupt.length === 0) return { vaultId, events: own.events, corrupt: own.corrupt, pendingCorrupt: [] };
   // The seal moves the pending log under the id, so a pending log still beside it was
   // written by a writer that did not see the id yet: it goes after, as the move appends it,
   // each event numbered one more than the highest before it.
@@ -140,7 +148,8 @@ export async function vaultLog(vault: string, root: string): Promise<{ readonly 
   return {
     vaultId,
     events: [...own.events, ...moved.map((event, index) => ({ ...event, seq: offset + index + 1 }))],
-    corrupt: [...own.corrupt, ...pending.corrupt],
+    corrupt: own.corrupt,
+    pendingCorrupt: pending.corrupt,
   };
 }
 
@@ -149,8 +158,10 @@ export interface ResumedIO {
   readonly notes: readonly string[];
   /** Logged answers dropped because their question changed or was rejected; filled as the run asks. */
   readonly drift: readonly ReplayDrift[];
-  /** Line numbers in the log that did not parse; they were skipped, not removed. */
+  /** Line numbers in the vault id log that did not parse; they were skipped, not removed. */
   readonly corrupt: readonly number[];
+  /** Line numbers in the pending log (kept before the first seal) that did not parse. */
+  readonly pendingCorrupt: readonly number[];
   /** How many logged answers are offered for replay. */
   readonly pending: number;
 }
@@ -189,5 +200,5 @@ export async function resumableIO(options: {
     ...(options.fallback === undefined ? {} : { fallback: options.fallback }),
     ...(record === undefined ? {} : { record }),
   });
-  return { io, notes, drift, corrupt: log.corrupt, pending: replay.size };
+  return { io, notes, drift, corrupt: log.corrupt, pendingCorrupt: log.pendingCorrupt, pending: replay.size };
 }

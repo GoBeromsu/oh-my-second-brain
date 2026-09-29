@@ -86,7 +86,7 @@ vi.mock("../kernel/doctor/service.js", async (importOriginal) => {
   };
 });
 
-import { writeMorningVaultFixture } from "../kernel/search/morning-test-fixtures.js";
+import { writeMorningVaultFixture } from "../../test/fixtures/morning-test-fixtures.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import { createOMSMcpServer } from "./server.js";
 

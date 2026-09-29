@@ -1,10 +1,11 @@
-import { access, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { access, appendFile, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import { runInterview, type InterviewIO, type Question } from "./interview.js";
-import { appendInterviewEvent, migrateInterviewLog, pendingLogKey, readInterviewLog } from "./interview-log.js";
+import { appendInterviewEvent, EVENTS_FILE, migrateInterviewLog, pendingLogKey, readInterviewLog } from "./interview-log.js";
+import { stateDir } from "./state-dir.js";
 import { confirmedProposal, currentRun, latestProposal, pendingAnswers, resumableIO, vaultLog } from "./interview-resume.js";
 import type { Answers } from "./scripted-interview.js";
 import { readStore } from "./store.js";
@@ -239,6 +240,31 @@ describe("continuing an interrupted interview", () => {
     expect(before).toEqual([[1, "own-1"], [2, "pending-1"], [3, "pending-2"]]);
     await migrateInterviewLog(root, pending, VAULT_ID);
     expect(strip((await vaultLog(vault, root)).events)).toEqual(before);
+  });
+
+  it("reports unparsable lines numbered within the file they are in", async () => {
+    const { vault, root } = await makeVault("corrupt-lines");
+    const pending = await pendingLogKey(vault);
+    const answer = (questionId: string) => ({ type: "answered" as const, questionId, questionDigest: "d", payload: { answer: "x" } });
+    await appendInterviewEvent(root, VAULT_ID, answer("own-1"), () => 1);
+    await appendFile(join(stateDir(root, VAULT_ID), "interview", EVENTS_FILE), "{not json\n");
+    await appendInterviewEvent(root, pending, answer("pending-1"), () => 2);
+    await appendInterviewEvent(root, pending, answer("pending-2"), () => 3);
+    await appendFile(join(stateDir(root, pending), "interview", EVENTS_FILE), "{not json\n");
+    const log = await vaultLog(vault, root);
+    expect(log.corrupt).toEqual([2]);
+    expect(log.pendingCorrupt).toEqual([3]);
+    const resumed = await resumableIO({ vault, root, record: false, now: () => NOW });
+    expect([resumed.corrupt, resumed.pendingCorrupt]).toEqual([[2], [3]]);
+  });
+
+  it("reports a pending log's unparsable lines as pending before the first seal", async () => {
+    const { vault, root } = await makeFreshVault("fresh-corrupt");
+    const pending = await pendingLogKey(vault);
+    await appendInterviewEvent(root, pending, { type: "answered", questionId: "q", questionDigest: "d", payload: { answer: "x" } }, () => 1);
+    await appendFile(join(stateDir(root, pending), "interview", EVENTS_FILE), "{not json\n");
+    const log = await vaultLog(vault, root);
+    expect([log.vaultId, log.corrupt, log.pendingCorrupt]).toEqual([null, [], [2]]);
   });
 
   it("confirms only the latest proposal", () => {

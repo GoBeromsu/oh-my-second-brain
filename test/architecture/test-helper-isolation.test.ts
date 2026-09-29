@@ -126,3 +126,31 @@ describe("test helpers stay out of production code", () => {
       .toEqual([]);
   });
 });
+
+/**
+ * Test fixtures build vaults and sealed stores for tests. Unlike the helpers above they
+ * are not a fake capability, but they are not product either, and anything under `src/`
+ * compiles into `dist/` and ships. They live in `test/fixtures/` instead.
+ */
+function isFixtureModule(relativePath: string): boolean {
+  return isProductionTs(relativePath) && /fixtures?\.ts$/u.test(relativePath);
+}
+
+describe("test fixtures stay out of the published source tree", () => {
+  it("finds the fixtures it is meant to police in test/fixtures", async () => {
+    const fixtures = await collectFiles("test/fixtures", isFixtureModule);
+    assertNonVacuous(fixtures, "test/fixtures fixture modules");
+    expect(fixtures).toContain("test/fixtures/contract-vault-fixture.ts");
+    expect(fixtures).toContain("test/fixtures/legacy-store-fixture.ts");
+  });
+
+  it("no fixture module is compiled from src into dist", async () => {
+    expect(await collectFiles("src", isFixtureModule)).toEqual([]);
+  });
+
+  it("detects a fixture module under src", () => {
+    expect(isFixtureModule("src/kernel/contract/legacy-store-fixture.ts")).toBe(true);
+    expect(isFixtureModule("src/kernel/search/morning-test-fixtures.ts")).toBe(true);
+    expect(isFixtureModule("src/kernel/contract/store.test.ts")).toBe(false);
+  });
+});

@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readdir, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readdir, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InterviewIO, Question } from "../kernel/contract/interview.js";
-import { pendingLogKey, readInterviewLog } from "../kernel/contract/interview-log.js";
+import { EVENTS_FILE, pendingLogKey, readInterviewLog } from "../kernel/contract/interview-log.js";
+import { stateDir } from "../kernel/contract/state-dir.js";
 import { readStore } from "../kernel/contract/store.js";
 import { resolveSealState } from "../kernel/contract/vault-id.js";
 import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../kernel/vault/settings.js";
@@ -145,6 +146,19 @@ describe("oms interview", () => {
     expect((await readStore(VAULT_ID, root)).state).toBe("ok");
     expect(await readlink(path.join(root, VAULT_ID))).toBe(`.${VAULT_ID}.1`);
     expect((await readInterviewLog(root, VAULT_ID)).events.at(-1)?.type).toBe("sealed");
+  });
+
+  it("counts unreadable lines in the pending log as well as the vault id log", async () => {
+    const { vault, root } = await makeVault();
+    const resume = { root, now: () => NOW, sealDeps: { now: () => NOW } };
+    await interrupted(runInterviewCommand(["--vault", vault], { io: owner(3).io, resume }));
+    await appendFile(path.join(stateDir(root, VAULT_ID), "interview", EVENTS_FILE), "{not json\n");
+    const pending = path.join(stateDir(root, await pendingLogKey(vault)), "interview");
+    await mkdir(pending, { recursive: true });
+    await appendFile(path.join(pending, EVENTS_FILE), "{not json\n");
+    error.mockClear();
+    await runInterviewCommand(["--vault", vault], { io: owner().io, resume });
+    expect(stderr()).toContain("The interview log has 2 unreadable line(s)");
   });
 
   it("starts over with --restart after logging the run as abandoned", async () => {

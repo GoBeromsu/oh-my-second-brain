@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { retrieveMorningContext, type MorningSemanticBackend } from "./morning.js";
-import { writeMorningVaultFixture } from "./morning-test-fixtures.js";
+import { writeMorningVaultFixture } from "../../../test/fixtures/morning-test-fixtures.js";
 import type {
   SemanticDocumentResult,
   SemanticEmbeddingSyncResult,

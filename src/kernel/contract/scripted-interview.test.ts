@@ -7,7 +7,7 @@ import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import { runInterview } from "./interview.js";
 import { parseAnswers, publicQuestion, scriptedIO, type Answers } from "./scripted-interview.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
-import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { sealLegacyGeneration } from "../../../test/fixtures/legacy-store-fixture.js";
 import { bootstrapSnapshots, readStore } from "./store.js";
 import type { Rule } from "./types.js";
 

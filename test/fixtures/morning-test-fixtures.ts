@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { writeContractVault } from "../contract/contract-vault-fixture.js";
+import { writeContractVault } from "./contract-vault-fixture.js";
 
 const REFERENCE_SOURCE = "---\ntemplate: reference\ntitle: Untitled\ntags: []\n---\n\n## Summary\n";
 

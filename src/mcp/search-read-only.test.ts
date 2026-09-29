@@ -17,7 +17,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
+import { writeContractVault } from "../../test/fixtures/contract-vault-fixture.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import Database from "better-sqlite3";
 import { mkdtemp, mkdir, readFile, readdir, readlink, rm, writeFile, stat } from "node:fs/promises";
