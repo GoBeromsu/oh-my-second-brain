@@ -33,7 +33,7 @@ import { mechanicalStage, type MechanicalResult, type NoteJudge } from "./stage-
  *   2. a loosening candidate moves to awaiting-human, whatever the policy says;
  *   3. the autonomous policy is on (else EVOLUTION_POLICY_OFF; the request stays open);
  *   4. stage 1: a new refusal rejects, a rising warning count moves to awaiting-human;
- *   5. the quorum: 2 of 3 bound verdicts approve (2 rejects reject; fewer is pending);
+ *   5. the quorum: all 3 bound verdicts arrived and 2 of 3 approve (2 rejects reject);
  *   6. the rate limit, counted from the lineage;
  *   7. the pinned bytes verify; the seal attempt is recorded; then the seal, refusing a
  *      lineage gap instead of re-anchoring it.
@@ -72,9 +72,9 @@ export function tally(verdicts: readonly VerdictRecord[]): Tally {
 }
 
 export function quorumDecision(count: Tally): QuorumDecision {
-  if (count.approve >= MAJORITY) return "approve";
-  if (count.reject >= MAJORITY) return "reject";
-  return "pending";
+  if (count.pending > 0) return "pending";
+  // All three arrived, so a minority of approvals is a majority of rejections.
+  return count.approve >= MAJORITY ? "approve" : "reject";
 }
 
 /** Which way the candidate moves from the parent; see mutation-direction.ts. */
