@@ -9,7 +9,7 @@ import { judgeContent, judgeWrite } from "./judge-write.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { sealContract, storeRoot } from "./store.js";
 import {
-  formatDenyReason, GUIDANCE, GUIDANCE_FOR, VIOLATION_KINDS,
+  findingsOf, formatDenyReason, formatWarnings, GUIDANCE, GUIDANCE_FOR, SEVERITY_OF, verdictOf, VIOLATION_KINDS, WARNING_PREFIX,
   type ContractView, type PropertyContract, type VaultContract,
 } from "./types.js";
 
@@ -41,10 +41,44 @@ describe("GUIDANCE totality", () => {
     for (const kind of VIOLATION_KINDS) expect(GUIDANCE).toContain(GUIDANCE_FOR[kind]);
   });
 
-  it("formats a deny reason with the first violation's guidance", () => {
-    expect(formatDenyReason([{ field: "contract", kind: "contract-unreadable" }, { field: "x", kind: "missing" }]))
-      .toBe('[oms] write denied: [{"field":"contract","kind":"contract-unreadable"},{"field":"x","kind":"missing"}] Run: oms doctor contract');
+  it("formats a deny reason with the first refusal's guidance", () => {
+    expect(formatDenyReason([{ field: "contract", kind: "contract-tampered" }, { field: "path", kind: "path-unsafe" }]))
+      .toBe('[oms] write denied: [{"field":"contract","kind":"contract-tampered"},{"field":"path","kind":"path-unsafe"}] Run: oms doctor contract');
     expect(formatDenyReason([])).toBe("[oms] write denied: [] Run: oms doctor status");
+  });
+
+  it("formats warnings with the warning prefix and the first warning's guidance", () => {
+    expect(WARNING_PREFIX).toBe("[oms] write allowed with warnings: ");
+    expect(formatWarnings([{ field: "contract", kind: "contract-unreadable" }, { field: "x", kind: "missing" }]))
+      .toBe('[oms] write allowed with warnings: [{"field":"contract","kind":"contract-unreadable"},{"field":"x","kind":"missing"}] Run: oms interview');
+    expect(formatWarnings([{ field: "x", kind: "missing" }]).startsWith(WARNING_PREFIX)).toBe(true);
+    expect(formatWarnings([])).toBe("[oms] write allowed with warnings: [] Run: oms doctor status");
+  });
+});
+
+describe("SEVERITY_OF", () => {
+  it("gives every kind exactly one severity", () => {
+    expect(Object.keys(SEVERITY_OF).sort()).toEqual([...VIOLATION_KINDS].sort());
+  });
+
+  it("refuses only safety kinds and warns on every axis", () => {
+    const refused = VIOLATION_KINDS.filter(kind => SEVERITY_OF[kind] === "refuse").sort();
+    expect(refused).toEqual(["contract-tampered", "control-path", "outside-vault", "path-unsafe", "unsupported-input"]);
+    for (const kind of VIOLATION_KINDS) if (!refused.includes(kind)) expect(SEVERITY_OF[kind]).toBe("warn");
+  });
+
+  it("splits findings into refusals and warnings, with violations as the refusals", () => {
+    const verdict = verdictOf([{ field: "x", kind: "missing" }, { field: "path", kind: "path-unsafe" }], ["owner"]);
+    expect(verdict).toEqual({
+      ok: false,
+      refusals: [{ field: "path", kind: "path-unsafe" }],
+      warnings: [{ field: "x", kind: "missing" }],
+      fixes: [],
+      missingDefaults: ["owner"],
+      violations: [{ field: "path", kind: "path-unsafe" }],
+    });
+    expect(findingsOf(verdict)).toEqual([{ field: "path", kind: "path-unsafe" }, { field: "x", kind: "missing" }]);
+    expect(verdictOf([{ field: "x", kind: "missing" }]).ok).toBe(true);
   });
 });
 
@@ -55,13 +89,18 @@ describe("base path rules", () => {
     expect(judge({ path: "../escape.md", frontmatter: {}, body: "" }, open).violations).toEqual([{ field: "path", kind: "path-unsafe" }]);
   });
 
-  it("passes anything when the vault is open", () => {
-    expect(judge({ path: "a.md", frontmatter: { anything: 1 }, body: "{{x}}" }, { state: "open" })).toEqual({ ok: true, violations: [], missingDefaults: [] });
+  it("passes anything when the vault is open, with one contract-open warning", () => {
+    expect(judge({ path: "a.md", frontmatter: { anything: 1 }, body: "{{x}}" }, { state: "open" })).toEqual({
+      ok: true, refusals: [], warnings: [{ field: "contract", kind: "contract-open" }], fixes: [], missingDefaults: [], violations: [],
+    });
   });
 
-  it("reports malformed frontmatter as yaml-syntax", () => {
+  it("reports malformed frontmatter as a yaml-syntax warning", () => {
     const verdict = judgeContent({ path: "a.md", content: "---\nkey: [unclosed\n---\n" }, { state: "open" });
-    expect(verdict.violations).toEqual([{ field: "content", kind: "yaml-syntax" }]);
+    expect(verdict.ok).toBe(true);
+    expect(verdict.warnings).toEqual([{ field: "contract", kind: "contract-open" }, { field: "content", kind: "yaml-syntax" }]);
+    const sealedVerdict = judgeContent({ path: "a.md", content: "---\nkey: [unclosed\n---\n" }, sealed({}));
+    expect(sealedVerdict.warnings).toEqual([{ field: "content", kind: "yaml-syntax" }]);
   });
 });
 
@@ -88,19 +127,19 @@ describe("AC6: required and default properties", () => {
     },
   });
 
-  it("denies a missing or empty required property", () => {
-    expect(judge({ path: "a.md", frontmatter: {}, body: "" }, view).violations).toEqual([{ field: "status", kind: "missing" }]);
-    expect(judge({ path: "a.md", frontmatter: { status: "  " }, body: "" }, view).violations).toEqual([{ field: "status", kind: "missing" }]);
+  it("warns on a missing or empty required property", () => {
+    expect(judge({ path: "a.md", frontmatter: {}, body: "" }, view).warnings).toEqual([{ field: "status", kind: "missing" }]);
+    expect(judge({ path: "a.md", frontmatter: { status: "  " }, body: "" }, view).warnings).toEqual([{ field: "status", kind: "missing" }]);
   });
 
   it("passes a missing default property and reports it", () => {
     const verdict = judge({ path: "a.md", frontmatter: { status: "x" }, body: "" }, view);
-    expect(verdict).toEqual({ ok: true, violations: [], missingDefaults: ["owner"] });
+    expect(verdict).toEqual({ ok: true, refusals: [], warnings: [], fixes: [], missingDefaults: ["owner"], violations: [] });
   });
 });
 
 describe("AC7: no value, rule or template name leaves the judge", () => {
-  it("keeps secrets out of violations and the deny reason", () => {
+  it("keeps secrets out of warnings and the warning line", () => {
     const view = sealed({
       properties: {
         code: property({ rules: [{ kind: "fixed", value: SECRET }] }),
@@ -112,14 +151,14 @@ describe("AC7: no value, rule or template name leaves the judge", () => {
       },
     });
     const verdict = judge({ path: "a.md", frontmatter: { code: "wrong", level: "bad", id: "nope" }, body: "", selectedTemplate: "missing" }, view);
-    expect(verdict.ok).toBe(false);
-    expect(verdict.violations).toEqual([
+    expect(verdict.ok).toBe(true);
+    expect(verdict.warnings).toEqual([
       { field: "code", kind: "not-fixed" },
       { field: "id", kind: "pattern" },
       { field: "level", kind: "not-allowed" },
       { field: "template", kind: "template-mismatch" },
     ]);
-    const output = `${JSON.stringify(verdict)}\n${formatDenyReason(verdict.violations)}`;
+    const output = `${JSON.stringify(verdict)}\n${formatWarnings(verdict.warnings)}`;
     expect(output).not.toContain(SECRET);
     expect(output).not.toContain("wrong");
   });
@@ -134,10 +173,10 @@ describe("value rules", () => {
   });
 
   it("checks type before rules", () => {
-    expect(judge({ path: "a.md", frontmatter: { count: "3" }, body: "" }, view).violations).toEqual([{ field: "count", kind: "type" }]);
-    expect(judge({ path: "a.md", frontmatter: { count: 9 }, body: "" }, view).violations).toEqual([{ field: "count", kind: "range" }]);
-    expect(judge({ path: "a.md", frontmatter: { when: "2026-02-30" }, body: "" }, view).violations).toEqual([{ field: "when", kind: "type" }]);
-    expect(judge({ path: "a.md", frontmatter: { count: 3, when: "2026-02-28" }, body: "" }, view).ok).toBe(true);
+    expect(judge({ path: "a.md", frontmatter: { count: "3" }, body: "" }, view).warnings).toEqual([{ field: "count", kind: "type" }]);
+    expect(judge({ path: "a.md", frontmatter: { count: 9 }, body: "" }, view).warnings).toEqual([{ field: "count", kind: "range" }]);
+    expect(judge({ path: "a.md", frontmatter: { when: "2026-02-30" }, body: "" }, view).warnings).toEqual([{ field: "when", kind: "type" }]);
+    expect(judge({ path: "a.md", frontmatter: { count: 3, when: "2026-02-28" }, body: "" }, view).warnings).toEqual([]);
   });
 });
 
@@ -154,32 +193,36 @@ describe("count rule", () => {
   const verdict = (frontmatter: Record<string, unknown>) => judge({ path: "a.md", frontmatter, body: "" }, view);
 
   it("counts the items of a list against min and max", () => {
-    expect(verdict({ tags: ["a"] }).ok).toBe(true);
-    expect(verdict({ tags: ["a", "b"] }).ok).toBe(true);
-    expect(verdict({ tags: ["a", "b", "c"] }).violations).toEqual([{ field: "tags", kind: "count" }]);
+    expect(verdict({ tags: ["a"] }).warnings).toEqual([]);
+    expect(verdict({ tags: ["a", "b"] }).warnings).toEqual([]);
+    expect(verdict({ tags: ["a", "b", "c"] }).warnings).toEqual([{ field: "tags", kind: "count" }]);
   });
 
   it("applies a min-only or max-only bound", () => {
-    expect(verdict({ atLeast: ["a", "b", "c", "d"] }).ok).toBe(true);
-    expect(verdict({ atLeast: ["a"] }).violations).toEqual([{ field: "atLeast", kind: "count" }]);
-    expect(verdict({ atMost: [] }).ok).toBe(true);
-    expect(verdict({ atMost: ["a", "b"] }).violations).toEqual([{ field: "atMost", kind: "count" }]);
+    expect(verdict({ atLeast: ["a", "b", "c", "d"] }).warnings).toEqual([]);
+    expect(verdict({ atLeast: ["a"] }).warnings).toEqual([{ field: "atLeast", kind: "count" }]);
+    expect(verdict({ atMost: [] }).warnings).toEqual([]);
+    expect(verdict({ atMost: ["a", "b"] }).warnings).toEqual([{ field: "atMost", kind: "count" }]);
   });
 
   it("counts a scalar as one member and leaves an absent or empty value to the required check", () => {
-    expect(verdict({ one: "x" }).ok).toBe(true);
-    expect(verdict({ none: "x" }).violations).toEqual([{ field: "none", kind: "count" }]);
-    expect(verdict({}).ok).toBe(true);
-    expect(verdict({ tags: [] }).ok).toBe(true);
+    expect(verdict({ one: "x" }).warnings).toEqual([]);
+    expect(verdict({ none: "x" }).warnings).toEqual([{ field: "none", kind: "count" }]);
+    expect(verdict({}).warnings).toEqual([]);
+    expect(verdict({ tags: [] }).warnings).toEqual([]);
     const required = sealed({ properties: { tags: property({ type: "list", required: true, rules: [{ kind: "count", min: 1 }] }) } });
-    expect(judge({ path: "a.md", frontmatter: { tags: [] }, body: "" }, required).violations).toEqual([{ field: "tags", kind: "missing" }]);
+    expect(judge({ path: "a.md", frontmatter: { tags: [] }, body: "" }, required).warnings).toEqual([{ field: "tags", kind: "missing" }]);
   });
 });
 
-describe("AC16: an unreadable contract denies every write", () => {
-  it("denies against an unreadable view", () => {
-    expect(judge({ path: "Projects/a.md", frontmatter: {}, body: "" }, { state: "unreadable" }).violations)
-      .toEqual([{ field: "contract", kind: "contract-unreadable" }]);
+describe("AC16: an unreadable contract refuses only when tampered", () => {
+  it("warns against a broken view and refuses against a tampered one", () => {
+    const broken = judge({ path: "Projects/a.md", frontmatter: { anything: 1 }, body: "" }, { state: "unreadable", reason: "broken" });
+    expect(broken.ok).toBe(true);
+    expect(broken.warnings).toEqual([{ field: "contract", kind: "contract-unreadable" }]);
+    const tampered = judge({ path: "Projects/a.md", frontmatter: {}, body: "" }, { state: "unreadable", reason: "tampered" });
+    expect(tampered.ok).toBe(false);
+    expect(tampered.refusals).toEqual([{ field: "contract", kind: "contract-tampered" }]);
   });
 
   describe("judgeWrite against a tampered store", () => {
@@ -197,7 +240,7 @@ describe("AC16: an unreadable contract denies every write", () => {
       else process.env["HOME"] = previousHome;
     });
 
-    it("passes a sealed write and denies once a store file is altered", async () => {
+    it("passes a sealed write and warns once a store file is altered", async () => {
       expect(storeRoot().startsWith(home)).toBe(true);
       const vault = await temp("oms-judge-vault-");
       const vaultId = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
@@ -206,11 +249,11 @@ describe("AC16: an unreadable contract denies every write", () => {
       await sealContract({ vaultRealPath: vault, vaultId, contract: { folders: { Projects: { meaning: "p", searchExclude: false } }, properties: null, templates: {} } });
 
       expect((await judgeWrite(vault, "Projects/a.md", "# ok\n")).ok).toBe(true);
-      expect((await judgeWrite(vault, "Inbox/a.md", "# ok\n")).violations).toEqual([{ field: "path", kind: "unregistered-folder" }]);
+      expect((await judgeWrite(vault, "Inbox/a.md", "# ok\n")).warnings).toEqual([{ field: "path", kind: "unregistered-folder" }]);
 
       const generation = (await readdir(storeRoot())).find(entry => new RegExp(`^\\.${vaultId}\\.(\\d{1,9})$`).test(entry))!;
       await writeFile(join(storeRoot(), generation, "folders.json"), "{\"version\":1,\"folders\":{}}\n");
-      expect((await judgeWrite(vault, "Projects/a.md", "# ok\n")).violations).toEqual([{ field: "contract", kind: "contract-unreadable" }]);
+      expect((await judgeWrite(vault, "Projects/a.md", "# ok\n")).warnings).toEqual([{ field: "contract", kind: "contract-unreadable" }]);
     });
 
     it("denies a target outside the vault", async () => {
@@ -232,11 +275,11 @@ describe("AC18: folder-mismatch for an explicit template", () => {
   it("inherits into subfolders", () => {
     expect(insideApplyFolder("Meetings/2026/a.md", "Meetings")).toBe(true);
     expect(insideApplyFolder("MeetingsX/a.md", "Meetings")).toBe(false);
-    expect(judge({ path: "Meetings/2026/a.md", frontmatter: {}, body: "", selectedTemplate: "Meeting" }, view).ok).toBe(true);
+    expect(judge({ path: "Meetings/2026/a.md", frontmatter: {}, body: "", selectedTemplate: "Meeting" }, view).warnings).toEqual([]);
   });
 
-  it("denies a note outside the apply folder", () => {
-    expect(judge({ path: "Notes/a.md", frontmatter: {}, body: "", selectedTemplate: "Meeting" }, view).violations)
+  it("warns on a note outside the apply folder", () => {
+    expect(judge({ path: "Notes/a.md", frontmatter: {}, body: "", selectedTemplate: "Meeting" }, view).warnings)
       .toEqual([{ field: "path", kind: "folder-mismatch" }]);
   });
 });
@@ -247,19 +290,19 @@ describe("AC19: registered folders and properties", () => {
     properties: { status: property() },
   });
 
-  it("denies an unregistered folder, including the vault root", () => {
-    expect(judge({ path: "Inbox/a.md", frontmatter: {}, body: "" }, view).violations).toEqual([{ field: "path", kind: "unregistered-folder" }]);
-    expect(judge({ path: "a.md", frontmatter: {}, body: "" }, view).violations).toEqual([{ field: "path", kind: "unregistered-folder" }]);
-    expect(judge({ path: "Projects/deep/a.md", frontmatter: {}, body: "" }, view).ok).toBe(true);
+  it("warns on an unregistered folder, including the vault root", () => {
+    expect(judge({ path: "Inbox/a.md", frontmatter: {}, body: "" }, view).warnings).toEqual([{ field: "path", kind: "unregistered-folder" }]);
+    expect(judge({ path: "a.md", frontmatter: {}, body: "" }, view).warnings).toEqual([{ field: "path", kind: "unregistered-folder" }]);
+    expect(judge({ path: "Projects/deep/a.md", frontmatter: {}, body: "" }, view).warnings).toEqual([]);
   });
 
-  it("denies an unknown property", () => {
-    expect(judge({ path: "Projects/a.md", frontmatter: { status: "x", extra: 1 }, body: "" }, view).violations)
+  it("warns on an unknown property", () => {
+    expect(judge({ path: "Projects/a.md", frontmatter: { status: "x", extra: 1 }, body: "" }, view).warnings)
       .toEqual([{ field: "extra", kind: "unknown-property" }]);
   });
 
   it("leaves null axes open", () => {
-    expect(judge({ path: "anywhere/a.md", frontmatter: { whatever: 1 }, body: "" }, sealed({})).ok).toBe(true);
+    expect(judge({ path: "anywhere/a.md", frontmatter: { whatever: 1 }, body: "" }, sealed({})).warnings).toEqual([]);
   });
 });
 
@@ -274,32 +317,32 @@ describe("edits judge only what they change", () => {
 
   it("allows a body-only edit of a legacy note with an unregistered key and a missing required key", () => {
     const verdict = judgeContent({ path: "a.md", content: "---\nlegacy: kept\nowner: me\n---\nnew body\n", previousContent: legacy }, view);
-    expect(verdict).toEqual({ ok: true, violations: [], missingDefaults: [] });
+    expect(verdict).toEqual({ ok: true, refusals: [], warnings: [], fixes: [], missingDefaults: [], violations: [] });
   });
 
-  it("denies an edit that adds an unknown key", () => {
+  it("warns on an edit that adds an unknown key", () => {
     const verdict = judgeContent({ path: "a.md", content: "---\nlegacy: kept\nowner: me\nextra: 1\n---\nold body\n", previousContent: legacy }, view);
-    expect(verdict.violations).toEqual([{ field: "extra", kind: "unknown-property" }]);
+    expect(verdict.warnings).toEqual([{ field: "extra", kind: "unknown-property" }]);
   });
 
-  it("denies an edit that removes or empties a required key", () => {
+  it("warns on an edit that removes or empties a required key", () => {
     const previous = "---\nstatus: open\n---\nbody\n";
-    expect(judgeContent({ path: "a.md", content: "---\nowner: me\n---\nbody\n", previousContent: previous }, view).violations)
+    expect(judgeContent({ path: "a.md", content: "---\nowner: me\n---\nbody\n", previousContent: previous }, view).warnings)
       .toEqual([{ field: "status", kind: "missing" }]);
-    expect(judgeContent({ path: "a.md", content: "---\nstatus: \"\"\n---\nbody\n", previousContent: previous }, view).violations)
+    expect(judgeContent({ path: "a.md", content: "---\nstatus: \"\"\n---\nbody\n", previousContent: previous }, view).warnings)
       .toEqual([{ field: "status", kind: "missing" }]);
   });
 
-  it("denies changing a value to an invalid one but keeps an unchanged legacy value", () => {
+  it("warns on changing a value to an invalid one but keeps an unchanged legacy value", () => {
     const previous = "---\nstatus: stale\n---\nbody\n";
-    expect(judgeContent({ path: "a.md", content: "---\nstatus: stale\n---\nedited\n", previousContent: previous }, view).ok).toBe(true);
-    expect(judgeContent({ path: "a.md", content: "---\nstatus: wrong\n---\nbody\n", previousContent: "---\nstatus: open\n---\nbody\n" }, view).violations)
+    expect(judgeContent({ path: "a.md", content: "---\nstatus: stale\n---\nedited\n", previousContent: previous }, view).warnings).toEqual([]);
+    expect(judgeContent({ path: "a.md", content: "---\nstatus: wrong\n---\nbody\n", previousContent: "---\nstatus: open\n---\nbody\n" }, view).warnings)
       .toEqual([{ field: "status", kind: "not-allowed" }]);
   });
 
   it("still judges a new note in full", () => {
     const verdict = judgeContent({ path: "a.md", content: "---\nlegacy: kept\n---\nbody\n" }, view);
-    expect(verdict.violations).toEqual([{ field: "legacy", kind: "unknown-property" }, { field: "status", kind: "missing" }]);
+    expect(verdict.warnings).toEqual([{ field: "legacy", kind: "unknown-property" }, { field: "status", kind: "missing" }]);
   });
 });
 
@@ -308,14 +351,14 @@ describe("pattern values are capped", () => {
     const view = sealed({ properties: { id: property({ rules: [{ kind: "pattern", regex: "(a+)+b" }] }) } });
     const long = "a".repeat(PATTERN_VALUE_LIMIT + 1);
     const started = Date.now();
-    expect(judge({ path: "a.md", frontmatter: { id: long }, body: "" }, view).violations).toEqual([{ field: "id", kind: "pattern" }]);
+    expect(judge({ path: "a.md", frontmatter: { id: long }, body: "" }, view).warnings).toEqual([{ field: "id", kind: "pattern" }]);
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
   it("never runs a sealed source past the seal-time length cap", () => {
     const atCap = sealed({ properties: { id: property({ rules: [{ kind: "pattern", regex: "a".repeat(PATTERN_SOURCE_LIMIT) }] }) } });
-    expect(judge({ path: "a.md", frontmatter: { id: "a".repeat(PATTERN_SOURCE_LIMIT) }, body: "" }, atCap).violations).toEqual([]);
+    expect(judge({ path: "a.md", frontmatter: { id: "a".repeat(PATTERN_SOURCE_LIMIT) }, body: "" }, atCap).warnings).toEqual([]);
     const overCap = sealed({ properties: { id: property({ rules: [{ kind: "pattern", regex: "a".repeat(PATTERN_SOURCE_LIMIT + 1) }] }) } });
-    expect(judge({ path: "a.md", frontmatter: { id: "a".repeat(PATTERN_SOURCE_LIMIT + 1) }, body: "" }, overCap).violations).toEqual([{ field: "id", kind: "pattern" }]);
+    expect(judge({ path: "a.md", frontmatter: { id: "a".repeat(PATTERN_SOURCE_LIMIT + 1) }, body: "" }, overCap).warnings).toEqual([{ field: "id", kind: "pattern" }]);
   });
 });

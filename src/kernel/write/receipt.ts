@@ -1,6 +1,6 @@
 import type { GapAxis, GapKind } from "../contract/gap-ledger.js";
 import { contractRevision } from "../contract/revision.js";
-import type { ContractView } from "../contract/types.js";
+import type { ContractView, Violation } from "../contract/types.js";
 import { digestBytes, type Digest } from "../conventions/canonical.js";
 
 export { contractRevision };
@@ -42,6 +42,10 @@ export interface WriteReceipt {
   readonly index: IndexState;
   readonly conformed: readonly ConformChange[];
   readonly missingDefaults: readonly { readonly field: string }[];
+  /** What the note breaks in the contract; the note was saved anyway. Fields and kinds only, never values. */
+  readonly warnings: readonly { readonly field: string; readonly kind: string }[];
+  /** What OMS changed so the note fits the contract. Fields and kinds only. */
+  readonly fixes: readonly { readonly field: string; readonly kind: string }[];
   /** Gaps this write met; absent when there were none. */
   readonly gaps?: readonly ReceiptGap[];
   /**
@@ -65,8 +69,14 @@ export interface ReceiptInput {
   readonly missingDefaults: readonly string[];
   /** The revision read once for the whole write; when given it wins over one derived from `view`. */
   readonly contractRevision?: Digest | null;
+  readonly warnings?: readonly Violation[];
+  readonly fixes?: readonly Violation[];
   readonly gaps?: readonly ReceiptGap[];
   readonly gapLedger?: GapLedgerState;
+}
+
+function fieldKind(finding: Violation): { readonly field: string; readonly kind: string } {
+  return { field: finding.field, kind: finding.kind };
 }
 
 /** The vector index only has work queued when the keyword update reached the store. */
@@ -79,6 +89,8 @@ export function buildReceipt(input: ReceiptInput): WriteReceipt {
     index: { keyword: input.keyword, vector: input.keyword === "updated" ? "pending" : "disabled" },
     conformed: input.conformed,
     missingDefaults: input.missingDefaults.map(field => ({ field })),
+    warnings: (input.warnings ?? []).map(fieldKind),
+    fixes: (input.fixes ?? []).map(fieldKind),
     ...(input.gaps === undefined || input.gaps.length === 0 ? {} : { gaps: input.gaps }),
     ...(input.gapLedger === undefined ? {} : { gapLedger: input.gapLedger }),
   };

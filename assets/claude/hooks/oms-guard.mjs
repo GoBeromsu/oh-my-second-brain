@@ -12,7 +12,8 @@
  *   OMS_VAULT        — primary vault path
  *   OMS_AGENT_VAULT  — agent vault path
  *
- * The judge's deny is forwarded as is. When the judge cannot be reached (spawn failure,
+ * The judge's deny, and its allow with warnings (a `systemMessage` plus PreToolUse
+ * `additionalContext`, no `permissionDecision`), are forwarded as is. When the judge cannot be reached (spawn failure,
  * non-zero exit, timeout, malformed output) the write is allowed with one stderr line and
  * the failure kind is recorded in `~/.oms/guard-events.jsonl` for `oms doctor contract`.
  * A payload that cannot be parsed (or exceeds the stdin cap) is denied when its raw text
@@ -177,19 +178,33 @@ function transportFailure(kind) {
   }
 }
 
-/** Accepts exactly the allow shape or the deny shape `oms hook pre` prints. */
+const WARNING_PREFIX = "[oms] write allowed with warnings: ";
+
+/** Accepts exactly the allow, allow-with-warnings or deny shape `oms hook pre` prints. */
 function validJudgeOutput(stdout) {
   let value;
   try { value = JSON.parse(stdout); } catch { return null; }
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const keys = Object.keys(value).sort().join(",");
   if (keys === "continue,suppressOutput" && value.continue === true && value.suppressOutput === true) return ALLOW;
+  if (keys === "hookSpecificOutput,systemMessage") return validWarning(value);
   if (keys !== "hookSpecificOutput") return null;
   const out = value.hookSpecificOutput;
   if (out === null || typeof out !== "object" || Array.isArray(out)) return null;
   if (Object.keys(out).sort().join(",") !== "hookEventName,permissionDecision,permissionDecisionReason") return null;
   if (out.hookEventName !== "PreToolUse" || out.permissionDecision !== "deny") return null;
   if (typeof out.permissionDecisionReason !== "string" || !out.permissionDecisionReason.startsWith("[oms] write denied: ")) return null;
+  return JSON.stringify(value);
+}
+
+/** The allow-with-warnings shape: no permission decision, so Claude's normal permission flow applies. */
+function validWarning(value) {
+  if (typeof value.systemMessage !== "string" || !value.systemMessage.startsWith(WARNING_PREFIX)) return null;
+  const out = value.hookSpecificOutput;
+  if (out === null || typeof out !== "object" || Array.isArray(out)) return null;
+  if (Object.keys(out).sort().join(",") !== "additionalContext,hookEventName") return null;
+  if (out.hookEventName !== "PreToolUse") return null;
+  if (typeof out.additionalContext !== "string" || !out.additionalContext.startsWith(WARNING_PREFIX)) return null;
   return JSON.stringify(value);
 }
 

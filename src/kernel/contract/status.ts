@@ -27,6 +27,8 @@ export interface ContractTemplateStatus {
 
 export interface ContractStatus {
   readonly contract: "none" | "sealed" | "unreadable";
+  /** Present when the contract is unreadable: `tampered` refuses writes, `broken` lets them through with a warning. */
+  readonly reason?: "tampered" | "broken";
   readonly row: SealRow;
   readonly findings: readonly DoctorFinding[];
   readonly templates: readonly ContractTemplateStatus[];
@@ -40,6 +42,7 @@ export const ROW_FINDING: Readonly<Record<SealRow, DoctorFinding>> = {
   "vault-moved": { message: "vault moved", guidance: "oms doctor contract --fix" },
   "sealed": { message: "contract: sealed", guidance: null },
   "index-without-store": { message: "contract store missing", guidance: "oms setup" },
+  "settings-missing": { message: "vault settings missing", guidance: "oms interview" },
   "vault-id-tampered": { message: "vault id mismatch", guidance: "oms doctor contract" },
   "index-corrupt": { message: "index unreadable", guidance: "oms doctor contract --fix" },
 };
@@ -54,9 +57,11 @@ export async function contractStatus(vault: string, root: string = storeRoot()):
   if (state.settingsInvalid) findings.push(SETTINGS_INVALID_FINDING);
   if (state.shared) findings.push(SHARED_FINDING);
   if (state.view.state !== "sealed") {
-    const loadedRow = state.row !== "index-without-store" && state.row !== "vault-id-tampered";
+    const loadedRow = state.row !== "index-without-store" && state.row !== "vault-id-tampered" && state.row !== "settings-missing";
     if (state.view.state === "unreadable" && loadedRow) findings.push(STORE_UNREADABLE_FINDING);
-    return { contract: state.view.state === "unreadable" ? "unreadable" : "none", row: state.row, findings, templates: [] };
+    return state.view.state === "unreadable"
+      ? { contract: "unreadable", reason: state.view.reason, row: state.row, findings, templates: [] }
+      : { contract: "none", row: state.row, findings, templates: [] };
   }
   const drift = await detectDrift(vault, state.view.contract);
   const templates = [...drift].sort(([left], [right]) => compareCodePoints(left, right)).map(([name, driftState]) => ({ name, state: driftState }));
@@ -64,7 +69,7 @@ export async function contractStatus(vault: string, root: string = storeRoot()):
 }
 
 /** Why a contract is unreadable. Names no path, directory or id. */
-export type UnreadableCause = StoreCause | "index-without-store" | "vault-id-mismatch";
+export type UnreadableCause = StoreCause | "index-without-store" | "settings-missing" | "vault-id-mismatch";
 
 export interface UnexpectedControlFile {
   readonly path: string;
@@ -136,6 +141,7 @@ export async function contractDoctor(vault: string, audience: "human" | "agent",
   const state = await resolveSealState(vault, root);
   let cause: UnreadableCause | null = null;
   if (state.row === "index-without-store") cause = "index-without-store";
+  else if (state.row === "settings-missing") cause = "settings-missing";
   else if (state.row === "vault-id-tampered") cause = "vault-id-mismatch";
   else if (status.contract === "unreadable" && state.vaultId !== null) {
     const diagnosis = await diagnoseStore(state.vaultId, root);

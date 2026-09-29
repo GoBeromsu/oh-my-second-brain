@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { guardEventsPath, readTransportFailures } from "./guard-events.js";
+import { guardEventsPath, MALFORMED_OUTPUT_HINT, readTransportFailures } from "./guard-events.js";
 
 const bases: string[] = [];
 
@@ -40,6 +40,15 @@ describe("readTransportFailures", () => {
       "",
     ].join("\n"));
     expect(await readTransportFailures(root)).toEqual({ total: 3, kinds: { timeout: 2, "spawn-failed": 1 } });
+  });
+
+  it("adds the host-sync hint only when a malformed output was recorded", async () => {
+    const root = await storeRootDirectory();
+    await writeFile(guardEventsPath(root), `${JSON.stringify({ ts: "2026-09-25T00:00:00.000Z", kind: "timeout" })}\n`);
+    expect(await readTransportFailures(root)).not.toHaveProperty("hint");
+    await writeFile(guardEventsPath(root), `${JSON.stringify({ ts: "2026-09-25T00:00:00.000Z", kind: "malformed-output" })}\n`);
+    expect(await readTransportFailures(root)).toEqual({ total: 1, kinds: { "malformed-output": 1 }, hint: MALFORMED_OUTPUT_HINT });
+    expect(MALFORMED_OUTPUT_HINT).toContain("oms setup host sync");
   });
 
   it("only reads: the events file is left as it was", async () => {

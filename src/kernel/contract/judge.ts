@@ -8,10 +8,11 @@ import type {
   ContractView, FieldType, JsonScalar, JudgeInput, PropertyContract, Rule,
   TemplateContract, VaultContract, Verdict, Violation, ViolationKind,
 } from "./types.js";
+import { verdictOf } from "./types.js";
 
 /**
  * Pure judgement of a write against a vault's contract view. It never throws, writes,
- * repairs or renders. Each violation is `{field, kind}` only: no value, rule or template name.
+ * repairs or renders. Each finding is `{field, kind}` only: no value, rule or template name.
  */
 
 const STRING_TYPES = new Set<FieldType>(["text", "string", "select", "file"]);
@@ -272,19 +273,27 @@ function sealedJudge(input: JudgeInput, contract: VaultContract, found: Collecto
   return missingDefaults;
 }
 
-/** Rule order: base path rules → seal view → folders → properties → folder-mismatch → template axis. */
+/**
+ * Rule order: base path rules → seal view → folder axis → property axis → template axis
+ * (an unknown selected template, one used outside its folder, then its own rules). Every finding is collected, then split by severity: only a path rule or a
+ * tampered seal refuses. An open or broken seal cannot judge the axes, so it adds one
+ * warning and nothing else.
+ */
 export function judge(input: JudgeInput, view: ContractView): Verdict {
   const found = new Collector();
   const pathKind = basePathKind(input.path);
   if (pathKind !== null) {
     found.add("path", pathKind);
-    return { ok: false, violations: found.violations, missingDefaults: [] };
+    return verdictOf(found.violations);
   }
-  if (view.state === "open") return { ok: true, violations: [], missingDefaults: [] };
+  if (view.state === "open") {
+    found.add("contract", "contract-open");
+    return verdictOf(found.violations);
+  }
   if (view.state === "unreadable") {
-    found.add("contract", "contract-unreadable");
-    return { ok: false, violations: found.violations, missingDefaults: [] };
+    found.add("contract", view.reason === "tampered" ? "contract-tampered" : "contract-unreadable");
+    return verdictOf(found.violations);
   }
   const missingDefaults = sealedJudge(input, view.contract, found);
-  return { ok: found.violations.length === 0, violations: found.violations, missingDefaults };
+  return verdictOf(found.violations, missingDefaults);
 }

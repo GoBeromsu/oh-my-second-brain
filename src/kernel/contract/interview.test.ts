@@ -259,7 +259,7 @@ describe("diff-only rerun (R24)", () => {
     await interview({ vault, io: scripted(BASE_ANSWERS), root });
     const before = await sealed();
     const note = { path: "Journal/x.md", frontmatter: { status: "open", mood: "calm" }, body: "" };
-    expect(judge(note, { state: "sealed", contract: before }).ok).toBe(false);
+    expect(judge(note, { state: "sealed", contract: before }).warnings).not.toEqual([]);
 
     await mkdir(join(vault, "Journal"));
     await writeFile(join(vault, ".obsidian/types.json"), JSON.stringify({ types: { mood: "text" } }));
@@ -286,7 +286,7 @@ describe("diff-only rerun (R24)", () => {
     expect(after.folders?.["Projects"]).toEqual(before.folders?.["Projects"]);
     expect(after.properties?.["status"]).toEqual(before.properties?.["status"]);
     expect(after.templates).toEqual(before.templates);
-    expect(judge(note, { state: "sealed", contract: after })).toEqual({ ok: true, violations: [], missingDefaults: [] });
+    expect(judge(note, { state: "sealed", contract: after })).toEqual({ ok: true, refusals: [], warnings: [], fixes: [], missingDefaults: [], violations: [] });
   });
 
   it("re-asks nothing already sealed when nothing changed and keeps the contract", async () => {

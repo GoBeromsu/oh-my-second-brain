@@ -3,12 +3,13 @@ import { parseNote } from "../conventions/frontmatter.js";
 import { resolveRealTarget, vaultRelative, verifyVaultPath } from "../vault/paths.js";
 import { basePathKind, judge } from "./judge.js";
 import { resolveSealState } from "./vault-id.js";
-import type { ContractView, Verdict, ViolationKind } from "./types.js";
+import { findingsOf, verdictOf, type ContractView, type Verdict, type Violation, type ViolationKind } from "./types.js";
+import { resolveTiers, type GapFinding, type Resolution } from "../write/ambiguity.js";
 
 /**
  * The one entry both write surfaces use. MCP `write` and the Claude hook translator
- * resolve the target here and hand the reconstructed note to `judge` through
- * `judgeContent`, so both paths build the same `JudgeInput`.
+ * resolve the target here and decide through `decideWrite`, so both paths build the same
+ * `JudgeInput` and meet the same tiers: only a refusal stops a write.
  */
 
 export interface ContentInput {
@@ -18,12 +19,18 @@ export interface ContentInput {
   readonly previousContent?: string;
 }
 
-/** Parses raw content first; malformed frontmatter is reported as `yaml-syntax` after path rules. */
+/**
+ * Parses raw content first; malformed frontmatter is a `yaml-syntax` warning after path
+ * rules. A tampered seal still refuses, and an open or broken one still says so.
+ */
 export function judgeContent(input: ContentInput, view: ContractView): Verdict {
   const pathKind = basePathKind(input.path);
-  if (pathKind !== null) return { ok: false, violations: [{ field: "path", kind: pathKind }], missingDefaults: [] };
+  if (pathKind !== null) return verdictOf([{ field: "path", kind: pathKind }]);
   const parsed = parseNote(input.content);
-  if (parsed.diagnostics.length > 0) return { ok: false, violations: [{ field: "content", kind: "yaml-syntax" }], missingDefaults: [] };
+  if (parsed.diagnostics.length > 0) {
+    const posture = view.state === "sealed" ? [] : findingsOf(judge({ path: input.path, frontmatter: {}, body: "" }, view));
+    return verdictOf([...posture, { field: "content", kind: "yaml-syntax" }]);
+  }
   return judge({
     path: input.path,
     frontmatter: parsed.frontmatter,
@@ -47,7 +54,7 @@ export type WriteTarget =
   };
 
 function pathDenied(kind: ViolationKind): WriteTarget {
-  return { state: "denied", verdict: { ok: false, violations: [{ field: "path", kind }], missingDefaults: [] } };
+  return { state: "denied", verdict: verdictOf([{ field: "path", kind }]) };
 }
 
 export interface WriteTargetDeps {
@@ -57,8 +64,8 @@ export interface WriteTargetDeps {
 /**
  * Resolves `target` (absolute or relative to the vault) and applies the base path rules.
  * Read-only: nothing is created or repaired. A seal state that cannot be resolved is
- * reported as an unreadable contract, so the judge fails closed instead of the caller
- * seeing an exception.
+ * reported as a broken contract: the write goes ahead with a warning instead of the
+ * caller seeing an exception.
  */
 export async function resolveWriteTarget(vault: string, target: string, deps: WriteTargetDeps = {}): Promise<WriteTarget> {
   let vaultRoot: string;
@@ -91,22 +98,26 @@ export async function resolveWriteTarget(vault: string, target: string, deps: Wr
   try {
     view = (await (deps.resolveSealState ?? resolveSealState)(vaultRoot)).view;
   } catch {
-    view = { state: "unreadable" };
+    view = { state: "unreadable", reason: "broken" };
   }
   return { state: "ready", vaultRoot, path: relativePath, absolutePath, previousContent, view };
 }
 
 type ReadyTarget = Extract<WriteTarget, { readonly state: "ready" }>;
 
-/** Judges `content` for an already resolved target; an unreadable existing file goes to `unreadableTarget`. */
+/** An existing target that cannot be read gives no previous content: the write is judged as new and says so. */
+const UNREADABLE_TARGET: Violation = { field: "content", kind: "contract-unreadable" };
+
+/** Judges `content` for an already resolved target. */
 export function judgeReadyTarget(resolved: ReadyTarget, content: string, selectedTemplate?: string): Verdict {
-  if (resolved.previousContent === null) return unreadableTarget(resolved.view);
-  return judgeContent({
+  const verdict = judgeContent({
     path: resolved.path,
     content,
     ...(selectedTemplate === undefined ? {} : { selectedTemplate }),
-    ...(resolved.previousContent === undefined ? {} : { previousContent: resolved.previousContent }),
+    ...(typeof resolved.previousContent === "string" ? { previousContent: resolved.previousContent } : {}),
   }, resolved.view);
+  if (resolved.previousContent !== null || verdict.refusals.length > 0) return verdict;
+  return verdictOf([...findingsOf(verdict), UNREADABLE_TARGET], verdict.missingDefaults);
 }
 
 /** Judges a write of `content` to `target` against the vault's seal state. */
@@ -116,11 +127,57 @@ export async function judgeWrite(vault: string, target: string, content: string,
   return judgeReadyTarget(resolved, content, selectedTemplate);
 }
 
+export interface DecideWriteOptions {
+  readonly template?: string | undefined;
+  /**
+   * False when the caller can only allow or deny the content as written (the Claude hook):
+   * no key is dropped and nothing is drafted, and the warnings are recorded as kept.
+   */
+  readonly repair?: boolean;
+}
+
+export type WriteDecision =
+  | { readonly outcome: "deny"; readonly verdict: Verdict }
+  /** `fixedContent` is present when OMS changed the note; `saved` is the verdict on what is saved. */
+  | { readonly outcome: "allow"; readonly verdict: Verdict; readonly saved: Verdict; readonly fixedContent?: string; readonly findings: readonly GapFinding[] }
+  /** `asWritten` are the findings to record when the draft cannot be kept and the note is saved as written. */
+  | { readonly outcome: "draft"; readonly verdict: Verdict; readonly findings: readonly GapFinding[]; readonly asWritten: readonly GapFinding[] };
+
 /**
- * An existing target that cannot be read gives no previous content to judge against.
- * A sealed or unreadable contract fails closed; an open vault allows the write.
+ * Judges `content` and decides the tier. Only refusals deny. Warnings are compared with
+ * the verdict on the note as it is now: a `(field, kind)` the note already had is not
+ * recorded again. A new note or an unreadable one has no baseline, so every warning is new.
+ * The verdict always carries the full warning set for the response.
  */
-export function unreadableTarget(view: ContractView): Verdict {
-  if (view.state === "open") return { ok: true, violations: [], missingDefaults: [] };
-  return { ok: false, violations: [{ field: "contract", kind: "contract-unreadable" }], missingDefaults: [] };
+export function decideWrite(resolved: ReadyTarget, content: string, options: DecideWriteOptions = {}): WriteDecision {
+  const { template } = options;
+  const verdict = judgeReadyTarget(resolved, content, template);
+  const baseline = typeof resolved.previousContent === "string"
+    ? judgeContent({ path: resolved.path, content: resolved.previousContent, ...(template === undefined ? {} : { selectedTemplate: template }) }, resolved.view)
+    : undefined;
+  const resolution: Resolution = resolveTiers({
+    view: resolved.view,
+    path: resolved.path,
+    content,
+    template,
+    previousContent: resolved.previousContent ?? undefined,
+    verdict,
+    ...(baseline === undefined ? {} : { baseline }),
+    ...(options.repair === undefined ? {} : { repair: options.repair }),
+    rejudge: repaired => judgeReadyTarget(resolved, repaired, template),
+  });
+  switch (resolution.action) {
+    case "refuse":
+      return { outcome: "deny", verdict };
+    case "draft":
+      return { outcome: "draft", verdict, findings: resolution.findings, asWritten: resolution.asWritten };
+    case "save":
+      return {
+        outcome: "allow",
+        verdict,
+        saved: resolution.verdict,
+        ...(resolution.content === content ? {} : { fixedContent: resolution.content }),
+        findings: resolution.findings,
+      };
+  }
 }

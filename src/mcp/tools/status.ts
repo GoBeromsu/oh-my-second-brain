@@ -18,8 +18,8 @@ export async function handleStatus(ctx: ToolContext, readTools: readonly string[
   const { vault, source, engine } = ctx;
   const engineGraph = await engine.adapter.graphStatus(vault).catch(() => null);
   // Posture follows the sealed contract the write surface judges against.
-  // An open vault (no contract sealed) stays writable; only an unreadable
-  // seal disables writes.
+  // An open vault (no contract sealed) stays writable; a tampered seal
+  // disables writes, and a broken one lets them through unjudged.
   const meta = await readSearchTemplateSource(vault);
   const contract = await contractStatus(vault);
   return jsonText({
@@ -34,7 +34,8 @@ export async function handleStatus(ctx: ToolContext, readTools: readonly string[
     engineGraph,
     writeTools: source === "cwd"
       ? "write-disabled-target-unverified"
-      : contract.contract === "unreadable" ? "write-disabled-contract-unreadable" : "write-gated-by-verified-target-and-contract",
+      : contract.reason === "tampered" ? "write-disabled-contract-tampered"
+        : contract.reason === "broken" ? "write-unverified-contract" : "write-gated-by-verified-target-and-contract",
     readTools,
   });
 }

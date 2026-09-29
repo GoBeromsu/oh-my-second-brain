@@ -13,7 +13,12 @@ export type TransportFailureKind = typeof TRANSPORT_FAILURE_KINDS[number];
 export interface TransportFailures {
   readonly total: number;
   readonly kinds: Readonly<Partial<Record<TransportFailureKind, number>>>;
+  /** Present when the guard recorded output it could not read, which an outdated guard does. */
+  readonly hint?: string;
 }
+
+/** An older installed guard reads a newer judge's warning as malformed; it still allows the write. */
+export const MALFORMED_OUTPUT_HINT = "an older guard may not understand this CLI's output; run `oms setup host sync`";
 
 /** The events file sits beside the contract store root (`~/.oms/vaults`). */
 export function guardEventsPath(storeRootDirectory: string): string {
@@ -42,5 +47,5 @@ export async function readTransportFailures(storeRootDirectory: string): Promise
     kinds[known] = (kinds[known] ?? 0) + 1;
     total += 1;
   }
-  return { total, kinds };
+  return (kinds["malformed-output"] ?? 0) > 0 ? { total, kinds, hint: MALFORMED_OUTPUT_HINT } : { total, kinds };
 }

@@ -2,7 +2,8 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { judgeReadyTarget, resolveWriteTarget } from "./judge-write.js";
+import { decideWrite, judgeReadyTarget, resolveWriteTarget, type WriteTarget } from "./judge-write.js";
+import type { ContractView, PropertyContract } from "./types.js";
 
 const directories: string[] = [];
 
@@ -17,18 +18,21 @@ afterEach(async () => {
 });
 
 describe("resolveWriteTarget seal state failures", () => {
-  it("maps a throwing seal resolver to an unreadable contract that the judge denies", async () => {
+  it("maps a throwing seal resolver to a broken contract that the judge warns on", async () => {
     const vault = await tempVault();
     const resolved = await resolveWriteTarget(vault, join(vault, "a.md"), {
       resolveSealState: async () => { throw new Error("store exploded"); },
     });
     expect(resolved.state).toBe("ready");
     if (resolved.state !== "ready") return;
-    expect(resolved.view).toEqual({ state: "unreadable" });
+    expect(resolved.view).toEqual({ state: "unreadable", reason: "broken" });
     expect(judgeReadyTarget(resolved, "---\nstatus: open\n---\nbody\n")).toEqual({
-      ok: false,
-      violations: [{ field: "contract", kind: "contract-unreadable" }],
+      ok: true,
+      refusals: [],
+      warnings: [{ field: "contract", kind: "contract-unreadable" }],
+      fixes: [],
       missingDefaults: [],
+      violations: [],
     });
   });
 
@@ -38,5 +42,100 @@ describe("resolveWriteTarget seal state failures", () => {
       resolveSealState: async () => ({ row: "never-sealed", view: { state: "open" }, vaultId: null, shared: false, settingsInvalid: false }),
     });
     expect(resolved.state === "ready" && resolved.view).toEqual({ state: "open" });
+  });
+});
+
+type ReadyTarget = Extract<WriteTarget, { readonly state: "ready" }>;
+
+function property(overrides: Partial<PropertyContract> = {}): PropertyContract {
+  return { meaning: "a property", type: "text", default: false, required: false, rules: [], ...overrides };
+}
+
+const SEALED: ContractView = {
+  state: "sealed",
+  contract: { folders: null, properties: { status: property({ required: true }), owner: property() }, templates: {} },
+};
+
+function ready(view: ContractView, previousContent: string | undefined | null = undefined): ReadyTarget {
+  return { state: "ready", vaultRoot: "/vault", path: "a.md", absolutePath: "/vault/a.md", previousContent, view };
+}
+
+describe("judgeReadyTarget", () => {
+  it("warns that an existing target could not be read", () => {
+    const verdict = judgeReadyTarget(ready({ state: "open" }, null), "body\n");
+    expect(verdict.ok).toBe(true);
+    expect(verdict.warnings).toEqual([{ field: "contract", kind: "contract-open" }, { field: "content", kind: "contract-unreadable" }]);
+  });
+
+  it("refuses against a tampered contract without adding the unreadable-target warning", () => {
+    const verdict = judgeReadyTarget(ready({ state: "unreadable", reason: "tampered" }, null), "body\n");
+    expect(verdict.ok).toBe(false);
+    expect(verdict.refusals).toEqual([{ field: "contract", kind: "contract-tampered" }]);
+    expect(verdict.warnings).toEqual([]);
+  });
+});
+
+describe("decideWrite", () => {
+  it("denies only on a refusal", () => {
+    const decision = decideWrite(ready({ state: "unreadable", reason: "tampered" }), "---\nstatus: open\n---\n");
+    expect(decision.outcome).toBe("deny");
+    expect(decision.verdict.refusals).toEqual([{ field: "contract", kind: "contract-tampered" }]);
+  });
+
+  it("allows anything against an open vault, carrying the contract-open warning", () => {
+    const decision = decideWrite(ready({ state: "open" }), "---\nanything: 1\n---\n");
+    expect(decision).toMatchObject({ outcome: "allow", findings: [] });
+    if (decision.outcome !== "allow") return;
+    expect(decision.fixedContent).toBeUndefined();
+    expect(decision.verdict.warnings).toEqual([{ field: "contract", kind: "contract-open" }]);
+  });
+
+  it("allows a clean sealed write as written", () => {
+    const decision = decideWrite(ready(SEALED), "---\nstatus: open\n---\nbody\n");
+    expect(decision.outcome).toBe("allow");
+    if (decision.outcome !== "allow") return;
+    expect(decision.fixedContent).toBeUndefined();
+    expect(decision.verdict.warnings).toEqual([]);
+  });
+
+  it("drops a new unknown key and saves the repaired note", () => {
+    const decision = decideWrite(ready(SEALED), "---\nstatus: open\nextra: 1\n---\nbody\n");
+    expect(decision.outcome).toBe("allow");
+    if (decision.outcome !== "allow") return;
+    expect(decision.verdict.warnings).toEqual([{ field: "extra", kind: "unknown-property" }]);
+    expect(decision.fixedContent).toBe("---\nstatus: open\n---\nbody\n");
+    expect(decision.saved.warnings).toEqual([]);
+    expect(decision.findings.map(finding => finding.reason)).toEqual(["dropped: unknown-property"]);
+  });
+
+  it("drafts a new warning it cannot repair", () => {
+    const decision = decideWrite(ready(SEALED), "---\nowner: me\n---\nbody\n");
+    expect(decision.outcome).toBe("draft");
+    if (decision.outcome !== "draft") return;
+    expect(decision.verdict.warnings).toEqual([{ field: "status", kind: "missing" }]);
+    expect(decision.findings.map(finding => finding.reason)).toEqual(["drafted: missing"]);
+    expect(decision.asWritten.map(finding => finding.reason)).toEqual(["kept: missing"]);
+  });
+
+  it("never drafts or repairs when repair is off", () => {
+    for (const content of ["---\nowner: me\n---\nbody\n", "---\nstatus: open\nextra: 1\n---\nbody\n"]) {
+      const decision = decideWrite(ready(SEALED), content, { repair: false });
+      expect(decision.outcome).toBe("allow");
+      if (decision.outcome !== "allow") continue;
+      expect(decision.fixedContent).toBeUndefined();
+      expect(decision.findings.every(finding => finding.reason.startsWith("kept: "))).toBe(true);
+    }
+  });
+
+  it("does not treat a warning the note already had as new", () => {
+    const view: ContractView = { state: "sealed", contract: { folders: { Projects: { meaning: "p", searchExclude: false } }, properties: null, templates: {} } };
+    const unfiled = decideWrite(ready(view), "new body\n");
+    expect(unfiled.outcome).toBe("draft");
+    const decision = decideWrite(ready(view, "old body\n"), "new body\n");
+    expect(decision.outcome).toBe("allow");
+    if (decision.outcome !== "allow") return;
+    expect(decision.verdict.warnings).toEqual([{ field: "path", kind: "unregistered-folder" }]);
+    expect(decision.fixedContent).toBeUndefined();
+    expect(decision.findings).toEqual([]);
   });
 });

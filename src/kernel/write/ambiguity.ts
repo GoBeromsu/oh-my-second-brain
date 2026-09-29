@@ -7,8 +7,10 @@ import { insideApplyFolder } from "../contract/judge.js";
 import type { ContractView, JsonScalar, VaultContract, Verdict, Violation, ViolationKind } from "../contract/types.js";
 
 /**
- * What a write does where the note and the sealed contract do not line up exactly. There
- * are four kinds, and the judge decides every save in all of them:
+ * What a write does where the note and the sealed contract do not line up exactly. Only a
+ * refusal (vault boundary, path safety, a tampered seal) stops a write; everything below
+ * is a warning, and only warnings the note did not already have are recorded. There are
+ * four kinds:
  *
  * ① mechanical: `conform` fills date and title variables, defaults and the heading
  *    skeleton before the judge runs. Nothing is recorded; the receipt lists the changes.
@@ -18,8 +20,11 @@ import type { ContractView, JsonScalar, VaultContract, Verdict, Violation, Viola
  *    unplaceable frontmatter keys gives a form the same judge accepts, that nearest valid
  *    form is saved and each dropped want is recorded. Otherwise nothing is saved in the
  *    vault; the note is kept as a draft beside the ledger and the gaps point at it.
- * ④ contradiction: the contract itself cannot be satisfied on the field. The write is
- *    refused as usual, nothing is recorded, and `oms doctor gaps` reports it.
+ *    Malformed frontmatter is always drafted.
+ * ④ contradiction: the contract itself cannot be satisfied on the field. The note is
+ *    saved as written and each warning is recorded with the reason `contradiction`.
+ *
+ * An open or broken contract has no ledger: the note is saved as written with its warning.
  *
  * This module decides and never writes; the pipeline records and saves.
  */
@@ -42,17 +47,24 @@ export interface AmbiguityInput {
   /** The note on disk before this write; undefined for a new note. */
   readonly previousContent?: string | undefined;
   readonly verdict: Verdict;
+  /** The verdict on `previousContent`; absent when there is no readable previous note. */
+  readonly baseline?: Verdict | undefined;
+  /** False when only the content as written can be saved: nothing is dropped or drafted. */
+  readonly repair?: boolean | undefined;
   /** The same judge the pipeline used, run again on a repaired form. */
   readonly rejudge: (content: string) => Verdict;
 }
 
 export type Resolution =
-  /** ①, ② or a repaired ③: save `content`, which `verdict` accepted, and record `findings`. */
+  /** ①, ②, a repaired ③ or ④: save `content`, judged by `verdict`, and record `findings`. */
   | { readonly action: "save"; readonly content: string; readonly verdict: Verdict; readonly findings: readonly GapFinding[] }
-  /** ③ with no valid form: keep the note as a draft and record `findings` against it. */
-  | { readonly action: "draft"; readonly findings: readonly GapFinding[] }
-  /** Not a gap: an unsealed contract, a non-gap violation, or ④ a contract contradiction. */
-  | { readonly action: "refuse"; readonly reason: "unsealed" | "not-a-gap" | "contradiction" };
+  /**
+   * ③ with no valid form: keep the note as a draft and record `findings` against it.
+   * `asWritten` is what to record instead when no draft can be kept and the note is saved as written.
+   */
+  | { readonly action: "draft"; readonly findings: readonly GapFinding[]; readonly asWritten: readonly GapFinding[] }
+  /** The verdict carries a refusal. */
+  | { readonly action: "refuse"; readonly reason: "refused" };
 
 const AXIS_OF: Readonly<Partial<Record<ViolationKind, GapAxis>>> = {
   "unregistered-folder": "folder",
@@ -68,6 +80,7 @@ const AXIS_OF: Readonly<Partial<Record<ViolationKind, GapAxis>>> = {
   "unsubstituted-variable": "value",
   "heading-missing": "template",
   "template-mismatch": "template",
+  "yaml-syntax": "value",
 };
 
 /** Kinds a key can be dropped for: the key or its value has no place in the frame. */
@@ -162,31 +175,46 @@ function noFit(violation: Violation, axis: GapAxis, frontmatter: Readonly<Record
   return { axis, kind: "no-fit", chosen: null, wanted: want(violation.field, frontmatter), reason };
 }
 
-/** Decides how a judged write proceeds. The returned `save` content always carries an accepting verdict. */
-export function resolveAmbiguity(input: AmbiguityInput): Resolution {
+function findingKey(finding: Violation): string {
+  return `${finding.field}\u0000${finding.kind}`;
+}
+
+/** A warning is new unless the previous note already had the same `(field, kind)`. */
+function newWarnings(verdict: Verdict, baseline: Verdict | undefined): readonly Violation[] {
+  const before = new Set((baseline?.warnings ?? []).map(findingKey));
+  return verdict.warnings.filter(warning => gapAxisOf(warning.kind) !== null && !before.has(findingKey(warning)));
+}
+
+/**
+ * Decides the tier of a judged write: refuse only on a refusal, otherwise save, repair or
+ * draft. Recorded findings cover only the warnings the note did not already have.
+ */
+export function resolveTiers(input: AmbiguityInput): Resolution {
   const { view, verdict } = input;
-  if (view.state !== "sealed") return verdict.ok ? { action: "save", content: input.content, verdict, findings: [] } : { action: "refuse", reason: "unsealed" };
+  if (verdict.refusals.length > 0) return { action: "refuse", reason: "refused" };
+  if (view.state !== "sealed") return { action: "save", content: input.content, verdict, findings: [] };
   const { contract } = view;
   const parsed = parseNote(input.content);
-  if (parsed.diagnostics.length > 0) return verdict.ok ? { action: "save", content: input.content, verdict, findings: [] } : { action: "refuse", reason: "not-a-gap" };
   const frontmatter = parsed.frontmatter;
-  const choices = templateChoices(contract, input.path, input.template, frontmatter);
-  if (verdict.ok) return { action: "save", content: input.content, verdict, findings: choices };
+  const choices = parsed.diagnostics.length > 0 ? [] : templateChoices(contract, input.path, input.template, frontmatter);
+  const gaps = newWarnings(verdict, input.baseline);
+  if (gaps.length === 0) return { action: "save", content: input.content, verdict, findings: choices };
 
+  const recorded = (reason: string) => gaps.map(warning => noFit(warning, gapAxisOf(warning.kind)!, frontmatter, `${reason}: ${warning.kind}`));
   const contradicted = new Set(contractContradictions(contract).map(entry => entry.field));
-  if (verdict.violations.some(violation => contradicted.has(violation.field))) return { action: "refuse", reason: "contradiction" };
-  const axes = verdict.violations.map(violation => gapAxisOf(violation.kind));
-  if (axes.some(axis => axis === null)) return { action: "refuse", reason: "not-a-gap" };
+  if (gaps.some(warning => contradicted.has(warning.field))) {
+    return { action: "save", content: input.content, verdict, findings: [...choices, ...recorded("contradiction")] };
+  }
+  const asWritten = [...choices, ...recorded("kept")];
+  if (input.repair === false) return { action: "save", content: input.content, verdict, findings: asWritten };
 
-  const keys = droppableKeys(verdict.violations, contract, input, frontmatter);
+  const keys = droppableKeys(gaps, contract, input, frontmatter);
   const repaired = keys === null ? null : dropFrontmatterKeys(input.content, keys);
   if (repaired !== null) {
     const second = input.rejudge(repaired);
-    if (second.ok) {
-      const dropped = verdict.violations.map((violation, index) => noFit(violation, axes[index]!, frontmatter, `dropped: ${violation.kind}`));
-      return { action: "save", content: repaired, verdict: second, findings: [...choices, ...dropped] };
+    if (second.refusals.length === 0 && newWarnings(second, input.baseline).length === 0) {
+      return { action: "save", content: repaired, verdict: second, findings: [...choices, ...recorded("dropped")] };
     }
   }
-  const unplaced = verdict.violations.map((violation, index) => noFit(violation, axes[index]!, frontmatter, `drafted: ${violation.kind}`));
-  return { action: "draft", findings: [...choices, ...unplaced] };
+  return { action: "draft", findings: [...choices, ...recorded("drafted")], asWritten };
 }

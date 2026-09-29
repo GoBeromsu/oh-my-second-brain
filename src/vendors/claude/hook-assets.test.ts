@@ -21,6 +21,8 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const GUARD_SOURCE = path.join(REPO_ROOT, "assets", "claude", "hooks", "oms-guard.mjs");
 const ALLOW = '{"continue":true,"suppressOutput":true}\n';
 const DENY = JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: '[oms] write denied: [{"field":"status","kind":"not-allowed"}] Run: oms doctor contract' } });
+const WARNING_MESSAGE = '[oms] write allowed with warnings: [{"field":"status","kind":"not-allowed"}]';
+const WARN = { systemMessage: WARNING_MESSAGE, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: WARNING_MESSAGE } };
 const temporaryDirectories: string[] = [];
 
 const STUB_CLI = `
@@ -115,6 +117,14 @@ describe("oms-guard.mjs routing", () => {
     expect(Object.hasOwn(JSON.parse(result.stdout) as object, "continue")).toBe(false);
   });
 
+  it("forwards the judge's warning shape unchanged", () => {
+    const target = fixture();
+    const result = runHook(target, writePayload(target), { stdout: `${JSON.stringify(WARN)}\n` });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(`${JSON.stringify(WARN)}\n`);
+    expect(guardEvents(target)).toEqual([]);
+  });
+
   it("does not spawn for writes outside every configured vault or for other tools", () => {
     const target = fixture();
     const outside = runHook(target, { tool_name: "Write", tool_input: { file_path: path.join(target.root, "elsewhere.md"), content: "x" } });
@@ -140,6 +150,13 @@ describe("oms-guard.mjs transport failures", () => {
     ["output that is not JSON", { stdout: "nope" }, "malformed-output"],
     ["JSON that is neither the allow nor the deny shape", { stdout: '{"continue":true}' }, "malformed-output"],
     ["a deny with an extra continue key", { stdout: JSON.stringify({ continue: true, ...JSON.parse(DENY) as object }) }, "malformed-output"],
+    ["a warning without the systemMessage", { stdout: JSON.stringify({ hookSpecificOutput: WARN.hookSpecificOutput }) }, "malformed-output"],
+    ["a warning whose systemMessage lacks the prefix", { stdout: JSON.stringify({ ...WARN, systemMessage: "write allowed" }) }, "malformed-output"],
+    ["a warning whose additionalContext is not a string", { stdout: JSON.stringify({ ...WARN, hookSpecificOutput: { ...WARN.hookSpecificOutput, additionalContext: 7 } }) }, "malformed-output"],
+    ["a warning for another hook event", { stdout: JSON.stringify({ ...WARN, hookSpecificOutput: { ...WARN.hookSpecificOutput, hookEventName: "PostToolUse" } }) }, "malformed-output"],
+    ["a warning with a permission decision", { stdout: JSON.stringify({ ...WARN, hookSpecificOutput: { ...WARN.hookSpecificOutput, permissionDecision: "allow" } }) }, "malformed-output"],
+    ["a warning with an extra continue key", { stdout: JSON.stringify({ continue: true, ...WARN }) }, "malformed-output"],
+    ["a warning whose hookSpecificOutput is an array", { stdout: JSON.stringify({ ...WARN, hookSpecificOutput: [] }) }, "malformed-output"],
   ];
   for (const [label, stub, kind] of cases) {
     it(`allows with one warning and one guard event on ${label}`, () => {

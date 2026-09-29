@@ -6,20 +6,39 @@ import type { WriteReceipt } from "./receipt.js";
 /** The wire payload every write surface prints: MCP `write` and CLI `oms write` share it. */
 export type WritePayload =
   | WriteReceipt
-  | ({ readonly status: "checked" } & Omit<WriteCheck, "violations" | "missingDefaults"> & {
-    readonly violations: readonly { readonly field: string; readonly kind: string }[];
+  | ({ readonly status: "checked" } & Omit<WriteCheck, "refusals" | "warnings" | "fixes" | "violations" | "missingDefaults"> & {
+    readonly refusals: readonly FieldKind[];
+    readonly warnings: readonly FieldKind[];
+    readonly fixes: readonly FieldKind[];
+    /** @deprecated The same list as `refusals`. */
+    readonly violations: readonly FieldKind[];
     readonly missingDefaults: readonly { readonly field: string }[];
   })
-  | { readonly ok: false; readonly violations: readonly { readonly field: string; readonly kind: string }[]; readonly reason: string; readonly draftRef?: string }
+  | {
+    readonly ok: false;
+    readonly status: "denied";
+    readonly refusals: readonly FieldKind[];
+    /** @deprecated The same list as `refusals`. */
+    readonly violations: readonly FieldKind[];
+    readonly reason: string;
+  }
+  /** Nothing was saved in the vault; the note is kept as a draft beside the gap ledger. */
+  | { readonly ok: false; readonly status: "drafted"; readonly draftRef: string; readonly warnings: readonly FieldKind[] }
   | { readonly ok: false; readonly status: "rejected"; readonly rejection: WriteRejection }
   | { readonly ok: false; readonly code: "WRITE_IF_MATCH_REQUIRED"; readonly kind: "if-match-required"; readonly reason: string }
   | { readonly ok: false; readonly code: "WRITE_TARGET_CHANGED" | "WRITE_TARGET_VANISHED" | "WRITE_TARGET_ABSENT"; readonly retryable: true; readonly reason: string };
 
-type DeniedPayload = Extract<WritePayload, { readonly violations: unknown; readonly reason: string }>;
+interface FieldKind { readonly field: string; readonly kind: string }
 
-function denied(violations: readonly Violation[]): DeniedPayload {
-  const list = violations.map(violation => ({ field: violation.field, kind: violation.kind }));
-  return { ok: false, violations: list, reason: formatDenyReason(list) };
+type DeniedPayload = Extract<WritePayload, { readonly status: "denied" }>;
+
+function fieldKinds(findings: readonly Violation[]): readonly FieldKind[] {
+  return findings.map(finding => ({ field: finding.field, kind: finding.kind }));
+}
+
+function denied(refusals: readonly Violation[]): DeniedPayload {
+  const list = fieldKinds(refusals);
+  return { ok: false, status: "denied", refusals: list, violations: list, reason: formatDenyReason(refusals) };
 }
 
 /** Denied-write payload for input-shape violations found before the kernel runs. */
@@ -31,11 +50,11 @@ export function writePayload(outcome: WriteOutcome): WritePayload {
   switch (outcome.kind) {
     case "rejected":
       return { ok: false, status: "rejected", rejection: outcome.rejection };
-    case "denied": {
-      const payload = denied(outcome.violations);
+    case "denied":
+      return denied(outcome.refusals);
+    case "drafted":
       // The draft name is an opaque ledger ref; the note's content never leaves the store.
-      return outcome.draftRef === undefined ? payload : { ...payload, draftRef: outcome.draftRef };
-    }
+      return { ok: false, status: "drafted", draftRef: outcome.draftRef, warnings: fieldKinds(outcome.warnings) };
     case "if-match-required":
       return {
         ok: false,
@@ -52,7 +71,10 @@ export function writePayload(outcome: WriteOutcome): WritePayload {
       return {
         status: "checked",
         ...check,
-        violations: check.violations.map(violation => ({ field: violation.field, kind: violation.kind })),
+        refusals: fieldKinds(check.refusals),
+        warnings: fieldKinds(check.warnings),
+        fixes: fieldKinds(check.fixes),
+        violations: fieldKinds(check.refusals),
         missingDefaults: check.missingDefaults.map(field => ({ field })),
       };
     }

@@ -26,7 +26,7 @@ describe("contractRevision", () => {
 
   it("has no revision for an open or unreadable contract", () => {
     expect(contractRevision({ state: "open" })).toBeNull();
-    expect(contractRevision({ state: "unreadable" })).toBeNull();
+    expect(contractRevision({ state: "unreadable", reason: "broken" })).toBeNull();
   });
 });
 

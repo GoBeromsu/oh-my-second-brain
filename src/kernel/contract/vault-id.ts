@@ -9,6 +9,10 @@ import { verifyControlPath } from "../vault/paths.js";
 /**
  * Seal-state resolution (the index truth table). S = settings `vaultId`, I = the index
  * entry for this vault's realpath, St(x) = the store link for x exists. Read-only.
+ *
+ * Only a settings id that exists and differs from the index entry is tampering. A missing
+ * or invalid settings file, a missing store and a malformed store are broken: the axes
+ * cannot be judged, and writes go through with a warning until `oms interview` reseals.
  */
 
 export type SealRow =
@@ -18,6 +22,7 @@ export type SealRow =
   | "vault-moved"
   | "sealed"
   | "index-without-store"
+  | "settings-missing"
   | "vault-id-tampered"
   | "index-corrupt";
 
@@ -49,9 +54,11 @@ async function settingsId(vault: string): Promise<{ readonly id: string | null; 
   }
 }
 
+const BROKEN: ContractView = { state: "unreadable", reason: "broken" };
+
 async function load(vaultId: string, root: string): Promise<ContractView> {
   const read = await readStore(vaultId, root);
-  return read.state === "ok" ? { state: "sealed", contract: read.contract, revision: read.digest } : { state: "unreadable" };
+  return read.state === "ok" ? { state: "sealed", contract: read.contract, revision: read.digest } : BROKEN;
 }
 
 export async function resolveSealState(vault: string, root: string = storeRoot()): Promise<SealState> {
@@ -72,8 +79,9 @@ export async function resolveSealState(vault: string, root: string = storeRoot()
   const i = Object.hasOwn(entries, vaultRealPath) ? entries[vaultRealPath]! : null;
 
   if (i !== null) {
-    if (s !== i) return { ...base, row: "vault-id-tampered", view: { state: "unreadable" }, shared };
-    if (!await storeExists(i, root)) return { ...base, row: "index-without-store", view: { state: "unreadable" }, shared };
+    if (s === null) return { ...base, row: "settings-missing", view: BROKEN, shared };
+    if (s !== i) return { ...base, row: "vault-id-tampered", view: { state: "unreadable", reason: "tampered" }, shared };
+    if (!await storeExists(i, root)) return { ...base, row: "index-without-store", view: BROKEN, shared };
     return { ...base, row: "sealed", view: await load(i, root), shared };
   }
   if (s === null) return { ...base, row: "never-sealed", view: { state: "open" }, shared: false };

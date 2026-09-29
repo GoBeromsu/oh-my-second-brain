@@ -69,6 +69,8 @@ export type ViolationKind =
   | "path-unsafe"
   | "outside-vault"
   | "contract-unreadable"
+  | "contract-tampered"
+  | "contract-open"
   | "unregistered-folder"
   | "unknown-property"
   | "missing"
@@ -86,8 +88,8 @@ export type ViolationKind =
 
 export const VIOLATION_KINDS: readonly ViolationKind[] = [
   "control-path", "yaml-syntax", "path-unsafe", "outside-vault", "contract-unreadable",
-  "unregistered-folder", "unknown-property", "missing", "type", "not-allowed", "not-fixed",
-  "pattern", "range", "count", "unsubstituted-variable", "heading-missing", "folder-mismatch",
+  "contract-tampered", "contract-open", "unregistered-folder", "unknown-property", "missing",
+  "type", "not-allowed", "not-fixed", "pattern", "range", "count", "unsubstituted-variable", "heading-missing", "folder-mismatch",
   "template-mismatch", "unsupported-input",
 ];
 
@@ -102,10 +104,64 @@ export interface Violation {
   readonly kind: ViolationKind;
 }
 
+/**
+ * How a kind stops a write. Only safety refuses: the vault boundary and path safety, a
+ * tampered vault id, and input the kernel cannot read. Every other kind lets the write
+ * through with a warning.
+ */
+export type Severity = "refuse" | "warn";
+
+/** Total: exactly one severity per kind. */
+export const SEVERITY_OF: Readonly<Record<ViolationKind, Severity>> = {
+  "control-path": "refuse",
+  "yaml-syntax": "warn",
+  "path-unsafe": "refuse",
+  "outside-vault": "refuse",
+  "contract-unreadable": "warn",
+  "contract-tampered": "refuse",
+  "contract-open": "warn",
+  "unregistered-folder": "warn",
+  "unknown-property": "warn",
+  "missing": "warn",
+  "type": "warn",
+  "not-allowed": "warn",
+  "not-fixed": "warn",
+  "pattern": "warn",
+  "range": "warn",
+  "count": "warn",
+  "unsubstituted-variable": "warn",
+  "heading-missing": "warn",
+  "folder-mismatch": "warn",
+  "template-mismatch": "warn",
+  // Malformed input refuses; the hook reports a content it cannot rebuild as a warning itself.
+  "unsupported-input": "refuse",
+};
+
+/**
+ * `ok` is true exactly when nothing refuses. `violations` is the deprecated name for
+ * `refusals`, kept so older readers still see what stopped a write. `fixes` lists what the
+ * write changed to fit the contract; nothing is fixed yet, so it is always empty.
+ */
 export interface Verdict {
   readonly ok: boolean;
-  readonly violations: readonly Violation[];
+  readonly refusals: readonly Violation[];
+  readonly warnings: readonly Violation[];
+  readonly fixes: readonly Violation[];
   readonly missingDefaults: readonly string[];
+  /** @deprecated The same list as `refusals`. */
+  readonly violations: readonly Violation[];
+}
+
+/** Splits findings by severity into a verdict. */
+export function verdictOf(findings: readonly Violation[], missingDefaults: readonly string[] = []): Verdict {
+  const refusals = findings.filter(finding => SEVERITY_OF[finding.kind] === "refuse");
+  const warnings = findings.filter(finding => SEVERITY_OF[finding.kind] === "warn");
+  return { ok: refusals.length === 0, refusals, warnings, fixes: [], missingDefaults, violations: refusals };
+}
+
+/** Every finding of a verdict, refusals first: what `doctor audit` reports. */
+export function findingsOf(verdict: Verdict): readonly Violation[] {
+  return [...verdict.refusals, ...verdict.warnings];
 }
 
 /** The only command names agent-facing output may contain. */
@@ -115,6 +171,7 @@ export const GUIDANCE = [
   "oms doctor status",
   "oms setup host sync",
   "oms setup",
+  "oms interview",
 ] as const;
 export type Guidance = (typeof GUIDANCE)[number];
 
@@ -124,7 +181,9 @@ export const GUIDANCE_FOR: Readonly<Record<ViolationKind, Guidance>> = {
   "yaml-syntax": "oms doctor status",
   "path-unsafe": "oms doctor status",
   "outside-vault": "oms doctor status",
-  "contract-unreadable": "oms doctor contract",
+  "contract-unreadable": "oms interview",
+  "contract-tampered": "oms doctor contract",
+  "contract-open": "oms interview",
   "unregistered-folder": "oms doctor status",
   "unknown-property": "oms doctor status",
   "missing": "oms doctor status",
@@ -141,16 +200,31 @@ export const GUIDANCE_FOR: Readonly<Record<ViolationKind, Guidance>> = {
   "unsupported-input": "oms setup host sync",
 };
 
-/** The first violation picks the one guidance; the reason carries `{field, kind}` only. */
-export function formatDenyReason(violations: readonly Violation[]): string {
-  const list = violations.map(violation => ({ field: violation.field, kind: violation.kind }));
-  const guidance = violations.length === 0 ? "oms doctor status" : GUIDANCE_FOR[violations[0]!.kind];
-  return `[oms] write denied: ${JSON.stringify(list)} Run: ${guidance}`;
+function formatFindings(prefix: string, findings: readonly Violation[]): string {
+  const list = findings.map(finding => ({ field: finding.field, kind: finding.kind }));
+  const guidance = findings.length === 0 ? "oms doctor status" : GUIDANCE_FOR[findings[0]!.kind];
+  return `${prefix}${JSON.stringify(list)} Run: ${guidance}`;
 }
 
-/** What the judge sees of a vault's seal: nothing sealed, sealed but unreadable, or the contract. */
+/** The refusals only. The first picks the one guidance; the reason carries `{field, kind}` only. */
+export function formatDenyReason(refusals: readonly Violation[]): string {
+  return formatFindings("[oms] write denied: ", refusals);
+}
+
+export const WARNING_PREFIX = "[oms] write allowed with warnings: ";
+
+/** The line an allowed write carries: `{field, kind}` and one guidance, never a value or a path. */
+export function formatWarnings(warnings: readonly Violation[]): string {
+  return formatFindings(WARNING_PREFIX, warnings);
+}
+
+/**
+ * What the judge sees of a vault's seal: nothing sealed, sealed but unreadable, or the
+ * contract. An unreadable seal is `tampered` when the vault's own id disagrees with this
+ * machine's record (writes are refused), and `broken` otherwise (writes warn).
+ */
 export type ContractView =
   | { readonly state: "open" }
-  | { readonly state: "unreadable" }
+  | { readonly state: "unreadable"; readonly reason: "tampered" | "broken" }
   /** `revision` is the manifest digest of the generation the contract was read from; a view built in memory has none. */
   | { readonly state: "sealed"; readonly contract: VaultContract; readonly revision?: Digest };

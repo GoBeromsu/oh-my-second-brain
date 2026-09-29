@@ -3,14 +3,14 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { GUIDANCE } from "../../../src/kernel/contract/types.js";
+import { formatWarnings, GUIDANCE } from "../../../src/kernel/contract/types.js";
 import { buildTruthTableRow, type TruthTableFixture } from "../../fixtures/contract-truth-table.js";
 import { absolute } from "../../architecture/repo-root.js";
 
 /**
  * The real Claude guard, spawned as Claude Code spawns it, against a sealed vault in an
- * isolated HOME. A violation is denied through the built `oms hook pre`, every command a
- * deny can name reaches a live 0.19 handler, and a judge that cannot be reached allows
+ * isolated HOME. A refusal is denied and a contract violation is allowed with warnings
+ * through the built `oms hook pre`, every command a deny can name reaches a live 0.19 handler, and a judge that cannot be reached allows
  * the write with one warning.
  */
 
@@ -78,13 +78,27 @@ afterAll(async () => {
 });
 
 describe("real oms-guard.mjs over the built CLI", () => {
-  it("denies a sealed-contract violation and leaves the vault untouched", () => {
+  it("denies a write to the vault's control path and leaves the vault untouched", () => {
+    const before = readdirSync(path.join(fixture.vault, ".oms")).sort();
+    const result = runGuard(GUARD, writePayload(".oms/stray.md", "# stray\n"));
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: '[oms] write denied: [{"field":"path","kind":"control-path"}] Run: oms doctor status',
+      },
+    });
+    expect(readdirSync(path.join(fixture.vault, ".oms")).sort()).toEqual(before);
+    expect(guardEvents()).toEqual([]);
+  });
+
+  it("forwards a sealed-contract violation as an allow with warnings", () => {
+    const message = formatWarnings([{ field: "path", kind: "unregistered-folder" }]);
     const result = runGuard(GUARD, writePayload("Loose/stray.md", "# stray\n"));
     expect(result.status).toBe(0);
-    const output = JSON.parse(result.stdout) as { hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string } };
-    expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(output.hookSpecificOutput.permissionDecisionReason).toBe('[oms] write denied: [{"field":"path","kind":"unregistered-folder"}] Run: oms doctor status');
-    expect(existsSync(path.join(fixture.vault, "Loose"))).toBe(false);
+    expect(JSON.parse(result.stdout)).toEqual({ systemMessage: message, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: message } });
+    expect(result.stdout).not.toContain("permissionDecision");
     expect(guardEvents()).toEqual([]);
   });
 

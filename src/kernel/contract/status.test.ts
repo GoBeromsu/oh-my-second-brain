@@ -31,8 +31,15 @@ const EXPECTED_CONTRACT: Readonly<Record<SealRow, "none" | "sealed" | "unreadabl
   "vault-moved": "sealed",
   "sealed": "sealed",
   "index-without-store": "unreadable",
+  "settings-missing": "unreadable",
   "vault-id-tampered": "unreadable",
   "index-corrupt": "sealed",
+};
+
+const EXPECTED_REASON: Partial<Record<SealRow, "broken" | "tampered">> = {
+  "index-without-store": "broken",
+  "settings-missing": "broken",
+  "vault-id-tampered": "tampered",
 };
 
 const EXPECTED_FIX: Readonly<Record<SealRow, DoctorFixResult>> = {
@@ -42,6 +49,7 @@ const EXPECTED_FIX: Readonly<Record<SealRow, DoctorFixResult>> = {
   "vault-moved": "reindexed",
   "sealed": "nothing-to-fix",
   "index-without-store": "not-fixable",
+  "settings-missing": "not-fixable",
   "vault-id-tampered": "not-fixable",
   "index-corrupt": "reindexed",
 };
@@ -53,6 +61,7 @@ describe("contractStatus", () => {
       const status = await contractStatus(fixture.vault, fixture.root);
       expect(status.row).toBe(name);
       expect(status.contract).toBe(EXPECTED_CONTRACT[name]);
+      expect(status.reason).toBe(EXPECTED_REASON[name]);
       expect(status.findings).toEqual([ROW_FINDING[name]]);
       expect(JSON.stringify(status)).not.toContain(fixture.vaultId);
       expect(JSON.stringify(status)).not.toContain(fixture.root);
@@ -96,7 +105,7 @@ describe("contractStatus", () => {
 });
 
 describe("contractDoctor", () => {
-  const CAUSE: Partial<Record<SealRow, string>> = { "index-without-store": "index-without-store", "vault-id-tampered": "vault-id-mismatch" };
+  const CAUSE: Partial<Record<SealRow, string>> = { "index-without-store": "index-without-store", "settings-missing": "settings-missing", "vault-id-tampered": "vault-id-mismatch" };
 
   for (const name of TRUTH_TABLE_ROWS) {
     it(`AC16: reports the cause and recovery for ${name} without naming a path or id`, async () => {

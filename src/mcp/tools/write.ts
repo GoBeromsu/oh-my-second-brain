@@ -7,15 +7,16 @@ const WRITE_KEYS: readonly string[] = ["path", "content", "template", "ifMatch",
 
 function toolResult(payload: WritePayload): CallToolResult {
   const text = JSON.stringify(payload, null, 2);
-  // A rejected target and a check verdict are reported as data (not isError); every other refusal is an error.
-  if (payload.ok || "status" in payload) return { content: [{ type: "text", text }] };
+  // A rejected target, a check verdict and a kept draft are reported as data (not isError); a denial and a retry are errors.
+  if (payload.ok || ("status" in payload && payload.status !== "denied")) return { content: [{ type: "text", text }] };
   return { isError: true, content: [{ type: "text", text }] };
 }
 
 /**
  * MCP `write`: the write pipeline conforms, the judge decides and the kernel saves.
- * Legacy and unknown keys are refused rather than ignored; a denied write leaves the
- * target byte-for-byte unchanged, and an overwrite must carry the note's `ifMatch`.
+ * Only a safety refusal denies; a note that breaks the contract is saved and its receipt
+ * lists the warnings. Legacy and unknown keys are refused rather than ignored; a denied
+ * write leaves the target byte-for-byte unchanged, and an overwrite must carry the note's `ifMatch`.
  */
 export async function writeNote(vault: string, source: WriteTargetSource, args: Record<string, unknown>): Promise<CallToolResult> {
   const extra = Object.keys(args).filter(key => !WRITE_KEYS.includes(key)).sort();

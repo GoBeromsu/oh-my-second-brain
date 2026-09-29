@@ -97,7 +97,7 @@ describe("conform", () => {
   it("does not count a heading inside a code fence as present", () => {
     const result = conform("```\n## Goals\n```\n", options({ template: "project" }));
     expect(result.content).toBe("```\n## Goals\n```\n\n## Goals\n\n## 목표\n");
-    expect(judged("Projects/a.md", result.content, "project").violations.filter(violation => violation.kind.includes("heading"))).toEqual([]);
+    expect(judged("Projects/a.md", result.content, "project").warnings.filter(violation => violation.kind.includes("heading"))).toEqual([]);
   });
 
   it("never turns a value outside allowed into a passing note", () => {
@@ -105,9 +105,8 @@ describe("conform", () => {
     const before = judged("Projects/a.md", content);
     const result = conform(content, options({ isNew: true, template: "project" }));
     const after = judged("Projects/a.md", result.content, "project");
-    expect(before.ok).toBe(false);
-    expect(after.ok).toBe(false);
-    expect(after.violations).toContainEqual(expect.objectContaining({ field: "status" }));
+    expect(before.warnings).not.toEqual([]);
+    expect(after.warnings).toContainEqual(expect.objectContaining({ field: "status" }));
     expect(result.content).toContain("status: paused");
   });
 
@@ -123,14 +122,13 @@ describe("conform", () => {
     const content = "---\ntitle: a\n---\nBody\n";
     const raw = parseNote(content);
     const before = judge({ path: "Projects/a.md", frontmatter: raw.frontmatter, body: raw.body, selectedTemplate: "project" }, view);
-    expect(before.violations).toContainEqual(expect.objectContaining({ field: "created", kind: "missing" }));
+    expect(before.warnings).toContainEqual(expect.objectContaining({ field: "created", kind: "missing" }));
     for (const template of ["project", undefined]) {
       const result = conform(content, options({ view, isNew: true, ...(template === undefined ? {} : { template }) }));
       expect(result).toEqual({ content, applied: [] });
       const note = parseNote(result.content);
       const after = judge({ path: "Projects/a.md", frontmatter: note.frontmatter, body: note.body, selectedTemplate: "project" }, view);
-      expect(after.ok).toBe(false);
-      expect(after.violations).toContainEqual(expect.objectContaining({ field: "created", kind: "missing" }));
+      expect(after.warnings).toContainEqual(expect.objectContaining({ field: "created", kind: "missing" }));
     }
   });
 
@@ -143,6 +141,6 @@ describe("conform", () => {
   it("never supplies a required property the writer left out", () => {
     const result = conform("Body\n", options({ isNew: true }));
     expect(result.content).not.toContain("owner:");
-    expect(judged("Projects/a.md", result.content)).toMatchObject({ ok: false, violations: expect.arrayContaining([expect.objectContaining({ field: "owner" })]) });
+    expect(judged("Projects/a.md", result.content)).toMatchObject({ warnings: expect.arrayContaining([expect.objectContaining({ field: "owner" })]) });
   });
 });

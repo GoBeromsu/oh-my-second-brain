@@ -90,13 +90,23 @@ describe("Issue #58: Verified-target admission", () => {
     try {
       await client.connect(transport);
 
-      const denied = await client.callTool({
+      // A contract gap keeps the note as a draft outside the vault; it is not an error.
+      const drafted = await client.callTool({
         name: "write",
         arguments: { path: "references/new-note.md", content: "---\nstatus: maybe\n---\n" },
       });
-      expect(denied.isError).toBe(true);
-      expect(textPayload(denied).violations).toEqual([{ field: "status", kind: "not-allowed" }]);
+      expect(drafted.isError).toBeFalsy();
+      expect(textPayload(drafted)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "status", kind: "not-allowed" }] });
       await expect(readFile(note, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      // A safety refusal is still an error and writes nothing.
+      const denied = await client.callTool({
+        name: "write",
+        arguments: { path: ".oms/new-note.md", content: "---\nstatus: open\n---\n" },
+      });
+      expect(denied.isError).toBe(true);
+      expect(textPayload(denied)).toMatchObject({ ok: false, status: "denied", refusals: [{ field: "path", kind: "control-path" }] });
+      await expect(readFile(path.join(fixture.vault, ".oms", "new-note.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
       const saved = textPayload(await client.callTool({
         name: "write",

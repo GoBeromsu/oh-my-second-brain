@@ -104,13 +104,22 @@ describe("oms write", () => {
     expect(await readdir(cwd)).toEqual([]);
   });
 
-  it("denies a note the sealed contract forbids and leaves disk untouched", async () => {
+  it("keeps a note with a new contract gap as a draft outside the vault and exits 1", async () => {
     const fixture = await sealedVault();
-    const before = await readdir(fixture.vault);
+    const before = await snapshot(fixture.vault);
     await runWriteCommand(["Loose/a.md", "--vault", fixture.vault], { env: {}, readStdin: async () => "x\n" });
     expect(process.exitCode).toBe(1);
-    expect(receipt()).toMatchObject({ ok: false, violations: [{ field: "path", kind: "unregistered-folder" }] });
-    expect(await readdir(fixture.vault)).toEqual(before);
+    expect(receipt()).toEqual({ ok: false, status: "drafted", draftRef: expect.any(String), warnings: [{ field: "path", kind: "unregistered-folder" }] });
+    expect(await snapshot(fixture.vault)).toEqual(before);
+  });
+
+  it("denies a refused path and leaves disk untouched", async () => {
+    const fixture = await sealedVault();
+    const before = await snapshot(fixture.base);
+    await runWriteCommand([".oms/a.md", "--vault", fixture.vault], { env: {}, readStdin: async () => "x\n" });
+    expect(process.exitCode).toBe(1);
+    expect(receipt()).toMatchObject({ ok: false, status: "denied", refusals: [{ field: "path", kind: "control-path" }] });
+    expect(await snapshot(fixture.base)).toEqual(before);
   });
 
   it("does not overwrite an existing note when the edit is denied", async () => {
@@ -178,7 +187,9 @@ describe("oms write", () => {
       await runWriteCommand([note, "--vault", fixture.vault, "--check"], { env: {}, readStdin: async () => content });
       expect(receipt(), note).toMatchObject({ status: "checked", path: note });
     }
-    expect(receipt()).toMatchObject({ ok: false, violations: [{ field: "path", kind: "unregistered-folder" }] });
+    // A gap only warns; the check reports it without refusing.
+    expect(receipt()).toMatchObject({ ok: true, refusals: [], violations: [], warnings: [{ field: "path", kind: "unregistered-folder" }] });
+    expect(process.exitCode).toBe(0);
     expect(await snapshot(fixture.base)).toEqual(before);
   });
 });
