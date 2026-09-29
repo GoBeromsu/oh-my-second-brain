@@ -981,26 +981,29 @@ Valid frontmatter remains available to retrieve.
       expect(createdReceipt.contractRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
       expect(statSync(note).mode & 0o777).toBe(0o644);
 
-      // A denied write names {field, kind} only and leaves the bytes untouched. The ifMatch
-      // check runs first, so the overwrite names the current revision to reach the judge.
+      // A new contract gap is not a refusal: the note is kept as a draft outside the vault,
+      // the result is not an error, and it names {field, kind} only. The ifMatch check runs
+      // first, so the overwrite names the current revision to reach the judge.
       await chmod(note, 0o600);
       const before = await readFile(note);
-      const denied = await write({ path: "Projects/a.md", content: "---\nstatus: nope\n---\n# Goals\n", ifMatch: createdReceipt.revision });
-      expect(denied.isError).toBe(true);
-      const deniedPayload = textPayload(denied);
-      expect(deniedPayload).toMatchObject({ ok: false, violations: [{ field: "status", kind: "not-allowed" }] });
-      expect(typeof deniedPayload.reason).toBe("string");
-      expect(JSON.stringify(deniedPayload)).not.toContain("active");
-      expect(JSON.stringify(deniedPayload)).not.toContain(fixture.vaultId);
+      const drafted = await write({ path: "Projects/a.md", content: "---\nstatus: nope\n---\n# Goals\n", ifMatch: createdReceipt.revision });
+      expect(drafted.isError).toBeFalsy();
+      const draftedPayload = textPayload(drafted);
+      expect(draftedPayload).toEqual({
+        ok: false, status: "drafted", draftRef: expect.any(String), warnings: [{ field: "status", kind: "not-allowed" }],
+      });
+      expect(JSON.stringify(draftedPayload)).not.toContain("active");
+      expect(JSON.stringify(draftedPayload)).not.toContain(fixture.vaultId);
       expect(await readFile(note)).toEqual(before);
 
       // A chosen template's missing heading is conformed (check writes nothing); without the
-      // template nothing is conformed, so the judge refuses the headingless note.
+      // template nothing is conformed, so the headingless note is kept as a draft.
       const headingless = await write({ path: "Projects/b.md", content: "---\nstatus: done\n---\nBody\n", template: "project", check: true });
       expect(textPayload(headingless)).toMatchObject({ status: "checked", ok: true, conformed: [{ field: "Goals", action: "heading" }] });
       expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
       const dropped = await write({ path: "Projects/a.md", content: "---\nstatus: done\n---\nBody\n", ifMatch: createdReceipt.revision });
-      expect(textPayload(dropped)).toMatchObject({ ok: false, violations: [{ field: "Goals", kind: "heading-missing" }] });
+      expect(dropped.isError).toBeFalsy();
+      expect(textPayload(dropped)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "Goals", kind: "heading-missing" }] });
       expect(await readFile(note)).toEqual(before);
 
       // An allowed overwrite keeps the note's previous mode and leaves no temporary file.
@@ -1023,7 +1026,10 @@ Valid frontmatter remains available to retrieve.
       expect(textPayload(await write({ path: "../outside.md", content: "x" }))).toMatchObject({ ok: false, violations: [{ kind: "outside-vault" }] });
       expect(existsSync(path.join(fixture.base, "outside.md"))).toBe(false);
       const settings = await readFile(path.join(vault, ".oms", "settings.json"));
-      expect(textPayload(await write({ path: ".oms/settings.json", content: "{}" }))).toMatchObject({ ok: false, violations: [{ kind: "control-path" }] });
+      // Only a safety refusal is an error result.
+      const refused = await write({ path: ".oms/settings.json", content: "{}" });
+      expect(refused.isError).toBe(true);
+      expect(textPayload(refused)).toMatchObject({ ok: false, status: "denied", refusals: [{ kind: "control-path" }], violations: [{ kind: "control-path" }] });
       expect(await readFile(path.join(vault, ".oms", "settings.json"))).toEqual(settings);
       expect(await readdir(path.join(vault, "Projects"))).toEqual(["a.md"]);
     } finally {

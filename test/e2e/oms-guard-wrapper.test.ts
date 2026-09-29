@@ -3,7 +3,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { formatDenyReason, type VaultContract } from "../../src/kernel/contract/types.js";
+import { formatDenyReason, formatWarnings, type VaultContract } from "../../src/kernel/contract/types.js";
 import type { SealRow } from "../../src/kernel/contract/vault-id.js";
 import { buildTruthTableRow, TRUTH_TABLE_ROWS, type TruthTableFixture } from "../fixtures/contract-truth-table.js";
 
@@ -20,6 +20,15 @@ const CONTROL_DENY = formatDenyReason([{ field: "path", kind: "control-path" }])
 const SEARCH_DENY = `[oms] write denied: ${JSON.stringify([{ field: "path", kind: "control-path" }])} Narrow the search path or glob so it cannot reach ~/.oms. Run: oms doctor status`;
 const UNSAFE_DENY = formatDenyReason([{ field: "path", kind: "path-unsafe" }]);
 const INPUT_DENY = formatDenyReason([{ field: "input", kind: "unsupported-input" }]);
+const OPEN = formatWarnings([{ field: "contract", kind: "contract-open" }]);
+const BROKEN = formatWarnings([{ field: "contract", kind: "contract-unreadable" }]);
+const TAMPERED = formatDenyReason([{ field: "contract", kind: "contract-tampered" }]);
+const NOT_ALLOWED = formatWarnings([{ field: "status", kind: "not-allowed" }]);
+
+/** The allow-with-warnings shape `oms hook pre` prints and the wrapper forwards verbatim. */
+function warningShape(message: string): Record<string, unknown> {
+  return { systemMessage: message, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: message } };
+}
 
 const CONTRACT: VaultContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false } },
@@ -36,6 +45,7 @@ const EXPECTED_VIEW: Readonly<Record<SealRow, "open" | "unreadable" | "sealed">>
   "vault-moved": "sealed",
   "sealed": "sealed",
   "index-without-store": "unreadable",
+  "settings-missing": "unreadable",
   "vault-id-tampered": "unreadable",
   "index-corrupt": "sealed",
 };
@@ -44,7 +54,8 @@ const fixtures: TruthTableFixture[] = [];
 const directories: string[] = [];
 
 interface Run {
-  decision: "allow" | "deny";
+  decision: "allow" | "warn" | "deny";
+  /** The deny reason, or the warning message of an allow with warnings. */
   reason: string | null;
   stdout: string;
   stderr: string;
@@ -79,6 +90,11 @@ function run(input: unknown, options: RunOptions): Run {
   expect(result.status).toBe(0);
   const printed = JSON.parse(result.stdout) as Record<string, unknown>;
   const specific = printed["hookSpecificOutput"] as { permissionDecisionReason?: string } | undefined;
+  if (typeof printed["systemMessage"] === "string") {
+    const message = printed["systemMessage"];
+    expect(printed).toEqual(warningShape(message));
+    return { decision: "warn", reason: message, stdout: result.stdout, stderr: result.stderr };
+  }
   if (specific) {
     expect(Object.hasOwn(printed, "continue")).toBe(false);
     return { decision: "deny", reason: specific.permissionDecisionReason ?? null, stdout: result.stdout, stderr: result.stderr };
@@ -127,13 +143,15 @@ describe("oms-guard wrapper over the truth table", () => {
       const bad = run(tool("Write", { file_path: note, content: BAD }), { vault, home });
       const view = EXPECTED_VIEW[name];
       if (view === "open") {
-        expect([good.decision, bad.decision]).toEqual(["allow", "allow"]);
+        expect([good, bad].map(r => [r.decision, r.reason])).toEqual([["warn", OPEN], ["warn", OPEN]]);
+      } else if (name === "vault-id-tampered") {
+        expect([good, bad].map(r => [r.decision, r.reason])).toEqual([["deny", TAMPERED], ["deny", TAMPERED]]);
+        expect(TAMPERED).toContain("Run: oms doctor contract");
       } else if (view === "unreadable") {
-        expect(good.reason).toBe(formatDenyReason([{ field: "contract", kind: "contract-unreadable" }]));
-        expect(bad.decision).toBe("deny");
+        expect([good, bad].map(r => [r.decision, r.reason])).toEqual([["warn", BROKEN], ["warn", BROKEN]]);
       } else {
         expect(good.decision).toBe("allow");
-        expect(bad.reason).toBe(formatDenyReason([{ field: "status", kind: "not-allowed" }]));
+        expect([bad.decision, bad.reason]).toEqual(["warn", NOT_ALLOWED]);
       }
       expect(guardEvents(home)).toEqual([]);
     });
@@ -245,9 +263,9 @@ describe("oms-guard wrapper write routing", () => {
   it("routes a write to the deepest configured vault", async () => {
     const { vault, home, base } = await row("sealed");
     const note = path.join(vault, "Projects", "a.md");
-    expect(run(tool("Write", { file_path: note, content: BAD }), { vault: base, agentVault: vault, home }).reason)
-      .toBe(formatDenyReason([{ field: "status", kind: "not-allowed" }]));
-    expect(run(tool("Write", { file_path: note, content: BAD }), { vault, agentVault: base, home }).decision).toBe("deny");
+    // Judged at the shallower base, which has no vault settings, the write would warn contract-open instead.
+    expect(run(tool("Write", { file_path: note, content: BAD }), { vault: base, agentVault: vault, home }).reason).toBe(NOT_ALLOWED);
+    expect(run(tool("Write", { file_path: note, content: BAD }), { vault, agentVault: base, home }).reason).toBe(NOT_ALLOWED);
   });
 
   it("denies writes to the guard itself and the oms package that holds its entry", () => {
@@ -307,8 +325,8 @@ describe("oms-guard wrapper write routing", () => {
     mkdirSync(path.join(vault, "Projects"), { recursive: true });
     writeFileSync(path.join(vault, "Projects", "a.md"), GOOD);
     const note = path.join(vault, "Projects", "a.md");
-    expect(run(tool("MultiEdit", { file_path: note, edits: [{ old_string: "status: open", new_string: "status: maybe" }] }), { vault, home }).decision).toBe("deny");
-    expect(run(tool("write", { file_path: note, content: BAD }), { vault, home }).decision).toBe("deny");
+    expect(run(tool("MultiEdit", { file_path: note, edits: [{ old_string: "status: open", new_string: "status: maybe" }] }), { vault, home }).reason).toBe(NOT_ALLOWED);
+    expect(run(tool("write", { file_path: note, content: BAD }), { vault, home }).reason).toBe(NOT_ALLOWED);
     expect(run(tool("NotebookEdit", { notebook_path: path.join(vault, "Projects", "a.ipynb"), new_source: "x" }), { vault, home }).decision).toBe("allow");
     expect(run(tool("NotebookEdit", { notebook_path: path.join(vault, ".oms", "x.ipynb"), new_source: "x" }), { vault, home }).reason).toBe(CONTROL_DENY);
   });
@@ -322,9 +340,9 @@ describe("oms-guard wrapper write routing", () => {
     const { vault, home, base } = await row("sealed");
     const alias = path.join(base, "vault-alias");
     symlinkSync(vault, alias);
-    expect(run(tool("Write", { file_path: path.join(vault, "Projects", "a.md"), content: BAD }), { vault: alias, home }).decision).toBe("deny");
-    expect(run(tool("Write", { file_path: path.join(alias, "Projects", "a.md"), content: BAD }), { vault, home }).decision).toBe("deny");
-    expect(run(tool("Write", { file_path: "Projects/a.md", content: BAD }, alias), { vault, home }).decision).toBe("deny");
+    expect(run(tool("Write", { file_path: path.join(vault, "Projects", "a.md"), content: BAD }), { vault: alias, home }).reason).toBe(NOT_ALLOWED);
+    expect(run(tool("Write", { file_path: path.join(alias, "Projects", "a.md"), content: BAD }), { vault, home }).reason).toBe(NOT_ALLOWED);
+    expect(run(tool("Write", { file_path: "Projects/a.md", content: BAD }, alias), { vault, home }).reason).toBe(NOT_ALLOWED);
 
     const tmpVault = tempDir("oms-guard-tmp-", "/tmp");
     const realVault = realpathSync(tmpVault);
@@ -478,6 +496,39 @@ describe("oms-guard wrapper transport failures", () => {
     expect(outside.decision).toBe("allow");
     expect(outside.stderr).toMatch(/^\[oms\] .*\n$/);
   });
+
+  /** A wrapper whose `oms` on PATH drains stdin and prints `output` as its judgement. */
+  function scriptedJudge(output: string): { wrapper: string; pathEnv: string } {
+    const dir = realpathSync(tempDir("oms-guard-scripted-"));
+    writeFileSync(path.join(dir, "output.json"), output);
+    const detached = detachedWrapper(`#!/bin/sh\ncat >/dev/null\ncat "${path.join(dir, "output.json")}"\n`);
+    return { wrapper: detached.wrapper, pathEnv: `${detached.pathEnv}:/bin:/usr/bin` };
+  }
+
+  it("forwards the judge's allow-with-warnings shape verbatim", async () => {
+    const { vault, home } = await row("sealed");
+    const printed = JSON.stringify(warningShape(NOT_ALLOWED));
+    const result = run(tool("Write", { file_path: path.join(vault, "Projects", "a.md"), content: BAD }), { vault, home, ...scriptedJudge(printed) });
+    expect(result).toMatchObject({ decision: "warn", reason: NOT_ALLOWED, stdout: `${printed}\n`, stderr: "" });
+    expect(result.stdout).not.toContain("permissionDecision");
+    expect(guardEvents(home)).toEqual([]);
+  });
+
+  const nearMisses: Array<[string, Record<string, unknown>]> = [
+    ["an extra top-level key", { ...warningShape(NOT_ALLOWED), continue: true }],
+    ["a systemMessage without the warning prefix", { systemMessage: "[oms] note", hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: NOT_ALLOWED } }],
+    ["an additionalContext without the warning prefix", { systemMessage: NOT_ALLOWED, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: "[oms] note" } }],
+    ["an added permissionDecision", { systemMessage: NOT_ALLOWED, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: NOT_ALLOWED, permissionDecision: "allow" } }],
+    ["a wrong hookEventName", { systemMessage: NOT_ALLOWED, hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: NOT_ALLOWED } }],
+  ];
+  for (const [label, shape] of nearMisses) {
+    it(`treats a warning shape with ${label} as malformed output`, async () => {
+      const { vault, home } = await row("sealed");
+      const result = run(tool("Write", { file_path: path.join(vault, "Projects", "a.md"), content: BAD }), { vault, home, ...scriptedJudge(JSON.stringify(shape)) });
+      expect(result).toMatchObject({ decision: "allow", stdout: ALLOW, stderr: WARNING });
+      expect(guardEvents(home)).toEqual(["malformed-output"]);
+    });
+  }
 
   it("forwards only [oms] lines of the judge's stderr", async () => {
     const { vault, home } = await row("sealed");

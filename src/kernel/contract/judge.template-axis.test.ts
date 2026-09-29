@@ -25,70 +25,70 @@ const PASS_NONE = "plain\n";
 
 describe("template axis", () => {
   it("1: no candidates, the write passes", () => {
-    expect(judgeContent({ path: "Notes/a.md", content: PASS_NONE }, view({ A })).ok).toBe(true);
+    expect(judgeContent({ path: "Notes/a.md", content: PASS_NONE }, view({ A })).warnings).toEqual([]);
   });
 
   it("2: X empty on a new file, content failing the one candidate passes", () => {
-    expect(judgeContent({ path: "Meetings/a.md", content: PASS_NONE }, view({ A })).ok).toBe(true);
+    expect(judgeContent({ path: "Meetings/a.md", content: PASS_NONE }, view({ A })).warnings).toEqual([]);
   });
 
   it("3: X empty on an edit, old and new content both failing, the write passes", () => {
-    expect(judgeContent({ path: "Meetings/a.md", content: PASS_NONE, previousContent: "old\n" }, view({ A })).ok).toBe(true);
+    expect(judgeContent({ path: "Meetings/a.md", content: PASS_NONE, previousContent: "old\n" }, view({ A })).warnings).toEqual([]);
   });
 
   it("4: only templates without applyFolder and none selected, the axis is not applied", () => {
     const loose = template({ requiredHeadings: ["Agenda"] });
-    expect(judgeContent({ path: "Meetings/a.md", content: PASS_NONE, previousContent: PASS_A }, view({ loose })).ok).toBe(true);
+    expect(judgeContent({ path: "Meetings/a.md", content: PASS_NONE, previousContent: PASS_A }, view({ loose })).warnings).toEqual([]);
   });
 
-  it("5: an explicit T without applyFolder that fails is denied", () => {
+  it("5: an explicit T without applyFolder that fails warns", () => {
     const loose = template({ requiredHeadings: ["Agenda"] });
-    expect(judgeContent({ path: "Meetings/a.md", content: PASS_NONE, selectedTemplate: "loose" }, view({ loose })).violations)
+    expect(judgeContent({ path: "Meetings/a.md", content: PASS_NONE, selectedTemplate: "loose" }, view({ loose })).warnings)
       .toEqual([{ field: "Agenda", kind: "heading-missing" }]);
   });
 
-  it("6: an empty template in X denies new content with a variable", () => {
+  it("6: an empty template in X warns on new content with a variable", () => {
     const empty = template({ applyFolder: "Meetings" });
-    expect(judgeContent({ path: "Meetings/a.md", content: "{{title}}\n", previousContent: PASS_NONE }, view({ empty })).violations)
+    expect(judgeContent({ path: "Meetings/a.md", content: "{{title}}\n", previousContent: PASS_NONE }, view({ empty })).warnings)
       .toEqual([{ field: "content", kind: "unsubstituted-variable" }]);
   });
 
   it("7: an empty template in X passes content without variables", () => {
     const empty = template({ applyFolder: "Meetings" });
-    expect(judgeContent({ path: "Meetings/a.md", content: "changed\n", previousContent: PASS_NONE }, view({ empty })).ok).toBe(true);
+    expect(judgeContent({ path: "Meetings/a.md", content: "changed\n", previousContent: PASS_NONE }, view({ empty })).warnings).toEqual([]);
   });
 
-  it("8: edit with X={A} where new content passes only B is denied", () => {
+  it("8: edit with X={A} where new content passes only B warns", () => {
     const verdict = judgeContent({ path: "Meetings/a.md", content: PASS_B, previousContent: PASS_A }, view({ A, B }));
-    expect(verdict.violations).toEqual([{ field: "Agenda", kind: "heading-missing" }]);
+    expect(verdict.warnings).toEqual([{ field: "Agenda", kind: "heading-missing" }]);
   });
 
   it("9: edit with X={A,B} where new content passes B, the write passes", () => {
     const both = "## Agenda\n## Minutes\n";
-    expect(judgeContent({ path: "Meetings/a.md", content: PASS_B, previousContent: both }, view({ A, B })).ok).toBe(true);
+    expect(judgeContent({ path: "Meetings/a.md", content: PASS_B, previousContent: both }, view({ A, B })).warnings).toEqual([]);
   });
 
   it("10: an applyFolder mismatch on T is folder-mismatch", () => {
-    expect(judgeContent({ path: "Notes/a.md", content: PASS_A, selectedTemplate: "A" }, view({ A })).violations)
+    expect(judgeContent({ path: "Notes/a.md", content: PASS_A, selectedTemplate: "A" }, view({ A })).warnings)
       .toEqual([{ field: "path", kind: "folder-mismatch" }]);
   });
 
   it("11: an edit selecting T outside a non-empty X is template-mismatch", () => {
-    expect(judgeContent({ path: "Meetings/a.md", content: PASS_B, previousContent: PASS_A, selectedTemplate: "B" }, view({ A, B })).violations)
+    expect(judgeContent({ path: "Meetings/a.md", content: PASS_B, previousContent: PASS_A, selectedTemplate: "B" }, view({ A, B })).warnings)
       .toEqual([{ field: "template", kind: "template-mismatch" }]);
   });
 
   it("12: a new file with an explicit T that passes is accepted", () => {
-    expect(judgeContent({ path: "Meetings/a.md", content: PASS_A, selectedTemplate: "A" }, view({ A, B })).ok).toBe(true);
+    expect(judgeContent({ path: "Meetings/a.md", content: PASS_A, selectedTemplate: "A" }, view({ A, B })).warnings).toEqual([]);
   });
 
   it("13: T passes while another candidate fails, the write passes", () => {
-    expect(judgeContent({ path: "Meetings/a.md", content: PASS_B, selectedTemplate: "B" }, view({ A, B })).ok).toBe(true);
+    expect(judgeContent({ path: "Meetings/a.md", content: PASS_B, selectedTemplate: "B" }, view({ A, B })).warnings).toEqual([]);
   });
 
   it("breaks least-failing ties by template name", () => {
     const previous = "## Agenda\n## Minutes\n";
     const verdict = judgeContent({ path: "Meetings/a.md", content: PASS_NONE, previousContent: previous }, view({ B, A }));
-    expect(verdict.violations).toEqual([{ field: "Agenda", kind: "heading-missing" }]);
+    expect(verdict.warnings).toEqual([{ field: "Agenda", kind: "heading-missing" }]);
   });
 });

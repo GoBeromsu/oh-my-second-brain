@@ -19,6 +19,7 @@ export const TRUTH_TABLE_ROWS: readonly SealRow[] = [
   "vault-moved",
   "sealed",
   "index-without-store",
+  "settings-missing",
   "vault-id-tampered",
   "index-corrupt",
 ];
@@ -78,6 +79,10 @@ export async function buildTruthTableRow(row: SealRow, contract: VaultContract =
     case "index-without-store":
       await sealAt(vault, vaultId, root, contract);
       await rm(join(root, vaultId));
+      break;
+    case "settings-missing":
+      await sealAt(vault, vaultId, root, contract);
+      await rm(join(vault, SETTINGS_PATH));
       break;
     case "vault-id-tampered":
       await sealAt(vault, vaultId, root, contract);

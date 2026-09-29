@@ -231,7 +231,7 @@ describe("product contract (built CLI, isolated home)", () => {
     }
   }, 30_000);
 
-  it("MCP write over stdio saves an allowed note and refuses a violating one", async () => {
+  it("MCP write over stdio saves an allowed note, drafts a violating one and refuses a control path", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [OMS, "serve", "mcp", "--vault", vault],
@@ -255,21 +255,31 @@ describe("product contract (built CLI, isolated home)", () => {
       expect(JSON.parse(allowed.content[0]!.text)).toMatchObject({ ok: true, missingDefaults: [] });
       expect(await readFile(path.join(vault, allowedPath), "utf8")).toBe(allowedContent);
 
-      const refusedPath = "Projects/엉터리 상태.md";
+      // A contract gap is kept as a draft outside the vault; the result is not an error.
+      const draftedPath = "Projects/엉터리 상태.md";
+      const drafted = (await client.callTool({
+        name: "write",
+        arguments: { path: draftedPath, content: "---\nstatus: 엉터리\n---\n# 엉터리\n" },
+      })) as { isError?: boolean; content: { type: string; text: string }[] };
+      expect(drafted.isError).toBeFalsy();
+      expect(JSON.parse(drafted.content[0]!.text)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "status", kind: "not-allowed" }] });
+      expect(existsSync(path.join(vault, draftedPath))).toBe(false);
+
+      // Only a safety refusal is an error.
       const refused = (await client.callTool({
         name: "write",
-        arguments: { path: refusedPath, content: "---\nstatus: 엉터리\n---\n# 엉터리\n" },
+        arguments: { path: ".oms/엉터리.md", content: "---\nstatus: 완료\n---\n" },
       })) as { isError?: boolean; content: { type: string; text: string }[] };
       expect(refused.isError).toBe(true);
-      expect(JSON.parse(refused.content[0]!.text)).toMatchObject({ ok: false, violations: [{ field: "status", kind: "not-allowed" }] });
-      expect(existsSync(path.join(vault, refusedPath))).toBe(false);
+      expect(JSON.parse(refused.content[0]!.text)).toMatchObject({ ok: false, status: "denied", refusals: [{ field: "path", kind: "control-path" }] });
+      expect(existsSync(path.join(vault, ".oms", "엉터리.md"))).toBe(false);
     } finally {
       await client.close();
     }
   }, 60_000);
 
-  it("hook pre denies a Write that violates the sealed contract", () => {
-    const target = path.join(vault, "Projects", "가드 거부.md");
+  it("hook pre allows a Write that violates the sealed contract with a warning", () => {
+    const target = path.join(vault, "Projects", "가드 경고.md");
     const payload = {
       hook_event_name: "PreToolUse",
       tool_name: "Write",
@@ -278,11 +288,28 @@ describe("product contract (built CLI, isolated home)", () => {
     };
     const run = oms(["hook", "pre"], JSON.stringify(payload), { OMS_VAULT: vault });
     expect(run.status).toBe(0);
-    const out = json(run) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
-    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
-    expect(out.hookSpecificOutput?.permissionDecisionReason).toBe(
-      '[oms] write denied: [{"field":"status","kind":"not-allowed"}] Run: oms doctor status',
-    );
+    const message = '[oms] write allowed with warnings: [{"field":"status","kind":"not-allowed"}] Run: oms doctor status';
+    expect(json(run)).toEqual({ systemMessage: message, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: message } });
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("hook pre denies a Write to the vault's control path", () => {
+    const target = path.join(vault, ".oms", "가드 거부.md");
+    const payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: target, content: "---\nstatus: 완료\n---\n# 가드\n" },
+      cwd: vault,
+    };
+    const run = oms(["hook", "pre"], JSON.stringify(payload), { OMS_VAULT: vault });
+    expect(run.status).toBe(0);
+    expect(json(run)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: '[oms] write denied: [{"field":"path","kind":"control-path"}] Run: oms doctor status',
+      },
+    });
     expect(existsSync(target)).toBe(false);
   });
 

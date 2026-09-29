@@ -1,14 +1,14 @@
 import path from "node:path";
 import { admitWriteTarget } from "../capture/safe.js";
 import { recordGaps, writeGapDraft, type GapLedgerDeps } from "../contract/gap-ledger.js";
-import { judgeReadyTarget, resolveWriteTarget } from "../contract/judge-write.js";
+import { decideWrite, resolveWriteTarget } from "../contract/judge-write.js";
 import { storeRoot } from "../contract/store.js";
 import type { Violation } from "../contract/types.js";
 import { resolveSealState, type SealState } from "../contract/vault-id.js";
 import type { Digest } from "../conventions/canonical.js";
 import type { WriteRejection, WriteTargetSource } from "../conventions/write-protocol.js";
 import { updateKeywordIndex, type KeywordUpdateOptions } from "../engine/index-update.js";
-import { resolveAmbiguity, type GapFinding, type Resolution } from "./ambiguity.js";
+import type { GapFinding, Resolution } from "./ambiguity.js";
 import { conform } from "./conform.js";
 import { frameFor, type WriteFrame } from "./frame.js";
 import { atomicWriteNote, type NoteWriteDeps } from "./note-write.js";
@@ -16,10 +16,11 @@ import { buildReceipt, contractRevision, noteRevision, type ConformChange, type 
 
 /**
  * The one write path behind MCP `write` and CLI `oms write`:
- * frame -> conform -> judge -> ambiguity -> if-match -> draft or atomic save -> gap
- * ledger -> keyword index -> vector queue. A refused write leaves the vault untouched;
- * `check` runs the same ambiguity resolution, reports what the write would do, and writes
- * nothing anywhere.
+ * frame -> conform -> decide -> if-match -> draft or atomic save -> gap ledger -> keyword
+ * index -> vector queue. Only a refusal (vault boundary, path safety, a tampered seal,
+ * a data-loss check) leaves the vault untouched; every other finding is a warning the
+ * receipt lists. `check` runs the same decision, reports what the write would do, and
+ * writes nothing anywhere.
  *
  * The seal state is read once. The contract revision derived from it is the one the
  * judge, every recorded gap and the receipt name, so a seal landing mid-write cannot
@@ -40,11 +41,16 @@ export interface WriteRequest {
 }
 
 export interface WriteCheck {
+  /** False only when the write would be refused. */
   readonly ok: boolean;
   readonly path: string;
   /** Revision of the note on disk now, or null for a new or unreadable note. */
   readonly revision: Digest | null;
   readonly contractRevision: Digest | null;
+  readonly refusals: readonly Violation[];
+  readonly warnings: readonly Violation[];
+  readonly fixes: readonly Violation[];
+  /** @deprecated The same list as `refusals`. */
   readonly violations: readonly Violation[];
   readonly missingDefaults: readonly string[];
   readonly conformed: readonly ConformChange[];
@@ -69,8 +75,9 @@ export type Precondition = "if-match-required" | "changed" | "absent";
 
 export type WriteOutcome =
   | { readonly kind: "rejected"; readonly rejection: WriteRejection }
-  /** `draftRef` names the draft kept beside the gap ledger when the refused note was a gap in the frame. */
-  | { readonly kind: "denied"; readonly violations: readonly Violation[]; readonly draftRef?: string }
+  | { readonly kind: "denied"; readonly refusals: readonly Violation[] }
+  /** Nothing was saved in the vault; `draftRef` names the draft kept beside the gap ledger. */
+  | { readonly kind: "drafted"; readonly draftRef: string; readonly warnings: readonly Violation[] }
   | { readonly kind: "if-match-required" }
   | { readonly kind: "retry"; readonly state: "changed" | "vanished" | "absent" }
   | { readonly kind: "checked"; readonly check: WriteCheck }
@@ -117,7 +124,8 @@ function preconditionOf(previousContent: string | null | undefined, ifMatch: str
   return ifMatch === undefined ? undefined : "absent";
 }
 
-function gapInputs(findings: readonly GapFinding[], notePath: string, content: string, revision: Digest, draftRef?: string) {
+/** The ledger rows for `findings` met writing `content` at `notePath` under contract `revision`. */
+export function gapInputs(findings: readonly GapFinding[], notePath: string, content: string, revision: Digest, draftRef?: string) {
   const revisionOfNote = noteRevision(content);
   return findings.map(finding => ({
     notePath,
@@ -144,7 +152,7 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
     ...overrides,
   };
   const { vault, source, template, ifMatch } = request;
-  if (ifMatch !== undefined && !REVISION.test(ifMatch)) return { kind: "denied", violations: [{ field: "ifMatch", kind: "unsupported-input" }] };
+  if (ifMatch !== undefined && !REVISION.test(ifMatch)) return { kind: "denied", refusals: [{ field: "ifMatch", kind: "unsupported-input" }] };
   // Diagnosis is allowed on any target; only a write needs a verified one.
   if (request.check !== true) {
     const rejection = await admitWriteTarget({ vault, source });
@@ -155,7 +163,7 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
   const resolved = await resolveWriteTarget(vault, path.resolve(vault, request.path), {
     resolveSealState: async root => (read.seal = await deps.resolveSealState(root)),
   });
-  if (resolved.state === "denied") return { kind: "denied", violations: resolved.verdict.violations };
+  if (resolved.state === "denied") return { kind: "denied", refusals: resolved.verdict.refusals };
   const revision = contractRevision(resolved.view);
   const vaultId = read.seal?.vaultId ?? null;
   const ledger: LedgerTarget | null = revision !== null && vaultId !== null ? { root: deps.gapRoot(), vaultId } : null;
@@ -168,23 +176,20 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
     title: titleOf(resolved.path),
     now: deps.now(),
   });
-  const verdict = judgeReadyTarget(resolved, conformed.content, template);
-
-  const resolution = resolveAmbiguity({
-    view: resolved.view,
-    path: resolved.path,
-    content: conformed.content,
-    template,
-    previousContent: resolved.previousContent ?? undefined,
-    verdict,
-    rejudge: content => judgeReadyTarget(resolved, content, template),
-  });
+  const decision = decideWrite(resolved, conformed.content, { template });
+  const { verdict } = decision;
+  const resolution: Resolution = decision.outcome === "deny" ? { action: "refuse", reason: "refused" }
+    : decision.outcome === "draft" ? { action: "draft", findings: decision.findings, asWritten: decision.asWritten }
+      : { action: "save", content: decision.fixedContent ?? conformed.content, verdict: decision.saved, findings: decision.findings };
+  // Without a ledger no draft can be kept, so a write that would draft saves as written.
+  const draftable = ledger !== null && revision !== null;
 
   // A refusal comes first, so a refused write never reaches the ifMatch check.
   const precondition = resolution.action === "refuse" ? undefined : preconditionOf(resolved.previousContent, ifMatch);
   if (request.check === true) {
-    const findings = resolution.action === "refuse" ? [] : resolution.findings;
-    const wouldDraft = resolution.action === "draft" && ledger !== null && precondition === undefined;
+    const action = resolution.action === "draft" && !draftable ? "save" : resolution.action;
+    const findings = resolution.action === "refuse" ? [] : resolution.action === "draft" && !draftable ? resolution.asWritten : resolution.findings;
+    const wouldDraft = action === "draft" && precondition === undefined;
     return {
       kind: "checked",
       check: {
@@ -192,52 +197,62 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
         path: resolved.path,
         revision: typeof resolved.previousContent === "string" ? noteRevision(resolved.previousContent) : null,
         contractRevision: revision,
-        violations: verdict.violations,
+        refusals: verdict.refusals,
+        warnings: verdict.warnings,
+        fixes: verdict.fixes,
+        violations: verdict.refusals,
         missingDefaults: verdict.missingDefaults,
         conformed: conformed.applied,
         frame,
-        resolution: { action: resolution.action, gaps: unrecorded(findings), wouldDraft, ...(precondition === undefined ? {} : { precondition }) },
+        resolution: { action, gaps: unrecorded(findings), wouldDraft, ...(precondition === undefined ? {} : { precondition }) },
       },
     };
   }
-  if (resolution.action === "refuse") return { kind: "denied", violations: verdict.violations };
+  if (resolution.action === "refuse") return { kind: "denied", refusals: verdict.refusals };
 
   // This runs before the draft, so a stale or missing ifMatch keeps nothing and records nothing.
   if (precondition === "if-match-required") return { kind: "if-match-required" };
   if (precondition !== undefined) return { kind: "retry", state: precondition };
 
+  let save: Extract<Resolution, { readonly action: "save" }>;
   if (resolution.action === "draft") {
-    if (ledger === null || revision === null) return { kind: "denied", violations: verdict.violations };
-    let draftRef: string;
-    try {
-      draftRef = await writeGapDraft(ledger.root, ledger.vaultId, conformed.content, deps.gapLedger);
-    } catch {
-      // The judge refused the note either way; a state dir that cannot be written only loses the draft.
-      return { kind: "denied", violations: verdict.violations };
+    // No ledger, or a state dir that cannot be written: the note is saved as written with its warnings.
+    save = { action: "save", content: conformed.content, verdict, findings: resolution.asWritten };
+    if (draftable) {
+      let draftRef: string | undefined;
+      try {
+        draftRef = await writeGapDraft(ledger.root, ledger.vaultId, conformed.content, deps.gapLedger);
+      } catch {
+        draftRef = undefined;
+      }
+      if (draftRef !== undefined) {
+        try {
+          await recordGaps(ledger.root, ledger.vaultId, gapInputs(resolution.findings, resolved.path, conformed.content, revision, draftRef), deps.gapLedger);
+        } catch {
+          // The draft is kept; its ref still reaches the caller even though no gap points at it.
+        }
+        return { kind: "drafted", draftRef, warnings: verdict.warnings };
+      }
     }
-    try {
-      await recordGaps(ledger.root, ledger.vaultId, gapInputs(resolution.findings, resolved.path, conformed.content, revision, draftRef), deps.gapLedger);
-    } catch {
-      // The draft is kept; its ref still reaches the caller even though no gap points at it.
-    }
-    return { kind: "denied", violations: verdict.violations, draftRef };
+  } else {
+    save = resolution;
   }
 
-  const written = await atomicWriteNote(resolved.absolutePath, resolution.content, resolved.previousContent, deps.noteWrite);
+  const written = await atomicWriteNote(resolved.absolutePath, save.content, resolved.previousContent, deps.noteWrite);
   if (written !== "written") return { kind: "retry", state: written };
   let gaps: readonly ReceiptGap[] = [];
   let gapLedger: GapLedgerState | undefined;
-  if (resolution.findings.length > 0) {
+  if (save.findings.length > 0) {
     if (ledger === null || revision === null) {
-      gaps = unrecorded(resolution.findings);
+      gaps = unrecorded(save.findings);
       gapLedger = "unavailable";
     } else {
       try {
-        const records = await recordGaps(ledger.root, ledger.vaultId, gapInputs(resolution.findings, resolved.path, resolution.content, revision), deps.gapLedger);
+        const records = await recordGaps(ledger.root, ledger.vaultId, gapInputs(save.findings, resolved.path, save.content, revision), deps.gapLedger);
         gaps = records.map(record => ({ id: record.id, axis: record.axis, kind: record.kind, field: record.wanted.field }));
       } catch {
-        // The note is saved; the receipt still lists what it dropped, without ids, instead of failing the write.
-        gaps = unrecorded(resolution.findings);
+        // The note is saved; the receipt still lists what it met, without ids, instead of failing the write.
+        gaps = unrecorded(save.findings);
         gapLedger = "failed";
       }
     }
@@ -247,12 +262,14 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
     kind: "written",
     receipt: buildReceipt({
       path: resolved.path,
-      content: resolution.content,
+      content: save.content,
       view: resolved.view,
       contractRevision: revision,
       keyword,
       conformed: conformed.applied,
-      missingDefaults: resolution.verdict.missingDefaults,
+      missingDefaults: save.verdict.missingDefaults,
+      warnings: verdict.warnings,
+      fixes: verdict.fixes,
       gaps,
       ...(gapLedger === undefined ? {} : { gapLedger }),
     }),

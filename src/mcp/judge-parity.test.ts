@@ -9,7 +9,8 @@ import type { JudgeInput, VaultContract, Violation } from "../kernel/contract/ty
 
 /**
  * AC11: MCP `write`, CLI `oms write` and the Claude hook translator hand the same
- * `JudgeInput` to the one judge for the same note, and the final verdicts match.
+ * `JudgeInput` to the one judge for the same note, and agree on the decision: only a
+ * refusal denies, a note that breaks the contract is let through with the same warnings.
  */
 
 const judgeSpy = vi.hoisted(() => ({ calls: [] as unknown[][] }));
@@ -26,7 +27,7 @@ vi.mock("../kernel/contract/judge.js", async (importOriginal) => {
 
 const { createOMSMcpServer } = await import("./server.js");
 const { translatePreToolUse } = await import("../vendors/claude/hook/pre-tool-use.js");
-const { formatDenyReason } = await import("../kernel/contract/types.js");
+const { formatDenyReason, formatWarnings } = await import("../kernel/contract/types.js");
 const { runWriteCommand } = await import("../cli/write-command.js");
 
 const CONTRACT: VaultContract = {
@@ -51,7 +52,7 @@ interface Row {
   readonly edit?: { readonly old_string: string; readonly new_string: string };
   /** The input the judge must receive from both surfaces; null when neither reaches it. */
   readonly input: JudgeInput | null;
-  readonly ok: boolean;
+  readonly decision: "allow" | "warn" | "deny";
 }
 
 const ROWS: readonly Row[] = [
@@ -60,28 +61,28 @@ const ROWS: readonly Row[] = [
     path: "Projects/new-good.md",
     content: "---\nstatus: active\n---\n## Goals\nShip.\n",
     input: { path: "Projects/new-good.md", frontmatter: { status: "active" }, body: "## Goals\nShip.\n" },
-    ok: true,
+    decision: "allow",
   },
   {
     name: "new note with a disallowed property value",
     path: "Projects/new-bad.md",
     content: "---\nstatus: paused\n---\n## Goals\n",
     input: { path: "Projects/new-bad.md", frontmatter: { status: "paused" }, body: "## Goals\n" },
-    ok: false,
+    decision: "warn",
   },
   {
     name: "new note missing a required property outside the template folder",
     path: "Loose/missing.md",
     content: "---\nextra: 1\n---\nBody\n",
     input: { path: "Loose/missing.md", frontmatter: { extra: 1 }, body: "Body\n" },
-    ok: false,
+    decision: "warn",
   },
   {
     name: "new note in an unregistered folder",
     path: "Elsewhere/stray.md",
     content: "---\nstatus: done\n---\n",
     input: { path: "Elsewhere/stray.md", frontmatter: { status: "done" }, body: "" },
-    ok: false,
+    decision: "warn",
   },
   {
     name: "edit that keeps the note valid",
@@ -90,7 +91,7 @@ const ROWS: readonly Row[] = [
     content: "---\nstatus: done\n---\n## Goals\nShip.\n",
     edit: { old_string: "status: active", new_string: "status: done" },
     input: { path: "Projects/edit-good.md", frontmatter: { status: "done" }, body: "## Goals\nShip.\n", previousContent: PREVIOUS },
-    ok: true,
+    decision: "allow",
   },
   {
     name: "edit that drops the template heading",
@@ -99,16 +100,31 @@ const ROWS: readonly Row[] = [
     content: "---\nstatus: active\n---\n## Plans\nShip.\n",
     edit: { old_string: "## Goals", new_string: "## Plans" },
     input: { path: "Projects/edit-bad.md", frontmatter: { status: "active" }, body: "## Plans\nShip.\n", previousContent: PREVIOUS },
-    ok: false,
+    decision: "warn",
   },
   {
-    name: "malformed frontmatter is refused before the judge",
+    name: "malformed frontmatter is let through with a warning",
     path: "Projects/broken.md",
     content: "---\nstatus: [\n---\n",
     input: null,
-    ok: false,
+    decision: "warn",
+  },
+  {
+    name: "a control path is refused before the judge",
+    path: ".oms/note.md",
+    content: "---\nstatus: active\n---\n",
+    input: null,
+    decision: "deny",
   },
 ];
+
+interface Payload {
+  readonly ok: boolean;
+  readonly status?: string;
+  readonly refusals?: Violation[];
+  readonly warnings?: Array<Pick<Violation, "field" | "kind">>;
+  readonly exitCode?: number | string | undefined;
+}
 
 let fixture: TruthTableFixture;
 /** CLI writes land in their own sealed vault so an allowed write cannot turn MCP's new note into an edit. */
@@ -130,7 +146,7 @@ function ifMatchOf(row: Row): string | undefined {
 }
 
 /** Runs `oms write` against the CLI vault with an injected stdin and an empty env, returning its receipt. */
-async function cliWrite(row: Row): Promise<{ ok: boolean; violations?: Violation[] }> {
+async function cliWrite(row: Row): Promise<Payload> {
   const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
   const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
   process.env["HOME"] = path.join(cliFixture.base, "home");
@@ -139,8 +155,7 @@ async function cliWrite(row: Row): Promise<{ ok: boolean; violations?: Violation
     const argv = ifMatch === undefined ? [row.path] : [row.path, "--if-match", ifMatch];
     await runWriteCommand([...argv, "--vault", cliFixture.vault], { env: {}, cwd: cliFixture.vault, readStdin: async () => row.content });
     expect(error).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(row.ok ? 0 : 1);
-    return JSON.parse(String(log.mock.calls[0]?.[0])) as { ok: boolean; violations?: Violation[] };
+    return { ...(JSON.parse(String(log.mock.calls[0]?.[0])) as Payload), exitCode: process.exitCode };
   } finally {
     process.env["HOME"] = path.join(fixture.base, "home");
     process.exitCode = 0;
@@ -192,33 +207,54 @@ describe("MCP write, CLI write and the hook translator share one judge", () => {
     const result = await client.callTool({ name: "write", arguments: { path: row.path, content: row.content, ...(row.previous === undefined ? {} : { ifMatch: ifMatchOf(row) }) } });
     const mcpCalls = judgeSpy.calls.splice(0);
     const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
-    const payload = JSON.parse(text) as { ok: boolean; violations?: Violation[] };
+    const payload = JSON.parse(text) as Payload;
 
     if (row.input === null) {
       expect(hookCalls).toEqual([]);
       expect(mcpCalls).toEqual([]);
       expect(cliCalls).toEqual([]);
     } else {
-      expect(hookCalls).toHaveLength(1);
-      expect(mcpCalls).toHaveLength(1);
+      // An edit is judged twice: first the note it leaves, then the note on disk as the baseline.
+      const calls = row.previous === undefined ? 1 : 2;
+      expect(hookCalls).toHaveLength(calls);
+      expect(mcpCalls).toHaveLength(calls);
+      expect(cliCalls).toHaveLength(calls);
       expect(hookCalls[0]![0]).toEqual(row.input);
       expect(mcpCalls[0]![0]).toEqual(row.input);
-      expect(mcpCalls[0]![1]).toEqual(hookCalls[0]![1]);
-      expect(cliCalls).toHaveLength(1);
       expect(cliCalls[0]![0]).toEqual(row.input);
+      expect(mcpCalls[0]![1]).toEqual(hookCalls[0]![1]);
       expect(cliCalls[0]![1]).toEqual(hookCalls[0]![1]);
+      if (row.previous !== undefined) {
+        const baseline = { path: row.path, frontmatter: { status: "active" }, body: "## Goals\nShip.\n" };
+        for (const calls of [hookCalls, mcpCalls, cliCalls]) expect(calls[1]![0]).toEqual(baseline);
+      }
     }
 
-    expect(payload.ok).toBe(row.ok);
-    expect(cli.ok).toBe(row.ok);
-    expect(cli.violations).toEqual(payload.violations);
-    expect(result.isError === true).toBe(!row.ok);
-    if (row.ok) {
-      expect(hook.response).toEqual({ continue: true, suppressOutput: true });
-    } else {
+    const { exitCode, ...cliPayload } = cli;
+    expect(Object.keys(cliPayload).sort()).toEqual(Object.keys(payload).sort());
+    expect(cliPayload.status).toEqual(payload.status);
+    expect(cliPayload.refusals).toEqual(payload.refusals);
+    expect(cliPayload.warnings).toEqual(payload.warnings);
+    if (row.decision === "deny") {
+      expect(payload).toMatchObject({ ok: false, status: "denied" });
+      expect(result.isError).toBe(true);
+      expect(exitCode).toBe(1);
       expect(hook.response).toEqual({
-        hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: formatDenyReason(payload.violations!) },
+        hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: formatDenyReason(payload.refusals!) },
       });
+    } else if (row.decision === "warn") {
+      expect(payload.warnings!.length).toBeGreaterThan(0);
+      // Let through: saved with its warnings, or kept as a draft when a new gap cannot be repaired.
+      expect(payload.ok === true || payload.status === "drafted").toBe(true);
+      expect(result.isError).toBeUndefined();
+      const message = formatWarnings(payload.warnings!);
+      expect(hook.response).toEqual({ systemMessage: message, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: message } });
+    } else {
+      expect(payload.ok).toBe(true);
+      expect(payload.warnings).toEqual([]);
+      expect(result.isError).toBeUndefined();
+      expect(exitCode).toBe(0);
+      expect(hook.response).toEqual({ continue: true, suppressOutput: true });
     }
   });
 });

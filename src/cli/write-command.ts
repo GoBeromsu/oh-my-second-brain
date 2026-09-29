@@ -5,8 +5,8 @@ import { runWritePipeline } from "../kernel/write/pipeline.js";
 
 /**
  * `oms write <path> [--template <t>] [--if-match <rev>] [--check] < stdin`: the CLI face
- * of the write pipeline. The same kernel path as MCP `write`: one judge, a denied or
- * rejected write leaves disk untouched, and a vault inferred from the current directory
+ * of the write pipeline. The same kernel path as MCP `write`: one judge, only a refusal
+ * denies, a denied or rejected write leaves disk untouched, and a vault inferred from the current directory
  * is refused. `--check` judges only and never touches disk.
  */
 
@@ -21,13 +21,15 @@ export function writeUsage(): string {
   return `Usage: oms write <vault-relative path> [--template <template>] [--if-match sha256:<rev>] [--check] [--vault <path>] < note.md
 
 Reads the whole note (frontmatter and body) from stdin, applies mechanical fixes (date and
-title variables, date defaults, template headings) and saves it only when the sealed vault
-contract allows it. Overwriting an existing note needs --if-match with its current revision,
+title variables, date defaults, template headings) and saves it. Only a safety refusal (vault
+boundary, path safety, a tampered contract) denies the write; anything else the note breaks
+in the sealed vault contract is saved and listed as warnings in the receipt, or the note is
+kept as a draft outside the vault when a new gap cannot be repaired. Overwriting an existing note needs --if-match with its current revision,
 as a previous receipt or --check reports it. --check judges and prints the frame without
 touching disk. The target vault of a write must be verified: --vault, the vault's own
 .oms/settings.json, a bridge link, or OMS_VAULT. A vault inferred from the current directory
-is read-only, so the write is refused. Prints JSON; exits 1 when nothing was written or the
-check found violations.`;
+is read-only, so the write is refused. Prints JSON; exits 1 when nothing was written in the
+vault or the check found refusals.`;
 }
 
 interface WriteArgs {

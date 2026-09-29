@@ -6,7 +6,7 @@ import { mapWithConcurrency, walkVaultMarkdown } from "../conventions/vault-walk
 import { judgeContent } from "./judge-write.js";
 import { storeRoot } from "./store.js";
 import { resolveSealState } from "./vault-id.js";
-import type { ViolationKind } from "./types.js";
+import { findingsOf, type ViolationKind } from "./types.js";
 
 /**
  * Re-judges every existing note against the sealed contract. Read-only. Output carries
@@ -57,7 +57,10 @@ export async function auditVault(vault: string, options: { readonly folder?: str
     } catch {
       return [{ path: notePath, field: "path", kind: "path-unsafe" as const }];
     }
-    return judgeContent({ path: notePath, content }, state.view).violations.map(violation => ({ path: notePath, ...violation }));
+    // Every finding counts, refusal or warning; the contract posture itself is not a note's fault.
+    return findingsOf(judgeContent({ path: notePath, content }, state.view))
+      .filter(finding => finding.field !== "contract")
+      .map(finding => ({ path: notePath, ...finding }));
   });
   const violations = verdicts.flat();
   return { contract: contract === "open" ? "none" : contract, scannedNotes: paths.length, clean: violations.length === 0, violations };

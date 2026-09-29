@@ -75,10 +75,16 @@ describe("contract flow e2e", () => {
       });
       expect(sealed).toEqual({ state: "sealed", vaultIdCreated: true, folders: 1, properties: 1, templates: [] });
 
-      const denied = await write({ path: "Projects/b.md", content: "---\nstatus: nope\n---\nBody\n" });
-      expect(denied.isError).toBe(true);
-      expect(payload(denied)).toMatchObject({ ok: false, violations: [{ field: "status", kind: "not-allowed" }] });
+      // A sealed contract gap is kept as a draft outside the vault, not refused.
+      const drafted = await write({ path: "Projects/b.md", content: "---\nstatus: nope\n---\nBody\n" });
+      expect(drafted.isError).toBeFalsy();
+      expect(payload(drafted)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "status", kind: "not-allowed" }] });
       expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
+
+      // Only a safety refusal denies the write.
+      const denied = await write({ path: ".oms/b.md", content: "---\nstatus: open\n---\nBody\n" });
+      expect(denied.isError).toBe(true);
+      expect(payload(denied)).toMatchObject({ ok: false, status: "denied", refusals: [{ field: "path", kind: "control-path" }] });
 
       expect(payload(await write({ path: "Projects/b.md", content: "---\nstatus: closed\n---\nBody\n" })))
         .toMatchObject({ ok: true, path: "Projects/b.md", missingDefaults: [] });

@@ -71,7 +71,7 @@ describe("gapsReport", () => {
   it("marks every gap stale and reports no contradictions under an unreadable contract", async () => {
     const report = await gapsReport("/vault", {
       root: "/store",
-      resolveSealState: seal({ state: "unreadable" }),
+      resolveSealState: seal({ state: "unreadable", reason: "broken" }),
       readGapLedger: async () => ({ events: [event("g1")], corrupt: [] }),
     });
     expect(report).toMatchObject({ contract: "unreadable", contractRevision: null, open: 1, gaps: [{ id: "g1", stale: true }], contradictions: [] });

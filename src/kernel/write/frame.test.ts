@@ -30,8 +30,9 @@ const SEALED: ContractView = { state: "sealed", contract: CONTRACT };
 
 describe("frameFor", () => {
   it("returns an empty frame for an open or unreadable contract", () => {
-    for (const state of ["open", "unreadable"] as const) {
-      expect(frameFor({ state }, { folder: "Projects", template: "project" })).toEqual({
+    for (const view of [{ state: "open" }, { state: "unreadable", reason: "broken" }] as const) {
+      const state = view.state;
+      expect(frameFor(view, { folder: "Projects", template: "project" })).toEqual({
         contract: state, folder: null, properties: [], template: null, defaults: [],
       });
     }

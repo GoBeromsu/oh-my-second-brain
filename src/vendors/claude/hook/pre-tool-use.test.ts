@@ -2,13 +2,17 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTruthTableRow, TRUTH_TABLE_ROWS, type TruthTableFixture } from "../../../../test/fixtures/contract-truth-table.js";
-import { formatDenyReason, GUIDANCE, GUIDANCE_FOR, VIOLATION_KINDS, type VaultContract } from "../../../kernel/contract/types.js";
+import { openGaps, readGapLedger } from "../../../kernel/contract/gap-ledger.js";
+import { formatDenyReason, formatWarnings, GUIDANCE, GUIDANCE_FOR, VIOLATION_KINDS, WARNING_PREFIX, type VaultContract } from "../../../kernel/contract/types.js";
 import type { SealRow } from "../../../kernel/contract/vault-id.js";
+import { HOOK_MATCHER } from "../claude-hooks.js";
 
 const stdin = vi.hoisted(() => ({ value: "{}", truncated: false }));
 vi.mock("./stdin.js", () => ({ readStdinTimeout: async () => ({ text: stdin.value, truncated: stdin.truncated, timedOut: false }) }));
 
-const { runPreToolUse, translatePreToolUse } = await import("./pre-tool-use.js");
+const { runPreToolUse, translatePreToolUse, WRITE_TOOLS } = await import("./pre-tool-use.js");
+type HookResult = Awaited<ReturnType<typeof translatePreToolUse>>;
+type PreToolUseDeps = import("./pre-tool-use.js").PreToolUseDeps;
 
 const ALLOW = '{"continue":true,"suppressOutput":true}\n';
 
@@ -27,6 +31,7 @@ const EXPECTED_VIEW: Readonly<Record<SealRow, "open" | "unreadable" | "sealed">>
   "index-without-store": "unreadable",
   "vault-id-tampered": "unreadable",
   "index-corrupt": "sealed",
+  "settings-missing": "unreadable",
 };
 
 const fixtures: TruthTableFixture[] = [];
@@ -43,12 +48,20 @@ function payload(tool: string, input: Record<string, unknown>, cwd?: string): st
   return JSON.stringify({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: input, ...(cwd === undefined ? {} : { cwd }) });
 }
 
-async function decide(vault: string, raw: string): Promise<{ decision: "allow" | "deny"; reason: string | null; warning: string | null }> {
-  const result = await translatePreToolUse(raw, vault);
-  if ("hookSpecificOutput" in result.response) {
-    return { decision: "deny", reason: result.response.hookSpecificOutput.permissionDecisionReason, warning: result.warning };
+type Decision = { decision: "allow" | "warn" | "deny"; reason: string | null; warning: string | null };
+
+function decisionOf(result: HookResult): Decision {
+  const response = result.response;
+  if ("permissionDecision" in (("hookSpecificOutput" in response) ? response.hookSpecificOutput : {})) {
+    const output = (response as { hookSpecificOutput: { permissionDecisionReason: string } }).hookSpecificOutput;
+    return { decision: "deny", reason: output.permissionDecisionReason, warning: result.warning };
   }
+  if ("systemMessage" in response) return { decision: "warn", reason: response.systemMessage, warning: result.warning };
   return { decision: "allow", reason: null, warning: result.warning };
+}
+
+async function decide(vault: string, raw: string, overrides: Partial<PreToolUseDeps> = {}): Promise<Decision> {
+  return decisionOf(await translatePreToolUse(raw, vault, { truncated: false }, overrides));
 }
 
 const GOOD = "---\nstatus: open\n---\nbody\n";
@@ -67,6 +80,11 @@ afterEach(async () => {
   await Promise.all(fixtures.splice(0).map(fixture => fixture.cleanup()));
 });
 
+const OPEN = formatWarnings([{ field: "contract", kind: "contract-open" }]);
+const BROKEN = formatWarnings([{ field: "contract", kind: "contract-unreadable" }]);
+const TAMPERED = formatDenyReason([{ field: "contract", kind: "contract-tampered" }]);
+const NOT_ALLOWED = formatWarnings([{ field: "status", kind: "not-allowed" }]);
+
 describe("translatePreToolUse over the truth table", () => {
   for (const name of TRUTH_TABLE_ROWS) {
     it(`judges a Write in row ${name} by its view (${EXPECTED_VIEW[name]})`, async () => {
@@ -75,16 +93,90 @@ describe("translatePreToolUse over the truth table", () => {
       const bad = await decide(vault, payload("Write", { file_path: join(vault, "Projects/a.md"), content: BAD }));
       const view = EXPECTED_VIEW[name];
       if (view === "open") {
-        expect([good.decision, bad.decision]).toEqual(["allow", "allow"]);
+        expect(good).toEqual({ decision: "warn", reason: OPEN, warning: null });
+        expect(bad).toEqual({ decision: "warn", reason: OPEN, warning: null });
+      } else if (name === "vault-id-tampered") {
+        expect(good).toEqual({ decision: "deny", reason: TAMPERED, warning: null });
+        expect(bad).toEqual({ decision: "deny", reason: TAMPERED, warning: null });
       } else if (view === "unreadable") {
-        expect(good).toEqual({ decision: "deny", reason: formatDenyReason([{ field: "contract", kind: "contract-unreadable" }]), warning: null });
-        expect(bad.decision).toBe("deny");
+        expect(good).toEqual({ decision: "warn", reason: BROKEN, warning: null });
+        expect(bad).toEqual({ decision: "warn", reason: BROKEN, warning: null });
+        expect(good.reason).toContain("Run: oms interview");
       } else {
-        expect(good.decision).toBe("allow");
-        expect(bad).toEqual({ decision: "deny", reason: formatDenyReason([{ field: "status", kind: "not-allowed" }]), warning: null });
+        expect(good).toEqual({ decision: "allow", reason: null, warning: null });
+        expect(bad).toEqual({ decision: "warn", reason: NOT_ALLOWED, warning: null });
       }
     });
   }
+});
+
+describe("translatePreToolUse response shapes", () => {
+  it("pins the warning shape: systemMessage plus additionalContext, no permissionDecision", async () => {
+    const { vault } = await row("sealed");
+    const result = await translatePreToolUse(payload("Write", { file_path: join(vault, "Projects/a.md"), content: BAD }), vault);
+    expect(result.response).toEqual({ systemMessage: NOT_ALLOWED, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: NOT_ALLOWED } });
+    expect(JSON.stringify(result.response)).not.toContain("permissionDecision");
+    expect(NOT_ALLOWED.startsWith(WARNING_PREFIX)).toBe(true);
+  });
+
+  it("keeps the bare allow shape for a clean write", async () => {
+    const { vault } = await row("sealed");
+    const result = await translatePreToolUse(payload("Write", { file_path: join(vault, "Projects/a.md"), content: GOOD }), vault);
+    expect(result).toEqual({ response: { continue: true, suppressOutput: true }, warning: null });
+  });
+});
+
+describe("translatePreToolUse gap ledger", () => {
+  it("records the warnings a write adds as kept gaps", async () => {
+    const fixture = await row("sealed");
+    const gapRoot = join(fixture.base, "gaps");
+    const result = await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "Projects/a.md"), content: BAD }), { gapRoot: () => gapRoot });
+    expect(result.decision).toBe("warn");
+    const ledger = await readGapLedger(gapRoot, fixture.vaultId);
+    const gaps = openGaps(ledger.events);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]!.reason.startsWith("kept:")).toBe(true);
+  });
+
+  it("neither warns nor records when an edit adds no finding over the note on disk", async () => {
+    const fixture = await row("sealed");
+    const gapRoot = join(fixture.base, "gaps");
+    const note = join(fixture.vault, "Projects/a.md");
+    await mkdir(join(fixture.vault, "Projects"), { recursive: true });
+    await writeFile(note, BAD);
+    const result = await decide(fixture.vault, payload("Edit", { file_path: note, old_string: "body", new_string: "text" }), { gapRoot: () => gapRoot });
+    expect(result).toEqual({ decision: "allow", reason: null, warning: null });
+    expect(openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events)).toEqual([]);
+  });
+
+  it("records nothing for an open vault", async () => {
+    const fixture = await row("never-sealed");
+    const gapRoot = join(fixture.base, "gaps");
+    expect((await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "a.md"), content: BAD }), { gapRoot: () => gapRoot })).decision).toBe("warn");
+    expect(openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events)).toEqual([]);
+  });
+
+  it("still warns when the ledger cannot be written", async () => {
+    const fixture = await row("sealed");
+    const blocked = join(fixture.base, "not-a-dir");
+    await writeFile(blocked, "x");
+    const result = await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "Projects/a.md"), content: BAD }), {
+      gapRoot: () => blocked,
+      gapLedger: { newId: () => { throw new Error("ledger down"); } },
+    });
+    expect(result).toEqual({ decision: "warn", reason: NOT_ALLOWED, warning: null });
+  });
+
+  it("warns and records nothing when the seal state cannot be read", async () => {
+    const fixture = await row("sealed");
+    const gapRoot = join(fixture.base, "gaps");
+    const result = await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "Projects/a.md"), content: BAD }), {
+      gapRoot: () => gapRoot,
+      resolveSealState: async () => { throw new Error("seal unreadable"); },
+    });
+    expect(result).toEqual({ decision: "warn", reason: BROKEN, warning: null });
+    expect(openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events)).toEqual([]);
+  });
 });
 
 describe("translatePreToolUse content reconstruction", () => {
@@ -94,24 +186,39 @@ describe("translatePreToolUse content reconstruction", () => {
     await mkdir(join(vault, "Projects"), { recursive: true });
     await writeFile(note, GOOD);
     expect((await decide(vault, payload("Edit", { file_path: note, old_string: "status: open", new_string: "status: done" }))).decision).toBe("allow");
-    expect((await decide(vault, payload("Edit", { file_path: note, old_string: "status: open", new_string: "status: maybe" }))).decision).toBe("deny");
+    expect(await decide(vault, payload("Edit", { file_path: note, old_string: "status: open", new_string: "status: maybe" })))
+      .toEqual({ decision: "warn", reason: NOT_ALLOWED, warning: null });
   });
 
-  it("denies an edit that matches nothing or matches twice without replace_all in a sealed vault", async () => {
+  it("warns on an edit that matches nothing or matches twice without replace_all in a sealed vault", async () => {
     const { vault } = await row("sealed");
     const note = join(vault, "Projects/a.md");
     await mkdir(join(vault, "Projects"), { recursive: true });
     await writeFile(note, "---\nstatus: open\n---\nx x\n");
-    const refused = { decision: "deny", reason: formatDenyReason([{ field: "content", kind: "unsupported-input" }]), warning: null };
-    expect(await decide(vault, payload("Edit", { file_path: note, old_string: "absent", new_string: "y" }))).toEqual(refused);
-    expect(await decide(vault, payload("Edit", { file_path: note, old_string: "x", new_string: "y" }))).toEqual(refused);
+    const notJudged = formatWarnings([{ field: "content", kind: "unsupported-input" }]);
+    for (const edit of [{ old_string: "absent", new_string: "y" }, { old_string: "x", new_string: "y" }]) {
+      expect(await decide(vault, payload("Edit", { file_path: note, ...edit })))
+        .toEqual({ decision: "warn", reason: notJudged, warning: null });
+    }
   });
 
-  it("denies an edit that does not apply when the contract is unreadable", async () => {
+  it("warns on an edit that does not apply when the contract is broken", async () => {
     const { vault } = await row("index-without-store");
     const note = join(vault, "a.md");
     await writeFile(note, GOOD);
-    expect((await decide(vault, payload("Edit", { file_path: note, old_string: "absent", new_string: "y" }))).decision).toBe("deny");
+    expect(await decide(vault, payload("Edit", { file_path: note, old_string: "absent", new_string: "y" }))).toEqual({
+      decision: "warn",
+      reason: formatWarnings([{ field: "contract", kind: "contract-unreadable" }, { field: "content", kind: "unsupported-input" }]),
+      warning: null,
+    });
+  });
+
+  it("denies an edit that does not apply when the seal is tampered", async () => {
+    const { vault } = await row("vault-id-tampered");
+    const note = join(vault, "a.md");
+    await writeFile(note, GOOD);
+    expect(await decide(vault, payload("Edit", { file_path: note, old_string: "absent", new_string: "y" })))
+      .toEqual({ decision: "deny", reason: TAMPERED, warning: null });
   });
 
   it("allows with a warning an edit that does not apply in an open vault", async () => {
@@ -131,7 +238,7 @@ describe("translatePreToolUse content reconstruction", () => {
     const note = join(vault, "Projects/a.md");
     await mkdir(join(vault, "Projects"), { recursive: true });
     await writeFile(note, "---\nstatus: open\n---\nopen\n");
-    expect((await decide(vault, payload("Edit", { file_path: note, old_string: "open", new_string: "maybe", replace_all: true }))).decision).toBe("deny");
+    expect((await decide(vault, payload("Edit", { file_path: note, old_string: "open", new_string: "maybe", replace_all: true }))).decision).toBe("warn");
     expect((await decide(vault, payload("Edit", { file_path: note, old_string: "open", new_string: "done", replace_all: true }))).decision).toBe("allow");
   });
 
@@ -141,31 +248,31 @@ describe("translatePreToolUse content reconstruction", () => {
     await mkdir(join(vault, "Projects"), { recursive: true });
     await writeFile(note, GOOD);
     const edits = [{ old_string: "status: open", new_string: "status: done" }, { old_string: "status: done", new_string: "status: maybe" }];
-    expect((await decide(vault, payload("MultiEdit", { file_path: note, edits })))).toMatchObject({ decision: "deny" });
+    expect((await decide(vault, payload("MultiEdit", { file_path: note, edits })))).toMatchObject({ decision: "warn" });
     expect((await decide(vault, payload("MultiEdit", { file_path: note, edits: edits.slice(0, 1) })))).toMatchObject({ decision: "allow" });
   });
 
   it("accepts lowercase tool names", async () => {
     const { vault } = await row("sealed");
-    expect((await decide(vault, payload("write", { file_path: join(vault, "Projects/a.md"), content: BAD }))).decision).toBe("deny");
-    expect((await decide(vault, payload("multiedit", { file_path: join(vault, "Projects/n.md"), edits: [{ old_string: "", new_string: BAD }] }))).decision).toBe("deny");
+    expect((await decide(vault, payload("write", { file_path: join(vault, "Projects/a.md"), content: BAD }))).decision).toBe("warn");
+    expect((await decide(vault, payload("multiedit", { file_path: join(vault, "Projects/n.md"), edits: [{ old_string: "", new_string: BAD }] }))).decision).toBe("warn");
   });
 
   it("resolves a relative target against the payload cwd", async () => {
     const { vault } = await row("sealed");
-    expect((await decide(vault, payload("Write", { file_path: "Projects/a.md", content: BAD }, vault))).decision).toBe("deny");
+    expect((await decide(vault, payload("Write", { file_path: "Projects/a.md", content: BAD }, vault))).decision).toBe("warn");
   });
 
   it("reads camelCase toolInput when tool_input is absent", async () => {
     const { vault } = await row("sealed");
     const raw = JSON.stringify({ toolName: "Write", toolInput: { file_path: join(vault, "Projects/a.md"), content: BAD } });
-    expect(await decide(vault, raw)).toEqual({ decision: "deny", reason: formatDenyReason([{ field: "status", kind: "not-allowed" }]), warning: null });
+    expect(await decide(vault, raw)).toEqual({ decision: "warn", reason: NOT_ALLOWED, warning: null });
   });
 
   it("expands ~ against HOME and denies ~user targets", async () => {
     const { vault } = await row("sealed");
     expect(await decide(vault, payload("Write", { file_path: "~/../vault/Projects/a.md", content: BAD }, "/")))
-      .toEqual({ decision: "deny", reason: formatDenyReason([{ field: "status", kind: "not-allowed" }]), warning: null });
+      .toEqual({ decision: "warn", reason: NOT_ALLOWED, warning: null });
     expect((await decide(vault, payload("Write", { file_path: "~/../vault/Projects/a.md", content: GOOD }, "/"))).decision).toBe("allow");
     expect(await decide(vault, payload("Write", { file_path: "~other/vault/Projects/a.md", content: GOOD })))
       .toEqual({ decision: "deny", reason: formatDenyReason([{ field: "path", kind: "path-unsafe" }]), warning: null });
@@ -193,7 +300,7 @@ describe("translatePreToolUse path rules", () => {
     expect((await decide(vault, payload("Read", { file_path: join(vault, "Projects/a.md") })))).toEqual({ decision: "allow", reason: null, warning: null });
   });
 
-  it("fails closed on an unreadable target only when a contract is sealed", async () => {
+  it("judges a Write over an unreadable existing file as new and warns that it could not be read", async () => {
     const sealedRow = await row("sealed");
     const note = join(sealedRow.vault, "Projects/a.md");
     await mkdir(join(sealedRow.vault, "Projects"), { recursive: true });
@@ -201,7 +308,9 @@ describe("translatePreToolUse path rules", () => {
     await chmod(note, 0o000);
     try {
       expect(await decide(sealedRow.vault, payload("Write", { file_path: note, content: GOOD })))
-        .toEqual({ decision: "deny", reason: formatDenyReason([{ field: "contract", kind: "contract-unreadable" }]), warning: null });
+        .toEqual({ decision: "warn", reason: formatWarnings([{ field: "content", kind: "contract-unreadable" }]), warning: null });
+      expect(await decide(sealedRow.vault, payload("Edit", { file_path: note, old_string: "open", new_string: "done" })))
+        .toEqual({ decision: "warn", reason: formatWarnings([{ field: "content", kind: "contract-unreadable" }]), warning: null });
     } finally {
       await chmod(note, 0o644);
     }
@@ -210,7 +319,7 @@ describe("translatePreToolUse path rules", () => {
     await writeFile(openNote, GOOD);
     await chmod(openNote, 0o000);
     try {
-      expect((await decide(openRow.vault, payload("Write", { file_path: openNote, content: BAD }))).decision).toBe("allow");
+      expect((await decide(openRow.vault, payload("Write", { file_path: openNote, content: BAD }))).decision).toBe("warn");
     } finally {
       await chmod(openNote, 0o644);
     }
@@ -232,12 +341,22 @@ describe("translatePreToolUse path rules", () => {
 describe("runPreToolUse output", () => {
   it("prints the deny shape with no continue key", async () => {
     const { vault } = await row("sealed");
-    stdin.value = payload("Write", { file_path: join(vault, "Projects/a.md"), content: BAD });
+    stdin.value = payload("Write", { file_path: join(vault, ".oms/settings.json"), content: "{}" });
     const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     await runPreToolUse({ vault });
     const printed = JSON.parse(String(out.mock.calls[0]?.[0])) as Record<string, unknown>;
-    expect(printed).toEqual({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: formatDenyReason([{ field: "status", kind: "not-allowed" }]) } });
+    expect(printed).toEqual({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: formatDenyReason([{ field: "path", kind: "control-path" }]) } });
     expect(Object.hasOwn(printed, "continue")).toBe(false);
+  });
+
+  it("prints the warning shape with no permissionDecision", async () => {
+    const { vault } = await row("sealed");
+    stdin.value = payload("Write", { file_path: join(vault, "Projects/a.md"), content: BAD });
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await runPreToolUse({ vault });
+    expect(out.mock.calls.map(call => call[0])).toEqual([
+      `${JSON.stringify({ systemMessage: NOT_ALLOWED, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: NOT_ALLOWED } })}\n`,
+    ]);
   });
 
   it("denies when stdin was cut off at the size cap", async () => {
@@ -264,7 +383,13 @@ describe("runPreToolUse output", () => {
     stdin.value = payload("Write", { file_path: join(vault, "Projects/a.md"), content: BAD });
     const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     await runPreToolUse({ vault });
-    expect(String(out.mock.calls[0]?.[0])).toContain('"permissionDecision":"deny"');
+    expect(String(out.mock.calls[0]?.[0])).toContain('"systemMessage"');
+  });
+});
+
+describe("write tool set", () => {
+  it("matches the Claude hook matcher", () => {
+    expect([...WRITE_TOOLS].sort()).toEqual(HOOK_MATCHER.toLowerCase().split("|").sort());
   });
 });
 

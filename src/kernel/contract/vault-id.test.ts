@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { addSharedCopy, buildTruthTableRow, TRUTH_TABLE_ROWS, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
 import { SETTINGS_PATH, VAULT_ID_PATTERN } from "../vault/settings.js";
+import type { ContractView } from "./types.js";
 import { ensureVaultId, resolveSealState, type SealRow } from "./vault-id.js";
 
 const fixtures: TruthTableFixture[] = [];
@@ -20,20 +21,27 @@ async function row(name: SealRow): Promise<TruthTableFixture> {
   return fixture;
 }
 
-const EXPECTED_VIEW: Readonly<Record<SealRow, "open" | "unreadable" | "sealed">> = {
+type ExpectedView = "open" | "sealed" | "broken" | "tampered";
+
+const EXPECTED_VIEW: Readonly<Record<SealRow, ExpectedView>> = {
   "never-sealed": "open",
   "synced-second-machine": "open",
   "store-without-index": "sealed",
   "vault-moved": "sealed",
   "sealed": "sealed",
-  "index-without-store": "unreadable",
-  "vault-id-tampered": "unreadable",
+  "index-without-store": "broken",
+  "settings-missing": "broken",
+  "vault-id-tampered": "tampered",
   "index-corrupt": "sealed",
 };
 
+function viewKind(view: ContractView): ExpectedView {
+  return view.state === "unreadable" ? view.reason : view.state;
+}
+
 describe("resolveSealState truth table", () => {
-  it("covers exactly eight rows", () => {
-    expect(new Set(TRUTH_TABLE_ROWS).size).toBe(8);
+  it("covers exactly nine rows", () => {
+    expect(new Set(TRUTH_TABLE_ROWS).size).toBe(9);
   });
 
   for (const name of TRUTH_TABLE_ROWS) {
@@ -41,10 +49,10 @@ describe("resolveSealState truth table", () => {
       const fixture = await row(name);
       const state = await resolveSealState(fixture.vault, fixture.root);
       expect(state.row).toBe(name);
-      expect(state.view.state).toBe(EXPECTED_VIEW[name]);
+      expect(viewKind(state.view)).toBe(EXPECTED_VIEW[name]);
       expect(state.shared).toBe(false);
       expect(state.settingsInvalid).toBe(false);
-      if (name === "never-sealed") expect(state.vaultId).toBeNull();
+      if (name === "never-sealed" || name === "settings-missing") expect(state.vaultId).toBeNull();
       else if (name !== "vault-id-tampered") expect(state.vaultId).toBe(fixture.vaultId);
     });
   }
@@ -72,6 +80,37 @@ describe("resolveSealState truth table", () => {
     expect(state.settingsInvalid).toBe(true);
     expect(state.row).toBe("never-sealed");
     expect(state.view.state).toBe("open");
+  });
+});
+
+describe("a missing vault id is broken, a different one is tampered", () => {
+  it("treats invalid settings on a sealed vault as settings-missing, not tampered", async () => {
+    const fixture = await row("sealed");
+    await writeFile(join(fixture.vault, SETTINGS_PATH), "{\"version\":1,\"vaultId\":\"not-a-uuid\"}");
+    const state = await resolveSealState(fixture.vault, fixture.root);
+    expect(state.settingsInvalid).toBe(true);
+    expect(state.row).toBe("settings-missing");
+    expect(state.view).toEqual({ state: "unreadable", reason: "broken" });
+  });
+
+  it("treats a deleted settings file on a sealed vault as broken", async () => {
+    const fixture = await row("settings-missing");
+    const state = await resolveSealState(fixture.vault, fixture.root);
+    expect(state.view).toEqual({ state: "unreadable", reason: "broken" });
+    expect(state.vaultId).toBeNull();
+  });
+
+  it("reports tampered only when a present settings id differs from the index", async () => {
+    const fixture = await row("vault-id-tampered");
+    const state = await resolveSealState(fixture.vault, fixture.root);
+    expect(state.view).toEqual({ state: "unreadable", reason: "tampered" });
+    expect(state.vaultId).not.toBeNull();
+    expect(state.vaultId).not.toBe(fixture.vaultId);
+  });
+
+  it("reports an index entry without a store as broken", async () => {
+    const fixture = await row("index-without-store");
+    expect((await resolveSealState(fixture.vault, fixture.root)).view).toEqual({ state: "unreadable", reason: "broken" });
   });
 });
 

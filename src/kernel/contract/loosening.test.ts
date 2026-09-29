@@ -146,7 +146,7 @@ describe("looseningChanges", () => {
 
     function accepts(contract: VaultContract, tags: readonly string[], selectedTemplate?: string): boolean {
       const input = { path: "a.md", frontmatter: { tags }, body: "", ...selectedTemplate === undefined ? {} : { selectedTemplate } };
-      return judge(input, { state: "sealed", contract }).ok;
+      return judge(input, { state: "sealed", contract }).warnings.length === 0;
     }
 
     it("reports an allowed list replaced by fixed members, which would pass an unlisted member", () => {
@@ -231,8 +231,8 @@ describe("looseningChanges", () => {
     const sealed: VaultContract = { ...SEALED, properties: null };
     const next: VaultContract = { ...sealed, templates: { Meeting: template({ ...sealed.templates["Meeting"]!, requiredHeadings: ["Agenda", "Notes"] }) } };
     const edit = { path: "Inbox/a.md", frontmatter: {}, body: "no headings\n", previousContent: "---\nstatus: open\n---\n## Agenda\n" };
-    expect(judge(edit, { state: "sealed", contract: sealed }).ok).toBe(false);
-    expect(judge(edit, { state: "sealed", contract: next }).ok).toBe(true);
+    expect(judge(edit, { state: "sealed", contract: sealed }).warnings).not.toEqual([]);
+    expect(judge(edit, { state: "sealed", contract: next }).warnings).toEqual([]);
     expect(looseningChanges(sealed, next)).toEqual([{ field: "templates.Meeting.requiredHeadings.Notes", kind: "template-tightened" }]);
   });
 
@@ -258,12 +258,12 @@ describe("looseningChanges", () => {
       expect(looseningChanges(sealed, withScoped("Private"))).toEqual([]);
     });
 
-    it("keeps an overlapping edit rejected by the sealed template", () => {
+    it("keeps an overlapping edit warned on by the sealed template", () => {
       const next = withScoped("Inbox");
       const previousContent = "---\nstatus: open\n---\n## Agenda\n";
       const edit = { path: "Inbox/a.md", frontmatter: { status: "done" }, body: "## Agenda\n", previousContent };
-      expect(judge(edit, { state: "sealed", contract: SEALED }).ok).toBe(false);
-      expect(judge(edit, { state: "sealed", contract: next }).ok).toBe(true);
+      expect(judge(edit, { state: "sealed", contract: SEALED }).warnings).not.toEqual([]);
+      expect(judge(edit, { state: "sealed", contract: next }).warnings).toEqual([]);
     });
   });
 
