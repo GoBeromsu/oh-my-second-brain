@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+- **`ip-address` no longer carries its `<=10.5.0` SSRF advisories.** `npm run audit` started failing again on the transitive `@modelcontextprotocol/sdk` → `express-rate-limit` → `ip-address` chain (GHSA-rpw4-54j3-4h4q, GHSA-2vr4-cq9g-pvrc). `npm audit fix` (no `--force`) resolved it to `10.7.2`, still within `express-rate-limit`'s own `^10.2.0` range, so only `package-lock.json` changed — no `package.json` edit or `overrides` entry was needed. `npm run audit` reports zero vulnerabilities again.
+
 ## [0.19.0] - 2026-09-28
 
 - **Upgrading from 0.18: run `oms setup host sync` first.** Installed host assets (the Claude guard hook, skills, and MCP wiring) still point at the 0.18 surface until they are re-synced. Then read [Migrating to 0.19](./docs/migration-0.19.md) for the full command map.
