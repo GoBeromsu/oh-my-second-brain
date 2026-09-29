@@ -20,7 +20,7 @@ describe("bench:latency CLI surface", () => {
     // Top-level families retired in 0.19: `note`, `index`, `template`, `contract`, `graph`.
     // A bare word-boundary scan is deliberately broad; it should never see any of these as the
     // first token handed to the CLI.
-    for (const family of ["note", "index", "template", "contract"]) {
+    for (const family of ["note", "index", "template", "contract", "graph"]) {
       expect(source).not.toMatch(new RegExp(`\\[\\s*["']${family}["']`, "u"));
     }
     // `search query` / `search context` were removed in 0.19 in favor of `search <text>` and
@@ -42,7 +42,7 @@ describe("bench:latency CLI surface", () => {
     const report = JSON.parse(result.stdout);
     expect(Object.keys(report.results).sort()).toEqual(["searchPathNfd", "searchQueryLexical"].sort());
     for (const metric of Object.values(report.results) as Array<{ command: string }>) {
-      expect(metric.command).not.toContain("note");
+      expect(metric.command).not.toMatch(/^oms (note|index|template|contract|graph) /u);
       expect(metric.command).not.toMatch(/search (query|context) /u);
     }
   }, 60_000);

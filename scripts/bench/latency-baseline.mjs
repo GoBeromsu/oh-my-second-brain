@@ -40,6 +40,8 @@ const ISOLATED_DIRS = {
   OMS_HERMES_HOME: "hermes",
   XDG_CONFIG_HOME: "xdg-config",
   XDG_CACHE_HOME: "xdg-cache",
+  XDG_DATA_HOME: "xdg-data",
+  XDG_STATE_HOME: "xdg-state",
 };
 
 /** A fresh vault copy plus an isolated env, all under one temp dir. */

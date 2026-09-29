@@ -136,9 +136,9 @@ function walkStrings(value, visit) {
 // which is what a real leak of a short query looks like in an
 // aggregate-only report; at or above it, the existing substring check still
 // fails closed on any leak. A short *non-ASCII* query (a single Korean
-// syllable, say) has no such false-positive risk: everything a generated
-// report emits on its own (ids, labels, numbers) is ASCII, so a non-ASCII
-// substring match can only be an actual leak.
+// syllable, say) has little false-positive risk: the labels and numbers a
+// report generates are ASCII, so a non-ASCII match can only come from a leak
+// or from an operator-supplied query id/type, and either way it fails closed.
 const MIN_SUBSTRING_LEAK_LENGTH = 3;
 const NON_ASCII = /[^\x00-\x7F]/u;
 
