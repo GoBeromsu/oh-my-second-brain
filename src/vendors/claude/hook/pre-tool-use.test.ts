@@ -5,6 +5,7 @@ import { buildTruthTableRow, TRUTH_TABLE_ROWS, type TruthTableFixture } from "..
 import { openGaps, readGapLedger } from "../../../kernel/contract/gap-ledger.js";
 import { formatDenyReason, formatWarnings, GUIDANCE, GUIDANCE_FOR, VIOLATION_KINDS, WARNING_PREFIX, type VaultContract } from "../../../kernel/contract/types.js";
 import type { SealRow } from "../../../kernel/contract/vault-id.js";
+import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../../../kernel/vault/settings.js";
 import { HOOK_MATCHER } from "../claude-hooks.js";
 
 const stdin = vi.hoisted(() => ({ value: "{}", truncated: false }));
@@ -146,6 +147,21 @@ describe("translatePreToolUse gap ledger", () => {
     expect(JSON.stringify(result.response)).not.toContain("updatedInput");
     const gaps = openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events);
     expect(gaps.map(gap => [gap.kind, gap.wanted, gap.reason])).toEqual([["kept", { field: "status", value: " OPEN " }, "kept: not-allowed"]]);
+  });
+
+  it("records the open template choice for a new note, as MCP write does, without changing the verdict", async () => {
+    const fixture = await row("sealed");
+    const gapRoot = join(fixture.base, "gaps");
+    await mkdir(join(fixture.vault, "Templates"), { recursive: true });
+    await writeFile(join(fixture.vault, "Templates", "Projects.md"), "## Goals\n");
+    await writeFile(join(fixture.vault, "Templates", "meeting.md"), "---\nfolder: Projects\n---\n## Agenda\n");
+    const settings = await readVaultSettings(fixture.vault);
+    if (settings === null) throw new Error("the sealed fixture has no settings");
+    await writeFile(join(fixture.vault, SETTINGS_PATH), serializeVaultSettings({ ...settings, templateFolder: "Templates" }));
+    const result = await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "Projects/a.md"), content: GOOD }), { gapRoot: () => gapRoot });
+    expect(result).toEqual({ decision: "allow", reason: null, warning: null });
+    const gaps = openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events);
+    expect(gaps.map(gap => gap.kind)).toEqual(["choice"]);
   });
 
   it("warns with the whole verdict but records nothing when an edit adds no finding over the note on disk", async () => {

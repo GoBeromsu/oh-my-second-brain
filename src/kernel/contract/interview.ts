@@ -8,6 +8,7 @@ import { buildRedactor, hiddenValuesOf, publicTokensOf } from "./redact.js";
 import { PATTERN_SOURCE_LIMIT, patternRefusal } from "./pattern.js";
 import { currentSequence, NO_DECLINED, readDeclined, sealContract, storeRoot, type DeclinedSet, type SealDeps, type SequenceObservation } from "./store.js";
 import { legacyTemplatesOf } from "./legacy.js";
+import { readLiveTemplates } from "../write/live-templates.js";
 import { LineageAppendFailed } from "./lineage.js";
 import type {
   FieldType,
@@ -24,8 +25,8 @@ export { hasNestedQuantifier } from "./pattern.js";
 /**
  * Deterministic seal-time questionnaire over the vault's two axes: top-level folders and
  * properties (the Obsidian property types). Templates are not contract: they scaffold new
- * notes from the template folder, so the interview only records which folder that is and
- * never reads, asks about or seals a template. No LLM asks anything and all IO is injected.
+ * notes from the template folder, so the interview records which folder that is and offers
+ * the keys its templates set as properties, but never asks about or seals a template. No LLM asks anything and all IO is injected.
  * With a readable sealed contract, a rerun asks only about new folders and new properties
  * and keeps every existing answer (diff-only). Declined folders and properties are kept
  * beside the contract and not asked again until the caller asks to review them.
@@ -272,13 +273,20 @@ async function topLevelFolders(vault: string): Promise<string[]> {
   return folders.sort(compareCodePoints);
 }
 
-/** The folders and the Obsidian property types the seal questions are built from. */
-async function discover(vault: string): Promise<Discovered | { readonly refused: string[] }> {
+/**
+ * The folders and properties the seal questions are built from: the Obsidian property types,
+ * then the keys the live templates set, as text unless Obsidian already types them.
+ */
+async function discover(vault: string, templateFolder: string | undefined): Promise<Discovered | { readonly refused: string[] }> {
   const observedTypes = new Map<string, FieldType>();
   try {
     for (const [name, type] of Object.entries(await readObsidianTypes(vault))) observedTypes.set(name, type);
   } catch {
     return { refused: ["The Obsidian property types file is unreadable; fix it in Obsidian first."] };
+  }
+  const templates = templateFolder === undefined ? [] : await readLiveTemplates(vault, templateFolder);
+  for (const field of templates.flatMap(template => template.fields)) {
+    if (!observedTypes.has(field.name)) observedTypes.set(field.name, "text");
   }
   return { folders: await topLevelFolders(vault), observedTypes };
 }
@@ -431,7 +439,7 @@ export async function runInterview(input: {
     if (unsafe.length > 0) return { state: "loosening", changes: unsafe };
     const pickFolder = settings?.templateFolder === undefined && (previous === null || input.reask === true);
     const chosenFolder = pickFolder ? await askTemplateFolder(asker, vault) : null;
-    const found = await discover(vault);
+    const found = await discover(vault, settings?.templateFolder ?? chosenFolder ?? undefined);
     if ("refused" in found) return { state: "refused", reasons: found.refused };
 
     const earlier: DeclinedSet = input.reask === true || state.vaultId === null ? NO_DECLINED : await readDeclined(state.vaultId, root);

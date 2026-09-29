@@ -26,7 +26,7 @@ beforeEach(async () => {
   await mkdir(join(vault, "Templates"));
   await mkdir(join(vault, ".oms"));
   await mkdir(join(vault, ".obsidian"));
-  // Properties are discovered from Obsidian's property types, never from template text.
+  // Properties are discovered from Obsidian's property types, then from the keys templates set.
   await writeFile(join(vault, ".obsidian/types.json"), JSON.stringify({ types: { status: "text" } }));
   await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateFolder: "Templates" }));
   await writeFile(join(vault, "Templates/Meeting.md"), MEETING_SOURCE);
@@ -159,9 +159,28 @@ describe("scripted interview answers", () => {
     await expect(readdir(root)).rejects.toThrow();
   });
 
+  it("offers a key a template sets as a text property unless Obsidian already types it", async () => {
+    await writeFile(join(vault, ".obsidian/types.json"), JSON.stringify({ types: { status: "text", due: "date" } }));
+    await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\ndue: 2026-01-01\nfolder: Projects\ntopic: x\n---\n## Agenda\n");
+    const { result, notes } = await run({
+      ...ANSWERS,
+      "property:due:register": false,
+      "property:topic:register": true,
+      "property:topic:type": "",
+      "property:topic:required": false,
+      "property:topic:default": false,
+      "property:topic:rule": "none",
+      "property:topic:meaning": "subject",
+      seal: true,
+    });
+    expect(result).toMatchObject({ state: "sealed", properties: 2 });
+    expect((await sealedContract()).properties?.["topic"]).toMatchObject({ type: "text" });
+    expect(notes.filter(note => note.startsWith("property:folder"))).toEqual([]);
+  });
+
   it("never refuses over a template's content, since templates are not sealed", async () => {
     await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\nowner: me\n---\n## Agenda\n");
-    const { result } = await run({ ...ANSWERS, "property:status:meaning": "open or done", seal: true });
+    const { result } = await run({ ...ANSWERS, "property:status:meaning": "open or done", "property:owner:register": false, seal: true });
     expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1 });
     expect(Object.keys(await sealedContract()).sort()).toEqual(["folders", "properties"]);
   });

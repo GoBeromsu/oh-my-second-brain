@@ -34,6 +34,8 @@ const VARIABLE = /\{\{\s*(title|date|time)(?::([^}]*))?\s*\}\}/gi;
 const FORMAT_TOKEN = /YYYY|MM|DD|HH|mm|ss/g;
 const PLAIN_TITLE = /^[\p{L}\p{N} _.-]+$/u;
 const PLAIN_KEY = /^[\p{L}\p{N}_-]+$/u;
+/** A template variable conform does not fill: Obsidian's `{{...}}` left over, or any Templater `<%` tag. */
+const UNFILLED = /\{\{|<%/;
 const KEY_LINE = /^\s*(?:"([^"]+)"|'([^']+)'|([^\s:#][^:#]*?))\s*:/;
 
 function pad(value: number): string {
@@ -143,16 +145,18 @@ function observedHeadings(body: string): readonly string[] | null {
 function insertFrontmatter(content: string, lines: readonly string[]): string {
   if (lines.length === 0) return content;
   const eol = content.includes("\r\n") ? "\r\n" : "\n";
+  // A multi-line value keeps the note's line endings, not the template's.
+  const block = lines.map(line => line.replace(/\r?\n/g, eol)).join(eol);
   const parsed = parseNote(content);
-  if (parsed.frontmatterRange === null) return `---${eol}${lines.join(eol)}${eol}---${eol}${content}`;
+  if (parsed.frontmatterRange === null) return `---${eol}${block}${eol}---${eol}${content}`;
   const end = parsed.frontmatterRange.end;
-  return `${content.slice(0, end)}${eol}${lines.join(eol)}${content.slice(end)}`;
+  return `${content.slice(0, end)}${eol}${block}${content.slice(end)}`;
 }
 
 /**
  * New notes only: the chosen template's keys the note leaves out, with its variables filled,
- * then each of its headings the note misses. A key whose value still holds a variable conform
- * cannot fill is left out rather than saved unfilled. A named template that is not in
+ * then each of its headings the note misses. A key or heading that still holds a variable
+ * conform cannot fill (`{{...}}`, or Templater's `<% ... %>`) is left out rather than saved unfilled. A named template that is not in
  * `templateFolder` scaffolds nothing and is reported as `template-missing`.
  */
 function addScaffold(content: string, options: ConformOptions, applied: ConformChange[]): string {
@@ -169,14 +173,14 @@ function addScaffold(content: string, options: ConformOptions, applied: ConformC
   for (const field of template.fields) {
     if (Object.hasOwn(parsed.frontmatter, field.name)) continue;
     const text = substitute(field.text, options, true);
-    if (/\{\{/.test(text)) continue;
+    if (UNFILLED.test(text)) continue;
     lines.push(text);
     applied.push({ field: field.name, action: "default" });
   }
   let next = insertFrontmatter(content, lines);
   const observed = observedHeadings(parseNote(next).body);
   if (observed === null) return next;
-  const missing = template.headings.filter(heading => !observed.includes(heading.title));
+  const missing = template.headings.filter(heading => !UNFILLED.test(heading.title) && !observed.includes(heading.title));
   if (missing.length === 0) return next;
   for (const heading of missing) applied.push({ field: heading.title, action: "heading" });
   const separator = next === "" || next.endsWith("\n\n") ? "" : next.endsWith("\n") ? "\n" : "\n\n";

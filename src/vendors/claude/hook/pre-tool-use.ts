@@ -8,6 +8,7 @@ import { storeRoot } from "../../../kernel/contract/store.js";
 import { formatDenyReason, formatWarnings, type ContractView, type Verdict, type Violation } from "../../../kernel/contract/types.js";
 import { resolveSealState, type SealState } from "../../../kernel/contract/vault-id.js";
 import type { GapFinding } from "../../../kernel/write/ambiguity.js";
+import { loadLiveTemplates } from "../../../kernel/write/live-templates.js";
 import { gapInputs } from "../../../kernel/write/pipeline.js";
 import { readStdinTimeout, type StdinRead } from "./stdin.js";
 
@@ -150,7 +151,8 @@ export async function translatePreToolUse(
     : reconstruct(tool, input, resolved.previousContent);
   if (content === null) return notJudged(resolved.path, resolved.view, resolved.previousContent === null);
 
-  const decision = decideWrite(resolved, content, { repair: false });
+  // The live templates only record an open template choice, as MCP write does; the verdict is the same without them.
+  const decision = decideWrite(resolved, content, { repair: false, templates: await loadLiveTemplates(resolved.vaultRoot) });
   if (decision.outcome === "allow" && decision.findings.length > 0) await recordKept(decision.findings, resolved.path, content, resolved.view, read.seal, deps);
   return fromVerdict(decision.verdict);
 }

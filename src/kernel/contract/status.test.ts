@@ -7,8 +7,9 @@ import type { TemplatedContract } from "./legacy.js";
 import { appendInterviewEvent, EVENTS_FILE, pendingLogKey } from "./interview-log.js";
 import { stateDir } from "./state-dir.js";
 import {
-  contractDoctor, contractStatus, doctorFix, legacyTemplateFinding, ROW_FINDING, SHARED_FINDING, STORE_UNREADABLE_FINDING, type DoctorFixResult,
+  contractDoctor, contractStatus, doctorFix, legacyTemplateFinding, ROW_FINDING, SHARED_FINDING, STORE_UNREADABLE_FINDING, templateFolderUnsetFinding, type DoctorFixResult,
 } from "./status.js";
+import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import type { VaultContract } from "./types.js";
 import { resolveSealState, type SealRow } from "./vault-id.js";
 
@@ -93,11 +94,40 @@ describe("contractStatus", () => {
     expect(legacyTemplateFinding(2)).toEqual({ message: "legacy-template-constraints-ignored: 2", guidance: "oms setup" });
   });
 
+  it("suggests a template folder for a legacy generation whose settings name none, without writing it", async () => {
+    const template = { source: "Templates/Meeting.md", sourceHash: `sha256:${"a".repeat(64)}` as const, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
+    const contract: TemplatedContract = { folders: null, properties: null, templates: { Meeting: template, Daily: { ...template, source: "Templates/Daily.md" } } };
+    const fixture = await row("sealed", contract);
+    const before = await readFile(join(fixture.vault, SETTINGS_PATH), "utf8");
+    const status = await contractStatus(fixture.vault, fixture.root);
+    expect(status.findings).toContainEqual({
+      message: "template-folder-unset: set \"templateFolder\" to \"Templates\" in .oms/settings.json so templates scaffold new notes",
+      guidance: null,
+    });
+    expect(await readFile(join(fixture.vault, SETTINGS_PATH), "utf8")).toBe(before);
+  });
+
+  it("names no folder when the legacy templates do not share one", () => {
+    expect(templateFolderUnsetFinding(["Templates/Meeting.md", "Other/Daily.md"]).message).toContain("to your template folder in");
+    expect(templateFolderUnsetFinding(["Meeting.md"]).message).toContain("to your template folder in");
+  });
+
+  it("makes no template folder suggestion once the settings name one", async () => {
+    const template = { source: "Templates/Meeting.md", sourceHash: `sha256:${"a".repeat(64)}` as const, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
+    const fixture = await row("sealed", { folders: null, properties: null, templates: { Meeting: template } });
+    const settings = await readVaultSettings(fixture.vault);
+    await writeFile(join(fixture.vault, SETTINGS_PATH), serializeVaultSettings({ ...settings!, templateFolder: "Templates" }));
+    const status = await contractStatus(fixture.vault, fixture.root);
+    expect(status.findings).toContainEqual(legacyTemplateFinding(1));
+    expect(status.findings.some(finding => finding.message.startsWith("template-folder-unset"))).toBe(false);
+  });
+
   it("reports no legacy template finding for a version 3 generation", async () => {
     const fixture = await row("sealed");
     const status = await contractStatus(fixture.vault, fixture.root);
     expect(status).toMatchObject({ contract: "sealed", legacyTemplates: 0 });
     expect(status.findings.some(finding => finding.message.startsWith("legacy-template-constraints-ignored"))).toBe(false);
+    expect(status.findings.some(finding => finding.message.startsWith("template-folder-unset"))).toBe(false);
   });
 });
 

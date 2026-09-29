@@ -91,7 +91,15 @@ export function parseLiveTemplate(source: string, text: string): LiveTemplate | 
 export async function loadLiveTemplates(vault: string): Promise<readonly LiveTemplate[]> {
   try {
     const folder = (await readVaultSettings(vault))?.templateFolder;
-    if (folder === undefined) return [];
+    return folder === undefined ? [] : await readLiveTemplates(vault, folder);
+  } catch {
+    return [];
+  }
+}
+
+/** Every readable Markdown template under `folder`, by name; best effort like `loadLiveTemplates`. */
+export async function readLiveTemplates(vault: string, folder: string): Promise<readonly LiveTemplate[]> {
+  try {
     const inventory = await scanTemplateSources(vault, [{ path: folder, kind: "folder" }]);
     const templates = inventory.sources
       .filter(source => /\.md$/i.test(source.path) && source.text !== null)

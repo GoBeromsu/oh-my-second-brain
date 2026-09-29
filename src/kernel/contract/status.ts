@@ -1,5 +1,5 @@
 import { lstat, readdir, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { compareCodePoints } from "../conventions/canonical.js";
 import { legacyTemplatesOf } from "./legacy.js";
 import { readTransportFailures, type TransportFailures } from "./guard-events.js";
@@ -8,6 +8,7 @@ import { lineageHealth, type LineageHealth } from "./lineage-health.js";
 import { unsafePatternChanges, type LooseningChange } from "./loosening.js";
 import { diagnoseStore, readStore, storeExists, storeHousekeeping, storeRoot, writeIndexEntry, type StoreCause } from "./store.js";
 import { resolveSealState, type SealRow } from "./vault-id.js";
+import { readVaultSettings } from "../vault/settings.js";
 import type { Guidance } from "./types.js";
 
 /**
@@ -56,6 +57,27 @@ export function legacyTemplateFinding(count: number): DoctorFinding {
   return { message: `legacy-template-constraints-ignored: ${count}`, guidance: "oms setup" };
 }
 
+/**
+ * A legacy generation sealed templates, but the vault settings name no `templateFolder`, so
+ * those templates neither scaffold new notes nor stay out of the audit. Only a suggestion:
+ * the folder is named when every sealed template shares it, and nothing is written.
+ */
+export function templateFolderUnsetFinding(sources: readonly string[]): DoctorFinding {
+  const folders = new Set(sources.map(source => posix.dirname(source)));
+  const [folder] = folders;
+  const value = folders.size === 1 && folder !== undefined && folder !== "." ? `"${folder}"` : "your template folder";
+  return { message: `template-folder-unset: set "templateFolder" to ${value} in .oms/settings.json so templates scaffold new notes`, guidance: null };
+}
+
+async function templateFolderUnset(vault: string): Promise<boolean> {
+  try {
+    return (await readVaultSettings(vault))?.templateFolder === undefined;
+  } catch {
+    // Unreadable settings are reported on their own; no suggestion is made on top of them.
+    return false;
+  }
+}
+
 export async function contractStatus(vault: string, root: string = storeRoot()): Promise<ContractStatus> {
   const state = await resolveSealState(vault, root);
   const findings: DoctorFinding[] = [ROW_FINDING[state.row]];
@@ -68,8 +90,10 @@ export async function contractStatus(vault: string, root: string = storeRoot()):
       ? { contract: "unreadable", reason: state.view.reason, row: state.row, findings, legacyTemplates: 0 }
       : { contract: "none", row: state.row, findings, legacyTemplates: 0 };
   }
-  const legacyTemplates = Object.keys(legacyTemplatesOf(state.view)).length;
+  const legacy = Object.values(legacyTemplatesOf(state.view));
+  const legacyTemplates = legacy.length;
   if (legacyTemplates > 0) findings.push(legacyTemplateFinding(legacyTemplates));
+  if (legacyTemplates > 0 && await templateFolderUnset(vault)) findings.push(templateFolderUnsetFinding(legacy.map(template => template.source)));
   return { contract: "sealed", row: state.row, findings, legacyTemplates };
 }
 

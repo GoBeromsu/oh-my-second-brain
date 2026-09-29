@@ -150,6 +150,13 @@ describe("conform", () => {
     expect(conform(malformed, options({ view: { state: "open" }, isNew: true, scaffold: chosen(PROJECT) }))).toEqual({ content: malformed, applied: [] });
   });
 
+  it("leaves out a Templater value or heading, since conform never runs Templater", () => {
+    const templater = live("Templates/tp.md", "---\ncreated: <% tp.date.now() %>\ntitle: \"<% tp.file.title %>\"\nkind: log\n---\n# <% tp.file.title %>\n\n## Notes\n");
+    const result = conform("", options({ view: { state: "open" }, isNew: true, scaffold: chosen(templater) }));
+    expect(result.content).toBe("---\nkind: log\n---\n\n## Notes\n");
+    expect(result.applied).toEqual([{ field: "kind", action: "default" }, { field: "Notes", action: "heading" }]);
+  });
+
   it("does not count a heading inside a code fence as present", () => {
     const result = conform("```\n## Goals\n```\n", options({ view: { state: "open" }, isNew: true, scaffold: chosen(live("Templates/h.md", "## Goals\n\n## 목표\n")) }));
     expect(result.content).toBe("```\n## Goals\n```\n\n## Goals\n\n## 목표\n");
@@ -180,6 +187,12 @@ describe("conform", () => {
     const result = conform("---\r\nstatus: active\r\n---\r\nBody\r\n", options({ isNew: true, scaffold: chosen(BARE) }));
     expect(result.content).toBe("---\r\nstatus: active\r\ncreated: 2026-09-28\r\nupdated: 2026-09-28T09:05:07\r\n\"review date\": 2026-09-28\r\n---\r\nBody\r\n");
     expect(conform("Body\r\n", options({ isNew: true, scaffold: chosen(BARE) })).content).toBe("---\r\ncreated: 2026-09-28\r\nupdated: 2026-09-28T09:05:07\r\n\"review date\": 2026-09-28\r\n---\r\nBody\r\n");
+  });
+
+  it("inserts a multi-line template value with the note's CRLF line endings", () => {
+    const listed = live("Templates/list.md", "---\ntags:\n  - a\n  - b\nkind: log\n---\n");
+    const result = conform("---\r\nstatus: active\r\n---\r\nBody\r\n", options({ view: { state: "open" }, isNew: true, scaffold: chosen(listed) }));
+    expect(result.content).toBe("---\r\nstatus: active\r\ntags:\r\n  - a\r\n  - b\r\nkind: log\r\n---\r\nBody\r\n");
   });
 
   it("never supplies a required property the writer left out", () => {

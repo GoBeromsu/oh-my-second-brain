@@ -69,6 +69,8 @@ const ANSWERS: Readonly<Record<string, string>> = {
   "folder:Projects:meaning": "project notes",
   "folder:Projects:search-exclude": "n",
   "folder:Templates:register": "n",
+  // Offered because the Meeting template sets it.
+  "property:status:register": "n",
   "seal": "y",
 };
 
