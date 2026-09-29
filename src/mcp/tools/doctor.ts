@@ -2,9 +2,18 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { auditVault } from "../../kernel/contract/audit.js";
 import { gapsReport } from "../../kernel/contract/gaps-report.js";
 import { contractDoctor } from "../../kernel/contract/status.js";
-import { repairDoctor } from "../../kernel/doctor/service.js";
+import { repairDoctor, type DoctorRepairOperation } from "../../kernel/doctor/service.js";
 import type { McpEngineAdapter } from "../../kernel/engine/mcp/facade.js";
 import { errorText, jsonText, stringArg, type ToolContext } from "./shared.js";
+
+const CONTRACT_OPERATIONS: Readonly<Record<string, DoctorRepairOperation>> = {
+  oms_contract_lineage_recover: "lineage-recover",
+  oms_contract_lineage_reanchor: "lineage-reanchor",
+  oms_contract_evolve: "evolve",
+  oms_contract_evolve_verdict: "evolve-verdict",
+  oms_contract_revert_propose: "revert-propose",
+  oms_contract_reclaim_evolution_lock: "reclaim-evolution-lock",
+};
 
 /** MCP `doctor`: diagnose or repair. Returns undefined for an operation it does not own. */
 export async function handleDoctor(ctx: ToolContext, name: string, args: Record<string, unknown> | undefined): Promise<CallToolResult | undefined> {
@@ -55,8 +64,10 @@ export async function handleDoctor(ctx: ToolContext, name: string, args: Record<
     return repair.kind === "error" ? errorText(repair.message) : jsonText(repair.value);
   }
 
-  if (name === "oms_contract_lineage_recover" || name === "oms_contract_lineage_reanchor") {
-    const repair = await repairDoctor({ operation: name === "oms_contract_lineage_recover" ? "lineage-recover" : "lineage-reanchor", vault, source, args });
+  const contractOperation = Object.hasOwn(CONTRACT_OPERATIONS, name) ? CONTRACT_OPERATIONS[name] : undefined;
+  if (contractOperation !== undefined) {
+    // No `human` over MCP: the owner-only ops (lineage-reanchor, reclaim-evolution-lock) refuse here.
+    const repair = await repairDoctor({ operation: contractOperation, vault, source, args });
     return repair.kind === "error" ? errorText(repair.message) : jsonText(repair.value);
   }
 

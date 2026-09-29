@@ -160,6 +160,7 @@ describe("graph command", () => {
       },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false, reason: "Graph cache not built" },
+      evolution: null,
     });
     expect(process.exitCode).toBe(0);
     expect(await fileSnapshot(vault)).toEqual(before);

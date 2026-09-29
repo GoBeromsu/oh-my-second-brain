@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 
 import { runEngineSession } from "./engine-session.js";
 import { contractStatus } from "../kernel/contract/status.js";
+import { evolutionStatus } from "../kernel/doctor/evolution-status.js";
 import * as engineAssembly from "../kernel/engine/assemble.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
@@ -47,6 +48,13 @@ export async function collectStatus(resolved: { readonly vault: string; readonly
   } catch {
     // The error text may name the store; only the fixed guidance is shown.
     convention = { contract: "unreadable", findings: [{ message: "contract status unavailable", guidance: "oms doctor contract" }] };
+  }
+
+  let evolution: unknown;
+  try {
+    evolution = await evolutionStatus(resolved.vault, Date.now());
+  } catch {
+    evolution = { unavailable: "evolution status could not be read; run `oms doctor contract`" };
   }
 
   let history: unknown;
@@ -94,6 +102,7 @@ export async function collectStatus(resolved: { readonly vault: string; readonly
     vault: resolved.vault,
     source: resolved.source,
     convention,
+    evolution,
     history,
     engine,
     graph,

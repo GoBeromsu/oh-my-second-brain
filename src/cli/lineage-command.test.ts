@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,7 @@ vi.mock("../kernel/doctor/service.js", async importOriginal => {
 import { writeContractVault } from "../../test/fixtures/contract-vault-fixture.js";
 import { resolveSealState } from "../kernel/contract/vault-id.js";
 import { storeRoot } from "../kernel/contract/store.js";
+import type { DoctorHuman } from "../kernel/doctor/service.js";
 import { runLineageCommand } from "./lineage-command.js";
 
 const saved = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"], OMS_VAULT: process.env["OMS_VAULT"] };
@@ -51,6 +53,11 @@ afterEach(async () => {
   await rm(base, { recursive: true, force: true });
 });
 
+const owner = (decision: "approve" | "reject" = "approve", interactive = true): DoctorHuman & { readonly seen: unknown[] } => {
+  const seen: unknown[] = [];
+  return { interactive, seen, confirm: async subject => { seen.push(subject); return decision; } };
+};
+
 function output(): Record<string, unknown> {
   return JSON.parse(String(log.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
 }
@@ -76,9 +83,17 @@ describe("oms doctor lineage-recover and lineage-reanchor", () => {
   });
 
   it("repairs an explicit vault and prints the receipt", async () => {
-    await runLineageCommand("lineage-reanchor", ["--vault", vault]);
+    await runLineageCommand("lineage-recover", ["--vault", vault]);
     expect(process.exitCode).toBe(0);
-    expect(output()).toMatchObject({ anchors: [], resolutionSource: "explicit", receipt: { operation: "lineage-reanchor", postcondition: { kind: "contract-lineage", events: 1 } } });
+    expect(output()).toMatchObject({ anchors: [], resolutionSource: "explicit", receipt: { operation: "lineage-recover", postcondition: { kind: "contract-lineage", events: 1 } } });
+  });
+
+  it("hands lineage-reanchor the injected owner and writes nothing on an unbroken lineage", async () => {
+    const human = owner();
+    await runLineageCommand("lineage-reanchor", ["--vault", vault], { human });
+    expect(process.exitCode).toBe(0);
+    expect(output()).toMatchObject({ op: "lineage-reanchor", anchors: [], decision: "approve", resolutionSource: "explicit" });
+    expect(human.seen).toEqual([]);
   });
 
   it("resolves the vault from OMS_VAULT when no --vault is given", async () => {
@@ -120,6 +135,12 @@ describe("oms doctor lineage-recover and lineage-reanchor", () => {
     expect(output()).toEqual({ status: "rejected", diagnostics: [{ code: "CONTRACT_LINEAGE_GAP", remediation: "CONTRACT_LINEAGE_GAP: the lineage/events.jsonl chain has a gap" }] });
   });
 
+  it("refuses lineage-reanchor when this process has no terminal owner", async () => {
+    await runLineageCommand("lineage-reanchor", ["--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "error", message: expect.stringMatching(/^LINEAGE_REANCHOR_REQUIRES_TTY: /) });
+  });
+
   it("rejects a vault inferred from the working directory", async () => {
     const cwd = process.cwd();
     const elsewhere = path.join(base, "elsewhere");
@@ -132,5 +153,84 @@ describe("oms doctor lineage-recover and lineage-reanchor", () => {
     }
     expect(process.exitCode).toBe(1);
     expect(output()).toMatchObject({ status: "rejected", resolutionSource: "cwd" });
+  });
+});
+
+describe("oms doctor evolution leaves", () => {
+  it("prints each leaf's usage with its own flag", async () => {
+    await runLineageCommand("evolve", ["--help"]);
+    expect(log).toHaveBeenLastCalledWith("Usage: oms doctor evolve [--maker-session <id>] [--vault <path>]");
+    await runLineageCommand("evolve-verdict", ["--help"]);
+    expect(log).toHaveBeenLastCalledWith("Usage: oms doctor evolve-verdict --verdict <file|-> [--vault <path>]");
+    await runLineageCommand("revert-propose", ["-h"]);
+    expect(log).toHaveBeenLastCalledWith("Usage: oms doctor revert-propose --target <digest> [--vault <path>]");
+    await runLineageCommand("reclaim-evolution-lock", ["--help"]);
+    expect(log).toHaveBeenLastCalledWith("Usage: oms doctor reclaim-evolution-lock [--vault <path>]");
+  });
+
+  it.each([
+    ["evolve-verdict", ["--vault", "v"], "CONTRACT_ARGS_INVALID: doctor evolve-verdict needs --verdict"],
+    ["revert-propose", [], "CONTRACT_ARGS_INVALID: doctor revert-propose needs --target"],
+    ["revert-propose", ["--target", "a", "--target", "b"], "CONTRACT_ARGS_INVALID: duplicate flag --target"],
+    ["evolve", ["--target", "a"], "CONTRACT_ARGS_INVALID: doctor evolve received unknown argument --target"],
+    ["reclaim-evolution-lock", ["--verdict", "-"], "CONTRACT_ARGS_INVALID: doctor reclaim-evolution-lock received unknown argument --verdict"],
+  ] as const)("%s rejects %j before touching the store", async (leaf, argv, remediation) => {
+    await runLineageCommand(leaf, argv);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "rejected", diagnostics: [{ code: "CONTRACT_ARGS_INVALID", remediation }] });
+  });
+
+  it("passes --maker-session through to evolve", async () => {
+    await runLineageCommand("evolve", ["--maker-session", "maker-1", "--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "error", message: expect.stringMatching(/^EVOLUTION_[A-Z_]+: /) });
+  });
+
+  it("passes --target through to revert-propose", async () => {
+    await runLineageCommand("revert-propose", ["--target", `sha256:${"f".repeat(64)}`, "--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "error", message: expect.stringMatching(/^EVOLUTION_[A-Z_]+: /) });
+  });
+
+  it("reads a verdict object from a file and hands it to the kernel", async () => {
+    const file = path.join(base, "verdict.json");
+    await writeFile(file, JSON.stringify({ requestId: "missing" }));
+    await runLineageCommand("evolve-verdict", ["--verdict", file, "--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "error", message: expect.stringMatching(/^EVOLUTION_ARGUMENT_INVALID: /) });
+  });
+
+  it("reads a verdict from stdin with -", async () => {
+    await runLineageCommand("evolve-verdict", ["--verdict", "-", "--vault", vault], { stdin: Readable.from([Buffer.from('{"requestId":'), '"missing"}']) });
+    expect(output()).toEqual({ status: "error", message: expect.stringMatching(/^EVOLUTION_ARGUMENT_INVALID: /) });
+  });
+
+  it.each([
+    ["not json", "EVOLUTION_ARGUMENT_INVALID: the verdict could not be read as JSON"],
+    ["[1]", "EVOLUTION_ARGUMENT_INVALID: the verdict must be a JSON object"],
+    ["null", "EVOLUTION_ARGUMENT_INVALID: the verdict must be a JSON object"],
+  ])("refuses the verdict %j", async (text, remediation) => {
+    await runLineageCommand("evolve-verdict", ["--verdict", "-", "--vault", vault], { stdin: Readable.from([text]) });
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "rejected", diagnostics: [{ code: "EVOLUTION_ARGUMENT_INVALID", remediation }] });
+  });
+
+  it("refuses a verdict file that cannot be read", async () => {
+    await runLineageCommand("evolve-verdict", ["--verdict", path.join(base, "absent.json"), "--vault", vault]);
+    expect(output()).toEqual({ status: "rejected", diagnostics: [{ code: "EVOLUTION_ARGUMENT_INVALID", remediation: "EVOLUTION_ARGUMENT_INVALID: the verdict could not be read as JSON" }] });
+  });
+
+  it("reclaims only with an interactive owner", async () => {
+    await runLineageCommand("reclaim-evolution-lock", ["--vault", vault], { human: owner("approve", false) });
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "error", message: expect.stringMatching(/^EVOLUTION_RECLAIM_REQUIRES_TTY: /) });
+    await runLineageCommand("reclaim-evolution-lock", ["--vault", vault], { human: owner() });
+    expect(process.exitCode).toBe(0);
+    expect(output()).toMatchObject({ op: "reclaim-evolution-lock", removed: false });
+  });
+
+  it("refuses reclaim when this process has no terminal owner", async () => {
+    await runLineageCommand("reclaim-evolution-lock", ["--vault", vault]);
+    expect(output()).toEqual({ status: "error", message: expect.stringMatching(/^EVOLUTION_RECLAIM_REQUIRES_TTY: /) });
   });
 });

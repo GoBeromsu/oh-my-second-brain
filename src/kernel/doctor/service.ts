@@ -10,11 +10,17 @@ import { completeDirtyDrain, prepareDirtyDrain } from "../engine/index-update.js
 import { handleSemanticTool } from "../semantic/semantic-retrieve.js";
 import { lineageHealth, type LineageFindingKind } from "../contract/lineage-health.js";
 import { StateDirUnsafe } from "../contract/state-dir.js";
-import { recoverLineage, storeRoot } from "../contract/store.js";
+import { readSnapshot } from "../contract/generation-snapshot.js";
+import { readStore, recoverLineage, storeRoot } from "../contract/store.js";
 import { resolveSealState } from "../contract/vault-id.js";
+import { appendEvolutionEvent } from "../evolution/events.js";
+import { withEvolutionLock } from "../evolution/evolution-lock.js";
+import { lineageTail } from "../evolution/request-state.js";
+import { isEvolutionOperation, runEvolutionOp, type DoctorHuman, type EvolutionOperation } from "./evolution-ops.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 
-export type DoctorRepairOperation = "build-graph" | "lineage-reanchor" | "lineage-recover" | "repair-index" | "semantic-cleanup" | "sync-embeddings";
+export type DoctorRepairOperation = "build-graph" | "lineage-reanchor" | "lineage-recover" | "repair-index" | "semantic-cleanup" | "sync-embeddings" | EvolutionOperation;
+export type { DoctorHuman } from "./evolution-ops.js";
 
 type SemanticIndexPostcondition = {
   readonly kind: "semantic-index";
@@ -252,8 +258,67 @@ async function repairLineage(operation: "lineage-recover" | "lineage-reanchor", 
   return { kind: "completed", value: { snapshots: recovered.snapshots, anchors: recovered.anchors.map(anchor => ({ eventSeq: anchor.eventSeq, reason: anchor.reason ?? null, digest: anchor.digest })), resolvedVault: vault, resolutionSource: source, receipt } };
 }
 
+async function reanchorView(root: string, vaultId: string): Promise<{ readonly tail: { readonly eventSeq: number; readonly digest: string }; readonly events: number; readonly linked: string | null }> {
+  const { tail, events } = await lineageTail(root, vaultId);
+  const store = await readStore(vaultId, root);
+  return { tail, events: events.length, linked: store.state === "ok" ? store.digest : null };
+}
+
+/**
+ * `lineage-reanchor` is owner-only: a terminal must pass `human` (MCP never does, so it
+ * gets LINEAGE_REANCHOR_REQUIRES_TTY). The owner is asked with no lock held; then, under
+ * the evolution lock and the seal lock, the lineage is re-read and anchored only when it
+ * is still what the owner saw. A tail already at the linked generation writes nothing.
+ */
+async function reanchorLineage(vault: string, source: WriteTargetSource, human: DoctorHuman | undefined): Promise<DoctorRepairResult> {
+  if (human?.interactive !== true) {
+    return { kind: "error", message: "LINEAGE_REANCHOR_REQUIRES_TTY: anchoring the contract lineage needs the owner at a terminal; run `oms doctor lineage-reanchor` or `oms setup` in one" };
+  }
+  const root = storeRoot();
+  const state = await resolveSealState(vault, root);
+  const vaultId = state.vaultId;
+  if (!LINEAGE_RECOVERABLE.has(state.row) || vaultId === null) return repairLineage("lineage-reanchor", vault, source);
+  try {
+    const before = await reanchorView(root, vaultId);
+    if (state.row === "sealed" && before.linked !== null && before.tail.digest === before.linked) {
+      return {
+        kind: "completed",
+        value: { op: "lineage-reanchor", vaultId, anchorEventSeq: before.tail.eventSeq, digest: before.linked, gapFrom: before.tail.digest, reason: "gap-anchor", decision: "approve", anchors: [], resolvedVault: vault, resolutionSource: source },
+      };
+    }
+    const decision = await human.confirm({ op: "lineage-reanchor", gapFrom: before.tail.digest, digest: before.linked });
+    if (decision !== "approve") return { kind: "error", message: "EVOLUTION_REANCHOR_DECLINED: the owner did not approve; the lineage was left as it is" };
+    return await withEvolutionLock(root, vaultId, async () => {
+      const current = await reanchorView(root, vaultId);
+      if (current.tail.eventSeq !== before.tail.eventSeq || current.tail.digest !== before.tail.digest || current.linked !== before.linked) {
+        return { kind: "error", message: "EVOLUTION_REANCHOR_CHANGED: the lineage or the linked contract changed while you were asked; nothing was written, run the command again" } as const;
+      }
+      const repaired = await repairLineage("lineage-reanchor", vault, source);
+      if (repaired.kind !== "completed") return repaired;
+      const anchors = repaired.value["anchors"] as readonly { readonly eventSeq: number; readonly reason: string | null; readonly digest: string }[];
+      const after = await reanchorView(root, vaultId);
+      if (after.linked === null || after.tail.digest !== after.linked || after.events !== before.events + anchors.length || anchors.length === 0) {
+        throw new Error("Contract lineage postcondition failed: the lineage tail is not the linked generation.");
+      }
+      if ((await readSnapshot(root, vaultId, after.linked as Parameters<typeof readSnapshot>[2])).state !== "ok") {
+        throw new Error("Contract lineage postcondition failed: the linked generation has no verified snapshot.");
+      }
+      const anchor = anchors.at(-1)!;
+      await appendEvolutionEvent(root, vaultId, { kind: "lineage.reanchored", at: Date.now(), detail: { via: "doctor", anchors: anchors.length } });
+      return {
+        kind: "completed",
+        value: { ...repaired.value, op: "lineage-reanchor", vaultId, anchorEventSeq: anchor.eventSeq, digest: anchor.digest, gapFrom: before.tail.digest, reason: anchor.reason, decision: "approve" },
+      } as const;
+    });
+  } catch (error: unknown) {
+    const message = contractErrorMessage(error);
+    if (message === null) throw error;
+    return { kind: "error", message };
+  }
+}
+
 export async function repairDoctor(
-  { operation, vault, source, args, resolveAdapter }: {
+  { operation, vault, source, args, resolveAdapter, human }: {
     readonly operation: DoctorRepairOperation;
     readonly vault: string;
     readonly source: WriteTargetSource;
@@ -267,13 +332,20 @@ export async function repairDoctor(
      * WHICH adapter is appropriate.
      */
     readonly resolveAdapter?: () => McpEngineAdapter;
+    /** The owner at a terminal; only the CLI passes it, so owner-only ops refuse over MCP. */
+    readonly human?: DoctorHuman;
   },
 ): Promise<DoctorRepairResult> {
   const indexArgs = operation === "repair-index" ? repairIndexArgs(args) : undefined;
   const rejection = await admitWriteTarget({ vault, source });
   if (rejection) return { kind: "rejected", value: { status: "rejected", rejection, resolvedVault: vault, resolutionSource: source } };
 
-  if (operation === "lineage-recover" || operation === "lineage-reanchor") return repairLineage(operation, vault, source);
+  if (operation === "lineage-recover") return repairLineage(operation, vault, source);
+  if (operation === "lineage-reanchor") return reanchorLineage(vault, source, human);
+  if (isEvolutionOperation(operation)) {
+    const evolved = await runEvolutionOp({ operation, vault, root: storeRoot(), args, ...(human === undefined ? {} : { human }) });
+    return evolved.kind === "error" ? evolved : { kind: "completed", value: { ...evolved.value, resolvedVault: vault, resolutionSource: source } };
+  }
 
   if (operation === "repair-index") {
     const { repairMode, dryRun } = indexArgs!;
