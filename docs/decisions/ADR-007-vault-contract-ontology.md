@@ -287,7 +287,7 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
 - **검색**이 계약에서 가져가는 것은 폴더 경로·의미·검색 제외, 속성 이름·타입·필수 여부,
   템플릿 이름과 참조 속성까지다(`publicProjection`, `src/kernel/engine/retrieval/template-source.ts:67-81`).
 - (개정 2026-09-29, 구현: 슬라이스 f1.) status의 템플릿별 drift 상태와 검색 투영의 템플릿 이름·참조
-  속성은 v3에서 빠진다. 계약 상태에는 `open`(봉인 없음)이 추가되고, 레거시 템플릿 항목은
+  속성은 v3에서 빠진다. 계약 상태에는 `reason`(tampered/broken)이 노출되고, 레거시 템플릿 항목은
   `legacy-template-constraints-ignored`로만 보고한다.
 - **가림(redaction)**은 봉인 인터뷰 출력에만 건다(`buildRedactor`,
   `src/kernel/contract/redact.ts:39`; `sealGuard`, interview.ts:442-458). 도구 응답은 애초에 값을 담지 않는
@@ -309,8 +309,9 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
     돌려준다.
 - **계약이 없으면 기본 규칙만 적용한다.** 볼트 경계, 경로 안전, YAML 문법, 그리고 `.oms`
   제어 경로(`control-path`, `basePathKind`, judge.ts:135-144)다.
-  (개정 2026-09-29, 구현: 슬라이스 e, Q1.) YAML 문법 오류는 거부하지 않는다. MCP는 초안(D)으로
-  저장하고 기록하며, hook은 입력을 바꿀 수 없으므로 허용 + `yaml-syntax` 경고를 낸다. 기본 규칙
+  (개정 2026-09-29, 구현: 슬라이스 e, Q1.) YAML 문법 오류는 거부하지 않는다. 봉인된 볼트에서는
+  MCP가 초안(D)으로 저장하고 기록하며, 계약이 없거나(ledger 없음) 초안 쓰기가 실패하면 쓴 그대로
+  저장 + `yaml-syntax` 경고다. hook은 입력을 바꿀 수 없으므로 허용 + `yaml-syntax` 경고를 낸다. 기본 규칙
   중 거부는 볼트 경계, 경로 안전, `control-path`만 남는다.
 - **개정 2026-09-29 (슬라이스 d, e): 열린 세계와 기록.** 아래의 닫힌 세계, 템플릿 축, `missing`
   거부는 바뀐다. 봉인된 계약이 있어도 축 위반은 쓰기를 막지 않는다.
