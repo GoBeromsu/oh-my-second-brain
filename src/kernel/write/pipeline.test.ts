@@ -451,12 +451,17 @@ describe("runWritePipeline", () => {
       request(fixture, "Projects/b.md", "---\nstatus: paused\nmood: calm\n---\nBody\n"),
       { now: () => NOW, updateIndex: async () => "skipped" },
     );
-    // Both keys are dropped from the saved note; the receipt still names both warnings.
+    // Both keys are dropped from the saved note, so the receipt reports them as fixes, not as warnings on the saved note.
     expect(await readFile(path.join(fixture.vault, "Projects", "b.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nBody\n");
-    expect(repaired.kind === "written" ? repaired.receipt.warnings : []).toEqual(expect.arrayContaining([
+    expect(repaired.kind).toBe("written");
+    if (repaired.kind !== "written") return;
+    expect(repaired.receipt.fixes).toEqual(expect.arrayContaining([
       { field: "status", kind: "not-allowed" },
       { field: "mood", kind: "unknown-property" },
     ]));
+    expect(repaired.receipt.fixes).toHaveLength(2);
+    expect(repaired.receipt.warnings).not.toEqual(expect.arrayContaining([expect.objectContaining({ field: "status" })]));
+    expect(repaired.receipt.warnings).not.toEqual(expect.arrayContaining([expect.objectContaining({ field: "mood" })]));
   });
 
   it("names one contract revision in the receipt and every gap when a seal lands mid-write", async () => {

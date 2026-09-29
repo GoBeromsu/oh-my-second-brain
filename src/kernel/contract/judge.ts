@@ -274,8 +274,8 @@ function sealedJudge(input: JudgeInput, contract: VaultContract, found: Collecto
 }
 
 /**
- * Rule order: base path rules → seal view → folders → properties → folder-mismatch →
- * template axis. Every finding is collected, then split by severity: only a path rule or a
+ * Rule order: base path rules → seal view → folder axis → property axis → template axis
+ * (an unknown selected template, one used outside its folder, then its own rules). Every finding is collected, then split by severity: only a path rule or a
  * tampered seal refuses. An open or broken seal cannot judge the axes, so it adds one
  * warning and nothing else.
  */

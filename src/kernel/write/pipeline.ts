@@ -268,8 +268,9 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
       keyword,
       conformed: conformed.applied,
       missingDefaults: save.verdict.missingDefaults,
-      warnings: verdict.warnings,
-      fixes: verdict.fixes,
+      // A drop repair saves a different note: its warnings are the saved note's, and what it dropped is a fix.
+      warnings: save.verdict.warnings,
+      fixes: verdict.warnings.filter(warning => !save.verdict.warnings.some(kept => kept.field === warning.field && kept.kind === warning.kind)),
       gaps,
       ...(gapLedger === undefined ? {} : { gapLedger }),
     }),

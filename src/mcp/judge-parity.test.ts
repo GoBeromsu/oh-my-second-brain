@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTruthTableRow, type TruthTableFixture } from "../../test/fixtures/contract-truth-table.js";
 import type { JudgeInput, VaultContract, Violation } from "../kernel/contract/types.js";
+import type { SealRow } from "../kernel/contract/vault-id.js";
 
 /**
  * AC11: MCP `write`, CLI `oms write` and the Claude hook translator hand the same
@@ -123,13 +124,23 @@ interface Payload {
   readonly status?: string;
   readonly refusals?: Violation[];
   readonly warnings?: Array<Pick<Violation, "field" | "kind">>;
+  readonly fixes?: Array<Pick<Violation, "field" | "kind">>;
   readonly exitCode?: number | string | undefined;
 }
 
-let fixture: TruthTableFixture;
-/** CLI writes land in their own sealed vault so an allowed write cannot turn MCP's new note into an edit. */
-let cliFixture: TruthTableFixture;
-let client: Client;
+type Decision = Row["decision"];
+
+/**
+ * The seal states the table runs under, with the decision each expects for a row. Only a
+ * tampered seal refuses everything; an open or unreadable contract warns on every write.
+ */
+const SEALS: ReadonlyArray<{ readonly seal: SealRow; readonly expected: (row: Row) => Decision }> = [
+  { seal: "sealed", expected: (row) => row.decision },
+  { seal: "never-sealed", expected: (row) => (row.decision === "deny" ? "deny" : "warn") },
+  { seal: "index-without-store", expected: (row) => (row.decision === "deny" ? "deny" : "warn") },
+  { seal: "vault-id-tampered", expected: () => "deny" },
+];
+
 const originalHome = process.env["HOME"];
 
 async function seedPrevious(target: TruthTableFixture): Promise<void> {
@@ -145,60 +156,73 @@ function ifMatchOf(row: Row): string | undefined {
   return row.previous === undefined ? undefined : `sha256:${createHash("sha256").update(row.previous).digest("hex")}`;
 }
 
-/** Runs `oms write` against the CLI vault with an injected stdin and an empty env, returning its receipt. */
-async function cliWrite(row: Row): Promise<Payload> {
-  const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-  const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-  process.env["HOME"] = path.join(cliFixture.base, "home");
-  try {
-    const ifMatch = ifMatchOf(row);
-    const argv = ifMatch === undefined ? [row.path] : [row.path, "--if-match", ifMatch];
-    await runWriteCommand([...argv, "--vault", cliFixture.vault], { env: {}, cwd: cliFixture.vault, readStdin: async () => row.content });
-    expect(error).not.toHaveBeenCalled();
-    return { ...(JSON.parse(String(log.mock.calls[0]?.[0])) as Payload), exitCode: process.exitCode };
-  } finally {
-    process.env["HOME"] = path.join(fixture.base, "home");
-    process.exitCode = 0;
-    log.mockRestore();
-    error.mockRestore();
-  }
-}
-
-beforeAll(async () => {
-  fixture = await buildTruthTableRow("sealed", CONTRACT);
-  cliFixture = await buildTruthTableRow("sealed", CONTRACT);
-  process.env["HOME"] = path.join(fixture.base, "home");
-  await seedPrevious(fixture);
-  await seedPrevious(cliFixture);
-  const server = createOMSMcpServer({ vault: fixture.vault, source: "explicit" });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  client = new Client({ name: "judge-parity", version: "0.0.0" });
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-});
-
-afterAll(async () => {
-  await client.close();
-  if (originalHome === undefined) delete process.env["HOME"];
-  else process.env["HOME"] = originalHome;
-  await fixture.cleanup();
-  await cliFixture.cleanup();
-});
-
-beforeEach(() => {
-  judgeSpy.calls.length = 0;
-});
-
-function hookPayload(row: Row): string {
+function hookPayload(fixture: TruthTableFixture, row: Row): string {
   const filePath = path.join(fixture.vault, row.path);
   return JSON.stringify(row.edit === undefined
     ? { tool_name: "Write", tool_input: { file_path: filePath, content: row.content }, cwd: fixture.vault }
     : { tool_name: "Edit", tool_input: { file_path: filePath, ...row.edit }, cwd: fixture.vault });
 }
 
-describe("MCP write, CLI write and the hook translator share one judge", () => {
+/** What the hook decided, read back from its response shape. */
+function hookDecision(response: unknown): { readonly decision: Decision; readonly message: string | null } {
+  const shape = response as { systemMessage?: string; hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
+  if (shape.hookSpecificOutput?.permissionDecision === "deny") return { decision: "deny", message: shape.hookSpecificOutput.permissionDecisionReason ?? null };
+  if (shape.systemMessage !== undefined) return { decision: "warn", message: shape.systemMessage };
+  return { decision: "allow", message: null };
+}
+
+describe.each(SEALS)("MCP write, CLI write and the hook translator share one judge ($seal)", ({ seal, expected }) => {
+  let fixture: TruthTableFixture;
+  /** CLI writes land in their own vault so an allowed write cannot turn MCP's new note into an edit. */
+  let cliFixture: TruthTableFixture;
+  let client: Client;
+
+  /** Runs `oms write` against the CLI vault with an injected stdin and an empty env, returning its receipt. */
+  async function cliWrite(row: Row): Promise<Payload> {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    process.env["HOME"] = path.join(cliFixture.base, "home");
+    try {
+      const ifMatch = ifMatchOf(row);
+      const argv = ifMatch === undefined ? [row.path] : [row.path, "--if-match", ifMatch];
+      await runWriteCommand([...argv, "--vault", cliFixture.vault], { env: {}, cwd: cliFixture.vault, readStdin: async () => row.content });
+      expect(error).not.toHaveBeenCalled();
+      return { ...(JSON.parse(String(log.mock.calls[0]?.[0])) as Payload), exitCode: process.exitCode };
+    } finally {
+      process.env["HOME"] = path.join(fixture.base, "home");
+      process.exitCode = 0;
+      log.mockRestore();
+      error.mockRestore();
+    }
+  }
+
+  beforeAll(async () => {
+    fixture = await buildTruthTableRow(seal, CONTRACT);
+    cliFixture = await buildTruthTableRow(seal, CONTRACT);
+    process.env["HOME"] = path.join(fixture.base, "home");
+    await seedPrevious(fixture);
+    await seedPrevious(cliFixture);
+    const server = createOMSMcpServer({ vault: fixture.vault, source: "explicit" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    client = new Client({ name: "judge-parity", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  });
+
+  afterAll(async () => {
+    await client.close();
+    if (originalHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = originalHome;
+    await fixture.cleanup();
+    await cliFixture.cleanup();
+  });
+
+  beforeEach(() => {
+    judgeSpy.calls.length = 0;
+  });
+
   it.each(ROWS)("$name", async (row) => {
     // The hook only reads, so it runs first; an allowed MCP write then changes the file.
-    const hook = await translatePreToolUse(hookPayload(row), fixture.vault);
+    const hook = await translatePreToolUse(hookPayload(fixture, row), fixture.vault);
     const hookCalls = judgeSpy.calls.splice(0);
 
     const cli = await cliWrite(row);
@@ -209,24 +233,23 @@ describe("MCP write, CLI write and the hook translator share one judge", () => {
     const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
     const payload = JSON.parse(text) as Payload;
 
-    if (row.input === null) {
-      expect(hookCalls).toEqual([]);
-      expect(mcpCalls).toEqual([]);
-      expect(cliCalls).toEqual([]);
-    } else {
-      // An edit is judged twice: first the note it leaves, then the note on disk as the baseline.
-      const calls = row.previous === undefined ? 1 : 2;
-      expect(hookCalls).toHaveLength(calls);
-      expect(mcpCalls).toHaveLength(calls);
-      expect(cliCalls).toHaveLength(calls);
-      expect(hookCalls[0]![0]).toEqual(row.input);
-      expect(mcpCalls[0]![0]).toEqual(row.input);
-      expect(cliCalls[0]![0]).toEqual(row.input);
-      expect(mcpCalls[0]![1]).toEqual(hookCalls[0]![1]);
-      expect(cliCalls[0]![1]).toEqual(hookCalls[0]![1]);
-      if (row.previous !== undefined) {
-        const baseline = { path: row.path, frontmatter: { status: "active" }, body: "## Goals\nShip.\n" };
-        for (const calls of [hookCalls, mcpCalls, cliCalls]) expect(calls[1]![0]).toEqual(baseline);
+    // Every surface judges the same notes, in the same order, against the same view.
+    expect(mcpCalls.length).toBe(hookCalls.length);
+    expect(cliCalls.length).toBe(hookCalls.length);
+    for (const [index, call] of hookCalls.entries()) {
+      expect(mcpCalls[index]).toEqual(call);
+      expect(cliCalls[index]).toEqual(call);
+    }
+    if (seal === "sealed") {
+      if (row.input === null) {
+        expect(hookCalls).toEqual([]);
+      } else {
+        // An edit is judged twice: first the note it leaves, then the note on disk as the baseline.
+        expect(hookCalls).toHaveLength(row.previous === undefined ? 1 : 2);
+        expect(hookCalls[0]![0]).toEqual(row.input);
+        if (row.previous !== undefined) {
+          expect(hookCalls[1]![0]).toEqual({ path: row.path, frontmatter: { status: "active" }, body: "## Goals\nShip.\n" });
+        }
       }
     }
 
@@ -235,26 +258,36 @@ describe("MCP write, CLI write and the hook translator share one judge", () => {
     expect(cliPayload.status).toEqual(payload.status);
     expect(cliPayload.refusals).toEqual(payload.refusals);
     expect(cliPayload.warnings).toEqual(payload.warnings);
-    if (row.decision === "deny") {
+    expect(cliPayload.fixes).toEqual(payload.fixes);
+
+    // Cross-surface: hook deny <=> MCP denied, hook warn <=> MCP written or drafted with the same warnings.
+    const decision = expected(row);
+    const fromHook = hookDecision(hook.response);
+    expect(fromHook.decision).toBe(decision);
+    if (decision === "deny") {
       expect(payload).toMatchObject({ ok: false, status: "denied" });
       expect(result.isError).toBe(true);
       expect(exitCode).toBe(1);
       expect(hook.response).toEqual({
         hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: formatDenyReason(payload.refusals!) },
       });
-    } else if (row.decision === "warn") {
-      expect(payload.warnings!.length).toBeGreaterThan(0);
-      // Let through: saved with its warnings, or kept as a draft when a new gap cannot be repaired.
-      expect(payload.ok === true || payload.status === "drafted").toBe(true);
-      expect(result.isError).toBeUndefined();
-      const message = formatWarnings(payload.warnings!);
-      expect(hook.response).toEqual({ systemMessage: message, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: message } });
     } else {
-      expect(payload.ok).toBe(true);
-      expect(payload.warnings).toEqual([]);
+      expect(payload.status).not.toBe("denied");
       expect(result.isError).toBeUndefined();
-      expect(exitCode).toBe(0);
-      expect(hook.response).toEqual({ continue: true, suppressOutput: true });
+      // The hook never repairs, so it warns on everything MCP either kept as a warning or dropped as a fix.
+      const met = [...(payload.warnings ?? []), ...(payload.fixes ?? [])];
+      if (decision === "warn") {
+        // Let through: saved with its warnings, or kept as a draft when a new gap cannot be repaired.
+        expect(payload.ok === true || payload.status === "drafted").toBe(true);
+        expect(met.length).toBeGreaterThan(0);
+        const message = formatWarnings(met);
+        expect(hook.response).toEqual({ systemMessage: message, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: message } });
+      } else {
+        expect(payload.ok).toBe(true);
+        expect(met).toEqual([]);
+        expect(exitCode).toBe(0);
+        expect(hook.response).toEqual({ continue: true, suppressOutput: true });
+      }
     }
   });
 });

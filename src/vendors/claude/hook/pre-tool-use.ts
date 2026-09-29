@@ -157,15 +157,16 @@ export async function translatePreToolUse(
 
 /**
  * No content to judge: the tool itself refuses an edit that does not apply. The contract's
- * own posture still decides (a tampered seal denies); otherwise the write is allowed and,
- * outside an open vault, Claude is told it was not judged.
+ * own posture still decides (a tampered seal denies); otherwise the write is allowed and
+ * Claude is told it was not judged (in an open vault, only that the vault is open).
  */
 function notJudged(notePath: string, view: ContractView, unreadable: boolean): HookResult {
   const posture = judge({ path: notePath, frontmatter: {}, body: "" }, view);
   if (!posture.ok) return deny(posture.refusals);
-  if (view.state === "open") return allow("[oms] the edit does not apply to the current file; nothing to judge.");
   // Only the contract's own posture applies; the empty stand-in note has no content to find fault with.
   const contract = posture.warnings.filter((w) => w.field === "contract");
+  // An open vault keeps its contract-open signal, so Claude is still told to run `oms interview`.
+  if (view.state === "open") return { ...warn(contract), warning: "[oms] the edit does not apply to the current file; nothing to judge." };
   return warn([...contract, { field: "content", kind: unreadable ? "contract-unreadable" : "unsupported-input" }]);
 }
 

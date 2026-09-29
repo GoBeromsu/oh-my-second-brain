@@ -221,16 +221,15 @@ describe("translatePreToolUse content reconstruction", () => {
       .toEqual({ decision: "deny", reason: TAMPERED, warning: null });
   });
 
-  it("allows with a warning an edit that does not apply in an open vault", async () => {
+  it("warns contract-open on an edit that does not apply in an open vault", async () => {
     const { vault } = await row("never-sealed");
     const note = join(vault, "a.md");
     await writeFile(note, "x x\n");
+    const open = formatWarnings([{ field: "contract", kind: "contract-open" }]);
     const none = await decide(vault, payload("Edit", { file_path: note, old_string: "absent", new_string: "y" }));
-    expect(none.decision).toBe("allow");
-    expect(none.warning).toMatch(/^\[oms\] /);
+    expect(none).toEqual({ decision: "warn", reason: open, warning: expect.stringMatching(/^\[oms\] /) });
     const twice = await decide(vault, payload("Edit", { file_path: note, old_string: "x", new_string: "y" }));
-    expect(twice.decision).toBe("allow");
-    expect(twice.warning).toMatch(/^\[oms\] /);
+    expect(twice).toEqual({ decision: "warn", reason: open, warning: expect.stringMatching(/^\[oms\] /) });
   });
 
   it("applies replace_all to every match", async () => {
