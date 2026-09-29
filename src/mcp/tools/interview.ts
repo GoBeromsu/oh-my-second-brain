@@ -7,6 +7,7 @@ import { proposalDigest, runInterview, SEAL_QUESTION, type InterviewRecord, type
 import { parseAnswers, publicQuestion, type Answers } from "../../kernel/contract/scripted-interview.js";
 import { contractStatus } from "../../kernel/contract/status.js";
 import { currentSequence, readStore, storeRoot, type SealDeps } from "../../kernel/contract/store.js";
+import { writeVaultSettings } from "../../kernel/contract/vault-id.js";
 import { readVaultSettings } from "../../kernel/vault/settings.js";
 import { errorText, isRecord, jsonText, type ToolContext } from "./shared.js";
 
@@ -259,6 +260,9 @@ async function seal(vault: string, root: string, now: () => number, args: Record
  * The confirmed proposal is already the sealed contract, sealed after the proposal was
  * made: an earlier `seal` finished but its log entry was lost. The missing `sealed` event
  * is recorded (a failure is a warning) and no new generation is sealed. Null otherwise.
+ * The seal writes the chosen template folder to the settings after the generation, so a
+ * run cut short between the two is completed here from the proposal. Declined templates
+ * need nothing: they are part of the sealed generation itself.
  */
 async function alreadySealed(vault: string, root: string, events: Parameters<typeof latestProposal>[0], confirmed: string, log: (event: InterviewRecord) => Promise<void>): Promise<InterviewResult | null> {
   const payload = latestProposal(events)?.payload ?? {};
@@ -270,6 +274,15 @@ async function alreadySealed(vault: string, root: string, events: Parameters<typ
   const store = await readStore(vaultId, root);
   if (store.state !== "ok" || proposalDigest(store.contract, removed) !== confirmed) return null;
   const warnings: string[] = [];
+  const templateFolder = payload["templateFolder"];
+  if (typeof templateFolder === "string") {
+    try {
+      const settings = await readVaultSettings(vault);
+      if (settings !== null && settings.templateFolder === undefined) await writeVaultSettings(vault, { ...settings, templateFolder });
+    } catch (error: unknown) {
+      warnings.push(`INTERVIEW_TEMPLATE_FOLDER_UNRECORDED: the template folder was not saved (${message(error)})`);
+    }
+  }
   try {
     await log({ type: "sealed", vaultId });
   } catch (error: unknown) {

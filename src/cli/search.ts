@@ -174,6 +174,8 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
     return;
   }
   if (first === "--context") {
+    // Context retrieval takes only flags, so a terminator would reach the flag parser as one.
+    if (terminator !== -1) fail("--context does not accept a -- terminator");
     const { retrieveMorningContext } = await import("../kernel/search/morning.js");
     const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
       retrieveMorningContext(contextOptions(resolved.vault, resolved.argv.slice(1)), backend(adapter, resolved.vault)));

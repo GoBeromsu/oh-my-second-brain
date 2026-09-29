@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import { interpretVault } from "./interpretation-fixture.js";
 import { runInterview, type InterviewIO, type Question } from "./interview.js";
-import { pendingLogKey, readInterviewLog } from "./interview-log.js";
-import { confirmedProposal, currentRun, latestProposal, pendingAnswers, resumableIO } from "./interview-resume.js";
+import { appendInterviewEvent, migrateInterviewLog, pendingLogKey, readInterviewLog } from "./interview-log.js";
+import { confirmedProposal, currentRun, latestProposal, pendingAnswers, resumableIO, vaultLog } from "./interview-resume.js";
 import type { Answers } from "./scripted-interview.js";
 import { readStore } from "./store.js";
 import { resolveSealState } from "./vault-id.js";
@@ -215,6 +215,21 @@ describe("continuing an interrupted interview", () => {
     expect((await readInterviewLog(root, await pendingLogKey(vault))).events.at(-1)?.type).toBe("abandoned");
     expect(await exists(join(vault, SETTINGS_PATH))).toBe(false);
     expect((await resolveSealState(vault, root)).row).toBe("never-sealed");
+  });
+
+  it("orders a pending log beside the vault id log the same before and after it is moved", async () => {
+    const { vault, root } = await makeVault("order");
+    const pending = await pendingLogKey(vault);
+    const answer = (questionId: string) => ({ type: "answered" as const, questionId, questionDigest: "d", payload: { answer: "x" } });
+    await appendInterviewEvent(root, VAULT_ID, answer("own-1"), () => 1);
+    await appendInterviewEvent(root, VAULT_ID, answer("own-2"), () => 2);
+    await appendInterviewEvent(root, pending, answer("pending-1"), () => 3);
+    const strip = (events: readonly { readonly seq: number; readonly questionId: string | null }[]) =>
+      events.map(event => [event.seq, event.questionId]);
+    const before = strip((await vaultLog(vault, root)).events);
+    expect(before).toEqual([[1, "own-1"], [2, "own-2"], [3, "pending-1"]]);
+    await migrateInterviewLog(root, pending, VAULT_ID);
+    expect(strip((await vaultLog(vault, root)).events)).toEqual(before);
   });
 
   it("confirms only the latest proposal", () => {

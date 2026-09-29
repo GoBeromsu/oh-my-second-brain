@@ -70,9 +70,11 @@ export type InterviewRecord =
   | { readonly type: "answered"; readonly question: Question; readonly answer: string }
   /**
    * `digest` covers the contract and the removed templates the seal question is about;
-   * `baseSeq` is the sealed generation the proposal was made against.
+   * `baseSeq` is the sealed generation the proposal was made against. `templateFolder` is
+   * the folder chosen in this run, which the seal records in the settings; absent when the
+   * settings already name one or none was chosen.
    */
-  | { readonly type: "proposed"; readonly digest: string; readonly removedTemplates: readonly string[]; readonly baseSeq: SequenceObservation }
+  | { readonly type: "proposed"; readonly digest: string; readonly removedTemplates: readonly string[]; readonly baseSeq: SequenceObservation; readonly templateFolder?: string }
   | { readonly type: "sealed"; readonly vaultId: string };
 
 /** The digest of what the seal question proposes, as recorded in `proposed`. */
@@ -709,7 +711,13 @@ export async function runInterview(input: {
 
     preview(io, contract);
     if (removedTemplates.length > 0) io.say(`  removed templates: ${removedTemplates.join(", ")}`);
-    await io.record?.({ type: "proposed", digest: proposalDigest(contract, removedTemplates), removedTemplates, baseSeq });
+    await io.record?.({
+      type: "proposed",
+      digest: proposalDigest(contract, removedTemplates),
+      removedTemplates,
+      baseSeq,
+      ...(chosenFolder === null ? {} : { templateFolder: chosenFolder }),
+    });
     const seal = await asker.confirm(SEAL_QUESTION.id, SEAL_QUESTION.prompt);
     if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
     if (!seal) return { state: "aborted" };

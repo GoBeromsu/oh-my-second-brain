@@ -148,12 +148,15 @@ function defaultAnswer(question: Record<string, unknown>): string | number | boo
 }
 
 /** Answers every open question with its default, one call per round, until a proposal comes back. */
-async function answerAll(vault: string, deps: InterviewToolDeps): Promise<string> {
+async function answerAll(vault: string, deps: InterviewToolDeps, chosen: Readonly<Record<string, string | number | boolean>> = {}): Promise<string> {
   for (let round = 0; round < 10; round += 1) {
     const body = payload(await handleInterview(context(vault), {}, deps));
     if (body["status"] === "proposed") return String(body["proposed"]);
     expect(body["status"]).toBe("questions");
-    const answers = Object.fromEntries((body["questions"] as Record<string, unknown>[]).map(question => [String(question["id"]), defaultAnswer(question)]));
+    const answers = Object.fromEntries((body["questions"] as Record<string, unknown>[]).map(question => {
+      const id = String(question["id"]);
+      return [id, Object.hasOwn(chosen, id) ? chosen[id]! : defaultAnswer(question)];
+    }));
     const answered = payload(await handleInterview(context(vault), { op: "answer", answers }, deps));
     if (answered["status"] === "proposed") return String(answered["proposed"]);
   }
@@ -298,5 +301,31 @@ describe("MCP interview seal", () => {
     expect(retried).toMatchObject({ ok: true, status: "sealed" });
     expect(await currentSequence(vaultId, root)).toBe(generation);
     expect((await readInterviewLog(root, vaultId)).events.at(-1)?.type).toBe("sealed");
+  });
+
+  it("saves the chosen template folder when a retried seal finds the contract sealed but the folder unsaved", async () => {
+    const { vault, root } = await freshVault();
+    await mkdir(path.join(vault, "Templates"));
+    const deps = { ...clock(), root };
+    const proposed = await answerAll(vault, deps, { "template-folder:path": "Templates" });
+    await handleInterview(context(vault), { op: "confirm", proposed }, deps);
+    expect(payload(await handleInterview(context(vault), { op: "seal" }, deps))).toMatchObject({ ok: true, status: "sealed" });
+    const settings = (await readVaultSettings(vault))!;
+    expect(settings.templateFolder).toBe("Templates");
+    const generation = await currentSequence(settings.vaultId, root);
+
+    // The seal finished, but neither the template folder nor the log entry was saved.
+    const { templateFolder: _unsaved, ...withoutFolder } = settings;
+    await writeFile(path.join(vault, ".oms", "settings.json"), `${JSON.stringify(withoutFolder, null, 2)}\n`);
+    const events = path.join(stateDir(root, settings.vaultId), "interview", "events.jsonl");
+    const lines = (await readFile(events, "utf8")).split("\n").filter(line => line !== "");
+    await writeFile(events, `${lines.slice(0, -1).join("\n")}\n`);
+    expect((await readVaultSettings(vault))!.templateFolder).toBeUndefined();
+
+    const retried = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+    expect(retried).toMatchObject({ ok: true, status: "sealed" });
+    expect(retried["warnings"]).toBeUndefined();
+    expect(await currentSequence(settings.vaultId, root)).toBe(generation);
+    expect((await readVaultSettings(vault))!.templateFolder).toBe("Templates");
   });
 });
