@@ -133,6 +133,19 @@ describe("sealGate autonomous", () => {
     expect(await stateOf(request)).toBe("open");
   });
 
+  it("refuses after three autonomous generations in a row until an owner seals one", async () => {
+    await autonomousOn();
+    const autonomousSeal = async (): Promise<void> => {
+      const { tail } = await lineageTail(root, ID);
+      await appendLineageEvents(root, ID, [{ kind: "sealed", generation: null, parentDigest: tail.digest as never, digest: tail.digest as never, mutations: [], manifestDigests: {}, autonomous: true, mode: "autonomous" }], { expectTail: tail.digest as never });
+    };
+    for (let index = 0; index < 3; index += 1) await autonomousSeal();
+    const request = await withVerdicts(await issue(TIGHTER), ["approve", "approve", "reject"]);
+    await expect(run(request)).rejects.toThrow(/^EVOLUTION_STALLED:/);
+    expect((await readEvolutionEvents(root, ID)).events.at(-1)).toMatchObject({ kind: "seal.stalled", detail: { run: 3 } });
+    expect(await stateOf(request)).toBe("open");
+  });
+
   it("rejects a candidate that adds a refusal without closing the request", async () => {
     await autonomousOn();
     const request = await withVerdicts(await issue(TIGHTER), ["approve", "approve", "reject"]);

@@ -3,6 +3,7 @@ import { lineageAppender, LineageGap } from "../contract/lineage.js";
 import { isNonLoosening } from "../contract/loosening.js";
 import { readStore, sealContract, type SealDeps } from "../contract/store.js";
 import type { VaultContract } from "../contract/types.js";
+import { assertNotStalled, autonomousRun, isStalled } from "./convergence.js";
 import { appendEvolutionEvent, readEvolutionEvents } from "./events.js";
 import { withEvolutionLock, type LockDeps } from "./evolution-lock.js";
 import { classifyAll, type Direction } from "./mutation-direction.js";
@@ -31,7 +32,8 @@ import { mechanicalStage, type MechanicalResult, type NoteJudge } from "./stage-
  * Autonomous mode, in order:
  *   1. the request is open (a derived expiry, supersede or seal is persisted and refused);
  *   2. a loosening candidate moves to awaiting-human, whatever the policy says;
- *   3. the autonomous policy is on (else EVOLUTION_POLICY_OFF; the request stays open);
+ *   3. the autonomous policy is on (else EVOLUTION_POLICY_OFF; the request stays open), and
+ *      evolution has not stalled (EVOLUTION_STALLED after 3 autonomous generations in a row);
  *   4. stage 1: a new refusal rejects, a rising warning count moves to awaiting-human;
  *   5. the quorum: all 3 bound verdicts arrived and 2 of 3 approve (2 rejects reject);
  *   6. the rate limit, counted from the lineage;
@@ -182,6 +184,10 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
     }
     if (!(await readPolicy(root, vaultId)).policy.autonomous) {
       throw new SealGateError("EVOLUTION_POLICY_OFF", "autonomous sealing is off for this vault; turn it on with `oms setup` in a terminal, or wait for an owner to approve");
+    }
+    if (isStalled(events)) {
+      await appendEvolutionEvent(root, vaultId, { kind: "seal.stalled", at: now, requestId: request.requestId, detail: { run: autonomousRun(events) } });
+      assertNotStalled(events);
     }
   }
 

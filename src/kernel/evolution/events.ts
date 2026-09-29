@@ -23,6 +23,7 @@ export const EVOLUTION_EVENT_KINDS = [
   "seal.autonomous",
   "seal.blocked-loosening",
   "seal.rate-limited",
+  "seal.stalled",
   "seal.parent-moved",
   "seal.lock-stale",
   "seal.human-approved",
