@@ -201,6 +201,9 @@ const ISOLATED_DIRS = {
   XDG_STATE_HOME: "xdg-state",
 };
 
+/** Every env key `sandboxEnv` touches, for callers that need to save/restore around it. */
+export const SANDBOXED_ENV_KEYS = /** @type {const} */ ([...Object.keys(ISOLATED_DIRS), "OMS_VAULT"]);
+
 /**
  * Points HOME, XDG and OMS homes at `base` so dist/ never reads the operator's real home.
  * @param {string} base

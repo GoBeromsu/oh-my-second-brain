@@ -62,6 +62,7 @@ export function pairedRandomizationTest(baseline, candidate, options = {}) {
  */
 export function quantile(sorted, q) {
   const n = sorted.length;
+  if (n === 0) throw new Error("quantile sample must not be empty");
   if (n === 1) return sorted[0];
   const h = (n - 1) * Math.min(1, Math.max(0, q));
   const lo = Math.floor(h);

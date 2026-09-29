@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { cpus, tmpdir, totalmem, release, type } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { materializeKoVault, NFC_NOTE, NFD_NOTE } from "../../test/fixtures/ko-vault.mjs";
+import { materializeKoVault, NFD_NOTE } from "../../test/fixtures/ko-vault.mjs";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 const OMS = path.join(REPO, "dist", "cli", "oms.js");
@@ -40,6 +40,8 @@ const ISOLATED_DIRS = {
   OMS_HERMES_HOME: "hermes",
   XDG_CONFIG_HOME: "xdg-config",
   XDG_CACHE_HOME: "xdg-cache",
+  XDG_DATA_HOME: "xdg-data",
+  XDG_STATE_HOME: "xdg-state",
 };
 
 /** A fresh vault copy plus an isolated env, all under one temp dir. */
@@ -62,7 +64,7 @@ function timeRun(box, args) {
   if (result.status !== 0) {
     throw new Error(`oms ${args.join(" ")} exited ${result.status}${result.error ? ` (${result.error.message})` : ""}: ${result.stderr}`);
   }
-  if (args[0] === "search" && args[1] === "query") {
+  if (args[0] === "search" && args[1] !== undefined && !args[1].startsWith("--")) {
     // A plain query must stay lexical-only, or the baseline would silently measure another path.
     const channels = JSON.parse(result.stdout).receipt?.usedChannels;
     if (JSON.stringify(channels) !== JSON.stringify(["lex"])) {
@@ -135,9 +137,10 @@ console.log(JSON.stringify({
     memoryGiB: Math.round(totalmem() / 2 ** 30),
   },
   results: {
-    noteGet: measure(["note", "get", NFC_NOTE], runs),
-    searchQueryLexical: measure(["search", "query", SEARCH_TEXT], runs),
+    searchQueryLexical: measure(["search", SEARCH_TEXT], runs),
     // Engine-free exact read; the NFC spelling of a note whose filename is NFD on disk.
-    searchPath: measure(["search", "--path", NFD_NOTE.normalize("NFC")], runs),
+    // This exercises the same search --path code path a plain NFC-named note would,
+    // so a separate NFC-only measurement would be a duplicate, not added coverage.
+    searchPathNfd: measure(["search", "--path", NFD_NOTE.normalize("NFC")], runs),
   },
 }, null, 2));
