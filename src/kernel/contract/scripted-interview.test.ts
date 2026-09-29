@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { digestBytes } from "../conventions/canonical.js";
 import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
-import { runInterview } from "./interview.js";
+import { runInterview, templateFieldType } from "./interview.js";
 import { parseAnswers, publicQuestion, scriptedIO, type Answers } from "./scripted-interview.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { sealLegacyGeneration } from "./legacy-store-fixture.js";
@@ -176,6 +176,53 @@ describe("scripted interview answers", () => {
     expect(result).toMatchObject({ state: "sealed", properties: 2 });
     expect((await sealedContract()).properties?.["topic"]).toMatchObject({ type: "text" });
     expect(notes.filter(note => note.startsWith("property:folder"))).toEqual([]);
+  });
+
+  it("offers a template key Obsidian does not type as the list, date or datetime its value clearly is", async () => {
+    await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\ntags:\n  - meeting\ndue: \"{{date}}\"\nat: \"{{date:YYYY-MM-DDTHH:mm}}\"\ntopic: \"{{title}}\"\n---\n## Agenda\n");
+    const { result } = await run({
+      ...ANSWERS,
+      "property:tags:register": true,
+      "property:tags:type": "",
+      "property:tags:required": false,
+      "property:tags:default": false,
+      "property:tags:rule": "none",
+      "property:tags:meaning": "tags",
+      "property:due:register": true,
+      "property:due:type": "",
+      "property:due:required": false,
+      "property:due:default": false,
+      "property:due:rule": "none",
+      "property:due:meaning": "due",
+      "property:at:register": true,
+      "property:at:type": "",
+      "property:at:required": false,
+      "property:at:default": false,
+      "property:at:rule": "none",
+      "property:at:meaning": "at",
+      "property:topic:register": true,
+      "property:topic:type": "",
+      "property:topic:required": false,
+      "property:topic:default": false,
+      "property:topic:rule": "none",
+      "property:topic:meaning": "topic",
+      seal: true,
+    });
+    expect(result).toMatchObject({ state: "sealed", properties: 5 });
+    const properties = (await sealedContract()).properties ?? {};
+    expect(Object.fromEntries(["tags", "due", "at", "topic"].map(name => [name, properties[name]?.type]))).toEqual({ tags: "list", due: "date", at: "datetime", topic: "text" });
+  });
+
+  it("infers a template value's type only when it is clear", () => {
+    expect(templateFieldType("tags: [a, b]")).toBe("list");
+    expect(templateFieldType("tags:\n  - a\n  - b")).toBe("list");
+    expect(templateFieldType("due: 2026-01-01")).toBe("date");
+    expect(templateFieldType("due: '{{ date:YYYY-MM-DD }}'")).toBe("date");
+    expect(templateFieldType("at: 2026-01-01T09:30")).toBe("datetime");
+    expect(templateFieldType("at: \"{{date:YYYY-MM-DDTHH:mm:ss}}\"")).toBe("datetime");
+    expect(templateFieldType("week: \"{{date:YYYY-[W]ww}}\"")).toBe("text");
+    expect(templateFieldType("topic: 2026-01-01 kickoff")).toBe("text");
+    expect(templateFieldType("owner:\n  name: me")).toBe("text");
   });
 
   it("never refuses over a template's content, since templates are not sealed", async () => {

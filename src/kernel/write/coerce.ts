@@ -182,6 +182,11 @@ function fieldEdits(document: Document, key: string, value: unknown): readonly E
   return [{ start, end, text: node.source === "" ? ` ${text}` : text }];
 }
 
+/** The line break an empty block (`---` straight after `---`) needs before its closing fence. */
+export function closingBreak(content: string, end: number, eol: string): string {
+  return /^\r?\n/.test(content.slice(end)) ? "" : eol;
+}
+
 function keyText(key: string): string {
   return readsAs(key, key, false) && !/[:#]/.test(key) ? key : JSON.stringify(key);
 }
@@ -225,7 +230,7 @@ function setFrontmatter(content: string, values: ReadonlyMap<string, unknown>, w
   if (added.length > 0) yaml = yaml.trim() === "" ? added.join(eol) : `${yaml}${eol}${added.join(eol)}`;
   const next = parsed.frontmatterRange === null
     ? `---${eol}${yaml}${eol}---${eol}${content}`
-    : `${content.slice(0, parsed.frontmatterRange.start)}${yaml}${content.slice(parsed.frontmatterRange.end)}`;
+    : `${content.slice(0, parsed.frontmatterRange.start)}${yaml}${closingBreak(content, parsed.frontmatterRange.end, eol)}${content.slice(parsed.frontmatterRange.end)}`;
   const reread = parseNote(next);
   const expected = { ...written, ...Object.fromEntries([...values].filter(([key]) => applied.has(key))) };
   return reread.diagnostics.length === 0 && isDeepStrictEqual(reread.frontmatter, expected) ? { content: next, applied } : null;

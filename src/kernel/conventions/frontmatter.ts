@@ -30,6 +30,8 @@ export interface FrontmatterRange {
 
 const OPEN_FENCE = /^\ufeff?---\r?\n/;
 const FENCE = /^\ufeff?---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+/** `---` directly followed by the closing `---`: an empty frontmatter block. */
+const EMPTY_FENCE = /^\ufeff?---\r?\n---(?:\r?\n|$)/;
 
 function emptyParsedNote(raw: string): ParsedNote {
   return {
@@ -47,6 +49,18 @@ export function parseNote(raw: string): ParsedNote {
   const open = OPEN_FENCE.exec(raw);
   if (!open) {
     return emptyParsedNote(raw);
+  }
+  const empty = EMPTY_FENCE.exec(raw);
+  if (empty) {
+    const frontmatterStart = open[0].length;
+    return {
+      frontmatter: {},
+      body: raw.slice(empty[0].length),
+      hasFrontmatter: true,
+      diagnostics: [],
+      frontmatterRaw: "",
+      frontmatterRange: { start: frontmatterStart, end: frontmatterStart },
+    };
   }
   const match = FENCE.exec(raw);
   if (!match) {
@@ -77,6 +91,18 @@ export function parseNote(raw: string): ParsedNote {
         code: "frontmatter-yaml-parse-error",
         message: error.message,
       })),
+      frontmatterRaw: yamlText,
+      frontmatterRange: { start: frontmatterStart, end: frontmatterStart + yamlText.length },
+    };
+  }
+
+  // An empty or comment-only block holds no properties; it is not a malformed one.
+  if (document.contents === null) {
+    return {
+      frontmatter: {},
+      body: raw.slice(match[0].length),
+      hasFrontmatter: true,
+      diagnostics: [],
       frontmatterRaw: yamlText,
       frontmatterRange: { start: frontmatterStart, end: frontmatterStart + yamlText.length },
     };

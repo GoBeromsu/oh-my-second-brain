@@ -1,6 +1,6 @@
 import { parseNote } from "../conventions/frontmatter.js";
 import { scanContractHeadings } from "../contract/scan.js";
-import { listTyped } from "./coerce.js";
+import { closingBreak, listTyped } from "./coerce.js";
 import type { TemplateSelection } from "./live-templates.js";
 import type { ContractView, FieldType, PropertyContract } from "../contract/types.js";
 import type { ConformChange } from "./receipt.js";
@@ -8,8 +8,9 @@ import type { ConformChange } from "./receipt.js";
 /**
  * Mechanical conformance before the judge: date and title variables, the live template's
  * scaffold for a new note (its frontmatter as defaults, its headings as the skeleton), and
- * date and fixed-rule defaults a new note leaves out. It never calls the judge and never
- * touches an existing value. The contract never makes it supply a required property, so a
+ * date and fixed-rule defaults a new note leaves out. It never calls the judge. Apart from
+ * the variables it fills in the written text (`{{date}}` becomes today's date), it never
+ * changes an existing value. The contract never makes it supply a required property, so a
  * missing required property is still reported after conform; the judge never checks headings.
  */
 
@@ -129,8 +130,15 @@ function addDefaults(content: string, options: ConformOptions, applied: ConformC
   }
   if (lines.length === 0) return content;
   if (parsed.frontmatterRange === null) return `---${eol}${lines.join(eol)}${eol}---${eol}${content}`;
-  const end = parsed.frontmatterRange.end;
-  return `${content.slice(0, end)}${eol}${lines.join(eol)}${content.slice(end)}`;
+  return atFrontmatterEnd(content, parsed.frontmatterRange.end, lines.join(eol), eol);
+}
+
+/** Appends `block` to the frontmatter ending at `end`; an empty block has no line to follow. */
+function atFrontmatterEnd(content: string, end: number, block: string, eol: string): string {
+  const breakAfter = closingBreak(content, end, eol);
+  return breakAfter === ""
+    ? `${content.slice(0, end)}${eol}${block}${content.slice(end)}`
+    : `${content.slice(0, end)}${block}${breakAfter}${content.slice(end)}`;
 }
 
 function observedHeadings(body: string): readonly string[] | null {
@@ -149,8 +157,7 @@ function insertFrontmatter(content: string, lines: readonly string[]): string {
   const block = lines.map(line => line.replace(/\r?\n/g, eol)).join(eol);
   const parsed = parseNote(content);
   if (parsed.frontmatterRange === null) return `---${eol}${block}${eol}---${eol}${content}`;
-  const end = parsed.frontmatterRange.end;
-  return `${content.slice(0, end)}${eol}${block}${content.slice(end)}`;
+  return atFrontmatterEnd(content, parsed.frontmatterRange.end, block, eol);
 }
 
 /**
@@ -183,8 +190,9 @@ function addScaffold(content: string, options: ConformOptions, applied: ConformC
   const missing = template.headings.filter(heading => !UNFILLED.test(heading.title) && !observed.includes(heading.title));
   if (missing.length === 0) return next;
   for (const heading of missing) applied.push({ field: heading.title, action: "heading" });
-  const separator = next === "" || next.endsWith("\n\n") ? "" : next.endsWith("\n") ? "\n" : "\n\n";
-  next = `${next}${separator}${missing.map(heading => `${"#".repeat(heading.level)} ${heading.title}\n`).join("\n")}`;
+  const eol = next.includes("\r\n") ? "\r\n" : "\n";
+  const separator = next === "" || next.endsWith(eol + eol) ? "" : next.endsWith(eol) ? eol : eol + eol;
+  next = `${next}${separator}${missing.map(heading => `${"#".repeat(heading.level)} ${heading.title}${eol}`).join(eol)}`;
   return next;
 }
 

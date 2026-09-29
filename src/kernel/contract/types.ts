@@ -139,9 +139,10 @@ export const SEVERITY_OF: Readonly<Record<ViolationKind, Severity>> = {
  * `ok` is true exactly when nothing refuses. `violations` is the deprecated name for
  * `refusals`, kept so older readers still see what stopped a write. `fixes` lists the
  * lossless fixes a write applied, as `{field, kind}` of the warning each one cleared. The
- * judge itself never fixes, so a verdict straight from the judge has none; the verdict on
- * the note a write saves (and the write receipt and check built from it) lists them, and
- * its `warnings` are what remains after the fixes.
+ * judge itself never fixes, so a verdict straight from the judge has none. The verdict on
+ * the note a write saves lists them, and its `warnings` are what remains after the fixes.
+ * The write receipt carries that verdict, and a check (which saves nothing) reports the same
+ * fixes and remaining warnings the write would.
  */
 export interface Verdict {
   readonly ok: boolean;

@@ -163,6 +163,21 @@ describe("F fixed", () => {
     expect(existing.action === "save" && existing.findings.map(finding => `${finding.wanted.field} ${finding.reason}`).sort()).toEqual(["created kept: missing", "kind fixed: missing"]);
   });
 
+  it("fills a missing required fixed value when the frontmatter is empty or holds only comments", () => {
+    const kindOnly: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { kind: property({ required: true, rules: [{ kind: "fixed", value: "note" }] }) } } };
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ["---\n---\nbody\n", "---\nkind: note\n---\nbody\n"],
+      ["---\n---", "---\nkind: note\n---"],
+      ["---\r\n---\r\nbody\r\n", "---\r\nkind: note\r\n---\r\nbody\r\n"],
+      ["---\n# only a comment\n---\nbody\n", "---\n# only a comment\nkind: note\n---\nbody\n"],
+    ];
+    for (const [written, saved] of cases) {
+      const resolution = resolveTiers(input("Inbox/a.md", written, { view: kindOnly, isNew: true }));
+      expect(resolution).toMatchObject({ action: "save", content: saved, verdict: { warnings: [] } });
+      expect(resolution.action === "save" && resolution.verdict.fixes).toEqual([{ field: "kind", kind: "missing" }]);
+    }
+  });
+
   it("records a number as written, not as the value it parses to", () => {
     const labelled: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { ...CONTRACT.properties, label: property() } } };
     const resolution = resolveTiers(input("Inbox/a.md", "---\ntitle: A\nlabel: 01234\n---\n", { view: labelled }));
@@ -180,6 +195,37 @@ describe("F fixed", () => {
     expect(resolution).toMatchObject({ action: "save", content: note.content, verdict: { fixes: [] } });
     expect(resolution.action === "save" && resolution.findings.map(finding => finding.reason)).toEqual(["kept: type"]);
     expect(rejudge).toHaveBeenCalledOnce();
+  });
+
+  it("does not spend a fix pass on a discarded pass: three fixing passes still run after one", () => {
+    const labelled: ContractView = { state: "sealed", contract: { ...typed.contract, properties: { ...typed.contract.properties, label: property() } } };
+    const note = input("Inbox/a.md", "---\ntitle: A\nkind: note\ncount: \"12\"\nstatus: Done\ntags: solo\nlabel: 42\n---\n", { view: labelled });
+    const rejudge = vi.fn<(content: string) => Verdict>()
+      // The first pass fixes count and status, but status still warns: the pass is discarded.
+      .mockReturnValueOnce(verdictOf([{ field: "status", kind: "not-allowed" }]))
+      // Then each fixing pass uncovers the next warning.
+      .mockReturnValueOnce(verdictOf([{ field: "tags", kind: "type" }]))
+      .mockReturnValueOnce(verdictOf([{ field: "label", kind: "type" }]))
+      .mockReturnValueOnce(verdictOf([]));
+    const resolution = resolveTiers({ ...note, verdict: verdictOf([{ field: "count", kind: "type" }, { field: "status", kind: "not-allowed" }]), rejudge });
+    expect(rejudge).toHaveBeenCalledTimes(4);
+    expect(resolution).toMatchObject({ action: "save", content: "---\ntitle: A\nkind: note\ncount: 12\nstatus: Done\ntags: [solo]\nlabel: \"42\"\n---\n" });
+    expect(resolution.action === "save" && resolution.verdict.fixes).toEqual([
+      { field: "count", kind: "type" }, { field: "tags", kind: "type" }, { field: "label", kind: "type" },
+    ]);
+  });
+
+  it("stops after a bounded number of attempts even when every pass is discarded", () => {
+    const names = Array.from({ length: 20 }, (_, index) => `n${String(index).padStart(2, "0")}`);
+    const numeric: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: Object.fromEntries(names.map(name => [name, property({ type: "number" })])) } };
+    const note = input("Inbox/a.md", `---\n${names.map(name => `${name}: "1"`).join("\n")}\n---\n`, { view: numeric });
+    expect(note.verdict.warnings).toHaveLength(names.length);
+    // Each rejudge leaves exactly one fix uncleared, so each pass is discarded and skips one more field.
+    let attempt = 0;
+    const rejudge = vi.fn((): Verdict => verdictOf([{ field: names[attempt++]!, kind: "type" }]));
+    const resolution = resolveTiers({ ...note, rejudge });
+    expect(rejudge).toHaveBeenCalledTimes(12);
+    expect(resolution).toMatchObject({ action: "save", content: note.content, verdict: { fixes: [] } });
   });
 
   it("keeps a tagged value as written: one kept finding and no fix", () => {

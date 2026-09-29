@@ -10,6 +10,11 @@ import { HOOK_MATCHER } from "../claude-hooks.js";
 
 const stdin = vi.hoisted(() => ({ value: "{}", truncated: false }));
 vi.mock("./stdin.js", () => ({ readStdinTimeout: async () => ({ text: stdin.value, truncated: stdin.truncated, timedOut: false }) }));
+const liveTemplates = vi.hoisted(() => ({ loads: [] as string[] }));
+vi.mock("../../../kernel/write/live-templates.js", async importOriginal => {
+  const original = await importOriginal<typeof import("../../../kernel/write/live-templates.js")>();
+  return { ...original, loadLiveTemplates: async (vault: string) => { liveTemplates.loads.push(vault); return original.loadLiveTemplates(vault); } };
+});
 
 const { runPreToolUse, translatePreToolUse, WRITE_TOOLS } = await import("./pre-tool-use.js");
 type HookResult = Awaited<ReturnType<typeof translatePreToolUse>>;
@@ -68,6 +73,7 @@ const GOOD = "---\nstatus: open\n---\nbody\n";
 const BAD = "---\nstatus: maybe\n---\nbody\n";
 
 beforeEach(() => {
+  liveTemplates.loads.length = 0;
   stdin.value = "{}";
   stdin.truncated = false;
 });
@@ -162,6 +168,25 @@ describe("translatePreToolUse gap ledger", () => {
     expect(result).toEqual({ decision: "allow", reason: null, warning: null });
     const gaps = openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events);
     expect(gaps.map(gap => gap.kind)).toEqual(["choice"]);
+  });
+
+  it("reads the live templates only for a new note, never for an edit of an existing one", async () => {
+    const fixture = await row("sealed");
+    const gapRoot = join(fixture.base, "gaps");
+    await mkdir(join(fixture.vault, "Templates"), { recursive: true });
+    await writeFile(join(fixture.vault, "Templates", "Projects.md"), "## Goals\n");
+    await writeFile(join(fixture.vault, "Templates", "meeting.md"), "---\nfolder: Projects\n---\n## Agenda\n");
+    const settings = await readVaultSettings(fixture.vault);
+    if (settings === null) throw new Error("the sealed fixture has no settings");
+    await writeFile(join(fixture.vault, SETTINGS_PATH), serializeVaultSettings({ ...settings, templateFolder: "Templates" }));
+    await mkdir(join(fixture.vault, "Projects"), { recursive: true });
+    await writeFile(join(fixture.vault, "Projects", "old.md"), GOOD);
+    const edit = await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "Projects/old.md"), content: GOOD }), { gapRoot: () => gapRoot });
+    expect(edit).toEqual({ decision: "allow", reason: null, warning: null });
+    expect(liveTemplates.loads).toEqual([]);
+    await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "Projects/new.md"), content: GOOD }), { gapRoot: () => gapRoot });
+    expect(liveTemplates.loads).toHaveLength(1);
+    expect(openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events).map(gap => gap.kind)).toEqual(["choice"]);
   });
 
   it("warns with the whole verdict but records nothing when an edit adds no finding over the note on disk", async () => {
