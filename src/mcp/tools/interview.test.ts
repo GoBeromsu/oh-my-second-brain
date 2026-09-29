@@ -324,8 +324,79 @@ describe("MCP interview seal", () => {
 
     const retried = payload(await handleInterview(context(vault), { op: "seal" }, deps));
     expect(retried).toMatchObject({ ok: true, status: "sealed" });
-    expect(retried["warnings"]).toBeUndefined();
+    expect((retried["result"] as Record<string, unknown>)["warnings"]).toBeUndefined();
     expect(await currentSequence(settings.vaultId, root)).toBe(generation);
     expect((await readVaultSettings(vault))!.templateFolder).toBe("Templates");
+  });
+
+  /** Seals with `Templates` chosen, then loses the `sealed` log line; `edit` changes the settings and the proposal before the retry. */
+  async function sealThenLoseLogLine(edit: (paths: { settings: string; proposal: Record<string, unknown> }) => Promise<void> = async () => undefined) {
+    const { vault, root } = await freshVault();
+    await mkdir(path.join(vault, "Templates"));
+    const deps = { ...clock(), root };
+    const proposed = await answerAll(vault, deps, { "template-folder:path": "Templates" });
+    await handleInterview(context(vault), { op: "confirm", proposed }, deps);
+    expect(payload(await handleInterview(context(vault), { op: "seal" }, deps))).toMatchObject({ ok: true, status: "sealed" });
+    const settings = (await readVaultSettings(vault))!;
+    const settingsPath = path.join(vault, ".oms", "settings.json");
+    const { templateFolder: _unsaved, ...withoutFolder } = settings;
+    await writeFile(settingsPath, `${JSON.stringify(withoutFolder, null, 2)}\n`);
+    const events = path.join(stateDir(root, settings.vaultId), "interview", "events.jsonl");
+    const lines = (await readFile(events, "utf8")).split("\n").filter(line => line !== "").slice(0, -1);
+    const at = lines.findLastIndex(line => (JSON.parse(line) as { type: string }).type === "proposed");
+    const proposal = JSON.parse(lines[at]!) as { payload: Record<string, unknown> };
+    await edit({ settings: settingsPath, proposal: proposal.payload });
+    lines[at] = JSON.stringify(proposal);
+    await writeFile(events, `${lines.join("\n")}\n`);
+    return { vault, root, deps, vaultId: settings.vaultId, generation: await currentSequence(settings.vaultId, root), settingsPath };
+  }
+
+  it("still reports the seal, with a warning, when a retried seal cannot save the template folder", async () => {
+    const { vault, root, deps, vaultId, generation } = await sealThenLoseLogLine();
+    const oms = path.join(vault, ".oms");
+    await chmod(oms, 0o500);
+    try {
+      const retried = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+      expect(retried).toMatchObject({ ok: true, status: "sealed" });
+      expect((retried["result"] as Record<string, unknown>)["warnings"]).toEqual([expect.stringMatching(/^INTERVIEW_TEMPLATE_FOLDER_UNRECORDED: the template folder was not saved/)]);
+    } finally {
+      await chmod(oms, 0o700);
+    }
+    expect(await currentSequence(vaultId, root)).toBe(generation);
+    expect((await readVaultSettings(vault))!.templateFolder).toBeUndefined();
+    expect((await readInterviewLog(root, vaultId)).events.at(-1)?.type).toBe("sealed");
+  });
+
+  it("leaves the settings as they are when a retried seal finds they already name a template folder", async () => {
+    const { vault, deps, settingsPath } = await sealThenLoseLogLine(async ({ settings }) => {
+      const current = JSON.parse(await readFile(settings, "utf8")) as Record<string, unknown>;
+      await mkdir(path.join(path.dirname(path.dirname(settings)), "Other"));
+      await writeFile(settings, `${JSON.stringify({ ...current, templateFolder: "Other" }, null, 2)}\n`);
+    });
+    const before = await readFile(settingsPath, "utf8");
+    const retried = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+    expect(retried).toMatchObject({ ok: true, status: "sealed" });
+    expect((retried["result"] as Record<string, unknown>)["warnings"]).toBeUndefined();
+    expect(await readFile(settingsPath, "utf8")).toBe(before);
+  });
+
+  it("does not save a logged template folder that is not a usable folder in the vault", async () => {
+    const { vault, root, deps, vaultId, generation } = await sealThenLoseLogLine(async ({ proposal }) => {
+      proposal["templateFolder"] = "../outside";
+    });
+    const retried = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+    expect(retried).toMatchObject({ ok: true, status: "sealed" });
+    expect((retried["result"] as Record<string, unknown>)["warnings"]).toEqual([expect.stringMatching(/^INTERVIEW_TEMPLATE_FOLDER_UNRECORDED: the logged template folder is not/)]);
+    expect(await currentSequence(vaultId, root)).toBe(generation);
+    expect((await readVaultSettings(vault))!.templateFolder).toBeUndefined();
+  });
+
+  it("does not take the already-sealed path, or write settings, when a retried seal finds no vault settings", async () => {
+    const { vault, root, deps, vaultId, generation, settingsPath } = await sealThenLoseLogLine();
+    await rm(settingsPath);
+    const retried = payload(await handleInterview(context(vault), { op: "seal" }, deps));
+    expect(retried).toMatchObject({ ok: false, status: "rejected" });
+    expect(await currentSequence(vaultId, root)).toBe(generation);
+    expect(await readVaultSettings(vault)).toBeNull();
   });
 });

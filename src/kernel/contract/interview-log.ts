@@ -181,8 +181,14 @@ function copyKey(event: InterviewEvent): string {
   return JSON.stringify([event.at, event.type, event.questionId, event.questionDigest, event.payload]);
 }
 
-/** How many leading `source` events already end `target`: a migration cut short after copying them. */
-function copiedPrefix(target: readonly InterviewEvent[], source: readonly InterviewEvent[]): number {
+/**
+ * How many leading `source` events already end `target`: a migration cut short after copying them.
+ * Only a copy at the very end of `target` is recognised. That is enough: a cut-short move
+ * leaves the pending log in place, and every later append under the vault id first runs the
+ * move again (`interviewLogKey` migrates before it returns the key), so nothing is appended
+ * after a partial copy before the copy is finished.
+ */
+export function copiedPrefix(target: readonly InterviewEvent[], source: readonly InterviewEvent[]): number {
   const targetKeys = target.map(copyKey);
   const sourceKeys = source.map(copyKey);
   for (let count = Math.min(targetKeys.length, sourceKeys.length); count > 0; count -= 1) {

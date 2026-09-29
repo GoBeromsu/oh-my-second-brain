@@ -232,6 +232,23 @@ describe("continuing an interrupted interview", () => {
     expect(strip((await vaultLog(vault, root)).events)).toEqual(before);
   });
 
+  it("lists a pending event already copied by a cut-short move once, as the retried move leaves it", async () => {
+    const { vault, root } = await makeVault("partial");
+    const pending = await pendingLogKey(vault);
+    const answer = (questionId: string) => ({ type: "answered" as const, questionId, questionDigest: "d", payload: { answer: "x" } });
+    await appendInterviewEvent(root, VAULT_ID, answer("own-1"), () => 1);
+    await appendInterviewEvent(root, pending, answer("pending-1"), () => 2);
+    await appendInterviewEvent(root, pending, answer("pending-2"), () => 3);
+    // The first move copied "pending-1" and then stopped: the pending log is still there.
+    await appendInterviewEvent(root, VAULT_ID, answer("pending-1"), () => 2);
+    const strip = (events: readonly { readonly seq: number; readonly questionId: string | null }[]) =>
+      events.map(event => [event.seq, event.questionId]);
+    const before = strip((await vaultLog(vault, root)).events);
+    expect(before).toEqual([[1, "own-1"], [2, "pending-1"], [3, "pending-2"]]);
+    await migrateInterviewLog(root, pending, VAULT_ID);
+    expect(strip((await vaultLog(vault, root)).events)).toEqual(before);
+  });
+
   it("confirms only the latest proposal", () => {
     const event = (seq: number, type: "proposed" | "answered" | "sealed", payload: Record<string, unknown>, questionId: string | null = null) =>
       ({ seq, at: seq, type, questionId, questionDigest: questionId === null ? null : "d", payload });

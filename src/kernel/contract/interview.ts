@@ -369,7 +369,7 @@ async function templateSourcesUnchanged(
 }
 
 /** A vault-relative folder that exists, stays inside the vault and is not hidden; null otherwise. */
-async function usableFolder(vault: string, raw: string): Promise<string | null> {
+export async function usableFolder(vault: string, raw: string): Promise<string | null> {
   try {
     const folder = normalizeFolderPath(raw);
     const verified = await verifyVaultPath(vault, folder, { expected: "either" });

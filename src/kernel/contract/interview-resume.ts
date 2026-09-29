@@ -1,6 +1,6 @@
 import { readVaultSettings } from "../vault/settings.js";
 import type { InterviewIO, InterviewRecord } from "./interview.js";
-import { appendInterviewEvent, migrateInterviewLog, pendingLogKey, questionDigest, readInterviewLog, type InterviewEvent } from "./interview-log.js";
+import { appendInterviewEvent, copiedPrefix, migrateInterviewLog, pendingLogKey, questionDigest, readInterviewLog, type InterviewEvent } from "./interview-log.js";
 import { replayIO, type Answers, type ReplayDrift, type ReplayedAnswer } from "./scripted-interview.js";
 
 /**
@@ -116,8 +116,10 @@ export function logRecorder(vault: string, root: string, now: () => number = Dat
 
 /**
  * The logged events for a vault: the log under its vault id, if it has one, followed by a
- * pending log not yet moved under the id. That is the order `migrateInterviewLog` gives
- * them once the move happens. Nothing is created or moved.
+ * pending log not yet moved under the id. That is the order and numbering
+ * `migrateInterviewLog` gives them once the move happens, including after a move cut short
+ * part way: pending events already copied under the id are not listed twice. Nothing is
+ * created or moved.
  */
 export async function vaultLog(vault: string, root: string): Promise<{ readonly vaultId: string | null; readonly events: readonly InterviewEvent[]; readonly corrupt: readonly number[] }> {
   let vaultId: string | null;
@@ -132,11 +134,13 @@ export async function vaultLog(vault: string, root: string): Promise<{ readonly 
   const own = await readInterviewLog(root, vaultId);
   if (pending.events.length === 0 && pending.corrupt.length === 0) return { vaultId, ...own };
   // The seal moves the pending log under the id, so a pending log still beside it was
-  // written by a writer that did not see the id yet: it goes after, as the move appends it.
+  // written by a writer that did not see the id yet: it goes after, as the move appends it,
+  // each event numbered one more than the highest before it.
   const offset = own.events.reduce((max, event) => Math.max(max, event.seq), 0);
+  const moved = pending.events.slice(copiedPrefix(own.events, pending.events));
   return {
     vaultId,
-    events: [...own.events, ...pending.events.map(event => ({ ...event, seq: event.seq + offset }))],
+    events: [...own.events, ...moved.map((event, index) => ({ ...event, seq: offset + index + 1 }))],
     corrupt: [...own.corrupt, ...pending.corrupt],
   };
 }

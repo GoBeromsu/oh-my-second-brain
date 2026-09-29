@@ -3,7 +3,7 @@ import { admitWriteTarget } from "../../kernel/capture/safe.js";
 import { parseInterpretations, type TemplateInterpretation } from "../../kernel/contract/interpretation.js";
 import { appendInterviewEvent, questionDigest } from "../../kernel/contract/interview-log.js";
 import { confirmedProposal, interviewLogKey, latestProposal, logRecorder, resumableIO, vaultLog } from "../../kernel/contract/interview-resume.js";
-import { proposalDigest, runInterview, SEAL_QUESTION, type InterviewRecord, type InterviewResult } from "../../kernel/contract/interview.js";
+import { proposalDigest, runInterview, SEAL_QUESTION, usableFolder, type InterviewRecord, type InterviewResult } from "../../kernel/contract/interview.js";
 import { parseAnswers, publicQuestion, type Answers } from "../../kernel/contract/scripted-interview.js";
 import { contractStatus } from "../../kernel/contract/status.js";
 import { currentSequence, readStore, storeRoot, type SealDeps } from "../../kernel/contract/store.js";
@@ -268,19 +268,26 @@ async function alreadySealed(vault: string, root: string, events: Parameters<typ
   const payload = latestProposal(events)?.payload ?? {};
   const removed = payload["removedTemplates"];
   if (!Array.isArray(removed) || !removed.every(name => typeof name === "string")) return null;
-  const vaultId = (await readVaultSettings(vault))?.vaultId ?? null;
-  if (vaultId === null) return null;
+  // Without settings there is no vault id, so nothing shows the vault was sealed.
+  const settings = await readVaultSettings(vault);
+  if (settings === null) return null;
+  const { vaultId } = settings;
   if (await currentSequence(vaultId, root) === payload["baseSeq"]) return null;
   const store = await readStore(vaultId, root);
   if (store.state !== "ok" || proposalDigest(store.contract, removed) !== confirmed) return null;
   const warnings: string[] = [];
-  const templateFolder = payload["templateFolder"];
-  if (typeof templateFolder === "string") {
-    try {
-      const settings = await readVaultSettings(vault);
-      if (settings !== null && settings.templateFolder === undefined) await writeVaultSettings(vault, { ...settings, templateFolder });
-    } catch (error: unknown) {
-      warnings.push(`INTERVIEW_TEMPLATE_FOLDER_UNRECORDED: the template folder was not saved (${message(error)})`);
+  const logged = payload["templateFolder"];
+  if (typeof logged === "string" && settings.templateFolder === undefined) {
+    // The log is outside the vault but not trusted: the folder is checked as the interview checks an answer.
+    const templateFolder = await usableFolder(vault, logged);
+    if (templateFolder === null) {
+      warnings.push("INTERVIEW_TEMPLATE_FOLDER_UNRECORDED: the logged template folder is not an existing, visible folder inside the vault, so it was not saved");
+    } else {
+      try {
+        await writeVaultSettings(vault, { ...settings, templateFolder });
+      } catch (error: unknown) {
+        warnings.push(`INTERVIEW_TEMPLATE_FOLDER_UNRECORDED: the template folder was not saved (${message(error)})`);
+      }
     }
   }
   try {
