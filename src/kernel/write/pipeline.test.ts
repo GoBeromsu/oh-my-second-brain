@@ -682,7 +682,7 @@ describe("runWritePipeline tiers (rows 14-23)", () => {
 
   it.each([
     ["a boolean string for a checkbox", "done: \"true\"", "done: true", "done"],
-    ["a scalar for a list", "topics: ai", "topics:\n  - ai", "topics"],
+    ["a scalar for a list", "topics: ai", "topics: [ai]", "topics"],
     ["a midnight datetime for a date", "day: 2026-09-29T00:00", "day: 2026-09-29", "day"],
     ["a number for a text key", "label: 42", "label: \"42\"", "label"],
   ])("row 17: fixes %s", async (_name, written, expected, field) => {

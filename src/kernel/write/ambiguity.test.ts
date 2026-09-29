@@ -143,7 +143,7 @@ describe("F fixed", () => {
   it("fixes what it can and keeps the rest", () => {
     const note = input("Inbox/a.md", "---\ntitle: A\nkind: note\ncount: \"12a\"\ntags: solo\n---\n", { view: typed });
     const resolution = resolveTiers(note);
-    expect(resolution).toMatchObject({ action: "save", content: "---\ntitle: A\nkind: note\ncount: \"12a\"\ntags:\n  - solo\n---\n" });
+    expect(resolution).toMatchObject({ action: "save", content: "---\ntitle: A\nkind: note\ncount: \"12a\"\ntags: [solo]\n---\n" });
     expect(resolution.action === "save" && resolution.findings.map(finding => finding.reason)).toEqual(["fixed: type", "kept: type"]);
   });
 
@@ -155,6 +155,31 @@ describe("F fixed", () => {
     expect(fresh.action === "save" && fresh.findings.map(finding => finding.reason)).toEqual(["fixed: missing", "fixed: missing"]);
     const existing = resolveTiers(input("Inbox/a.md", "---\ntitle: A\n---\n", { view: dated, now }));
     expect(existing.action === "save" && existing.findings.map(finding => `${finding.wanted.field} ${finding.reason}`).sort()).toEqual(["created kept: missing", "kind fixed: missing"]);
+  });
+
+  it("records a number as written, not as the value it parses to", () => {
+    const labelled: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { ...CONTRACT.properties, label: property() } } };
+    const resolution = resolveTiers(input("Inbox/a.md", "---\ntitle: A\nlabel: 01234\n---\n", { view: labelled }));
+    expect(resolution).toMatchObject({ action: "save", content: "---\ntitle: A\nlabel: 01234\n---\n" });
+    expect(resolution.action === "save" && resolution.findings).toEqual([
+      { axis: "value", kind: "kept", chosen: null, wanted: { field: "label", value: "01234" }, reason: "kept: type" },
+    ]);
+  });
+
+  it("counts a fix only when the rejudged note no longer reports it, once", () => {
+    const note = input("Inbox/a.md", "---\ntitle: A\nkind: note\ncount: \"12\"\n---\n", { view: typed });
+    // A rejudge that still reports the fixed warning: the fix did not clear it.
+    const rejudge = vi.fn((): Verdict => verdictOf([{ field: "count", kind: "type" }]));
+    const resolution = resolveTiers({ ...note, rejudge });
+    expect(resolution).toMatchObject({ action: "save", content: note.content, verdict: { fixes: [] } });
+    expect(resolution.action === "save" && resolution.findings.map(finding => finding.reason)).toEqual(["kept: type"]);
+    expect(rejudge).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a tagged value as written: one kept finding and no fix", () => {
+    const resolution = resolveTiers(input("Inbox/a.md", "---\ntitle: A\nkind: note\ncount: !!str 12\n---\n", { view: typed }));
+    expect(resolution).toMatchObject({ action: "save", content: "---\ntitle: A\nkind: note\ncount: !!str 12\n---\n", verdict: { fixes: [] } });
+    expect(resolution.action === "save" && resolution.findings.map(finding => finding.reason)).toEqual(["kept: type"]);
   });
 
   it("keeps the note as written when the fixed form is refused", () => {

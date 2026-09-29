@@ -1,4 +1,5 @@
-import { Document, isMap, parseDocument } from "yaml";
+import { isDeepStrictEqual } from "node:util";
+import { type Document, isMap, isScalar, isSeq, parseDocument, type Scalar } from "yaml";
 import { parseNote } from "../conventions/frontmatter.js";
 import { propertyKinds, singleValued, stringTyped } from "../contract/judge.js";
 import type { FieldType, JsonScalar, PropertyContract, VaultContract, Violation, ViolationKind } from "../contract/types.js";
@@ -45,15 +46,16 @@ function scalar(value: unknown): value is JsonScalar {
   return value === null || ["string", "number", "boolean"].includes(typeof value);
 }
 
-function fixType(value: unknown, type: FieldType): Fix {
+function fixType(value: unknown, written: unknown, type: FieldType): Fix {
   if (type === "number") return typeof value === "string" && String(Number(value)) === value && Number.isFinite(Number(value)) ? fixed(Number(value)) : null;
   if (type === "boolean" || type === "checkbox") return value === "true" || value === "false" ? fixed(value === "true") : null;
   if (type === "date") {
     const match = typeof value === "string" ? MIDNIGHT.exec(value) : null;
     return match === null ? null : fixed(match[1]);
   }
-  if (stringTyped(type)) return typeof value === "number" && Number.isFinite(value) ? fixed(String(value)) : null;
-  if (!singleValued(type)) return value !== null && scalar(value) ? fixed([value]) : null;
+  // `written` is the source text of the value: a number fixes to text only when it spells no more than its value.
+  if (stringTyped(type)) return typeof value === "number" && Number.isFinite(value) && typeof written === "number" ? fixed(String(value)) : null;
+  if (!singleValued(type)) return value !== null && scalar(value) && isDeepStrictEqual(value, written) ? fixed([value]) : null;
   return null;
 }
 
@@ -91,15 +93,20 @@ function dateNow(type: FieldType, now: Date): string | null {
 
 function fixMissing(property: PropertyContract, options: CoerceOptions): Fix {
   const rule = property.rules.find(candidate => candidate.kind === "fixed");
-  if (rule !== undefined) return fixed(singleValued(property.type) ? rule.value : [rule.value]);
+  if (rule !== undefined) return fixed(listTyped(property.type) ? [rule.value] : rule.value);
   if (!options.isNew || options.now === undefined || !property.default || property.rules.length > 0) return null;
   const date = dateNow(property.type, options.now);
   return date === null ? null : fixed(date);
 }
 
-function fixFor(warning: Violation, value: unknown, property: PropertyContract, options: CoerceOptions): Fix {
+/** True only for a known list type; an untyped property takes a fixed value as a single value. */
+export function listTyped(type: FieldType | null): boolean {
+  return type !== null && !singleValued(type);
+}
+
+function fixFor(warning: Violation, value: unknown, written: unknown, property: PropertyContract, options: CoerceOptions): Fix {
   switch (warning.kind) {
-    case "type": return fixType(value, property.type);
+    case "type": return fixType(value, written, property.type);
     case "not-allowed": return fixAllowed(value, property);
     case "missing": return fixMissing(property, options);
     default: return null;
@@ -111,24 +118,136 @@ function clears(kind: ViolationKind, remaining: readonly ViolationKind[]): boole
   return kind === "missing" ? remaining.length === 0 : !remaining.includes(kind);
 }
 
-/** `content` with each field set to its fixed value; the body and every other key stay as written. */
-function setFrontmatter(content: string, values: ReadonlyMap<string, unknown>): string | null {
+/** A written scalar a fix may replace in place: no tag, no anchor, not a block scalar. */
+function spliceable(node: unknown): node is Scalar {
+  return isScalar(node) && node.tag === undefined && node.anchor === undefined && node.range !== undefined && node.range !== null
+    && (node.type === "PLAIN" || node.type === "QUOTE_DOUBLE" || node.type === "QUOTE_SINGLE");
+}
+
+/** True when `text` reads back as `value` in a block (`key: text`) or flow (`[text]`) position. */
+function readsAs(text: string, value: unknown, flow: boolean): boolean {
+  const document = parseDocument(flow ? `k: [${text}]` : `k: ${text}`);
+  if (document.errors.length > 0) return false;
+  const read = (document.toJS() as { k?: unknown } | null)?.k;
+  return isDeepStrictEqual(flow ? (Array.isArray(read) && read.length === 1 ? read[0] : undefined) : read, value);
+}
+
+/** YAML text for a scalar: the written quote style for a string when it reads back, otherwise double quotes. */
+function render(value: JsonScalar, style: Scalar["type"], flow: boolean): string | null {
+  const candidates = typeof value !== "string" ? [String(value)]
+    : style === "QUOTE_SINGLE" ? [`'${value.replace(/'/g, "''")}'`, JSON.stringify(value)]
+    : style === "QUOTE_DOUBLE" ? [JSON.stringify(value)]
+    : [value, JSON.stringify(value)];
+  return candidates.find(text => readsAs(text, value, flow)) ?? null;
+}
+
+function renderList(values: readonly unknown[]): string | null {
+  const members = values.map(member => scalar(member) ? render(member, "PLAIN", true) : null);
+  return members.some(member => member === null) ? null : `[${members.join(", ")}]`;
+}
+
+function renderValue(value: unknown, style: Scalar["type"]): string | null {
+  if (Array.isArray(value)) return renderList(value);
+  return scalar(value) ? render(value, style, false) : null;
+}
+
+interface Edit {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
+/** The edits that set one field, or null when its written node cannot be replaced in place. */
+function fieldEdits(document: Document, key: string, value: unknown): readonly Edit[] | null {
+  const map = document.contents;
+  const pair = isMap(map) ? map.items.find(item => isScalar(item.key) && item.key.value === key) : undefined;
+  const node = pair?.value;
+  if (isSeq(node) && Array.isArray(value) && node.items.length === value.length) {
+    // A list whose members changed: each member is replaced where it is written.
+    const edits: Edit[] = [];
+    for (const [index, item] of node.items.entries()) {
+      if (isDeepStrictEqual((item as { toJSON?: () => unknown }).toJSON?.(), value[index])) continue;
+      if (!spliceable(item) || !scalar(value[index])) return null;
+      const text = render(value[index], item.type, node.flow === true);
+      if (text === null) return null;
+      edits.push({ start: item.range![0], end: item.range![1], text });
+    }
+    return edits;
+  }
+  if (!spliceable(node)) return null;
+  const text = renderValue(value, node.type);
+  if (text === null) return null;
+  const [start, end] = node.range!;
+  // `key:` with nothing after it: the value goes after the colon.
+  return [{ start, end, text: node.source === "" ? ` ${text}` : text }];
+}
+
+function keyText(key: string): string {
+  return readsAs(key, key, false) && !/[:#]/.test(key) ? key : JSON.stringify(key);
+}
+
+/**
+ * `content` with each field set to its fixed value. Only the bytes of a fixed value (or
+ * an added line for a missing key) change; every other key, the body and the line
+ * endings stay byte for byte as written. A value that cannot be replaced in place (a tag,
+ * an anchor, a block scalar) is left out of `applied`. Null when nothing applies or the
+ * result would not read back as exactly the intended frontmatter.
+ */
+function setFrontmatter(content: string, values: ReadonlyMap<string, unknown>, written: Readonly<Record<string, unknown>>): { readonly content: string; readonly applied: ReadonlySet<string> } | null {
   const parsed = parseNote(content);
   if (parsed.diagnostics.length > 0) return null;
   const eol = content.includes("\r\n") ? "\r\n" : "\n";
-  if (parsed.frontmatterRange === null) {
-    const yaml = String(new Document(Object.fromEntries(values))).replace(/\r?\n/g, eol);
-    return `---${eol}${yaml}---${eol}${content}`;
+  const added: string[] = [];
+  const edits: Edit[] = [];
+  const applied = new Set(values.keys());
+  const document = parseDocument(parsed.frontmatterRaw, { uniqueKeys: true });
+  if (document.contents !== null && !isMap(document.contents)) return null;
+  for (const [key, value] of values) {
+    if (!Object.hasOwn(written, key)) {
+      const text = renderValue(value, "PLAIN");
+      if (text === null) return null;
+      added.push(`${keyText(key)}: ${text}`);
+      continue;
+    }
+    const fieldEdit = fieldEdits(document, key, value);
+    if (fieldEdit === null) {
+      // A tagged, anchored or block value is kept as written; the other fixes still apply.
+      applied.delete(key);
+      continue;
+    }
+    edits.push(...fieldEdit);
   }
-  const written = parseDocument(parsed.frontmatterRaw, { uniqueKeys: true });
-  // An empty block parses to no map; the fixes then make the whole block.
-  const document = written.contents === null ? new Document({}) : written;
-  if (!isMap(document.contents)) return null;
-  for (const [key, value] of values) document.set(key, value);
-  const yaml = String(document).replace(/\r?\n/g, eol);
-  const head = content.slice(0, parsed.frontmatterRange.start);
-  const tail = content.slice(parsed.frontmatterRange.end);
-  return `${head}${yaml.endsWith("\n") ? yaml : `${yaml}${eol}`}${tail.replace(/^\r?\n/, "")}`;
+  if (applied.size === 0) return null;
+  let yaml = parsed.frontmatterRaw;
+  for (const edit of [...edits].sort((left, right) => right.start - left.start)) {
+    yaml = `${yaml.slice(0, edit.start)}${edit.text}${yaml.slice(edit.end)}`;
+  }
+  if (added.length > 0) yaml = yaml.trim() === "" ? added.join(eol) : `${yaml}${eol}${added.join(eol)}`;
+  const next = parsed.frontmatterRange === null
+    ? `---${eol}${yaml}${eol}---${eol}${content}`
+    : `${content.slice(0, parsed.frontmatterRange.start)}${yaml}${content.slice(parsed.frontmatterRange.end)}`;
+  const reread = parseNote(next);
+  const expected = { ...written, ...Object.fromEntries([...values].filter(([key]) => applied.has(key))) };
+  return reread.diagnostics.length === 0 && isDeepStrictEqual(reread.frontmatter, expected) ? { content: next, applied } : null;
+}
+
+/**
+ * The frontmatter as written: a plain number whose source spells more than its value
+ * (`01234`, `1.0`, `0x1F`, an integer past 2^53) is given as its source text, so a
+ * recorded gap keeps what the writer wrote.
+ */
+export function writtenValues(content: string): Readonly<Record<string, unknown>> {
+  const parsed = parseNote(content);
+  if (parsed.diagnostics.length > 0) return parsed.frontmatter;
+  const document = parseDocument(parsed.frontmatterRaw, { uniqueKeys: true });
+  const values: Record<string, unknown> = { ...parsed.frontmatter };
+  if (!isMap(document.contents)) return values;
+  for (const pair of document.contents.items) {
+    const node = pair.value;
+    if (!isScalar(pair.key) || typeof pair.key.value !== "string" || !isScalar(node) || typeof node.value !== "number") continue;
+    if (node.type === "PLAIN" && typeof node.source === "string" && node.source !== String(node.value)) values[pair.key.value] = node.source;
+  }
+  return values;
 }
 
 /**
@@ -140,17 +259,18 @@ export function coerceFrontmatter(content: string, warnings: readonly Violation[
   if (properties === null) return null;
   const { frontmatter, diagnostics } = parseNote(content);
   if (diagnostics.length > 0) return null;
+  const written = writtenValues(content);
   const values = new Map<string, unknown>();
   const fixes: Violation[] = [];
   for (const warning of warnings) {
     if (!FIXABLE.has(warning.kind) || skip.has(warning.field) || values.has(warning.field) || !Object.hasOwn(properties, warning.field)) continue;
     const property = properties[warning.field]!;
-    const fix = fixFor(warning, frontmatter[warning.field], property, options);
+    const fix = fixFor(warning, frontmatter[warning.field], written[warning.field], property, options);
     if (fix === null || !clears(warning.kind, propertyKinds(fix.value, property))) continue;
     values.set(warning.field, fix.value);
     fixes.push({ field: warning.field, kind: warning.kind });
   }
   if (fixes.length === 0) return null;
-  const next = setFrontmatter(content, values);
-  return next === null ? null : { content: next, fixes };
+  const next = setFrontmatter(content, values, frontmatter);
+  return next === null ? null : { content: next.content, fixes: fixes.filter(fix => next.applied.has(fix.field)) };
 }

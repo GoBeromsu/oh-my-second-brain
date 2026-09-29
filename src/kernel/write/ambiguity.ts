@@ -4,7 +4,7 @@ import { contractContradictions } from "../contract/contradiction.js";
 import type { GapAxis, GapKind, GapWant } from "../contract/gap-ledger.js";
 import { insideApplyFolder } from "../contract/judge.js";
 import type { ContractView, JsonScalar, VaultContract, Verdict, Violation, ViolationKind } from "../contract/types.js";
-import { coerceFrontmatter } from "./coerce.js";
+import { coerceFrontmatter, writtenValues } from "./coerce.js";
 
 /**
  * What a write does where the note and the sealed contract do not line up exactly.
@@ -157,8 +157,9 @@ export function resolveTiers(input: AmbiguityInput): Resolution {
   if (view.state !== "sealed") return { action: "save", content: input.content, verdict, findings: [] };
   const { contract } = view;
   const parsed = parseNote(input.content);
-  const frontmatter = parsed.frontmatter;
-  const choices = parsed.diagnostics.length > 0 ? [] : templateChoices(contract, input.path, input.template, frontmatter);
+  // A finding records the value as written: `01234` stays `01234`, not the number it parses to.
+  const frontmatter = writtenValues(input.content);
+  const choices = parsed.diagnostics.length > 0 ? [] : templateChoices(contract, input.path, input.template, parsed.frontmatter);
   const gaps = newWarnings(verdict, input.baseline);
   if (gaps.length === 0) return { action: "save", content: input.content, verdict, findings: choices };
 
@@ -178,11 +179,20 @@ export function resolveTiers(input: AmbiguityInput): Resolution {
   let current = verdict;
   let remaining = gaps;
   const fixes: Violation[] = [];
+  const skip = new Set(contradicted);
   for (let pass = 0; pass < FIX_PASSES && remaining.length > 0; pass += 1) {
-    const coerced = coerceFrontmatter(content, remaining, { contract, isNew: input.isNew === true, now: input.now }, contradicted);
+    const coerced = coerceFrontmatter(content, remaining, { contract, isNew: input.isNew === true, now: input.now }, skip);
     if (coerced === null) break;
     const next = input.rejudge(coerced.content);
     if (next.refusals.length > 0) break;
+    // A fix counts only when the rejudged note no longer reports it; a pass with a fix
+    // that did not clear is not saved, and that field is kept as written from then on.
+    const after = new Set(next.warnings.map(findingKey));
+    const uncleared = coerced.fixes.filter(fix => after.has(findingKey(fix)));
+    if (uncleared.length > 0) {
+      for (const fix of uncleared) skip.add(fix.field);
+      continue;
+    }
     content = coerced.content;
     current = next;
     fixes.push(...coerced.fixes);

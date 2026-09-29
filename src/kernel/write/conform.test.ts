@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { judge } from "../contract/judge.js";
-import type { ContractView, VaultContract } from "../contract/types.js";
+import type { ContractView, PropertyContract, VaultContract } from "../contract/types.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { conform, type ConformOptions } from "./conform.js";
 
@@ -82,10 +82,12 @@ describe("conform", () => {
       kinds: { meaning: "kinds", type: "list", default: true, required: false, rules: [{ kind: "fixed", value: "note" }] },
       picked: { meaning: "pick one", type: "text", default: true, required: false, rules: [{ kind: "allowed", values: ["a", "b"] }] },
       both: { meaning: "two rules", type: "text", default: true, required: false, rules: [{ kind: "fixed", value: "x" }, { kind: "pattern", regex: "^x$" }] },
+      // An untyped property takes the fixed value as a single value, not a list.
+      loose: { meaning: "untyped", type: null as unknown as PropertyContract["type"], default: true, required: false, rules: [{ kind: "fixed", value: "y" }] },
     } } };
     const result = conform("Body\n", options({ view: fixedView, isNew: true }));
-    expect(result.content).toBe("---\nstage: \"draft\"\nkinds: [\"note\"]\n---\nBody\n");
-    expect(result.applied).toEqual([{ field: "stage", action: "default" }, { field: "kinds", action: "default" }]);
+    expect(result.content).toBe("---\nstage: \"draft\"\nkinds: [\"note\"]\nloose: \"y\"\n---\nBody\n");
+    expect(result.applied).toEqual([{ field: "stage", action: "default" }, { field: "kinds", action: "default" }, { field: "loose", action: "default" }]);
     expect(conform("Body\n", options({ view: fixedView }))).toEqual({ content: "Body\n", applied: [] });
   });
 

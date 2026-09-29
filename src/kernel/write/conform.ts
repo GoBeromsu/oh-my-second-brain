@@ -1,6 +1,6 @@
 import { parseNote } from "../conventions/frontmatter.js";
 import { scanContractHeadings } from "../contract/scan.js";
-import { singleValued } from "../contract/judge.js";
+import { listTyped } from "./coerce.js";
 import type { ContractView, FieldType, PropertyContract, TemplateContract } from "../contract/types.js";
 import type { ConformChange } from "./receipt.js";
 
@@ -109,7 +109,7 @@ function defaultValue(type: FieldType, now: Date): string | null {
 function fixedDefault(property: PropertyContract): string | null {
   const [rule] = property.rules;
   if (property.rules.length !== 1 || rule?.kind !== "fixed") return null;
-  return JSON.stringify(singleValued(property.type) ? rule.value : [rule.value]);
+  return JSON.stringify(listTyped(property.type) ? [rule.value] : rule.value);
 }
 
 /**

@@ -36,7 +36,7 @@ describe("coerceFrontmatter type fixes", () => {
     ["a number string for a number", "size: \"12\"", "size", "size: 12"],
     ["a negative decimal string for a number", "size: \"-1.5\"", "size", "size: -1.5"],
     ["a boolean string for a checkbox", "done: \"false\"", "done", "done: false"],
-    ["a scalar for a list", "topics: ai", "topics", "topics:\n  - ai"],
+    ["a scalar for a list", "topics: ai", "topics", "topics: [ai]"],
     ["a midnight datetime for a date", "day: 2026-09-29T00:00", "day", "day: 2026-09-29"],
     ["a number for a text", "label: 42", "label", "label: \"42\""],
   ])("fixes %s", (_name, line, field, expected) => {
@@ -50,6 +50,12 @@ describe("coerceFrontmatter type fixes", () => {
     ["\"yes\" for a checkbox", "done: \"yes\"", "done"],
     ["a non-midnight datetime for a date", "day: 2026-09-29T10:00", "day"],
     ["a map for a list", "topics:\n  a: 1", "topics"],
+    ["1.0 for a text, which would drop the decimal", "label: 1.0", "label"],
+    ["01234 for a text, which would drop the leading zero", "label: 01234", "label"],
+    ["0x1F for a text, which would become 31", "label: 0x1F", "label"],
+    ["an integer past 2^53 for a text, which would lose digits", "label: 12345678901234567890", "label"],
+    ["01234 for a list, which would drop the leading zero", "topics: 01234", "topics"],
+    ["a tagged string, which cannot be replaced in place", "size: !!str 12", "size"],
   ])("refuses to fix %s", (_name, line, field) => {
     expect(coerce(`---\n${line}\n---\nBody\n`, [{ field, kind: "type" }])).toBeNull();
   });
@@ -83,7 +89,7 @@ describe("coerceFrontmatter missing values", () => {
   it("fills a required property whose rule fixes its value, as a list for a list type", () => {
     const result = coerce("---\nlabel: a\n---\n", [{ field: "kind", kind: "missing" }, { field: "kinds", kind: "missing" }], false);
     expect(result).toEqual({
-      content: "---\nlabel: a\nkind: note\nkinds:\n  - note\n---\n",
+      content: "---\nlabel: a\nkind: note\nkinds: [note]\n---\n",
       fixes: [{ field: "kind", kind: "missing" }, { field: "kinds", kind: "missing" }],
     });
   });
@@ -116,6 +122,28 @@ describe("coerceFrontmatter leaves notes alone", () => {
     expect(coerceFrontmatter("---\nsize: \"12\"\n---\n", [{ field: "size", kind: "type" }], { contract: CONTRACT, isNew: true }, new Set(["size"]))).toBeNull();
     expect(coerce("---\nother: \"12\"\n---\n", [{ field: "other", kind: "type" }])).toBeNull();
     expect(coerce("---\nother: 1\n---\n", [{ field: "other", kind: "unknown-property" }])).toBeNull();
+  });
+
+  it("changes only the fixed value's bytes, leaving every other key as written", () => {
+    const long = `"${"word ".repeat(30).trim()}"`;
+    const content = `---\nw: 012\nlist: [a,   b]\nquote: ${long}\nsize: "12"\ntail: 'x' # note\n---\nBody\n`;
+    const result = coerce(content, [{ field: "size", kind: "type" }]);
+    expect(result?.content).toBe(content.replace("size: \"12\"", "size: 12"));
+  });
+
+  it("fills an empty value after its colon and keeps a comment after a fixed value", () => {
+    expect(coerce("---\nkind:\nlabel: a\n---\n", [{ field: "kind", kind: "missing" }])?.content).toBe("---\nkind: note\nlabel: a\n---\n");
+    expect(coerce("---\nsize: \"12\" # count\n---\n", [{ field: "size", kind: "type" }])?.content).toBe("---\nsize: 12 # count\n---\n");
+  });
+
+  it("fills a fixed value as a single value for an untyped property", () => {
+    const contract: VaultContract = { ...CONTRACT, properties: { loose: property(null as unknown as PropertyContract["type"], { required: true, rules: [{ kind: "fixed", value: "y" }] }) } };
+    expect(coerce("---\na: 1\n---\n", [{ field: "loose", kind: "missing" }], true, contract)?.content).toBe("---\na: 1\nloose: y\n---\n");
+  });
+
+  it("applies the fixes it can place when another field's value is tagged", () => {
+    const result = coerce("---\nsize: !!str 12\ndone: \"true\"\n---\n", [{ field: "size", kind: "type" }, { field: "done", kind: "type" }]);
+    expect(result).toEqual({ content: "---\nsize: !!str 12\ndone: true\n---\n", fixes: [{ field: "done", kind: "type" }] });
   });
 
   it("keeps the body, other keys and CRLF line endings as written", () => {
