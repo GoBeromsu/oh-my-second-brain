@@ -219,7 +219,14 @@ describe("oms setup end to end", () => {
       const { home, vault, answersFile, interpreting } = await agentVault();
       const first = runCli(home, ["setup", "--answers", await answersFile(FIRST), ...await interpreting(), "--vault", vault]);
       expect(first.status, first.stdout + first.stderr).toBe(0);
-      expect(json(first)).toMatchObject({ status: "sealed", folders: 1, properties: 1, templates: ["Meeting"] });
+      // A version 3 seal stores no templates, and says the template answers were not stored.
+      expect(json(first)).toMatchObject({
+        status: "sealed",
+        folders: 1,
+        properties: 1,
+        templates: [],
+        warnings: [expect.stringContaining("CONTRACT_TEMPLATES_NOT_STORED")],
+      });
       expect(first.stdout).not.toContain(HIDDEN);
 
       await writeFile(path.join(vault, "Templates", "Meeting.md"), WITH_NOTES);
@@ -276,6 +283,16 @@ describe("oms setup end to end", () => {
       expect(third.stdout).not.toMatch(/"(open|done)"/);
       expect(third.stderr).not.toContain(HIDDEN);
       expect(await storeFiles(home)).toEqual(sealedFiles);
+    });
+
+    it("prints no warnings when no template was answered", async () => {
+      const { home, vault, answersFile, interpreting } = await agentVault();
+      const answers = Object.fromEntries(Object.entries(FIRST).filter(([id]) => !id.startsWith("template:Meeting:") || id === "template:Meeting:interpretation"));
+      const result = runCli(home, ["setup", "--answers", await answersFile({ ...answers, "template:Meeting:register": false }), ...await interpreting(), "--vault", vault]);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const output = json(result);
+      expect(output).toMatchObject({ status: "sealed", folders: 1, properties: 1, templates: [] });
+      expect(output).not.toHaveProperty("warnings");
     });
 
     it("refuses invalid, unknown, malformed and in-vault answers and seals nothing", async () => {
