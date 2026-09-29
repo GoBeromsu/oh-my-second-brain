@@ -1,24 +1,23 @@
 import { canonicalJson } from "../conventions/canonical.js";
-import type { FolderContract, PropertyContract, Rule, TemplateContract, VaultContract } from "./types.js";
+import type { FolderContract, PropertyContract, Rule, VaultContract } from "./types.js";
 
 /**
- * A contract change expressed as data: add, modify or remove one folder, property,
- * template or property rule. `applyMutations` is pure and deterministic; it never touches
+ * A contract change expressed as data: add, modify or remove one folder, property or
+ * property rule. `applyMutations` is pure and deterministic; it never touches
  * the store and never seals. Every MODIFY and REMOVE names the value it expects to
  * replace (`before`), and an ADD expects nothing there, so a list drafted against one
  * contract is refused against another instead of silently overwriting a newer change.
  *
- * `key` names a folder path, a property name or a template name. On the `rule` axis the
+ * `key` names a folder path or a property name. On the `rule` axis the
  * key is the property whose rule list changes, and `before`/`after` are single rules.
  */
 
 export type MutationOp = "ADD" | "MODIFY" | "REMOVE";
-export type MutationAxis = "folder" | "property" | "template" | "rule";
+export type MutationAxis = "folder" | "property" | "rule";
 
 export type Mutation =
   | { readonly op: MutationOp; readonly axis: "folder"; readonly key: string; readonly before?: FolderContract; readonly after?: FolderContract }
   | { readonly op: MutationOp; readonly axis: "property"; readonly key: string; readonly before?: PropertyContract; readonly after?: PropertyContract }
-  | { readonly op: MutationOp; readonly axis: "template"; readonly key: string; readonly before?: TemplateContract; readonly after?: TemplateContract }
   | { readonly op: MutationOp; readonly axis: "rule"; readonly key: string; readonly before?: Rule; readonly after?: Rule };
 
 export type MutationConflictKind =
@@ -81,9 +80,6 @@ function applyOne(contract: VaultContract, mutation: Mutation, index: number): V
     case "property":
       expect(index, mutation, entry(contract.properties, mutation.key));
       return { ...contract, properties: put(contract.properties, mutation.key, mutation.after) };
-    case "template":
-      expect(index, mutation, entry(contract.templates, mutation.key));
-      return { ...contract, templates: put(contract.templates, mutation.key, mutation.after) };
     case "rule": {
       const property = entry(contract.properties, mutation.key);
       if (property === undefined) throw new MutationConflict(index, "rule", mutation.key, "missing");

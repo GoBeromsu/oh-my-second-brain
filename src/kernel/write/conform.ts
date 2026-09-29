@@ -7,8 +7,8 @@ import type { ConformChange } from "./receipt.js";
  * Mechanical conformance before the judge: date and title variables, date defaults a new
  * note leaves out, and the chosen template's missing heading skeleton. It never calls the
  * judge, never touches an existing value and never supplies a property the contract or a
- * template requires, so a missing required property is still refused after conform. The
- * heading skeleton does, by design, satisfy a template's required headings.
+ * template requires, so a missing required property is still reported after conform. The
+ * heading skeleton is the chosen template's scaffold; the judge never checks headings.
  */
 
 export interface ConformOptions {
@@ -106,7 +106,7 @@ function defaultValue(type: FieldType, now: Date): string | null {
 
 /**
  * Names a template requires: the chosen template's, or every template's when none is
- * chosen, since the judge may still match the note to any of them.
+ * chosen. The writer is asked for these by the scaffold, so a date is never invented for them.
  */
 function templateRequired(options: ConformOptions, template: TemplateContract | undefined): ReadonlySet<string> {
   if (template !== undefined) return new Set(template.requiredProperties);

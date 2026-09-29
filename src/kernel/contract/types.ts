@@ -57,10 +57,6 @@ export interface JudgeInput {
   readonly path: string;
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly body: string;
-  /** Template name the writer explicitly chose. */
-  readonly selectedTemplate?: string;
-  /** Raw content of the note before this write; absent for a new file. */
-  readonly previousContent?: string;
 }
 
 export type ViolationKind =
@@ -81,23 +77,20 @@ export type ViolationKind =
   | "range"
   | "count"
   | "unsubstituted-variable"
-  | "heading-missing"
-  | "folder-mismatch"
-  | "template-mismatch"
   | "unsupported-input";
 
 export const VIOLATION_KINDS: readonly ViolationKind[] = [
   "control-path", "yaml-syntax", "path-unsafe", "outside-vault", "contract-unreadable",
   "contract-tampered", "contract-open", "unregistered-folder", "unknown-property", "missing",
-  "type", "not-allowed", "not-fixed", "pattern", "range", "count", "unsubstituted-variable", "heading-missing", "folder-mismatch",
-  "template-mismatch", "unsupported-input",
+  "type", "not-allowed", "not-fixed", "pattern", "range", "count", "unsubstituted-variable",
+  "unsupported-input",
 ];
 
 /**
- * `field` is `path`, `template`, `contract`, `content`, a property key, a required heading
- * or an input key. It never carries a value or a pattern. The judge's own fields never name
- * a template; other `{field, kind}` reports, such as reseal loosening changes, may carry a
- * template name or a heading, which are vault-visible, never sealed values.
+ * `field` is `path`, `contract`, `content`, a property key or an input key. It never carries
+ * a value or a pattern. The judge's own fields never name a template; other `{field, kind}`
+ * reports, such as reseal loosening changes, may carry a template name, which is
+ * vault-visible, never a sealed value.
  */
 export interface Violation {
   readonly field: string;
@@ -130,9 +123,6 @@ export const SEVERITY_OF: Readonly<Record<ViolationKind, Severity>> = {
   "range": "warn",
   "count": "warn",
   "unsubstituted-variable": "warn",
-  "heading-missing": "warn",
-  "folder-mismatch": "warn",
-  "template-mismatch": "warn",
   // Malformed input refuses; the hook reports a content it cannot rebuild as a warning itself.
   "unsupported-input": "refuse",
 };
@@ -194,9 +184,6 @@ export const GUIDANCE_FOR: Readonly<Record<ViolationKind, Guidance>> = {
   "range": "oms doctor status",
   "count": "oms doctor status",
   "unsubstituted-variable": "oms doctor status",
-  "heading-missing": "oms doctor status",
-  "folder-mismatch": "oms doctor status",
-  "template-mismatch": "oms doctor status",
   "unsupported-input": "oms setup host sync",
 };
 

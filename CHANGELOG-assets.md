@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The setup skill no longer describes a `template-tightened` refusal.** Reseal no longer refuses a template answered more strictly, because the judge never reads a template.
+
 ## [0.19.0] - 2026-09-28
 
 - **Breaking: six shared skills.** `write`, `search`, `interview`, `distill`, `setup`, and `doctor`. The `link` skill is folded into `search` (suggest) and `doctor` (check), the `status` skill into `doctor` `op: "status"`, and the new `interview` skill reads the pending questions without sealing. Every skill and host guidance file uses the 0.19 command spellings.

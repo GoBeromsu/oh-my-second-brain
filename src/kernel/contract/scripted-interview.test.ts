@@ -175,10 +175,9 @@ describe("non-loosening reseal", () => {
     expect({ ...after, sourceHash: "" }).toEqual({ ...before.templates["Meeting"]!, sourceHash: "" });
   });
 
-  it("refuses a changed template answered more strictly, which the judge would stop enforcing on notes that fail it", async () => {
-    const before = await sealedContract();
+  it("seals a changed template answered more strictly, since the judge never reads a template", async () => {
     await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n## Notes\n");
-    const { result } = await run({
+    const stricter = await run({
       "template:Meeting:interpretation": true,
       "template:Meeting:register": true,
       "template:Meeting:field:status:required": true,
@@ -188,20 +187,13 @@ describe("non-loosening reseal", () => {
       "template:Meeting:apply-folder": "Projects",
       seal: true,
     });
-    expect(result).toEqual({
-      state: "loosening",
-      changes: [
-        { field: "templates.Meeting.narrowedRules.status", kind: "template-tightened" },
-        { field: "templates.Meeting.requiredHeadings.Notes", kind: "template-tightened" },
-      ],
-    });
-    expect(await sealedContract()).toEqual(before);
+    expect(stricter.result.state).toBe("sealed");
+    expect((await sealedContract()).templates["Meeting"]!.requiredHeadings).toEqual(["Agenda", "Notes"]);
   });
 
-  it("refuses a looser answer, names fields and kinds only and keeps the sealed contract", async () => {
-    const before = await sealedContract();
+  it("seals a changed template answered more loosely, which exposes no file", async () => {
     await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n## Notes\n");
-    const { result, notes } = await run({
+    const looser = await run({
       "template:Meeting:interpretation": true,
       "template:Meeting:register": true,
       "template:Meeting:field:status:required": false,
@@ -211,22 +203,13 @@ describe("non-loosening reseal", () => {
       "template:Meeting:apply-folder": "",
       seal: true,
     });
-    expect(result).toEqual({
-      state: "loosening",
-      changes: [
-        { field: "templates.Meeting.requiredProperties.status", kind: "required-dropped" },
-        { field: "templates.Meeting.narrowedRules.status", kind: "rule-removed" },
-        { field: "templates.Meeting.requiredHeadings.Notes", kind: "template-tightened" },
-        { field: "templates.Meeting.applyFolder", kind: "apply-folder-changed" },
-      ],
-    });
-    expect(JSON.stringify(result)).not.toMatch(/"(open|done)"/);
-    expect(notes).not.toContain("Public part (agents will see this):");
-    expect(await sealedContract()).toEqual(before);
+    expect(looser.result.state).toBe("sealed");
+    const after = (await sealedContract()).templates["Meeting"]!;
+    expect(after.requiredProperties).toEqual([]);
+    expect(after.applyFolder).toBeUndefined();
   });
 
-  it("refuses a new template scoped inside a sealed scoped template's folder", async () => {
-    const before = await sealedContract();
+  it("seals a new template scoped inside a sealed scoped template's folder", async () => {
     await writeFile(join(vault, "Templates/Daily.md"), "## Log\n");
     const { result } = await run({
       "template:Daily:interpretation": true,
@@ -235,8 +218,8 @@ describe("non-loosening reseal", () => {
       "template:Daily:apply-folder": "Projects/Daily",
       seal: true,
     });
-    expect(result).toEqual({ state: "loosening", changes: [{ field: "templates.Daily.applyFolder", kind: "apply-folder-overlap" }] });
-    expect(await sealedContract()).toEqual(before);
+    expect(result.state).toBe("sealed");
+    expect((await sealedContract()).templates["Daily"]!.applyFolder).toBe("Projects/Daily");
   });
 
   it("refuses removing a template whose source is gone", async () => {
@@ -285,10 +268,7 @@ describe("a sealed pattern that today's seal screen refuses", () => {
     const { result, notes } = await run({ seal: true });
     expect(result).toEqual({
       state: "loosening",
-      changes: [
-        { field: "properties.status", kind: "pattern-unsafe" },
-        { field: "templates.Meeting.narrowedRules.status", kind: "pattern-unsafe" },
-      ],
+      changes: [{ field: "properties.status", kind: "pattern-unsafe" }],
     });
     expect(JSON.stringify(result) + notes.join("\n")).not.toMatch(/xxxx|\(a\+\)\+/);
     expect(await sealedContract()).toEqual(before);

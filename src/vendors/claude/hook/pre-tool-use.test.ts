@@ -138,14 +138,14 @@ describe("translatePreToolUse gap ledger", () => {
     expect(gaps[0]!.reason.startsWith("kept:")).toBe(true);
   });
 
-  it("neither warns nor records when an edit adds no finding over the note on disk", async () => {
+  it("warns with the whole verdict but records nothing when an edit adds no finding over the note on disk", async () => {
     const fixture = await row("sealed");
     const gapRoot = join(fixture.base, "gaps");
     const note = join(fixture.vault, "Projects/a.md");
     await mkdir(join(fixture.vault, "Projects"), { recursive: true });
     await writeFile(note, BAD);
     const result = await decide(fixture.vault, payload("Edit", { file_path: note, old_string: "body", new_string: "text" }), { gapRoot: () => gapRoot });
-    expect(result).toEqual({ decision: "allow", reason: null, warning: null });
+    expect(result).toEqual({ decision: "warn", reason: NOT_ALLOWED, warning: null });
     expect(openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events)).toEqual([]);
   });
 

@@ -15,8 +15,6 @@ import { resolveTiers, type GapFinding, type Resolution } from "../write/ambigui
 export interface ContentInput {
   readonly path: string;
   readonly content: string;
-  readonly selectedTemplate?: string;
-  readonly previousContent?: string;
 }
 
 /**
@@ -31,13 +29,7 @@ export function judgeContent(input: ContentInput, view: ContractView): Verdict {
     const posture = view.state === "sealed" ? [] : findingsOf(judge({ path: input.path, frontmatter: {}, body: "" }, view));
     return verdictOf([...posture, { field: "content", kind: "yaml-syntax" }]);
   }
-  return judge({
-    path: input.path,
-    frontmatter: parsed.frontmatter,
-    body: parsed.body,
-    ...(input.selectedTemplate === undefined ? {} : { selectedTemplate: input.selectedTemplate }),
-    ...(input.previousContent === undefined ? {} : { previousContent: input.previousContent }),
-  }, view);
+  return judge({ path: input.path, frontmatter: parsed.frontmatter, body: parsed.body }, view);
 }
 
 export type WriteTarget =
@@ -108,26 +100,25 @@ type ReadyTarget = Extract<WriteTarget, { readonly state: "ready" }>;
 /** An existing target that cannot be read gives no previous content: the write is judged as new and says so. */
 const UNREADABLE_TARGET: Violation = { field: "content", kind: "contract-unreadable" };
 
-/** Judges `content` for an already resolved target. */
-export function judgeReadyTarget(resolved: ReadyTarget, content: string, selectedTemplate?: string): Verdict {
-  const verdict = judgeContent({
-    path: resolved.path,
-    content,
-    ...(selectedTemplate === undefined ? {} : { selectedTemplate }),
-    ...(typeof resolved.previousContent === "string" ? { previousContent: resolved.previousContent } : {}),
-  }, resolved.view);
+/** Judges `content` for an already resolved target; the note on disk never changes the verdict. */
+export function judgeReadyTarget(resolved: ReadyTarget, content: string): Verdict {
+  const verdict = judgeContent({ path: resolved.path, content }, resolved.view);
   if (resolved.previousContent !== null || verdict.refusals.length > 0) return verdict;
   return verdictOf([...findingsOf(verdict), UNREADABLE_TARGET], verdict.missingDefaults);
 }
 
 /** Judges a write of `content` to `target` against the vault's seal state. */
-export async function judgeWrite(vault: string, target: string, content: string, selectedTemplate?: string): Promise<Verdict> {
+export async function judgeWrite(vault: string, target: string, content: string): Promise<Verdict> {
   const resolved = await resolveWriteTarget(vault, target);
   if (resolved.state === "denied") return resolved.verdict;
-  return judgeReadyTarget(resolved, content, selectedTemplate);
+  return judgeReadyTarget(resolved, content);
 }
 
 export interface DecideWriteOptions {
+  /**
+   * The selected template, used only to tell whether a scaffold choice is still open (②).
+   * It is never judged: the verdict is the same with or without it.
+   */
   readonly template?: string | undefined;
   /**
    * False when the caller can only allow or deny the content as written (the Claude hook):
@@ -151,9 +142,10 @@ export type WriteDecision =
  */
 export function decideWrite(resolved: ReadyTarget, content: string, options: DecideWriteOptions = {}): WriteDecision {
   const { template } = options;
-  const verdict = judgeReadyTarget(resolved, content, template);
+  const verdict = judgeReadyTarget(resolved, content);
+  // The judge is stateless; the delta is taken here, against its verdict on the note as it is now.
   const baseline = typeof resolved.previousContent === "string"
-    ? judgeContent({ path: resolved.path, content: resolved.previousContent, ...(template === undefined ? {} : { selectedTemplate: template }) }, resolved.view)
+    ? judgeContent({ path: resolved.path, content: resolved.previousContent }, resolved.view)
     : undefined;
   const resolution: Resolution = resolveTiers({
     view: resolved.view,
@@ -164,7 +156,7 @@ export function decideWrite(resolved: ReadyTarget, content: string, options: Dec
     verdict,
     ...(baseline === undefined ? {} : { baseline }),
     ...(options.repair === undefined ? {} : { repair: options.repair }),
-    rejudge: repaired => judgeReadyTarget(resolved, repaired, template),
+    rejudge: repaired => judgeReadyTarget(resolved, repaired),
   });
   switch (resolution.action) {
     case "refuse":

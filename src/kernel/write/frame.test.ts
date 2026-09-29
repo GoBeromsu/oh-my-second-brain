@@ -66,12 +66,13 @@ describe("frameFor", () => {
     expect(frameFor({ state: "sealed", contract: { ...CONTRACT, folders: null } }, { folder: "Projects" }).folder).toBeNull();
   });
 
-  it("describes the chosen template and applies its requirements and narrowed rules", () => {
+  it("describes the chosen template as a scaffold, while properties come from the property contract only", () => {
     const frame = frameFor(SEALED, { template: "project" });
     expect(frame.template).toEqual({ name: "project", meaning: "one project", requiredProperties: ["rating"], requiredHeadings: ["Goals"] });
+    expect(frame.properties).toEqual(frameFor(SEALED, {}).properties);
     const byName = Object.fromEntries(frame.properties.map(property => [property.name, property]));
-    expect(byName["rating"]?.required).toBe(true);
-    expect(byName["created"]?.constrained).toBe(true);
+    expect(byName["rating"]?.required).toBe(false);
+    expect(byName["created"]?.constrained).toBe(false);
     expect(frame.defaults).toEqual(["created"]);
   });
 

@@ -36,7 +36,7 @@ describe("applyMutations", () => {
     expect(applyMutations(BASE, [])).toBe(BASE);
   });
 
-  it("adds, modifies and removes on the folder, property and template axes without changing the input", () => {
+  it("adds, modifies and removes on the folder and property axes without changing the input", () => {
     const snapshot = JSON.stringify(BASE);
     const archive = { meaning: "archive", searchExclude: true };
     const next = applyMutations(BASE, [
@@ -44,14 +44,11 @@ describe("applyMutations", () => {
       { op: "MODIFY", axis: "folder", key: "Inbox", before: BASE.folders!["Inbox"]!, after: { meaning: "in", searchExclude: false } },
       { op: "ADD", axis: "property", key: "mood", after: property() },
       { op: "REMOVE", axis: "property", key: "status", before: property([ALLOWED]) },
-      { op: "MODIFY", axis: "template", key: "Meeting", before: TEMPLATE, after: { ...TEMPLATE, requiredHeadings: ["Agenda"] } },
-      { op: "ADD", axis: "template", key: "Daily", after: TEMPLATE },
-      { op: "REMOVE", axis: "template", key: "Daily", before: TEMPLATE },
     ]);
     expect(next).toEqual({
       folders: { Inbox: { meaning: "in", searchExclude: false }, Archive: archive },
       properties: { mood: property() },
-      templates: { Meeting: { ...TEMPLATE, requiredHeadings: ["Agenda"] } },
+      templates: { Meeting: TEMPLATE },
     });
     expect(JSON.stringify(BASE)).toBe(snapshot);
   });
@@ -90,7 +87,6 @@ describe("applyMutations", () => {
       [{ op: "REMOVE", axis: "folder", key: "Inbox", before: inbox, after: inbox }, "malformed"],
       [{ op: "REMOVE", axis: "folder", key: "Gone", before: inbox }, "missing"],
       [{ op: "MODIFY", axis: "property", key: "status", before: property(), after: property() }, "before-mismatch"],
-      [{ op: "REMOVE", axis: "template", key: "Meeting", before: { ...TEMPLATE, source: "other.md" } }, "before-mismatch"],
       [{ op: "ADD", axis: "rule", key: "status", after: ALLOWED }, "exists"],
       [{ op: "ADD", axis: "rule", key: "nobody", after: COUNT }, "missing"],
       [{ op: "REMOVE", axis: "rule", key: "status", before: COUNT }, "missing"],

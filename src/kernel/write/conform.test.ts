@@ -33,9 +33,9 @@ function options(extra: Partial<ConformOptions> = {}): ConformOptions {
   return { view: SEALED, isNew: false, title: "Alpha", now: NOW, ...extra };
 }
 
-function judged(path: string, content: string, template?: string) {
+function judged(path: string, content: string) {
   const note = parseNote(content);
-  return judge({ path, frontmatter: note.frontmatter, body: note.body, ...(template === undefined ? {} : { selectedTemplate: template }) }, SEALED);
+  return judge({ path, frontmatter: note.frontmatter, body: note.body }, SEALED);
 }
 
 describe("conform", () => {
@@ -97,14 +97,13 @@ describe("conform", () => {
   it("does not count a heading inside a code fence as present", () => {
     const result = conform("```\n## Goals\n```\n", options({ template: "project" }));
     expect(result.content).toBe("```\n## Goals\n```\n\n## Goals\n\n## 목표\n");
-    expect(judged("Projects/a.md", result.content, "project").warnings.filter(violation => violation.kind.includes("heading"))).toEqual([]);
   });
 
   it("never turns a value outside allowed into a passing note", () => {
     const content = "---\nstatus: paused\n---\n# {{title}}\n";
     const before = judged("Projects/a.md", content);
     const result = conform(content, options({ isNew: true, template: "project" }));
-    const after = judged("Projects/a.md", result.content, "project");
+    const after = judged("Projects/a.md", result.content);
     expect(before.warnings).not.toEqual([]);
     expect(after.warnings).toContainEqual(expect.objectContaining({ field: "status" }));
     expect(result.content).toContain("status: paused");
@@ -120,15 +119,14 @@ describe("conform", () => {
     };
     const view: ContractView = { state: "sealed", contract };
     const content = "---\ntitle: a\n---\nBody\n";
-    const raw = parseNote(content);
-    const before = judge({ path: "Projects/a.md", frontmatter: raw.frontmatter, body: raw.body, selectedTemplate: "project" }, view);
-    expect(before.warnings).toContainEqual(expect.objectContaining({ field: "created", kind: "missing" }));
     for (const template of ["project", undefined]) {
       const result = conform(content, options({ view, isNew: true, ...(template === undefined ? {} : { template }) }));
       expect(result).toEqual({ content, applied: [] });
       const note = parseNote(result.content);
-      const after = judge({ path: "Projects/a.md", frontmatter: note.frontmatter, body: note.body, selectedTemplate: "project" }, view);
-      expect(after.warnings).toContainEqual(expect.objectContaining({ field: "created", kind: "missing" }));
+      // The judge reads only the property contract: the template's requirement is not a finding.
+      const after = judge({ path: "Projects/a.md", frontmatter: note.frontmatter, body: note.body }, view);
+      expect(after.warnings).not.toContainEqual(expect.objectContaining({ field: "created" }));
+      expect(after.missingDefaults).toEqual(["created"]);
     }
   });
 

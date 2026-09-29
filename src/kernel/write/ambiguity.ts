@@ -68,7 +68,6 @@ export type Resolution =
 
 const AXIS_OF: Readonly<Partial<Record<ViolationKind, GapAxis>>> = {
   "unregistered-folder": "folder",
-  "folder-mismatch": "folder",
   "unknown-property": "property",
   "missing": "property",
   "type": "value",
@@ -78,8 +77,6 @@ const AXIS_OF: Readonly<Partial<Record<ViolationKind, GapAxis>>> = {
   "range": "value",
   "count": "value",
   "unsubstituted-variable": "value",
-  "heading-missing": "template",
-  "template-mismatch": "template",
   "yaml-syntax": "value",
 };
 
@@ -133,11 +130,8 @@ export function templateChoices(contract: VaultContract, notePath: string, templ
   }];
 }
 
-function requiredBy(contract: VaultContract, template: string | undefined, field: string): boolean {
-  const property = contract.properties !== null && Object.hasOwn(contract.properties, field) ? contract.properties[field]! : undefined;
-  if (property?.required === true) return true;
-  const selected = template !== undefined && Object.hasOwn(contract.templates, template) ? contract.templates[template] : undefined;
-  return selected?.requiredProperties.includes(field) ?? false;
+function requiredBy(contract: VaultContract, field: string): boolean {
+  return contract.properties !== null && Object.hasOwn(contract.properties, field) && contract.properties[field]!.required;
 }
 
 /**
@@ -150,7 +144,7 @@ function droppableKeys(violations: readonly Violation[], contract: VaultContract
   const keys = new Set<string>();
   for (const violation of violations) {
     if (!DROPPABLE.has(violation.kind) || !Object.hasOwn(frontmatter, violation.field)) return null;
-    if (Object.hasOwn(before, violation.field) || requiredBy(contract, input.template, violation.field)) return null;
+    if (Object.hasOwn(before, violation.field) || requiredBy(contract, violation.field)) return null;
     keys.add(violation.field);
   }
   return keys.size === 0 ? null : [...keys].sort(compareCodePoints);

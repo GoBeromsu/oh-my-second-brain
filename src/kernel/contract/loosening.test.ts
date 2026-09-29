@@ -61,31 +61,6 @@ describe("looseningChanges", () => {
     expect(looseningChanges(SEALED, next)).toEqual([]);
   });
 
-  it("reports a sealed template made stricter, which the judge would stop enforcing on notes that fail it", () => {
-    const sealed = SEALED.templates["Meeting"]!;
-    const stricter = { ...sealed, requiredProperties: ["status", "created"], requiredHeadings: ["Agenda", "Notes"], narrowedRules: { ...sealed.narrowedRules, code: [{ kind: "fixed", value: "ABC" }] } } satisfies TemplateContract;
-    expect(looseningChanges(SEALED, withTemplate(stricter))).toEqual([
-      { field: "templates.Meeting.requiredProperties.created", kind: "template-tightened" },
-      { field: "templates.Meeting.narrowedRules.code", kind: "template-tightened" },
-      { field: "templates.Meeting.requiredHeadings.Notes", kind: "template-tightened" },
-    ]);
-    expect(looseningChanges(SEALED, withTemplate({ ...sealed, narrowedRules: { status: [{ kind: "fixed", value: "open" }, { kind: "pattern", regex: "o.*" }] } })))
-      .toEqual([{ field: "templates.Meeting.narrowedRules.status", kind: "template-tightened" }]);
-  });
-
-  it("reports a narrowed rule whose property type becomes known, since the judge then checks that type", () => {
-    const open: VaultContract = { folders: null, properties: null, templates: { Meeting: template({ narrowedRules: { status: [] } }) } };
-    expect(looseningChanges(open, { ...open, properties: { status: property([]) } }))
-      .toEqual([{ field: "templates.Meeting.narrowedRules.status", kind: "template-tightened" }]);
-  });
-
-  it("keeps a template equal when only its heading normalization or a single-valued fixed/allowed spelling differs", () => {
-    const sealed: VaultContract = { ...SEALED, templates: { Meeting: template({ applyFolder: "Inbox", requiredHeadings: ["Caf\u00e9"], narrowedRules: { owner: [{ kind: "fixed", value: "me" }] } }) } };
-    const next: VaultContract = { ...SEALED, templates: { Meeting: template({ applyFolder: "Inbox", requiredHeadings: ["Cafe\u0301"], narrowedRules: { owner: [{ kind: "allowed", values: ["me"] }] } }) } };
-    expect(looseningChanges(sealed, next)).toEqual([]);
-    expect(looseningChanges(next, sealed)).toEqual([]);
-  });
-
   it("accepts a first-time applyFolder and a closed axis", () => {
     const open: VaultContract = { folders: null, properties: null, templates: { Meeting: template() } };
     const closed: VaultContract = { folders: { Inbox: { meaning: "", searchExclude: false } }, properties: { status: property([]) }, templates: { Meeting: template({ applyFolder: "Inbox" }) } };
@@ -134,9 +109,6 @@ describe("looseningChanges", () => {
     const list = { type: "list" as const, required: true };
     const sealed = withProperty("status", property([{ kind: "allowed", values: ["open", "done"] }], list));
     expect(looseningChanges(sealed, withProperty("status", property([{ kind: "fixed", value: "open" }], list)))).toEqual([{ field: "properties.status", kind: "rule-removed" }]);
-    const open: VaultContract = { ...SEALED, properties: null };
-    expect(looseningChanges(open, { ...open, templates: { Meeting: template({ applyFolder: "Inbox", narrowedRules: { status: [{ kind: "allowed", values: ["open"] }] } }) } }))
-      .toEqual([{ field: "templates.Meeting.narrowedRules.status", kind: "rule-removed" }]);
   });
 
   describe("list values, checked against the judge", () => {
@@ -144,9 +116,8 @@ describe("looseningChanges", () => {
       return { folders: null, properties: { tags: property(rules, { type: "list" }) }, templates: {} };
     }
 
-    function accepts(contract: VaultContract, tags: readonly string[], selectedTemplate?: string): boolean {
-      const input = { path: "a.md", frontmatter: { tags }, body: "", ...selectedTemplate === undefined ? {} : { selectedTemplate } };
-      return judge(input, { state: "sealed", contract }).warnings.length === 0;
+    function accepts(contract: VaultContract, tags: readonly string[]): boolean {
+      return judge({ path: "a.md", frontmatter: { tags }, body: "" }, { state: "sealed", contract }).warnings.length === 0;
     }
 
     it("reports an allowed list replaced by fixed members, which would pass an unlisted member", () => {
@@ -156,18 +127,6 @@ describe("looseningChanges", () => {
         expect(accepts(next, ["a", "b", "evil"])).toBe(true);
         expect(looseningChanges(sealed, next)).toEqual([{ field: "properties.tags", kind: "rule-removed" }]);
       }
-    });
-
-    it("reports a fixed member replaced by a one-value allowed list, which would pass an empty list", () => {
-      const scoped = (rules: readonly Rule[]): VaultContract => ({
-        folders: null, properties: null,
-        templates: { Tagged: template({ applyFolder: "", requiredProperties: [], requiredHeadings: [], narrowedRules: { tags: rules } }) },
-      });
-      const sealed = scoped([{ kind: "fixed", value: "a" }]);
-      const next = scoped([{ kind: "allowed", values: ["a"] }]);
-      expect(accepts(sealed, [], "Tagged")).toBe(false);
-      expect(accepts(next, [], "Tagged")).toBe(true);
-      expect(looseningChanges(sealed, next)).toEqual([{ field: "templates.Tagged.narrowedRules.tags", kind: "rule-removed" }]);
     });
 
     it("accepts a narrower allowed list, which rejects everything the sealed one rejected", () => {
@@ -200,78 +159,29 @@ describe("looseningChanges", () => {
     expect(looseningChanges(tags([]), sealed)).toEqual([]);
   });
 
-  it("reports template loosening by field path only", () => {
+  it("reports a removed template by field path only, and nothing the judge no longer reads", () => {
     const sealed = SEALED.templates["Meeting"]!;
     expect(looseningChanges(SEALED, withTemplate(undefined))).toEqual([{ field: "templates.Meeting", kind: "removed" }]);
-    expect(looseningChanges(SEALED, withTemplate({ ...sealed, requiredProperties: [] }))).toEqual([{ field: "templates.Meeting.requiredProperties.status", kind: "required-dropped" }]);
-    expect(looseningChanges(SEALED, withTemplate({ ...sealed, requiredHeadings: [] }))).toEqual([{ field: "templates.Meeting.requiredHeadings.Agenda", kind: "heading-dropped" }]);
-    expect(looseningChanges(SEALED, withTemplate({ ...sealed, narrowedRules: {} }))).toEqual([{ field: "templates.Meeting.narrowedRules.status", kind: "rule-removed" }]);
-    expect(looseningChanges(SEALED, withTemplate({ ...sealed, narrowedRules: { status: [{ kind: "fixed", value: "done" }] } }))).toEqual([{ field: "templates.Meeting.narrowedRules.status", kind: "fixed-changed" }]);
     const { applyFolder: _dropped, ...unscoped } = sealed;
-    expect(looseningChanges(SEALED, withTemplate(unscoped))).toEqual([{ field: "templates.Meeting.applyFolder", kind: "apply-folder-changed" }]);
-    expect(looseningChanges(SEALED, withTemplate({ ...sealed, applyFolder: "Private" }))).toEqual([{ field: "templates.Meeting.applyFolder", kind: "apply-folder-changed" }]);
+    for (const next of [
+      { ...sealed, requiredProperties: [] },
+      { ...sealed, requiredProperties: ["status", "created"] },
+      { ...sealed, requiredHeadings: [] },
+      { ...sealed, requiredHeadings: ["Agenda", "Notes"] },
+      { ...sealed, narrowedRules: {} },
+      { ...sealed, narrowedRules: { status: [{ kind: "fixed", value: "done" }] } },
+      unscoped,
+      { ...sealed, applyFolder: "Private" },
+    ] satisfies TemplateContract[]) {
+      expect(looseningChanges(SEALED, withTemplate(next))).toEqual([]);
+    }
+    expect(looseningChanges(SEALED, { ...SEALED, templates: { ...SEALED.templates, Daily: template({ source: "Templates/Daily.md", applyFolder: "Inbox" }) } })).toEqual([]);
   });
 
   it("reports a moved template source, which search exclusion no longer covers", () => {
     const sealed = SEALED.templates["Meeting"]!;
     expect(looseningChanges(SEALED, withTemplate({ ...sealed, source: "Templates/Moved.md" }))).toEqual([{ field: "templates.Meeting.source", kind: "removed" }]);
     expect(looseningChanges(SEALED, withTemplate({ ...sealed, source: "Templates//Meeting.md/" }))).toEqual([]);
-  });
-
-  it("compares apply folders after NFC and separator normalization", () => {
-    const decomposed = "Cafe\u0301";
-    const sealed: VaultContract = { ...SEALED, templates: { Meeting: template({ applyFolder: `${decomposed.normalize("NFC")}/Notes` }) } };
-    for (const applyFolder of [`${decomposed}/Notes`, `${decomposed}\\Notes/`, `./${decomposed}//Notes`]) {
-      expect(looseningChanges(sealed, { ...sealed, templates: { Meeting: template({ applyFolder }) } })).toEqual([]);
-    }
-    expect(looseningChanges(sealed, { ...sealed, templates: { Meeting: template({ applyFolder: "Cafe/Notes" }) } })).toEqual([{ field: "templates.Meeting.applyFolder", kind: "apply-folder-changed" }]);
-  });
-
-  it("keeps an edit to a note that fails a tightened template judged by the sealed template", () => {
-    const sealed: VaultContract = { ...SEALED, properties: null };
-    const next: VaultContract = { ...sealed, templates: { Meeting: template({ ...sealed.templates["Meeting"]!, requiredHeadings: ["Agenda", "Notes"] }) } };
-    const edit = { path: "Inbox/a.md", frontmatter: {}, body: "no headings\n", previousContent: "---\nstatus: open\n---\n## Agenda\n" };
-    expect(judge(edit, { state: "sealed", contract: sealed }).warnings).not.toEqual([]);
-    expect(judge(edit, { state: "sealed", contract: next }).warnings).toEqual([]);
-    expect(looseningChanges(sealed, next)).toEqual([{ field: "templates.Meeting.requiredHeadings.Notes", kind: "template-tightened" }]);
-  });
-
-  describe("apply folder overlap", () => {
-    function withScoped(applyFolder: string): VaultContract {
-      return { ...SEALED, templates: { ...SEALED.templates, Daily: template({ source: "Templates/Daily.md", applyFolder }) } };
-    }
-
-    it("reports a new template scoped to the same, an enclosing or an enclosed folder", () => {
-      for (const folder of ["Inbox", "", "Inbox/Sub"]) {
-        expect(looseningChanges(SEALED, withScoped(folder))).toEqual([{ field: "templates.Daily.applyFolder", kind: "apply-folder-overlap" }]);
-      }
-    });
-
-    it("accepts a new template scoped to a folder that does not overlap", () => {
-      expect(looseningChanges(SEALED, withScoped("Private"))).toEqual([]);
-      expect(looseningChanges(SEALED, withScoped("Inboxes"))).toEqual([]);
-    });
-
-    it("reports a sealed unscoped template gaining an overlapping folder", () => {
-      const sealed: VaultContract = { ...SEALED, templates: { ...SEALED.templates, Daily: template({ source: "Templates/Daily.md" }) } };
-      expect(looseningChanges(sealed, withScoped("Inbox"))).toEqual([{ field: "templates.Daily.applyFolder", kind: "apply-folder-overlap" }]);
-      expect(looseningChanges(sealed, withScoped("Private"))).toEqual([]);
-    });
-
-    it("keeps an overlapping edit warned on by the sealed template", () => {
-      const next = withScoped("Inbox");
-      const previousContent = "---\nstatus: open\n---\n## Agenda\n";
-      const edit = { path: "Inbox/a.md", frontmatter: { status: "done" }, body: "## Agenda\n", previousContent };
-      expect(judge(edit, { state: "sealed", contract: SEALED }).warnings).not.toEqual([]);
-      expect(judge(edit, { state: "sealed", contract: next }).warnings).toEqual([]);
-    });
-  });
-
-  it("reads narrowed rules only as own properties", () => {
-    const sealed = SEALED.templates["Meeting"]!;
-    const next = withTemplate({ ...sealed, narrowedRules: { status: [{ kind: "fixed", value: "open" }] } });
-    const withConstructor: VaultContract = { ...SEALED, templates: { Meeting: { ...sealed, narrowedRules: { ...sealed.narrowedRules, constructor: [{ kind: "fixed", value: "x" }] } } } };
-    expect(looseningChanges(withConstructor, next)).toEqual([{ field: "templates.Meeting.narrowedRules.constructor", kind: "rule-removed" }]);
   });
 
   it("names sealed patterns the seal screen now refuses by field only", () => {
@@ -282,10 +192,8 @@ describe("looseningChanges", () => {
       templates: { Meeting: template({ narrowedRules: { owner: [{ kind: "pattern", regex: "(a+)+" }] } }) },
     };
     expect(unsafePatternChanges(SEALED)).toEqual([]);
-    expect(unsafePatternChanges(contract)).toEqual([
-      { field: "properties.code", kind: "pattern-unsafe" },
-      { field: "templates.Meeting.narrowedRules.owner", kind: "pattern-unsafe" },
-    ]);
+    // A template's narrowed rules are never judged, so only property patterns are named.
+    expect(unsafePatternChanges(contract)).toEqual([{ field: "properties.code", kind: "pattern-unsafe" }]);
     expect(JSON.stringify(unsafePatternChanges(contract))).not.toContain("bbb");
   });
 

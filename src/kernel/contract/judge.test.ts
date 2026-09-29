@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeSettings } from "../../../test/fixtures/contract-truth-table.js";
 import { enumerateTemplateSources } from "./interpretation.js";
 import { insideApplyFolder, judge, PATTERN_VALUE_LIMIT } from "./judge.js";
-import { judgeContent, judgeWrite } from "./judge-write.js";
+import { decideWrite, judgeContent, judgeReadyTarget, judgeWrite, type WriteTarget } from "./judge-write.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { sealContract, storeRoot } from "./store.js";
 import {
@@ -150,13 +150,12 @@ describe("AC7: no value, rule or template name leaves the judge", () => {
         [SECRET]: { source: "T.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] },
       },
     });
-    const verdict = judge({ path: "a.md", frontmatter: { code: "wrong", level: "bad", id: "nope" }, body: "", selectedTemplate: "missing" }, view);
+    const verdict = judge({ path: "a.md", frontmatter: { code: "wrong", level: "bad", id: "nope" }, body: "" }, view);
     expect(verdict.ok).toBe(true);
     expect(verdict.warnings).toEqual([
       { field: "code", kind: "not-fixed" },
       { field: "id", kind: "pattern" },
       { field: "level", kind: "not-allowed" },
-      { field: "template", kind: "template-mismatch" },
     ]);
     const output = `${JSON.stringify(verdict)}\n${formatWarnings(verdict.warnings)}`;
     expect(output).not.toContain(SECRET);
@@ -265,22 +264,10 @@ describe("AC16: an unreadable contract refuses only when tampered", () => {
   });
 });
 
-describe("AC18: folder-mismatch for an explicit template", () => {
-  const view = sealed({
-    templates: {
-      Meeting: { source: "Templates/Meeting.md", sourceHash: `sha256:${"0".repeat(64)}`, applyFolder: "Meetings", requiredProperties: [], narrowedRules: {}, requiredHeadings: [] },
-    },
-  });
-
+describe("apply folders", () => {
   it("inherits into subfolders", () => {
     expect(insideApplyFolder("Meetings/2026/a.md", "Meetings")).toBe(true);
     expect(insideApplyFolder("MeetingsX/a.md", "Meetings")).toBe(false);
-    expect(judge({ path: "Meetings/2026/a.md", frontmatter: {}, body: "", selectedTemplate: "Meeting" }, view).warnings).toEqual([]);
-  });
-
-  it("warns on a note outside the apply folder", () => {
-    expect(judge({ path: "Notes/a.md", frontmatter: {}, body: "", selectedTemplate: "Meeting" }, view).warnings)
-      .toEqual([{ field: "path", kind: "folder-mismatch" }]);
   });
 });
 
@@ -306,43 +293,84 @@ describe("AC19: registered folders and properties", () => {
   });
 });
 
-describe("edits judge only what they change", () => {
+describe("the judge ignores history", () => {
   const view = sealed({
+    folders: { Projects: { meaning: "projects", searchExclude: false } },
     properties: {
       status: property({ required: true, rules: [{ kind: "allowed", values: ["open", "done"] }] }),
       owner: property(),
     },
+    templates: {
+      Meeting: { source: "Templates/Meeting.md", sourceHash: `sha256:${"0".repeat(64)}`, applyFolder: "Projects", requiredProperties: ["owner"], narrowedRules: { status: [{ kind: "fixed", value: "open" }] }, requiredHeadings: ["Agenda"] },
+    },
   });
-  const legacy = "---\nlegacy: kept\nowner: me\n---\nold body\n";
+  const notes = [
+    "---\nstatus: open\nowner: me\n---\n## Agenda\n",
+    "---\nlegacy: kept\nowner: me\n---\nnew body\n",
+    "---\nstatus: wrong\nextra: 1\n---\nbody\n",
+    "---\nstatus: \"\"\n---\n",
+    "no frontmatter\n",
+    "---\nstatus: [unclosed\n---\n",
+  ];
+  const priors: (string | undefined | null)[] = [undefined, "", ...notes, "---\nlegacy: kept\nextra: 1\nstatus: wrong\n---\n"];
 
-  it("allows a body-only edit of a legacy note with an unregistered key and a missing required key", () => {
-    const verdict = judgeContent({ path: "a.md", content: "---\nlegacy: kept\nowner: me\n---\nnew body\n", previousContent: legacy }, view);
-    expect(verdict).toEqual({ ok: true, refusals: [], warnings: [], fixes: [], missingDefaults: [], violations: [] });
+  function ready(path: string, previousContent: string | undefined | null): Extract<WriteTarget, { state: "ready" }> {
+    return { state: "ready", vaultRoot: "/vault", path, absolutePath: `/vault/${path}`, previousContent, view };
+  }
+
+  it("gives the same verdict for the same note whatever was on disk before", () => {
+    for (const path of ["Projects/a.md", "Inbox/a.md"]) {
+      for (const content of notes) {
+        const expected = judgeContent({ path, content }, view);
+        for (const prior of priors.filter(entry => entry !== null)) {
+          expect(judgeReadyTarget(ready(path, prior), content)).toEqual(expected);
+          expect(decideWrite(ready(path, prior), content).verdict).toEqual(expected);
+        }
+      }
+    }
   });
 
-  it("warns on an edit that adds an unknown key", () => {
-    const verdict = judgeContent({ path: "a.md", content: "---\nlegacy: kept\nowner: me\nextra: 1\n---\nold body\n", previousContent: legacy }, view);
-    expect(verdict.warnings).toEqual([{ field: "extra", kind: "unknown-property" }]);
+  it("depends only on the contract, the path and the frontmatter, never the body", () => {
+    for (const content of notes) {
+      const [head, ...rest] = content.split("\n---\n");
+      if (rest.length === 0) continue;
+      expect(judgeContent({ path: "Projects/a.md", content: `${head}\n---\nanother body\n` }, view))
+        .toEqual(judgeContent({ path: "Projects/a.md", content }, view));
+    }
   });
 
-  it("warns on an edit that removes or empties a required key", () => {
-    const previous = "---\nstatus: open\n---\nbody\n";
-    expect(judgeContent({ path: "a.md", content: "---\nowner: me\n---\nbody\n", previousContent: previous }, view).warnings)
-      .toEqual([{ field: "status", kind: "missing" }]);
-    expect(judgeContent({ path: "a.md", content: "---\nstatus: \"\"\n---\nbody\n", previousContent: previous }, view).warnings)
-      .toEqual([{ field: "status", kind: "missing" }]);
+  it("records only the warnings the note did not already have", () => {
+    const legacy = "---\nlegacy: kept\nowner: me\n---\nold body\n";
+    const bodyOnly = decideWrite(ready("Projects/a.md", legacy), "---\nlegacy: kept\nowner: me\n---\nnew body\n", { repair: false });
+    expect(bodyOnly.verdict.warnings).toEqual([{ field: "legacy", kind: "unknown-property" }, { field: "status", kind: "missing" }]);
+    expect(bodyOnly).toMatchObject({ outcome: "allow", findings: [] });
+    const added = decideWrite(ready("Projects/a.md", legacy), "---\nlegacy: kept\nowner: me\nextra: 1\n---\nold body\n", { repair: false });
+    expect(added).toMatchObject({ outcome: "allow", findings: [{ axis: "property", kind: "no-fit", wanted: { field: "extra", value: 1 } }] });
+    const fresh = decideWrite(ready("Projects/a.md", undefined), "---\nlegacy: kept\n---\nbody\n", { repair: false });
+    expect(fresh.outcome === "allow" ? fresh.findings.map(finding => finding.wanted.field) : null).toEqual(["legacy", "status"]);
+  });
+});
+
+describe("a template key", () => {
+  it("is judged like an ordinary key", () => {
+    const closed = sealed({ properties: { status: property() } });
+    const registered = sealed({ properties: { template: property({ rules: [{ kind: "allowed", values: ["Meeting"] }] }) } });
+    const judged = (frontmatter: Record<string, unknown>, view: ContractView) => judge({ path: "a.md", frontmatter, body: "" }, view).warnings;
+    expect(judged({ template: "Meeting" }, closed)).toEqual([{ field: "template", kind: "unknown-property" }]);
+    expect(judged({ template: "Meeting" }, closed)).toEqual(judged({ kind: "Meeting" }, closed).map(warning => ({ ...warning, field: "template" })));
+    expect(judged({ template: "Meeting" }, registered)).toEqual([]);
+    expect(judged({ template: "Other" }, registered)).toEqual([{ field: "template", kind: "not-allowed" }]);
+    expect(judged({ template: "Nonexistent" }, sealed({}))).toEqual([]);
   });
 
-  it("warns on changing a value to an invalid one but keeps an unchanged legacy value", () => {
-    const previous = "---\nstatus: stale\n---\nbody\n";
-    expect(judgeContent({ path: "a.md", content: "---\nstatus: stale\n---\nedited\n", previousContent: previous }, view).warnings).toEqual([]);
-    expect(judgeContent({ path: "a.md", content: "---\nstatus: wrong\n---\nbody\n", previousContent: "---\nstatus: open\n---\nbody\n" }, view).warnings)
-      .toEqual([{ field: "status", kind: "not-allowed" }]);
-  });
-
-  it("still judges a new note in full", () => {
-    const verdict = judgeContent({ path: "a.md", content: "---\nlegacy: kept\n---\nbody\n" }, view);
-    expect(verdict.warnings).toEqual([{ field: "legacy", kind: "unknown-property" }, { field: "status", kind: "missing" }]);
+  it("never selects a sealed template's requirements", () => {
+    const view = sealed({
+      properties: { template: property(), owner: property() },
+      templates: {
+        Meeting: { source: "Templates/Meeting.md", sourceHash: `sha256:${"0".repeat(64)}`, applyFolder: "Meetings", requiredProperties: ["owner"], narrowedRules: {}, requiredHeadings: ["Agenda"] },
+      },
+    });
+    expect(judge({ path: "Notes/a.md", frontmatter: { template: "Meeting" }, body: "" }, view).warnings).toEqual([]);
   });
 });
 
