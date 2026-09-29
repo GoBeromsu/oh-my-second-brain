@@ -127,6 +127,28 @@ describe("pending interview log", () => {
     expect(await readInterviewLog(root, PENDING)).toEqual({ events: [], corrupt: [] });
   });
 
+  it("does not copy an event twice when a migration cut short before removing the pending log is retried", async () => {
+    await appendInterviewEvent(root, VAULT_ID, answered("old", "0"), () => 1);
+    await appendInterviewEvent(root, PENDING, answered("a", "1"), () => 2);
+    await appendInterviewEvent(root, PENDING, answered("b", "2"), () => 3);
+    // The first migration copied "a" and then stopped: the pending log is still there.
+    await appendInterviewEvent(root, VAULT_ID, answered("a", "1"), () => 2);
+    await migrateInterviewLog(root, PENDING, VAULT_ID);
+    const { events } = await readInterviewLog(root, VAULT_ID);
+    expect(events.map(event => event.questionId)).toEqual(["old", "a", "b"]);
+    expect(events.map(event => event.seq)).toEqual([1, 2, 3]);
+    expect(await readInterviewLog(root, PENDING)).toEqual({ events: [], corrupt: [] });
+  });
+
+  it("copies every pending event when none of them ends the vault id log", async () => {
+    await appendInterviewEvent(root, VAULT_ID, answered("a", "1"), () => 2);
+    await appendInterviewEvent(root, VAULT_ID, answered("old", "0"), () => 5);
+    await appendInterviewEvent(root, PENDING, answered("a", "1"), () => 2);
+    await migrateInterviewLog(root, PENDING, VAULT_ID);
+    const { events } = await readInterviewLog(root, VAULT_ID);
+    expect(events.map(event => event.questionId)).toEqual(["a", "old", "a"]);
+  });
+
   it("does nothing when there is no pending log", async () => {
     await migrateInterviewLog(root, PENDING, VAULT_ID);
     expect(await readInterviewLog(root, VAULT_ID)).toEqual({ events: [], corrupt: [] });

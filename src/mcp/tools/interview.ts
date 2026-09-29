@@ -3,10 +3,11 @@ import { admitWriteTarget } from "../../kernel/capture/safe.js";
 import { parseInterpretations, type TemplateInterpretation } from "../../kernel/contract/interpretation.js";
 import { appendInterviewEvent, questionDigest } from "../../kernel/contract/interview-log.js";
 import { confirmedProposal, interviewLogKey, latestProposal, logRecorder, resumableIO, vaultLog } from "../../kernel/contract/interview-resume.js";
-import { proposalDigest, runInterview, SEAL_QUESTION, type InterviewRecord, type InterviewResult } from "../../kernel/contract/interview.js";
+import { proposalDigest, runInterview, SEAL_QUESTION, usableFolder, type InterviewRecord, type InterviewResult } from "../../kernel/contract/interview.js";
 import { parseAnswers, publicQuestion, type Answers } from "../../kernel/contract/scripted-interview.js";
 import { contractStatus } from "../../kernel/contract/status.js";
 import { currentSequence, readStore, storeRoot, type SealDeps } from "../../kernel/contract/store.js";
+import { writeVaultSettings } from "../../kernel/contract/vault-id.js";
 import { readVaultSettings } from "../../kernel/vault/settings.js";
 import { errorText, isRecord, jsonText, type ToolContext } from "./shared.js";
 
@@ -259,17 +260,36 @@ async function seal(vault: string, root: string, now: () => number, args: Record
  * The confirmed proposal is already the sealed contract, sealed after the proposal was
  * made: an earlier `seal` finished but its log entry was lost. The missing `sealed` event
  * is recorded (a failure is a warning) and no new generation is sealed. Null otherwise.
+ * The seal writes the chosen template folder to the settings after the generation, so a
+ * run cut short between the two is completed here from the proposal. Declined templates
+ * need nothing: they are part of the sealed generation itself.
  */
 async function alreadySealed(vault: string, root: string, events: Parameters<typeof latestProposal>[0], confirmed: string, log: (event: InterviewRecord) => Promise<void>): Promise<InterviewResult | null> {
   const payload = latestProposal(events)?.payload ?? {};
   const removed = payload["removedTemplates"];
   if (!Array.isArray(removed) || !removed.every(name => typeof name === "string")) return null;
-  const vaultId = (await readVaultSettings(vault))?.vaultId ?? null;
-  if (vaultId === null) return null;
+  // Without settings there is no vault id, so nothing shows the vault was sealed.
+  const settings = await readVaultSettings(vault);
+  if (settings === null) return null;
+  const { vaultId } = settings;
   if (await currentSequence(vaultId, root) === payload["baseSeq"]) return null;
   const store = await readStore(vaultId, root);
   if (store.state !== "ok" || proposalDigest(store.contract, removed) !== confirmed) return null;
   const warnings: string[] = [];
+  const logged = payload["templateFolder"];
+  if (typeof logged === "string" && settings.templateFolder === undefined) {
+    // The log is outside the vault but not trusted: the folder is checked as the interview checks an answer.
+    const templateFolder = await usableFolder(vault, logged);
+    if (templateFolder === null) {
+      warnings.push("INTERVIEW_TEMPLATE_FOLDER_UNRECORDED: the logged template folder is not an existing, visible folder inside the vault, so it was not saved");
+    } else {
+      try {
+        await writeVaultSettings(vault, { ...settings, templateFolder });
+      } catch (error: unknown) {
+        warnings.push(`INTERVIEW_TEMPLATE_FOLDER_UNRECORDED: the template folder was not saved (${message(error)})`);
+      }
+    }
+  }
   try {
     await log({ type: "sealed", vaultId });
   } catch (error: unknown) {

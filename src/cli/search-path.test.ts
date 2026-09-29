@@ -222,6 +222,14 @@ describe("oms search --link", () => {
     expect(deps.runEngineSession).toHaveBeenCalledTimes(0);
   });
 
+  it("refuses a -- terminator with --context rather than passing it to the context flags", async () => {
+    const deps = spiedDeps();
+    await runSearchCommand(["--context", "--folder", "지식", "--", "--query", "x", "--vault", vault], deps);
+    expect(process.exitCode).toBe(1);
+    expect(errors).toEqual([expect.stringMatching(/^SEARCH_ARGS_INVALID: --context does not accept a -- terminator/)]);
+    expect(deps.runEngineSession).toHaveBeenCalledTimes(0);
+  });
+
   it("keeps a later --link as a query filter rather than link suggestion", async () => {
     const deps = spiedDeps();
     const runEngineSession = vi.fn<SearchCommandDeps["runEngineSession"]>(

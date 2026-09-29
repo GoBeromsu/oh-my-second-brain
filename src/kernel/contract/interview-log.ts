@@ -15,8 +15,16 @@ import { checkStateFile, ensureStateDir, existingStateDir, openStateFile, stateD
  *
  * `seq` is one more than the highest sequence already in the file. Appends are
  * serialized within a process only; there is no cross-process lock, so two processes
- * appending at once may write the same `seq`. Readers therefore rely on line order, and
- * `seq` only orders events within one writer's run.
+ * appending at once may write the same `seq`. Readers take events in line order, but
+ * `confirmedProposal` also compares `seq` to find a confirmation after a proposal, so
+ * `seq` is only trusted within one writer's run.
+ *
+ * Known limits, accepted for an interview-sized log rather than designed away:
+ * - every append reads and parses the whole file to find the next `seq`, so writing n
+ *   events costs O(n^2);
+ * - a log larger than MAX_LOG_BYTES (16 MiB) is refused with INTERVIEW_LOG_TOO_LARGE on
+ *   read and append alike; nothing trims or rotates it;
+ * - there is no cross-process lock, for appends or for `migrateInterviewLog`.
  */
 
 export const INTERVIEW_EVENT_TYPES = ["asked", "answered", "proposed", "sealed", "abandoned"] as const;
@@ -168,12 +176,37 @@ export async function appendInterviewEvent(root: string, vaultId: string, input:
   });
 }
 
+/** An event as migration copies it: everything but `seq`, which the target renumbers. */
+function copyKey(event: InterviewEvent): string {
+  return JSON.stringify([event.at, event.type, event.questionId, event.questionDigest, event.payload]);
+}
+
+/**
+ * How many leading `source` events already end `target`: a migration cut short after copying them.
+ * Only a copy at the very end of `target` is recognised. That is enough: a cut-short move
+ * leaves the pending log in place, and every later append under the vault id first runs the
+ * move again (`interviewLogKey` migrates before it returns the key), so nothing is appended
+ * after a partial copy before the copy is finished.
+ */
+export function copiedPrefix(target: readonly InterviewEvent[], source: readonly InterviewEvent[]): number {
+  const targetKeys = target.map(copyKey);
+  const sourceKeys = source.map(copyKey);
+  for (let count = Math.min(targetKeys.length, sourceKeys.length); count > 0; count -= 1) {
+    const tail = targetKeys.slice(targetKeys.length - count);
+    if (tail.every((key, index) => key === sourceKeys[index])) return count;
+  }
+  return 0;
+}
+
 /**
  * Moves the log kept under `from` (a pending key) to `to` (the vault id issued at seal).
  * When `to` has no log yet the file is renamed as it is, corrupt lines included;
- * otherwise the parsed events of `from` are appended to it with their original times and
- * the old file is removed. The emptied pending directories are removed when possible.
+ * otherwise the parsed events of `from` are appended after its events with their original
+ * times and the old file is removed. The emptied pending directories are removed when possible.
  * Nothing happens when `from` has no log.
+ *
+ * A retry after a crash between the appends and the removal does not copy an event twice:
+ * the leading events of `from` that already end the `to` log are skipped.
  */
 export async function migrateInterviewLog(root: string, from: string, to: string): Promise<void> {
   const sourceDir = await existingStateDir(root, from);
@@ -189,7 +222,8 @@ export async function migrateInterviewLog(root: string, from: string, to: string
     });
     if (renamed) return;
     const { events } = parseLog(await readText(source));
-    for (const event of events) {
+    const copied = copiedPrefix(parseLog(await readText(target)).events, events);
+    for (const event of events.slice(copied)) {
       const { type, questionId, questionDigest: digest, payload } = event;
       await appendInterviewEvent(root, to, { type, questionId, questionDigest: digest, payload }, () => event.at);
     }

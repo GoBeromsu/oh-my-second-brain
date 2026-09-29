@@ -1,6 +1,6 @@
 import { readVaultSettings } from "../vault/settings.js";
 import type { InterviewIO, InterviewRecord } from "./interview.js";
-import { appendInterviewEvent, migrateInterviewLog, pendingLogKey, questionDigest, readInterviewLog, type InterviewEvent } from "./interview-log.js";
+import { appendInterviewEvent, copiedPrefix, migrateInterviewLog, pendingLogKey, questionDigest, readInterviewLog, type InterviewEvent } from "./interview-log.js";
 import { replayIO, type Answers, type ReplayDrift, type ReplayedAnswer } from "./scripted-interview.js";
 
 /**
@@ -99,7 +99,12 @@ export function logRecorder(vault: string, root: string, now: () => number = Dat
           type: "proposed",
           questionId: null,
           questionDigest: null,
-          payload: { digest: event.digest, removedTemplates: [...event.removedTemplates], baseSeq: event.baseSeq },
+          payload: {
+            digest: event.digest,
+            removedTemplates: [...event.removedTemplates],
+            baseSeq: event.baseSeq,
+            ...(event.templateFolder === undefined ? {} : { templateFolder: event.templateFolder }),
+          },
         }, now);
         return;
       case "sealed":
@@ -110,8 +115,11 @@ export function logRecorder(vault: string, root: string, now: () => number = Dat
 }
 
 /**
- * The logged events for a vault: its pending log (from before the first seal) followed by
- * the log under its vault id, if it has one. Nothing is created or moved.
+ * The logged events for a vault: the log under its vault id, if it has one, followed by a
+ * pending log not yet moved under the id. That is the order and numbering
+ * `migrateInterviewLog` gives them once the move happens, including after a move cut short
+ * part way: pending events already copied under the id are not listed twice. Nothing is
+ * created or moved.
  */
 export async function vaultLog(vault: string, root: string): Promise<{ readonly vaultId: string | null; readonly events: readonly InterviewEvent[]; readonly corrupt: readonly number[] }> {
   let vaultId: string | null;
@@ -125,12 +133,15 @@ export async function vaultLog(vault: string, root: string): Promise<{ readonly 
   if (vaultId === null) return { vaultId, ...pending };
   const own = await readInterviewLog(root, vaultId);
   if (pending.events.length === 0 && pending.corrupt.length === 0) return { vaultId, ...own };
-  // A pending log not yet moved under the id is older than it; its sequence comes first.
-  const offset = pending.events.reduce((max, event) => Math.max(max, event.seq), 0);
+  // The seal moves the pending log under the id, so a pending log still beside it was
+  // written by a writer that did not see the id yet: it goes after, as the move appends it,
+  // each event numbered one more than the highest before it.
+  const offset = own.events.reduce((max, event) => Math.max(max, event.seq), 0);
+  const moved = pending.events.slice(copiedPrefix(own.events, pending.events));
   return {
     vaultId,
-    events: [...pending.events, ...own.events.map(event => ({ ...event, seq: event.seq + offset }))],
-    corrupt: [...pending.corrupt, ...own.corrupt],
+    events: [...own.events, ...moved.map((event, index) => ({ ...event, seq: offset + index + 1 }))],
+    corrupt: [...own.corrupt, ...pending.corrupt],
   };
 }
 
