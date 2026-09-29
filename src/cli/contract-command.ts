@@ -177,6 +177,7 @@ function printResult(result: InterviewResult, notes: readonly string[] = []): vo
       properties: result.properties,
       templates: result.templates,
       ...(result.removedTemplates === undefined || result.removedTemplates.length === 0 ? {} : { removedTemplates: result.removedTemplates }),
+      ...(result.warnings === undefined || result.warnings.length === 0 ? {} : { warnings: result.warnings }),
     });
   } else if (result.state === "refused") {
     print({ status: "refused", reasons: result.reasons });

@@ -70,12 +70,11 @@ describe("① and ② with an accepting verdict", () => {
     expect(resolveTiers(accepted)).toEqual({ action: "save", content: accepted.content, verdict: accepted.verdict, findings: [] });
   });
 
-  it("records a template choice when several templates apply and none was selected", () => {
+  // slice f2: move to templateFolder — the choice returns once templates are read from there.
+  it("records no template choice from an older generation's templates", () => {
     const note = input("Meetings/a.md", "---\ntitle: A\nstatus: open\n---\n");
-    expect(resolveTiers(note)).toEqual({
-      action: "save", content: note.content, verdict: note.verdict,
-      findings: [{ axis: "template", kind: "choice", chosen: "Review", wanted: { field: "template", value: ["Review", "Standup"] }, reason: "2 templates apply to the folder and none was selected" }],
-    });
+    expect(templateChoices(CONTRACT, note.path, undefined, { title: "A", status: "open" })).toHaveLength(1);
+    expect(resolveTiers(note)).toEqual({ action: "save", content: note.content, verdict: note.verdict, findings: [] });
   });
 
   it("recommends nothing when no candidate fits and records no choice once one is selected or only one applies", () => {

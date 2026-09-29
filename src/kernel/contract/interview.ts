@@ -75,7 +75,15 @@ export type InterviewRecord =
    * the folder chosen in this run, which the seal records in the settings; absent when the
    * settings already name one or none was chosen.
    */
-  | { readonly type: "proposed"; readonly digest: string; readonly removedTemplates: readonly string[]; readonly baseSeq: SequenceObservation; readonly templateFolder?: string }
+  | {
+    readonly type: "proposed";
+    readonly digest: string;
+    readonly removedTemplates: readonly string[];
+    readonly baseSeq: SequenceObservation;
+    readonly templateFolder?: string;
+    /** How many templates of an older generation this seal does not carry into version 3. */
+    readonly droppedLegacyTemplates?: number;
+  }
   | { readonly type: "sealed"; readonly vaultId: string };
 
 /**
@@ -95,7 +103,10 @@ export type InterviewResult =
     readonly templates: readonly string[];
     /** Sealed templates whose source file was gone and that the user removed. */
     readonly removedTemplates?: readonly string[];
-    /** The contract is sealed, but something after the seal (such as logging it) failed. */
+    /**
+     * The contract is sealed, but with something the caller should know: template input this
+     * seal did not store, or a failure after the seal (such as logging it).
+     */
     readonly warnings?: readonly string[];
   }
   | { readonly state: "refused"; readonly reasons: readonly string[] }
@@ -487,31 +498,13 @@ function unsafePattern(rule: Rule): boolean {
  * value, so the owner answers that property's rule again and its other rules are kept.
  * Prompts name the field only, never the sealed pattern.
  */
-async function askUnsafePatterns(asker: Asker, properties: Record<string, PropertyContract> | null, templates: Record<string, LegacyTemplateContract>): Promise<void> {
-  const notice = (field: string): void => asker.say(`The sealed pattern rule for \`${field}\` is no longer accepted; answer its rule again (its other rules are kept).`);
+async function askUnsafePatterns(asker: Asker, properties: Record<string, PropertyContract> | null): Promise<void> {
+  // slice f2: move to templateFolder — a template's narrowed rules are not stored, so none is asked again.
   for (const [name, property] of Object.entries(properties ?? {}).sort(([left], [right]) => compareCodePoints(left, right))) {
     if (!property.rules.some(unsafePattern)) continue;
-    notice(name);
+    asker.say(`The sealed pattern rule for \`${name}\` is no longer accepted; answer its rule again (its other rules are kept).`);
     const rules = [...property.rules.filter(rule => !unsafePattern(rule)), ...await askRules(asker, `property:${name}:repair`, name, property.type)];
     properties![name] = { ...property, rules };
-  }
-  for (const [templateName, template] of Object.entries(templates).sort(([left], [right]) => compareCodePoints(left, right))) {
-    const narrowedRules: Record<string, Rule[]> = Object.create(null) as Record<string, Rule[]>;
-    let repaired = false;
-    for (const [name, rules] of Object.entries(template.narrowedRules)) {
-      if (!rules.some(unsafePattern)) {
-        narrowedRules[name] = [...rules];
-        continue;
-      }
-      notice(`${templateName}.${name}`);
-      // `properties` holds every sealed entry, so a registered field gets its sealed type. An
-      // unregistered one has no sealed type and the judge checks it without one; "text" keeps
-      // the answer as the literal string the owner typed, never coerced to a guessed type.
-      const type = properties !== null && Object.hasOwn(properties, name) ? properties[name]!.type : "text";
-      narrowedRules[name] = [...rules.filter(rule => !unsafePattern(rule)), ...await askRules(asker, `template:${templateName}:repair:${name}`, name, type)];
-      repaired = true;
-    }
-    if (repaired) templates[templateName] = { ...template, narrowedRules };
   }
 }
 
@@ -690,10 +683,14 @@ export async function runInterview(input: {
     const folders = merge(previous?.folders ?? null, askedFolders);
     const properties = merge(previous?.properties ?? null, askedProperties);
     const templates: Record<string, LegacyTemplateContract> = { ...previous?.templates };
+    let answeredTemplates = 0;
     for (const template of askTemplateList) {
       const answered = await askTemplate(asker, template);
       if (answered === null) delete templates[template.name];
-      else templates[template.name] = answered;
+      else {
+        templates[template.name] = answered;
+        answeredTemplates += 1;
+      }
     }
     const removedTemplates: string[] = [];
     for (const name of goneTemplates) {
@@ -701,24 +698,34 @@ export async function runInterview(input: {
       delete templates[name];
       removedTemplates.push(name);
     }
-    await askUnsafePatterns(asker, properties, templates);
+    await askUnsafePatterns(asker, properties);
     if (asker.unanswered.length > 0) return { state: "incomplete", questions: [...asker.unanswered, SEAL_QUESTION] };
     const contract: TemplatedContract = { folders, properties, templates };
-    const reasons = sealGuard(contract);
+    // slice f2: move to templateFolder — a version 3 seal stores no templates, so neither the
+    // guard nor the loosening check reads them: a template-only issue cannot block this seal.
+    const stored: TemplatedContract = { folders, properties, templates: {} };
+    const reasons = sealGuard(stored);
     if (reasons.length > 0) return { state: "refused", reasons };
     if (input.nonLoosening === true && previous !== null) {
-      const changes = looseningChanges(previous, contract);
+      const changes = looseningChanges({ ...previous, templates: {} }, stored);
       if (changes.length > 0) return { state: "loosening", changes };
     }
+    const legacyTemplates = Object.keys(sealed?.templates ?? {}).length;
+    const notices = [
+      ...(legacyTemplates === 0 ? [] : [`CONTRACT_LEGACY_TEMPLATES_DROPPED: ${legacyTemplates} legacy templates will not be carried into the v3 contract (slice f2 moves templates to templateFolder)`]),
+      ...(answeredTemplates === 0 ? [] : ["CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder"]),
+    ];
 
     preview(io, contract);
     if (removedTemplates.length > 0) io.say(`  removed templates: ${removedTemplates.join(", ")}`);
+    for (const notice of notices) io.say(notice);
     await io.record?.({
       type: "proposed",
       digest: proposalDigest(contract, removedTemplates),
       removedTemplates,
       baseSeq,
       ...(chosenFolder === null ? {} : { templateFolder: chosenFolder }),
+      ...(legacyTemplates === 0 ? {} : { droppedLegacyTemplates: legacyTemplates }),
     });
     const seal = await asker.confirm(SEAL_QUESTION.id, SEAL_QUESTION.prompt);
     if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
@@ -763,7 +770,7 @@ export async function runInterview(input: {
     }
     await recordTemplateFolder();
     // The contract is sealed by now: a failure to log that is a warning, not a failed seal.
-    const warnings: string[] = [];
+    const warnings: string[] = [...notices];
     try {
       await io.record?.({ type: "sealed", vaultId });
     } catch (error: unknown) {
@@ -774,7 +781,8 @@ export async function runInterview(input: {
       vaultIdCreated: settings === null,
       folders: Object.keys(folders ?? {}).length,
       properties: Object.keys(properties ?? {}).length,
-      templates: Object.keys(templates),
+      // slice f2: move to templateFolder — no template is sealed until then.
+      templates: [],
       ...(removedTemplates.length === 0 ? {} : { removedTemplates }),
       ...(warnings.length === 0 ? {} : { warnings }),
     };

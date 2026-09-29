@@ -211,3 +211,27 @@ describe("decideWrite", () => {
     expect(decision.findings).toEqual([]);
   });
 });
+
+describe("decideWrite on a legacy view", () => {
+  it("decides exactly as on the same axes without templates, choices and contradictions included", () => {
+    const axes = { folders: { Notes: { meaning: "notes", searchExclude: false } }, properties: { size: property({ type: "number" }) } };
+    const legacyTemplate = (source: string, narrowedRules = {}) => ({
+      source, sourceHash: `sha256:${"a".repeat(64)}` as const, applyFolder: "Notes", requiredProperties: [], narrowedRules, requiredHeadings: [],
+    });
+    const legacy: ContractView = {
+      state: "sealed",
+      contract: axes,
+      // Two templates on one folder would offer a choice; A's empty allowed list would contradict `size`.
+      legacy: { templates: { A: legacyTemplate("Templates/A.md", { size: [{ kind: "allowed", values: [] }] }), B: legacyTemplate("Templates/B.md") } },
+    };
+    const v3: ContractView = { state: "sealed", contract: axes };
+    const at = (view: ContractView): ReadyTarget => ({ ...ready(view), path: "Notes/a.md", absolutePath: "/vault/Notes/a.md" });
+    const content = "---\nsize: \"12\"\n---\nbody\n";
+
+    const decision = decideWrite(at(legacy), content);
+    expect(decision).toEqual(decideWrite(at(v3), content));
+    expect(decision).toMatchObject({ outcome: "allow", fixedContent: "---\nsize: 12\n---\nbody\n" });
+    expect(decision.findings).toMatchObject([{ axis: "value", kind: "fixed", reason: expect.stringContaining("type") }]);
+    expect(decision.findings.some(finding => finding.axis === "template" || finding.reason?.startsWith("contradiction"))).toBe(false);
+  });
+});

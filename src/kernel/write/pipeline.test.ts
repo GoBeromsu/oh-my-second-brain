@@ -370,7 +370,8 @@ describe("runWritePipeline", () => {
     expect(drafted).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", gaps: [{ axis: "value", kind: "no-fit", field: "content" }], wouldDraft: true } } });
   });
 
-  it("records an open template choice and saves the note as written", async () => {
+  // slice f2: move to templateFolder — the choice returns once templates are read from there.
+  it("records no template choice from an older generation's templates and saves the note as written", async () => {
     const template = CONTRACT.templates["project"]!;
     const fixture = await sealedVault({
       ...CONTRACT,
@@ -380,9 +381,9 @@ describe("runWritePipeline", () => {
       },
     });
     const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: active\n---\nBody\n"), { now: () => NOW, updateIndex: async () => "skipped" });
-    expect(outcome).toMatchObject({ kind: "written", receipt: { gaps: [{ axis: "template", kind: "choice", field: "template" }] } });
-    const [gap] = openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events);
-    expect(gap).toMatchObject({ chosen: "project", reason: "2 templates apply to the folder and none was selected" });
+    expect(outcome).toMatchObject({ kind: "written" });
+    expect(outcome.kind === "written" && outcome.receipt).not.toHaveProperty("gaps");
+    expect(openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events)).toEqual([]);
   });
 
   it("saves a write the contract contradicts on the field as written and records the contradiction", async () => {

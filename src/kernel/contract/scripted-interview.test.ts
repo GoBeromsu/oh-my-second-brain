@@ -13,6 +13,9 @@ import { bootstrapSnapshots, readStore } from "./store.js";
 import type { Rule } from "./types.js";
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
+// slice f2: move to templateFolder — until then a seal reports template input it did not store.
+const NOT_STORED = "CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder";
+const DROPPED_ONE = "CONTRACT_LEGACY_TEMPLATES_DROPPED: 1 legacy templates will not be carried into the v3 contract (slice f2 moves templates to templateFolder)";
 
 let base: string;
 let vault: string;
@@ -148,7 +151,8 @@ describe("scripted interview answers", () => {
     await expect(readdir(root)).rejects.toThrow();
 
     const second = await run({ ...ANSWERS, seal: true });
-    expect(second.result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: ["Meeting"] });
+    expect(second.result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [NOT_STORED] });
+    expect(second.notes).toContain(NOT_STORED);
     // The answered template is reported, not stored: a version 3 seal carries no templates.
     expect(Object.keys(await sealedContract()).sort()).toEqual(["folders", "properties"]);
   });
@@ -170,9 +174,27 @@ describe("scripted interview answers", () => {
   });
 
   it("refuses a hidden value in a public meaning like the terminal interview", async () => {
-    const { result } = await run({ ...ANSWERS, "property:status:meaning": "open or done", seal: true });
+    const { result } = await run({ ...ANSWERS, "property:status:rule": "one-of-allowed", "property:status:allowed": "open, done", "property:status:meaning": "open or done", seal: true });
     expect(result.state).toBe("refused");
     await expect(readdir(root)).rejects.toThrow();
+  });
+
+  // slice f2: move to templateFolder — a template answer is not stored, so it is not checked.
+  it("neither refuses nor asks about a template-only issue, and reports the answers as not stored", async () => {
+    await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\nowner: me\n---\n## Agenda\n");
+    const { result, notes } = await run({
+      ...ANSWERS,
+      // `owner` stays unregistered; the old guard refused a template requiring it.
+      "property:owner:register": false,
+      "template:Meeting:field:owner:required": true,
+      "template:Meeting:field:owner:literal": "example-only",
+      // A template value in a public meaning: the old guard refused it as hidden.
+      "property:status:meaning": "open or done",
+      seal: true,
+    });
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [NOT_STORED] });
+    expect(notes).toContain(NOT_STORED);
+    expect(Object.keys(await sealedContract()).sort()).toEqual(["folders", "properties"]);
   });
 });
 
@@ -259,10 +281,22 @@ describe("non-loosening reseal", () => {
     expect(result.state).toBe("sealed");
   });
 
-  it("refuses removing a template whose source is gone", async () => {
+  // slice f2: move to templateFolder — a version 3 seal carries no template, so dropping one warns.
+  it("warns, and does not refuse, that the legacy templates are not carried into the v3 contract", async () => {
+    const records: unknown[] = [];
+    const { io, notes } = scriptedIO({ seal: true });
+    const result = await runInterview({ vault, io: { ...io, record: async event => { records.push(event); } }, root, nonLoosening: true, interpretations: await interpretVault(vault) });
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [DROPPED_ONE] });
+    expect(notes).toContain(DROPPED_ONE);
+    expect(records).toContainEqual(expect.objectContaining({ type: "proposed", droppedLegacyTemplates: 1 }));
+    const store = await readStore(VAULT_ID, root);
+    expect(store.state === "ok" && store.legacy).toBeUndefined();
+  });
+
+  it("seals removing a template whose source is gone, with the same warning", async () => {
     await rm(join(vault, "Templates/Meeting.md"));
     const { result } = await run({ "template:Meeting:remove": true, seal: true });
-    expect(result).toEqual({ state: "loosening", changes: [{ field: "templates.Meeting", kind: "removed" }] });
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], removedTemplates: ["Meeting"], warnings: [DROPPED_ONE] });
   });
 
   it("refuses a seal that needs recovery", async () => {
@@ -301,14 +335,14 @@ describe("a sealed pattern that today's seal screen refuses", () => {
     };
     const incomplete = await owner({});
     if (incomplete.result.state !== "incomplete") throw new Error(incomplete.result.state);
-    expect(incomplete.result.questions.map(question => question.id)).toEqual(["property:status:repair:rule", "template:Meeting:repair:status:rule", "seal"]);
+    // slice f2: move to templateFolder — the legacy template's refused rule is not stored, so not asked.
+    expect(incomplete.result.questions.map(question => question.id)).toEqual(["property:status:repair:rule", "seal"]);
     expect(incomplete.notes.join("\n")).toContain("The sealed pattern rule for `status` is no longer accepted");
     expect(incomplete.notes.join("\n")).not.toMatch(/xxxx|\(a\+\)\+/);
 
     const sealed = await owner({
       "property:status:repair:rule": "pattern",
       "property:status:repair:pattern": "[a-z]+",
-      "template:Meeting:repair:status:rule": "none",
       seal: true,
     });
     expect(sealed.result.state).toBe("sealed");

@@ -3,7 +3,7 @@ import { parseNote } from "../conventions/frontmatter.js";
 import { contractContradictions } from "../contract/contradiction.js";
 import type { GapAxis, GapKind, GapWant } from "../contract/gap-ledger.js";
 import { insideApplyFolder } from "../contract/judge.js";
-import { templatedContract, type TemplatedContract } from "../contract/legacy.js";
+import type { TemplatedContract } from "../contract/legacy.js";
 import type { ContractView, JsonScalar, Verdict, Violation, ViolationKind } from "../contract/types.js";
 import { coerceFrontmatter, writtenValues } from "./coerce.js";
 
@@ -162,8 +162,8 @@ export function resolveTiers(input: AmbiguityInput): Resolution {
   const parsed = parseNote(input.content);
   // A finding records the value as written: `01234` stays `01234`, not the number it parses to.
   const frontmatter = writtenValues(input.content);
-  // slice f2: move to templateFolder
-  const choices = parsed.diagnostics.length > 0 ? [] : templateChoices(templatedContract(view), input.path, input.template, parsed.frontmatter);
+  // slice f2: move to templateFolder — until then no template offers a choice.
+  const choices = parsed.diagnostics.length > 0 ? [] : templateChoices({ ...contract, templates: {} }, input.path, input.template, parsed.frontmatter);
   const gaps = newWarnings(verdict, input.baseline);
   if (gaps.length === 0) return { action: "save", content: input.content, verdict, findings: choices };
 

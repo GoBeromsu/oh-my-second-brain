@@ -13,6 +13,9 @@ import { bootstrapSnapshots, readDeclined, readStore } from "./store.js";
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const SECRET = "SECRET-42";
+// slice f2: move to templateFolder — until then a seal reports template input it did not store.
+const NOT_STORED = "CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder";
+const DROPPED_ONE = "CONTRACT_LEGACY_TEMPLATES_DROPPED: 1 legacy templates will not be carried into the v3 contract (slice f2 moves templates to templateFolder)";
 
 let base: string;
 let vault: string;
@@ -120,7 +123,8 @@ describe("runInterview", () => {
   it("seals the answered contract", async () => {
     const io = scripted(BASE_ANSWERS);
     const result = await interview({ vault, io, root });
-    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: ["Meeting"] });
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [NOT_STORED] });
+    expect(io.said).toContain(NOT_STORED);
     expect(io.asked).not.toContain("folder:.obsidian:register");
     expect(io.asked).not.toContain("property:status:default");
 
@@ -221,7 +225,7 @@ describe("template folder discovery", () => {
   it("seals the templates of the folder named by .obsidian/templates.json once confirmed, and remembers it", async () => {
     await writeFile(join(vault, ".obsidian/templates.json"), JSON.stringify({ folder: "Templates" }));
     const io = scripted({ ...BASE_ANSWERS, "template-folder:confirm": "" });
-    expect(await interview({ vault, io, root })).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: ["Meeting"] });
+    expect(await interview({ vault, io, root })).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [NOT_STORED] });
     expect(io.asked).not.toContain("template-folder:path");
     expect((await readVaultSettings(vault))?.templateFolder).toBe("Templates");
     const store = await readStore(VAULT_ID, root);
@@ -237,8 +241,8 @@ describe("template folder discovery", () => {
       },
     };
     const result = await interview({ vault, io, root });
-    expect(result).toMatchObject({ state: "sealed", templates: ["Meeting"] });
-    expect(result.state === "sealed" && result.warnings).toEqual(["INTERVIEW_LOG_UNRECORDED: the seal was not logged (disk full)"]);
+    expect(result).toMatchObject({ state: "sealed", templates: [] });
+    expect(result.state === "sealed" && result.warnings).toEqual([NOT_STORED, "INTERVIEW_LOG_UNRECORDED: the seal was not logged (disk full)"]);
     expect((await readVaultSettings(vault))?.templateFolder).toBe("Templates");
     expect((await readStore(VAULT_ID, root)).state).toBe("ok");
   });
@@ -314,7 +318,7 @@ describe("diff-only rerun (R24)", () => {
       "property:mood:meaning": "how the day felt",
     });
     const result = await interview({ vault, io, root });
-    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 2, properties: 2, templates: ["Meeting"] });
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 2, properties: 2, templates: [], warnings: [NOT_STORED] });
 
     const asked = new Set(io.asked.map(id => id.split(":").slice(0, 2).join(":")));
     expect([...asked].sort()).toEqual(["folder:Journal", "property:mood", "seal", "template:Meeting"].sort());
@@ -349,7 +353,7 @@ describe("diff-only rerun (R24)", () => {
   it("asks nothing about a template a legacy head sealed from an unchanged source", async () => {
     await sealLegacyHead();
     const io = scripted({ seal: "y" });
-    expect(await interview({ vault, io, root })).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: ["Meeting"] });
+    expect(await interview({ vault, io, root })).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [DROPPED_ONE] });
     expect(io.asked).toEqual(["seal"]);
     expect(io.said).toContain("Nothing new since the last seal; existing answers are kept.");
     const store = await readStore(VAULT_ID, root);
@@ -415,7 +419,7 @@ describe("diff-only rerun (R24)", () => {
     await sealLegacyHead();
     await rm(join(vault, "Templates/Meeting.md"));
     const kept = scripted({ "template:Meeting:remove": "n", seal: "y" });
-    expect(await interview({ vault, io: kept, root })).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: ["Meeting"] });
+    expect(await interview({ vault, io: kept, root })).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [DROPPED_ONE] });
   });
 
   it("asks to remove a legacy template whose source is gone and lists it", async () => {
@@ -423,7 +427,7 @@ describe("diff-only rerun (R24)", () => {
     await rm(join(vault, "Templates/Meeting.md"));
     const io = scripted({ "template:Meeting:remove": "", seal: "y" });
     expect(await interview({ vault, io, root })).toEqual({
-      state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], removedTemplates: ["Meeting"],
+      state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], removedTemplates: ["Meeting"], warnings: [DROPPED_ONE],
     });
     expect(io.said).toContain("  removed templates: Meeting");
     expect(Object.hasOwn(await sealed(), "templates")).toBe(false);
