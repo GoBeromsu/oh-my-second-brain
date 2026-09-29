@@ -528,7 +528,7 @@ describe("doctor lineage repairs", () => {
     const id = randomUUID();
     await mkdir(path.join(vault, ".oms"), { recursive: true });
     await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: id, templateFolder: "Templates" }));
-    const contract: VaultContract = { folders: { notes: { meaning: "Notes.", searchExclude: false } }, properties: {}, templates: {} };
+    const contract: VaultContract = { folders: { notes: { meaning: "Notes.", searchExclude: false } }, properties: {} };
     await expect(sealContract({ vaultRealPath: await realpath(vault), vaultId: id, contract, onSealed: async () => { throw new Error("disk full"); } }))
       .rejects.toMatchObject({ code: "CONTRACT_LINEAGE_APPEND_FAILED", seq: 1 });
     return { vault, id };

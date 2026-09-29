@@ -54,13 +54,13 @@ A plain `oms search <text>` is lexical-only. Search is independent of the contra
 | `oms interview` | `oms_interview` | absent | The CLI runs the interactive interview, continuing from the interview log (`--restart` starts over); it refuses without a TTY or under `OMS_NON_INTERACTIVE=1`. The MCP tool continues the same log over `op: questions`, `answer`, `confirm`, and `seal`; it seals only the proposal the owner confirmed and never reclaims a stale seal lock. |
 | `oms setup` | none | — | Interview the whole vault and seal its contract. Interactive terminal only. Writes only `.oms/settings.json` inside the vault. |
 | `oms setup extract --template <path>` | none | — | Show one template source and the `sourceHash` OMS computed for it. OMS never parses template text. |
-| `oms setup status` | none | — | Report the seal's posture and each sealed template as `active`, `drift`, or `missing` against the live file. |
+| `oms setup status` | none | — | Report the seal's posture and `legacyTemplates`, the number of templates an older (version 1 or 2) generation sealed, which are reported and never enforced. |
 | `oms setup host install|remove|sync|status` | none | — | Manage host-native assets and registrations. `remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. |
 | `oms setup package check|update` | none | — | Check or update the npm package without implicitly syncing hosts. |
 | `oms setup model install|select|waive|status` | none | — | Manage model acquisition, selection, waiver, and status. |
 | `oms setup bridge add|remove|status` | none | — | Manage repository-to-vault bridge configuration. There is no bridge repair command. |
 
-Sealing has no MCP operation. The sealed contract lives outside the vault under `~/.oms/vaults/<vault-id>/`. A drifted template is reported, never re-sealed silently; the user re-seals by running `oms setup` again.
+Sealing has no MCP operation. The sealed contract lives outside the vault under `~/.oms/vaults/<vault-id>/`. A new generation stores folders and properties only; the user re-seals by running `oms setup` again.
 
 ## Doctor
 

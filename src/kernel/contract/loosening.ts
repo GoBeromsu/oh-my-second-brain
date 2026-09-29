@@ -1,6 +1,7 @@
 import { normalizePath, singleValued } from "./judge.js";
 import { patternRefusal } from "./pattern.js";
-import type { FieldType, JsonScalar, PropertyContract, Rule, TemplateContract, VaultContract } from "./types.js";
+import type { TemplatedContract } from "./legacy.js";
+import type { FieldType, JsonScalar, LegacyTemplateContract, PropertyContract, Rule, VaultContract } from "./types.js";
 
 /**
  * Monotonic reseal check for a contract sealed without a terminal: the next contract
@@ -89,7 +90,7 @@ function propertyChanges(name: string, sealed: PropertyContract, next: PropertyC
  * exclusion is built from sealed sources, and a removed template or a moved source
  * exposes the old file.
  */
-function templateChanges(name: string, sealed: TemplateContract, next: TemplateContract | undefined): LooseningChange[] {
+function templateChanges(name: string, sealed: LegacyTemplateContract, next: LegacyTemplateContract | undefined): LooseningChange[] {
   const field = `templates.${name}`;
   if (next === undefined) return [{ field, kind: "removed" }];
   return normalizePath(next.source) === normalizePath(sealed.source) ? [] : [{ field: `${field}.source`, kind: "removed" }];
@@ -115,7 +116,7 @@ export function unsafePatternChanges(contract: VaultContract): LooseningChange[]
  * closed axis by registering a new entry: that is the "add" in add-or-tighten. A changed
  * property type counts as loosening even when it would be narrower.
  */
-export function looseningChanges(sealed: VaultContract, next: VaultContract): LooseningChange[] {
+export function looseningChanges(sealed: TemplatedContract, next: TemplatedContract): LooseningChange[] {
   const changes: LooseningChange[] = [];
   if (sealed.folders !== null) {
     if (next.folders === null) changes.push({ field: "folders", kind: "axis-opened" });
@@ -141,6 +142,6 @@ export function looseningChanges(sealed: VaultContract, next: VaultContract): Lo
   return changes;
 }
 
-export function isNonLoosening(sealed: VaultContract, next: VaultContract): boolean {
+export function isNonLoosening(sealed: TemplatedContract, next: TemplatedContract): boolean {
   return looseningChanges(sealed, next).length === 0;
 }

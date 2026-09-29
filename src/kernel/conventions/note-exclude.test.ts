@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import { chmod, link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { sealLegacyGeneration } from "../contract/legacy-store-fixture.js";
 import { sealContract, storeRoot } from "../contract/store.js";
-import type { FolderContract, TemplateContract } from "../contract/types.js";
+import type { FolderContract, LegacyTemplateContract } from "../contract/types.js";
 import { serializeVaultSettings } from "../vault/settings.js";
 import {
   DEFAULT_EXCLUDE_GLOBS,
@@ -38,7 +39,7 @@ async function makeVault(files: Record<string, string> = {}): Promise<string> {
 
 const SOURCE_HASH = `sha256:${"0".repeat(64)}`;
 
-function template(source: string): TemplateContract {
+function template(source: string): LegacyTemplateContract {
   return { source, sourceHash: SOURCE_HASH, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
 }
 
@@ -48,7 +49,7 @@ interface SealOptions {
   readonly sources?: readonly string[];
 }
 
-/** Seals a contract into the per-test temporary store and writes vault settings. */
+/** Seals a contract into the per-test temporary store and writes vault settings; template sources seal a legacy generation. */
 async function seal(vault: string, options: SealOptions = {}): Promise<string> {
   const vaultId = randomUUID();
   await mkdir(path.join(vault, ".oms"), { recursive: true });
@@ -58,7 +59,9 @@ async function seal(vault: string, options: SealOptions = {}): Promise<string> {
     ...(options.templateFolder === undefined ? {} : { templateFolder: options.templateFolder }),
   }));
   const templates = Object.fromEntries((options.sources ?? []).map((source, index) => [`t${index}`, template(source)]));
-  await sealContract({ vaultRealPath: vault, vaultId, contract: { folders: options.folders ?? null, properties: null, templates } });
+  const contract = { folders: options.folders ?? null, properties: null };
+  if (Object.keys(templates).length === 0) await sealContract({ vaultRealPath: vault, vaultId, contract });
+  else await sealLegacyGeneration({ vaultRealPath: vault, vaultId, contract, templates });
   return vaultId;
 }
 

@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { digestBytes } from "../conventions/canonical.js";
+import { sealLegacyGeneration } from "./legacy-store-fixture.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { currentSequence, diagnoseStore, readDeclined, readIndex, readStore, SEAL_LOCK_STALE_MS, sealContract, storeExists, storeHousekeeping, writeIndexEntry } from "./store.js";
-import type { VaultContract } from "./types.js";
+import type { LegacyTemplateContract, VaultContract } from "./types.js";
 
 const ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const OTHER = "9b1d2c3e-4f5a-4b6c-8d7e-0f1a2b3c4d5e";
@@ -15,9 +16,10 @@ const MANIFEST_DIGEST = expect.stringMatching(/^sha256:[0-9a-f]{64}$/);
 const CONTRACT: VaultContract = {
   folders: { Projects: { meaning: "projects", searchExclude: false } },
   properties: { rating: { meaning: "score", type: "number", default: false, required: true, rules: [{ kind: "range", min: 0.5, max: 4.5 }] } },
-  templates: {
-    Meeting: { source: "Templates/Meeting.md", sourceHash: `sha256:${"a".repeat(64)}`, applyFolder: "Meetings", requiredProperties: ["rating"], narrowedRules: {}, requiredHeadings: ["Agenda"] },
-  },
+};
+
+const TEMPLATES: Record<string, LegacyTemplateContract> = {
+  Meeting: { source: "Templates/Meeting.md", sourceHash: `sha256:${"a".repeat(64)}` as const, applyFolder: "Meetings", requiredProperties: ["rating"], narrowedRules: {}, requiredHeadings: ["Agenda"], meaning: "one meeting" },
 };
 
 let base: string;
@@ -52,13 +54,13 @@ describe("contract store", () => {
     expect(await currentSequence(ID, root)).toBe(1);
   });
 
-  it("refuses an unsafe pattern in a template's narrowed rules before touching the store", async () => {
-    const meeting = CONTRACT.templates["Meeting"]!;
-    for (const regex of ["d".repeat(PATTERN_SOURCE_LIMIT + 1), "(a+)+", "("]) {
-      const contract: VaultContract = { ...CONTRACT, templates: { Meeting: { ...meeting, narrowedRules: { rating: [{ kind: "pattern", regex }] } } } };
-      await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract }, root)).rejects.toThrow(/^CONTRACT_PATTERN_UNSAFE: /);
-    }
-    await expect(stat(root)).rejects.toThrow();
+  it("writes a version 3 generation with no templates directory", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    const dir = await generation();
+    const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as { version: number; files: Record<string, string> };
+    expect(manifest.version).toBe(3);
+    expect(Object.keys(manifest.files).sort()).toEqual(["folders.json", "properties.json"]);
+    expect((await readdir(dir)).sort()).toEqual(["folders.json", "manifest.json", "properties.json"]);
   });
 
   it("round-trips a sealed contract", async () => {
@@ -74,24 +76,16 @@ describe("contract store", () => {
     const dir = await generation();
     expect((await stat(root)).mode & 0o777).toBe(0o700);
     expect((await stat(dir)).mode & 0o777).toBe(0o700);
-    for (const file of ["folders.json", "properties.json", "manifest.json", "templates/Meeting.json"]) {
+    for (const file of ["folders.json", "properties.json", "manifest.json"]) {
       expect((await stat(join(dir, file))).mode & 0o777).toBe(0o600);
     }
     expect((await stat(join(root, "index.json"))).mode & 0o777).toBe(0o600);
   });
 
   it("keeps an absent axis absent", async () => {
-    const open: VaultContract = { folders: null, properties: null, templates: {} };
+    const open: VaultContract = { folders: null, properties: null };
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: open }, root);
     expect(await readStore(ID, root)).toEqual({ state: "ok", contract: open, digest: MANIFEST_DIGEST });
-  });
-
-  it("round-trips a template meaning", async () => {
-    const meant: VaultContract = { ...CONTRACT, templates: { Meeting: { ...CONTRACT.templates["Meeting"]!, meaning: "one meeting" } } };
-    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: meant }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: meant, digest: MANIFEST_DIGEST });
-    const manifest = JSON.parse(await readFile(join(await generation(), "manifest.json"), "utf8")) as { version: number };
-    expect(manifest.version).toBe(2);
   });
 
   it("round-trips count rules", async () => {
@@ -126,14 +120,65 @@ describe("contract store", () => {
     }
   });
 
-  it("still reads a version 1 manifest", async () => {
-    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
-    const manifest = join(await generation(), "manifest.json");
-    const parsed = JSON.parse(await readFile(manifest, "utf8")) as { version: number };
-    await writeFile(manifest, JSON.stringify({ ...parsed, version: 1 }));
+  it("reads a version 1 and a version 2 generation, projecting their templates into legacy", async () => {
+    for (const version of [1, 2] as const) {
+      await sealLegacyGeneration({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT, templates: TEMPLATES, version }, root);
+      expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST, legacy: { templates: TEMPLATES } });
+    }
+  });
+
+  it("reads a legacy generation's templates without writing the projection back", async () => {
+    const digest = await sealLegacyGeneration({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT, templates: TEMPLATES }, root);
+    const dir = await generation();
+    const before = await readFile(join(dir, "manifest.json"), "utf8");
+    const read = await readStore(ID, root);
+    expect(read).toMatchObject({ state: "ok", digest });
+    expect(await readFile(join(dir, "manifest.json"), "utf8")).toBe(before);
+    expect((await readdir(join(dir, "templates"))).sort()).toEqual(["Meeting.json"]);
+    expect(await generations()).toEqual([`.${ID}.1`]);
+  });
+
+  it("reads past the templates a version 1 declined set names", async () => {
+    const declined = { folders: ["Inbox"], properties: ["mood"], templates: { Daily: `sha256:${"b".repeat(64)}` as const } };
+    await sealLegacyGeneration({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT, templates: TEMPLATES, version: 1, declined }, root);
+    expect(await readDeclined(ID, root)).toEqual({ folders: ["Inbox"], properties: ["mood"] });
+  });
+
+  it("reseals a legacy generation forward as version 3 without its templates, keeping the old bytes", async () => {
+    const legacyDigest = await sealLegacyGeneration({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT, templates: TEMPLATES }, root);
+    const legacyDir = await generation();
+    const legacyManifest = await readFile(join(legacyDir, "manifest.json"), "utf8");
+    const read = await readStore(ID, root);
+    if (read.state !== "ok") throw new Error("legacy generation unreadable");
+    const sealed = await sealContract({ vaultRealPath: vault, vaultId: ID, contract: read.contract, baseSeq: 1, expectedParentDigest: legacyDigest }, root);
+    expect(sealed).toMatchObject({ seq: 2, parentDigest: legacyDigest });
     expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
-    await writeFile(manifest, JSON.stringify({ ...parsed, version: 3 }));
+    expect(JSON.parse(await readFile(join(await generation(), "manifest.json"), "utf8"))).toMatchObject({ version: 3 });
+    expect(await readFile(join(legacyDir, "manifest.json"), "utf8")).toBe(legacyManifest);
+  });
+
+  it("refuses an unknown manifest version, templates in a version 3 generation, and a version 1 declined set there", async () => {
+    await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
+    const dir = await generation();
+    const manifestPath = join(dir, "manifest.json");
+    const parsed = JSON.parse(await readFile(manifestPath, "utf8")) as { version: number; files: Record<string, string> };
+    await writeFile(manifestPath, JSON.stringify({ ...parsed, version: 4 }));
+    expect(await diagnoseStore(ID, root)).toBe("manifest-mismatch");
+
+    const template = `${JSON.stringify(TEMPLATES["Meeting"])}\n`;
+    await mkdir(join(dir, "templates"));
+    await writeFile(join(dir, "templates", "Meeting.json"), template);
+    await writeFile(manifestPath, JSON.stringify({ ...parsed, files: { ...parsed.files, "templates/Meeting.json": digestBytes(template) } }));
+    expect(await diagnoseStore(ID, root)).toBe("schema-invalid");
     expect(await readStore(ID, root)).toEqual({ state: "unreadable" });
+    await writeFile(manifestPath, JSON.stringify({ ...parsed, version: 2, files: { ...parsed.files, "templates/Meeting.json": digestBytes(template) } }));
+    expect(await readStore(ID, root)).toMatchObject({ state: "ok", legacy: { templates: { Meeting: TEMPLATES["Meeting"] } } });
+    await rm(join(dir, "templates"), { recursive: true });
+
+    const oldDeclined = `${JSON.stringify({ version: 1, folders: [], properties: [], templates: {} })}\n`;
+    await writeFile(join(dir, "declined.json"), oldDeclined);
+    await writeFile(manifestPath, JSON.stringify({ ...parsed, files: { ...parsed.files, "declined.json": digestBytes(oldDeclined) } }));
+    expect(await diagnoseStore(ID, root)).toBe("schema-invalid");
   });
 
   it("treats an altered file as unreadable", async () => {
@@ -206,14 +251,17 @@ describe("contract store", () => {
   });
 
   it("keeps declined answers with the generation, outside the contract", async () => {
-    const declined = { folders: ["Inbox"], properties: ["mood"], templates: { Daily: `sha256:${"b".repeat(64)}` } };
-    expect(await readDeclined(ID, root)).toEqual({ folders: [], properties: [], templates: {} });
+    const declined = { folders: ["Inbox", "Inbox"], properties: ["mood"] };
+    expect(await readDeclined(ID, root)).toEqual({ folders: [], properties: [] });
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT, declined }, root);
     expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
-    expect(await readDeclined(ID, root)).toEqual(declined);
+    expect(await readDeclined(ID, root)).toEqual({ folders: ["Inbox"], properties: ["mood"] });
+    const stored = JSON.parse(await readFile(join(await generation(), "declined.json"), "utf8")) as unknown;
+    expect(stored).toEqual({ version: 2, folders: ["Inbox"], properties: ["mood"] });
     expect((await stat(join(await generation(), "declined.json"))).mode & 0o777).toBe(0o600);
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
-    expect(await readDeclined(ID, root)).toEqual({ folders: [], properties: [], templates: {} });
+    expect(await readDeclined(ID, root)).toEqual({ folders: [], properties: [] });
+    await expect(stat(join(await generation(), "declined.json"))).rejects.toThrow();
   });
 
   it("prunes stale entries for the same id but keeps other vaults", async () => {

@@ -7,7 +7,9 @@ import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { interpretVault } from "./interpretation-fixture.js";
 import { hasNestedQuantifier, InterviewAborted, runInterview, sealGuard, type InterviewIO, type Question } from "./interview.js";
 import { judge } from "./judge.js";
-import { readDeclined, readStore } from "./store.js";
+import { digestBytes } from "../conventions/canonical.js";
+import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { bootstrapSnapshots, readDeclined, readStore } from "./store.js";
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const SECRET = "SECRET-42";
@@ -26,8 +28,38 @@ beforeEach(async () => {
   await mkdir(join(vault, "Templates"));
   await mkdir(join(vault, ".oms"));
   await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateFolder: "Templates" }));
-  await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\ncreated: \"{{date}}\"\n---\n## Agenda\n");
+  await writeFile(join(vault, "Templates/Meeting.md"), MEETING_SOURCE);
 });
+
+const MEETING_SOURCE = "---\nstatus: open\ncreated: \"{{date}}\"\n---\n## Agenda\n";
+
+/**
+ * Seals the state BASE_ANSWERS reaches, the way a version 2 store held it: the Meeting
+ * template included. A version 3 seal no longer stores templates, so only a head sealed
+ * before it still carries one for the interview to compare against.
+ */
+async function sealLegacyHead(): Promise<void> {
+  await sealLegacyGeneration({
+    vaultRealPath: vault,
+    vaultId: VAULT_ID,
+    contract: {
+      folders: { Projects: { meaning: "project notes", searchExclude: false } },
+      properties: { status: { meaning: "workflow state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["open", "closed"] }] } },
+    },
+    templates: {
+      Meeting: {
+        source: "Templates/Meeting.md",
+        sourceHash: digestBytes(MEETING_SOURCE),
+        applyFolder: "Projects",
+        requiredProperties: ["status"],
+        narrowedRules: { status: [{ kind: "fixed", value: "open" }] },
+        requiredHeadings: ["Agenda"],
+      },
+    },
+    declined: { folders: ["Inbox", "Templates"], properties: ["created"], templates: {} },
+  }, root);
+  await bootstrapSnapshots(root, VAULT_ID);
+}
 
 afterEach(async () => {
   await rm(base, { recursive: true, force: true });
@@ -98,13 +130,9 @@ describe("runInterview", () => {
     expect(store.contract.properties).toEqual({
       status: { meaning: "workflow state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["open", "closed"] }] },
     });
-    expect(store.contract.templates["Meeting"]).toMatchObject({
-      source: "Templates/Meeting.md",
-      applyFolder: "Projects",
-      requiredProperties: ["status"],
-      narrowedRules: { status: [{ kind: "fixed", value: "open" }] },
-      requiredHeadings: ["Agenda"],
-    });
+    // The answered template is reported but not stored: a version 3 seal carries no templates.
+    expect(Object.keys(store.contract).sort()).toEqual(["folders", "properties"]);
+    expect(store.legacy).toBeUndefined();
   });
 
   it("refuses a public meaning that carries a hidden value, without naming it", async () => {
@@ -197,7 +225,7 @@ describe("template folder discovery", () => {
     expect(io.asked).not.toContain("template-folder:path");
     expect((await readVaultSettings(vault))?.templateFolder).toBe("Templates");
     const store = await readStore(VAULT_ID, root);
-    expect(store.state === "ok" && store.contract.templates["Meeting"]?.source).toBe("Templates/Meeting.md");
+    expect(store.state === "ok" && Object.hasOwn(store.contract, "templates")).toBe(false);
   });
 
   it("persists the template folder and still reports sealed, with a warning, when the seal cannot be logged", async () => {
@@ -244,8 +272,18 @@ describe("template folder discovery", () => {
 });
 
 describe("diff-only rerun (R24)", () => {
-  /** Declined folders and properties are remembered beside the contract, so a rerun only confirms the seal. */
+  /**
+   * Declined folders and properties are remembered beside the contract. A version 3 seal
+   * stores no templates, so the Meeting template is answered again on every rerun.
+   */
   const DECLINED_AGAIN = {
+    "template:Meeting:interpretation": "y",
+    "template:Meeting:register": "y",
+    "template:Meeting:field:status:required": "y",
+    "template:Meeting:field:status:literal": "must-equal",
+    "template:Meeting:field:created:required": "n",
+    "template:Meeting:heading:Agenda": "y",
+    "template:Meeting:apply-folder": "Projects",
     "seal": "y",
   } as const;
 
@@ -279,13 +317,12 @@ describe("diff-only rerun (R24)", () => {
     expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 2, properties: 2, templates: ["Meeting"] });
 
     const asked = new Set(io.asked.map(id => id.split(":").slice(0, 2).join(":")));
-    expect([...asked].sort()).toEqual(["folder:Journal", "property:mood", "seal"].sort());
-    expect(io.asked.some(id => id.startsWith("folder:Projects") || id.startsWith("property:status") || id.startsWith("template:"))).toBe(false);
+    expect([...asked].sort()).toEqual(["folder:Journal", "property:mood", "seal", "template:Meeting"].sort());
+    expect(io.asked.some(id => id.startsWith("folder:Projects") || id.startsWith("property:status"))).toBe(false);
 
     const after = await sealed();
     expect(after.folders?.["Projects"]).toEqual(before.folders?.["Projects"]);
     expect(after.properties?.["status"]).toEqual(before.properties?.["status"]);
-    expect(after.templates).toEqual(before.templates);
     expect(judge(note, { state: "sealed", contract: after })).toEqual({ ok: true, refusals: [], warnings: [], fixes: [], missingDefaults: [], violations: [] });
   });
 
@@ -309,22 +346,23 @@ describe("diff-only rerun (R24)", () => {
     expect(io.said).toContain("Nothing new since the last seal; existing answers are kept.");
   });
 
-  it("re-asks a template whose source changed", async () => {
-    await interview({ vault, io: scripted(BASE_ANSWERS), root });
+  it("asks nothing about a template a legacy head sealed from an unchanged source", async () => {
+    await sealLegacyHead();
+    const io = scripted({ seal: "y" });
+    expect(await interview({ vault, io, root })).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: ["Meeting"] });
+    expect(io.asked).toEqual(["seal"]);
+    expect(io.said).toContain("Nothing new since the last seal; existing answers are kept.");
+    const store = await readStore(VAULT_ID, root);
+    expect(store.state === "ok" && store.legacy).toBeUndefined();
+  });
+
+  it("re-asks a template a legacy head sealed when its source changed", async () => {
+    await sealLegacyHead();
     await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\ncreated: \"{{date}}\"\n---\n## Agenda\n## Notes\n");
-    const io = scripted({
-      ...DECLINED_AGAIN,
-      "template:Meeting:interpretation": "y",
-  "template:Meeting:register": "y",
-      "template:Meeting:field:status:required": "y",
-      "template:Meeting:field:status:literal": "must-equal",
-      "template:Meeting:field:created:required": "n",
-      "template:Meeting:heading:Agenda": "y",
-      "template:Meeting:heading:Notes": "y",
-      "template:Meeting:apply-folder": "Projects",
-    });
+    const io = scripted({ ...DECLINED_AGAIN, "template:Meeting:heading:Notes": "y" });
     expect((await interview({ vault, io, root })).state).toBe("sealed");
-    expect((await sealed()).templates["Meeting"]?.requiredHeadings).toEqual(["Agenda", "Notes"]);
+    expect(io.asked).toContain("template:Meeting:heading:Notes");
+    expect(io.asked.some(id => id.startsWith("folder:") || id.startsWith("property:"))).toBe(false);
   });
 
   it("keeps the previous contract when the reseal fails midway", async () => {
@@ -352,42 +390,43 @@ describe("diff-only rerun (R24)", () => {
     expect(accepted.asked).toContain("seal-lock:reclaim");
   });
 
-  it("remembers what was declined until it changes or the owner asks to review it", async () => {
-    await interview({ vault, io: scripted({ ...BASE_ANSWERS, "template:Meeting:register": "n" }), root });
+  it("remembers what was declined until the owner asks to review it", async () => {
+    const declineMeeting = { "template:Meeting:interpretation": "y", "template:Meeting:register": "n" } as const;
+    await interview({ vault, io: scripted({ ...BASE_ANSWERS, ...declineMeeting }), root });
     const declined = await readDeclined(VAULT_ID, root);
     expect(declined.folders.sort()).toEqual(["Inbox", "Templates"]);
     expect(declined.properties).toEqual(["created"]);
-    expect(Object.keys(declined.templates)).toEqual(["Meeting"]);
+    expect(Object.keys(declined).sort()).toEqual(["folders", "properties"]);
 
-    const quiet = scripted({ seal: "y" });
+    // A declined template is not stored, so it is asked again; folders and properties are not.
+    const quiet = scripted({ ...declineMeeting, seal: "y" });
     expect((await interview({ vault, io: quiet, root })).state).toBe("sealed");
-    expect(quiet.asked).toEqual(["seal"]);
+    expect(quiet.asked).toEqual(["template:Meeting:interpretation", "template:Meeting:register", "seal"]);
     expect(quiet.said.some(line => line.includes("oms setup --reask"))).toBe(true);
     expect(await readDeclined(VAULT_ID, root)).toEqual(declined);
 
-    await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n");
-    const changed = scripted({ "template:Meeting:interpretation": "y", "template:Meeting:register": "n", seal: "y" });
-    expect((await interview({ vault, io: changed, root })).state).toBe("sealed");
-    expect(changed.asked).toEqual(["template:Meeting:interpretation", "template:Meeting:register", "seal"]);
-    expect((await readDeclined(VAULT_ID, root)).templates["Meeting"]).not.toBe(declined.templates["Meeting"]);
-
-    const review = scripted({ ...DECLINED_AGAIN, "folder:Inbox:register": "n", "folder:Templates:register": "n", "template:Meeting:interpretation": "y", "template:Meeting:register": "n" });
+    const review = scripted({ ...declineMeeting, "folder:Inbox:register": "n", "folder:Templates:register": "n", "property:created:register": "n", seal: "y" });
     expect((await interview({ vault, io: review, root, reask: true })).state).toBe("sealed");
-    expect(review.asked.sort()).toEqual(["folder:Inbox:register", "folder:Templates:register", "seal", "template:Meeting:interpretation", "template:Meeting:register"].sort());
-    expect((await readDeclined(VAULT_ID, root)).properties).toEqual([]);
+    expect(review.asked.sort()).toEqual(["folder:Inbox:register", "folder:Templates:register", "property:created:register", "seal", "template:Meeting:interpretation", "template:Meeting:register"].sort());
+    expect(await readDeclined(VAULT_ID, root)).toEqual(declined);
   });
 
-  it("asks to remove a sealed template whose source is gone and lists it", async () => {
-    await interview({ vault, io: scripted(BASE_ANSWERS), root });
+  it("keeps a legacy template whose source is gone when the owner says so", async () => {
+    await sealLegacyHead();
     await rm(join(vault, "Templates/Meeting.md"));
     const kept = scripted({ "template:Meeting:remove": "n", seal: "y" });
     expect(await interview({ vault, io: kept, root })).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: ["Meeting"] });
+  });
+
+  it("asks to remove a legacy template whose source is gone and lists it", async () => {
+    await sealLegacyHead();
+    await rm(join(vault, "Templates/Meeting.md"));
     const io = scripted({ "template:Meeting:remove": "", seal: "y" });
     expect(await interview({ vault, io, root })).toEqual({
       state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], removedTemplates: ["Meeting"],
     });
     expect(io.said).toContain("  removed templates: Meeting");
-    expect((await sealed()).templates).toEqual({});
+    expect(Object.hasOwn(await sealed(), "templates")).toBe(false);
   });
 
   it("adds no file to the vault .oms/ besides settings.json", async () => {

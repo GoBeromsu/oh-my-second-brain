@@ -3,7 +3,8 @@ import { parseNote } from "../conventions/frontmatter.js";
 import { contractContradictions } from "../contract/contradiction.js";
 import type { GapAxis, GapKind, GapWant } from "../contract/gap-ledger.js";
 import { insideApplyFolder } from "../contract/judge.js";
-import type { ContractView, JsonScalar, VaultContract, Verdict, Violation, ViolationKind } from "../contract/types.js";
+import { templatedContract, type TemplatedContract } from "../contract/legacy.js";
+import type { ContractView, JsonScalar, Verdict, Violation, ViolationKind } from "../contract/types.js";
 import { coerceFrontmatter, writtenValues } from "./coerce.js";
 
 /**
@@ -101,7 +102,7 @@ function want(field: string, frontmatter: Readonly<Record<string, unknown>>): Ga
   return { field };
 }
 
-function templatesFor(contract: VaultContract, notePath: string): readonly string[] {
+function templatesFor(contract: TemplatedContract, notePath: string): readonly string[] {
   return Object.entries(contract.templates)
     .filter(([, template]) => template.applyFolder !== undefined && insideApplyFolder(notePath, template.applyFolder))
     .map(([name]) => name)
@@ -113,7 +114,7 @@ function templatesFor(contract: VaultContract, notePath: string): readonly strin
  * The recommendation is the first template (code point order) whose required properties
  * the note already carries, or null when none fits yet.
  */
-export function templateChoices(contract: VaultContract, notePath: string, template: string | undefined, frontmatter: Readonly<Record<string, unknown>>): GapFinding[] {
+export function templateChoices(contract: TemplatedContract, notePath: string, template: string | undefined, frontmatter: Readonly<Record<string, unknown>>): GapFinding[] {
   if (template !== undefined) return [];
   const candidates = templatesFor(contract, notePath);
   if (candidates.length < 2) return [];
@@ -155,7 +156,7 @@ export function resolveTiers(input: AmbiguityInput): Resolution {
   const { view, verdict } = input;
   if (verdict.refusals.length > 0) return { action: "refuse", reason: "refused" };
   if (view.state !== "sealed") return { action: "save", content: input.content, verdict, findings: [] };
-  const { contract } = view;
+  const contract = templatedContract(view);
   const parsed = parseNote(input.content);
   // A finding records the value as written: `01234` stays `01234`, not the number it parses to.
   const frontmatter = writtenValues(input.content);

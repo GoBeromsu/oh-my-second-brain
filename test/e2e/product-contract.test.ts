@@ -84,7 +84,6 @@ const CONTRACT: VaultContract = {
       rules: [{ kind: "allowed", values: ["진행중", "완료", "보류", "active"] }],
     },
   },
-  templates: {},
 };
 
 let base = "";

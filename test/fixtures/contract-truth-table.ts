@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sealContract, writeIndexEntry } from "../../src/kernel/contract/store.js";
+import { sealLegacyGeneration } from "../../src/kernel/contract/legacy-store-fixture.js";
+import type { TemplatedContract } from "../../src/kernel/contract/legacy.js";
+import { bootstrapSnapshots, sealContract, writeIndexEntry } from "../../src/kernel/contract/store.js";
 import type { VaultContract } from "../../src/kernel/contract/types.js";
 import type { SealRow } from "../../src/kernel/contract/vault-id.js";
 import { serializeVaultSettings, SETTINGS_PATH } from "../../src/kernel/vault/settings.js";
@@ -27,7 +29,6 @@ export const TRUTH_TABLE_ROWS: readonly SealRow[] = [
 export const FIXTURE_CONTRACT: VaultContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false } },
   properties: null,
-  templates: {},
 };
 
 export interface TruthTableFixture {
@@ -43,12 +44,21 @@ export async function writeSettings(vault: string, vaultId: string): Promise<voi
   await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId }));
 }
 
-async function sealAt(vault: string, vaultId: string, root: string, contract: VaultContract): Promise<void> {
+/** A contract that carries templates seals as a legacy version 2 generation; otherwise version 3. */
+async function sealAt(vault: string, vaultId: string, root: string, contract: VaultContract | TemplatedContract): Promise<void> {
   await writeSettings(vault, vaultId);
-  await sealContract({ vaultRealPath: await realpath(vault), vaultId, contract }, root);
+  const vaultRealPath = await realpath(vault);
+  const templates = "templates" in contract ? contract.templates : {};
+  const split: VaultContract = { folders: contract.folders, properties: contract.properties };
+  if (Object.keys(templates).length === 0) {
+    await sealContract({ vaultRealPath, vaultId, contract: split }, root);
+    return;
+  }
+  await sealLegacyGeneration({ vaultRealPath, vaultId, contract: split, templates }, root);
+  await bootstrapSnapshots(root, vaultId);
 }
 
-export async function buildTruthTableRow(row: SealRow, contract: VaultContract = FIXTURE_CONTRACT): Promise<TruthTableFixture> {
+export async function buildTruthTableRow(row: SealRow, contract: VaultContract | TemplatedContract = FIXTURE_CONTRACT): Promise<TruthTableFixture> {
   const base = await realpath(await mkdtemp(join(tmpdir(), "oms-truth-")));
   const vault = join(base, "vault");
   const root = join(base, "home", ".oms", "vaults");

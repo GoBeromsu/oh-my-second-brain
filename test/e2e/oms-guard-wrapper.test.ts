@@ -33,7 +33,6 @@ function warningShape(message: string): Record<string, unknown> {
 const CONTRACT: VaultContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false } },
   properties: { status: { meaning: "state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["open", "done"] }] } },
-  templates: {},
 };
 const GOOD = "---\nstatus: open\n---\nbody\n";
 const BAD = "---\nstatus: maybe\n---\nbody\n";

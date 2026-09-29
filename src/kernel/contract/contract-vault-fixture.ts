@@ -4,15 +4,18 @@ import path from "node:path";
 import { digestBytes } from "../conventions/canonical.js";
 import { serializeVaultSettings } from "../vault/settings.js";
 import { lineageAppender } from "./lineage.js";
-import { sealContract } from "./store.js";
-import type { FieldType, Rule, VaultContract } from "./types.js";
+import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { bootstrapSnapshots, sealContract, storeRoot } from "./store.js";
+import type { FieldType, LegacyTemplateContract, Rule, VaultContract } from "./types.js";
 
 /**
  * Writes a contract vault for tests and tools that need one.
  *
  * The vault itself carries only `.oms/settings.json`, the Obsidian type map,
  * template sources and notes. The contract is sealed into the (test) home
- * store, which is what runtime readers consult.
+ * store, which is what runtime readers consult. A fixture without templates is
+ * sealed as version 3. Version 3 carries no templates, so a fixture with templates
+ * is sealed as a legacy version 2 generation that still holds them.
  */
 
 export interface ContractTemplateFixture {
@@ -57,21 +60,27 @@ export async function writeContractVault(root: string, fixture: ContractVaultFix
   for (const source of sources) await writeAt(root, source.path, source.bytes);
   for (const [notePath, content] of Object.entries(fixture.notes ?? {})) await writeAt(root, notePath, content);
 
+  const vaultRealPath = await realpath(root);
+  const templates = legacyFixtureTemplates(fixture, sources);
+  if (Object.keys(templates).length > 0) {
+    // Bootstrapped the way a doctor repair adopts a pre-lineage store, so the lineage is current.
+    const store = fixture.contractStoreRoot ?? storeRoot();
+    await sealLegacyGeneration({ vaultRealPath, vaultId, contract: sealedFixtureContract(fixture), templates }, store);
+    await bootstrapSnapshots(store, vaultId);
+    return;
+  }
   // Fixture seals are attributed to the fixture, so a lineage never mistakes one for a person's.
   const sealed = {
-    vaultRealPath: await realpath(root),
+    vaultRealPath,
     vaultId,
-    contract: sealedFixtureContract(fixture, sources),
+    contract: sealedFixtureContract(fixture),
     onSealed: lineageAppender({ proposer: "fixture", evaluator: "none" }),
   };
   if (fixture.contractStoreRoot === undefined) await sealContract(sealed);
   else await sealContract(sealed, fixture.contractStoreRoot);
 }
 
-function sealedFixtureContract(
-  fixture: ContractVaultFixture,
-  sources: readonly { readonly path: string; readonly bytes: string }[],
-): VaultContract {
+function sealedFixtureContract(fixture: ContractVaultFixture): VaultContract {
   const folders = Object.fromEntries(Object.entries(fixture.folders ?? {}).map(([folder, { intent }]) =>
     [folder, { meaning: intent, searchExclude: false }]));
   const properties = Object.fromEntries(Object.entries(fixture.properties ?? {}).map(([name, definition]) => {
@@ -80,7 +89,14 @@ function sealedFixtureContract(
       : [];
     return [name, { meaning: definition.intent, type: definition.type as FieldType, default: false, required: false, rules }];
   }));
-  const templates = Object.fromEntries(Object.entries(fixture.templates ?? {}).map(([templateId, template], index) => {
+  return { folders, properties };
+}
+
+function legacyFixtureTemplates(
+  fixture: ContractVaultFixture,
+  sources: readonly { readonly path: string; readonly bytes: string }[],
+): Record<string, LegacyTemplateContract> {
+  return Object.fromEntries(Object.entries(fixture.templates ?? {}).map(([templateId, template], index) => {
     const optional = new Set(template.optionalFields ?? []);
     const source = sources[index]!;
     return [templateId, {
@@ -92,5 +108,4 @@ function sealedFixtureContract(
       requiredHeadings: (template.headings ?? []).map(heading => heading.title),
     }];
   }));
-  return { folders, properties, templates };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { judgeContent } from "../contract/judge-write.js";
-import { verdictOf, type ContractView, type PropertyContract, type TemplateContract, type VaultContract, type Verdict } from "../contract/types.js";
+import { verdictOf, type ContractView, type LegacyTemplateContract, type PropertyContract, type Verdict } from "../contract/types.js";
+import type { TemplatedContract } from "../contract/legacy.js";
 import { gapAxisOf, resolveTiers, templateChoices, type AmbiguityInput } from "./ambiguity.js";
 
 const HASH = `sha256:${"a".repeat(64)}` as const;
@@ -9,11 +10,11 @@ function property(extra: Partial<PropertyContract> = {}): PropertyContract {
   return { meaning: "", type: "text", default: false, required: false, rules: [], ...extra };
 }
 
-function template(extra: Partial<TemplateContract> = {}): TemplateContract {
+function template(extra: Partial<LegacyTemplateContract> = {}): LegacyTemplateContract {
   return { source: "Templates/T.md", sourceHash: HASH, requiredProperties: [], narrowedRules: {}, requiredHeadings: [], ...extra };
 }
 
-const CONTRACT: VaultContract = {
+const CONTRACT: TemplatedContract = {
   folders: { Inbox: { meaning: "", searchExclude: false }, Meetings: { meaning: "", searchExclude: false } },
   properties: {
     status: property({ rules: [{ kind: "allowed", values: ["open", "done"] }] }),
@@ -28,7 +29,7 @@ const CONTRACT: VaultContract = {
   },
 };
 
-const SEALED: ContractView = { state: "sealed", contract: CONTRACT };
+const SEALED: ContractView = { state: "sealed", contract: { folders: CONTRACT.folders, properties: CONTRACT.properties }, legacy: { templates: CONTRACT.templates } };
 
 function input(path: string, content: string, extra: Partial<AmbiguityInput> = {}): AmbiguityInput {
   const view = extra.view ?? SEALED;

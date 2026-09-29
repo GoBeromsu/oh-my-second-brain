@@ -1,5 +1,6 @@
 import { compareCodePoints } from "../conventions/canonical.js";
-import type { JsonScalar, Rule, VaultContract } from "./types.js";
+import type { TemplatedContract } from "./legacy.js";
+import type { JsonScalar, Rule } from "./types.js";
 
 /**
  * Contradictions inside a sealed contract: rules no note can ever satisfy. They are the
@@ -51,7 +52,7 @@ function ruleContradictions(field: string, rules: readonly Rule[]): Contradictio
 }
 
 /** Every contradiction in `contract`, sorted by field then kind; empty for a consistent contract. */
-export function contractContradictions(contract: VaultContract): readonly Contradiction[] {
+export function contractContradictions(contract: TemplatedContract): readonly Contradiction[] {
   const found: Contradiction[] = [];
   const properties = contract.properties ?? {};
   for (const [name, property] of Object.entries(properties)) found.push(...ruleContradictions(name, property.rules));

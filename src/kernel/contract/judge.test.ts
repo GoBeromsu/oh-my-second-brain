@@ -5,12 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeSettings } from "../../../test/fixtures/contract-truth-table.js";
 import { enumerateTemplateSources } from "./interpretation.js";
 import { insideApplyFolder, judge, PATTERN_VALUE_LIMIT } from "./judge.js";
+import type { TemplatedContract } from "./legacy.js";
 import { decideWrite, judgeContent, judgeReadyTarget, judgeWrite, type WriteTarget } from "./judge-write.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { sealContract, storeRoot } from "./store.js";
 import {
   findingsOf, formatDenyReason, formatWarnings, GUIDANCE, GUIDANCE_FOR, SEVERITY_OF, verdictOf, VIOLATION_KINDS, WARNING_PREFIX,
-  type ContractView, type PropertyContract, type VaultContract,
+  type ContractView, type PropertyContract,
 } from "./types.js";
 
 const SECRET = "SECRET-42";
@@ -19,8 +20,10 @@ function property(overrides: Partial<PropertyContract> = {}): PropertyContract {
   return { meaning: "a property", type: "text", default: false, required: false, rules: [], ...overrides };
 }
 
-function sealed(contract: Partial<VaultContract>): ContractView {
-  return { state: "sealed", contract: { folders: null, properties: null, templates: {}, ...contract } };
+/** A sealed view; any templates ride along as the legacy projection of an older generation. */
+function sealed({ templates, ...contract }: Partial<TemplatedContract>): ContractView {
+  const view: ContractView = { state: "sealed", contract: { folders: null, properties: null, ...contract } };
+  return templates === undefined ? view : { ...view, legacy: { templates } };
 }
 
 const temps: string[] = [];
@@ -245,7 +248,7 @@ describe("AC16: an unreadable contract refuses only when tampered", () => {
       const vaultId = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
       await writeSettings(vault, vaultId);
       await mkdir(join(vault, "Projects"));
-      await sealContract({ vaultRealPath: vault, vaultId, contract: { folders: { Projects: { meaning: "p", searchExclude: false } }, properties: null, templates: {} } });
+      await sealContract({ vaultRealPath: vault, vaultId, contract: { folders: { Projects: { meaning: "p", searchExclude: false } }, properties: null } });
 
       expect((await judgeWrite(vault, "Projects/a.md", "# ok\n")).ok).toBe(true);
       expect((await judgeWrite(vault, "Inbox/a.md", "# ok\n")).warnings).toEqual([{ field: "path", kind: "unregistered-folder" }]);

@@ -14,21 +14,25 @@ import {
 } from "./lineage.js";
 import { isFieldType } from "./obsidian.js";
 import { patternRefusal } from "./pattern.js";
-import type { FolderContract, JsonScalar, PropertyContract, Rule, TemplateContract, VaultContract } from "./types.js";
+import type { FolderContract, JsonScalar, LegacyContract, LegacyTemplateContract, PropertyContract, Rule, VaultContract } from "./types.js";
 
 /**
  * Store outside the vault: `~/.oms/vaults/index.json` maps a vault realpath to its id;
  * `<id>` is a relative symlink to `.<id>.<seq>/` holding `folders.json`, `properties.json`,
- * `templates/<name>.json`, an optional `declined.json` (what the owner chose not to register)
- * and `manifest.json` (sha256 per file). Directories 0700, files 0600.
- * Reads never create anything.
+ * an optional `declined.json` (what the owner chose not to register) and `manifest.json`
+ * (sha256 per file). Directories 0700, files 0600. Reads never create anything.
+ *
+ * A seal writes manifest version 3. Versions 1 and 2 stay readable for good: their
+ * `templates/<name>.json` entries are projected into `legacy` on load, never judged, and
+ * never rewritten, and the templates a version 1 `declined.json` names are read past. A new
+ * seal from such a read writes a version 3 generation without them.
  */
 
 const MAX_STORE_FILE_BYTES = 4 * 1024 * 1024;
 const MANIFEST = "manifest.json";
-/** Version 2 adds the optional `TemplateContract.meaning`; a version 1 manifest still reads. */
-const MANIFEST_VERSION = 2;
-const READABLE_MANIFEST_VERSIONS: readonly unknown[] = [1, MANIFEST_VERSION];
+/** Version 2 added the optional template `meaning`; version 3 stores no templates. */
+const MANIFEST_VERSION = 3;
+const LEGACY_MANIFEST_VERSIONS: readonly unknown[] = [1, 2];
 const FOLDERS = "folders.json";
 const PROPERTIES = "properties.json";
 const TEMPLATES = "templates";
@@ -45,17 +49,19 @@ export type IndexRead =
 export type StoreRead =
   | { readonly state: "absent" }
   | { readonly state: "unreadable" }
-  /** `digest` is the manifest digest of the generation read: the contract revision. */
-  | { readonly state: "ok"; readonly contract: VaultContract; readonly digest: Digest };
+  /**
+   * `digest` is the manifest digest of the generation read: the contract revision. `legacy`
+   * is present for a version 1 or 2 generation only.
+   */
+  | { readonly state: "ok"; readonly contract: VaultContract; readonly digest: Digest; readonly legacy?: LegacyContract };
 
-/** What the owner declined at seal time; a template is keyed by the source hash it was declined at. */
+/** What the owner declined at seal time. */
 export interface DeclinedSet {
   readonly folders: readonly string[];
   readonly properties: readonly string[];
-  readonly templates: Readonly<Record<string, string>>;
 }
 
-export const NO_DECLINED: DeclinedSet = { folders: [], properties: [], templates: {} };
+export const NO_DECLINED: DeclinedSet = { folders: [], properties: [] };
 
 /** No environment override: tests point HOME at a temporary directory. */
 export function storeRoot(): string {
@@ -127,7 +133,7 @@ function isPropertyContract(value: unknown): value is PropertyContract {
     && typeof value["default"] === "boolean" && typeof value["required"] === "boolean" && isRules(value["rules"]);
 }
 
-function isTemplateContract(value: unknown): value is TemplateContract {
+function isLegacyTemplateContract(value: unknown): value is LegacyTemplateContract {
   if (!record(value) || !onlyKeys(value, ["source", "sourceHash", "requiredProperties", "narrowedRules", "requiredHeadings"], ["applyFolder", "meaning"])) return false;
   const narrowed = value["narrowedRules"];
   return typeof value["source"] === "string"
@@ -138,10 +144,12 @@ function isTemplateContract(value: unknown): value is TemplateContract {
     && record(narrowed) && Object.values(narrowed).every(isRules);
 }
 
-function isDeclined(value: unknown): value is DeclinedSet & { readonly version: 1 } {
-  if (!record(value) || !onlyKeys(value, ["version", "folders", "properties", "templates"]) || value["version"] !== 1) return false;
+/** Version 1 (in a version 1 or 2 generation) also keyed declined templates by source hash; version 2 has none. */
+function isDeclined(value: unknown, legacy: boolean): value is DeclinedSet {
+  if (!record(value) || !isStrings(value["folders"]) || !isStrings(value["properties"])) return false;
+  if (!legacy) return onlyKeys(value, ["version", "folders", "properties"]) && value["version"] === 2;
   const templates = value["templates"];
-  return isStrings(value["folders"]) && isStrings(value["properties"])
+  return onlyKeys(value, ["version", "folders", "properties", "templates"]) && value["version"] === 1
     && record(templates) && Object.values(templates).every(hash => typeof hash === "string");
 }
 
@@ -258,7 +266,7 @@ async function listFiles(directory: string, prefix = ""): Promise<string[] | nul
 export type StoreCause = "link-dangling" | "manifest-mismatch" | "schema-invalid";
 
 type GenerationRead =
-  | { readonly state: "ok"; readonly contract: VaultContract; readonly declined: DeclinedSet; readonly digest: Digest }
+  | { readonly state: "ok"; readonly contract: VaultContract; readonly declined: DeclinedSet; readonly digest: Digest; readonly legacy?: LegacyContract }
   | { readonly state: "unreadable"; readonly cause: StoreCause };
 
 function unreadable(cause: StoreCause): GenerationRead {
@@ -273,7 +281,9 @@ async function readGeneration(directory: string): Promise<GenerationRead> {
   if (manifestRead.state !== "ok") return unreadable("manifest-mismatch");
   let manifest: unknown;
   try { manifest = parseBytes(manifestRead.bytes); } catch { return unreadable("manifest-mismatch"); }
-  if (!record(manifest) || !onlyKeys(manifest, ["version", "files"]) || !READABLE_MANIFEST_VERSIONS.includes(manifest["version"])) return unreadable("manifest-mismatch");
+  if (!record(manifest) || !onlyKeys(manifest, ["version", "files"])) return unreadable("manifest-mismatch");
+  const legacy = LEGACY_MANIFEST_VERSIONS.includes(manifest["version"]);
+  if (!legacy && manifest["version"] !== MANIFEST_VERSION) return unreadable("manifest-mismatch");
   const files = manifest["files"];
   if (!record(files) || !Object.values(files).every(digest => typeof digest === "string")) return unreadable("manifest-mismatch");
   const listed = await listFiles(directory);
@@ -291,7 +301,7 @@ async function readGeneration(directory: string): Promise<GenerationRead> {
 
   let folders: Record<string, FolderContract> | null = null;
   let properties: Record<string, PropertyContract> | null = null;
-  const templates: Record<string, TemplateContract> = {};
+  const templates: Record<string, LegacyTemplateContract> = {};
   let declined: DeclinedSet = NO_DECLINED;
   for (const [path, value] of values) {
     if (path === FOLDERS) {
@@ -301,17 +311,20 @@ async function readGeneration(directory: string): Promise<GenerationRead> {
       if (!record(value) || !onlyKeys(value, ["version", "properties"]) || value["version"] !== 1 || !isRecordOf(value["properties"], isPropertyContract)) return unreadable("schema-invalid");
       properties = value["properties"];
     } else if (path === DECLINED) {
-      if (!isDeclined(value)) return unreadable("schema-invalid");
-      declined = { folders: value.folders, properties: value.properties, templates: value.templates };
-    } else if (path.startsWith(`${TEMPLATES}/`) && path.endsWith(".json")) {
+      if (!isDeclined(value, legacy)) return unreadable("schema-invalid");
+      declined = { folders: value.folders, properties: value.properties };
+    } else if (legacy && path.startsWith(`${TEMPLATES}/`) && path.endsWith(".json")) {
       const name = path.slice(TEMPLATES.length + 1, -".json".length);
-      if (!isSafeName(name) || !isTemplateContract(value)) return unreadable("schema-invalid");
+      if (!isSafeName(name) || !isLegacyTemplateContract(value)) return unreadable("schema-invalid");
       templates[name] = value;
     } else {
       return unreadable("schema-invalid");
     }
   }
-  return { state: "ok", contract: { folders, properties, templates }, declined, digest: manifestDigestOf(manifestRead.bytes) };
+  const digest = manifestDigestOf(manifestRead.bytes);
+  return legacy
+    ? { state: "ok", contract: { folders, properties }, declined, digest, legacy: { templates } }
+    : { state: "ok", contract: { folders, properties }, declined, digest };
 }
 
 async function readResolved(vaultId: string, root: string): Promise<{ readonly state: "absent" } | GenerationRead> {
@@ -336,7 +349,11 @@ async function readResolved(vaultId: string, root: string): Promise<{ readonly s
  */
 export async function readStore(vaultId: string, root: string = storeRoot()): Promise<StoreRead> {
   const read = await readResolved(vaultId, root);
-  if (read.state === "ok") return { state: "ok", contract: read.contract, digest: read.digest };
+  if (read.state === "ok") {
+    return read.legacy === undefined
+      ? { state: "ok", contract: read.contract, digest: read.digest }
+      : { state: "ok", contract: read.contract, digest: read.digest, legacy: read.legacy };
+  }
   return read.state === "unreadable" ? { state: "unreadable" } : read;
 }
 
@@ -354,11 +371,7 @@ export async function diagnoseStore(vaultId: string, root: string = storeRoot())
 
 /** Every pattern rule must pass the interview's screen; the error never echoes the source. */
 function assertSealablePatterns(contract: VaultContract): void {
-  const ruleSets = [
-    ...Object.values(contract.properties ?? {}).map(property => property.rules),
-    ...Object.values(contract.templates).flatMap(template => Object.values(template.narrowedRules)),
-  ];
-  for (const rules of ruleSets) {
+  for (const rules of Object.values(contract.properties ?? {}).map(property => property.rules)) {
     for (const rule of rules) {
       if (rule.kind !== "pattern") continue;
       const refusal = patternRefusal(rule.regex);
@@ -370,20 +383,15 @@ function assertSealablePatterns(contract: VaultContract): void {
 function contractFiles(contract: VaultContract, declined: DeclinedSet = NO_DECLINED): Map<string, string> {
   assertSealablePatterns(contract);
   const files = new Map<string, string>();
-  if (declined.folders.length + declined.properties.length + Object.keys(declined.templates).length > 0) {
+  if (declined.folders.length + declined.properties.length > 0) {
     files.set(DECLINED, stringify({
-      version: 1,
+      version: 2,
       folders: [...new Set(declined.folders)].sort(compareCodePoints),
       properties: [...new Set(declined.properties)].sort(compareCodePoints),
-      templates: declined.templates,
     }));
   }
   if (contract.folders !== null) files.set(FOLDERS, stringify({ version: 1, folders: contract.folders }));
   if (contract.properties !== null) files.set(PROPERTIES, stringify({ version: 1, properties: contract.properties }));
-  for (const [name, template] of Object.entries(contract.templates)) {
-    if (!isSafeName(name)) throw new TypeError("CONTRACT_TEMPLATE_NAME_UNSAFE: template name must be a plain file name");
-    files.set(`${TEMPLATES}/${name}.json`, stringify(template));
-  }
   return files;
 }
 
@@ -532,7 +540,7 @@ export interface SealRequest {
   readonly contract: VaultContract;
   /** What `<id>` was when the interview read the contract; a different value after locking aborts. */
   readonly baseSeq?: SequenceObservation;
-  /** Folders, properties and templates the owner declined; kept so a rerun does not ask again. */
+  /** Folders and properties the owner declined; kept so a rerun does not ask again. */
   readonly declined?: DeclinedSet;
   /**
    * Re-checks under the seal lock that the inputs the contract was built from still hold,
@@ -792,7 +800,6 @@ export async function sealContract(request: SealRequest, root: string = storeRoo
       await mkdir(directory, { mode: 0o700 });
       await ensureDirectory(directory);
       for (const [path, content] of [...files].sort(([left], [right]) => compareCodePoints(left, right))) {
-        if (path.includes("/")) await ensureDirectory(join(directory, TEMPLATES));
         await writePrivate(join(directory, ...path.split("/")), content);
         digests[path] = digestBytes(content);
       }

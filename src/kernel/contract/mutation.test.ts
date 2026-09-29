@@ -1,21 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { applyMutations, MutationConflict, type Mutation, type MutationConflictKind } from "./mutation.js";
-import type { PropertyContract, Rule, TemplateContract, VaultContract } from "./types.js";
-
-const HASH = `sha256:${"a".repeat(64)}`;
+import type { PropertyContract, Rule, VaultContract } from "./types.js";
 
 function property(rules: readonly Rule[] = []): PropertyContract {
   return { meaning: "", type: "text", default: false, required: false, rules };
 }
 
-const TEMPLATE: TemplateContract = { source: "Templates/Meeting.md", sourceHash: HASH, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
 const ALLOWED: Rule = { kind: "allowed", values: ["open", "done"] };
 const COUNT: Rule = { kind: "count", max: 3 };
 
 const BASE: VaultContract = {
   folders: { Inbox: { meaning: "inbox", searchExclude: false } },
   properties: { status: property([ALLOWED]) },
-  templates: { Meeting: TEMPLATE },
 };
 
 function conflict(contract: VaultContract, list: readonly Mutation[]): { index: number; axis: string; key: string; kind: MutationConflictKind } {
@@ -48,17 +44,16 @@ describe("applyMutations", () => {
     expect(next).toEqual({
       folders: { Inbox: { meaning: "in", searchExclude: false }, Archive: archive },
       properties: { mood: property() },
-      templates: { Meeting: TEMPLATE },
-    });
+        });
     expect(JSON.stringify(BASE)).toBe(snapshot);
   });
 
   it("starts an open (null) axis empty on ADD", () => {
-    const open: VaultContract = { folders: null, properties: null, templates: {} };
+    const open: VaultContract = { folders: null, properties: null };
     expect(applyMutations(open, [
       { op: "ADD", axis: "folder", key: "Inbox", after: { meaning: "", searchExclude: false } },
       { op: "ADD", axis: "property", key: "status", after: property() },
-    ])).toEqual({ folders: { Inbox: { meaning: "", searchExclude: false } }, properties: { status: property() }, templates: {} });
+    ])).toEqual({ folders: { Inbox: { meaning: "", searchExclude: false } }, properties: { status: property() } });
     expect(conflict(open, [{ op: "REMOVE", axis: "folder", key: "Inbox", before: { meaning: "", searchExclude: false } }])).toMatchObject({ kind: "missing" });
   });
 

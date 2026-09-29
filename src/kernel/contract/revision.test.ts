@@ -9,7 +9,7 @@ import { readStore, sealContract } from "./store.js";
 import type { VaultContract } from "./types.js";
 import { resolveSealState } from "./vault-id.js";
 
-const CONTRACT: VaultContract = { folders: { Inbox: { meaning: "", searchExclude: false } }, properties: null, templates: {} };
+const CONTRACT: VaultContract = { folders: { Inbox: { meaning: "", searchExclude: false } }, properties: null };
 const REVISION = `sha256:${"a".repeat(64)}` as const;
 
 describe("contractRevision", () => {

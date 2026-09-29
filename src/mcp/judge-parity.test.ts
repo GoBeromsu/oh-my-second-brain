@@ -5,7 +5,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTruthTableRow, type TruthTableFixture } from "../../test/fixtures/contract-truth-table.js";
-import type { JudgeInput, VaultContract, Violation } from "../kernel/contract/types.js";
+import type { TemplatedContract } from "../kernel/contract/legacy.js";
+import type { JudgeInput, Violation } from "../kernel/contract/types.js";
 import type { SealRow } from "../kernel/contract/vault-id.js";
 
 /**
@@ -31,7 +32,7 @@ const { translatePreToolUse } = await import("../vendors/claude/hook/pre-tool-us
 const { formatDenyReason, WARNING_PREFIX } = await import("../kernel/contract/types.js");
 const { runWriteCommand } = await import("../cli/write-command.js");
 
-const CONTRACT: VaultContract = {
+const CONTRACT: TemplatedContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false }, Loose: { meaning: "loose notes", searchExclude: false } },
   properties: {
     status: { meaning: "state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["active", "done"] }] },

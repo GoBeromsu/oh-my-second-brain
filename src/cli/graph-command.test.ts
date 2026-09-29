@@ -124,7 +124,7 @@ describe("graph command", () => {
     expect(output.pop()).toMatchObject({
       vault,
       source: "explicit",
-      convention: { contract: "sealed", row: "sealed", templates: [{ name: "note", state: "active" }] },
+      convention: { contract: "sealed", row: "sealed", legacyTemplates: 1 },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false, reason: "Graph cache not built" },
@@ -149,7 +149,7 @@ describe("graph command", () => {
         contract: "none",
         row: "never-sealed",
         findings: [{ message: "contract: none", guidance: "oms setup" }],
-        templates: [],
+        legacyTemplates: 0,
       },
       history: {
         events: 0,
@@ -198,7 +198,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
+      convention: { contract: "sealed", legacyTemplates: 1 },
       history: { status: "unavailable", diagnostics: [{ code: "LEDGER_ROOT_INSIDE_VAULT" }] },
       engine: { available: false, reason: "Engine store not found" },
       graph: { available: false },
@@ -217,7 +217,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
+      convention: { contract: "sealed", legacyTemplates: 1 },
       history: { events: 0 },
       engine: {
         available: false,
@@ -240,7 +240,7 @@ describe("graph command", () => {
 
     expect(output.pop()).toMatchObject({
       vault,
-      convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
+      convention: { contract: "sealed", legacyTemplates: 1 },
       history: { events: 0 },
       engine: { available: false, reason: "Engine store not found" },
       graph: {
@@ -277,7 +277,7 @@ describe("graph command", () => {
 
       expect(output.pop()).toMatchObject({
         vault,
-        convention: { contract: "sealed", templates: [{ name: "note", state: "active" }] },
+        convention: { contract: "sealed", legacyTemplates: 1 },
         history: { events: 0 },
         engine: { available: true },
         graph: { available: false },

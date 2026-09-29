@@ -301,7 +301,7 @@ async function alreadySealed(vault: string, root: string, events: Parameters<typ
     vaultIdCreated: false,
     folders: Object.keys(contract.folders ?? {}).length,
     properties: Object.keys(contract.properties ?? {}).length,
-    templates: Object.keys(contract.templates),
+    templates: Object.keys(store.legacy?.templates ?? {}),
     ...(removed.length === 0 ? {} : { removedTemplates: removed }),
     ...(warnings.length === 0 ? {} : { warnings }),
   };

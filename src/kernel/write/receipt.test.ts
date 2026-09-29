@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ContractView } from "../contract/types.js";
 import { buildReceipt, contractRevision, noteRevision } from "./receipt.js";
 
-const SEALED: ContractView = { state: "sealed", contract: { folders: null, properties: null, templates: {} } };
+const SEALED: ContractView = { state: "sealed", contract: { folders: null, properties: null } };
 
 function sha(text: string): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;

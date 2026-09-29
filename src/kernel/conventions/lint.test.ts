@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { extractWikilinks, detectLinkIssues } from "./lint.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
-import { sealContract } from "../contract/store.js";
+import { sealLegacyGeneration } from "../contract/legacy-store-fixture.js";
 import { serializeVaultSettings } from "../vault/settings.js";
 import path from "node:path";
 import os from "node:os";
@@ -71,15 +71,15 @@ describe("detectLinkIssues", () => {
       "Templates/note.md": "---\ntemplate: note\n---\n[[Missing]]",
       "notes/live.md": "---\ntemplate: note\n---\nlive",
     });
-    // The sealed contract names the template source that lint must skip.
-    await sealContract({
+    // The legacy generation names the template source that lint must skip.
+    await sealLegacyGeneration({
       vaultRealPath: await realpath(vaultPath),
       vaultId,
       contract: {
         folders: { notes: { meaning: "notes", searchExclude: false } },
         properties: {},
-        templates: { note: { source: "Templates/note.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] } },
       },
+      templates: { note: { source: "Templates/note.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] } },
     });
     try {
       const result = await detectLinkIssues(vaultPath);

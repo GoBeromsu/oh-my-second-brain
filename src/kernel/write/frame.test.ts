@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { ContractView, VaultContract } from "../contract/types.js";
+import type { TemplatedContract } from "../contract/legacy.js";
+import type { ContractView } from "../contract/types.js";
 import { frameFor } from "./frame.js";
 
-const CONTRACT: VaultContract = {
+const CONTRACT: TemplatedContract = {
   folders: {
     Projects: { meaning: "project notes", searchExclude: false },
     "Projects/Archive": { meaning: "finished projects", searchExclude: false },
@@ -26,7 +27,7 @@ const CONTRACT: VaultContract = {
     bare: { source: "Templates/bare.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] },
   },
 };
-const SEALED: ContractView = { state: "sealed", contract: CONTRACT };
+const SEALED: ContractView = { state: "sealed", contract: { folders: CONTRACT.folders, properties: CONTRACT.properties }, legacy: { templates: CONTRACT.templates } };
 
 describe("frameFor", () => {
   it("returns an empty frame for an open or unreadable contract", () => {

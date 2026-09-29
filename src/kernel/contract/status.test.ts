@@ -2,12 +2,12 @@ import { appendFile, mkdir, readdir, readFile, rm, symlink, writeFile } from "no
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { addSharedCopy, buildTruthTableRow, TRUTH_TABLE_ROWS, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
-import { enumerateTemplateSources } from "./interpretation.js";
 import { guardEventsPath } from "./guard-events.js";
+import type { TemplatedContract } from "./legacy.js";
 import { appendInterviewEvent, EVENTS_FILE, pendingLogKey } from "./interview-log.js";
 import { stateDir } from "./state-dir.js";
 import {
-  contractDoctor, contractStatus, doctorFix, ROW_FINDING, SHARED_FINDING, STORE_UNREADABLE_FINDING, type DoctorFixResult,
+  contractDoctor, contractStatus, doctorFix, legacyTemplateFinding, ROW_FINDING, SHARED_FINDING, STORE_UNREADABLE_FINDING, type DoctorFixResult,
 } from "./status.js";
 import type { VaultContract } from "./types.js";
 import { resolveSealState, type SealRow } from "./vault-id.js";
@@ -18,7 +18,7 @@ afterEach(async () => {
   await Promise.all(fixtures.splice(0).map(fixture => fixture.cleanup()));
 });
 
-async function row(name: SealRow, contract?: VaultContract): Promise<TruthTableFixture> {
+async function row(name: SealRow, contract?: VaultContract | TemplatedContract): Promise<TruthTableFixture> {
   const fixture = await buildTruthTableRow(name, contract);
   fixtures.push(fixture);
   return fixture;
@@ -83,24 +83,21 @@ describe("contractStatus", () => {
     expect(status.findings).toEqual([ROW_FINDING.sealed, STORE_UNREADABLE_FINDING]);
   });
 
-  it("lists template drift by name", async () => {
-    const probe = await row("never-sealed");
-    await mkdir(join(probe.vault, "Templates"));
-    await writeFile(join(probe.vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n");
-    const enumerated = await enumerateTemplateSources(probe.vault, { path: "Templates/Meeting.md", kind: "file" });
-    if (!enumerated.ok) throw new Error("enumeration failed");
-    const template = { source: "Templates/Meeting.md", sourceHash: enumerated.sources[0]!.digest, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] };
-    const contract: VaultContract = { folders: null, properties: null, templates: { Meeting: template, Gone: { ...template, source: "Templates/Gone.md" } } };
-
+  it("counts the template constraints of a legacy generation and reports them as ignored", async () => {
+    const template = { source: "Templates/Meeting.md", sourceHash: `sha256:${"a".repeat(64)}` as const, requiredProperties: ["status"], narrowedRules: {}, requiredHeadings: ["Agenda"] };
+    const contract: TemplatedContract = { folders: null, properties: null, templates: { Meeting: template, Gone: { ...template, source: "Templates/Gone.md" } } };
     const fixture = await row("sealed", contract);
-    await mkdir(join(fixture.vault, "Templates"));
-    await writeFile(join(fixture.vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n");
-    expect((await contractStatus(fixture.vault, fixture.root)).templates).toEqual([
-      { name: "Gone", state: "missing" },
-      { name: "Meeting", state: "active" },
-    ]);
-    await writeFile(join(fixture.vault, "Templates/Meeting.md"), "---\nstatus: closed\n---\n");
-    expect((await contractStatus(fixture.vault, fixture.root)).templates).toContainEqual({ name: "Meeting", state: "drift" });
+    const status = await contractStatus(fixture.vault, fixture.root);
+    expect(status).toMatchObject({ contract: "sealed", legacyTemplates: 2 });
+    expect(status.findings).toContainEqual(legacyTemplateFinding(2));
+    expect(legacyTemplateFinding(2)).toEqual({ message: "legacy-template-constraints-ignored: 2", guidance: "oms setup" });
+  });
+
+  it("reports no legacy template finding for a version 3 generation", async () => {
+    const fixture = await row("sealed");
+    const status = await contractStatus(fixture.vault, fixture.root);
+    expect(status).toMatchObject({ contract: "sealed", legacyTemplates: 0 });
+    expect(status.findings.some(finding => finding.message.startsWith("legacy-template-constraints-ignored"))).toBe(false);
   });
 });
 

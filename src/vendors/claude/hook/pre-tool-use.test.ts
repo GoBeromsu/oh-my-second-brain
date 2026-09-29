@@ -19,7 +19,6 @@ const ALLOW = '{"continue":true,"suppressOutput":true}\n';
 const CONTRACT: VaultContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false } },
   properties: { status: { meaning: "state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["open", "done"] }] } },
-  templates: {},
 };
 
 const EXPECTED_VIEW: Readonly<Record<SealRow, "open" | "unreadable" | "sealed">> = {

@@ -99,7 +99,8 @@ describe("oms setup template-folder discovery", () => {
     expect(await readdir(path.join(home, ".oms", "vaults"))).toContain("index.json");
 
     await runContractCommand(["status", "--vault", vault]);
-    expect(output()).toMatchObject({ contract: "sealed", templates: [expect.objectContaining({ name: "Meeting" })] });
+    // A version 3 seal keeps no templates, so none is reported as legacy.
+    expect(output()).toMatchObject({ contract: "sealed", legacyTemplates: 0 });
   });
 
   it("offers the Templater folder, with its slashes trimmed, when the core plugin names none", async () => {

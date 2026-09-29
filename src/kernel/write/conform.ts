@@ -1,7 +1,8 @@
 import { parseNote } from "../conventions/frontmatter.js";
 import { scanContractHeadings } from "../contract/scan.js";
 import { listTyped } from "./coerce.js";
-import type { ContractView, FieldType, PropertyContract, TemplateContract } from "../contract/types.js";
+import { legacyTemplatesOf } from "../contract/legacy.js";
+import type { ContractView, FieldType, LegacyTemplateContract, PropertyContract } from "../contract/types.js";
 import type { ConformChange } from "./receipt.js";
 
 /**
@@ -93,9 +94,9 @@ function substituteVariables(content: string, options: ConformOptions, applied: 
   return frontmatter + conformedBody;
 }
 
-function selectedTemplate(options: ConformOptions): TemplateContract | undefined {
+function selectedTemplate(options: ConformOptions): LegacyTemplateContract | undefined {
   if (options.view.state !== "sealed" || options.template === undefined) return undefined;
-  const { templates } = options.view.contract;
+  const templates = legacyTemplatesOf(options.view);
   return Object.hasOwn(templates, options.template) ? templates[options.template] : undefined;
 }
 
@@ -116,10 +117,9 @@ function fixedDefault(property: PropertyContract): string | null {
  * Names a template requires: the chosen template's, or every template's when none is
  * chosen. The writer is asked for these by the scaffold, so a date is never invented for them.
  */
-function templateRequired(options: ConformOptions, template: TemplateContract | undefined): ReadonlySet<string> {
+function templateRequired(options: ConformOptions, template: LegacyTemplateContract | undefined): ReadonlySet<string> {
   if (template !== undefined) return new Set(template.requiredProperties);
-  if (options.view.state !== "sealed") return new Set();
-  return new Set(Object.values(options.view.contract.templates).flatMap(candidate => candidate.requiredProperties));
+  return new Set(Object.values(legacyTemplatesOf(options.view)).flatMap(candidate => candidate.requiredProperties));
 }
 
 /**

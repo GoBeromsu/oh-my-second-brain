@@ -1,6 +1,7 @@
 import { compareCodePoints, hashCanonical, type Digest } from "../../conventions/canonical.js";
 import { readSourceExclusions, type SourceExclusionInventory } from "../../conventions/note-exclude.js";
 import { deriveFolderOntologyAxis } from "../../contract/folders-axis.js";
+import { templatedContract, type TemplatedContract } from "../../contract/legacy.js";
 import type { PropertyContract, VaultContract } from "../../contract/types.js";
 import { ROW_FINDING, SETTINGS_INVALID_FINDING, type DoctorFinding } from "../../contract/status.js";
 import { resolveSealState } from "../../contract/vault-id.js";
@@ -35,7 +36,7 @@ export interface SearchTemplateSource {
 type ReadState =
   | { readonly state: "open"; readonly finding: DoctorFinding | null }
   | { readonly state: "unreadable"; readonly reason: string }
-  | { readonly state: "sealed"; readonly contract: VaultContract };
+  | { readonly state: "sealed"; readonly contract: TemplatedContract };
 
 /** A fixed reason by code: a raw filesystem message would carry a private store path. */
 function failureReason(error: unknown): string {
@@ -52,7 +53,7 @@ function isAbsent(error: unknown): boolean {
 async function readState(vault: string): Promise<ReadState> {
   try {
     const { view, row, settingsInvalid } = await resolveSealState(vault);
-    if (view.state === "sealed") return { state: "sealed", contract: view.contract };
+    if (view.state === "sealed") return { state: "sealed", contract: templatedContract(view) };
     if (view.state === "unreadable") return { state: "unreadable", reason: "the sealed contract is unreadable; run oms doctor contract" };
     return { state: "open", finding: settingsInvalid ? SETTINGS_INVALID_FINDING : ROW_FINDING[row] };
   } catch (error: unknown) {
@@ -65,7 +66,7 @@ function sortedEntries<T>(record: Readonly<Record<string, T>>): Array<[string, T
 }
 
 /** The only contract facts search may carry. Rules and templates' narrowed rules never enter. */
-function publicProjection(contract: VaultContract): unknown {
+function publicProjection(contract: TemplatedContract): unknown {
   return {
     folders: contract.folders === null
       ? null

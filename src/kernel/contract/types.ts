@@ -33,7 +33,11 @@ export interface PropertyContract {
   readonly rules: readonly Rule[];
 }
 
-export interface TemplateContract {
+/**
+ * A template entry of a version 1 or 2 generation. New generations never store one; an
+ * old one is read into `ContractView.legacy` for doctor reporting and never judged.
+ */
+export interface LegacyTemplateContract {
   /** Vault-relative template source path. */
   readonly source: string;
   readonly sourceHash: Digest;
@@ -45,11 +49,15 @@ export interface TemplateContract {
   readonly requiredHeadings: readonly string[];
 }
 
-/** Null axis = open (nothing sealed for it). Templates are keyed by name. */
+/** Null axis = open (nothing sealed for it). */
 export interface VaultContract {
   readonly folders: Readonly<Record<string, FolderContract>> | null;
   readonly properties: Readonly<Record<string, PropertyContract>> | null;
-  readonly templates: Readonly<Record<string, TemplateContract>>;
+}
+
+/** What an old generation sealed beyond folders and properties, projected on load and never persisted. Templates are keyed by name. */
+export interface LegacyContract {
+  readonly templates: Readonly<Record<string, LegacyTemplateContract>>;
 }
 
 export interface JudgeInput {
@@ -216,5 +224,8 @@ export function formatWarnings(warnings: readonly Violation[]): string {
 export type ContractView =
   | { readonly state: "open" }
   | { readonly state: "unreadable"; readonly reason: "tampered" | "broken" }
-  /** `revision` is the manifest digest of the generation the contract was read from; a view built in memory has none. */
-  | { readonly state: "sealed"; readonly contract: VaultContract; readonly revision?: Digest };
+  /**
+   * `revision` is the manifest digest of the generation the contract was read from; a view
+   * built in memory has none. `legacy` is present when that generation is version 1 or 2.
+   */
+  | { readonly state: "sealed"; readonly contract: VaultContract; readonly revision?: Digest; readonly legacy?: LegacyContract };

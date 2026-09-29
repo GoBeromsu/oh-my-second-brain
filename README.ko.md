@@ -135,7 +135,7 @@ oms search "프로젝트 결정" --vault /path/to/vault
 - **의미는 사용자 소유다.** 폴더, 속성 pool, 템플릿을 함께 인터뷰한다. 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다.
 - **볼트 안의 제어 파일은 하나다.** `.oms/settings.json`에 `version`, `vaultId`, `templateFolder`, `embedding`, `agentRepair`를 둔다. 다른 `.oms/` 항목은 무시하고 `oms doctor contract`가 예상하지 않은 제어 파일로 보고한다. `.obsidian/types.json`은 읽기 전용 관측값이며 봉인을 덮어쓰지 않는다.
 - **템플릿은 원본으로 남는다.** OMS는 템플릿이 선언하는 것을 기록한다. 템플릿 파일을 다시 쓰거나 복사하지 않으며, Templater·JavaScript·전용 token 언어를 해석하거나 실행하지 않는다. 쓰기는 작성 중인 노트의 기계적인 부분만 채운다. `{{title}}`·`{{date}}`·`{{time}}` 변수, 새 노트의 date·datetime 기본값, 선택한 템플릿에서 빠진 heading이다. 필수 값을 대신 채우지는 않는다.
-- **변경은 드러난다.** `oms setup status`는 템플릿 상태를 `active`, `drift`, `missing`으로 보고한다. 변경된 템플릿을 조용히 재봉인하지 않는다.
+- **이전 봉인도 읽힌다.** 새 봉인은 폴더와 속성만 저장한다. 이전 릴리스가 만든 봉인도 그대로 읽히며, `oms setup status`는 그 템플릿 제약을 `legacyTemplates` 개수로 보고할 뿐 강제하지 않는다.
 - **판정자는 하나다.** 거부 시 `{field, kind}` 위반과 안내 명령 하나만 반환한다. 규칙 값, 저장소 경로, 계약 본문은 반환하지 않는다.
 - **봉인 증거가 맞지 않으면 쓰기를 거부한다.** 이 기기의 증거가 볼트와 어긋나면 `contract-unreadable`로 거부하고 소유자가 `oms setup`을 다시 실행해야 한다. 봉인이 아예 없는 기기에서는 판정하지 않는 것과 구별한다.
 

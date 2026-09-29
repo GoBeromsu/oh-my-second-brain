@@ -24,7 +24,6 @@ const CONTRACT: VaultContract = {
     stamped: property("datetime", { default: true }),
     shade: property("text", { default: true }),
   },
-  templates: {},
 };
 
 function coerce(content: string, warnings: readonly Violation[], isNew = true, contract = CONTRACT) {

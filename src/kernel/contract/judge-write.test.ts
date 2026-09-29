@@ -1,9 +1,14 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { digestBytes } from "../conventions/canonical.js";
+import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import { decideWrite, judgeReadyTarget, resolveWriteTarget, type WriteTarget } from "./judge-write.js";
+import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { bootstrapSnapshots } from "./store.js";
 import type { ContractView, PropertyContract } from "./types.js";
+import { resolveSealState } from "./vault-id.js";
 
 const directories: string[] = [];
 
@@ -45,6 +50,40 @@ describe("resolveWriteTarget seal state failures", () => {
   });
 });
 
+describe("a version 2 generation with templates", () => {
+  it("loads, and the judge ignores its template constraints without touching the stored bytes", async () => {
+    const vault = await tempVault();
+    const root = await tempVault();
+    const vaultId = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
+    await mkdir(join(vault, ".oms"));
+    await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId, templateFolder: "Templates" }));
+    const revision = await sealLegacyGeneration({
+      vaultRealPath: vault,
+      vaultId,
+      contract: { folders: null, properties: { status: { meaning: "state", type: "text", default: false, required: false, rules: [] } } },
+      templates: {
+        Meeting: {
+          source: "Templates/Meeting.md", sourceHash: digestBytes("x"), applyFolder: "Projects",
+          requiredProperties: ["status"], narrowedRules: { status: [{ kind: "fixed", value: "open" }] }, requiredHeadings: ["Agenda"],
+        },
+      },
+    }, root);
+    await bootstrapSnapshots(root, vaultId);
+    const manifest = join(root, `.${vaultId}.1`, "manifest.json");
+    const before = await readFile(manifest, "utf8");
+
+    const resolved = await resolveWriteTarget(vault, join(vault, "Projects/a.md"), { resolveSealState: target => resolveSealState(target, root) });
+    if (resolved.state !== "ready" || resolved.view.state !== "sealed") throw new Error("expected a sealed ready target");
+    expect(resolved.view.revision).toBe(revision);
+    expect(resolved.view.legacy?.templates["Meeting"]?.requiredHeadings).toEqual(["Agenda"]);
+    expect(resolved.view.contract).not.toHaveProperty("templates");
+    // The note sits in the template's applyFolder, breaks its fixed `status` and lacks its heading.
+    expect(judgeReadyTarget(resolved, "---\nstatus: closed\n---\nno agenda\n")).toMatchObject({ ok: true, refusals: [], warnings: [], violations: [] });
+    expect(await readFile(manifest, "utf8")).toBe(before);
+    expect(digestBytes(await readFile(manifest, "utf8"))).toBe(digestBytes(before));
+  });
+});
+
 type ReadyTarget = Extract<WriteTarget, { readonly state: "ready" }>;
 
 function property(overrides: Partial<PropertyContract> = {}): PropertyContract {
@@ -53,7 +92,7 @@ function property(overrides: Partial<PropertyContract> = {}): PropertyContract {
 
 const SEALED: ContractView = {
   state: "sealed",
-  contract: { folders: null, properties: { status: property({ required: true }), owner: property() }, templates: {} },
+  contract: { folders: null, properties: { status: property({ required: true }), owner: property() } },
 };
 
 function ready(view: ContractView, previousContent: string | undefined | null = undefined): ReadyTarget {
@@ -109,7 +148,7 @@ describe("decideWrite", () => {
   });
 
   it("returns the fixed content and the saved verdict's fixes for a lossless fix", () => {
-    const typed: ContractView = { state: "sealed", contract: { folders: null, properties: { status: property({ required: true }), size: property({ type: "number" }) }, templates: {} } };
+    const typed: ContractView = { state: "sealed", contract: { folders: null, properties: { status: property({ required: true }), size: property({ type: "number" }) } } };
     const decision = decideWrite(ready(typed), "---\nstatus: open\nsize: \"12\"\n---\nbody\n");
     expect(decision.outcome).toBe("allow");
     if (decision.outcome !== "allow") return;
@@ -120,7 +159,7 @@ describe("decideWrite", () => {
   });
 
   it("fills a date default only on a new note and only with a time", () => {
-    const dated: ContractView = { state: "sealed", contract: { folders: null, properties: { created: property({ type: "date", default: true, required: true }) }, templates: {} } };
+    const dated: ContractView = { state: "sealed", contract: { folders: null, properties: { created: property({ type: "date", default: true, required: true }) } } };
     const now = new Date(2026, 8, 29, 9, 30);
     const fresh = decideWrite(ready(dated), "body\n", { now });
     expect(fresh.outcome === "allow" && fresh.fixedContent).toBe("---\ncreated: 2026-09-29\n---\nbody\n");
@@ -151,7 +190,7 @@ describe("decideWrite", () => {
   });
 
   it("does not treat a warning the note already had as new", () => {
-    const view: ContractView = { state: "sealed", contract: { folders: { Projects: { meaning: "p", searchExclude: false } }, properties: null, templates: {} } };
+    const view: ContractView = { state: "sealed", contract: { folders: { Projects: { meaning: "p", searchExclude: false } }, properties: null } };
     const unfiled = decideWrite(ready(view), "new body\n");
     expect(unfiled).toMatchObject({ outcome: "allow", findings: [{ axis: "folder", kind: "kept" }] });
     const decision = decideWrite(ready(view, "old body\n"), "new body\n");

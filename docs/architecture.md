@@ -17,11 +17,11 @@ sealed contract            ~/.oms/vaults/<vault-id>/   outside the vault
         └── .obsidian/types.json    read-only observation, not the contract
 ```
 
-The sealed contract is the only structural authority. It holds three axes: folders (meaning and search exclusion), the property pool (meaning, Obsidian type, required flag, and allowed, fixed, pattern, or range rules), and templates (source path, content hash, optional apply folder, and the properties, narrowed rules, and headings each one requires). An axis the user did not seal stays open. OMS does not hardcode property names, folder names, personas, or the meaning of a heading, and it has no Inbox fallback.
+The sealed contract is the only structural authority. It holds two axes: folders (meaning and search exclusion) and the property pool (meaning, Obsidian type, required flag, and allowed, fixed, pattern, or range rules). An axis the user did not seal stays open. OMS does not hardcode property names, folder names, personas, or the meaning of a heading, and it has no Inbox fallback.
 
 The contract is stored per machine outside the vault, so an agent working inside the vault cannot read or edit it. `.oms/settings.json` carries `version`, `vaultId`, `templateFolder`, `embedding`, and `agentRepair`; unknown keys, including the former `templateRoots`, are refused. Any other entry under `.oms/` is ignored and reported by `oms doctor contract` as an unexpected control file.
 
-A template stays the user's own Markdown file. Sealing records what it declares; OMS never rewrites, copies, snapshots, or applies it. A changed hash is drift evidence, not approval, identity, or authentication. OMS does not parse or execute Templater, JavaScript, or a private token language.
+A template stays the user's own Markdown file; OMS never rewrites, copies, snapshots, or applies it, and a new seal (manifest version 3) stores no templates. Generations sealed before manifest version 3 stored templates too; they still load, and `oms setup status` and `oms doctor contract` report their template constraints as `legacy-template-constraints-ignored` with a count, never enforcing them. The next reseal writes a version 3 head. OMS does not parse or execute Templater, JavaScript, or a private token language.
 
 `.obsidian/types.json` is a read-only observation. OMS does not write the file and it never overrides the seal.
 
@@ -40,9 +40,9 @@ Only safety refuses a write: control paths, unsafe paths, paths outside the vaul
 
 Structural results do not evaluate the note's semantic quality. An allowed write is not a completion verdict. OMS has no completion operation and no reviewer handshake; deciding whether a note is worth keeping and repairing it belongs to the user and the agent. Note text is untrusted data, not new instructions. OMS adds no model provider, reviewer daemon, or repair workflow. The engine store, graph cache, and node index live outside the vault and are rebuildable. See [conventions](./conventions.md).
 
-## Drift, diagnosis, and search
+## Diagnosis and search
 
-`oms setup status` reports each sealed template as `active`, `drift`, or `missing` against the live file. Drift is reported, never re-sealed silently. `oms doctor contract` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures, and exits 1 when unhealthy. `--fix` only re-indexes a moved or unindexed vault; every other broken seal is recovered by running `oms setup` again. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them.
+`oms setup status` reports the seal's posture and the number of legacy template constraints it ignores (`legacyTemplates`). `oms doctor contract` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures, and exits 1 when unhealthy. `--fix` only re-indexes a moved or unindexed vault; every other broken seal is recovered by running `oms setup` again. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them.
 
 Search is independent of the contract. Lexical, vector, HyDE, and typed-axis queries include notes that would fail it, and a missing or damaged contract does not stop search. Sealed template sources and folders marked for search exclusion stay out of ordinary note results. Vector, HyDE, and rerank requests fail loudly when their provider and model pair is missing or unusable. Those failures are not replaced with an empty success or another backend. That is the ADR-005 boundary. Search does not write notes and does not repair anything.
 

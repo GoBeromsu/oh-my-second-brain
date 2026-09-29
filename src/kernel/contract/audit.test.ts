@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildTruthTableRow, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
 import { auditVault } from "./audit.js";
-import type { VaultContract } from "./types.js";
+import type { TemplatedContract } from "./legacy.js";
 
 const SECRET = "zeta-secret-value";
-const CONTRACT: VaultContract = {
+const CONTRACT: TemplatedContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false }, Templates: { meaning: "sources", searchExclude: true } },
   properties: {
     status: { meaning: "state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: [SECRET] }] },
