@@ -18,6 +18,10 @@ describe("bench stats", () => {
     expect(quantile([7], 0.3)).toBe(7);
   });
 
+  it("rejects an empty sample", () => {
+    expect(() => quantile([], 0.5)).toThrow(/empty/);
+  });
+
   it("draws a reproducible stream for a seed", () => {
     const a = seededRandom(7);
     const b = seededRandom(7);

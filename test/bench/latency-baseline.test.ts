@@ -29,7 +29,7 @@ describe("bench:latency CLI surface", () => {
     expect(source).not.toMatch(/"search",\s*"context"/u);
   });
 
-  it("runs end to end against the built CLI and returns the three expected metrics", () => {
+  it("runs end to end against the built CLI and returns the expected metrics", () => {
     if (!existsSync(OMS)) {
       throw new Error("dist/cli/oms.js is missing; run `npm run build` before this test.");
     }
@@ -40,7 +40,7 @@ describe("bench:latency CLI surface", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     const report = JSON.parse(result.stdout);
-    expect(Object.keys(report.results).sort()).toEqual(["searchPathNfc", "searchPathNfd", "searchQueryLexical"].sort());
+    expect(Object.keys(report.results).sort()).toEqual(["searchPathNfd", "searchQueryLexical"].sort());
     for (const metric of Object.values(report.results) as Array<{ command: string }>) {
       expect(metric.command).not.toContain("note");
       expect(metric.command).not.toMatch(/search (query|context) /u);

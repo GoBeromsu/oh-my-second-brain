@@ -128,14 +128,19 @@ function walkStrings(value, visit) {
   }
 }
 
-// Below this length a substring check is unreliable: a 1-2 character tier-3
-// query (a single Korean syllable, say) can match inside an unrelated word
-// that happens to share those characters, which fails closed but is a
-// false positive. Below the threshold we only flag an exact value match
-// (the whole JSON string equals the query), which is what a real leak of a
-// short query looks like in an aggregate-only report; at or above it, the
-// existing substring check still fails closed on any leak.
+// Below this length a substring check is unreliable for ASCII text: a 1-2
+// character tier-3 query (a single letter, say) can match inside an
+// unrelated ASCII word that happens to share those characters, which fails
+// closed but is a false positive. Below the threshold we only flag an exact
+// value match (the whole JSON string equals the query) for ASCII text,
+// which is what a real leak of a short query looks like in an
+// aggregate-only report; at or above it, the existing substring check still
+// fails closed on any leak. A short *non-ASCII* query (a single Korean
+// syllable, say) has no such false-positive risk: everything a generated
+// report emits on its own (ids, labels, numbers) is ASCII, so a non-ASCII
+// substring match can only be an actual leak.
 const MIN_SUBSTRING_LEAK_LENGTH = 3;
+const NON_ASCII = /[^\x00-\x7F]/u;
 
 /**
  * Throws when a report leaks query text, a document path, or an absolute path.
@@ -152,7 +157,9 @@ export function assertReportPrivacy(report, context) {
     }
     for (const text of texts) {
       if (value === text) throw new Error("report leaks query text");
-      if (text.length >= MIN_SUBSTRING_LEAK_LENGTH && value.includes(text)) throw new Error("report leaks query text");
+      if ((text.length >= MIN_SUBSTRING_LEAK_LENGTH || NON_ASCII.test(text)) && value.includes(text)) {
+        throw new Error("report leaks query text");
+      }
     }
   });
 }

@@ -84,6 +84,15 @@ describe("bench privacy", () => {
     expect(() => assertReportPrivacy({ note: "prefix 낙상판정기준 suffix" }, { queryTexts: ["낙상판정기준"] })).toThrow(/query text/);
   });
 
+  it("still flags a substring leak of a short non-ASCII query", () => {
+    // Below the substring floor, an ASCII query only fails closed on an
+    // exact value match (see the "ab"/"table" case above). A non-ASCII
+    // query below the floor has no equivalent false-positive risk, since
+    // everything a generated report emits on its own is ASCII, so it must
+    // still be caught as a substring leak, not just an exact match.
+    expect(() => assertReportPrivacy({ perQuery: [{ id: "q-낙상" }] }, { queryTexts: ["낙상"] })).toThrow(/query text/);
+  });
+
   it("refuses tier 3 without an explicit vault and queries file", () => {
     expect(() => resolveTier3Vault({}, {})).toThrow(/explicit vault/);
     expect(() => resolveTier3Vault({ vault: "  " }, {})).toThrow(/explicit vault/);

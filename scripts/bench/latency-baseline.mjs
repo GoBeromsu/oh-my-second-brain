@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { cpus, tmpdir, totalmem, release, type } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { materializeKoVault, NFC_NOTE, NFD_NOTE } from "../../test/fixtures/ko-vault.mjs";
+import { materializeKoVault, NFD_NOTE } from "../../test/fixtures/ko-vault.mjs";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 const OMS = path.join(REPO, "dist", "cli", "oms.js");
@@ -135,10 +135,10 @@ console.log(JSON.stringify({
     memoryGiB: Math.round(totalmem() / 2 ** 30),
   },
   results: {
-    // Engine-free exact read; the note's on-disk spelling is already NFC.
-    searchPathNfc: measure(["search", "--path", NFC_NOTE], runs),
     searchQueryLexical: measure(["search", SEARCH_TEXT], runs),
     // Engine-free exact read; the NFC spelling of a note whose filename is NFD on disk.
+    // This exercises the same search --path code path a plain NFC-named note would,
+    // so a separate NFC-only measurement would be a duplicate, not added coverage.
     searchPathNfd: measure(["search", "--path", NFD_NOTE.normalize("NFC")], runs),
   },
 }, null, 2));
