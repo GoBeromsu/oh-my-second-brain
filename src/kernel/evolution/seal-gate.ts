@@ -6,6 +6,7 @@ import type { VaultContract } from "../contract/types.js";
 import { assertNotStalled, autonomousRun, isStalled } from "./convergence.js";
 import { appendEvolutionEvent, readEvolutionEvents } from "./events.js";
 import { withEvolutionLock, type LockDeps } from "./evolution-lock.js";
+import { anchorContract } from "./evaluator.js";
 import { classifyAll, type Direction } from "./mutation-direction.js";
 import { readPolicy } from "./policy.js";
 import { autonomousSeals, checkRateLimit } from "./rate-limit.js";
@@ -24,6 +25,7 @@ import {
   type VerdictRecord,
 } from "./request-state.js";
 import { mechanicalStage, type MechanicalResult, type NoteJudge } from "./stage-mechanical.js";
+import { semanticStage, type SemanticResult, type Similarity } from "./stage-semantic.js";
 
 /**
  * The one path from an evolution request to a sealed contract. It is the only evolution
@@ -34,11 +36,16 @@ import { mechanicalStage, type MechanicalResult, type NoteJudge } from "./stage-
  *   2. a loosening candidate moves to awaiting-human, whatever the policy says;
  *   3. the autonomous policy is on (else EVOLUTION_POLICY_OFF; the request stays open), and
  *      evolution has not stalled (EVOLUTION_STALLED after 3 autonomous generations in a row);
- *   4. stage 1: a new refusal rejects, a rising warning count moves to awaiting-human;
- *   5. the quorum: all 3 bound verdicts arrived and 2 of 3 approve (2 rejects reject);
- *   6. the rate limit, counted from the lineage;
- *   7. the pinned bytes verify; the seal attempt is recorded; then the seal, refusing a
- *      lineage gap instead of re-anchoring it.
+ *   4. stage 1: a new refusal rejects, a rising warning count moves to awaiting-human (so
+ *      an autonomous seal needs a warning delta of 0 or less);
+ *   5. stage 2, recomputed against the gen-1 anchor: a MECE overlap or drift above 0.3 rejects;
+ *   6. the quorum: all 3 bound verdicts arrived and 2 of 3 approve (2 rejects reject, and the
+ *      used slots keep rejecting every later autonomous attempt on the request);
+ *   7. the rate limit, counted from the lineage;
+ *   8. the pinned bytes verify; the seal attempt is recorded; then the seal, refusing a
+ *      lineage gap instead of re-anchoring it. The seal records `quorum: "host-attested"`:
+ *      OMS binds each verdict to a distinct session but cannot prove those sessions are
+ *      independent subagents.
  * An autonomous rejection is reported and journalled, never persisted as a terminal state:
  * only a human rejects a request for good.
  *
@@ -66,6 +73,13 @@ export interface Tally {
 export type QuorumDecision = "approve" | "reject" | "pending";
 
 const MAJORITY = Math.floor(QUORUM / 2) + 1;
+
+/**
+ * How an autonomous seal's quorum is attested: by the host. OMS enforces three distinct
+ * evaluator sessions, none of them the maker, but it cannot verify that the host really ran
+ * them as independent subagents — which is why autonomy is off by default.
+ */
+export const HOST_ATTESTED = "host-attested";
 
 export function tally(verdicts: readonly VerdictRecord[]): Tally {
   const approve = verdicts.filter(verdict => verdict.verdict === "approve").length;
@@ -102,6 +116,8 @@ export interface SealGateInput {
 export interface SealGateDeps {
   readonly now: () => number;
   readonly judge?: NoteJudge;
+  /** Stage 2's meaning similarity; token Jaccard when absent. */
+  readonly similarity?: Similarity;
   readonly lockDeps?: Partial<LockDeps>;
   /** Never carries `confirmStaleReclaim`: the seal-gate does not reclaim a seal lock. */
   readonly sealDeps?: Partial<Omit<SealDeps, "confirmStaleReclaim">>;
@@ -120,7 +136,7 @@ export type SealGateOutcome =
     readonly stage1: MechanicalResult;
   }
   | { readonly outcome: "awaiting-human"; readonly reason: "loosening" | "warning-delta" | "already"; readonly direction?: Direction; readonly stage1?: MechanicalResult }
-  | { readonly outcome: "rejected"; readonly reason: "stage1-refusal" | "quorum-rejected"; readonly stage1?: MechanicalResult }
+  | { readonly outcome: "rejected"; readonly reason: "stage1-refusal" | "stage2-refusal" | "quorum-rejected"; readonly stage1?: MechanicalResult; readonly stage2?: SemanticResult }
   | { readonly outcome: "pending"; readonly quorum: Tally };
 
 function stage1Summary(stage1: MechanicalResult): Record<string, number> {
@@ -215,6 +231,17 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
       await toAwaitingHuman(input, request, now, "warning-delta", { direction, ...stage1Summary(stage1) });
       return { outcome: "awaiting-human", reason: "warning-delta", direction, stage1 };
     }
+    const anchor = await anchorContract(root, vaultId);
+    const stage2 = semanticStage(anchor ?? parent.contract, parent.contract, candidate.contract, deps.similarity === undefined ? {} : { similarity: deps.similarity });
+    if (!stage2.passed) {
+      await appendEvolutionEvent(root, vaultId, {
+        kind: "request.rejected",
+        at: now,
+        requestId: request.requestId,
+        detail: { reason: "stage2-refusal", mode: input.mode, stage2Reason: stage2.reason, drift: stage2.drift, overlaps: stage2.overlaps.length },
+      });
+      return { outcome: "rejected", reason: "stage2-refusal", stage1, stage2 };
+    }
     const count = tally(request.verdicts);
     const decision = quorumDecision(count);
     if (decision === "pending") return { outcome: "pending", quorum: count };
@@ -245,6 +272,7 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
         requestId: request.requestId,
         autonomous,
         mode: input.mode,
+        ...(autonomous ? { quorum: HOST_ATTESTED } : {}),
         mutations: request.mutations,
         ...(request.revertOf === undefined ? {} : { revertOf: request.revertOf }),
       }),
@@ -258,7 +286,7 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
     kind: autonomous ? "seal.autonomous" : "seal.human-approved",
     at: now,
     requestId: request.requestId,
-    detail: { seq: sealed.seq, digest: sealed.digest, eventSeq: tail.eventSeq, direction, ...stage1Summary(stage1) },
+    detail: { seq: sealed.seq, digest: sealed.digest, eventSeq: tail.eventSeq, direction, ...stage1Summary(stage1), ...(autonomous ? { quorum: HOST_ATTESTED } : {}) },
   });
   if (sealed.warnings.includes("lineage-gap-reanchored")) {
     await appendEvolutionEvent(root, vaultId, { kind: "lineage.reanchored", at: now, requestId: request.requestId, detail: { anchors: sealed.anchors.length } });

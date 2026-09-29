@@ -11,6 +11,7 @@ import { readEvolutionEvents } from "./events.js";
 import { evolve } from "./evolve.js";
 import { listRequests, readPinnedCandidate } from "./request-state.js";
 import type { NoteJudge } from "./stage-mechanical.js";
+import type { Similarity } from "./stage-semantic.js";
 
 const ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const NOW = 1_700_000_000_000;
@@ -39,7 +40,7 @@ afterEach(async () => {
 });
 
 let counter = 0;
-const deps = (extra: { judge?: NoteJudge } = {}) => ({
+const deps = (extra: { judge?: NoteJudge; similarity?: Similarity } = {}) => ({
   now: () => NOW,
   newId: () => `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`,
   newToken: () => (++counter).toString(16).padStart(32, "0"),
@@ -49,9 +50,9 @@ const seal = async (contract: VaultContract) => (await sealContract({ vaultRealP
 const gap = (field: string, value: string, axis: GapInput["axis"] = "value"): GapInput => ({
   notePath: "Projects/a.md", noteRevision: REV, contractRevision: REV, axis, kind: "kept", chosen: null, wanted: { field, value }, reason: "kept: not-allowed",
 });
-const run = (extra: { judge?: NoteJudge; makerSessionId?: string } = {}) => evolve(
-  { root, vaultId: ID, vaultRealPath: vault, ...(extra.makerSessionId === undefined ? {} : { makerSessionId: extra.makerSessionId }) },
-  deps(extra.judge === undefined ? {} : { judge: extra.judge }),
+const run = (extra: { judge?: NoteJudge; similarity?: Similarity; makerSessionId?: string } = {}) => evolve(
+  { root, vaultId: ID, vaultRealPath: vault, makerSessionId: extra.makerSessionId ?? "maker-1" },
+  deps({ ...(extra.judge === undefined ? {} : { judge: extra.judge }), ...(extra.similarity === undefined ? {} : { similarity: extra.similarity }) }),
 );
 
 async function unchanged(action: () => Promise<unknown>, code: RegExp): Promise<void> {
@@ -85,11 +86,19 @@ describe("evolve", () => {
     expect(kinds).toEqual(expect.arrayContaining(["request.issued", "request.awaiting-human"]));
   });
 
-  it("omits the maker session when none is given", async () => {
+  it("issues nothing without a maker session", async () => {
     await seal(NARROW);
     await recordGaps(root, ID, [gap("status", "b")], { now: () => NOW, newId: () => "gap-1" });
-    const result = await run();
-    expect(result.request.makerSessionId).toBeUndefined();
+    const bare = { root, vaultId: ID, vaultRealPath: vault } as Parameters<typeof evolve>[0];
+    await unchanged(() => evolve(bare, deps()), /^EVOLUTION_MAKER_SESSION_REQUIRED:/);
+    await unchanged(() => run({ makerSessionId: "  " }), /^EVOLUTION_MAKER_SESSION_REQUIRED:/);
+  });
+
+  it("issues nothing when stage 2 finds drift past the threshold", async () => {
+    await seal(NARROW);
+    await recordGaps(root, ID, [gap("status", "b")], { now: () => NOW, newId: () => "gap-1" });
+    await unchanged(() => run({ similarity: () => 0.69 }), /^EVOLUTION_STAGE2_REFUSED: the candidate drifts 0\.31/);
+    expect((await run({ similarity: () => 0.7 })).stage2).toMatchObject({ passed: true });
   });
 
   it("issues nothing when the maker drafts no change", async () => {

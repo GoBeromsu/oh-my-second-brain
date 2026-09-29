@@ -84,11 +84,13 @@ describe("runEvolutionOp evolve", () => {
     expect(await readStore(ID, root)).toMatchObject({ digest: parent });
   });
 
-  it("issues a request with no maker session", async () => {
+  it("refuses an evolve that names no maker session and issues nothing", async () => {
     await seal(NARROW);
     await recordGaps(root, ID, [gap("status", "b")], { now: () => NOW, newId: () => "gap-1" });
-    const result = await run("evolve");
-    expect(result).toMatchObject({ kind: "completed", value: { state: "awaiting-human" } });
+    for (const args of [undefined, {}, { makerSessionId: "  " }]) {
+      expect(await run("evolve", args)).toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_MAKER_SESSION_REQUIRED:/) });
+    }
+    expect((await listRequests(root, ID)).records).toEqual([]);
   });
 
   it("refuses a malformed maker session and issues nothing", async () => {
@@ -99,7 +101,7 @@ describe("runEvolutionOp evolve", () => {
 
   it("maps an evolution refusal to an error result", async () => {
     await seal(NARROW);
-    expect(await run("evolve")).toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_NO_MUTATIONS:/) });
+    expect(await run("evolve", { makerSessionId: "maker-1" })).toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_NO_MUTATIONS:/) });
   });
 
   it("refuses a vault with no sealed contract", async () => {
@@ -113,7 +115,7 @@ describe("runEvolutionOp evolve", () => {
     await recordGaps(root, ID, [gap("status", "b")], { now: () => NOW, newId: () => "gap-1" });
     await chmod(join(root, `.${ID}.state`), 0o777);
     try {
-      expect(await run("evolve")).toEqual({ kind: "error", message: "STATE_DIR_UNSAFE: the contract store holds an unsafe entry (shared-writable); it was left untouched" });
+      expect(await run("evolve", { makerSessionId: "maker-1" })).toEqual({ kind: "error", message: "STATE_DIR_UNSAFE: the contract store holds an unsafe entry (shared-writable); it was left untouched" });
     } finally {
       await chmod(join(root, `.${ID}.state`), 0o700);
     }
@@ -122,7 +124,7 @@ describe("runEvolutionOp evolve", () => {
   it("rethrows a failure that is not an evolution refusal", async () => {
     await seal(NARROW);
     await recordGaps(root, ID, [gap("status", "b")], { now: () => NOW, newId: () => "gap-1" });
-    await expect(run("evolve", undefined, undefined, { judge: () => { throw new Error("judge broke"); } })).rejects.toThrow("judge broke");
+    await expect(run("evolve", { makerSessionId: "maker-1" }, undefined, { judge: () => { throw new Error("judge broke"); } })).rejects.toThrow("judge broke");
   });
 });
 

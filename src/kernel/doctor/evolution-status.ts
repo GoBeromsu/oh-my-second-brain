@@ -6,11 +6,14 @@ import { readEvolutionEvents, EVOLUTION_EVENT_KINDS, type EvolutionCounters, typ
 import { readPolicy, type EvolutionLimits } from "../evolution/policy.js";
 import { autonomousSeals, checkRateLimit } from "../evolution/rate-limit.js";
 import { listRequests } from "../evolution/request-state.js";
+import { HOST_ATTESTED } from "../evolution/seal-gate.js";
 
 /**
  * The evolution section of `doctor status`: counters from the evolution journal, the
  * requests waiting for the owner, the autonomous budget left in the current day and week,
- * and whether the lineage currently has a gap. Read-only: every reader here returns empty
+ * whether the lineage currently has a gap, and how an autonomous seal's quorum is attested
+ * (`host-attested`: OMS cannot verify the evaluators were independent subagents, which is
+ * why autonomy is off by default). Read-only: every reader here returns empty
  * for an absent store and creates nothing. An unsealed vault has no evolution (null).
  */
 export interface EvolutionStatus {
@@ -24,6 +27,7 @@ export interface EvolutionStatus {
     readonly remaining: { readonly day: number; readonly week: number };
   };
   readonly lineageGap: boolean;
+  readonly quorum: typeof HOST_ATTESTED;
 }
 
 export async function evolutionStatus(vault: string, now: number, root: string = storeRoot()): Promise<EvolutionStatus | null> {
@@ -49,5 +53,6 @@ export async function evolutionStatus(vault: string, now: number, root: string =
       remaining: policy.policy.autonomous ? check.remaining : { day: 0, week: 0 },
     },
     lineageGap: health.findings.some(finding => finding.kind === "lineage-gap"),
+    quorum: HOST_ATTESTED,
   };
 }

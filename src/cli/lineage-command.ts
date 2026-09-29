@@ -18,7 +18,7 @@ export type LineageLeaf = "lineage-recover" | "lineage-reanchor" | "evolve" | "e
 
 /** Each leaf's own flag, if any, and the op argument it fills. */
 const LEAF_FLAG: Readonly<Partial<Record<LineageLeaf, { readonly flag: string; readonly arg: string; readonly required: boolean }>>> = {
-  evolve: { flag: "--maker-session", arg: "makerSessionId", required: false },
+  evolve: { flag: "--maker-session", arg: "makerSessionId", required: true },
   "evolve-verdict": { flag: "--verdict", arg: "verdict", required: true },
   "revert-propose": { flag: "--target", arg: "targetDigest", required: true },
 };
@@ -27,7 +27,7 @@ const OWNER_ONLY: ReadonlySet<LineageLeaf> = new Set(["lineage-reanchor", "recla
 
 function usage(leaf: LineageLeaf): string {
   const own = LEAF_FLAG[leaf];
-  const flag = own === undefined ? "" : own.required ? ` ${own.flag} <${own.arg === "verdict" ? "file|-" : "digest"}>` : ` [${own.flag} <id>]`;
+  const flag = own === undefined ? "" : ` ${own.flag} <${own.arg === "verdict" ? "file|-" : own.arg === "makerSessionId" ? "id" : "digest"}>`;
   return `Usage: oms doctor ${leaf}${flag} [--vault <path>]`;
 }
 

@@ -31,7 +31,7 @@ const status = (values: string[]): PropertyContract => ({ meaning: "state", type
 const PARENT: VaultContract = { folders: { Projects: { meaning: "projects", searchExclude: false } }, properties: { status: status(["a", "b"]) } };
 const TIGHTER: VaultContract = { ...PARENT, properties: { status: status(["a"]) } };
 const WIDER: VaultContract = { ...PARENT, properties: { status: status(["a", "b", "c"]) } };
-const RENAMED: VaultContract = { ...TIGHTER, folders: { Projects: { meaning: "active work", searchExclude: false } } };
+const RENAMED: VaultContract = { ...TIGHTER, folders: { Projects: { meaning: "active projects", searchExclude: false } } };
 
 beforeEach(async () => {
   base = await realpath(await mkdtemp(join(tmpdir(), "oms-evo-human-")));

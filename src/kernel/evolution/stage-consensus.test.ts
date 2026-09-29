@@ -200,6 +200,24 @@ describe("recordVerdict refusals", () => {
     expect((await readRequest(root, ID, request.requestId))?.verdicts).toEqual([]);
   });
 
+  it("refuses every verdict on an evolve request that names no maker", async () => {
+    const { tail } = await lineageTail(root, ID);
+    const request = await createRequest(root, ID, { kind: "evolve", contract: TIGHTER, mutations: [], parent: tail }, ids(NOW));
+    await expect(record(submission(request, 0, "approve"))).rejects.toThrow(/maker-unknown/);
+    expect((await readRequest(root, ID, request.requestId))?.verdicts).toEqual([]);
+    expect(await discarded()).toEqual(["maker-unknown"]);
+  });
+
+  it("refuses three approvals under ids that repeat each other or the maker", async () => {
+    const request = await issue();
+    const before = await readStore(ID, root);
+    await record(submission(request, 0, "approve", { evaluatorSessionId: "same" }));
+    await expect(record(submission(request, 1, "approve", { evaluatorSessionId: "same" }))).rejects.toThrow(/session-duplicate/);
+    await expect(record(submission(request, 2, "approve", { evaluatorSessionId: "maker-1" }))).rejects.toThrow(/session-is-maker/);
+    expect((await readRequest(root, ID, request.requestId))?.verdicts).toHaveLength(1);
+    expect(await readStore(ID, root)).toEqual(before);
+  });
+
   it.each([
     ["candidateDigest", "candidate-mismatch", { candidateDigest: `sha256:${"c".repeat(64)}` }],
     ["parentDigest", "parent-mismatch", { parentDigest: `sha256:${"d".repeat(64)}` }],

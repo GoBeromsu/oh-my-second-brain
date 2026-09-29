@@ -159,7 +159,7 @@ describe("oms doctor lineage-recover and lineage-reanchor", () => {
 describe("oms doctor evolution leaves", () => {
   it("prints each leaf's usage with its own flag", async () => {
     await runLineageCommand("evolve", ["--help"]);
-    expect(log).toHaveBeenLastCalledWith("Usage: oms doctor evolve [--maker-session <id>] [--vault <path>]");
+    expect(log).toHaveBeenLastCalledWith("Usage: oms doctor evolve --maker-session <id> [--vault <path>]");
     await runLineageCommand("evolve-verdict", ["--help"]);
     expect(log).toHaveBeenLastCalledWith("Usage: oms doctor evolve-verdict --verdict <file|-> [--vault <path>]");
     await runLineageCommand("revert-propose", ["-h"]);
@@ -170,6 +170,7 @@ describe("oms doctor evolution leaves", () => {
 
   it.each([
     ["evolve-verdict", ["--vault", "v"], "CONTRACT_ARGS_INVALID: doctor evolve-verdict needs --verdict"],
+    ["evolve", ["--vault", "v"], "CONTRACT_ARGS_INVALID: doctor evolve needs --maker-session"],
     ["revert-propose", [], "CONTRACT_ARGS_INVALID: doctor revert-propose needs --target"],
     ["revert-propose", ["--target", "a", "--target", "b"], "CONTRACT_ARGS_INVALID: duplicate flag --target"],
     ["evolve", ["--target", "a"], "CONTRACT_ARGS_INVALID: doctor evolve received unknown argument --target"],

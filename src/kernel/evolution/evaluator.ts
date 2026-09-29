@@ -10,8 +10,9 @@ import { semanticStage, type SemanticResult, type Similarity } from "./stage-sem
  * The evaluator: stages 1 and 2 of the three-stage pipeline, plus the direction check.
  * It is read-only and runs without the writer's context — its input is the parent contract,
  * the maker's mutation list and the vault path. Stage 1 (no new refusals) and the direction
- * are the hard gates; the warning delta is the score and stage 2 is advisory. Stage 3 (the
- * host quorum) runs later against the request this result opens.
+ * and stage 2 (no MECE overlap, drift within the threshold) are hard gates — a stage-2
+ * refusal rejects, it is not advisory; the warning delta is the score. Stage 3 (the host
+ * quorum) runs later against the request this result opens.
  */
 
 export interface EvaluatorInput {
@@ -29,8 +30,8 @@ export interface EvaluatorDeps {
 }
 
 /**
- * Where the candidate goes next: `reject` when stage 1 finds a new refusal (nothing is
- * opened), `awaiting-human` when it loosens or raises warnings (it can never seal on the
+ * Where the candidate goes next: `reject` when stage 1 finds a new refusal or stage 2
+ * finds a MECE overlap or drift past the threshold (nothing is opened), `awaiting-human` when it loosens or raises warnings (it can never seal on the
  * quorum alone), otherwise `consensus`.
  */
 export type EvaluationRoute = "reject" | "awaiting-human" | "consensus";
@@ -43,8 +44,8 @@ export interface Evaluation {
   readonly route: EvaluationRoute;
 }
 
-export function routeOf(stage1: MechanicalResult, direction: Direction): EvaluationRoute {
-  if (!stage1.passed) return "reject";
+export function routeOf(stage1: MechanicalResult, stage2: SemanticResult, direction: Direction): EvaluationRoute {
+  if (!stage1.passed || !stage2.passed) return "reject";
   if (direction === "loosening" || stage1.warningDelta > 0) return "awaiting-human";
   return "consensus";
 }
@@ -55,7 +56,7 @@ export async function evaluateCandidate(input: EvaluatorInput, deps: EvaluatorDe
   const stage1 = await mechanicalStage(input.vault, input.parent, candidate, deps.judge);
   const stage2 = semanticStage(input.anchor ?? input.parent, input.parent, candidate, deps.similarity === undefined ? {} : { similarity: deps.similarity });
   const direction = classifyAll(input.mutations, input.parent).direction;
-  return { candidate, stage1, stage2, direction, route: routeOf(stage1, direction) };
+  return { candidate, stage1, stage2, direction, route: routeOf(stage1, stage2, direction) };
 }
 
 /**

@@ -121,7 +121,8 @@ export type DiscardReason =
   | "slot-unknown"
   | "slot-reused"
   | "session-duplicate"
-  | "session-is-maker";
+  | "session-is-maker"
+  | "maker-unknown";
 
 function validSubmission(input: VerdictSubmission): boolean {
   return typeof input.evaluatorSessionId === "string" && input.evaluatorSessionId.length > 0
@@ -140,7 +141,10 @@ function discardReason(request: RequestRecord, input: VerdictSubmission): Discar
   if (!request.slots.includes(input.slotToken)) return "slot-unknown";
   if (request.usedSlots.includes(input.slotToken)) return "slot-reused";
   if (request.verdicts.some(verdict => verdict.evaluatorSessionId === input.evaluatorSessionId)) return "session-duplicate";
-  if (request.makerSessionId !== undefined && input.evaluatorSessionId === request.makerSessionId) return "session-is-maker";
+  // An evolve request always names its maker, so maker exclusion is unconditional; one without
+  // (a record written before the maker session became required) cannot take a verdict.
+  if (request.kind === "evolve" && request.makerSessionId === undefined) return "maker-unknown";
+  if (input.evaluatorSessionId === request.makerSessionId) return "session-is-maker";
   return null;
 }
 

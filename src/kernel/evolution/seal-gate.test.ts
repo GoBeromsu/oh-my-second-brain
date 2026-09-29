@@ -27,7 +27,7 @@ const status = (values: string[]): PropertyContract => ({ meaning: "state", type
 const PARENT: VaultContract = { folders: { Projects: { meaning: "projects", searchExclude: false } }, properties: { status: status(["a", "b"]) } };
 const TIGHTER: VaultContract = { ...PARENT, properties: { status: status(["a"]) } };
 const WIDER: VaultContract = { ...PARENT, properties: { status: status(["a", "b", "c"]) } };
-const RENAMED: VaultContract = { ...TIGHTER, folders: { Projects: { meaning: "active work", searchExclude: false } } };
+const RENAMED: VaultContract = { ...TIGHTER, folders: { Projects: { meaning: "active projects", searchExclude: false } } };
 
 beforeEach(async () => {
   base = await realpath(await mkdtemp(join(tmpdir(), "oms-evo-gate-")));
@@ -114,9 +114,31 @@ describe("sealGate autonomous", () => {
     const store = await readStore(ID, root);
     expect(store.state === "ok" && store.digest).toBe(request.candidateDigest);
     const last = (await readLineage(root, ID, "strict")).events.at(-1);
-    expect(last).toMatchObject({ kind: "sealed", digest: request.candidateDigest, requestId: request.requestId, autonomous: true, mode: "autonomous", proposer: "maker-1", evaluator: "eval-0,eval-1,eval-2" });
+    expect(last).toMatchObject({ kind: "sealed", digest: request.candidateDigest, requestId: request.requestId, autonomous: true, mode: "autonomous", proposer: "maker-1", evaluator: "eval-0,eval-1,eval-2", quorum: "host-attested" });
     expect(await readRequest(root, ID, request.requestId)).toMatchObject({ state: "sealed", sealAttempt: { mode: "autonomous", at: NOW, candidateDigest: request.candidateDigest } });
-    expect((await readEvolutionEvents(root, ID)).events.at(-1)).toMatchObject({ kind: "seal.autonomous", requestId: request.requestId, detail: { eventSeq: last?.eventSeq } });
+    expect((await readEvolutionEvents(root, ID)).events.at(-1)).toMatchObject({ kind: "seal.autonomous", requestId: request.requestId, detail: { eventSeq: last?.eventSeq, quorum: "host-attested" } });
+  });
+
+  it.each([
+    ["drift 0.31", TIGHTER, () => 0.69, "drift"],
+    ["a MECE overlap", { ...TIGHTER, properties: { ...TIGHTER.properties, phase: status(["x"]) } }, undefined, "mece-overlap"],
+  ] as const)("rejects %s even with an approving quorum, and keeps rejecting it", async (_label, contract, similarity, stage2Reason) => {
+    await autonomousOn();
+    const request = await withVerdicts(await issue(contract), ["approve", "approve", "approve"]);
+    const store = await readStore(ID, root);
+    const deps = similarity === undefined ? {} : { similarity };
+    expect(await run(request, "autonomous", deps)).toMatchObject({ outcome: "rejected", reason: "stage2-refusal", stage2: { passed: false, reason: stage2Reason } });
+    expect(await run(request, "autonomous", deps)).toMatchObject({ outcome: "rejected", reason: "stage2-refusal" });
+    expect(await readStore(ID, root)).toEqual(store);
+    expect((await readLineage(root, ID, "strict")).events).toHaveLength(1);
+    expect(await stateOf(request)).toBe("open");
+    expect((await readEvolutionEvents(root, ID)).events.at(-1)).toMatchObject({ kind: "request.rejected", detail: { reason: "stage2-refusal", mode: "autonomous", stage2Reason } });
+  });
+
+  it("admits drift of exactly 0.3", async () => {
+    await autonomousOn();
+    const request = await withVerdicts(await issue(TIGHTER), ["approve", "approve", "reject"]);
+    expect(await run(request, "autonomous", { similarity: () => 0.7 })).toMatchObject({ outcome: "sealed" });
   });
 
   it("moves a loosening candidate to awaiting-human even when the policy is off", async () => {
@@ -171,7 +193,10 @@ describe("sealGate autonomous", () => {
     const request = await withVerdicts(await issue(TIGHTER), ["approve"]);
     expect(await run(request)).toEqual({ outcome: "pending", quorum: { approve: 1, reject: 0, pending: 2 } });
     await withVerdicts(request, ["approve", "reject", "reject"]);
+    const store = await readStore(ID, root);
     expect(await run(request)).toMatchObject({ outcome: "rejected", reason: "quorum-rejected" });
+    expect(await run(request)).toMatchObject({ outcome: "rejected", reason: "quorum-rejected" });
+    expect(await readStore(ID, root)).toEqual(store);
     expect(await stateOf(request)).toBe("open");
   });
 
@@ -253,7 +278,9 @@ describe("sealGate human", () => {
     expect(result).toMatchObject({ outcome: "sealed", direction: "loosening" });
     const last = (await readLineage(root, ID, "strict")).events.at(-1);
     expect(last).toMatchObject({ kind: "sealed", requestId: request.requestId, autonomous: false, mode: "human", evaluator: "human-cli" });
+    expect(last).not.toHaveProperty("quorum");
     expect((await readEvolutionEvents(root, ID)).events.at(-1)).toMatchObject({ kind: "seal.human-approved", detail: { direction: "loosening" } });
+    expect((await readEvolutionEvents(root, ID)).events.at(-1)?.detail).not.toHaveProperty("quorum");
     expect(await stateOf(request)).toBe("sealed");
   });
 

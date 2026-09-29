@@ -2,8 +2,9 @@ import type { VaultContract } from "../contract/types.js";
 
 /**
  * Stage 2 of the evaluator: the meanings of the candidate contract, read-only and
- * deterministic. It is an advisory filter: a rejection is final, a pass proves nothing
- * (stage 1 and the direction classifier are the hard gates).
+ * deterministic. It is a hard gate: a MECE overlap or drift past the threshold rejects the
+ * candidate (routeOf, evolve and the autonomous seal-gate all enforce it). A pass proves nothing
+ * on its own; stage 1, the direction classifier and the quorum still decide.
  *
  *   - MECE: two entries of one axis whose meanings are near-identical overlap. Only a pair
  *     that involves an entry the candidate adds or re-words counts, so an overlap already

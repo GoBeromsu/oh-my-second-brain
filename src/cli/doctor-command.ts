@@ -34,8 +34,9 @@ export function doctorUsage(): string {
   lineage-reanchor [--vault <path>]
             As lineage-recover, and also anchor a gap so the lineage continues.
             Owner only: asks for confirmation in a terminal.
-  evolve [--maker-session <id>] [--vault <path>]
+  evolve --maker-session <id> [--vault <path>]
             Open a contract evolution request for an evaluator to judge.
+            The maker's session is required so it can never evaluate its own candidate.
   evolve-verdict --verdict <file|-> [--vault <path>]
             Submit an evaluator verdict (one JSON object) for an open request.
   revert-propose --target <digest> [--vault <path>]

@@ -47,6 +47,8 @@ export interface LineageEvent {
   readonly autonomous?: boolean;
   /** How the seal was decided: `autonomous`, `human` (an approved request) or `revert`. */
   readonly mode?: string;
+  /** How an autonomous seal's quorum was attested: `host-attested` (OMS cannot verify subagent independence). */
+  readonly quorum?: string;
   readonly reason?: RecoveredReason;
   readonly priorTail?: ContractDigest;
   readonly gapFrom?: ContractDigest;
@@ -86,10 +88,10 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-const OPTIONAL_TEXT = ["proposer", "evaluator", "requestId", "mode"] as const;
+const OPTIONAL_TEXT = ["proposer", "evaluator", "requestId", "mode", "quorum"] as const;
 const KNOWN_KEYS: ReadonlySet<string> = new Set([
   "eventSeq", "kind", "generation", "parentDigest", "digest", "mutations", "manifestDigests",
-  "revertOf", "proposer", "evaluator", "requestId", "autonomous", "mode", "reason", "priorTail", "gapFrom",
+  "revertOf", "proposer", "evaluator", "requestId", "autonomous", "mode", "quorum", "reason", "priorTail", "gapFrom",
 ]);
 
 export function parseLineageEvent(line: string): LineageEvent | null {
@@ -346,6 +348,8 @@ export interface LineageAttribution {
   readonly requestId?: string;
   readonly autonomous?: boolean;
   readonly mode?: string;
+  /** How an autonomous seal's quorum was attested. */
+  readonly quorum?: string;
   /** The mutations the seal applied; recorded as given. */
   readonly mutations?: readonly unknown[];
   /** The earlier digest a revert seal restores. */
@@ -367,6 +371,7 @@ export function sealedDraft(sealed: SealedGeneration, attribution: LineageAttrib
     ...(attribution.requestId === undefined ? {} : { requestId: attribution.requestId }),
     ...(attribution.autonomous === undefined ? {} : { autonomous: attribution.autonomous }),
     ...(attribution.mode === undefined ? {} : { mode: attribution.mode }),
+    ...(attribution.quorum === undefined ? {} : { quorum: attribution.quorum }),
     ...(attribution.revertOf === undefined ? {} : { revertOf: attribution.revertOf }),
   };
 }

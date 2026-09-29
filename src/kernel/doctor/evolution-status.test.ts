@@ -55,6 +55,7 @@ describe("evolutionStatus", () => {
       awaitingHuman: 0,
       budget: { limits: { perDay: 1, perWeek: 3 }, used: { day: 0, week: 0 }, remaining: { day: 0, week: 0 } },
       lineageGap: false,
+      quorum: "host-attested",
     });
     expect(existsSync(join(stateDir(root, ID), "evolution"))).toBe(false);
   });

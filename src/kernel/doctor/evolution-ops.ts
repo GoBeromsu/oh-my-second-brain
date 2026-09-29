@@ -54,8 +54,17 @@ class EvolutionOpError extends Error {
   }
 }
 
-function postcondition(holds: boolean, detail: string): void {
-  if (!holds) throw new Error(`Evolution postcondition failed: ${detail}.`);
+/**
+ * A failed server-side postcondition. After a seal it names the sealed generation, so the host
+ * knows the contract already moved and must not retry the seal.
+ */
+function postcondition(holds: boolean, detail: string, sealed?: { readonly seq: number; readonly digest: string; readonly eventSeq: number }): void {
+  if (holds) return;
+  if (sealed === undefined) throw new EvolutionOpError("EVOLUTION_POSTCONDITION_FAILED", `${detail}`);
+  throw new EvolutionOpError(
+    "EVOLUTION_POSTCONDITION_FAILED_AFTER_SEAL",
+    `${detail}; the seal happened (digest ${sealed.digest}, seq ${sealed.seq}, eventSeq ${sealed.eventSeq}) — run \`oms doctor contract\` before retrying`,
+  );
 }
 
 function text(args: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -82,8 +91,11 @@ async function count(root: string, vaultId: string, kind: EvolutionEventKind): P
 
 async function runEvolve(root: string, vaultId: string, vault: string, args: Record<string, unknown> | undefined, deps: EvolutionOpsDeps): Promise<Record<string, unknown>> {
   const makerSessionId = text(args, "makerSessionId");
+  if (makerSessionId === undefined) {
+    throw new EvolutionOpError("EVOLUTION_MAKER_SESSION_REQUIRED", "evolve needs the maker's session id (makerSessionId), so the maker can never evaluate its own candidate; nothing was issued");
+  }
   const before = await linked(vaultId, root);
-  const result = await evolve({ root, vaultId, vaultRealPath: vault, ...(makerSessionId === undefined ? {} : { makerSessionId }) }, deps);
+  const result = await evolve({ root, vaultId, vaultRealPath: vault, makerSessionId }, deps);
   const { request } = result;
   const stored = await readRequest(root, vaultId, request.requestId);
   postcondition(stored !== null && stored.state === request.state && (stored.state === "open" || stored.state === "awaiting-human"), "the issued request is not open or awaiting-human");
@@ -110,9 +122,9 @@ async function runVerdict(root: string, vaultId: string, vault: string, args: Re
   postcondition(stored!.usedSlots.filter(token => token === submission.slotToken).length === 1, "the slot was not used exactly once");
   if (receipt.sealed !== undefined) {
     const store = await readStore(vaultId, root);
-    postcondition(store.state === "ok" && store.digest === stored!.candidateDigest && receipt.sealed.digest === stored!.candidateDigest, "the linked digest is not the candidate");
+    postcondition(store.state === "ok" && store.digest === stored!.candidateDigest && receipt.sealed.digest === stored!.candidateDigest, "the linked digest is not the candidate", receipt.sealed);
     const { tail } = await lineageTail(root, vaultId);
-    postcondition(tail.eventSeq === receipt.sealed.eventSeq && tail.digest === receipt.sealed.digest, "the lineage tail is not the sealed event");
+    postcondition(tail.eventSeq === receipt.sealed.eventSeq && tail.digest === receipt.sealed.digest, "the lineage tail is not the sealed event", receipt.sealed);
   }
   return {
     op: "evolve-verdict", vaultId, requestId: receipt.requestId, slot: receipt.slot, accepted: receipt.accepted, quorum: receipt.quorum,

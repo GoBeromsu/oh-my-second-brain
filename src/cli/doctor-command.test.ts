@@ -75,7 +75,7 @@ describe("oms doctor", () => {
 
   it("routes the evolution leaves to the contract repair leaf", async () => {
     for (const [leaf, usage] of [
-      ["evolve", "Usage: oms doctor evolve [--maker-session <id>] [--vault <path>]"],
+      ["evolve", "Usage: oms doctor evolve --maker-session <id> [--vault <path>]"],
       ["evolve-verdict", "Usage: oms doctor evolve-verdict --verdict <file|-> [--vault <path>]"],
       ["revert-propose", "Usage: oms doctor revert-propose --target <digest> [--vault <path>]"],
       ["reclaim-evolution-lock", "Usage: oms doctor reclaim-evolution-lock [--vault <path>]"],
@@ -168,7 +168,7 @@ describe("oms doctor", () => {
     await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: id, templateFolder: "Templates" }));
     await sealContract({ vaultRealPath: await realpath(vault), vaultId: id, contract: { folders: { notes: { meaning: "notes", searchExclude: false } }, properties: {} } }, storeRoot());
     await runDoctorCommand(["status", "--vault", vault]);
-    expect(JSON.parse(stdout())).toMatchObject({ evolution: { autonomous: false, awaitingHuman: 0, lineageGap: false, budget: { remaining: { day: 0, week: 0 } } } });
+    expect(JSON.parse(stdout())).toMatchObject({ evolution: { autonomous: false, awaitingHuman: 0, lineageGap: false, quorum: "host-attested", budget: { remaining: { day: 0, week: 0 } } } });
     expect(existsSync(path.join(stateDir(storeRoot(), id), "evolution"))).toBe(false);
     await writeFile(path.join(stateDir(storeRoot(), id), "evolution"), "not a directory");
     log.mockClear();

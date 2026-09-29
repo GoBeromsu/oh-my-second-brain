@@ -9,6 +9,7 @@ import { sealContract } from "../contract/store.js";
 import type { PropertyContract, VaultContract } from "../contract/types.js";
 import { anchorContract, evaluateCandidate, routeOf } from "./evaluator.js";
 import type { MechanicalResult, NoteJudge } from "./stage-mechanical.js";
+import type { SemanticResult } from "./stage-semantic.js";
 
 const ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const status = (values: string[]): PropertyContract => ({ meaning: "state", type: "text", default: false, required: false, rules: [{ kind: "allowed", values }] });
@@ -62,11 +63,25 @@ describe("evaluateCandidate", () => {
     expect(result).toMatchObject({ route: "reject", stage1: { newRefusals: 1, passed: false } });
   });
 
-  it("measures drift from the anchor with the injected similarity, advisory only", async () => {
+  it("rejects a candidate that drifts from the anchor past the threshold", async () => {
     const anchor: VaultContract = { folders: { Projects: { meaning: "something else entirely", searchExclude: false } }, properties: PARENT.properties };
     const result = await evaluateCandidate({ vault, parent: PARENT, mutations: [modify(["a"])], anchor }, { similarity: () => 0 });
-    expect(result.stage2).toMatchObject({ passed: false });
-    expect(result.route).toBe("consensus");
+    expect(result.stage2).toMatchObject({ passed: false, reason: "drift" });
+    expect(result.route).toBe("reject");
+  });
+
+  it("rejects drift 0.31 and admits drift 0.3 exactly", async () => {
+    const over = await evaluateCandidate({ vault, parent: PARENT, mutations: [modify(["a"])] }, { similarity: () => 0.69 });
+    expect(over.stage2.drift).toBeCloseTo(0.31, 9);
+    expect(over).toMatchObject({ route: "reject", stage2: { passed: false, reason: "drift" } });
+    const edge = await evaluateCandidate({ vault, parent: PARENT, mutations: [modify(["a"])] }, { similarity: () => 0.7 });
+    expect(edge).toMatchObject({ route: "consensus", stage2: { passed: true } });
+  });
+
+  it("rejects a candidate that adds a property overlapping an existing meaning", async () => {
+    const add: Mutation = { op: "ADD", axis: "property", key: "phase", after: status(["x"]) };
+    const result = await evaluateCandidate({ vault, parent: PARENT, mutations: [add] });
+    expect(result).toMatchObject({ route: "reject", stage1: { passed: true }, stage2: { passed: false, reason: "mece-overlap", overlaps: [{ axis: "property", keys: ["phase", "status"] }] } });
   });
 
   it("throws the conflict of a list that does not apply", async () => {
@@ -77,15 +92,22 @@ describe("evaluateCandidate", () => {
 
 describe("routeOf", () => {
   const stage1 = (newRefusals: number, warningDelta: number) => ({ newRefusals, warningDelta, passed: newRefusals === 0 }) as MechanicalResult;
+  const pass: SemanticResult = { overlaps: [], drift: 0.3, passed: true };
+  const drifted: SemanticResult = { overlaps: [], drift: 0.31, passed: false, reason: "drift" };
+  const overlapping: SemanticResult = { overlaps: [{ axis: "property", keys: ["phase", "status"], similarity: 1 }], drift: 0, passed: false, reason: "mece-overlap" };
   it.each([
-    [stage1(1, -3), "tightening", "reject"],
-    [stage1(1, 0), "loosening", "reject"],
-    [stage1(0, 1), "neutral", "awaiting-human"],
-    [stage1(0, -1), "loosening", "awaiting-human"],
-    [stage1(0, 0), "neutral", "consensus"],
-    [stage1(0, -2), "tightening", "consensus"],
-  ] as const)("routes %o %s to %s", (result, direction, route) => {
-    expect(routeOf(result, direction)).toBe(route);
+    [stage1(1, -3), pass, "tightening", "reject"],
+    [stage1(1, 0), pass, "loosening", "reject"],
+    [stage1(0, 1), pass, "neutral", "awaiting-human"],
+    [stage1(0, -1), pass, "loosening", "awaiting-human"],
+    [stage1(0, 0), pass, "neutral", "consensus"],
+    [stage1(0, -2), pass, "tightening", "consensus"],
+    [stage1(0, 0), drifted, "tightening", "reject"],
+    [stage1(0, 1), drifted, "loosening", "reject"],
+    [stage1(0, 0), overlapping, "neutral", "reject"],
+    [stage1(0, -1), overlapping, "tightening", "reject"],
+  ] as const)("routes %o %o %s to %s", (result, semantic, direction, route) => {
+    expect(routeOf(result, semantic, direction)).toBe(route);
   });
 });
 
