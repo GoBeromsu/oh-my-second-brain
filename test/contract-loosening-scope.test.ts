@@ -35,9 +35,8 @@ function vault(templates: TemplatedContract["templates"]): TemplatedContract {
 }
 
 describe("template identity under looseningChanges", () => {
-  it("rekeying a sealed template to a scoped name reads as a removal, so a sealed vault cannot reseal without a terminal", () => {
-    const changes = looseningChanges(vault({ meeting: template(MANUAL) }), vault({ manual__meeting: template(MANUAL) }));
-    expect(changes).toEqual([{ field: "templates.meeting", kind: "removed" }]);
+  it("rekeying a legacy template is not a change: templates are not contract", () => {
+    expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ manual__meeting: template(MANUAL) }))).toEqual([]);
   });
 
   it("a scoped separator must survive the template-name check that the store applies", () => {
@@ -56,10 +55,8 @@ describe("what a submitted interpretation could try to widen", () => {
     expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: stripped }))).toEqual([]);
   });
 
-  it("moving a sealed template's source is caught, since search exclusion is built from sealed sources", () => {
-    expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: template(AGENT) }))).toEqual([
-      { field: "templates.meeting.source", kind: "removed" },
-    ]);
+  it("moving a legacy template's source is not a change, since search exclusion follows templateFolder", () => {
+    expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: template(AGENT) }))).toEqual([]);
   });
 
   it("sourceHash alone is invisible to the loosening check, so it gates freshness and not safety", () => {

@@ -2,17 +2,15 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildTruthTableRow, type TruthTableFixture } from "../../../test/fixtures/contract-truth-table.js";
+import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import { auditVault } from "./audit.js";
-import type { TemplatedContract } from "./legacy.js";
+import type { VaultContract } from "./types.js";
 
 const SECRET = "zeta-secret-value";
-const CONTRACT: TemplatedContract = {
-  folders: { Projects: { meaning: "project notes", searchExclude: false }, Templates: { meaning: "sources", searchExclude: true } },
+const CONTRACT: VaultContract = {
+  folders: { Projects: { meaning: "project notes", searchExclude: false } },
   properties: {
     status: { meaning: "state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: [SECRET] }] },
-  },
-  templates: {
-    project: { source: "Templates/project.md", sourceHash: `sha256:${"0".repeat(64)}`, applyFolder: "Projects", requiredProperties: ["status"], narrowedRules: {}, requiredHeadings: [] },
   },
 };
 
@@ -25,6 +23,7 @@ afterEach(async () => {
 async function sealedVault(notes: Record<string, string>): Promise<TruthTableFixture> {
   const fixture = await buildTruthTableRow("sealed", CONTRACT);
   fixtures.push(fixture);
+  await writeFile(join(fixture.vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: fixture.vaultId, templateFolder: "Templates" }));
   for (const [notePath, content] of Object.entries(notes)) {
     await mkdir(join(fixture.vault, notePath, ".."), { recursive: true });
     await writeFile(join(fixture.vault, notePath), content);
@@ -33,7 +32,7 @@ async function sealedVault(notes: Record<string, string>): Promise<TruthTableFix
 }
 
 describe("auditVault", () => {
-  it("re-judges every note and aggregates {path, field, kind} without values, ids or store paths", async () => {
+  it("re-judges every note outside templateFolder and aggregates {path, field, kind} without values, ids or store paths", async () => {
     const fixture = await sealedVault({
       "Projects/good.md": `---\nstatus: ${SECRET}\n---\nBody\n`,
       "Projects/bad.md": "---\nstatus: other\nextra: 1\n---\nBody\n",

@@ -11,7 +11,6 @@ import {
   DEFAULT_EXCLUDE_GLOBS,
   excludedNoteMatcher,
   managedSourceExclusionMatcher,
-  managedSourcePathSet,
   matchesAnyGlob,
   readSourceExclusions,
 } from "./note-exclude.js";
@@ -106,7 +105,7 @@ describe("matchesAnyGlob", () => {
 });
 
 describe("readSourceExclusions", () => {
-  it("keeps settings roots, sealed template sources and searchExclude folders", async () => {
+  it("keeps the settings template root and searchExclude folders, never a legacy template source", async () => {
     const vault = await makeVault({
       "Templates/flower.md": "raw source",
       "notes/idea.md": "ordinary",
@@ -118,13 +117,12 @@ describe("readSourceExclusions", () => {
     });
     const inventory = await readSourceExclusions(vault);
     expect(inventory.roots).toEqual(["Shared Templates"]);
-    expect(inventory.paths).toEqual(["Templates/flower.md"]);
+    expect(inventory).not.toHaveProperty("paths");
     expect(inventory.globs).toEqual([...DEFAULT_EXCLUDE_GLOBS, "drafts", "drafts/**"]);
     expect(inventory.complete).toBe(true);
     expect(inventory.diagnostics).toEqual([]);
-    expect(await managedSourcePathSet(vault)).toEqual(new Set(["Templates/flower.md"]));
     const lexical = await excludedNoteMatcher(vault);
-    expect(lexical("Templates/flower.md")).toBe(true);
+    expect(lexical("Templates/flower.md")).toBe(false);
     expect(lexical("notes/idea.md")).toBe(false);
     expect(lexical("drafts/unfinished.md")).toBe(true);
     expect(lexical("drafts/deep/unfinished.md")).toBe(true);
@@ -143,9 +141,8 @@ describe("readSourceExclusions", () => {
     await seal(vault, { sources: ["Templates/flower.md"] });
     const inventory = await readSourceExclusions(vault);
     expect(inventory.roots).toEqual([]);
-    expect(inventory.paths).toEqual(["Templates/flower.md"]);
     expect(inventory.complete).toBe(true);
-    const lexical = await excludedNoteMatcher(vault, false);
+    const lexical = await excludedNoteMatcher(vault);
     expect(lexical("Prompts/template.md")).toBe(false);
     expect(lexical("Prompts/ordinary.md")).toBe(false);
     expect(lexical("Templates/flower.md")).toBe(false);
@@ -160,7 +157,7 @@ describe("readSourceExclusions", () => {
       "drafts/unfinished.md": "draft",
     });
     const inventory = await readSourceExclusions(vault);
-    expect(inventory).toMatchObject({ roots: [], paths: [], globs: [...DEFAULT_EXCLUDE_GLOBS], complete: true, diagnostics: [] });
+    expect(inventory).toMatchObject({ roots: [], globs: [...DEFAULT_EXCLUDE_GLOBS], complete: true, diagnostics: [] });
     const lexical = await excludedNoteMatcher(vault);
     expect(lexical("Templates/flower.md")).toBe(false);
     expect(lexical("drafts/unfinished.md")).toBe(false);
@@ -172,7 +169,6 @@ describe("readSourceExclusions", () => {
     await tamper(vaultId);
     const inventory = await readSourceExclusions(vault);
     expect(inventory.roots).toEqual(["Templates"]);
-    expect(inventory.paths).toEqual([]);
     expect(inventory.globs).toEqual([...DEFAULT_EXCLUDE_GLOBS]);
     expect(inventory.complete).toBe(false);
     expect(inventory.diagnostics).toEqual([expect.objectContaining({ code: "SOURCE_CONTRACT_UNREADABLE", path: "folders.json" })]);
@@ -196,36 +192,26 @@ describe("readSourceExclusions", () => {
     await expect(excludedNoteMatcher(vault)).rejects.toThrow(/NOTE_EXCLUSION_RESOLUTION_FAILED: folders\.json/);
   });
 
-  it("classifies a hardlinked sealed source without dropping its lexical exclusion", async () => {
-    const vault = await makeVault({
-      "authored/original.md": "original",
-      "notes/idea.md": "ordinary",
-    });
-    await link(path.join(vault, "authored", "original.md"), path.join(vault, "authored", "hard.md"));
-    await seal(vault, { sources: ["authored/hard.md"] });
-    const inventory = await readSourceExclusions(vault);
-    expect(inventory.paths).toEqual(["authored/hard.md"]);
-    expect(inventory.complete).toBe(false);
-    expect(inventory.diagnostics).toEqual([expect.objectContaining({ code: "SOURCE_ALIAS_UNSAFE" })]);
-    expect((await excludedNoteMatcher(vault))("authored/hard.md")).toBe(true);
-    expect((await excludedNoteMatcher(vault))("notes/idea.md")).toBe(false);
-    const isExcluded = await managedSourceExclusionMatcher(vault, ["authored/hard.md"]);
-    await expect(isExcluded("authored/hard.md")).resolves.toBe(true);
-    await expect(isExcluded("authored/original.md")).resolves.toBe(false);
-    await expect(isExcluded("notes/idea.md")).resolves.toBe(false);
-  });
-
-  it("excludes a missing sealed source lexically and a confined alias deliberately", async () => {
+  it("excludes a supplied source lexically and its confined alias deliberately", async () => {
     const vault = await makeVault({ "authored/नोट 이름.md": "---\ntitle: template\n---\n" });
     await mkdir(path.join(vault, "aliases"));
     await symlink(path.join(vault, "authored", "नोट 이름.md"), path.join(vault, "aliases", "copy.md"));
     await seal(vault, { sources: ["Templates/missing.md"] });
-    const inventory = await readSourceExclusions(vault);
-    expect(inventory.paths).toEqual(["Templates/missing.md"]);
     const isExcluded = await managedSourceExclusionMatcher(vault, ["authored/नोट 이름.md"]);
     await expect(isExcluded("authored/नोट 이름.md")).resolves.toBe(true);
     await expect(isExcluded("aliases/copy.md")).resolves.toBe(true);
-    await expect(isExcluded("Templates/missing.md")).resolves.toBe(true);
+    await expect(isExcluded("Templates/missing.md")).resolves.toBe(false);
+    await expect(isExcluded("notes/idea.md")).resolves.toBe(false);
+  });
+
+  it("excludes a confined alias of a note under the template root", async () => {
+    const vault = await makeVault({ "Templates/daily.md": "---\nfolder: journal\n---\n", "notes/idea.md": "ordinary" });
+    await writeSettingsFile(vault, "Templates");
+    await mkdir(path.join(vault, "aliases"));
+    await symlink(path.join(vault, "Templates", "daily.md"), path.join(vault, "aliases", "daily.md"));
+    const isExcluded = await managedSourceExclusionMatcher(vault);
+    await expect(isExcluded("Templates/daily.md")).resolves.toBe(true);
+    await expect(isExcluded("aliases/daily.md")).resolves.toBe(true);
     await expect(isExcluded("notes/idea.md")).resolves.toBe(false);
   });
 
@@ -265,7 +251,7 @@ describe("readSourceExclusions", () => {
   it("does not create OMS state while reading an empty vault", async () => {
     const vault = await makeVault();
     const inventory = await readSourceExclusions(vault);
-    expect(inventory).toMatchObject({ roots: [], paths: [], globs: [...DEFAULT_EXCLUDE_GLOBS], complete: true, diagnostics: [] });
+    expect(inventory).toMatchObject({ roots: [], globs: [...DEFAULT_EXCLUDE_GLOBS], complete: true, diagnostics: [] });
     await expect(lstat(path.join(vault, ".oms"))).rejects.toMatchObject({ code: "ENOENT" });
     expect((await excludedNoteMatcher(vault))("notes/idea.md")).toBe(false);
   });
@@ -295,24 +281,6 @@ describe("excludedNoteMatcher", () => {
     expect(isExcluded("notes/idea.md")).toBe(false);
   });
 
-  it("does not retarget a noncanonical sealed source", async () => {
-    const nfc = "é".normalize("NFC");
-    const nfd = "é".normalize("NFD");
-    const vault = await makeVault({
-      [`Sources/${nfc}.md`]: "composed source",
-      [`${nfc}/note.md`]: "composed note",
-    });
-    await seal(vault, { sources: [`Sources/${nfd}.md`, "../private.md"] });
-    const inventory = await readSourceExclusions(vault);
-    expect(inventory.paths).toEqual([]);
-    expect(inventory.complete).toBe(false);
-    expect(inventory.diagnostics.map(item => item.code)).toEqual(["SOURCE_REGISTRATION_NONCANONICAL", "SOURCE_REGISTRATION_NONCANONICAL"]);
-    const lexical = await excludedNoteMatcher(vault);
-    expect(lexical(`Sources/${nfc}.md`)).toBe(false);
-    expect(lexical(`Sources/${nfd}.md`)).toBe(false);
-    expect(lexical(`${nfc}/note.md`)).toBe(false);
-  });
-
   it("excludes confined file and directory aliases without following an outside target", async () => {
     const outside = await mkdtemp(path.join(os.tmpdir(), "oms-note-exclude-alias-"));
     roots.push(await realpath(outside));
@@ -330,37 +298,6 @@ describe("excludedNoteMatcher", () => {
     await expect(isExcluded("aliases/file.md")).resolves.toBe(true);
     await expect(isExcluded("aliases/directory/original.md")).resolves.toBe(true);
     await expect(isExcluded("aliases/outside.md")).resolves.toBe(false);
-    await expect(isExcluded("notes/idea.md")).resolves.toBe(false);
-  });
-
-  it("keeps a lexically safe sealed source excluded when its file is missing, linked, hardlinked, or not a file", async () => {
-    const outside = await mkdtemp(path.join(os.tmpdir(), "oms-note-exclude-source-"));
-    roots.push(await realpath(outside));
-    await writeFile(path.join(outside, "private.md"), "private");
-    const vault = await makeVault({
-      "authored/original.md": "original",
-      "notes/ordinary-hardlink.md": "ordinary hardlink",
-      "notes/idea.md": "ordinary",
-    });
-    await mkdir(path.join(vault, "Sources"));
-    await symlink(path.join(outside, "private.md"), path.join(vault, "Sources", "linked.md"));
-    await link(path.join(vault, "authored", "original.md"), path.join(vault, "Sources", "hard.md"));
-    await link(path.join(vault, "notes", "ordinary-hardlink.md"), path.join(vault, "notes", "second-hardlink.md"));
-    await mkdir(path.join(vault, "Sources", "folder.md"));
-    await seal(vault, { sources: ["Sources/missing.md", "Sources/linked.md", "Sources/hard.md", "Sources/folder.md"] });
-    const inventory = await readSourceExclusions(vault);
-    expect(inventory.paths).toEqual(["Sources/folder.md", "Sources/hard.md", "Sources/linked.md", "Sources/missing.md"]);
-    expect(inventory.complete).toBe(false);
-    const lexical = await excludedNoteMatcher(vault);
-    expect(lexical("Sources/missing.md")).toBe(true);
-    expect(lexical("Sources/linked.md")).toBe(true);
-    expect(lexical("Sources/hard.md")).toBe(true);
-    expect(lexical("Sources/folder.md")).toBe(true);
-    expect(lexical("notes/idea.md")).toBe(false);
-    const isExcluded = await managedSourceExclusionMatcher(vault);
-    await expect(isExcluded("Sources/linked.md")).resolves.toBe(true);
-    await expect(isExcluded("notes/ordinary-hardlink.md")).resolves.toBe(false);
-    await expect(isExcluded("notes/second-hardlink.md")).resolves.toBe(false);
     await expect(isExcluded("notes/idea.md")).resolves.toBe(false);
   });
 });

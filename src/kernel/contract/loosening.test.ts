@@ -160,29 +160,16 @@ describe("looseningChanges", () => {
     expect(looseningChanges(tags([]), sealed)).toEqual([]);
   });
 
-  it("reports a removed template by field path only, and nothing the judge no longer reads", () => {
+  it("never reads a template: removing or moving one is not loosening", () => {
     const sealed = SEALED.templates["Meeting"]!;
-    expect(looseningChanges(SEALED, withTemplate(undefined))).toEqual([{ field: "templates.Meeting", kind: "removed" }]);
-    const { applyFolder: _dropped, ...unscoped } = sealed;
     for (const next of [
-      { ...sealed, requiredProperties: [] },
-      { ...sealed, requiredProperties: ["status", "created"] },
-      { ...sealed, requiredHeadings: [] },
-      { ...sealed, requiredHeadings: ["Agenda", "Notes"] },
-      { ...sealed, narrowedRules: {} },
-      { ...sealed, narrowedRules: { status: [{ kind: "fixed", value: "done" }] } },
-      unscoped,
-      { ...sealed, applyFolder: "Private" },
-    ] satisfies LegacyTemplateContract[]) {
-      expect(looseningChanges(SEALED, withTemplate(next))).toEqual([]);
+      withTemplate(undefined),
+      withTemplate({ ...sealed, source: "Templates/Moved.md" }),
+      withTemplate({ ...sealed, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] }),
+      { ...SEALED, templates: { ...SEALED.templates, Daily: template({ source: "Templates/Daily.md", applyFolder: "Inbox" }) } },
+    ]) {
+      expect(looseningChanges(SEALED, next)).toEqual([]);
     }
-    expect(looseningChanges(SEALED, { ...SEALED, templates: { ...SEALED.templates, Daily: template({ source: "Templates/Daily.md", applyFolder: "Inbox" }) } })).toEqual([]);
-  });
-
-  it("reports a moved template source, which search exclusion no longer covers", () => {
-    const sealed = SEALED.templates["Meeting"]!;
-    expect(looseningChanges(SEALED, withTemplate({ ...sealed, source: "Templates/Moved.md" }))).toEqual([{ field: "templates.Meeting.source", kind: "removed" }]);
-    expect(looseningChanges(SEALED, withTemplate({ ...sealed, source: "Templates//Meeting.md/" }))).toEqual([]);
   });
 
   it("names sealed patterns the seal screen now refuses by field only", () => {

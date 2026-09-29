@@ -3,17 +3,19 @@
  *
  * Settings roots, the sealed contract, and external template settings are
  * independent channels. A malformed channel cannot erase a valid sibling.
- * The sealed contract contributes its template sources and every folder
- * marked `searchExclude`; an unsealed vault contributes nothing from it.
+ * The live `templateFolder` from settings is the template root; the sealed
+ * contract contributes only the folders marked `searchExclude`, and an
+ * unsealed vault contributes nothing from it. A legacy generation's template
+ * sources are never read: templates live in `templateFolder`.
  * `complete` means every channel was read and its declared facts classified;
  * it is not proof that every possible source in the vault was discovered.
  */
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
-import { templatedContract, type TemplatedContract } from "../contract/legacy.js";
+import type { VaultContract } from "../contract/types.js";
 import { resolveSealState } from "../contract/vault-id.js";
 import { loadConfiguredTemplatePaths } from "./template-paths.js";
-import { normalizeFolderPath, normalizeTemplateSourcePath, verifyVaultPath } from "../vault/paths.js";
+import { normalizeFolderPath, verifyVaultPath } from "../vault/paths.js";
 import { readVaultSettings, SETTINGS_PATH, VaultSettingsError } from "../vault/settings.js";
 import { compareCodePoints, hashCanonical, type Digest } from "./canonical.js";
 
@@ -33,10 +35,8 @@ export const DEFAULT_EXCLUDE_GLOBS: readonly string[] = [
 
 /** Diagnostic label for the sealed folder contract. */
 const FOLDERS_PATH = "folders.json";
-/** Diagnostic label for the sealed template sources. */
-const TEMPLATES_PATH = "templates";
 const EXTERNAL_TEMPLATES_PATH = ".obsidian";
-const INVENTORY_DOMAIN = "oms.source-exclusion-inventory.v6";
+const INVENTORY_DOMAIN = "oms.source-exclusion-inventory.v7";
 
 export interface SourceExclusionDiagnostic {
   readonly code: string;
@@ -47,7 +47,6 @@ export interface SourceExclusionDiagnostic {
 export interface SourceExclusionInventory {
   readonly digest: Digest;
   readonly roots: readonly string[];
-  readonly paths: readonly string[];
   readonly globs: readonly string[];
   readonly complete: boolean;
   readonly diagnostics: readonly SourceExclusionDiagnostic[];
@@ -80,17 +79,6 @@ function lexicalPath(notePath: string): string {
   return lexical;
 }
 
-function declaredSourcePath(sourcePath: string): string | null {
-  const lexical = sourcePath.replaceAll("\\", "/").replace(/^\.\/+/, "");
-  if (lexical.normalize("NFC") !== lexical) return null;
-  try {
-    if (normalizeTemplateSourcePath(lexical) !== lexical) return null;
-  } catch {
-    return null;
-  }
-  return lexical;
-}
-
 function globToRegExp(glob: string): RegExp {
   const placeholder = "\u0000";
   const escaped = glob.replace(/\*\*/g, placeholder).replace(/[.+^${}()|[\]\\]/g, "\\$&");
@@ -99,18 +87,6 @@ function globToRegExp(glob: string): RegExp {
 
 function nodeCode(error: unknown): string | null {
   return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : null;
-}
-
-function aliasDiagnostic(sourcePath: string, error: unknown): SourceExclusionDiagnostic {
-  const text = message(error);
-  const unsafe = error instanceof TypeError && text.startsWith("TEMPLATE_SOURCE_UNSAFE:");
-  return diagnostic(
-    unsafe ? "SOURCE_ALIAS_UNSAFE" : "SOURCE_ALIAS_UNAVAILABLE",
-    TEMPLATES_PATH,
-    unsafe
-      ? `${sourcePath} resolves outside the vault; lexical exclusion remains and its alias is not followed: ${text}`
-      : `${sourcePath} cannot provide alias evidence: ${text}`,
-  );
 }
 
 /** True when `notePath` matches at least one of `globs`. */
@@ -122,68 +98,6 @@ export function matchesAnyGlob(notePath: string, globs: readonly string[]): bool
 export function noteExcludeMatcherFromGlobs(globs: readonly string[]): (notePath: string) => boolean {
   const matchers = [...DEFAULT_EXCLUDE_GLOBS, ...globs].map(globToRegExp);
   return (notePath: string) => matchers.some(matcher => matcher.test(lexicalPath(notePath)));
-}
-
-async function confinedSource(
-  vault: string,
-  sourcePath: string,
-): Promise<{ readonly path: string | null; readonly diagnostic: SourceExclusionDiagnostic | null }> {
-  const lexical = declaredSourcePath(sourcePath);
-  if (lexical === null) {
-    return { path: null, diagnostic: diagnostic("SOURCE_REGISTRATION_NONCANONICAL", TEMPLATES_PATH, `${sourcePath} is not a canonical confined source declaration`) };
-  }
-  try {
-    const verified = await verifyVaultPath(vault, normalizeTemplateSourcePath(lexical), { expected: "either" });
-    if (verified.targetRealPath !== null) {
-      const relative = path.relative(verified.vaultRoot, verified.targetRealPath);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
-        return { path: lexical, diagnostic: diagnostic("SOURCE_ALIAS_UNSAFE", TEMPLATES_PATH, `${lexical} resolves outside the vault; lexical exclusion remains and its alias is not followed`) };
-      }
-    }
-    let cursor = verified.vaultRoot;
-    for (const segment of lexical.split("/")) {
-      cursor = path.resolve(cursor, segment);
-      let stat;
-      try {
-        stat = await lstat(cursor);
-      } catch (error) {
-        if (nodeCode(error) === "ENOENT") return { path: lexical, diagnostic: null };
-        return { path: lexical, diagnostic: diagnostic("SOURCE_ALIAS_UNAVAILABLE", TEMPLATES_PATH, `${lexical} cannot provide alias evidence: ${error instanceof Error ? error.message : String(error)}`) };
-      }
-      if (stat.isSymbolicLink() || (cursor === verified.absolutePath && (!stat.isFile() || stat.nlink !== 1))) {
-        return { path: lexical, diagnostic: diagnostic("SOURCE_ALIAS_UNSAFE", TEMPLATES_PATH, `${lexical} is not a regular confined file; lexical exclusion remains and its alias is not followed`) };
-      }
-    }
-    return { path: lexical, diagnostic: null };
-  } catch (error) {
-    return { path: lexical, diagnostic: aliasDiagnostic(lexical, error) };
-  }
-}
-
-async function acceptSources(
-  vault: string,
-  controlPath: string,
-  candidates: readonly { readonly id: string; readonly path: string }[],
-): Promise<{ readonly paths: readonly string[]; readonly diagnostics: readonly SourceExclusionDiagnostic[] }> {
-  const paths: string[] = [];
-  const diagnostics: SourceExclusionDiagnostic[] = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    const confined = await confinedSource(vault, candidate.path);
-    if (confined.path === null) {
-      diagnostics.push(confined.diagnostic ?? diagnostic("SOURCE_REGISTRATION_UNSAFE", controlPath, `${candidate.id} source ${candidate.path} is not a confined original source`));
-      continue;
-    }
-    if (confined.diagnostic !== null) diagnostics.push(confined.diagnostic);
-    if (seen.has(confined.path)) {
-      diagnostics.push(diagnostic("SOURCE_REGISTRATION_DUPLICATE", controlPath, `${confined.path} is registered more than once`));
-      continue;
-    }
-    seen.add(confined.path);
-    paths.push(confined.path);
-  }
-  paths.sort((left, right) => compareText(left, right));
-  return { paths, diagnostics };
 }
 
 /**
@@ -251,41 +165,35 @@ async function readRoots(vault: string): Promise<{ readonly roots: readonly stri
 }
 
 /**
- * Sealed template sources and `searchExclude` folders. A missing vault or an
- * unsealed vault declares nothing; an unreadable seal is a blocker because it
- * would otherwise hide declared exclusions.
+ * Sealed `searchExclude` folders. A missing vault or an unsealed vault declares
+ * nothing; an unreadable seal is a blocker because it would otherwise hide
+ * declared exclusions.
  */
 async function readSealed(vault: string): Promise<{
-  readonly paths: readonly string[];
   readonly globs: readonly string[];
   readonly diagnostics: readonly SourceExclusionDiagnostic[];
   readonly classification: string;
 }> {
-  let contract: TemplatedContract | null = null;
+  let contract: VaultContract | null = null;
   try {
     const view = (await resolveSealState(vault)).view;
     if (view.state === "unreadable") {
-      return { paths: [], globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, "the sealed contract is unreadable; run oms doctor contract")], classification: "unreadable" };
+      return { globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, "the sealed contract is unreadable; run oms doctor contract")], classification: "unreadable" };
     }
-    // slice f2: move to templateFolder
-    if (view.state === "sealed") contract = templatedContract(view);
+    if (view.state === "sealed") contract = view.contract;
   } catch (error: unknown) {
     const code = nodeCode(error);
     if (code !== "ENOENT" && code !== "ENOTDIR") {
-      return { paths: [], globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, `${code ?? "CONTRACT_READ_FAILED"}; run oms doctor contract`)], classification: "unreadable" };
+      return { globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, `${code ?? "CONTRACT_READ_FAILED"}; run oms doctor contract`)], classification: "unreadable" };
     }
   }
-  if (contract === null) return { paths: [], globs: [], diagnostics: [], classification: "open" };
+  if (contract === null) return { globs: [], diagnostics: [], classification: "open" };
   const globs = Object.entries(contract.folders ?? {})
     .filter(([, folder]) => folder.searchExclude)
     .map(([folder]) => folder)
     .sort(compareText)
     .flatMap(folder => [folder, `${folder}/**`]);
-  const candidates = Object.entries(contract.templates)
-    .map(([id, template]) => ({ id, path: template.source }))
-    .sort((left, right) => compareText(left.id, right.id));
-  const accepted = await acceptSources(vault, TEMPLATES_PATH, candidates);
-  return { paths: accepted.paths, globs, diagnostics: accepted.diagnostics, classification: "sealed" };
+  return { globs, diagnostics: [], classification: "sealed" };
 }
 
 /** Reads settings, the sealed contract, and external template settings independently. It creates no vault state. */
@@ -298,51 +206,35 @@ export async function readSourceExclusions(vault: string): Promise<SourceExclusi
   return {
     digest: hashCanonical(INVENTORY_DOMAIN, {
       roots: roots.roots,
-      paths: sealed.paths,
       globs: declared,
       diagnostics: diagnostics.map(item => ({ code: item.code, path: item.path, message: item.message })),
       classifications: [roots.classification, sealed.classification, external.classification],
     }),
     roots: roots.roots,
-    paths: sealed.paths,
     globs: [...DEFAULT_EXCLUDE_GLOBS, ...declared],
     complete: diagnostics.length === 0,
     diagnostics,
   };
 }
 
-async function lexicalSources(vault: string): Promise<ReadonlySet<string>> {
-  return new Set((await readSourceExclusions(vault)).paths);
-}
-
-/** Exact original source paths without requiring a derived projection or active contract. */
-export async function managedSourcePathSet(vaultRoot: string): Promise<ReadonlySet<string>> {
-  return lexicalSources(path.resolve(vaultRoot));
-}
-
 function underRoot(notePath: string, root: string): boolean {
   return notePath === root || notePath.startsWith(`${root}/`);
 }
 
-function lexicallyExcluded(inventory: SourceExclusionInventory, notePath: string, includeSources: boolean): boolean {
+function lexicallyExcluded(inventory: SourceExclusionInventory, notePath: string): boolean {
   const lexical = lexicalPath(notePath);
   if (inventory.roots.some(root => underRoot(lexical, root))) return true;
-  if (inventory.globs.some(glob => globToRegExp(glob).test(lexical))) return true;
-  return includeSources && inventory.paths.includes(lexical);
+  return inventory.globs.some(glob => globToRegExp(glob).test(lexical));
 }
 
 /**
- * Lexical predicate over vault-relative note paths. Settings roots, source
- * paths, and globs are reread together; a supplied source list cannot erase
- * roots or globs, and an empty source list is not replace-all authority.
+ * Lexical predicate over vault-relative note paths. Settings roots and globs
+ * are reread together on every call.
  */
-export async function excludedNoteMatcher(
-  vaultRoot: string,
-  includeManagedSources = true,
-): Promise<(notePath: string) => boolean> {
+export async function excludedNoteMatcher(vaultRoot: string): Promise<(notePath: string) => boolean> {
   const inventory = await readSourceExclusions(vaultRoot);
   assertLexicalChannels(inventory);
-  return (notePath: string) => lexicallyExcluded(inventory, notePath, includeManagedSources);
+  return (notePath: string) => lexicallyExcluded(inventory, notePath);
 }
 
 async function resolveAlias(root: string, relativePath: string): Promise<string | null> {
@@ -385,8 +277,9 @@ async function resolveAlias(root: string, relativePath: string): Promise<string 
 }
 
 /**
- * Matches lexical roots, globs, and known source paths, then confined aliases
- * of files that can be resolved safely. Alias enrichment never erases a known
+ * Matches lexical roots, globs, and supplied source paths, then confined
+ * aliases of supplied sources or of files under a root that can be resolved
+ * safely. Alias enrichment never erases a known
  * lexical exclusion or aborts an ordinary note scan.
  */
 export async function managedSourceExclusionMatcher(
@@ -397,7 +290,7 @@ export async function managedSourceExclusionMatcher(
   const inventory = await readSourceExclusions(root);
   assertLexicalChannels(inventory);
   const lexical = new Set<string>();
-  for (const sourcePath of [...inventory.paths, ...(sourcePaths ?? [])]) {
+  for (const sourcePath of sourcePaths ?? []) {
     try {
       lexical.add(lexicalPath(sourcePath));
     } catch {
@@ -411,11 +304,14 @@ export async function managedSourceExclusionMatcher(
   }
   return async (notePath: string) => {
     try {
-      if (lexicallyExcluded(inventory, notePath, false) || lexical.has(lexicalPath(notePath))) return true;
+      if (lexicallyExcluded(inventory, notePath) || lexical.has(lexicalPath(notePath))) return true;
     } catch {
       return false;
     }
     const actual = await resolveAlias(root, notePath);
-    return actual !== null && resolved.has(actual);
+    if (actual === null) return false;
+    // An alias into the template root is a template, wherever it is linked from.
+    const target = path.relative(root, actual).split(path.sep).join("/");
+    return resolved.has(actual) || inventory.roots.some(templateRoot => underRoot(target, templateRoot));
   };
 }

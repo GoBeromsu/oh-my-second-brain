@@ -6,7 +6,6 @@ import { mapWithConcurrency, walkVaultMarkdown } from "../conventions/vault-walk
 import { judgeContent } from "./judge-write.js";
 import { storeRoot } from "./store.js";
 import { resolveSealState } from "./vault-id.js";
-import { legacyTemplatesOf } from "./legacy.js";
 import { findingsOf, type ViolationKind } from "./types.js";
 
 /**
@@ -36,17 +35,16 @@ function inFolder(notePath: string, folder: string | undefined): boolean {
 export async function auditVault(vault: string, options: { readonly folder?: string } = {}, root: string = storeRoot()): Promise<VaultAudit> {
   const state = await resolveSealState(vault, root);
   const contract = state.view.state;
-  // slice f2: move to templateFolder
-  const sources = new Set(Object.values(legacyTemplatesOf(state.view)).map(template => template.source));
   let managed: (notePath: string) => Promise<boolean> = async () => false;
   try {
     managed = await managedSourceExclusionMatcher(vault);
   } catch {
-    // Unreadable exclusion settings exclude nothing beyond the sealed template sources.
+    // Unreadable exclusion settings exclude nothing: every note is audited.
   }
   const paths: string[] = [];
   for await (const notePath of walkVaultMarkdown(vault)) {
-    if (!inFolder(notePath, options.folder) || sources.has(notePath) || await managed(notePath)) continue;
+    // Templates in `templateFolder` scaffold notes; they are never judged as notes.
+    if (!inFolder(notePath, options.folder) || await managed(notePath)) continue;
     paths.push(notePath);
   }
   paths.sort(compareCodePoints);

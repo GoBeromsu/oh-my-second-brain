@@ -1,12 +1,11 @@
-import { normalizePath, singleValued } from "./judge.js";
+import { singleValued } from "./judge.js";
 import { patternRefusal } from "./pattern.js";
-import type { TemplatedContract } from "./legacy.js";
-import type { FieldType, JsonScalar, LegacyTemplateContract, PropertyContract, Rule, VaultContract } from "./types.js";
+import type { FieldType, JsonScalar, PropertyContract, Rule, VaultContract } from "./types.js";
 
 /**
  * Monotonic reseal check for a contract sealed without a terminal: the next contract
- * may add entries and tighten folder and property rules, never loosen them or drop a
- * sealed template source. Each change names a field path and a kind only,
+ * may add entries and tighten folder and property rules, never loosen them. Templates
+ * are not contract, so they never enter this check. Each change names a field path and a kind only,
  * never a value, so it can be shown to an agent.
  */
 
@@ -86,17 +85,6 @@ function propertyChanges(name: string, sealed: PropertyContract, next: PropertyC
 }
 
 /**
- * The judge never reads a template, so only its source matters on a reseal: search
- * exclusion is built from sealed sources, and a removed template or a moved source
- * exposes the old file.
- */
-function templateChanges(name: string, sealed: LegacyTemplateContract, next: LegacyTemplateContract | undefined): LooseningChange[] {
-  const field = `templates.${name}`;
-  if (next === undefined) return [{ field, kind: "removed" }];
-  return normalizePath(next.source) === normalizePath(sealed.source) ? [] : [{ field: `${field}.source`, kind: "removed" }];
-}
-
-/**
  * Sealed pattern rules the seal screen now refuses (for example a source over the length
  * cap sealed by an older release). The judge fails every value against such a rule, and
  * any replacement is looser, so only the owner at a terminal can replace it.
@@ -109,14 +97,14 @@ export function unsafePatternChanges(contract: VaultContract): LooseningChange[]
 }
 
 /**
- * Every way `next` accepts a note or exposes a file that `sealed` did not.
+ * Every way `next` accepts a note or exposes a folder that `sealed` did not.
  * Tighter folder and property rules are not changes: a write records only the warnings
  * the note did not already have, so notes that fail a stricter rule are not blocked.
- * Adding a folder, a property or a template is not a change either, although it widens a
+ * Adding a folder or a property is not a change either, although it widens a
  * closed axis by registering a new entry: that is the "add" in add-or-tighten. A changed
  * property type counts as loosening even when it would be narrower.
  */
-export function looseningChanges(sealed: TemplatedContract, next: TemplatedContract): LooseningChange[] {
+export function looseningChanges(sealed: VaultContract, next: VaultContract): LooseningChange[] {
   const changes: LooseningChange[] = [];
   if (sealed.folders !== null) {
     if (next.folders === null) changes.push({ field: "folders", kind: "axis-opened" });
@@ -136,12 +124,9 @@ export function looseningChanges(sealed: TemplatedContract, next: TemplatedContr
       }
     }
   }
-  for (const [name, entry] of Object.entries(sealed.templates)) {
-    changes.push(...templateChanges(name, entry, Object.hasOwn(next.templates, name) ? next.templates[name] : undefined));
-  }
   return changes;
 }
 
-export function isNonLoosening(sealed: TemplatedContract, next: TemplatedContract): boolean {
+export function isNonLoosening(sealed: VaultContract, next: VaultContract): boolean {
   return looseningChanges(sealed, next).length === 0;
 }

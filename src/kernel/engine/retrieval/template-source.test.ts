@@ -75,16 +75,14 @@ describe("readSearchTemplateSource", () => {
       tags: { property: "tags", type: "tags", required: false, valuePolicy: "free" },
       title: { property: "title", type: "text", required: true, valuePolicy: "free" },
     });
-    expect(Object.keys(read.source.templates ?? {}).sort()).toEqual(["alpha", "zeta"]);
-    // A template's required properties are required in its own field set only.
-    expect(read.source.templates?.["zeta"]?.["status"]?.required).toBe(true);
-    expect(read.source.templates?.["alpha"]?.["status"]?.required).toBe(false);
+    // Legacy sealed templates never reach search: templates scaffold, they are not contract.
+    expect(read.source.templates).toEqual({});
     expect(read.source.globalAxes?.["folder-ontology"]).toMatchObject({
       kind: "folder",
       members: ["Drafts", "Notes"],
       extensions: { intents: { Drafts: "Unfinished drafts.", Notes: "Working notes." } },
     });
-    expect(read.source.sourcePaths).toEqual(["Sources/a.md", "Sources/z.md"]);
+    expect(read.source.sourcePaths).toEqual([]);
     expect(read.diagnostics).toEqual([]);
     expect(Object.keys(read.source).sort()).toEqual(["defaultFields", "generationDigest", "globalAxes", "sourcePaths", "templates"]);
   });
@@ -167,7 +165,7 @@ describe("readSearchTemplateSource", () => {
     await seal(vault, { ...contract(), properties: null });
     const read = await readSearchTemplateSource(vault);
     expect(read.source.defaultFields).toBeNull();
-    expect(read.source.templates).toEqual({ alpha: null, zeta: null });
+    expect(read.source.templates).toEqual({});
     expect(read.source.globalAxes?.["folder-ontology"]).toBeDefined();
   });
 
@@ -175,7 +173,7 @@ describe("readSearchTemplateSource", () => {
     const vault = await makeVault(SOURCES);
     await seal(vault, contract());
     const first = await readSearchTemplateSource(vault);
-    expect(first.exclusions.paths).toEqual(["Sources/a.md", "Sources/z.md"]);
+    expect(first.exclusions).not.toHaveProperty("paths");
     expect(first.exclusions.globs).toEqual(expect.arrayContaining(["Drafts", "Drafts/**"]));
 
     const other = await makeVault(SOURCES);
