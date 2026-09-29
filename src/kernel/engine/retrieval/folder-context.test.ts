@@ -24,7 +24,7 @@ async function sealedVault(folders: Record<string, FolderContract> | null): Prom
   const vault = await emptyVault();
   const vaultId = randomUUID();
   await writeSettings(vault, vaultId);
-  await sealContract({ vaultRealPath: vault, vaultId, contract: { folders, properties: null, templates: {} } });
+  await sealContract({ vaultRealPath: vault, vaultId, contract: { folders, properties: null } });
   return { vault, vaultId };
 }
 

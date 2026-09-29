@@ -10,7 +10,7 @@
  */
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
-import type { VaultContract } from "../contract/types.js";
+import { templatedContract, type TemplatedContract } from "../contract/legacy.js";
 import { resolveSealState } from "../contract/vault-id.js";
 import { loadConfiguredTemplatePaths } from "./template-paths.js";
 import { normalizeFolderPath, normalizeTemplateSourcePath, verifyVaultPath } from "../vault/paths.js";
@@ -261,13 +261,14 @@ async function readSealed(vault: string): Promise<{
   readonly diagnostics: readonly SourceExclusionDiagnostic[];
   readonly classification: string;
 }> {
-  let contract: VaultContract | null = null;
+  let contract: TemplatedContract | null = null;
   try {
     const view = (await resolveSealState(vault)).view;
     if (view.state === "unreadable") {
       return { paths: [], globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, "the sealed contract is unreadable; run oms doctor contract")], classification: "unreadable" };
     }
-    if (view.state === "sealed") contract = view.contract;
+    // slice f2: move to templateFolder
+    if (view.state === "sealed") contract = templatedContract(view);
   } catch (error: unknown) {
     const code = nodeCode(error);
     if (code !== "ENOENT" && code !== "ENOTDIR") {

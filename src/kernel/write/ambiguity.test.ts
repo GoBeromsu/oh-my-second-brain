@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { judgeContent } from "../contract/judge-write.js";
-import { verdictOf, type ContractView, type PropertyContract, type TemplateContract, type VaultContract, type Verdict } from "../contract/types.js";
+import { verdictOf, type ContractView, type LegacyTemplateContract, type PropertyContract, type Verdict } from "../contract/types.js";
+import type { TemplatedContract } from "../contract/legacy.js";
 import { gapAxisOf, resolveTiers, templateChoices, type AmbiguityInput } from "./ambiguity.js";
 
 const HASH = `sha256:${"a".repeat(64)}` as const;
@@ -9,11 +10,11 @@ function property(extra: Partial<PropertyContract> = {}): PropertyContract {
   return { meaning: "", type: "text", default: false, required: false, rules: [], ...extra };
 }
 
-function template(extra: Partial<TemplateContract> = {}): TemplateContract {
+function template(extra: Partial<LegacyTemplateContract> = {}): LegacyTemplateContract {
   return { source: "Templates/T.md", sourceHash: HASH, requiredProperties: [], narrowedRules: {}, requiredHeadings: [], ...extra };
 }
 
-const CONTRACT: VaultContract = {
+const CONTRACT: TemplatedContract = {
   folders: { Inbox: { meaning: "", searchExclude: false }, Meetings: { meaning: "", searchExclude: false } },
   properties: {
     status: property({ rules: [{ kind: "allowed", values: ["open", "done"] }] }),
@@ -28,7 +29,7 @@ const CONTRACT: VaultContract = {
   },
 };
 
-const SEALED: ContractView = { state: "sealed", contract: CONTRACT };
+const SEALED: ContractView = { state: "sealed", contract: { folders: CONTRACT.folders, properties: CONTRACT.properties }, legacy: { templates: CONTRACT.templates } };
 
 function input(path: string, content: string, extra: Partial<AmbiguityInput> = {}): AmbiguityInput {
   const view = extra.view ?? SEALED;
@@ -69,12 +70,11 @@ describe("① and ② with an accepting verdict", () => {
     expect(resolveTiers(accepted)).toEqual({ action: "save", content: accepted.content, verdict: accepted.verdict, findings: [] });
   });
 
-  it("records a template choice when several templates apply and none was selected", () => {
+  // slice f2: move to templateFolder — the choice returns once templates are read from there.
+  it("records no template choice from an older generation's templates", () => {
     const note = input("Meetings/a.md", "---\ntitle: A\nstatus: open\n---\n");
-    expect(resolveTiers(note)).toEqual({
-      action: "save", content: note.content, verdict: note.verdict,
-      findings: [{ axis: "template", kind: "choice", chosen: "Review", wanted: { field: "template", value: ["Review", "Standup"] }, reason: "2 templates apply to the folder and none was selected" }],
-    });
+    expect(templateChoices(CONTRACT, note.path, undefined, { title: "A", status: "open" })).toHaveLength(1);
+    expect(resolveTiers(note)).toEqual({ action: "save", content: note.content, verdict: note.verdict, findings: [] });
   });
 
   it("recommends nothing when no candidate fits and records no choice once one is selected or only one applies", () => {

@@ -58,7 +58,10 @@ const BROKEN: ContractView = { state: "unreadable", reason: "broken" };
 
 async function load(vaultId: string, root: string): Promise<ContractView> {
   const read = await readStore(vaultId, root);
-  return read.state === "ok" ? { state: "sealed", contract: read.contract, revision: read.digest } : BROKEN;
+  if (read.state !== "ok") return BROKEN;
+  return read.legacy === undefined
+    ? { state: "sealed", contract: read.contract, revision: read.digest }
+    : { state: "sealed", contract: read.contract, revision: read.digest, legacy: read.legacy };
 }
 
 export async function resolveSealState(vault: string, root: string = storeRoot()): Promise<SealState> {

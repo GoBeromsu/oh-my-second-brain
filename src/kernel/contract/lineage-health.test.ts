@@ -15,9 +15,6 @@ function contract(max: number): VaultContract {
   return {
     folders: { Projects: { meaning: "projects", searchExclude: false } },
     properties: { rating: { meaning: "score", type: "number", default: false, required: true, rules: [{ kind: "range", min: 0, max }] } },
-    templates: {
-      Meeting: { source: "Templates/Meeting.md", sourceHash: `sha256:${"a".repeat(64)}`, applyFolder: "Meetings", requiredProperties: ["rating"], narrowedRules: {}, requiredHeadings: ["Agenda"] },
-    },
   };
 }
 

@@ -7,6 +7,7 @@ import { buildTruthTableRow } from "../../../test/fixtures/contract-truth-table.
 import type { Digest } from "../conventions/canonical.js";
 import { digestHex, manifestDigestOf } from "./digest.js";
 import { readSnapshot, readVerifiedDirectory, removeSnapshotTemporaries, snapshotDigests, snapshotInventory, SNAPSHOT_TEMPORARY_PREFIX, writeSnapshot } from "./generation-snapshot.js";
+import { sealLegacyGeneration } from "./legacy-store-fixture.js";
 import { lineageHealth, lineageNeedsAttention } from "./lineage-health.js";
 import { readLineage } from "./lineage.js";
 import { stateDir } from "./state-dir.js";
@@ -20,9 +21,6 @@ function contract(max: number): VaultContract {
   return {
     folders: { Projects: { meaning: "projects", searchExclude: false } },
     properties: { rating: { meaning: "score", type: "number", default: false, required: true, rules: [{ kind: "range", min: 0, max }] } },
-    templates: {
-      Meeting: { source: "Templates/Meeting.md", sourceHash: `sha256:${"a".repeat(64)}`, applyFolder: "Meetings", requiredProperties: ["rating"], narrowedRules: {}, requiredHeadings: ["Agenda"] },
-    },
   };
 }
 
@@ -116,6 +114,16 @@ describe("generation snapshots", () => {
     expect((await snapshotInventory(root, ID)).digests).toHaveLength(4);
   });
 
+  it("snapshots a legacy generation with its nested template files byte for byte", async () => {
+    const template = { source: "Templates/Meeting.md", sourceHash: `sha256:${"a".repeat(64)}` as const, requiredProperties: ["rating"], narrowedRules: {}, requiredHeadings: ["Agenda"] };
+    const digest = await sealLegacyGeneration({ vaultRealPath: vault, vaultId: ID, contract: contract(1), templates: { Meeting: template } }, root);
+    await bootstrapSnapshots(root, ID);
+    const read = await readSnapshot(root, ID, digest);
+    if (read.state !== "ok") throw new Error(`snapshot is ${read.state}`);
+    expect([...read.files.keys()].sort()).toEqual(["folders.json", "properties.json", "templates/Meeting.json"]);
+    expect(read.files.get("templates/Meeting.json")).toEqual(await readFile(join(root, `.${ID}.1`, "templates", "Meeting.json")));
+  });
+
   it("reads a changed byte, an extra file or a changed manifest as corrupt", async () => {
     const { digest } = await seal(1);
     const directory = join(generationsDir(), digestHex(digest));
@@ -128,8 +136,6 @@ describe("generation snapshots", () => {
     };
     await mkdir(pristine);
     for (const file of ["folders.json", "properties.json", "manifest.json"]) await writeFile(join(pristine, file), await readFile(join(directory, file)));
-    await mkdir(join(pristine, "templates"));
-    await writeFile(join(pristine, "templates", "Meeting.json"), await readFile(join(directory, "templates", "Meeting.json")));
     expect((await readVerifiedDirectory(pristine, digest)).state).toBe("ok");
 
     const folders = join(directory, "folders.json");

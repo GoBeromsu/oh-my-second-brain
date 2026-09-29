@@ -15,7 +15,7 @@ import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import { createOMSMcpServer, omsMcpTools, searchPathDefaults } from "./server.js";
 import { searchExactRead } from "./tools/search.js";
 import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
-import type { VaultContract } from "../kernel/contract/types.js";
+import type { TemplatedContract } from "../kernel/contract/legacy.js";
 import { serializeVaultSettings } from "../kernel/vault/settings.js";
 import { buildTruthTableRow } from "../../test/fixtures/contract-truth-table.js";
 
@@ -75,7 +75,7 @@ async function createMcpMetadataAuthority(vault: string): Promise<{ readonly tem
 
 
 /** A sealed contract for the write-judge rows: one registered folder, one template. */
-const SEALED_WRITE_CONTRACT: VaultContract = {
+const SEALED_WRITE_CONTRACT: TemplatedContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false } },
   properties: {
     status: { meaning: "state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["active", "done"] }] },
@@ -676,7 +676,7 @@ describe("Oh My Second Brain MCP stdio server", () => {
       expect(parsedStatus.counts).toBeNull();
       expect(parsedStatus).not.toHaveProperty("projectionSource");
       expect(parsedStatus).not.toHaveProperty("derivedState");
-      expect(parsedStatus.contract).toMatchObject({ contract: "none", templates: [] });
+      expect(parsedStatus.contract).toMatchObject({ contract: "none", legacyTemplates: 0 });
 
       const templateDiagnosis = textPayload(await client.callTool({
         name: "doctor",

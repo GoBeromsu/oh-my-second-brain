@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import { enumerateTemplateSources } from "../src/kernel/contract/interpretation.js";
 import { looseningChanges } from "../src/kernel/contract/loosening.js";
 import { isSafeName } from "../src/kernel/contract/store.js";
-import type { TemplateContract, VaultContract } from "../src/kernel/contract/types.js";
+import type { TemplatedContract } from "../src/kernel/contract/legacy.js";
+import type { LegacyTemplateContract } from "../src/kernel/contract/types.js";
 
 /**
  * Pins the classifications the interpretation-as-input design depends on
@@ -20,16 +21,16 @@ const HASH = `sha256:${"a".repeat(64)}` as `sha256:${string}`;
 const MANUAL = "Templates/manual/meeting.template.md";
 const AGENT = "Templates/agent/meeting.template.md";
 
-function template(source: string, extra: Partial<TemplateContract> = {}): TemplateContract {
+function template(source: string, extra: Partial<LegacyTemplateContract> = {}): LegacyTemplateContract {
   return { source, sourceHash: HASH, requiredProperties: ["status"], narrowedRules: {}, requiredHeadings: ["Agenda"], ...extra };
 }
 
 const base = {
   folders: { Inbox: { meaning: "", searchExclude: false } },
   properties: { status: { meaning: "", type: "text", default: false, required: true, rules: [] } },
-} as const satisfies Omit<VaultContract, "templates">;
+} as const satisfies Omit<TemplatedContract, "templates">;
 
-function vault(templates: VaultContract["templates"]): VaultContract {
+function vault(templates: TemplatedContract["templates"]): TemplatedContract {
   return { ...base, templates };
 }
 

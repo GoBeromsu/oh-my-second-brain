@@ -1,18 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { contractContradictions } from "./contradiction.js";
-import type { PropertyContract, Rule, TemplateContract, VaultContract } from "./types.js";
+import type { TemplatedContract } from "./legacy.js";
+import type { PropertyContract, Rule, LegacyTemplateContract } from "./types.js";
 
-const HASH = `sha256:${"a".repeat(64)}`;
+const HASH = `sha256:${"a".repeat(64)}` as const;
 
 function property(rules: readonly Rule[], extra: Partial<PropertyContract> = {}): PropertyContract {
   return { meaning: "", type: "text", default: false, required: false, rules, ...extra };
 }
 
-function template(extra: Partial<TemplateContract> = {}): TemplateContract {
+function template(extra: Partial<LegacyTemplateContract> = {}): LegacyTemplateContract {
   return { source: "Templates/T.md", sourceHash: HASH, requiredProperties: [], narrowedRules: {}, requiredHeadings: [], ...extra };
 }
 
-function contract(properties: VaultContract["properties"], templates: VaultContract["templates"] = {}): VaultContract {
+function contract(properties: TemplatedContract["properties"], templates: TemplatedContract["templates"] = {}): TemplatedContract {
   return { folders: null, properties, templates };
 }
 

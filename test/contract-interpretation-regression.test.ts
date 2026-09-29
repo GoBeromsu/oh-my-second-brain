@@ -9,8 +9,9 @@ import { digestBytes } from "../src/kernel/conventions/canonical.js";
 import { enumerateTemplateSources, resolveInterpretations, scopedTemplateName, type TemplateInterpretation } from "../src/kernel/contract/interpretation.js";
 import { rekeySealedTemplates, runInterview, type InterviewIO } from "../src/kernel/contract/interview.js";
 import { scriptedIO, type Answers } from "../src/kernel/contract/scripted-interview.js";
-import { isSafeName, readStore, sealContract } from "../src/kernel/contract/store.js";
-import type { TemplateContract, VaultContract } from "../src/kernel/contract/types.js";
+import { bootstrapSnapshots, isSafeName, readStore } from "../src/kernel/contract/store.js";
+import { sealLegacyGeneration } from "../src/kernel/contract/legacy-store-fixture.js";
+import type { LegacyTemplateContract, VaultContract } from "../src/kernel/contract/types.js";
 import { serializeVaultSettings, SETTINGS_PATH } from "../src/kernel/vault/settings.js";
 
 /**
@@ -281,15 +282,16 @@ describe("templates no parser could read", () => {
   });
 
   it("carry every field and heading the retired parser lost, and seal them from the owner's answers", async () => {
-    const { io } = scriptedIO(sealAnswers());
+    const { io, notes } = scriptedIO(sealAnswers());
     const result = await runInterview({ vault, io, root, nonLoosening: true, interpretations: interpretations() });
-    expect(result).toMatchObject({ state: "sealed", templates: ["manual__meeting.template"] });
+    // slice f2: move to templateFolder — the answers are reported as not stored.
+    expect(result).toMatchObject({ state: "sealed", templates: [], warnings: ["CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder"] });
+    // All ten properties were asked about; the three with no variable are the required ones.
+    expect(notes).toContain("  template manual__meeting.template: properties [type, aliases, authorship], headings [Actions]");
+    // A version 3 seal stores the answers nowhere; only folders and properties persist.
     const store = await readStore(VAULT_ID, root);
     if (store.state !== "ok") throw new Error(store.state);
-    const sealed = store.contract.templates["manual__meeting.template"];
-    // All ten properties were asked about; the three with no variable are the required ones.
-    expect(sealed?.requiredProperties).toEqual(["type", "aliases", "authorship"]);
-    expect(sealed?.requiredHeadings).toEqual(["Actions"]);
+    expect(Object.hasOwn(store.contract, "templates")).toBe(false);
   });
 
   it("refuse to seal when a template source changes after the owner answered, and leave nothing behind", async () => {
@@ -331,7 +333,7 @@ describe("condition 1 — the hash OMS computed is the only one it trusts", () =
 });
 
 describe("condition 2 — scope arrives with the rekey migration", () => {
-  const sealedTemplate = (source: string): TemplateContract => ({
+  const sealedTemplate = (source: string): LegacyTemplateContract => ({
     source,
     sourceHash: digestBytes("whatever"),
     requiredProperties: [],
@@ -376,14 +378,15 @@ describe("condition 2 — scope arrives with the rekey migration", () => {
   });
 
   it("lets a vault sealed under the old keys reseal without a terminal", async () => {
-    const bare: VaultContract = {
-      version: 1,
+    const bare: VaultContract = { folders: {}, properties: {} };
+    // Old keys only ever lived in a version 1 or 2 generation, which stored templates.
+    await sealLegacyGeneration({
+      vaultRealPath: vault,
       vaultId: VAULT_ID,
-      folders: {},
-      properties: {},
+      contract: bare,
       templates: { "meeting.template": sealedTemplate("Templates/agent/meeting.template.md") },
-    };
-    await sealContract({ vaultRealPath: vault, vaultId: VAULT_ID, contract: bare }, root);
+    }, root);
+    await bootstrapSnapshots(root, VAULT_ID);
     // The sealed template declared nothing required, so answering the same way reseals it.
     const answers: Answers = { seal: true };
     for (const entry of interpretations()) {
@@ -408,10 +411,16 @@ describe("condition 2 — scope arrives with the rekey migration", () => {
     const result = await runInterview({ vault, io, root, nonLoosening: true, interpretations: interpretations() });
     // Without the rekey this would be `loosening` with `templates.meeting.template removed`.
     if (result.state === "incomplete") throw new Error(result.questions.map(question => question.id).join("\n"));
-    expect(result).toMatchObject({ state: "sealed" });
+    expect(result).toMatchObject({
+      state: "sealed",
+      templates: [],
+      warnings: [expect.stringMatching(/^CONTRACT_LEGACY_TEMPLATES_DROPPED: \d+ legacy templates/), "CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder"],
+    });
     const store = await readStore(VAULT_ID, root);
     if (store.state !== "ok") throw new Error(store.state);
-    expect(Object.keys(store.contract.templates)).toEqual(["agent__meeting.template"]);
+    // The reseal is forward-only: a new version 3 head with the legacy templates dropped.
+    expect(Object.hasOwn(store.contract, "templates")).toBe(false);
+    expect(store.legacy).toBeUndefined();
   });
 });
 

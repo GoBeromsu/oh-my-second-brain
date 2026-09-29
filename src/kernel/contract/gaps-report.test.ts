@@ -13,7 +13,6 @@ const DRAFT = "draft-12345678-1234-4234-8234-123456789abc.md";
 const CONTRACT: VaultContract = {
   folders: { Inbox: { meaning: "", searchExclude: false } },
   properties: { status: { meaning: "", type: "text", default: false, required: false, rules: [{ kind: "allowed", values: [] }] } },
-  templates: {},
 };
 const SEALED: ContractView = { state: "sealed", contract: CONTRACT };
 const CURRENT = contractRevision(SEALED)!;

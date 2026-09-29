@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { judge } from "../contract/judge.js";
-import type { ContractView, PropertyContract, VaultContract } from "../contract/types.js";
+import type { TemplatedContract } from "../contract/legacy.js";
+import type { ContractView, PropertyContract } from "../contract/types.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { conform, type ConformOptions } from "./conform.js";
 
-const CONTRACT: VaultContract = {
+const CONTRACT: TemplatedContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false } },
   properties: {
     status: { meaning: "state", type: "text", default: false, required: false, rules: [{ kind: "allowed", values: ["active", "done"] }] },
@@ -26,7 +27,7 @@ const CONTRACT: VaultContract = {
     bare: { source: "Templates/bare.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] },
   },
 };
-const SEALED: ContractView = { state: "sealed", contract: CONTRACT };
+const SEALED: ContractView = { state: "sealed", contract: { folders: CONTRACT.folders, properties: CONTRACT.properties }, legacy: { templates: CONTRACT.templates } };
 const NOW = new Date(2026, 8, 28, 9, 5, 7);
 
 function options(extra: Partial<ConformOptions> = {}): ConformOptions {
@@ -125,14 +126,14 @@ describe("conform", () => {
   });
 
   it("never defaults a property a template requires, whether or not the template is chosen", () => {
-    const contract: VaultContract = {
+    const contract: TemplatedContract = {
       folders: CONTRACT.folders,
       properties: { created: { meaning: "creation date", type: "date", default: true, required: false, rules: [] } },
       templates: {
         project: { source: "Templates/project.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: ["created"], narrowedRules: {}, requiredHeadings: [] },
       },
     };
-    const view: ContractView = { state: "sealed", contract };
+    const view: ContractView = { state: "sealed", contract: { folders: contract.folders, properties: contract.properties }, legacy: { templates: contract.templates } };
     const content = "---\ntitle: a\n---\nBody\n";
     for (const template of ["project", undefined]) {
       const result = conform(content, options({ view, isNew: true, ...(template === undefined ? {} : { template }) }));

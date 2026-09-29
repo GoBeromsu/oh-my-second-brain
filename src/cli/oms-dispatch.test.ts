@@ -307,7 +307,7 @@ describe("oms CLI dispatch", () => {
     expect(jsonObject(doctor.stdout)).toEqual({
       contract: "none",
       findings: [{ message: "contract: none", guidance: "oms setup" }],
-      templates: [],
+      legacyTemplates: 0,
     });
 
     expect(lint.status).toBe(0);

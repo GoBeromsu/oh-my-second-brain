@@ -7,13 +7,14 @@ import { buildTruthTableRow, type TruthTableFixture } from "../../../test/fixtur
 import { openGaps, readGapDraft, readGapLedger } from "../contract/gap-ledger.js";
 import { contractRevision } from "../contract/revision.js";
 import { sealContract } from "../contract/store.js";
+import type { TemplatedContract } from "../contract/legacy.js";
 import { formatWarnings, type VaultContract } from "../contract/types.js";
 import { resolveSealState, type SealRow } from "../contract/vault-id.js";
 import { syncEngineStore } from "../engine/embed/sync.js";
 import { engineStorePath } from "../engine/paths.js";
 import { runWritePipeline, type WriteRequest } from "./pipeline.js";
 
-const CONTRACT: VaultContract = {
+const CONTRACT: TemplatedContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false } },
   properties: {
     status: { meaning: "where the project stands", type: "text", default: false, required: false, rules: [{ kind: "allowed", values: ["active", "done"] }] },
@@ -40,12 +41,12 @@ const fixtures: TruthTableFixture[] = [];
 const scratch: string[] = [];
 let savedEnv: Record<string, string | undefined>;
 
-async function sealedVault(contract: VaultContract = CONTRACT): Promise<TruthTableFixture> {
+async function sealedVault(contract: VaultContract | TemplatedContract = CONTRACT): Promise<TruthTableFixture> {
   return rowVault("sealed", contract);
 }
 
 /** A vault in seal-state `row`, with HOME pointed at its store so the default seal read finds it. */
-async function rowVault(row: SealRow, contract: VaultContract = CONTRACT): Promise<TruthTableFixture> {
+async function rowVault(row: SealRow, contract: VaultContract | TemplatedContract = CONTRACT): Promise<TruthTableFixture> {
   const fixture = await buildTruthTableRow(row, contract);
   fixtures.push(fixture);
   const home = path.join(fixture.base, "home");
@@ -369,7 +370,8 @@ describe("runWritePipeline", () => {
     expect(drafted).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", gaps: [{ axis: "value", kind: "no-fit", field: "content" }], wouldDraft: true } } });
   });
 
-  it("records an open template choice and saves the note as written", async () => {
+  // slice f2: move to templateFolder — the choice returns once templates are read from there.
+  it("records no template choice from an older generation's templates and saves the note as written", async () => {
     const template = CONTRACT.templates["project"]!;
     const fixture = await sealedVault({
       ...CONTRACT,
@@ -379,9 +381,9 @@ describe("runWritePipeline", () => {
       },
     });
     const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: active\n---\nBody\n"), { now: () => NOW, updateIndex: async () => "skipped" });
-    expect(outcome).toMatchObject({ kind: "written", receipt: { gaps: [{ axis: "template", kind: "choice", field: "template" }] } });
-    const [gap] = openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events);
-    expect(gap).toMatchObject({ chosen: "project", reason: "2 templates apply to the folder and none was selected" });
+    expect(outcome).toMatchObject({ kind: "written" });
+    expect(outcome.kind === "written" && outcome.receipt).not.toHaveProperty("gaps");
+    expect(openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events)).toEqual([]);
   });
 
   it("saves a write the contract contradicts on the field as written and records the contradiction", async () => {
@@ -465,7 +467,7 @@ describe("runWritePipeline", () => {
   it("names one contract revision in the receipt and every gap when a seal lands mid-write", async () => {
     const fixture = await sealedVault();
     const vaultRealPath = await realpath(fixture.vault);
-    const resealed: VaultContract = {
+    const resealed: TemplatedContract = {
       ...CONTRACT,
       properties: { ...CONTRACT.properties!, created: { ...CONTRACT.properties!["created"]!, meaning: "creation date, resealed" } },
     };
@@ -536,7 +538,7 @@ describe("runWritePipeline", () => {
   });
 
   it("never defaults a date property a template requires, and never judges the template's requirement", async () => {
-    const required: VaultContract = {
+    const required: TemplatedContract = {
       ...CONTRACT,
       templates: { project: { ...CONTRACT.templates["project"]!, requiredProperties: ["created"] } },
     };
@@ -658,7 +660,6 @@ const TIERS: VaultContract = {
     refs: { meaning: "references", type: "list", default: false, required: false, rules: [{ kind: "count", max: 2 }] },
     created: { meaning: "creation date", type: "date", default: true, required: false, rules: [] },
   },
-  templates: {},
 };
 
 describe("runWritePipeline tiers (rows 14-23)", () => {

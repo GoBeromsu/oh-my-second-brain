@@ -1,9 +1,14 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { digestBytes } from "../conventions/canonical.js";
+import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import { decideWrite, judgeReadyTarget, resolveWriteTarget, type WriteTarget } from "./judge-write.js";
+import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { bootstrapSnapshots } from "./store.js";
 import type { ContractView, PropertyContract } from "./types.js";
+import { resolveSealState } from "./vault-id.js";
 
 const directories: string[] = [];
 
@@ -45,6 +50,50 @@ describe("resolveWriteTarget seal state failures", () => {
   });
 });
 
+describe("a version 2 generation with templates", () => {
+  it("loads, and neither the judge nor decideWrite reads its template constraints", async () => {
+    const vault = await tempVault();
+    const root = await tempVault();
+    const vaultId = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
+    await mkdir(join(vault, ".oms"));
+    await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId, templateFolder: "Templates" }));
+    const status: PropertyContract = { meaning: "state", type: "text", default: false, required: false, rules: [{ kind: "allowed", values: ["closed", "done"] }] };
+    const revision = await sealLegacyGeneration({
+      vaultRealPath: vault,
+      vaultId,
+      contract: { folders: null, properties: { status } },
+      templates: {
+        // Its fixed rule contradicts the pool's allowed list, so a leaked read would show as a contradiction.
+        Meeting: {
+          source: "Templates/Meeting.md", sourceHash: digestBytes("x"), applyFolder: "Projects",
+          requiredProperties: ["status", "attendees"], narrowedRules: { status: [{ kind: "fixed", value: "open" }] }, requiredHeadings: ["Agenda"],
+        },
+      },
+    }, root);
+    await bootstrapSnapshots(root, vaultId);
+    const manifest = join(root, `.${vaultId}.1`, "manifest.json");
+    const before = await readFile(manifest, "utf8");
+
+    const resolved = await resolveWriteTarget(vault, join(vault, "Projects/a.md"), { resolveSealState: target => resolveSealState(target, root) });
+    if (resolved.state !== "ready" || resolved.view.state !== "sealed") throw new Error("expected a sealed ready target");
+    expect(resolved.view.revision).toBe(revision);
+    expect(resolved.view.legacy?.templates["Meeting"]?.requiredHeadings).toEqual(["Agenda"]);
+    expect(resolved.view.contract).not.toHaveProperty("templates");
+
+    // In the template's applyFolder, breaking its fixed `status`, lacking `attendees` and its heading.
+    const obeysPool = "---\nstatus: closed\n---\nno agenda\n";
+    expect(judgeReadyTarget(resolved, obeysPool)).toMatchObject({ ok: true, refusals: [], warnings: [], violations: [] });
+    expect(decideWrite(resolved, obeysPool, { template: "Meeting" })).toMatchObject({ outcome: "allow", findings: [] });
+    expect(decideWrite(resolved, obeysPool, { template: "Meeting" })).not.toHaveProperty("fixedContent");
+
+    // A pool miss is kept as an ordinary warning, not a contradiction the template's rule would imply.
+    const decision = decideWrite(resolved, "---\nstatus: pending\n---\nno agenda\n", { template: "Meeting" });
+    expect(decision).toMatchObject({ outcome: "allow", findings: [{ axis: "value", kind: "kept", reason: "kept: not-allowed" }] });
+
+    expect(await readFile(manifest, "utf8")).toBe(before);
+  });
+});
+
 type ReadyTarget = Extract<WriteTarget, { readonly state: "ready" }>;
 
 function property(overrides: Partial<PropertyContract> = {}): PropertyContract {
@@ -53,7 +102,7 @@ function property(overrides: Partial<PropertyContract> = {}): PropertyContract {
 
 const SEALED: ContractView = {
   state: "sealed",
-  contract: { folders: null, properties: { status: property({ required: true }), owner: property() }, templates: {} },
+  contract: { folders: null, properties: { status: property({ required: true }), owner: property() } },
 };
 
 function ready(view: ContractView, previousContent: string | undefined | null = undefined): ReadyTarget {
@@ -109,7 +158,7 @@ describe("decideWrite", () => {
   });
 
   it("returns the fixed content and the saved verdict's fixes for a lossless fix", () => {
-    const typed: ContractView = { state: "sealed", contract: { folders: null, properties: { status: property({ required: true }), size: property({ type: "number" }) }, templates: {} } };
+    const typed: ContractView = { state: "sealed", contract: { folders: null, properties: { status: property({ required: true }), size: property({ type: "number" }) } } };
     const decision = decideWrite(ready(typed), "---\nstatus: open\nsize: \"12\"\n---\nbody\n");
     expect(decision.outcome).toBe("allow");
     if (decision.outcome !== "allow") return;
@@ -120,7 +169,7 @@ describe("decideWrite", () => {
   });
 
   it("fills a date default only on a new note and only with a time", () => {
-    const dated: ContractView = { state: "sealed", contract: { folders: null, properties: { created: property({ type: "date", default: true, required: true }) }, templates: {} } };
+    const dated: ContractView = { state: "sealed", contract: { folders: null, properties: { created: property({ type: "date", default: true, required: true }) } } };
     const now = new Date(2026, 8, 29, 9, 30);
     const fresh = decideWrite(ready(dated), "body\n", { now });
     expect(fresh.outcome === "allow" && fresh.fixedContent).toBe("---\ncreated: 2026-09-29\n---\nbody\n");
@@ -151,7 +200,7 @@ describe("decideWrite", () => {
   });
 
   it("does not treat a warning the note already had as new", () => {
-    const view: ContractView = { state: "sealed", contract: { folders: { Projects: { meaning: "p", searchExclude: false } }, properties: null, templates: {} } };
+    const view: ContractView = { state: "sealed", contract: { folders: { Projects: { meaning: "p", searchExclude: false } }, properties: null } };
     const unfiled = decideWrite(ready(view), "new body\n");
     expect(unfiled).toMatchObject({ outcome: "allow", findings: [{ axis: "folder", kind: "kept" }] });
     const decision = decideWrite(ready(view, "old body\n"), "new body\n");
@@ -160,5 +209,29 @@ describe("decideWrite", () => {
     expect(decision.verdict.warnings).toEqual([{ field: "path", kind: "unregistered-folder" }]);
     expect(decision.fixedContent).toBeUndefined();
     expect(decision.findings).toEqual([]);
+  });
+});
+
+describe("decideWrite on a legacy view", () => {
+  it("decides exactly as on the same axes without templates, choices and contradictions included", () => {
+    const axes = { folders: { Notes: { meaning: "notes", searchExclude: false } }, properties: { size: property({ type: "number" }) } };
+    const legacyTemplate = (source: string, narrowedRules = {}) => ({
+      source, sourceHash: `sha256:${"a".repeat(64)}` as const, applyFolder: "Notes", requiredProperties: [], narrowedRules, requiredHeadings: [],
+    });
+    const legacy: ContractView = {
+      state: "sealed",
+      contract: axes,
+      // Two templates on one folder would offer a choice; A's empty allowed list would contradict `size`.
+      legacy: { templates: { A: legacyTemplate("Templates/A.md", { size: [{ kind: "allowed", values: [] }] }), B: legacyTemplate("Templates/B.md") } },
+    };
+    const v3: ContractView = { state: "sealed", contract: axes };
+    const at = (view: ContractView): ReadyTarget => ({ ...ready(view), path: "Notes/a.md", absolutePath: "/vault/Notes/a.md" });
+    const content = "---\nsize: \"12\"\n---\nbody\n";
+
+    const decision = decideWrite(at(legacy), content);
+    expect(decision).toEqual(decideWrite(at(v3), content));
+    expect(decision).toMatchObject({ outcome: "allow", fixedContent: "---\nsize: 12\n---\nbody\n" });
+    expect(decision.findings).toMatchObject([{ axis: "value", kind: "fixed", reason: expect.stringContaining("type") }]);
+    expect(decision.findings.some(finding => finding.axis === "template" || finding.reason?.startsWith("contradiction"))).toBe(false);
   });
 });

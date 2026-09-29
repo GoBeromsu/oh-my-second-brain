@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,9 +8,14 @@ import { interpretVault } from "./interpretation-fixture.js";
 import { runInterview } from "./interview.js";
 import { parseAnswers, publicQuestion, scriptedIO, type Answers } from "./scripted-interview.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
-import { readStore } from "./store.js";
+import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { bootstrapSnapshots, readStore } from "./store.js";
+import type { Rule } from "./types.js";
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
+// slice f2: move to templateFolder — until then a seal reports template input it did not store.
+const NOT_STORED = "CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder";
+const DROPPED_ONE = "CONTRACT_LEGACY_TEMPLATES_DROPPED: 1 legacy templates will not be carried into the v3 contract (slice f2 moves templates to templateFolder)";
 
 let base: string;
 let vault: string;
@@ -24,8 +29,10 @@ beforeEach(async () => {
   await mkdir(join(vault, "Templates"));
   await mkdir(join(vault, ".oms"));
   await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateFolder: "Templates" }));
-  await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n");
+  await writeFile(join(vault, "Templates/Meeting.md"), MEETING_SOURCE);
 });
+
+const MEETING_SOURCE = "---\nstatus: open\n---\n## Agenda\n";
 
 afterEach(async () => {
   await rm(base, { recursive: true, force: true });
@@ -54,6 +61,34 @@ async function run(answers: Answers, extra: { readonly reask?: boolean } = {}) {
   const { io, notes } = scriptedIO(answers);
   const interpretations = await interpretVault(vault);
   return { result: await runInterview({ vault, io, root, nonLoosening: true, interpretations, ...extra }), notes };
+}
+
+/**
+ * Seals what ANSWERS reaches the way a version 2 store held it, the Meeting template
+ * included. A version 3 seal stores no templates, so only such a head gives a reseal a
+ * sealed template to compare against.
+ */
+async function sealLegacyHead(rules: { readonly status?: readonly Rule[]; readonly meeting?: readonly Rule[] } = {}): Promise<void> {
+  await sealLegacyGeneration({
+    vaultRealPath: vault,
+    vaultId: VAULT_ID,
+    contract: {
+      folders: { Projects: { meaning: "project notes", searchExclude: false } },
+      properties: { status: { meaning: "workflow state", type: "text", default: false, required: true, rules: rules.status ?? [] } },
+    },
+    templates: {
+      Meeting: {
+        source: "Templates/Meeting.md",
+        sourceHash: digestBytes(MEETING_SOURCE),
+        applyFolder: "Projects",
+        requiredProperties: ["status"],
+        narrowedRules: { status: rules.meeting ?? [{ kind: "allowed", values: ["open", "done"] }] },
+        requiredHeadings: ["Agenda"],
+      },
+    },
+    declined: { folders: ["Templates"], properties: [], templates: {} },
+  }, root);
+  await bootstrapSnapshots(root, VAULT_ID);
 }
 
 async function sealedContract() {
@@ -116,8 +151,10 @@ describe("scripted interview answers", () => {
     await expect(readdir(root)).rejects.toThrow();
 
     const second = await run({ ...ANSWERS, seal: true });
-    expect(second.result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: ["Meeting"] });
-    expect((await sealedContract()).templates["Meeting"]?.narrowedRules).toEqual({ status: [{ kind: "allowed", values: ["open", "done"] }] });
+    expect(second.result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [NOT_STORED] });
+    expect(second.notes).toContain(NOT_STORED);
+    // The answered template is reported, not stored: a version 3 seal carries no templates.
+    expect(Object.keys(await sealedContract()).sort()).toEqual(["folders", "properties"]);
   });
 
   it("aborts when the seal is declined", async () => {
@@ -137,15 +174,43 @@ describe("scripted interview answers", () => {
   });
 
   it("refuses a hidden value in a public meaning like the terminal interview", async () => {
-    const { result } = await run({ ...ANSWERS, "property:status:meaning": "open or done", seal: true });
+    const { result } = await run({ ...ANSWERS, "property:status:rule": "one-of-allowed", "property:status:allowed": "open, done", "property:status:meaning": "open or done", seal: true });
     expect(result.state).toBe("refused");
     await expect(readdir(root)).rejects.toThrow();
+  });
+
+  // slice f2: move to templateFolder — a template answer is not stored, so it is not checked.
+  it("neither refuses nor asks about a template-only issue, and reports the answers as not stored", async () => {
+    await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\nowner: me\n---\n## Agenda\n");
+    const { result, notes } = await run({
+      ...ANSWERS,
+      // `owner` stays unregistered; the old guard refused a template requiring it.
+      "property:owner:register": false,
+      "template:Meeting:field:owner:required": true,
+      "template:Meeting:field:owner:literal": "example-only",
+      // A template value in a public meaning: the old guard refused it as hidden.
+      "property:status:meaning": "open or done",
+      seal: true,
+    });
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [NOT_STORED] });
+    expect(notes).toContain(NOT_STORED);
+    expect(Object.keys(await sealedContract()).sort()).toEqual(["folders", "properties"]);
   });
 });
 
 describe("non-loosening reseal", () => {
   beforeEach(async () => {
+    await sealLegacyHead();
+  });
+
+  it("reseals over a version 3 head without a template to compare against", async () => {
+    await rm(root, { recursive: true, force: true });
     expect((await run({ ...ANSWERS, seal: true })).result.state).toBe("sealed");
+    await mkdir(join(vault, "Journal"));
+    // The template is not stored, so it is answered again beside the new folder.
+    const template = Object.fromEntries(Object.entries(ANSWERS).filter(([id]) => id.startsWith("template:")));
+    const { result } = await run({ ...template, "folder:Journal:register": true, "folder:Journal:meaning": "journal", "folder:Journal:search-exclude": true, seal: true });
+    expect(result.state).toBe("sealed");
   });
 
   it("allows a reseal that only adds", async () => {
@@ -170,9 +235,8 @@ describe("non-loosening reseal", () => {
       seal: true,
     });
     expect(result.state).toBe("sealed");
-    const after = (await sealedContract()).templates["Meeting"]!;
-    expect(after.sourceHash).not.toBe(before.templates["Meeting"]!.sourceHash);
-    expect({ ...after, sourceHash: "" }).toEqual({ ...before.templates["Meeting"]!, sourceHash: "" });
+    const after = await sealedContract();
+    expect(after).toEqual({ folders: before.folders, properties: before.properties });
   });
 
   it("seals a changed template answered more strictly, since the judge never reads a template", async () => {
@@ -188,7 +252,6 @@ describe("non-loosening reseal", () => {
       seal: true,
     });
     expect(stricter.result.state).toBe("sealed");
-    expect((await sealedContract()).templates["Meeting"]!.requiredHeadings).toEqual(["Agenda", "Notes"]);
   });
 
   it("seals a changed template answered more loosely, which exposes no file", async () => {
@@ -204,9 +267,6 @@ describe("non-loosening reseal", () => {
       seal: true,
     });
     expect(looser.result.state).toBe("sealed");
-    const after = (await sealedContract()).templates["Meeting"]!;
-    expect(after.requiredProperties).toEqual([]);
-    expect(after.applyFolder).toBeUndefined();
   });
 
   it("seals a new template scoped inside a sealed scoped template's folder", async () => {
@@ -219,13 +279,24 @@ describe("non-loosening reseal", () => {
       seal: true,
     });
     expect(result.state).toBe("sealed");
-    expect((await sealedContract()).templates["Daily"]!.applyFolder).toBe("Projects/Daily");
   });
 
-  it("refuses removing a template whose source is gone", async () => {
+  // slice f2: move to templateFolder — a version 3 seal carries no template, so dropping one warns.
+  it("warns, and does not refuse, that the legacy templates are not carried into the v3 contract", async () => {
+    const records: unknown[] = [];
+    const { io, notes } = scriptedIO({ seal: true });
+    const result = await runInterview({ vault, io: { ...io, record: async event => { records.push(event); } }, root, nonLoosening: true, interpretations: await interpretVault(vault) });
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], warnings: [DROPPED_ONE] });
+    expect(notes).toContain(DROPPED_ONE);
+    expect(records).toContainEqual(expect.objectContaining({ type: "proposed", droppedLegacyTemplates: 1 }));
+    const store = await readStore(VAULT_ID, root);
+    expect(store.state === "ok" && store.legacy).toBeUndefined();
+  });
+
+  it("seals removing a template whose source is gone, with the same warning", async () => {
     await rm(join(vault, "Templates/Meeting.md"));
     const { result } = await run({ "template:Meeting:remove": true, seal: true });
-    expect(result).toEqual({ state: "loosening", changes: [{ field: "templates.Meeting", kind: "removed" }] });
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 1, properties: 1, templates: [], removedTemplates: ["Meeting"], warnings: [DROPPED_ONE] });
   });
 
   it("refuses a seal that needs recovery", async () => {
@@ -240,26 +311,9 @@ describe("non-loosening reseal", () => {
 describe("a sealed pattern that today's seal screen refuses", () => {
   const LEGACY = `L${"x".repeat(PATTERN_SOURCE_LIMIT)}`;
 
-  /** Rewrites one file of the linked generation the way an older release could have sealed it. */
-  async function rewriteGeneration(file: string, change: (value: Record<string, unknown>) => void): Promise<void> {
-    const directory = join(root, (await readdir(root)).find(entry => new RegExp(`^\\.${VAULT_ID}\\.(\\d{1,9})$`).test(entry))!);
-    const value = JSON.parse(await readFile(join(directory, file), "utf8")) as Record<string, unknown>;
-    change(value);
-    const bytes = `${JSON.stringify(value)}\n`;
-    await writeFile(join(directory, file), bytes);
-    const manifest = JSON.parse(await readFile(join(directory, "manifest.json"), "utf8")) as { files: Record<string, string> };
-    manifest.files[file] = digestBytes(bytes);
-    await writeFile(join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`);
-  }
-
   beforeEach(async () => {
-    expect((await run({ ...ANSWERS, seal: true })).result.state).toBe("sealed");
-    await rewriteGeneration("properties.json", value => {
-      (value["properties"] as Record<string, { rules: unknown[] }>)["status"]!.rules = [{ kind: "pattern", regex: LEGACY }];
-    });
-    await rewriteGeneration("templates/Meeting.json", value => {
-      value["narrowedRules"] = { status: [{ kind: "allowed", values: ["open", "done"] }, { kind: "pattern", regex: "(a+)+" }] };
-    });
+    // Sealed the way an older release could have: before today's pattern screen existed.
+    await sealLegacyHead({ status: [{ kind: "pattern", regex: LEGACY }], meeting: [{ kind: "allowed", values: ["open", "done"] }, { kind: "pattern", regex: "(a+)+" }] });
     expect(((await sealedContract()).properties?.["status"]?.rules)).toEqual([{ kind: "pattern", regex: LEGACY }]);
   });
 
@@ -281,21 +335,21 @@ describe("a sealed pattern that today's seal screen refuses", () => {
     };
     const incomplete = await owner({});
     if (incomplete.result.state !== "incomplete") throw new Error(incomplete.result.state);
-    expect(incomplete.result.questions.map(question => question.id)).toEqual(["property:status:repair:rule", "template:Meeting:repair:status:rule", "seal"]);
+    // slice f2: move to templateFolder — the legacy template's refused rule is not stored, so not asked.
+    expect(incomplete.result.questions.map(question => question.id)).toEqual(["property:status:repair:rule", "seal"]);
     expect(incomplete.notes.join("\n")).toContain("The sealed pattern rule for `status` is no longer accepted");
     expect(incomplete.notes.join("\n")).not.toMatch(/xxxx|\(a\+\)\+/);
 
     const sealed = await owner({
       "property:status:repair:rule": "pattern",
       "property:status:repair:pattern": "[a-z]+",
-      "template:Meeting:repair:status:rule": "none",
       seal: true,
     });
     expect(sealed.result.state).toBe("sealed");
     expect(sealed.notes.join("\n")).not.toMatch(/xxxx|\(a\+\)\+/);
     const contract = await sealedContract();
     expect(contract.properties?.["status"]?.rules).toEqual([{ kind: "pattern", regex: "[a-z]+" }]);
-    expect(contract.templates["Meeting"]?.narrowedRules).toEqual({ status: [{ kind: "allowed", values: ["open", "done"] }] });
+    expect(Object.hasOwn(contract, "templates")).toBe(false);
   });
 });
 

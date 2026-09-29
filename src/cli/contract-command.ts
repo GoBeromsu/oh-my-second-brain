@@ -177,6 +177,7 @@ function printResult(result: InterviewResult, notes: readonly string[] = []): vo
       properties: result.properties,
       templates: result.templates,
       ...(result.removedTemplates === undefined || result.removedTemplates.length === 0 ? {} : { removedTemplates: result.removedTemplates }),
+      ...(result.warnings === undefined || result.warnings.length === 0 ? {} : { warnings: result.warnings }),
     });
   } else if (result.state === "refused") {
     print({ status: "refused", reasons: result.reasons });
@@ -390,7 +391,7 @@ export async function runContractCommand(argv: readonly string[], deps: Contract
     else if (args.verb === "extract") await extract(vault, args.template!);
     else if (args.verb === "status") {
       const status = await contractStatus(vault);
-      print({ contract: status.contract, findings: status.findings, templates: status.templates });
+      print({ contract: status.contract, findings: status.findings, legacyTemplates: status.legacyTemplates });
     } else if (args.verb === "gaps") await gaps(vault);
     else await doctor(vault, args.fix);
   } catch (error: unknown) {

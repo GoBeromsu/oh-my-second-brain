@@ -7,6 +7,9 @@ import { interpretVault } from "../../src/kernel/contract/interpretation-fixture
 import type { InterviewIO, Question } from "../../src/kernel/contract/interview.js";
 import { readVaultSettings } from "../../src/kernel/vault/settings.js";
 
+// slice f2: move to templateFolder — the answered Meeting template is reported as not stored.
+const NOT_STORED = "CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder";
+
 /**
  * `oms setup --vault` finding the template folder from the vault's Obsidian
  * settings, with a temporary HOME. The CLI binary refuses a non-interactive terminal, so
@@ -91,7 +94,7 @@ describe("oms setup template-folder discovery", () => {
     expect(homedir()).toBe(home);
     await writeFile(path.join(vault, ".obsidian", "templates.json"), JSON.stringify({ folder: "Templates" }));
     const io = scripted({ ...TEMPLATE_ANSWERS, "template-folder:confirm": "" });
-    expect(await setup(io, await interpreting())).toEqual({ status: "sealed", vaultIdCreated: true, folders: 0, properties: 0, templates: ["Meeting"] });
+    expect(await setup(io, await interpreting())).toEqual({ status: "sealed", vaultIdCreated: true, folders: 0, properties: 0, templates: [], warnings: [NOT_STORED] });
     expect(process.exitCode).toBe(0);
     expect(io.asked).toContain("template-folder:confirm");
     expect(io.asked).not.toContain("template-folder:path");
@@ -99,13 +102,14 @@ describe("oms setup template-folder discovery", () => {
     expect(await readdir(path.join(home, ".oms", "vaults"))).toContain("index.json");
 
     await runContractCommand(["status", "--vault", vault]);
-    expect(output()).toMatchObject({ contract: "sealed", templates: [expect.objectContaining({ name: "Meeting" })] });
+    // A version 3 seal keeps no templates, so none is reported as legacy.
+    expect(output()).toMatchObject({ contract: "sealed", legacyTemplates: 0 });
   });
 
   it("offers the Templater folder, with its slashes trimmed, when the core plugin names none", async () => {
     await writeFile(path.join(vault, ".obsidian", "plugins", "templater-obsidian", "data.json"), JSON.stringify({ templates_folder: "/Templates/" }));
     const io = scripted({ ...TEMPLATE_ANSWERS, "template-folder:confirm": "y" });
-    expect(await setup(io, await interpreting())).toMatchObject({ status: "sealed", templates: ["Meeting"] });
+    expect(await setup(io, await interpreting())).toMatchObject({ status: "sealed", templates: [], warnings: [NOT_STORED] });
     expect(io.asked).not.toContain("template-folder:path");
     expect((await readVaultSettings(vault))?.templateFolder).toBe("Templates");
   });
@@ -129,7 +133,7 @@ describe("oms setup template-folder discovery", () => {
     await mkdir(path.join(base, "outside"));
     await writeFile(path.join(vault, ".obsidian", "templates.json"), settings);
     const io = scripted({ ...TEMPLATE_ANSWERS, "template-folder:path": "Templates" });
-    expect(await setup(io, await interpreting())).toMatchObject({ status: "sealed", templates: ["Meeting"] });
+    expect(await setup(io, await interpreting())).toMatchObject({ status: "sealed", templates: [], warnings: [NOT_STORED] });
     expect(io.asked).not.toContain("template-folder:confirm");
     expect(io.asked.filter(id => id === "template-folder:path")).toHaveLength(1);
     expect((await readVaultSettings(vault))?.templateFolder).toBe("Templates");
@@ -139,7 +143,7 @@ describe("oms setup template-folder discovery", () => {
     await writeFile(path.join(vault, ".obsidian", "templates.json"), "not json");
     await writeFile(path.join(vault, ".obsidian", "plugins", "templater-obsidian", "data.json"), JSON.stringify({ templates_folder: "Templates" }));
     const io = scripted({ ...TEMPLATE_ANSWERS, "template-folder:confirm": "" });
-    expect(await setup(io, await interpreting())).toMatchObject({ status: "sealed", templates: ["Meeting"] });
+    expect(await setup(io, await interpreting())).toMatchObject({ status: "sealed", templates: [], warnings: [NOT_STORED] });
     expect(io.asked).not.toContain("template-folder:path");
   });
 

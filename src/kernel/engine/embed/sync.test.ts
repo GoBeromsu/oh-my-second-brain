@@ -26,7 +26,7 @@ import { makeEmbeddingIdentity } from "./identity.js";
 import type { Chunk, EmbeddingProvider } from "../types.js";
 import { assembleCoreSemanticEngine } from "../assemble.js";
 import { serializeVaultSettings } from "../../vault/settings.js";
-import { sealContract } from "../../contract/store.js";
+import { sealLegacyGeneration } from "../../contract/legacy-store-fixture.js";
 
 let vault: string;
 let dbDir: string;
@@ -108,14 +108,14 @@ describe("syncEngineStore — embed=false (lex-only)", () => {
     writeDoc("Templates/note.md", "managed template");
     const vaultId = randomUUID();
     writeDoc(".oms/settings.json", serializeVaultSettings({ version: 1, vaultId }));
-    await sealContract({
+    await sealLegacyGeneration({
       vaultRealPath: realpathSync(vault),
       vaultId,
       contract: {
         folders: null,
         properties: null,
-        templates: { note: { source: "Templates/note.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] } },
       },
+      templates: { note: { source: "Templates/note.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] } },
     });
     mkdirSync(path.join(vault, "notes"), { recursive: true });
     symlinkSync(path.join(vault, "Templates", "note.md"), path.join(vault, "notes", "template-alias.md"));

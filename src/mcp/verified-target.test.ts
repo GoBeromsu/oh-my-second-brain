@@ -16,7 +16,6 @@ const distCli = path.join(repoRoot, "dist", "cli", "oms.js");
 const CONTRACT: VaultContract = {
   folders: { references: { meaning: "processed sources", searchExclude: false } },
   properties: { status: { meaning: "state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["open", "done"] }] } },
-  templates: {},
 };
 
 function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {

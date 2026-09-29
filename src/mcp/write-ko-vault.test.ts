@@ -29,7 +29,6 @@ const CONTRACT: VaultContract = {
   properties: {
     status: { meaning: "note lifecycle", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["진행중", "완료", "보류", "active"] }] },
   },
-  templates: {},
 };
 
 const KEYWORD = "낙상예방캠페인";

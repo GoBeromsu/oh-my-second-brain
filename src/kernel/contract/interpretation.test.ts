@@ -78,29 +78,23 @@ describe("the source OMS enumerates", () => {
 
 describe("a submitted interpretation", () => {
   it("decides the template questions, and the sealed values still come from the answers", async () => {
-    const { result } = await run(ANSWERS, [INTERPRETED]);
-    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 0, properties: 1, templates: ["Meeting"] });
+    const { result, notes } = await run(ANSWERS, [INTERPRETED]);
+    // slice f2: move to templateFolder — the answered template is reported as not stored.
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 0, properties: 1, templates: [], warnings: ["CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder"] });
+    expect(notes).toContain("  template Meeting: properties [status], headings [Agenda]");
+    // A version 3 seal stores no templates; the answers shaped only the proposal.
     const store = await readStore(VAULT_ID, root);
     if (store.state !== "ok") throw new Error(store.state);
-    expect(store.contract.templates["Meeting"]).toMatchObject({
-      source: SOURCE,
-      // The hash OMS computed, never the submitted observedHash.
-      sourceHash: digestBytes(BYTES),
-      requiredProperties: ["status"],
-      narrowedRules: { status: [{ kind: "fixed", value: "open" }] },
-      requiredHeadings: ["Agenda"],
-    });
+    expect(Object.hasOwn(store.contract, "templates")).toBe(false);
   });
 
   it("builds no question OMS was not given: an omitted field is asked about nowhere", async () => {
     // Nothing else in this vault mentions `status`: the Obsidian type map is empty, and
     // OMS cannot see the frontmatter, so dropping the field drops its questions entirely.
-    const { io } = scriptedIO({ "folder:Projects:register": false, "folder:Templates:register": false, "template:Meeting:interpretation": true, "template:Meeting:register": true, "template:Meeting:heading:Agenda": true, "template:Meeting:apply-folder": "", seal: true });
+    const { io, notes } = scriptedIO({ "folder:Projects:register": false, "folder:Templates:register": false, "template:Meeting:interpretation": true, "template:Meeting:register": true, "template:Meeting:heading:Agenda": true, "template:Meeting:apply-folder": "", seal: true });
     const result = await runInterview({ vault, io, root, nonLoosening: true, interpretations: [{ ...INTERPRETED, fields: [] }] });
-    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 0, properties: 0, templates: ["Meeting"] });
-    const store = await readStore(VAULT_ID, root);
-    if (store.state !== "ok") throw new Error(store.state);
-    expect(store.contract.templates["Meeting"]?.requiredProperties).toEqual([]);
+    expect(result).toEqual({ state: "sealed", vaultIdCreated: false, folders: 0, properties: 0, templates: [], warnings: ["CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder"] });
+    expect(notes).toContain("  template Meeting: properties [], headings [Agenda]");
   });
 
   it("is shown to the owner without its literal values, and a declined one seals nothing", async () => {
@@ -162,13 +156,14 @@ describe("a template in a subfolder", () => {
 
     await mkdir(join(vault, "Templates/Work"));
     await writeFile(join(vault, "Templates/Work/Meeting.md"), "## Log\n");
-    const { result } = await run({
+    const { result, notes } = await run({
       ...ANSWERS,
       "template:Work__Meeting:interpretation": true,
       "template:Work__Meeting:register": true,
       "template:Work__Meeting:heading:Log": true,
       "template:Work__Meeting:apply-folder": "",
     }, await interpretVault(vault));
-    expect(result).toMatchObject({ state: "sealed", templates: ["Meeting", "Work__Meeting"] });
+    expect(result).toMatchObject({ state: "sealed", templates: [] });
+    expect(notes).toContain("  template Work__Meeting: properties [], headings [Log]");
   });
 });

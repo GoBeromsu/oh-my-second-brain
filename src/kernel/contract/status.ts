@@ -1,7 +1,7 @@
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { compareCodePoints } from "../conventions/canonical.js";
-import { detectDrift, type DriftState } from "./drift.js";
+import { legacyTemplatesOf } from "./legacy.js";
 import { readTransportFailures, type TransportFailures } from "./guard-events.js";
 import { pendingLogKey, readInterviewLog } from "./interview-log.js";
 import { lineageHealth, type LineageHealth } from "./lineage-health.js";
@@ -20,18 +20,18 @@ export interface DoctorFinding {
   readonly guidance: Guidance | null;
 }
 
-export interface ContractTemplateStatus {
-  readonly name: string;
-  readonly state: DriftState;
-}
-
 export interface ContractStatus {
   readonly contract: "none" | "sealed" | "unreadable";
   /** Present when the contract is unreadable: `tampered` refuses writes, `broken` lets them through with a warning. */
   readonly reason?: "tampered" | "broken";
   readonly row: SealRow;
   readonly findings: readonly DoctorFinding[];
-  readonly templates: readonly ContractTemplateStatus[];
+  /**
+   * Templates an old (version 1 or 2) generation sealed. Their required properties,
+   * narrowed rules and headings are no longer enforced; a reseal writes a generation
+   * without them. Zero for a version 3 head or an unsealed vault.
+   */
+  readonly legacyTemplates: number;
 }
 
 /** Fixed doctor wording per truth-table row. */
@@ -51,6 +51,11 @@ export const SHARED_FINDING: DoctorFinding = { message: "vault id shared", guida
 export const SETTINGS_INVALID_FINDING: DoctorFinding = { message: "vault settings unreadable", guidance: "oms doctor contract" };
 export const STORE_UNREADABLE_FINDING: DoctorFinding = { message: "contract store unreadable", guidance: "oms setup" };
 
+/** The sealed generation carries template constraints the judge no longer enforces; the count is the only detail. */
+export function legacyTemplateFinding(count: number): DoctorFinding {
+  return { message: `legacy-template-constraints-ignored: ${count}`, guidance: "oms setup" };
+}
+
 export async function contractStatus(vault: string, root: string = storeRoot()): Promise<ContractStatus> {
   const state = await resolveSealState(vault, root);
   const findings: DoctorFinding[] = [ROW_FINDING[state.row]];
@@ -60,12 +65,12 @@ export async function contractStatus(vault: string, root: string = storeRoot()):
     const loadedRow = state.row !== "index-without-store" && state.row !== "vault-id-tampered" && state.row !== "settings-missing";
     if (state.view.state === "unreadable" && loadedRow) findings.push(STORE_UNREADABLE_FINDING);
     return state.view.state === "unreadable"
-      ? { contract: "unreadable", reason: state.view.reason, row: state.row, findings, templates: [] }
-      : { contract: "none", row: state.row, findings, templates: [] };
+      ? { contract: "unreadable", reason: state.view.reason, row: state.row, findings, legacyTemplates: 0 }
+      : { contract: "none", row: state.row, findings, legacyTemplates: 0 };
   }
-  const drift = await detectDrift(vault, state.view.contract);
-  const templates = [...drift].sort(([left], [right]) => compareCodePoints(left, right)).map(([name, driftState]) => ({ name, state: driftState }));
-  return { contract: "sealed", row: state.row, findings, templates };
+  const legacyTemplates = Object.keys(legacyTemplatesOf(state.view)).length;
+  if (legacyTemplates > 0) findings.push(legacyTemplateFinding(legacyTemplates));
+  return { contract: "sealed", row: state.row, findings, legacyTemplates };
 }
 
 /** Why a contract is unreadable. Names no path, directory or id. */

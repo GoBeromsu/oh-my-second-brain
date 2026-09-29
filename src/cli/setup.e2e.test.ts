@@ -215,11 +215,18 @@ describe("oms setup end to end", () => {
       expect(await storeFiles(home)).toEqual([]);
     });
 
-    it("seals a first contract from answers, reseals a changed template answered more strictly or more loosely, and refuses a removed one, without its values", async () => {
+    it("seals a first contract from answers, reseals a changed template answered more strictly or more loosely, and seals nothing for a removed one, without its values", async () => {
       const { home, vault, answersFile, interpreting } = await agentVault();
       const first = runCli(home, ["setup", "--answers", await answersFile(FIRST), ...await interpreting(), "--vault", vault]);
       expect(first.status, first.stdout + first.stderr).toBe(0);
-      expect(json(first)).toMatchObject({ status: "sealed", folders: 1, properties: 1, templates: ["Meeting"] });
+      // A version 3 seal stores no templates, and says the template answers were not stored.
+      expect(json(first)).toMatchObject({
+        status: "sealed",
+        folders: 1,
+        properties: 1,
+        templates: [],
+        warnings: [expect.stringContaining("CONTRACT_TEMPLATES_NOT_STORED")],
+      });
       expect(first.stdout).not.toContain(HIDDEN);
 
       await writeFile(path.join(vault, "Templates", "Meeting.md"), WITH_NOTES);
@@ -263,19 +270,29 @@ describe("oms setup end to end", () => {
       expect(json(second)["status"]).toBe("sealed");
       expect(second.stdout).not.toContain(HIDDEN);
 
-      // Removing a sealed template would expose its source to search, so only the owner can.
+      // A version 3 head stores no template, so there is none to remove: the answer is
+      // unknown and nothing is sealed. Removing a legacy head's template is interview.test's.
       const sealedFiles = await storeFiles(home);
       await rm(path.join(vault, "Templates", "Meeting.md"));
       const third = runCli(home, ["setup", "--answers", await answersFile({ "template:Meeting:remove": true, seal: true }), "--vault", vault]);
       expect(third.status, third.stdout + third.stderr).toBe(1);
       const refused = json(third);
-      expect(refused["status"]).toBe("loosening");
-      expect(refused["changes"]).toEqual([{ field: "templates.Meeting", kind: "removed" }]);
-      expect(refused["remediation"]).toContain("`oms setup` themselves in a terminal");
+      expect(refused["status"]).toBe("rejected");
+      expect(refused["diagnostics"]).toEqual([expect.objectContaining({ code: "CONTRACT_ANSWER_UNKNOWN" })]);
       expect(third.stdout).not.toContain(HIDDEN);
       expect(third.stdout).not.toMatch(/"(open|done)"/);
       expect(third.stderr).not.toContain(HIDDEN);
       expect(await storeFiles(home)).toEqual(sealedFiles);
+    });
+
+    it("prints no warnings when no template was answered", async () => {
+      const { home, vault, answersFile, interpreting } = await agentVault();
+      const answers = Object.fromEntries(Object.entries(FIRST).filter(([id]) => !id.startsWith("template:Meeting:") || id === "template:Meeting:interpretation"));
+      const result = runCli(home, ["setup", "--answers", await answersFile({ ...answers, "template:Meeting:register": false }), ...await interpreting(), "--vault", vault]);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const output = json(result);
+      expect(output).toMatchObject({ status: "sealed", folders: 1, properties: 1, templates: [] });
+      expect(output).not.toHaveProperty("warnings");
     });
 
     it("refuses invalid, unknown, malformed and in-vault answers and seals nothing", async () => {

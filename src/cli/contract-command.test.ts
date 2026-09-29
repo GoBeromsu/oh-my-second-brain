@@ -105,7 +105,7 @@ describe("oms contract", () => {
 
   it("seals through setup into the temporary home, then reports status and doctor", async () => {
     await runContractCommand(["status", "--vault", vault]);
-    expect(output()).toEqual({ contract: "none", findings: [{ message: "contract: none", guidance: "oms setup" }], templates: [] });
+    expect(output()).toEqual({ contract: "none", findings: [{ message: "contract: none", guidance: "oms setup" }], legacyTemplates: 0 });
 
     await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
     expect(process.exitCode).toBe(0);
@@ -113,7 +113,7 @@ describe("oms contract", () => {
     expect(await readdir(path.join(home, ".oms", "vaults"))).toContain("index.json");
 
     await runContractCommand(["status", "--vault", vault]);
-    expect(output()).toEqual({ contract: "sealed", findings: [{ message: "contract: sealed", guidance: null }], templates: [] });
+    expect(output()).toEqual({ contract: "sealed", findings: [{ message: "contract: sealed", guidance: null }], legacyTemplates: 0 });
 
     await runContractCommand(["doctor", "--vault", vault]);
     expect(process.exitCode).toBe(0);

@@ -3,19 +3,20 @@ import { describe, expect, it } from "vitest";
 import { judge } from "./judge.js";
 import { isNonLoosening, looseningChanges, unsafePatternChanges } from "./loosening.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
-import type { PropertyContract, Rule, TemplateContract, VaultContract } from "./types.js";
+import type { TemplatedContract } from "./legacy.js";
+import type { PropertyContract, Rule, LegacyTemplateContract } from "./types.js";
 
-const HASH = `sha256:${"a".repeat(64)}`;
+const HASH = `sha256:${"a".repeat(64)}` as const;
 
 function property(rules: readonly Rule[], extra: Partial<PropertyContract> = {}): PropertyContract {
   return { meaning: "", type: "text", default: false, required: false, rules, ...extra };
 }
 
-function template(extra: Partial<TemplateContract> = {}): TemplateContract {
+function template(extra: Partial<LegacyTemplateContract> = {}): LegacyTemplateContract {
   return { source: "Templates/Meeting.md", sourceHash: HASH, requiredProperties: ["status"], narrowedRules: {}, requiredHeadings: ["Agenda"], ...extra };
 }
 
-const SEALED: VaultContract = {
+const SEALED: TemplatedContract = {
   folders: { Inbox: { meaning: "", searchExclude: false }, Private: { meaning: "", searchExclude: true } },
   properties: {
     status: property([{ kind: "allowed", values: ["open", "done"] }], { required: true }),
@@ -26,14 +27,14 @@ const SEALED: VaultContract = {
   templates: { Meeting: template({ applyFolder: "Inbox", narrowedRules: { status: [{ kind: "fixed", value: "open" }] } }) },
 };
 
-function withProperty(name: string, next: PropertyContract | undefined): VaultContract {
+function withProperty(name: string, next: PropertyContract | undefined): TemplatedContract {
   const properties = { ...SEALED.properties };
   if (next === undefined) delete properties[name];
   else properties[name] = next;
   return { ...SEALED, properties };
 }
 
-function withTemplate(next: TemplateContract | undefined): VaultContract {
+function withTemplate(next: LegacyTemplateContract | undefined): TemplatedContract {
   return { ...SEALED, templates: next === undefined ? {} : { Meeting: next } };
 }
 
@@ -44,7 +45,7 @@ describe("looseningChanges", () => {
   });
 
   it("accepts additions and tighter rules", () => {
-    const next: VaultContract = {
+    const next: TemplatedContract = {
       folders: { ...SEALED.folders, Projects: { meaning: "work", searchExclude: false }, Inbox: { meaning: "changed meaning", searchExclude: true } },
       properties: {
         ...SEALED.properties,
@@ -62,8 +63,8 @@ describe("looseningChanges", () => {
   });
 
   it("accepts a first-time applyFolder and a closed axis", () => {
-    const open: VaultContract = { folders: null, properties: null, templates: { Meeting: template() } };
-    const closed: VaultContract = { folders: { Inbox: { meaning: "", searchExclude: false } }, properties: { status: property([]) }, templates: { Meeting: template({ applyFolder: "Inbox" }) } };
+    const open: TemplatedContract = { folders: null, properties: null, templates: { Meeting: template() } };
+    const closed: TemplatedContract = { folders: { Inbox: { meaning: "", searchExclude: false } }, properties: { status: property([]) }, templates: { Meeting: template({ applyFolder: "Inbox" }) } };
     expect(isNonLoosening(open, closed)).toBe(true);
   });
 
@@ -112,11 +113,11 @@ describe("looseningChanges", () => {
   });
 
   describe("list values, checked against the judge", () => {
-    function listContract(rules: readonly Rule[]): VaultContract {
+    function listContract(rules: readonly Rule[]): TemplatedContract {
       return { folders: null, properties: { tags: property(rules, { type: "list" }) }, templates: {} };
     }
 
-    function accepts(contract: VaultContract, tags: readonly string[]): boolean {
+    function accepts(contract: TemplatedContract, tags: readonly string[]): boolean {
       return judge({ path: "a.md", frontmatter: { tags }, body: "" }, { state: "sealed", contract }).warnings.length === 0;
     }
 
@@ -172,7 +173,7 @@ describe("looseningChanges", () => {
       { ...sealed, narrowedRules: { status: [{ kind: "fixed", value: "done" }] } },
       unscoped,
       { ...sealed, applyFolder: "Private" },
-    ] satisfies TemplateContract[]) {
+    ] satisfies LegacyTemplateContract[]) {
       expect(looseningChanges(SEALED, withTemplate(next))).toEqual([]);
     }
     expect(looseningChanges(SEALED, { ...SEALED, templates: { ...SEALED.templates, Daily: template({ source: "Templates/Daily.md", applyFolder: "Inbox" }) } })).toEqual([]);
@@ -186,7 +187,7 @@ describe("looseningChanges", () => {
 
   it("names sealed patterns the seal screen now refuses by field only", () => {
     const long = `a{1}${"b".repeat(PATTERN_SOURCE_LIMIT)}`;
-    const contract: VaultContract = {
+    const contract: TemplatedContract = {
       ...SEALED,
       properties: { ...SEALED.properties, code: property([{ kind: "pattern", regex: long }]) },
       templates: { Meeting: template({ narrowedRules: { owner: [{ kind: "pattern", regex: "(a+)+" }] } }) },

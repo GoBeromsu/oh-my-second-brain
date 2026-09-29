@@ -1,5 +1,6 @@
 import { compareCodePoints } from "../conventions/canonical.js";
 import { normalizePath } from "../contract/judge.js";
+import { templatedContract } from "../contract/legacy.js";
 import { buildRedactor, hiddenValuesOf, publicTokensOf, REDACTED, redactResponse, type Redactor } from "../contract/redact.js";
 import type { ContractView, FieldType, JsonScalar, Rule, VaultContract } from "../contract/types.js";
 
@@ -88,7 +89,8 @@ function frameProperties(contract: VaultContract, redactor: Redactor): FrameProp
 
 export function frameFor(view: ContractView, options: FrameOptions = {}): WriteFrame {
   if (view.state !== "sealed") return emptyFrame(view.state);
-  const { contract } = view;
+  // slice f2: move to templateFolder
+  const contract = templatedContract(view);
   const name = options.template;
   const template = name !== undefined && Object.hasOwn(contract.templates, name) ? contract.templates[name] : undefined;
   const redactor = buildRedactor(hiddenValuesOf(contract), { publicTokens: publicTokensOf(contract) });

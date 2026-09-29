@@ -4,8 +4,10 @@ import { chmod, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { sealLegacyGeneration } from "../../contract/legacy-store-fixture.js";
+import type { TemplatedContract } from "../../contract/legacy.js";
 import { sealContract, storeRoot } from "../../contract/store.js";
-import type { PropertyContract, VaultContract } from "../../contract/types.js";
+import type { PropertyContract } from "../../contract/types.js";
 import { serializeVaultSettings } from "../../vault/settings.js";
 import { readSearchTemplateSource } from "./template-source.js";
 
@@ -31,7 +33,7 @@ function property(overrides: Partial<PropertyContract> = {}): PropertyContract {
   return { meaning: "a property", type: "text", default: false, required: false, rules: [], ...overrides };
 }
 
-function contract(): VaultContract {
+function contract(): TemplatedContract {
   return {
     folders: {
       Notes: { meaning: "Working notes.", searchExclude: false },
@@ -49,11 +51,14 @@ function contract(): VaultContract {
   };
 }
 
-async function seal(vault: string, sealed: VaultContract): Promise<string> {
+/** Templates seal a legacy generation, the only kind that still carries them. */
+async function seal(vault: string, sealed: TemplatedContract): Promise<string> {
   const vaultId = randomUUID();
   await mkdir(path.join(vault, ".oms"), { recursive: true });
   await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId }));
-  await sealContract({ vaultRealPath: vault, vaultId, contract: sealed });
+  const { templates, ...split } = sealed;
+  if (Object.keys(templates).length === 0) await sealContract({ vaultRealPath: vault, vaultId, contract: split });
+  else await sealLegacyGeneration({ vaultRealPath: vault, vaultId, contract: split, templates });
   return vaultId;
 }
 
