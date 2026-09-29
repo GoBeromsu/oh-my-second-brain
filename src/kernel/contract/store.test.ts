@@ -9,6 +9,8 @@ import type { VaultContract } from "./types.js";
 
 const ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const OTHER = "9b1d2c3e-4f5a-4b6c-8d7e-0f1a2b3c4d5e";
+// A read names the generation it read by its manifest digest; revision.test.ts pins which one.
+const MANIFEST_DIGEST = expect.stringMatching(/^sha256:[0-9a-f]{64}$/);
 
 const CONTRACT: VaultContract = {
   folders: { Projects: { meaning: "projects", searchExclude: false } },
@@ -61,7 +63,7 @@ describe("contract store", () => {
 
   it("round-trips a sealed contract", async () => {
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
     expect(await readIndex(root)).toEqual({ state: "ok", entries: { [vault]: ID } });
     expect(await storeExists(ID, root)).toBe(true);
     expect((await lstat(join(root, ID))).isSymbolicLink()).toBe(true);
@@ -81,13 +83,13 @@ describe("contract store", () => {
   it("keeps an absent axis absent", async () => {
     const open: VaultContract = { folders: null, properties: null, templates: {} };
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: open }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: open });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: open, digest: MANIFEST_DIGEST });
   });
 
   it("round-trips a template meaning", async () => {
     const meant: VaultContract = { ...CONTRACT, templates: { Meeting: { ...CONTRACT.templates["Meeting"]!, meaning: "one meeting" } } };
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: meant }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: meant });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: meant, digest: MANIFEST_DIGEST });
     const manifest = JSON.parse(await readFile(join(await generation(), "manifest.json"), "utf8")) as { version: number };
     expect(manifest.version).toBe(2);
   });
@@ -96,13 +98,13 @@ describe("contract store", () => {
     const counts = [{ kind: "count", min: 1, max: 3 }, { kind: "count", min: 0 }, { kind: "count", max: 2 }, { kind: "count" }] as const;
     const contract: VaultContract = { ...CONTRACT, properties: { tags: { meaning: "labels", type: "list", default: false, required: false, rules: [...counts] } } };
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract, digest: MANIFEST_DIGEST });
   });
 
   it("stores a count rule whose min exceeds its max", async () => {
     const contract: VaultContract = { ...CONTRACT, properties: { tags: { meaning: "labels", type: "list", default: false, required: false, rules: [{ kind: "count", min: 3, max: 1 }] } } };
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract, digest: MANIFEST_DIGEST });
   });
 
   it("still refuses a malformed count rule", async () => {
@@ -129,7 +131,7 @@ describe("contract store", () => {
     const manifest = join(await generation(), "manifest.json");
     const parsed = JSON.parse(await readFile(manifest, "utf8")) as { version: number };
     await writeFile(manifest, JSON.stringify({ ...parsed, version: 1 }));
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
     await writeFile(manifest, JSON.stringify({ ...parsed, version: 3 }));
     expect(await readStore(ID, root)).toEqual({ state: "unreadable" });
   });
@@ -171,7 +173,7 @@ describe("contract store", () => {
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
     const next: VaultContract = { ...CONTRACT, folders: { Areas: { meaning: "areas", searchExclude: true } } };
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: next }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: next });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: next, digest: MANIFEST_DIGEST });
   });
 
   it("reports a corrupt index", async () => {
@@ -185,7 +187,7 @@ describe("contract store", () => {
     await writeFile(join(root, "index.json"), "{not json");
     await expect(writeIndexEntry(vault, ID, root)).rejects.toThrow(/^CONTRACT_INDEX_CORRUPT: /);
     await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT }, root)).rejects.toThrow(/^CONTRACT_INDEX_CORRUPT: /);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
     expect(await readFile(join(root, "index.json"), "utf8")).toBe("{not json");
     await writeIndexEntry(vault, ID, root, { rebuildCorrupt: true });
     expect(await readIndex(root)).toEqual({ state: "ok", entries: { [vault]: ID } });
@@ -207,7 +209,7 @@ describe("contract store", () => {
     const declined = { folders: ["Inbox"], properties: ["mood"], templates: { Daily: `sha256:${"b".repeat(64)}` } };
     expect(await readDeclined(ID, root)).toEqual({ folders: [], properties: [], templates: {} });
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT, declined }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
     expect(await readDeclined(ID, root)).toEqual(declined);
     expect((await stat(join(await generation(), "declined.json"))).mode & 0o777).toBe(0o600);
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
@@ -254,7 +256,7 @@ describe("locked atomic reseal", () => {
     let asked = 0;
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root, { ...dead, confirmStaleReclaim: async () => { asked += 1; return true; } });
     expect(asked).toBe(1);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
     expect((await readdir(root)).filter(name => name.includes(".lock"))).toEqual([]);
   });
 
@@ -265,7 +267,7 @@ describe("locked atomic reseal", () => {
     const old = { ...young, now: () => 1_001 + SEAL_LOCK_STALE_MS, isPidAlive: () => true };
     expect(await storeHousekeeping(ID, root, old)).toEqual({ staleLocks: 1, orphans: 0 });
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root, old);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
   });
 
   it("aborts when another seal finished after the interview read the contract", async () => {
@@ -273,11 +275,11 @@ describe("locked atomic reseal", () => {
     expect(baseSeq).toBe("none");
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
     await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT, baseSeq }, root)).rejects.toThrow(/CONTRACT_SEAL_CHANGED: .*oms setup again/);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
     expect(await currentSequence(ID, root)).toBe(1);
     expect((await readdir(root)).some(name => name.endsWith(".lock"))).toBe(false);
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT, baseSeq: 1 }, root);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: NEXT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: NEXT, digest: MANIFEST_DIGEST });
   });
 
   it("keeps N-1 so a read that resolved before a reseal still completes", async () => {
@@ -288,7 +290,7 @@ describe("locked atomic reseal", () => {
     expect(await generations()).toEqual([`.${ID}.1`, `.${ID}.2`]);
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
     expect(await generations()).toEqual([`.${ID}.2`, `.${ID}.3`]);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
   });
 
   it("moves a real directory aside on the first seal", async () => {
@@ -300,7 +302,7 @@ describe("locked atomic reseal", () => {
     expect((await lstat(join(root, ID))).isSymbolicLink()).toBe(true);
     expect(await generations()).toEqual([`.${ID}.0`, `.${ID}.1`]);
     expect(await readFile(join(root, `.${ID}.0`, "folders.json"), "utf8")).toBe("{}");
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
   });
 
   it("puts a legacy directory back when the link swap fails", async () => {
@@ -335,7 +337,7 @@ describe("locked atomic reseal", () => {
     await sealContract({ vaultRealPath: vault, vaultId: ID, contract: CONTRACT }, root);
     const failing = { fs: { rename: (async () => { throw new Error("disk gone"); }) as never, symlink, rm } };
     await expect(sealContract({ vaultRealPath: vault, vaultId: ID, contract: NEXT }, root, failing)).rejects.toThrow(/disk gone/);
-    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: CONTRACT, digest: MANIFEST_DIGEST });
     expect(await generations()).toEqual([`.${ID}.1`]);
     expect((await readdir(root)).filter(name => name.includes(".lock") || name.includes("link-tmp"))).toEqual([]);
   });
@@ -365,5 +367,63 @@ describe("store diagnosis", () => {
     await rm(join(root, ID));
     await symlink("elsewhere", join(root, ID));
     expect(await diagnoseStore(ID, root)).toBe("link-dangling");
+  });
+});
+
+describe("expected parent digest", () => {
+  const THIRD: VaultContract = { ...CONTRACT, folders: { Archive: { meaning: "archive", searchExclude: true } } };
+  const saved = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
+  const seal = (contract: VaultContract, extra: Partial<Parameters<typeof sealContract>[0]> = {}) =>
+    sealContract({ vaultRealPath: vault, vaultId: ID, contract, ...extra }, root);
+
+  beforeEach(() => {
+    process.env["HOME"] = join(base, "home");
+    process.env["USERPROFILE"] = join(base, "home");
+  });
+
+  afterEach(() => {
+    process.env["HOME"] = saved.HOME;
+    process.env["USERPROFILE"] = saved.USERPROFILE;
+  });
+
+  it("seals when the linked generation is the expected parent", async () => {
+    const first = await seal(CONTRACT);
+    const second = await seal(NEXT, { baseSeq: 1, expectedParentDigest: first.digest });
+    expect(second).toMatchObject({ seq: 2, parentDigest: first.digest });
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: NEXT, digest: MANIFEST_DIGEST });
+  });
+
+  it("refuses a different linked generation, and one expected where nothing is linked", async () => {
+    const first = await seal(CONTRACT);
+    await seal(NEXT);
+    await expect(seal(THIRD, { expectedParentDigest: first.digest })).rejects.toThrow(/^CONTRACT_SEAL_CHANGED: /);
+    expect(await currentSequence(ID, root)).toBe(2);
+    await rm(join(root, ID));
+    await expect(seal(THIRD, { expectedParentDigest: first.digest })).rejects.toThrow(/^CONTRACT_SEAL_CHANGED: /);
+    expect((await readdir(root)).some(name => name.endsWith(".lock"))).toBe(false);
+  });
+
+  it("refuses an unreadable linked generation", async () => {
+    const first = await seal(CONTRACT);
+    await writeFile(join(await generation(), "folders.json"), "{\"version\":1,\"folders\":{}}\n");
+    await expect(seal(NEXT, { expectedParentDigest: first.digest })).rejects.toThrow(/^CONTRACT_SEAL_CHANGED: /);
+  });
+
+  it("does not check the parent when none is expected", async () => {
+    await seal(CONTRACT);
+    const second = await seal(NEXT);
+    expect(await seal(THIRD)).toMatchObject({ seq: 3, parentDigest: second.digest });
+  });
+
+  it("catches a same-seq replacement that baseSeq alone lets through (ABA)", async () => {
+    const first = await seal(CONTRACT);
+    await rm(join(root, ID));
+    await rm(join(root, `.${ID}.1`), { recursive: true });
+    const replaced = await seal(NEXT);
+    expect(replaced.seq).toBe(1);
+    expect(replaced.digest).not.toBe(first.digest);
+    await expect(seal(THIRD, { baseSeq: 1, expectedParentDigest: first.digest })).rejects.toThrow(/^CONTRACT_SEAL_CHANGED: /);
+    expect(await readStore(ID, root)).toEqual({ state: "ok", contract: NEXT, digest: MANIFEST_DIGEST });
+    expect((await seal(THIRD, { baseSeq: 1 })).seq).toBe(2);
   });
 });

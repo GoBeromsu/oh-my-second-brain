@@ -208,7 +208,7 @@ describe("AC16: an unreadable contract denies every write", () => {
       expect((await judgeWrite(vault, "Projects/a.md", "# ok\n")).ok).toBe(true);
       expect((await judgeWrite(vault, "Inbox/a.md", "# ok\n")).violations).toEqual([{ field: "path", kind: "unregistered-folder" }]);
 
-      const generation = (await readdir(storeRoot())).find(entry => entry.startsWith(`.${vaultId}.`))!;
+      const generation = (await readdir(storeRoot())).find(entry => new RegExp(`^\\.${vaultId}\\.(\\d{1,9})$`).test(entry))!;
       await writeFile(join(storeRoot(), generation, "folders.json"), "{\"version\":1,\"folders\":{}}\n");
       expect((await judgeWrite(vault, "Projects/a.md", "# ok\n")).violations).toEqual([{ field: "contract", kind: "contract-unreadable" }]);
     });

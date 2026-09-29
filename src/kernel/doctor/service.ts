@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../engine/paths.js";
 import Database from "better-sqlite3";
 import { admitWriteTarget } from "../capture/safe.js";
@@ -8,9 +8,13 @@ import { openEngineStoreCoreReadOnly } from "../engine/embed/store.js";
 import { walkMarkdown } from "../engine/embed/sync.js";
 import { completeDirtyDrain, prepareDirtyDrain } from "../engine/index-update.js";
 import { handleSemanticTool } from "../semantic/semantic-retrieve.js";
+import { lineageHealth, type LineageFindingKind } from "../contract/lineage-health.js";
+import { StateDirUnsafe } from "../contract/state-dir.js";
+import { recoverLineage, storeRoot } from "../contract/store.js";
+import { resolveSealState } from "../contract/vault-id.js";
 import type { McpEngineAdapter } from "../engine/mcp/facade.js";
 
-export type DoctorRepairOperation = "build-graph" | "repair-index" | "semantic-cleanup" | "sync-embeddings";
+export type DoctorRepairOperation = "build-graph" | "lineage-reanchor" | "lineage-recover" | "repair-index" | "semantic-cleanup" | "sync-embeddings";
 
 type SemanticIndexPostcondition = {
   readonly kind: "semantic-index";
@@ -34,6 +38,14 @@ export type DoctorRepairReceipt =
       readonly resolutionSource: WriteTargetSource;
       readonly written: { readonly paths: readonly string[]; readonly summary: Record<string, unknown> };
       readonly postcondition: SemanticIndexPostcondition;
+    }
+  | {
+      readonly operation: "lineage-recover" | "lineage-reanchor";
+      readonly resolvedVault: string;
+      readonly resolutionSource: WriteTargetSource;
+      /** Store-relative names only: the store path carries the vault id. */
+      readonly written: { readonly paths: readonly string[]; readonly summary: { readonly snapshots: number; readonly anchors: number } };
+      readonly postcondition: { readonly kind: "contract-lineage"; readonly events: number; readonly snapshots: number };
     }
   | {
       readonly operation: "repair-index";
@@ -177,6 +189,69 @@ async function repairIndexReceipt(
   };
 }
 
+/** What a lineage repair must leave behind: the lineage ends at the linked generation. */
+const LINEAGE_UNRECORDED: ReadonlySet<LineageFindingKind> = new Set(["before-bootstrap", "lineage-unrecorded-seal", "lineage-seq-restart", "lineage-gap", "lineage-unreadable"]);
+
+/** Errors the contract store authors carry a fixed code and no path; anything else is rethrown. */
+function contractErrorMessage(error: unknown): string | null {
+  if (error instanceof StateDirUnsafe) return `STATE_DIR_UNSAFE: the contract store holds an unsafe entry (${error.kind}); it was left untouched`;
+  if (error instanceof Error && /^(CONTRACT|EVOLUTION)_[A-Z_]+:/.test(error.message)) return error.message;
+  return null;
+}
+
+/**
+ * Rows lineage recovery accepts. A first seal whose lineage append failed stops before
+ * `writeIndexEntry` and reads back as `store-without-index` (or `vault-moved` when an old
+ * index path also names the id); recovery records its index entry, so the documented
+ * `oms doctor lineage-recover` finishes that seal instead of refusing it.
+ */
+const LINEAGE_RECOVERABLE: ReadonlySet<string> = new Set(["sealed", "store-without-index", "vault-moved"]);
+
+async function repairLineage(operation: "lineage-recover" | "lineage-reanchor", vault: string, source: WriteTargetSource): Promise<DoctorRepairResult> {
+  const root = storeRoot();
+  const state = await resolveSealState(vault, root);
+  const vaultId = state.vaultId;
+  const unindexed = state.row !== "sealed";
+  if (!LINEAGE_RECOVERABLE.has(state.row) || vaultId === null || (unindexed && state.view.state !== "sealed")) {
+    return { kind: "error", message: "CONTRACT_NOT_SEALED: the vault has no readable sealed contract here; run oms doctor contract" };
+  }
+  // A copy whose original still exists must not claim the shared id's index entry (interview.ts refuses the same row).
+  if (unindexed && state.shared) {
+    return { kind: "error", message: "CONTRACT_VAULT_ID_SHARED: another existing vault uses this vault id (a copied vault); remove .oms/settings.json in the copy, then run `oms setup` again" };
+  }
+  let recovered;
+  let health: Awaited<ReturnType<typeof lineageHealth>> | undefined;
+  try {
+    recovered = await recoverLineage(root, vaultId, {
+      policy: operation === "lineage-reanchor" ? "reanchor" : "refuse",
+      reindex: unindexed ? await realpath(vault) : undefined,
+      // The postcondition is read under the seal lock, so no concurrent seal lands between
+      // the repair and the check that it holds.
+      verify: async () => {
+        health = await lineageHealth(vaultId, root);
+        const left = health.findings.filter(finding => LINEAGE_UNRECORDED.has(finding.kind)).map(finding => finding.kind);
+        if (left.length > 0) throw new Error(`Contract lineage postcondition failed: ${left.join(", ")} remains.`);
+        const row = (await resolveSealState(vault, root)).row;
+        if (row !== "sealed") throw new Error(`Contract lineage postcondition failed: the vault reads as ${row}, not sealed.`);
+      },
+    });
+  } catch (error: unknown) {
+    const message = contractErrorMessage(error);
+    if (message === null) throw error;
+    return { kind: "error", message };
+  }
+  const verified = health!;
+  const receipt: DoctorRepairReceipt = {
+    operation, resolvedVault: vault, resolutionSource: source,
+    written: {
+      paths: [...(unindexed ? ["index.json"] : []), ...(recovered.anchors.length > 0 ? ["lineage/events.jsonl"] : []), ...(recovered.snapshots > 0 ? ["generations/"] : [])],
+      summary: { snapshots: recovered.snapshots, anchors: recovered.anchors.length },
+    },
+    postcondition: { kind: "contract-lineage", events: verified.events, snapshots: verified.snapshots },
+  };
+  return { kind: "completed", value: { snapshots: recovered.snapshots, anchors: recovered.anchors.map(anchor => ({ eventSeq: anchor.eventSeq, reason: anchor.reason ?? null, digest: anchor.digest })), resolvedVault: vault, resolutionSource: source, receipt } };
+}
+
 export async function repairDoctor(
   { operation, vault, source, args, resolveAdapter }: {
     readonly operation: DoctorRepairOperation;
@@ -197,6 +272,8 @@ export async function repairDoctor(
   const indexArgs = operation === "repair-index" ? repairIndexArgs(args) : undefined;
   const rejection = await admitWriteTarget({ vault, source });
   if (rejection) return { kind: "rejected", value: { status: "rejected", rejection, resolvedVault: vault, resolutionSource: source } };
+
+  if (operation === "lineage-recover" || operation === "lineage-reanchor") return repairLineage(operation, vault, source);
 
   if (operation === "repair-index") {
     const { repairMode, dryRun } = indexArgs!;

@@ -16,6 +16,7 @@ import { looseningChanges, unsafePatternChanges, type LooseningChange } from "./
 import { buildRedactor, hiddenValuesOf, publicTokensOf } from "./redact.js";
 import { PATTERN_SOURCE_LIMIT, patternRefusal } from "./pattern.js";
 import { currentSequence, isSafeName, NO_DECLINED, readDeclined, sealContract, storeRoot, type DeclinedSet, type SealDeps, type SequenceObservation } from "./store.js";
+import { LineageAppendFailed } from "./lineage.js";
 import type {
   FieldType,
   FolderContract,
@@ -733,18 +734,29 @@ export async function runInterview(input: {
       confirmStaleReclaim: () => asker.confirm("seal-lock:reclaim", "An earlier seal did not finish and left its lock behind. Reclaim it and continue?"),
       ...input.sealDeps,
     };
-    await sealContract({
-      vaultRealPath: await realpath(vault),
-      vaultId,
-      contract,
-      baseSeq,
-      declined,
-      freshness: () => templateSourcesUnchanged(vault, templateFolder, found.sources),
-    }, root, deps);
-    if (chosenFolder !== null) {
+    const recordTemplateFolder = async (): Promise<void> => {
+      if (chosenFolder === null) return;
       const current = await readVaultSettings(vault);
       if (current !== null) await writeVaultSettings(vault, { ...current, templateFolder: chosenFolder });
+    };
+    try {
+      await sealContract({
+        vaultRealPath: await realpath(vault),
+        vaultId,
+        contract,
+        baseSeq,
+        declined,
+        freshness: () => templateSourcesUnchanged(vault, templateFolder, found.sources),
+      }, root, deps);
+    } catch (error: unknown) {
+      // The generation is linked even though its lineage event is not: settle the settings
+      // the seal was built from, so `oms doctor lineage-recover` alone completes it.
+      // Swallowed: the append failure (whose `cause` is already the append error) is what the
+      // caller must act on, and lineage-recover completes the seal without the template folder.
+      if (error instanceof LineageAppendFailed) await recordTemplateFolder().catch(() => undefined);
+      throw error;
     }
+    await recordTemplateFolder();
     // The contract is sealed by now: a failure to log that is a warning, not a failed seal.
     const warnings: string[] = [];
     try {

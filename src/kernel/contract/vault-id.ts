@@ -51,7 +51,7 @@ async function settingsId(vault: string): Promise<{ readonly id: string | null; 
 
 async function load(vaultId: string, root: string): Promise<ContractView> {
   const read = await readStore(vaultId, root);
-  return read.state === "ok" ? { state: "sealed", contract: read.contract } : { state: "unreadable" };
+  return read.state === "ok" ? { state: "sealed", contract: read.contract, revision: read.digest } : { state: "unreadable" };
 }
 
 export async function resolveSealState(vault: string, root: string = storeRoot()): Promise<SealState> {

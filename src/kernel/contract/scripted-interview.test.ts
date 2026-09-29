@@ -259,7 +259,7 @@ describe("a sealed pattern that today's seal screen refuses", () => {
 
   /** Rewrites one file of the linked generation the way an older release could have sealed it. */
   async function rewriteGeneration(file: string, change: (value: Record<string, unknown>) => void): Promise<void> {
-    const directory = join(root, (await readdir(root)).find(entry => entry.startsWith(`.${VAULT_ID}.`))!);
+    const directory = join(root, (await readdir(root)).find(entry => new RegExp(`^\\.${VAULT_ID}\\.(\\d{1,9})$`).test(entry))!);
     const value = JSON.parse(await readFile(join(directory, file), "utf8")) as Record<string, unknown>;
     change(value);
     const bytes = `${JSON.stringify(value)}\n`;
