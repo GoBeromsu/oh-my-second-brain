@@ -9,7 +9,7 @@ import Database from "better-sqlite3";
 import { syncEngineStore } from "../kernel/engine/embed/sync.js";
 import { engineGraphCachePath, engineNodeCachePath, engineStorePath, vaultCacheRoot } from "../kernel/engine/paths.js";
 import * as engineAssembly from "../kernel/engine/assemble.js";
-import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
+import { writeContractVault } from "../../test/fixtures/contract-vault-fixture.js";
 import { runGraphCommand } from "./graph-command.js";
 import { runStatusCommand } from "./status-command.js";
 

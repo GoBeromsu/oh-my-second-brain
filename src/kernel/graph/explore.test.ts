@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { writeMorningVaultFixture } from "../search/morning-test-fixtures.js";
+import { writeMorningVaultFixture } from "../../../test/fixtures/morning-test-fixtures.js";
 import { exploreLocalGraph } from "./explore.js";
 import { existsSync } from "node:fs";
 import { engineGraphCachePath, engineNodeCachePath } from "../engine/paths.js";

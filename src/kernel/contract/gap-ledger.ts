@@ -45,8 +45,9 @@ import type { JsonScalar } from "./types.js";
  * from the prefix, so the ledger never counts as fresh), and those a writer still holding
  * a moved-aside file adds after the prune. Writing a marker is also best effort: it happens
  * only after its event's append is fsynced, so a marker that fails to write (a state-dir
- * security check, or a plain I/O error) never loses the event — the choice is simply
- * appended once more on its next repeat, the same as a marker the prune failed to delete. A
+ * security check, or a plain I/O error) never loses the event — it costs a repeated append
+ * on the next repeat, until a marker write succeeds, the same as a marker the prune failed
+ * to delete. A
  * marker holds the byte offset its event starts at; once that event falls out of the
  * default 16 MiB read window the marker no longer counts and the next repeat is appended
  * again. A reader that passes a smaller `maxBytes` can still miss a choice that is inside
@@ -355,8 +356,8 @@ async function appendEvents(root: string, vaultId: string, events: readonly GapE
     // The marker follows the append, so a failed append never hides a choice from the next
     // write. Writing it is best effort for the same reason pruneMarkers is: the event this
     // marker would guard is already fsynced, so a write failure here (a state-dir security
-    // check, ENOSPC, whatever) only costs a single repeated append next time, never a lost
-    // or hidden event.
+    // check, ENOSPC, whatever) costs a repeated append on the next repeat, until a marker
+    // write succeeds, never a lost or hidden event.
     for (const [id, offset] of offsets) {
       await writeMarker(seenMarker(dir, identity, id), offset).catch(() => undefined);
     }

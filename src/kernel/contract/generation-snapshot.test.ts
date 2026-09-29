@@ -7,7 +7,7 @@ import { buildTruthTableRow } from "../../../test/fixtures/contract-truth-table.
 import type { Digest } from "../conventions/canonical.js";
 import { digestHex, manifestDigestOf } from "./digest.js";
 import { readSnapshot, readVerifiedDirectory, removeSnapshotTemporaries, snapshotDigests, snapshotInventory, SNAPSHOT_TEMPORARY_PREFIX, writeSnapshot } from "./generation-snapshot.js";
-import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { sealLegacyGeneration } from "../../../test/fixtures/legacy-store-fixture.js";
 import { lineageHealth, lineageNeedsAttention } from "./lineage-health.js";
 import { readLineage } from "./lineage.js";
 import { stateDir } from "./state-dir.js";

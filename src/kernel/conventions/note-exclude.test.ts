@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { sealLegacyGeneration } from "../contract/legacy-store-fixture.js";
+import { sealLegacyGeneration } from "../../../test/fixtures/legacy-store-fixture.js";
 import { sealContract, storeRoot } from "../contract/store.js";
 import type { FolderContract, LegacyTemplateContract } from "../contract/types.js";
 import { serializeVaultSettings } from "../vault/settings.js";

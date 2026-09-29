@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
+import { writeContractVault } from "../../test/fixtures/contract-vault-fixture.js";
 import { appendLineageEvents, readLineage } from "../kernel/contract/lineage.js";
 import { resolveSealState } from "../kernel/contract/vault-id.js";
 import { demotedOperationNames } from "./server.js";

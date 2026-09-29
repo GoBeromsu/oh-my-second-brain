@@ -9,7 +9,7 @@ import { exploreLocalGraph } from "../../graph/explore.js";
 import type { DispatcherDeps } from "../retrieval/dispatcher.js";
 import type { EmbeddingProvider, ScoredHit, VectorStore } from "../types.js";
 import type { EngineStore } from "../embed/store.js";
-import { writeContractVault } from "../../contract/contract-vault-fixture.js";
+import { writeContractVault } from "../../../../test/fixtures/contract-vault-fixture.js";
 import type { Digest } from "../../conventions/canonical.js";
 
 // ---------------------------------------------------------------------------

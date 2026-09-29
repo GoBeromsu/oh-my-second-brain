@@ -264,7 +264,8 @@ describe("MCP interview seal", () => {
     expect(body).toMatchObject({ ok: false, status: "rejected", rejection: { code: "CONTRACT_SEAL_BUSY", retryable: true } });
   });
 
-  it("still reports sealed, with a warning, when the sealed event cannot be logged", async () => {
+  // Root ignores permission bits, so the denial this test relies on never happens.
+  it.skipIf(process.getuid?.() === 0)("still reports sealed, with a warning, when the sealed event cannot be logged", async () => {
     const { vault, root } = await freshVault();
     const deps = { ...clock(), root };
     const vaultId = await ensureVaultId(vault);
@@ -354,7 +355,8 @@ describe("MCP interview seal", () => {
     return { vault, root, deps, vaultId: settings.vaultId, generation: await currentSequence(settings.vaultId, root), settingsPath };
   }
 
-  it("still reports the seal, with a warning, when a retried seal cannot save the template folder", async () => {
+  // Root ignores permission bits, so the denial this test relies on never happens.
+  it.skipIf(process.getuid?.() === 0)("still reports the seal, with a warning, when a retried seal cannot save the template folder", async () => {
     const { vault, root, deps, vaultId, generation } = await sealThenLoseLogLine();
     const oms = path.join(vault, ".oms");
     await chmod(oms, 0o500);

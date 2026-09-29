@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { digestBytes } from "../conventions/canonical.js";
-import { serializeVaultSettings } from "../vault/settings.js";
-import { lineageAppender } from "./lineage.js";
+import { digestBytes } from "../../src/kernel/conventions/canonical.js";
+import { serializeVaultSettings } from "../../src/kernel/vault/settings.js";
+import { lineageAppender } from "../../src/kernel/contract/lineage.js";
 import { sealLegacyGeneration } from "./legacy-store-fixture.js";
-import { bootstrapSnapshots, sealContract, storeRoot } from "./store.js";
-import type { FieldType, LegacyTemplateContract, Rule, VaultContract } from "./types.js";
+import { bootstrapSnapshots, sealContract, storeRoot } from "../../src/kernel/contract/store.js";
+import type { FieldType, LegacyTemplateContract, Rule, VaultContract } from "../../src/kernel/contract/types.js";
 
 /**
  * Writes a contract vault for tests and tools that need one.

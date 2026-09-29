@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assembleCoreSemanticEngine, assembleGraphOnlyEngine } from "../engine/assemble.js";
 import * as engineStoreRepair from "../engine/embed/repair.js";
 import { engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../engine/paths.js";
-import { writeContractVault } from "../contract/contract-vault-fixture.js";
+import { writeContractVault } from "../../../test/fixtures/contract-vault-fixture.js";
 import { appendLineageEvents, LINEAGE_FILE } from "../contract/lineage.js";
 import { stateDir } from "../contract/state-dir.js";
 import { sealContract, storeRoot, writeIndexEntry } from "../contract/store.js";
@@ -604,7 +604,8 @@ describe("doctor lineage repairs", () => {
     }
   });
 
-  it("rethrows a store failure that carries no contract code", async () => {
+  // Root ignores permission bits, so the denial this test relies on never happens.
+  it.skipIf(process.getuid?.() === 0)("rethrows a store failure that carries no contract code", async () => {
     const { vault, id } = await sealedVault();
     const generations = path.join(stateDir(storeRoot(), id), "generations");
     await chmod(generations, 0o300);

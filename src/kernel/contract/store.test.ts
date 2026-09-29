@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { digestBytes } from "../conventions/canonical.js";
-import { sealLegacyGeneration } from "./legacy-store-fixture.js";
+import { sealLegacyGeneration } from "../../../test/fixtures/legacy-store-fixture.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import { currentSequence, diagnoseStore, readDeclined, readIndex, readStore, SEAL_LOCK_STALE_MS, sealContract, storeExists, storeHousekeeping, writeIndexEntry } from "./store.js";
 import type { LegacyTemplateContract, VaultContract } from "./types.js";

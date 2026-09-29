@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { mainUsageCommandNames } from "./usage.js";
 import { REMOVED_0_19_FAMILIES, REMOVED_FAMILY_GUIDANCE } from "./removed-families.js";
-import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
+import { writeContractVault } from "../../test/fixtures/contract-vault-fixture.js";
 import { serializeVaultSettings } from "../kernel/vault/settings.js";
 
 const __filename = fileURLToPath(import.meta.url);

@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { sealLegacyGeneration } from "../../contract/legacy-store-fixture.js";
+import { sealLegacyGeneration } from "../../../../test/fixtures/legacy-store-fixture.js";
 import type { TemplatedContract } from "../../contract/legacy.js";
 import { sealContract, storeRoot } from "../../contract/store.js";
 import type { PropertyContract } from "../../contract/types.js";
@@ -162,7 +162,8 @@ describe("readSearchTemplateSource", () => {
     expect(read.digest).not.toBe(sealed.digest);
   });
 
-  it("names a failed contract read by code, never by the store path", async () => {
+  // Root ignores permission bits, so the denial this test relies on never happens.
+  it.skipIf(process.getuid?.() === 0)("names a failed contract read by code, never by the store path", async () => {
     const vault = await makeVault(SOURCES);
     await seal(vault, contract());
     await chmod(storeRoot(), 0o000);

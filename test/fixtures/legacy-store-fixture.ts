@@ -1,9 +1,9 @@
 import { mkdir, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { compareCodePoints, digestBytes, type Digest } from "../conventions/canonical.js";
-import { manifestDigestOf } from "./digest.js";
-import { storeRoot, writeIndexEntry } from "./store.js";
-import type { LegacyTemplateContract, VaultContract } from "./types.js";
+import { compareCodePoints, digestBytes, type Digest } from "../../src/kernel/conventions/canonical.js";
+import { manifestDigestOf } from "../../src/kernel/contract/digest.js";
+import { storeRoot, writeIndexEntry } from "../../src/kernel/contract/store.js";
+import type { LegacyTemplateContract, VaultContract } from "../../src/kernel/contract/types.js";
 
 /**
  * Writes a generation the way manifest versions 1 and 2 did, templates included, for tests

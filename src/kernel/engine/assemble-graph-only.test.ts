@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { writeContractVault } from "../contract/contract-vault-fixture.js";
+import { writeContractVault } from "../../../test/fixtures/contract-vault-fixture.js";
 import { assembleGraphOnlyEngine } from "./assemble.js";
 
 const tempDirs: string[] = [];
