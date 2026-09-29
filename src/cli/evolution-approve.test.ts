@@ -9,6 +9,8 @@ import type { PropertyContract, VaultContract } from "../kernel/contract/types.j
 import type { HumanLine, HumanPromptIO } from "../kernel/evolution/human-approval.js";
 import { readPolicy, writePolicy } from "../kernel/evolution/policy.js";
 import { CANDIDATE_DIR, createRequest, lineageTail, PENDING_DIR, readRequest, type RequestRecord } from "../kernel/evolution/request-state.js";
+import { proposeRevert } from "../kernel/evolution/revert.js";
+import { readLineage } from "../kernel/contract/lineage.js";
 import { serializeVaultSettings } from "../kernel/vault/settings.js";
 import { approvePendingCandidates, doctorHuman, setAutonomy, terminalPromptIO } from "./evolution-approve.js";
 
@@ -212,6 +214,36 @@ describe("approvePendingCandidates", () => {
     const results = await run(scripted(["approve"]));
     expect(results).toEqual([{ requestId: tampered.requestId, error: expect.stringMatching(/^EVOLUTION_CANDIDATE_MISMATCH:/) }]);
   });
+
+  for (const autonomous of [false, true]) {
+    it(`lists a tightening and a neutral revert for the owner and seals each on approve, policy ${autonomous ? "on" : "off"}`, async () => {
+      if (autonomous) await writePolicy(root, ID, { version: 1, autonomous: true, limits: { perDay: 1, perWeek: 3 } }, { interactive: true });
+      const deps = { now: () => NOW, ...ids };
+      const target = (await readStore(ID, root) as { digest: string }).digest;
+      await sealContract({ vaultRealPath: vault, vaultId: ID, contract: WIDER }, root);
+      const tightening = await proposeRevert({ root, vaultId: ID, vaultRealPath: vault, targetDigest: target }, deps);
+      expect(tightening).toMatchObject({ direction: "tightening", state: "awaiting-human" });
+      const first = scripted(["approve"]);
+      expect(await run(first)).toEqual([{ requestId: tightening.requestId, decision: "approve", outcome: "sealed" }]);
+      expect(first.shown.join("")).toContain(`Pending contract revert ${tightening.requestId} (tightening).`);
+      expect(first.shown.join("")).toContain(`  reverts to ${target}`);
+      expect(await storeDigest()).toBe(target);
+
+      const declined = (await sealContract({ vaultRealPath: vault, vaultId: ID, contract: PARENT, declined: { folders: ["Archive"], properties: [] } }, root)).digest;
+      await sealContract({ vaultRealPath: vault, vaultId: ID, contract: PARENT }, root);
+      const neutral = await proposeRevert({ root, vaultId: ID, vaultRealPath: vault, targetDigest: declined }, deps);
+      expect(neutral).toMatchObject({ direction: "neutral", state: "awaiting-human" });
+      const second = scripted(["approve"]);
+      expect(await run(second)).toEqual([{ requestId: neutral.requestId, decision: "approve", outcome: "sealed" }]);
+      expect(second.shown.join("")).toContain(`Pending contract revert ${neutral.requestId} (neutral).`);
+      expect(await storeDigest()).toBe(declined);
+      const sealed = (await readLineage(root, ID, "display")).events.filter(event => event.revertOf !== undefined);
+      expect(sealed).toMatchObject([
+        { digest: target, proposer: "owner", mode: "human", autonomous: false },
+        { digest: declined, proposer: "owner", mode: "human", autonomous: false },
+      ]);
+    });
+  }
 
   it("rethrows a failure that is not a contract or evolution refusal", async () => {
     await issue(WIDER, WIDER.properties.status!);

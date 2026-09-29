@@ -101,7 +101,7 @@ describe("approveInTerminal", () => {
     expect(prompts).toEqual([expect.objectContaining({ requestId: request.requestId, kind: "revert", direction: "loosening", candidateDigest: target, revertOf: target })]);
     expect(result).toMatchObject({ decision: "approve", gate: { outcome: "sealed", direction: "loosening" } });
     expect(await storeDigest()).toBe(target);
-    expect((await readLineage(root, ID, "strict")).events.at(-1)).toMatchObject({ kind: "sealed", revertOf: target, mode: "human", autonomous: false, evaluator: "human-cli" });
+    expect((await readLineage(root, ID, "strict")).events.at(-1)).toMatchObject({ kind: "sealed", revertOf: target, mode: "human", autonomous: false, proposer: "owner", evaluator: "human-cli" });
     expect(await kinds()).toContain("seal.human-approved");
   });
 

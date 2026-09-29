@@ -33,7 +33,8 @@ import { semanticStage, type SemanticResult, type Similarity } from "./stage-sem
  *
  * Autonomous mode, in order:
  *   1. the request is open (a derived expiry, supersede or seal is persisted and refused);
- *   2. a loosening candidate moves to awaiting-human, whatever the policy says;
+ *   2. a revert (it has no maker, so no quorum can bind to it) or a loosening candidate moves
+ *      to awaiting-human, whatever the policy says;
  *   3. the autonomous policy is on (else EVOLUTION_POLICY_OFF; the request stays open), and
  *      evolution has not stalled (EVOLUTION_STALLED after 3 autonomous generations in a row);
  *   4. stage 1: a new refusal rejects, a rising warning count moves to awaiting-human (so
@@ -135,7 +136,7 @@ export type SealGateOutcome =
     readonly direction: Direction;
     readonly stage1: MechanicalResult;
   }
-  | { readonly outcome: "awaiting-human"; readonly reason: "loosening" | "warning-delta" | "already"; readonly direction?: Direction; readonly stage1?: MechanicalResult }
+  | { readonly outcome: "awaiting-human"; readonly reason: "revert" | "loosening" | "warning-delta" | "already"; readonly direction?: Direction; readonly stage1?: MechanicalResult }
   | { readonly outcome: "rejected"; readonly reason: "stage1-refusal" | "stage2-refusal" | "quorum-rejected"; readonly stage1?: MechanicalResult; readonly stage2?: SemanticResult }
   | { readonly outcome: "pending"; readonly quorum: Tally };
 
@@ -143,7 +144,7 @@ function stage1Summary(stage1: MechanicalResult): Record<string, number> {
   return { scannedNotes: stage1.scannedNotes, newRefusals: stage1.newRefusals, warningDelta: stage1.warningDelta };
 }
 
-async function toAwaitingHuman(input: SealGateInput, request: RequestRecord, now: number, reason: "loosening" | "warning-delta", detail: Record<string, unknown>): Promise<void> {
+async function toAwaitingHuman(input: SealGateInput, request: RequestRecord, now: number, reason: "revert" | "loosening" | "warning-delta", detail: Record<string, unknown>): Promise<void> {
   await writeRequest(input.root, input.vaultId, transition(request, "awaiting-human"));
   if (reason === "loosening") await appendEvolutionEvent(input.root, input.vaultId, { kind: "seal.blocked-loosening", at: now, requestId: request.requestId, detail });
   await appendEvolutionEvent(input.root, input.vaultId, { kind: "request.awaiting-human", at: now, requestId: request.requestId, detail: { reason, ...detail } });
@@ -206,6 +207,10 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
   const direction = requestDirection(request, parent.contract, candidate.contract);
 
   if (input.mode === "autonomous") {
+    if (request.kind === "revert") {
+      await toAwaitingHuman(input, request, now, "revert", { direction });
+      return { outcome: "awaiting-human", reason: "revert", direction };
+    }
     if (direction === "loosening") {
       await toAwaitingHuman(input, request, now, "loosening", { direction });
       return { outcome: "awaiting-human", reason: "loosening", direction };
@@ -267,7 +272,8 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
       expectedParentDigest: request.expectedParentDigest,
       lineageGapPolicy: autonomous ? "refuse" : "reanchor",
       onSealed: lineageAppender({
-        proposer: request.makerSessionId ?? "maker",
+        // A revert has no maker: the owner who approved it in a terminal proposed it.
+        proposer: request.makerSessionId ?? (autonomous ? "maker" : "owner"),
         evaluator,
         requestId: request.requestId,
         autonomous,

@@ -119,6 +119,18 @@ describe("sealGate autonomous", () => {
     expect((await readEvolutionEvents(root, ID)).events.at(-1)).toMatchObject({ kind: "seal.autonomous", requestId: request.requestId, detail: { eventSeq: last?.eventSeq, quorum: "host-attested" } });
   });
 
+  it("moves an open revert left from before every revert went to the owner to the owner, quorum or not", async () => {
+    await autonomousOn();
+    const request = await withVerdicts(await issue(TIGHTER, { kind: "revert", state: "open" }), ["approve", "approve", "approve"]);
+    const store = await readStore(ID, root);
+    expect(await run(request)).toEqual({ outcome: "awaiting-human", reason: "revert", direction: "tightening" });
+    expect(await readStore(ID, root)).toEqual(store);
+    expect(await stateOf(request)).toBe("awaiting-human");
+    expect((await readEvolutionEvents(root, ID)).events.at(-1)).toMatchObject({ kind: "request.awaiting-human", requestId: request.requestId, detail: { reason: "revert", direction: "tightening" } });
+    expect(await run(request, "human")).toMatchObject({ outcome: "sealed", direction: "tightening" });
+    expect((await readLineage(root, ID, "strict")).events.at(-1)).toMatchObject({ revertOf: FOREIGN, mode: "human", proposer: "maker-1" });
+  });
+
   it.each([
     ["drift 0.31", TIGHTER, () => 0.69, "drift"],
     ["a MECE overlap", { ...TIGHTER, properties: { ...TIGHTER.properties, phase: status(["x"]) } }, undefined, "mece-overlap"],

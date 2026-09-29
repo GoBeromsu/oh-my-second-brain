@@ -16,6 +16,7 @@ import { proposeRevert } from "./revert.js";
 import { sealGate } from "./seal-gate.js";
 import { recordVerdict, type VerdictSubmission } from "./stage-consensus.js";
 import type { NoteJudge } from "./stage-mechanical.js";
+import type { Similarity } from "./stage-semantic.js";
 
 const ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 const NOW = 1_700_000_000_000;
@@ -44,14 +45,14 @@ afterEach(async () => {
 });
 
 let counter = 0;
-const deps = (extra: { judge?: NoteJudge } = {}) => ({
+const deps = (extra: { judge?: NoteJudge; similarity?: Similarity } = {}) => ({
   now: () => NOW,
   newId: () => `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`,
   newToken: () => (++counter).toString(16).padStart(32, "0"),
   ...extra,
 });
 const seal = async (contract: VaultContract) => (await sealContract({ vaultRealPath: vault, vaultId: ID, contract }, root)).digest;
-const propose = (targetDigest: string, extra: { judge?: NoteJudge } = {}) => proposeRevert({ root, vaultId: ID, vaultRealPath: vault, targetDigest }, deps(extra));
+const propose = (targetDigest: string, extra: { judge?: NoteJudge; similarity?: Similarity } = {}) => proposeRevert({ root, vaultId: ID, vaultRealPath: vault, targetDigest }, deps(extra));
 
 function submission(request: RequestRecord, slot: number): VerdictSubmission {
   return {
@@ -96,21 +97,60 @@ describe("proposeRevert", () => {
     expect(kinds).toEqual(["request.issued", "request.awaiting-human", "revert.proposed"]);
   });
 
-  it("seals a tightening revert on the quorum as a new generation that names what it restores", async () => {
+  it("routes a tightening revert to the owner, never to a quorum, and seals it on the owner's approve", async () => {
     const narrow = await seal(NARROW);
     await seal(WIDE);
     await writePolicy(root, ID, { version: 1, autonomous: true, limits: { perDay: 1, perWeek: 3 } }, { interactive: true });
     const proposal = await propose(narrow);
-    expect(proposal).toMatchObject({ direction: "tightening", state: "open", candidateDigest: narrow, parentEventSeq: 2 });
+    expect(proposal).toMatchObject({ direction: "tightening", state: "awaiting-human", candidateDigest: narrow, parentEventSeq: 2 });
     const request = (await readRequest(root, ID, proposal.requestId))!;
-    expect(request).toMatchObject({ kind: "revert", revertOf: narrow, mutations: [] });
+    expect(request).toMatchObject({ kind: "revert", revertOf: narrow, mutations: [], state: "awaiting-human" });
     const input = { root, vaultId: ID, vaultRealPath: vault };
-    await recordVerdict(input, submission(request, 0), { now: () => NOW });
-    await recordVerdict(input, submission(request, 1), { now: () => NOW });
-    const receipt = await recordVerdict(input, submission(request, 2), { now: () => NOW });
-    expect(receipt.sealed).toMatchObject({ seq: 3, digest: narrow });
+    await expect(recordVerdict(input, submission(request, 0), { now: () => NOW })).rejects.toThrow(/^EVOLUTION_REQUEST_CLOSED: request .+ is awaiting-human/);
+    expect(await readStore(ID, root)).not.toMatchObject({ digest: narrow });
+    expect(await sealGate({ ...input, requestId: proposal.requestId, mode: "human" }, { now: () => NOW })).toMatchObject({ outcome: "sealed", direction: "tightening" });
     expect(await readStore(ID, root)).toMatchObject({ digest: narrow });
-    expect((await readLineage(root, ID, "display")).events.at(-1)).toMatchObject({ kind: "sealed", generation: 3, digest: narrow, revertOf: narrow, requestId: proposal.requestId });
+    expect((await readLineage(root, ID, "display")).events.at(-1)).toMatchObject({
+      kind: "sealed", generation: 3, digest: narrow, revertOf: narrow, requestId: proposal.requestId, mode: "human", autonomous: false, proposer: "owner",
+    });
+  });
+
+  for (const autonomous of [false, true]) {
+    it(`waits for the owner on a tightening and a neutral revert alike with the policy ${autonomous ? "on" : "off"}`, async () => {
+      const declined = (await sealContract({ vaultRealPath: vault, vaultId: ID, contract: NARROW, declined: { folders: ["Archive"], properties: [] } }, root)).digest;
+      const wide = await seal(WIDE);
+      await writePolicy(root, ID, { version: 1, autonomous, limits: { perDay: 1, perWeek: 3 } }, { interactive: true });
+      const tightening = await propose(declined);
+      expect(tightening).toMatchObject({ direction: "tightening", state: "awaiting-human" });
+      expect(await sealGate({ root, vaultId: ID, vaultRealPath: vault, requestId: tightening.requestId, mode: "autonomous" }, { now: () => NOW })).toEqual({ outcome: "awaiting-human", reason: "already" });
+      const pending = (await listRequests(root, ID)).records.filter(record => record.state === "awaiting-human").map(record => record.requestId);
+      expect(pending).toEqual([tightening.requestId]);
+      expect(await readStore(ID, root)).toMatchObject({ digest: wide });
+      const plain = await seal(NARROW);
+      const neutral = await propose(declined);
+      expect(neutral).toMatchObject({ direction: "neutral", state: "awaiting-human", parentDigest: plain });
+      expect(await sealGate({ root, vaultId: ID, vaultRealPath: vault, requestId: neutral.requestId, mode: "autonomous" }, { now: () => NOW })).toEqual({ outcome: "awaiting-human", reason: "already" });
+      expect(await sealGate({ root, vaultId: ID, vaultRealPath: vault, requestId: neutral.requestId, mode: "human" }, { now: () => NOW })).toMatchObject({ outcome: "sealed", direction: "neutral" });
+      expect(await readStore(ID, root)).toMatchObject({ digest: declined });
+      expect((await readLineage(root, ID, "display")).events.at(-1)).toMatchObject({ revertOf: declined, mode: "human", autonomous: false, proposer: "owner" });
+    });
+  }
+
+  it("refuses a revert whose generation drifts too far from the first sealed one, proposing nothing", async () => {
+    await seal(WIDE);
+    const drifted = await seal({ ...WIDE, folders: { Projects: { meaning: "archived client invoices", searchExclude: false } } });
+    await seal(NARROW);
+    await unchanged(() => propose(drifted));
+    await expect(propose(drifted)).rejects.toThrow(/^EVOLUTION_STAGE2_REFUSED: restoring .+ drifts 0\.50 from the first sealed generation/);
+    expect((await readEvolutionEvents(root, ID)).events.map(event => event.kind)).not.toContain("revert.proposed");
+  });
+
+  it("refuses a revert that stage 2 finds overlapping in meaning, with the similarity it is given", async () => {
+    const wide = await seal({ ...WIDE, folders: { ...WIDE.folders, Areas: { meaning: "areas", searchExclude: false } } });
+    await seal({ ...NARROW, folders: { Projects: { meaning: "projects", searchExclude: false } } });
+    const same = (left: string, right: string) => (left === right ? 1 : 0.95);
+    await unchanged(() => propose(wide, { similarity: same }));
+    await expect(propose(wide, { similarity: same })).rejects.toThrow(/^EVOLUTION_STAGE2_REFUSED: restoring .+ overlaps in meaning: folder Areas ~ Projects/);
   });
 
   it("restores a generation whose store directory is gone, from its snapshot", async () => {
@@ -121,7 +161,7 @@ describe("proposeRevert", () => {
     }
     expect(await readdir(join(root, ID))).not.toContain("2");
     const proposal = await propose(target);
-    expect(proposal).toMatchObject({ candidateDigest: target, targetDigest: target, parentEventSeq: 5, state: "open" });
+    expect(proposal).toMatchObject({ candidateDigest: target, targetDigest: target, parentEventSeq: 5, state: "awaiting-human" });
     expect(proposal.direction).not.toBe("loosening");
   });
 

@@ -105,11 +105,11 @@ describe("write / evolution boundary", () => {
 const SEAL_PRODUCT_IMPORTERS = ["src/kernel/contract/interview.ts", "src/kernel/evolution/seal-gate.ts"];
 const SEAL_TEST_HELPERS = [
   // Seals a throwaway vault for store and CLI tests; never imported by product code.
-  "src/kernel/contract/contract-vault-fixture.ts",
+  "test/fixtures/contract-vault-fixture.ts",
   // Seals the truth-table vaults the judge and e2e tests read.
   "test/fixtures/contract-truth-table.ts",
 ];
-const TEST_ONLY_MODULES = [...SEAL_TEST_HELPERS, "src/kernel/search/morning-test-fixtures.ts"];
+const TEST_ONLY_MODULES = [...SEAL_TEST_HELPERS, "test/fixtures/morning-test-fixtures.ts"];
 const ENTRYPOINTS = ["src/cli/oms.ts", "src/mcp/server.ts"];
 const HUMAN_APPROVAL = "src/kernel/evolution/human-approval";
 const SEAL_GATE_HUMAN = "src/kernel/evolution/seal-gate-human";

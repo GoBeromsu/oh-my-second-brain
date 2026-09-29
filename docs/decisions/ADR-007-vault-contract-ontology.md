@@ -101,7 +101,15 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
   - 자율 정책은 기본으로 꺼져 있고, TTY `oms setup`에서만 켠다. 한도는 낮추기만 한다.
   - 사람의 결정은 approve 또는 reject이고, 승인 프롬프트는 `src/cli/evolution-approve.ts`에만 있다.
   - 되돌리기(`src/kernel/evolution/revert.ts`)는 앞으로만 간다. 스냅숏의 계약을 v3 형태로 투영해
-    새 후보로 제안하고, 같은 seal-gate를 지난다.
+    새 후보로 제안한다. 되돌리기는 항상 소유자 승인이 필요하다. 되돌리기에는 maker가 없으므로 어떤
+    호스트 quorum도 거기에 묶일 수 없다. 조이든, 중립이든, 푸는 방향이든, 자율 정책이 켜져 있든
+    꺼져 있든 모든 되돌리기는 `awaiting-human`으로 가고, 소유자가 `oms setup`에서 승인해 봉인한다.
+    그 요청에 들어온 verdict는 `EVOLUTION_REQUEST_CLOSED`로 거부된다. 제안 시점에 1단계와 2단계를
+    모두 돌린다. 새 거부를 만들면 `EVOLUTION_REVERT_REFUSED`이고, 의미가 겹치거나 첫 봉인 세대에서
+    0.3 넘게 표류하면 `EVOLUTION_STAGE2_REFUSED`이다. 어느 쪽이든 아무것도 제안하지 않는다. 사람이
+    봉인한 되돌리기의 lineage에는 제안자가 `owner`로 기록된다.
+  - maker 세션이 없는 verdict를 `maker-unknown`으로 버리는 규칙은 `kind: "evolve"` 요청에만
+    적용된다. 되돌리기 요청은 verdict를 받기 전에 이미 소유자를 기다린다.
 
 ## Context
 

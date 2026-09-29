@@ -7,7 +7,7 @@ import { readLineage } from "../contract/lineage.js";
 import { readStore, sealContract } from "../contract/store.js";
 import type { PropertyContract, VaultContract } from "../contract/types.js";
 import { writePolicy } from "../evolution/policy.js";
-import { listRequests, readRequest } from "../evolution/request-state.js";
+import { createRequest, lineageTail, listRequests, readRequest, type RequestRecord } from "../evolution/request-state.js";
 import { serializeVaultSettings } from "../vault/settings.js";
 import { evolutionCounters } from "../evolution/events.js";
 import { isEvolutionOperation, runEvolutionOp, type DoctorHuman, type EvolutionOperation, type EvolutionOpsDeps } from "./evolution-ops.js";
@@ -58,6 +58,10 @@ const owner = (decision: "approve" | "reject" = "approve"): DoctorHuman & { seen
   const seen: unknown[] = [];
   return { interactive: true, seen, confirm: async subject => { seen.push(subject); return decision; } };
 };
+const verdictFor = (request: RequestRecord, slot: number) => ({
+  requestId: request.requestId, nonce: request.nonce, slotToken: request.slots[slot], candidateDigest: request.candidateDigest,
+  parentDigest: request.expectedParentDigest, evaluatorSessionId: `eval-${slot}`, verdict: "approve", rubricScores: { "intent-preserved": 1 }, reasons: ["ok"],
+});
 const lockFile = (): string => join(root, `.${ID}.state`, "evolution", "lock");
 async function placeLock(): Promise<void> {
   await mkdir(join(root, `.${ID}.state`, "evolution"), { recursive: true, mode: 0o700 });
@@ -143,25 +147,36 @@ describe("runEvolutionOp revert-propose and evolve-verdict", () => {
     expect(await readStore(ID, root)).toMatchObject({ digest: narrow });
   });
 
-  it("seals a tightening revert once the quorum approves through evolve-verdict", async () => {
+  it("sends a tightening revert to the owner and refuses host verdicts on it, policy on", async () => {
     const narrow = await seal(NARROW);
-    await seal(WIDE);
+    const wide = await seal(WIDE);
     await writePolicy(root, ID, { version: 1, autonomous: true, limits: { perDay: 1, perWeek: 3 } }, { interactive: true });
     const proposed = await run("revert-propose", { targetDigest: narrow });
-    expect(proposed).toMatchObject({ kind: "completed", value: { direction: "tightening", state: "open", parentEventSeq: 2 } });
+    expect(proposed).toMatchObject({ kind: "completed", value: { direction: "tightening", state: "awaiting-human", parentEventSeq: 2 } });
     const request = (await readRequest(root, ID, (proposed as { value: { requestId: string } }).value.requestId))!;
-    const verdict = (slot: number) => ({
-      requestId: request.requestId, nonce: request.nonce, slotToken: request.slots[slot], candidateDigest: request.candidateDigest,
-      parentDigest: request.expectedParentDigest, evaluatorSessionId: `eval-${slot}`, verdict: "approve", rubricScores: { "intent-preserved": 1 }, reasons: ["ok"],
-    });
-    const receipts = [];
-    for (const slot of [0, 1, 2]) receipts.push(await run("evolve-verdict", verdict(slot)));
-    expect(receipts[0]).toMatchObject({ kind: "completed", value: { op: "evolve-verdict", slot: 0, accepted: true } });
-    expect((receipts[0] as { value: object }).value).not.toHaveProperty("sealed");
-    const sealed = receipts.find(receipt => receipt.kind === "completed" && "sealed" in receipt.value);
-    expect(sealed).toMatchObject({ value: { sealed: { digest: narrow }, gate: expect.anything() } });
-    expect(await readStore(ID, root)).toMatchObject({ digest: narrow });
-    expect((await readLineage(root, ID, "display")).events.at(-1)).toMatchObject({ digest: narrow, revertOf: narrow });
+    const result = await run("evolve-verdict", verdictFor(request, 0));
+    expect(result).toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_REQUEST_CLOSED: request .+ is awaiting-human/) });
+    expect(await readStore(ID, root)).toMatchObject({ digest: wide });
+  });
+
+  it("names the sealed generation when the readback after a seal fails", async () => {
+    await seal(WIDE);
+    const { tail } = await lineageTail(root, ID);
+    const request = await createRequest(root, ID, { kind: "evolve", contract: NARROW, mutations: [], parent: tail, makerSessionId: "maker-1", state: "open" }, deps());
+    await writePolicy(root, ID, { version: 1, autonomous: true, limits: { perDay: 1, perWeek: 3 } }, { interactive: true });
+    const moved: VaultContract = { ...WIDE, folders: { Projects: { meaning: "active projects", searchExclude: false } } };
+    const afterSeal = async (): Promise<void> => { await seal(moved); };
+    const results = [];
+    for (const slot of [0, 1, 2]) results.push(await run("evolve-verdict", verdictFor(request, slot), undefined, { afterSeal }));
+    expect(results.slice(0, 2)).toMatchObject([{ kind: "completed" }, { kind: "completed" }]);
+    const failed = results[2]!;
+    expect(failed).toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_POSTCONDITION_FAILED_AFTER_SEAL: the linked digest is not the candidate/) });
+    const event = (await readLineage(root, ID, "display")).events.find(entry => entry.digest === request.candidateDigest)!;
+    expect(event).toMatchObject({ requestId: request.requestId, autonomous: true });
+    const message = (failed as { message: string }).message;
+    expect(message).toContain(`digest ${request.candidateDigest}`);
+    expect(message).toContain(`seq ${event.generation}`);
+    expect(message).toContain(`eventSeq ${event.eventSeq}`);
   });
 
   it("needs a request id and a slot token", async () => {

@@ -2,18 +2,24 @@ import type { Digest } from "../conventions/canonical.js";
 import { isDigest } from "../contract/digest.js";
 import { bootstrapSnapshots, readStore } from "../contract/store.js";
 import { appendEvolutionEvent } from "./events.js";
+import { anchorContract } from "./evaluator.js";
 import { withEvolutionLock, type LockDeps } from "./evolution-lock.js";
 import type { Direction } from "./mutation-direction.js";
 import { createRequest, lineageTail, type RequestDeps } from "./request-state.js";
 import { requestDirection } from "./seal-gate.js";
 import { readSnapshotContract } from "./snapshot-contract.js";
 import { mechanicalStage, type MechanicalResult, type NoteJudge } from "./stage-mechanical.js";
+import { semanticStage, type Similarity } from "./stage-semantic.js";
 
 /**
  * Revert is forward-only: it proposes a sealed generation's contract, read back from its
  * snapshot (never from a retained store directory), as a new candidate on top of the current
- * tail. The request then goes through the same seal-gate as any evolution: a loosening revert
- * or one that raises warnings waits for the owner, and nothing is sealed here.
+ * tail. A revert has no maker, so no host quorum can ever be bound to it: every revert,
+ * tightening, neutral or loosening, waits for the owner (`oms setup`) whatever the policy
+ * says, and nothing is sealed here. Stage 1 runs at propose time (a new refusal proposes
+ * nothing: EVOLUTION_REVERT_REFUSED), and so does stage 2 against the first sealed generation
+ * (a MECE overlap or drift past 0.3 proposes nothing: EVOLUTION_STAGE2_REFUSED), because an
+ * owner approving in a terminal is exempt from every later check but stage 1.
  *
  * The target must be named by a `sealed` or `recovered` lineage event — an orphan snapshot is
  * not a generation. A missing or corrupt snapshot fails closed: it is journalled and the
@@ -37,6 +43,8 @@ export interface RevertInput {
 export interface RevertDeps extends RequestDeps {
   readonly judge?: NoteJudge;
   readonly lockDeps?: Partial<LockDeps>;
+  /** Stage 2's meaning similarity; token Jaccard when absent. */
+  readonly similarity?: Similarity;
 }
 
 export interface RevertProposal {
@@ -46,7 +54,7 @@ export interface RevertProposal {
   readonly parentDigest: string;
   readonly parentEventSeq: number;
   readonly direction: Direction;
-  readonly state: "open" | "awaiting-human";
+  readonly state: "awaiting-human";
   readonly stage1: MechanicalResult;
 }
 
@@ -73,7 +81,15 @@ async function propose(input: RevertInput, deps: RevertDeps): Promise<RevertProp
   if (!stage1.passed) {
     throw new RevertError("EVOLUTION_REVERT_REFUSED", `restoring ${targetDigest} would make the judge refuse ${stage1.newRefusals} note(s) it accepts today; nothing was proposed`);
   }
-  const state = direction === "loosening" || stage1.warningDelta > 0 ? "awaiting-human" : "open";
+  const anchor = await anchorContract(root, vaultId);
+  const stage2 = semanticStage(anchor ?? parent.contract, parent.contract, snapshot.contract, deps.similarity === undefined ? {} : { similarity: deps.similarity });
+  if (!stage2.passed) {
+    const found = stage2.reason === "drift"
+      ? `drifts ${stage2.drift.toFixed(2)} from the first sealed generation (limit 0.3)`
+      : `overlaps in meaning: ${stage2.overlaps.map(overlap => `${overlap.axis} ${overlap.keys.join(" ~ ")}`).join(", ")}`;
+    throw new RevertError("EVOLUTION_STAGE2_REFUSED", `restoring ${targetDigest} ${found}; nothing was proposed`);
+  }
+  const state = "awaiting-human";
   const request = await createRequest(root, vaultId, {
     kind: "revert",
     contract: snapshot.contract,

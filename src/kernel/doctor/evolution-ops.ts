@@ -39,6 +39,8 @@ export interface EvolutionOpsDeps extends RequestDeps {
   readonly judge?: NoteJudge;
   readonly lockDeps?: Partial<LockDeps>;
   readonly sealDeps?: SealGateDeps["sealDeps"];
+  /** Runs after a verdict seals and before the readback postcondition (tests only). */
+  readonly afterSeal?: () => Promise<void>;
 }
 
 export type EvolutionOpResult =
@@ -121,6 +123,7 @@ async function runVerdict(root: string, vaultId: string, vault: string, args: Re
     && stored.expectedParentDigest === submission.parentDigest && stored.slots[receipt.slot] === submission.slotToken, "the verdict does not bind to its request");
   postcondition(stored!.usedSlots.filter(token => token === submission.slotToken).length === 1, "the slot was not used exactly once");
   if (receipt.sealed !== undefined) {
+    await deps.afterSeal?.();
     const store = await readStore(vaultId, root);
     postcondition(store.state === "ok" && store.digest === stored!.candidateDigest && receipt.sealed.digest === stored!.candidateDigest, "the linked digest is not the candidate", receipt.sealed);
     const { tail } = await lineageTail(root, vaultId);
@@ -139,7 +142,7 @@ async function runRevert(root: string, vaultId: string, vault: string, args: Rec
   const before = await linked(vaultId, root);
   const proposal = await proposeRevert({ root, vaultId, vaultRealPath: vault, targetDigest }, deps);
   const stored = await readRequest(root, vaultId, proposal.requestId);
-  postcondition(stored !== null && stored.state === proposal.state && (stored.state === "open" || stored.state === "awaiting-human"), "the revert request is not open or awaiting-human");
+  postcondition(stored !== null && stored.state === "awaiting-human", "the revert request is not awaiting the owner");
   postcondition(proposal.candidateDigest === proposal.targetDigest && (await readPinnedCandidate(root, vaultId, stored!)).digest === proposal.candidateDigest, "the pending candidate is not the target");
   postcondition((await lineageTail(root, vaultId)).events.some(event => event.digest === proposal.targetDigest), "the target has no lineage event");
   const after = await linked(vaultId, root);
