@@ -170,6 +170,8 @@ describe("contractDoctor", () => {
   it("reports an interview log it may not read as unreadable instead of failing", async () => {
     const fixture = await row("sealed");
     await mkdir(join(fixture.vault, "..", "elsewhere"));
+    // The seal already made the state directory (its snapshots); replace it with the link.
+    await rm(stateDir(fixture.root, fixture.vaultId), { recursive: true, force: true });
     await symlink(join(fixture.vault, "..", "elsewhere"), stateDir(fixture.root, fixture.vaultId));
     expect((await contractDoctor(fixture.vault, "agent", fixture.root)).interviewLog).toEqual({ corrupt: [], pendingCorrupt: [], unreadable: true });
   });

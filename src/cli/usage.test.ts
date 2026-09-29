@@ -16,7 +16,7 @@ describe("CLI usage text", () => {
     expect(usage).not.toContain("--embedding-");
     // The 0.19 public spellings, with no removed family leaves.
     expect(usage).toContain("search --path <note> | --context [options] | --link <note> [options]");
-    expect(usage).toContain("doctor <status|contract|audit|link-check|sync-embeddings|cleanup|build-graph>");
+    expect(usage).toContain("doctor <status|contract|audit|link-check|sync-embeddings|cleanup|build-graph|lineage-recover|lineage-reanchor>");
     expect(usage).not.toContain("note <audit|get>");
     expect(usage).not.toContain("link <suggest|check>");
     expect(usage).not.toContain("oh-my-second-brain host <");

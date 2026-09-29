@@ -4,6 +4,7 @@ import { compareCodePoints } from "../conventions/canonical.js";
 import { detectDrift, type DriftState } from "./drift.js";
 import { readTransportFailures, type TransportFailures } from "./guard-events.js";
 import { pendingLogKey, readInterviewLog } from "./interview-log.js";
+import { lineageHealth, type LineageHealth } from "./lineage-health.js";
 import { unsafePatternChanges, type LooseningChange } from "./loosening.js";
 import { diagnoseStore, readStore, storeExists, storeHousekeeping, storeRoot, writeIndexEntry, type StoreCause } from "./store.js";
 import { resolveSealState, type SealRow } from "./vault-id.js";
@@ -86,6 +87,8 @@ export interface ContractDoctor extends ContractStatus {
   /** Hook transport failures the guard wrapper recorded: counts per kind only. */
   readonly transportFailures: TransportFailures;
   readonly interviewLog: InterviewLogHealth;
+  /** The lineage and kept snapshots, read-only; null when the vault has no id yet. */
+  readonly lineage: LineageHealth | null;
 }
 
 /**
@@ -150,7 +153,8 @@ export async function contractDoctor(vault: string, audience: "human" | "agent",
   const unsafePatterns = read?.state === "ok" ? unsafePatternChanges(read.contract) : [];
   const recovery = cause === null && unsafePatterns.length === 0 ? null : "oms setup";
   const interviewLog = await interviewLogHealth(vault, state.vaultId, root);
-  const report: ContractDoctor = { ...status, cause, recovery, unsafePatterns, ...housekeeping, transportFailures, interviewLog };
+  const lineage = state.vaultId === null ? null : await lineageHealth(state.vaultId, root);
+  const report: ContractDoctor = { ...status, cause, recovery, unsafePatterns, ...housekeeping, transportFailures, interviewLog, lineage };
   const unexpected = await unexpectedControlFiles(vault);
   return audience === "human"
     ? { ...report, audience, unexpectedControlFiles: unexpected }

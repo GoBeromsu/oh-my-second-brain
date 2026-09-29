@@ -5,8 +5,8 @@ import { VAULT_ID_PATTERN } from "../vault/settings.js";
 
 /**
  * Per-vault state beside the contract store: `<root>/.<id>.state/` with `interview/`,
- * `evolution/`, `generations/` and `gaps/`. It sits next to the `<id>` link, never under it or
- * inside a `.<id>.<seq>/` generation, and matches none of the names the seal collects
+ * `evolution/`, `generations/` (kept snapshots), `gaps/` and `lineage/` (the seal log).
+ * It sits next to the `<id>` link, never under it or inside a `.<id>.<seq>/` generation, and matches none of the names the seal collects
  * (generations, `.lock`, `.lock.stale-*`, `.link-tmp`, `index.json`), so a seal neither
  * lists nor removes it. Every component from `root` down is checked with lstat before
  * and after creation, and a file is opened with O_NOFOLLOW. Anything that is not what
@@ -16,7 +16,7 @@ import { VAULT_ID_PATTERN } from "../vault/settings.js";
  * yet (see interview-resume.ts): the pending state never writes inside the vault.
  */
 
-export const STATE_SUBDIRS = ["interview", "evolution", "generations", "gaps"] as const;
+export const STATE_SUBDIRS = ["interview", "evolution", "generations", "gaps", "lineage"] as const;
 export type StateSubdir = typeof STATE_SUBDIRS[number];
 
 export type UnsafeKind =

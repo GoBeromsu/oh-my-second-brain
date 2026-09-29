@@ -411,6 +411,8 @@ function assertServerOperationInventory(): void {
     "build-graph",
     "cleanup",
     "gaps",
+    "lineage-reanchor",
+    "lineage-recover",
     "link-check",
     "status",
     "sync-embeddings",

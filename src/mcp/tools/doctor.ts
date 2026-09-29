@@ -55,6 +55,11 @@ export async function handleDoctor(ctx: ToolContext, name: string, args: Record<
     return repair.kind === "error" ? errorText(repair.message) : jsonText(repair.value);
   }
 
+  if (name === "oms_contract_lineage_recover" || name === "oms_contract_lineage_reanchor") {
+    const repair = await repairDoctor({ operation: name === "oms_contract_lineage_recover" ? "lineage-recover" : "lineage-reanchor", vault, source, args });
+    return repair.kind === "error" ? errorText(repair.message) : jsonText(repair.value);
+  }
+
   if (name === "oms_vault_audit") {
     if (
       args !== undefined &&

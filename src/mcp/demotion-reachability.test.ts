@@ -7,6 +7,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
+import { appendLineageEvents, readLineage } from "../kernel/contract/lineage.js";
+import { resolveSealState } from "../kernel/contract/vault-id.js";
 import { demotedOperationNames } from "./server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -90,6 +92,16 @@ describe("MCP detail-tool demotion", () => {
       expect(payload(await call("doctor", { op: "validate" })).contract).toBe("sealed");
       expect(payload(await call("doctor", { op: "gaps" }))).toMatchObject({ contract: "sealed", ledger: "ok", open: 0, gaps: [], contradictions: [] });
       expect(payload(await call("doctor", { op: "build-graph" })).notes).toBeTypeOf("number");
+      expect(payload(await call("doctor", { op: "lineage-recover" }))).toMatchObject({ anchors: [], receipt: { operation: "lineage-recover", postcondition: { kind: "contract-lineage", events: 1 } } });
+      // A lineage that ends past the linked generation is a gap: recover refuses it as a tool error, reanchor repairs it.
+      const store = path.join(home, ".oms", "vaults");
+      const { vaultId } = await resolveSealState(vault, store);
+      const [sealed] = (await readLineage(store, vaultId!, "strict")).events;
+      await appendLineageEvents(store, vaultId!, [{ kind: "sealed", generation: 99, parentDigest: sealed!.digest, digest: `sha256:${"e".repeat(64)}`, mutations: [], manifestDigests: {} }]);
+      const refused = await call("doctor", { op: "lineage-recover" });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0]?.type === "text" ? refused.content[0].text : "").toMatch(/^CONTRACT_LINEAGE_GAP: /);
+      expect(payload(await call("doctor", { op: "lineage-reanchor" }))).toMatchObject({ anchors: [{ reason: "gap-anchor", digest: sealed!.digest }], receipt: { operation: "lineage-reanchor" } });
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
       // The derived projection repair is retired: the explicit contract is the
       // authority, so it is neither advertised nor reachable, with no alias.
