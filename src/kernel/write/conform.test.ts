@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { judge } from "../contract/judge.js";
-import type { ContractView, VaultContract } from "../contract/types.js";
+import type { ContractView, PropertyContract, VaultContract } from "../contract/types.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { conform, type ConformOptions } from "./conform.js";
 
@@ -74,6 +74,21 @@ describe("conform", () => {
     expect(result.content).toBe("---\ncreated: 2026-09-28\nupdated: 2026-09-28T09:05:07\n\"review date\": 2026-09-28\n---\nBody\n");
     const narrowed = conform("", options({ isNew: true, template: "project" }));
     expect(narrowed.applied.filter(change => change.action === "default").map(change => change.field)).toEqual(["created", "review date"]);
+  });
+
+  it("adds the value a default's only fixed rule names, as a list for a list type, on a new note only", () => {
+    const fixedView: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: {
+      stage: { meaning: "stage", type: "text", default: true, required: false, rules: [{ kind: "fixed", value: "draft" }] },
+      kinds: { meaning: "kinds", type: "list", default: true, required: false, rules: [{ kind: "fixed", value: "note" }] },
+      picked: { meaning: "pick one", type: "text", default: true, required: false, rules: [{ kind: "allowed", values: ["a", "b"] }] },
+      both: { meaning: "two rules", type: "text", default: true, required: false, rules: [{ kind: "fixed", value: "x" }, { kind: "pattern", regex: "^x$" }] },
+      // An untyped property takes the fixed value as a single value, not a list.
+      loose: { meaning: "untyped", type: null as unknown as PropertyContract["type"], default: true, required: false, rules: [{ kind: "fixed", value: "y" }] },
+    } } };
+    const result = conform("Body\n", options({ view: fixedView, isNew: true }));
+    expect(result.content).toBe("---\nstage: \"draft\"\nkinds: [\"note\"]\nloose: \"y\"\n---\nBody\n");
+    expect(result.applied).toEqual([{ field: "stage", action: "default" }, { field: "kinds", action: "default" }, { field: "loose", action: "default" }]);
+    expect(conform("Body\n", options({ view: fixedView }))).toEqual({ content: "Body\n", applied: [] });
   });
 
   it("never adds defaults to malformed frontmatter or an open contract", () => {

@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTruthTableRow, type TruthTableFixture } from "../../test/fixtures/contract-truth-table.js";
+import { buildTruthTableRow, FIXTURE_CONTRACT, type TruthTableFixture } from "../../test/fixtures/contract-truth-table.js";
+import type { VaultContract } from "../kernel/contract/types.js";
 import { runWriteCommand, writeUsage } from "./write-command.js";
 
 const fixtures: TruthTableFixture[] = [];
@@ -12,8 +13,8 @@ let savedEnv: Record<string, string | undefined>;
 let log: ReturnType<typeof vi.spyOn>;
 let error: ReturnType<typeof vi.spyOn>;
 
-async function sealedVault(): Promise<TruthTableFixture> {
-  const fixture = await buildTruthTableRow("sealed");
+async function sealedVault(contract: VaultContract = FIXTURE_CONTRACT): Promise<TruthTableFixture> {
+  const fixture = await buildTruthTableRow("sealed", contract);
   fixtures.push(fixture);
   const home = path.join(fixture.base, "home");
   process.env["HOME"] = home;
@@ -104,12 +105,39 @@ describe("oms write", () => {
     expect(await readdir(cwd)).toEqual([]);
   });
 
-  it("keeps a note with a new contract gap as a draft outside the vault and exits 1", async () => {
+  it("saves a note in an unregistered folder as written, exits 0 and prints the warnings to stderr", async () => {
+    const fixture = await sealedVault();
+    await runWriteCommand(["Loose/a.md", "--vault", fixture.vault], { env: {}, readStdin: async () => "x\n" });
+    expect(process.exitCode).toBe(0);
+    expect(receipt()).toMatchObject({ ok: true, path: "Loose/a.md", warnings: [{ field: "path", kind: "unregistered-folder" }], fixes: [] });
+    expect(await readFile(path.join(fixture.vault, "Loose", "a.md"), "utf8")).toBe("x\n");
+    expect(error.mock.calls.map(call => String(call[0]))).toEqual(['[oms] warnings: [{"field":"path","kind":"unregistered-folder"}]']);
+  });
+
+  it("prints the fixes and the remaining warnings to stderr, one line each", async () => {
+    const fixture = await sealedVault({
+      ...FIXTURE_CONTRACT,
+      properties: {
+        size: { meaning: "a count", type: "number", default: false, required: false, rules: [] },
+        mood: { meaning: "a mood", type: "text", default: false, required: false, rules: [{ kind: "allowed", values: ["calm"] }] },
+      },
+    });
+    await runWriteCommand(["Projects/a.md", "--vault", fixture.vault], { env: {}, readStdin: async () => "---\nsize: \"12\"\nmood: tense\n---\nBody\n" });
+    expect(process.exitCode).toBe(0);
+    expect(receipt()).toMatchObject({ ok: true, warnings: [{ field: "mood", kind: "not-allowed" }], fixes: [{ field: "size", kind: "type" }] });
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\nsize: 12\nmood: tense\n---\nBody\n");
+    expect(error.mock.calls.map(call => String(call[0]))).toEqual([
+      '[oms] warnings: [{"field":"mood","kind":"not-allowed"}]',
+      '[oms] fixed: [{"field":"size","kind":"type"}]',
+    ]);
+  });
+
+  it("keeps a note whose frontmatter does not parse as a draft outside the vault and exits 1", async () => {
     const fixture = await sealedVault();
     const before = await snapshot(fixture.vault);
-    await runWriteCommand(["Loose/a.md", "--vault", fixture.vault], { env: {}, readStdin: async () => "x\n" });
+    await runWriteCommand(["Projects/a.md", "--vault", fixture.vault], { env: {}, readStdin: async () => "---\na: [b\n---\nx\n" });
     expect(process.exitCode).toBe(1);
-    expect(receipt()).toEqual({ ok: false, status: "drafted", draftRef: expect.any(String), warnings: [{ field: "path", kind: "unregistered-folder" }] });
+    expect(receipt()).toEqual({ ok: false, status: "drafted", draftRef: expect.any(String), warnings: [{ field: "content", kind: "yaml-syntax" }] });
     expect(await snapshot(fixture.vault)).toEqual(before);
   });
 

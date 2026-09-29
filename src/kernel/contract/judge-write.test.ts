@@ -98,23 +98,46 @@ describe("decideWrite", () => {
     expect(decision.verdict.warnings).toEqual([]);
   });
 
-  it("drops a new unknown key and saves the repaired note", () => {
+  it("saves a new unknown key as written and records it as kept", () => {
     const decision = decideWrite(ready(SEALED), "---\nstatus: open\nextra: 1\n---\nbody\n");
     expect(decision.outcome).toBe("allow");
     if (decision.outcome !== "allow") return;
     expect(decision.verdict.warnings).toEqual([{ field: "extra", kind: "unknown-property" }]);
-    expect(decision.fixedContent).toBe("---\nstatus: open\n---\nbody\n");
-    expect(decision.saved.warnings).toEqual([]);
-    expect(decision.findings.map(finding => finding.reason)).toEqual(["dropped: unknown-property"]);
+    expect(decision.fixedContent).toBeUndefined();
+    expect(decision.saved.warnings).toEqual([{ field: "extra", kind: "unknown-property" }]);
+    expect(decision.findings.map(finding => `${finding.kind} ${finding.reason}`)).toEqual(["kept kept: unknown-property"]);
   });
 
-  it("drafts a new warning it cannot repair", () => {
-    const decision = decideWrite(ready(SEALED), "---\nowner: me\n---\nbody\n");
+  it("returns the fixed content and the saved verdict's fixes for a lossless fix", () => {
+    const typed: ContractView = { state: "sealed", contract: { folders: null, properties: { status: property({ required: true }), size: property({ type: "number" }) }, templates: {} } };
+    const decision = decideWrite(ready(typed), "---\nstatus: open\nsize: \"12\"\n---\nbody\n");
+    expect(decision.outcome).toBe("allow");
+    if (decision.outcome !== "allow") return;
+    expect(decision.verdict.warnings).toEqual([{ field: "size", kind: "type" }]);
+    expect(decision.fixedContent).toBe("---\nstatus: open\nsize: 12\n---\nbody\n");
+    expect(decision.saved).toMatchObject({ warnings: [], fixes: [{ field: "size", kind: "type" }] });
+    expect(decision.findings).toMatchObject([{ kind: "fixed", wanted: { field: "size", value: "12" }, reason: "fixed: type" }]);
+  });
+
+  it("fills a date default only on a new note and only with a time", () => {
+    const dated: ContractView = { state: "sealed", contract: { folders: null, properties: { created: property({ type: "date", default: true, required: true }) }, templates: {} } };
+    const now = new Date(2026, 8, 29, 9, 30);
+    const fresh = decideWrite(ready(dated), "body\n", { now });
+    expect(fresh.outcome === "allow" && fresh.fixedContent).toBe("---\ncreated: 2026-09-29\n---\nbody\n");
+    const existing = decideWrite(ready(dated, "old\n"), "body\n", { now });
+    expect(existing.outcome === "allow" && existing.fixedContent).toBeUndefined();
+    const timeless = decideWrite(ready(dated), "body\n");
+    expect(timeless.outcome === "allow" && timeless.fixedContent).toBeUndefined();
+  });
+
+  it("drafts only frontmatter that does not parse", () => {
+    const decision = decideWrite(ready(SEALED), "---\nstatus: [\n---\nbody\n");
     expect(decision.outcome).toBe("draft");
     if (decision.outcome !== "draft") return;
-    expect(decision.verdict.warnings).toEqual([{ field: "status", kind: "missing" }]);
-    expect(decision.findings.map(finding => finding.reason)).toEqual(["drafted: missing"]);
-    expect(decision.asWritten.map(finding => finding.reason)).toEqual(["kept: missing"]);
+    expect(decision.findings.map(finding => finding.reason)).toContain("drafted: yaml-syntax");
+    expect(decision.asWritten.map(finding => finding.reason)).toContain("kept: yaml-syntax");
+    const missing = decideWrite(ready(SEALED), "---\nowner: me\n---\nbody\n");
+    expect(missing).toMatchObject({ outcome: "allow", findings: [{ kind: "kept", reason: "kept: missing" }] });
   });
 
   it("never drafts or repairs when repair is off", () => {
@@ -130,7 +153,7 @@ describe("decideWrite", () => {
   it("does not treat a warning the note already had as new", () => {
     const view: ContractView = { state: "sealed", contract: { folders: { Projects: { meaning: "p", searchExclude: false } }, properties: null, templates: {} } };
     const unfiled = decideWrite(ready(view), "new body\n");
-    expect(unfiled.outcome).toBe("draft");
+    expect(unfiled).toMatchObject({ outcome: "allow", findings: [{ axis: "folder", kind: "kept" }] });
     const decision = decideWrite(ready(view, "old body\n"), "new body\n");
     expect(decision.outcome).toBe("allow");
     if (decision.outcome !== "allow") return;

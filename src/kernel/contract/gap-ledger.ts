@@ -9,8 +9,9 @@ import type { JsonScalar } from "./types.js";
 /**
  * The gap ledger: an append-only log, `<root>/.<id>.state/gaps/events.jsonl`, of every
  * place a write met the edge of the sealed contract. A `gap` event records a choice the
- * writer made inside the frame (`choice`) or a want the frame had no place for
- * (`no-fit`); a `resolved` event closes one. The ledger lives beside the store, never in
+ * writer made inside the frame (`choice`), a value saved as written outside the rules
+ * (`kept`), a value OMS fixed losslessly (`fixed`, the written value kept in `wanted`), or
+ * a note drafted outside the vault (`no-fit`); a `resolved` event closes one. The ledger lives beside the store, never in
  * the vault, so the values it records stay out of agent-visible output; readers that face
  * an agent report `{field, kind}` only.
  *
@@ -54,7 +55,11 @@ import type { JsonScalar } from "./types.js";
 
 export const GAP_AXES = ["folder", "property", "value", "template"] as const;
 export type GapAxis = typeof GAP_AXES[number];
-export const GAP_KINDS = ["no-fit", "choice"] as const;
+/**
+ * `kept`: saved as written outside the rules. `fixed`: saved with a lossless fix, the
+ * written value in `wanted`. `no-fit`: drafted, or recorded by an earlier version. `choice`: ②.
+ */
+export const GAP_KINDS = ["no-fit", "choice", "kept", "fixed"] as const;
 export type GapKind = typeof GAP_KINDS[number];
 
 /** What the writer wanted: the field it concerns and, when there was one, the value. */

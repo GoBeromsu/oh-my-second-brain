@@ -122,9 +122,11 @@ export interface DecideWriteOptions {
   readonly template?: string | undefined;
   /**
    * False when the caller can only allow or deny the content as written (the Claude hook):
-   * no key is dropped and nothing is drafted, and the warnings are recorded as kept.
+   * nothing is fixed or drafted, and the warnings are recorded as kept.
    */
   readonly repair?: boolean;
+  /** The time an unconstrained date or datetime default takes on a new note; without it none is filled. */
+  readonly now?: Date | undefined;
 }
 
 export type WriteDecision =
@@ -153,6 +155,8 @@ export function decideWrite(resolved: ReadyTarget, content: string, options: Dec
     content,
     template,
     previousContent: resolved.previousContent ?? undefined,
+    isNew: resolved.previousContent === undefined,
+    now: options.now,
     verdict,
     ...(baseline === undefined ? {} : { baseline }),
     ...(options.repair === undefined ? {} : { repair: options.repair }),

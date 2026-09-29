@@ -231,7 +231,7 @@ describe("product contract (built CLI, isolated home)", () => {
     }
   }, 30_000);
 
-  it("MCP write over stdio saves an allowed note, drafts a violating one and refuses a control path", async () => {
+  it("MCP write over stdio saves an allowed note, keeps an out-of-rule one as written, drafts unparsable frontmatter and refuses a control path", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [OMS, "serve", "mcp", "--vault", vault],
@@ -255,14 +255,24 @@ describe("product contract (built CLI, isolated home)", () => {
       expect(JSON.parse(allowed.content[0]!.text)).toMatchObject({ ok: true, missingDefaults: [] });
       expect(await readFile(path.join(vault, allowedPath), "utf8")).toBe(allowedContent);
 
-      // A contract gap is kept as a draft outside the vault; the result is not an error.
-      const draftedPath = "Projects/엉터리 상태.md";
+      // A value outside the allowed values is saved as written with a warning.
+      const keptPath = "Projects/엉터리 상태.md";
+      const kept = (await client.callTool({
+        name: "write",
+        arguments: { path: keptPath, content: "---\nstatus: 엉터리\n---\n# 엉터리\n" },
+      })) as { isError?: boolean; content: { type: string; text: string }[] };
+      expect(kept.isError).toBeFalsy();
+      expect(JSON.parse(kept.content[0]!.text)).toMatchObject({ ok: true, warnings: [{ field: "status", kind: "not-allowed" }], fixes: [] });
+      expect(await readFile(path.join(vault, keptPath), "utf8")).toBe("---\nstatus: 엉터리\n---\n# 엉터리\n");
+
+      // Frontmatter that does not parse is kept as a draft outside the vault; the result is not an error.
+      const draftedPath = "Projects/깨진 머리말.md";
       const drafted = (await client.callTool({
         name: "write",
-        arguments: { path: draftedPath, content: "---\nstatus: 엉터리\n---\n# 엉터리\n" },
+        arguments: { path: draftedPath, content: "---\nstatus: [엉터리\n---\n# 엉터리\n" },
       })) as { isError?: boolean; content: { type: string; text: string }[] };
       expect(drafted.isError).toBeFalsy();
-      expect(JSON.parse(drafted.content[0]!.text)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "status", kind: "not-allowed" }] });
+      expect(JSON.parse(drafted.content[0]!.text)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "content", kind: "yaml-syntax" }] });
       expect(existsSync(path.join(vault, draftedPath))).toBe(false);
 
       // Only a safety refusal is an error.

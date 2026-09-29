@@ -32,6 +32,8 @@ const CONTRACT: VaultContract = {
 };
 
 const NOW = new Date(2026, 8, 28, 9, 30, 0);
+/** Frontmatter that does not parse: the only note a sealed vault drafts. */
+const BROKEN = "---\nstatus: [active\n---\nx\n";
 const ISOLATED = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "OMS_RUNTIME_ROOT", "OMS_AUTO_UPDATE_STATE_DIR", "OMS_CLAUDE_HOME", "OMS_CODEX_HOME", "OMS_HERMES_HOME", "OMS_VAULT"];
 
 const fixtures: TruthTableFixture[] = [];
@@ -120,12 +122,13 @@ describe("runWritePipeline", () => {
     expect(await readdir(path.join(fixture.vault))).not.toContain("Projects");
   });
 
-  it("drafts a note in an unregistered folder and leaves the vault untouched", async () => {
+  it("saves a note in an unregistered folder where it was named and records the folder as kept", async () => {
     const fixture = await sealedVault();
-    const before = await snapshot(fixture.vault);
-    const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"));
-    expect(outcome).toMatchObject({ kind: "drafted", draftRef: expect.stringMatching(/^draft-/), warnings: [{ field: "path", kind: "unregistered-folder" }] });
-    expect(await snapshot(fixture.vault)).toEqual(before);
+    const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"), { now: () => NOW, updateIndex: async () => "skipped" });
+    expect(outcome).toMatchObject({ kind: "written", receipt: { path: "Loose/a.md", warnings: [{ field: "path", kind: "unregistered-folder" }], fixes: [], gaps: [{ axis: "folder", kind: "kept", field: "path" }] } });
+    expect(await readFile(path.join(fixture.vault, "Loose", "a.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nx\n");
+    const [gap] = openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events);
+    expect(gap).toMatchObject({ axis: "folder", kind: "kept", wanted: { field: "path" }, reason: "kept: unregistered-folder" });
   });
 
   it("writes a new note without ifMatch and returns a receipt with conform changes", async () => {
@@ -151,15 +154,15 @@ describe("runWritePipeline", () => {
     expect(updateIndex).toHaveBeenCalledWith({ vault: fixture.vault, relPath: "Projects/Alpha.md" });
   });
 
-  it("saves the nearest valid form when a new optional value is outside allowed, and records the gap", async () => {
+  it("saves a value no allowed value spells as written, and records it as kept", async () => {
     const fixture = await sealedVault();
     const outcome = await runWritePipeline(
       request(fixture, "Projects/a.md", "---\nstatus: paused\n---\nBody\n"),
       { now: () => NOW, updateIndex: async () => "skipped", gapLedger: { now: () => 7, newId: () => "gap-1" } },
     );
     const written = await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8");
-    expect(written).toBe("---\ncreated: 2026-09-28\n---\nBody\n");
-    expect(outcome).toMatchObject({ kind: "written", receipt: { revision: sha256(written), gaps: [{ id: "gap-1", axis: "value", kind: "no-fit", field: "status" }] } });
+    expect(written).toBe("---\nstatus: paused\ncreated: 2026-09-28\n---\nBody\n");
+    expect(outcome).toMatchObject({ kind: "written", receipt: { revision: sha256(written), warnings: [{ field: "status", kind: "not-allowed" }], fixes: [], gaps: [{ id: "gap-1", axis: "value", kind: "kept", field: "status" }] } });
     const receipt = outcome.kind === "written" ? outcome.receipt : null;
     const ledger = await readGapLedger(fixture.root, fixture.vaultId);
     expect(ledger).toEqual({
@@ -172,36 +175,34 @@ describe("runWritePipeline", () => {
         noteRevision: sha256(written),
         contractRevision: receipt?.contractRevision,
         axis: "value",
-        kind: "no-fit",
+        kind: "kept",
         chosen: null,
         wanted: { field: "status", value: "paused" },
-        reason: "dropped: not-allowed",
+        reason: "kept: not-allowed",
       }],
     });
   });
 
-  it("keeps a note with no valid form as a draft beside the ledger and leaves the vault untouched", async () => {
+  it("keeps a note whose frontmatter does not parse as a draft beside the ledger and leaves the vault untouched", async () => {
     const fixture = await sealedVault();
     const before = await snapshot(fixture.vault);
-    // The draft keeps the conformed note: the date default is filled before the judge runs.
-    const DRAFTED = "---\ncreated: 2026-09-28\n---\nx\n";
-    const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"), { now: () => NOW, gapLedger: { newId: () => "00000000-0000-4000-8000-000000000001" } });
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", BROKEN), { now: () => NOW, gapLedger: { newId: () => "00000000-0000-4000-8000-000000000001" } });
     expect(outcome).toEqual({
       kind: "drafted",
       draftRef: "draft-00000000-0000-4000-8000-000000000001.md",
-      warnings: [expect.objectContaining({ field: "path", kind: "unregistered-folder" })],
+      warnings: [expect.objectContaining({ field: "content", kind: "yaml-syntax" })],
     });
     expect(await snapshot(fixture.vault)).toEqual(before);
-    expect(await readGapDraft(fixture.root, fixture.vaultId, "draft-00000000-0000-4000-8000-000000000001.md")).toBe(DRAFTED);
+    expect(await readGapDraft(fixture.root, fixture.vaultId, "draft-00000000-0000-4000-8000-000000000001.md")).toBe(BROKEN);
     const [gap] = openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events);
-    expect(gap).toMatchObject({ axis: "folder", kind: "no-fit", notePath: "Loose/a.md", noteRevision: sha256(DRAFTED), draftRef: "draft-00000000-0000-4000-8000-000000000001.md", reason: "drafted: unregistered-folder" });
+    expect(gap).toMatchObject({ axis: "value", kind: "no-fit", notePath: "Projects/a.md", noteRevision: sha256(BROKEN), draftRef: "draft-00000000-0000-4000-8000-000000000001.md", reason: "drafted: yaml-syntax" });
   });
 
   it("saves the note as written when the draft cannot be kept", async () => {
     const fixture = await sealedVault();
-    const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"), { now: () => NOW, updateIndex: async () => "skipped", gapLedger: { newId: () => "not-a-uuid" } });
-    expect(outcome).toMatchObject({ kind: "written", receipt: { path: "Loose/a.md", warnings: [{ field: "path", kind: "unregistered-folder" }] } });
-    expect(await readFile(path.join(fixture.vault, "Loose", "a.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nx\n");
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", BROKEN), { now: () => NOW, updateIndex: async () => "skipped", gapLedger: { newId: () => "not-a-uuid" } });
+    expect(outcome).toMatchObject({ kind: "written", receipt: { path: "Projects/a.md", warnings: [{ field: "content", kind: "yaml-syntax" }] } });
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe(BROKEN);
     expect((await readdir(path.join(fixture.base, "home", ".oms", "vaults", fixture.vaultId))).filter(name => name.startsWith("draft"))).toEqual([]);
   });
 
@@ -210,7 +211,7 @@ describe("runWritePipeline", () => {
     const resolveSeal = vi.fn(async (vault: string) => ({ ...(await resolveSealState(vault, fixture.root)), vaultId: null }));
     const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"), { now: () => NOW, updateIndex: async () => "skipped", resolveSealState: resolveSeal });
     expect(outcome).toMatchObject({ kind: "written", receipt: { gapLedger: "unavailable", warnings: [{ field: "path", kind: "unregistered-folder" }] } });
-    expect(outcome.kind === "written" ? outcome.receipt.gaps : "absent").toEqual([{ axis: "folder", kind: "no-fit", field: "path" }]);
+    expect(outcome.kind === "written" ? outcome.receipt.gaps : "absent").toEqual([{ axis: "folder", kind: "kept", field: "path" }]);
     expect(await readFile(path.join(fixture.vault, "Loose", "a.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nx\n");
     expect(resolveSeal).toHaveBeenCalledTimes(1);
     expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
@@ -223,12 +224,12 @@ describe("runWritePipeline", () => {
       { now: () => NOW, updateIndex: async () => "skipped", gapLedger: { newId: () => { throw new Error("no ids"); } } },
     );
     expect(outcome).toMatchObject({ kind: "written", receipt: { ok: true, gapLedger: "failed" } });
-    // The dropped field is still reported, without an id, so the loss is never silent.
-    expect(outcome.kind === "written" ? outcome.receipt.gaps : "absent").toEqual([{ axis: "value", kind: "no-fit", field: "status" }]);
-    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nBody\n");
+    // The kept field is still reported, without an id, so the gap is never silent.
+    expect(outcome.kind === "written" ? outcome.receipt.gaps : "absent").toEqual([{ axis: "value", kind: "kept", field: "status" }]);
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\nstatus: paused\ncreated: 2026-09-28\n---\nBody\n");
   });
 
-  it("saves the nearest valid form and lists the dropped fields without ids when the vault has no ledger", async () => {
+  it("saves the note as written and lists the kept fields without ids when the vault has no ledger", async () => {
     const fixture = await sealedVault();
     const resolveSeal = vi.fn(async (vault: string) => ({ ...(await resolveSealState(vault, fixture.root)), vaultId: null }));
     const outcome = await runWritePipeline(
@@ -237,10 +238,10 @@ describe("runWritePipeline", () => {
     );
     expect(outcome).toMatchObject({ kind: "written", receipt: { ok: true, gapLedger: "unavailable" } });
     expect(outcome.kind === "written" ? outcome.receipt.gaps : "absent").toEqual([
-      { axis: "property", kind: "no-fit", field: "mood" },
-      { axis: "value", kind: "no-fit", field: "status" },
+      { axis: "property", kind: "kept", field: "mood" },
+      { axis: "value", kind: "kept", field: "status" },
     ]);
-    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nBody\n");
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\nstatus: paused\nmood: calm\ncreated: 2026-09-28\n---\nBody\n");
     expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
   });
 
@@ -248,9 +249,9 @@ describe("runWritePipeline", () => {
     const fixture = await sealedVault();
     const uuid = "00000000-0000-4000-8000-000000000002";
     const newId = vi.fn().mockReturnValueOnce(uuid).mockImplementation(() => { throw new Error("no ids"); });
-    const outcome = await runWritePipeline(request(fixture, "Loose/a.md", "x\n"), { now: () => NOW, gapLedger: { newId } });
-    expect(outcome).toEqual({ kind: "drafted", draftRef: `draft-${uuid}.md`, warnings: [expect.objectContaining({ kind: "unregistered-folder" })] });
-    expect(await readGapDraft(fixture.root, fixture.vaultId, `draft-${uuid}.md`)).toBe("---\ncreated: 2026-09-28\n---\nx\n");
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", BROKEN), { now: () => NOW, gapLedger: { newId } });
+    expect(outcome).toEqual({ kind: "drafted", draftRef: `draft-${uuid}.md`, warnings: [expect.objectContaining({ kind: "yaml-syntax" })] });
+    expect(await readGapDraft(fixture.root, fixture.vaultId, `draft-${uuid}.md`)).toBe(BROKEN);
     expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
   });
 
@@ -261,8 +262,8 @@ describe("runWritePipeline", () => {
     await writeFile(target, "---\nstatus: active\n---\noriginal\n");
     const store = path.join(fixture.base, "home", ".oms");
     const before = await snapshot(store);
-    // A required status outside the allowed values has no valid form: it would be drafted.
-    const content = "---\nstatus: paused\n---\nchanged\n";
+    // Frontmatter that does not parse would be drafted.
+    const content = "---\nstatus: [paused\n---\nchanged\n";
     const checked = await runWritePipeline(request(fixture, "Projects/a.md", content, { check: true }), { now: () => NOW });
     expect(checked).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", wouldDraft: false, precondition: "if-match-required" } } });
     expect(await runWritePipeline(request(fixture, "Projects/a.md", content), { now: () => NOW })).toEqual({ kind: "if-match-required" });
@@ -279,7 +280,7 @@ describe("runWritePipeline", () => {
     await writeFile(path.join(fixture.vault, "Projects", "a.md"), original);
     const store = path.join(fixture.base, "home", ".oms");
     const before = { vault: await snapshot(fixture.vault), store: await snapshot(store) };
-    const content = "---\nstatus: paused\n---\nchanged\n";
+    const content = "---\nstatus: [paused\n---\nchanged\n";
     const check = async (notePath: string, ifMatch?: string) => {
       const outcome = await runWritePipeline(request(fixture, notePath, content, { check: true, ...(ifMatch === undefined ? {} : { ifMatch }) }), { now: () => NOW });
       return outcome.kind === "checked" ? outcome.check.resolution : null;
@@ -307,7 +308,7 @@ describe("runWritePipeline", () => {
     expect(await check()).toMatchObject({ action: "save", wouldDraft: false, precondition: "if-match-required" });
     expect(await check(sha256("stale\n"))).toMatchObject({ action: "save", precondition: "changed" });
     const valid = await check(sha256(original));
-    expect(valid).toMatchObject({ action: "save", gaps: [{ field: "mood" }] });
+    expect(valid).toMatchObject({ action: "save", gaps: [{ field: "mood", kind: "kept" }] });
     expect(valid).not.toHaveProperty("precondition");
     expect(await snapshot(fixture.vault)).toEqual(before);
   });
@@ -321,7 +322,7 @@ describe("runWritePipeline", () => {
     expect(refused.kind === "checked" ? refused.check.resolution : null).not.toHaveProperty("precondition");
   });
 
-  it("check predicts the write for an extra optional key: the same action and dropped fields, with nothing written", async () => {
+  it("check predicts the write for an extra optional key: the same action and kept fields, with nothing written", async () => {
     const fixture = await sealedVault();
     const store = path.join(fixture.base, "home", ".oms");
     const before = { vault: await snapshot(fixture.vault), store: await snapshot(store) };
@@ -335,7 +336,7 @@ describe("runWritePipeline", () => {
         warnings: [{ field: "mood", kind: "unknown-property" }],
         fixes: [],
         violations: [],
-        resolution: { action: "save", gaps: [{ axis: "property", kind: "no-fit", field: "mood" }], wouldDraft: false },
+        resolution: { action: "save", gaps: [{ axis: "property", kind: "kept", field: "mood" }], wouldDraft: false },
       },
     });
     expect({ vault: await snapshot(fixture.vault), store: await snapshot(store) }).toEqual(before);
@@ -345,7 +346,7 @@ describe("runWritePipeline", () => {
     const receipt = written.kind === "written" ? written.receipt : null;
     const predicted = checked.kind === "checked" ? checked.check.resolution.gaps : [];
     expect(receipt?.gaps?.map(({ id: _id, ...gap }) => gap)).toEqual(predicted);
-    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\nstatus: active\ncreated: 2026-09-28\n---\nBody\n");
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\nstatus: active\nmood: calm\ncreated: 2026-09-28\n---\nBody\n");
   });
 
   it("check reports a refusal, and a draft with no ledger to go to as a save as written", async () => {
@@ -362,8 +363,10 @@ describe("runWritePipeline", () => {
       kind: "checked",
       check: { ok: true, warnings: [{ field: "path", kind: "unregistered-folder" }], resolution: { action: "save", gaps: [{ axis: "folder", field: "path" }], wouldDraft: false } },
     });
-    const drafted = await runWritePipeline(request(fixture, "Loose/a.md", "x\n", { check: true }), { now: () => NOW });
-    expect(drafted).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", gaps: [{ axis: "folder", field: "path" }], wouldDraft: true } } });
+    const noLedger = await runWritePipeline(request(fixture, "Projects/a.md", BROKEN, { check: true }), { now: () => NOW, resolveSealState: resolveSeal });
+    expect(noLedger).toMatchObject({ kind: "checked", check: { ok: true, resolution: { action: "save", gaps: [{ axis: "value", kind: "kept", field: "content" }], wouldDraft: false } } });
+    const drafted = await runWritePipeline(request(fixture, "Projects/a.md", BROKEN, { check: true }), { now: () => NOW });
+    expect(drafted).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", gaps: [{ axis: "value", kind: "no-fit", field: "content" }], wouldDraft: true } } });
   });
 
   it("records an open template choice and saves the note as written", async () => {
@@ -387,10 +390,10 @@ describe("runWritePipeline", () => {
       properties: { ...CONTRACT.properties!, status: { ...CONTRACT.properties!["status"]!, rules: [{ kind: "allowed", values: [] }] } },
     });
     const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: active\n---\nBody\n"), { now: () => NOW, updateIndex: async () => "skipped" });
-    expect(outcome).toMatchObject({ kind: "written", receipt: { warnings: [{ field: "status", kind: "not-allowed" }], gaps: [{ axis: "value", kind: "no-fit", field: "status" }] } });
+    expect(outcome).toMatchObject({ kind: "written", receipt: { warnings: [{ field: "status", kind: "not-allowed" }], fixes: [], gaps: [{ axis: "value", kind: "kept", field: "status" }] } });
     expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\nstatus: active\ncreated: 2026-09-28\n---\nBody\n");
     const [gap] = openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events);
-    expect(gap).toMatchObject({ axis: "value", kind: "no-fit", wanted: { field: "status", value: "active" }, reason: "contradiction: not-allowed" });
+    expect(gap).toMatchObject({ axis: "value", kind: "kept", wanted: { field: "status", value: "active" }, reason: "contradiction: not-allowed" });
   });
 
   it("saves under a broken contract with a warning whose guidance names oms interview", async () => {
@@ -448,20 +451,15 @@ describe("runWritePipeline", () => {
     expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
 
     const repaired = await runWritePipeline(
-      request(fixture, "Projects/b.md", "---\nstatus: paused\nmood: calm\n---\nBody\n"),
+      request(fixture, "Projects/b.md", "---\nstatus: Active\nmood: calm\n---\nBody\n"),
       { now: () => NOW, updateIndex: async () => "skipped" },
     );
-    // Both keys are dropped from the saved note, so the receipt reports them as fixes, not as warnings on the saved note.
-    expect(await readFile(path.join(fixture.vault, "Projects", "b.md"), "utf8")).toBe("---\ncreated: 2026-09-28\n---\nBody\n");
+    // The spelling is fixed and reported as a fix; the unknown key is kept and stays a warning on the saved note.
+    expect(await readFile(path.join(fixture.vault, "Projects", "b.md"), "utf8")).toBe("---\nstatus: active\nmood: calm\ncreated: 2026-09-28\n---\nBody\n");
     expect(repaired.kind).toBe("written");
     if (repaired.kind !== "written") return;
-    expect(repaired.receipt.fixes).toEqual(expect.arrayContaining([
-      { field: "status", kind: "not-allowed" },
-      { field: "mood", kind: "unknown-property" },
-    ]));
-    expect(repaired.receipt.fixes).toHaveLength(2);
-    expect(repaired.receipt.warnings).not.toEqual(expect.arrayContaining([expect.objectContaining({ field: "status" })]));
-    expect(repaired.receipt.warnings).not.toEqual(expect.arrayContaining([expect.objectContaining({ field: "mood" })]));
+    expect(repaired.receipt.fixes).toEqual([{ field: "status", kind: "not-allowed" }]);
+    expect(repaired.receipt.warnings).toEqual([{ field: "mood", kind: "unknown-property" }]);
   });
 
   it("names one contract revision in the receipt and every gap when a seal lands mid-write", async () => {
@@ -573,11 +571,11 @@ describe("runWritePipeline", () => {
       request(fixture, "Projects/a.md", "---\ncreated: 2026-09-01\nlegacy: kept\nextra: new\n---\nchanged\n", { ifMatch: sha256(edited) }),
       options,
     );
-    expect(added).toMatchObject({ kind: "written", receipt: { gaps: [{ id: "gap-1", axis: "property", kind: "no-fit", field: "extra" }] } });
-    expect(await readFile(target, "utf8")).toBe(edited);
+    expect(added).toMatchObject({ kind: "written", receipt: { gaps: [{ id: "gap-1", axis: "property", kind: "kept", field: "extra" }] } });
+    expect(await readFile(target, "utf8")).toBe("---\ncreated: 2026-09-01\nlegacy: kept\nextra: new\n---\nchanged\n");
     const events = (await readGapLedger(fixture.root, fixture.vaultId)).events;
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: "gap", wanted: { field: "extra", value: "new" }, reason: "dropped: unknown-property" });
+    expect(events[0]).toMatchObject({ type: "gap", kind: "kept", wanted: { field: "extra", value: "new" }, reason: "kept: unknown-property" });
   });
 
   it("returns changed when another writer creates the note between the judge and the save", async () => {
@@ -626,7 +624,7 @@ describe("runWritePipeline", () => {
     });
     expect(checks[2]).toMatchObject({
       kind: "checked",
-      check: { ok: true, violations: [], warnings: [{ field: "status", kind: "not-allowed" }], resolution: { action: "save", gaps: [{ axis: "value", kind: "no-fit", field: "status" }], wouldDraft: false } },
+      check: { ok: true, violations: [], warnings: [{ field: "status", kind: "not-allowed" }], resolution: { action: "save", gaps: [{ axis: "value", kind: "kept", field: "status" }], wouldDraft: false } },
     });
     for (const check of checks) {
       expect(check.kind === "checked" ? check.check.contractRevision : null).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -641,5 +639,110 @@ describe("runWritePipeline", () => {
     const outcome = await runWritePipeline({ vault: fixture.vault, source: "cwd", path: "Projects/a.md", content: "x\n", check: true });
     expect(outcome).toMatchObject({ kind: "checked", check: { ok: true, revision: null } });
     expect(await snapshot(fixture.vault)).toEqual(before);
+  });
+});
+
+/** One key per tier row: each is judged alone so a finding names exactly the row under test. */
+const TIERS: VaultContract = {
+  folders: { Notes: { meaning: "notes", searchExclude: false } },
+  properties: {
+    size: { meaning: "a count", type: "number", default: false, required: false, rules: [] },
+    done: { meaning: "finished", type: "checkbox", default: false, required: false, rules: [] },
+    topics: { meaning: "topics", type: "list", default: false, required: false, rules: [] },
+    day: { meaning: "a day", type: "date", default: false, required: false, rules: [] },
+    label: { meaning: "a label", type: "text", default: false, required: false, rules: [] },
+    mood: { meaning: "a mood", type: "text", default: false, required: false, rules: [{ kind: "allowed", values: ["Calm", "calm ", "Tense"] }] },
+    kind: { meaning: "note kind", type: "text", default: false, required: true, rules: [{ kind: "fixed", value: "note" }] },
+    code: { meaning: "a code", type: "text", default: false, required: false, rules: [{ kind: "pattern", regex: "^[A-Z]+$" }] },
+    score: { meaning: "a score", type: "number", default: false, required: false, rules: [{ kind: "range", max: 10 }] },
+    refs: { meaning: "references", type: "list", default: false, required: false, rules: [{ kind: "count", max: 2 }] },
+    created: { meaning: "creation date", type: "date", default: true, required: false, rules: [] },
+  },
+  templates: {},
+};
+
+describe("runWritePipeline tiers (rows 14-23)", () => {
+  async function write(content: string, notePath = "Notes/a.md") {
+    const fixture = await sealedVault(TIERS);
+    const outcome = await runWritePipeline(request(fixture, notePath, content), { now: () => NOW, updateIndex: async () => "skipped" });
+    if (outcome.kind !== "written") throw new Error(`expected a save, got ${outcome.kind}`);
+    const saved = await readFile(path.join(fixture.vault, notePath), "utf8");
+    const gaps = openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events);
+    return { receipt: outcome.receipt, saved, gaps };
+  }
+
+  it("fixes \"12\" for a number key to 12 with one value/fixed gap that keeps the written value", async () => {
+    const { receipt, saved, gaps } = await write("---\nkind: note\nsize: \"12\"\n---\nBody\n");
+    expect(saved).toBe("---\nkind: note\nsize: 12\ncreated: 2026-09-28\n---\nBody\n");
+    expect(receipt).toMatchObject({ warnings: [], fixes: [{ field: "size", kind: "type" }], gaps: [{ axis: "value", kind: "fixed", field: "size" }] });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({ axis: "value", kind: "fixed", wanted: { field: "size", value: "12" }, reason: "fixed: type" });
+    expect(receipt.revision).toBe(sha256(saved));
+  });
+
+  it.each([
+    ["a boolean string for a checkbox", "done: \"true\"", "done: true", "done"],
+    ["a scalar for a list", "topics: ai", "topics: [ai]", "topics"],
+    ["a midnight datetime for a date", "day: 2026-09-29T00:00", "day: 2026-09-29", "day"],
+    ["a number for a text key", "label: 42", "label: \"42\"", "label"],
+  ])("row 17: fixes %s", async (_name, written, expected, field) => {
+    const { receipt, saved } = await write(`---\nkind: note\n${written}\n---\nBody\n`);
+    expect(saved).toBe(`---\nkind: note\n${expected}\ncreated: 2026-09-28\n---\nBody\n`);
+    expect(receipt).toMatchObject({ warnings: [], fixes: [{ field, kind: "type" }] });
+  });
+
+  it.each([
+    ["a number string with trailing text", "size: 12a", "size"],
+    ["a datetime with a time for a date", "day: 2026-09-29T10:00", "day"],
+  ])("row 17: keeps %s as written", async (_name, written, field) => {
+    const { receipt, saved, gaps } = await write(`---\nkind: note\n${written}\n---\nBody\n`);
+    expect(saved).toBe(`---\nkind: note\n${written}\ncreated: 2026-09-28\n---\nBody\n`);
+    expect(receipt).toMatchObject({ warnings: [{ field, kind: "type" }], fixes: [] });
+    expect(gaps[0]).toMatchObject({ axis: "value", kind: "kept", reason: "kept: type" });
+  });
+
+  it("row 18: fixes a spelling that matches one allowed value and keeps one that matches two", async () => {
+    const one = await write("---\nkind: note\nmood: TENSE\n---\nBody\n");
+    expect(one.saved).toBe("---\nkind: note\nmood: Tense\ncreated: 2026-09-28\n---\nBody\n");
+    expect(one.receipt).toMatchObject({ warnings: [], fixes: [{ field: "mood", kind: "not-allowed" }] });
+    expect(one.gaps[0]).toMatchObject({ kind: "fixed", wanted: { field: "mood", value: "TENSE" }, reason: "fixed: not-allowed" });
+    const two = await write("---\nkind: note\nmood: CALM\n---\nBody\n");
+    expect(two.saved).toBe("---\nkind: note\nmood: CALM\ncreated: 2026-09-28\n---\nBody\n");
+    expect(two.receipt).toMatchObject({ warnings: [{ field: "mood", kind: "not-allowed" }], fixes: [] });
+    expect(two.gaps[0]).toMatchObject({ kind: "kept", reason: "kept: not-allowed" });
+  });
+
+  it("row 16: fills a missing required key with its fixed value", async () => {
+    const { receipt, saved, gaps } = await write("Body\n");
+    expect(saved).toBe("---\ncreated: 2026-09-28\nkind: note\n---\nBody\n");
+    expect(receipt).toMatchObject({ warnings: [], fixes: [{ field: "kind", kind: "missing" }] });
+    expect(gaps[0]).toMatchObject({ axis: "property", kind: "fixed", reason: "fixed: missing" });
+  });
+
+  it.each([
+    ["row 19: a value other than the fixed one", "kind: other", "kind", "not-fixed"],
+    ["row 20: a value outside the pattern", "code: abc", "code", "pattern"],
+    ["row 21: a value outside the range", "score: 11", "score", "range"],
+    ["row 22: a list over its count", "refs:\n  - a\n  - b\n  - c", "refs", "count"],
+  ])("%s is saved as written and recorded as kept", async (_name, written, field, kind) => {
+    const head = field === "kind" ? "" : "kind: note\n";
+    const { receipt, saved, gaps } = await write(`---\n${head}${written}\n---\nBody\n`);
+    expect(saved).toBe(`---\n${head}${written}\ncreated: 2026-09-28\n---\nBody\n`);
+    expect(receipt).toMatchObject({ warnings: [{ field, kind }], fixes: [] });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({ kind: "kept", reason: `kept: ${kind}` });
+  });
+
+  it("rows 9 and 15: an unknown key in an unregistered folder is saved verbatim with one property/kept", async () => {
+    const { receipt, saved, gaps } = await write("---\nkind: note\nextra: \"  as written \"\n---\nBody\n", "Loose/a.md");
+    expect(saved).toBe("---\nkind: note\nextra: \"  as written \"\ncreated: 2026-09-28\n---\nBody\n");
+    expect(receipt).toMatchObject({ fixes: [] });
+    expect(gaps.map(gap => [gap.axis, gap.kind, gap.wanted.field])).toEqual([["folder", "kept", "path"], ["property", "kept", "extra"]]);
+  });
+
+  it("row 14: fills a known template variable in the frontmatter before the judge", async () => {
+    const { receipt, saved } = await write("---\nkind: note\nlabel: \"{{title}}\"\n---\nBody\n");
+    expect(saved).toBe("---\nkind: note\nlabel: \"a\"\ncreated: 2026-09-28\n---\nBody\n");
+    expect(receipt).toMatchObject({ warnings: [], fixes: [] });
   });
 });

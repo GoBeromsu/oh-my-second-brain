@@ -3,7 +3,7 @@ import { isControlPath, normalizeFolderPath } from "../vault/paths.js";
 import { isObsidianTag } from "./obsidian.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
 import type {
-  ContractView, FieldType, JsonScalar, JudgeInput, Rule,
+  ContractView, FieldType, JsonScalar, JudgeInput, PropertyContract, Rule,
   VaultContract, Verdict, Violation, ViolationKind,
 } from "./types.js";
 import { verdictOf } from "./types.js";
@@ -35,6 +35,11 @@ function matchesType(value: unknown, type: FieldType): boolean {
   if (type === "list" || type === "multi") return true;
   if (!value.every(member => typeof member === "string")) return false;
   return type !== "tags" || value.every(member => isObsidianTag(member as string));
+}
+
+/** True when the type holds one string: a number written for it can be read as that string. */
+export function stringTyped(type: FieldType): boolean {
+  return STRING_TYPES.has(type);
 }
 
 /** True when a value of this type always reaches the rules as one member, never a list. */
@@ -102,6 +107,14 @@ function valueKinds(value: unknown, type: FieldType | null, rules: readonly Rule
     if (kind !== null) kinds.push(kind);
   }
   return kinds;
+}
+
+/**
+ * The kinds a present value meets against one property's type and rules, as the judge
+ * reports them: a lossless fix is only taken when it clears the kind it was made for.
+ */
+export function propertyKinds(value: unknown, property: Pick<PropertyContract, "type" | "rules">): readonly ViolationKind[] {
+  return valueKinds(value, property.type, property.rules);
 }
 
 function hasVariable(value: unknown): boolean {

@@ -981,16 +981,22 @@ Valid frontmatter remains available to retrieve.
       expect(createdReceipt.contractRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
       expect(statSync(note).mode & 0o777).toBe(0o644);
 
-      // A new contract gap is not a refusal: the note is kept as a draft outside the vault,
-      // the result is not an error, and it names {field, kind} only. The ifMatch check runs
-      // first, so the overwrite names the current revision to reach the judge.
+      // A value outside the allowed values is not a refusal: it would be saved as written
+      // with a warning that names {field, kind} only, never the value.
       await chmod(note, 0o600);
       const before = await readFile(note);
-      const drafted = await write({ path: "Projects/a.md", content: "---\nstatus: nope\n---\n# Goals\n", ifMatch: createdReceipt.revision });
+      const kept = await write({ path: "Projects/a.md", content: "---\nstatus: nope\n---\n# Goals\n", ifMatch: createdReceipt.revision, check: true });
+      expect(kept.isError).toBeFalsy();
+      expect(textPayload(kept)).toMatchObject({ status: "checked", ok: true, warnings: [{ field: "status", kind: "not-allowed" }], fixes: [] });
+      expect(JSON.stringify(textPayload(kept))).not.toContain("nope");
+
+      // Frontmatter that does not parse is kept as a draft outside the vault; the result is
+      // not an error. The ifMatch check runs first, so the overwrite names the current revision.
+      const drafted = await write({ path: "Projects/a.md", content: "---\nstatus: [nope\n---\n# Goals\n", ifMatch: createdReceipt.revision });
       expect(drafted.isError).toBeFalsy();
       const draftedPayload = textPayload(drafted);
       expect(draftedPayload).toEqual({
-        ok: false, status: "drafted", draftRef: expect.any(String), warnings: [{ field: "status", kind: "not-allowed" }],
+        ok: false, status: "drafted", draftRef: expect.any(String), warnings: [{ field: "content", kind: "yaml-syntax" }],
       });
       expect(JSON.stringify(draftedPayload)).not.toContain("active");
       expect(JSON.stringify(draftedPayload)).not.toContain(fixture.vaultId);

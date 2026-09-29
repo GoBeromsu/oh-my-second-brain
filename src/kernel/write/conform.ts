@@ -1,11 +1,12 @@
 import { parseNote } from "../conventions/frontmatter.js";
 import { scanContractHeadings } from "../contract/scan.js";
-import type { ContractView, FieldType, TemplateContract } from "../contract/types.js";
+import { listTyped } from "./coerce.js";
+import type { ContractView, FieldType, PropertyContract, TemplateContract } from "../contract/types.js";
 import type { ConformChange } from "./receipt.js";
 
 /**
- * Mechanical conformance before the judge: date and title variables, date defaults a new
- * note leaves out, and the chosen template's missing heading skeleton. It never calls the
+ * Mechanical conformance before the judge: date and title variables, date defaults and
+ * fixed-rule defaults a new note leaves out, and the chosen template's missing heading skeleton. It never calls the
  * judge, never touches an existing value and never supplies a property the contract or a
  * template requires, so a missing required property is still reported after conform. The
  * heading skeleton is the chosen template's scaffold; the judge never checks headings.
@@ -104,6 +105,13 @@ function defaultValue(type: FieldType, now: Date): string | null {
   return null;
 }
 
+/** The one value a rule fixes, as YAML (JSON is YAML), or null when the rules leave a choice. */
+function fixedDefault(property: PropertyContract): string | null {
+  const [rule] = property.rules;
+  if (property.rules.length !== 1 || rule?.kind !== "fixed") return null;
+  return JSON.stringify(listTyped(property.type) ? [rule.value] : rule.value);
+}
+
 /**
  * Names a template requires: the chosen template's, or every template's when none is
  * chosen. The writer is asked for these by the scaffold, so a date is never invented for them.
@@ -114,7 +122,10 @@ function templateRequired(options: ConformOptions, template: TemplateContract | 
   return new Set(Object.values(options.view.contract.templates).flatMap(candidate => candidate.requiredProperties));
 }
 
-/** New notes only: a missing unconstrained, unrequired date or datetime default gets `now`. */
+/**
+ * New notes only: a missing unrequired default gets `now` when it is an unconstrained date
+ * or datetime, or the value its only rule fixes.
+ */
 function addDefaults(content: string, options: ConformOptions, applied: ConformChange[]): string {
   if (!options.isNew || options.view.state !== "sealed") return content;
   const parsed = parseNote(content);
@@ -125,8 +136,8 @@ function addDefaults(content: string, options: ConformOptions, applied: ConformC
   const lines: string[] = [];
   for (const [name, property] of Object.entries(options.view.contract.properties ?? {})) {
     if (!property.default || property.required || required.has(name) || Object.hasOwn(parsed.frontmatter, name)) continue;
-    if (property.rules.length > 0 || (template !== undefined && Object.hasOwn(template.narrowedRules, name))) continue;
-    const value = defaultValue(property.type, options.now);
+    if (template !== undefined && Object.hasOwn(template.narrowedRules, name)) continue;
+    const value = property.rules.length > 0 ? fixedDefault(property) : defaultValue(property.type, options.now);
     if (value === null) continue;
     lines.push(`${PLAIN_KEY.test(name) ? name : JSON.stringify(name)}: ${value}`);
     applied.push({ field: name, action: "default" });

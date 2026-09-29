@@ -345,7 +345,7 @@ describe("the judge ignores history", () => {
     expect(bodyOnly.verdict.warnings).toEqual([{ field: "legacy", kind: "unknown-property" }, { field: "status", kind: "missing" }]);
     expect(bodyOnly).toMatchObject({ outcome: "allow", findings: [] });
     const added = decideWrite(ready("Projects/a.md", legacy), "---\nlegacy: kept\nowner: me\nextra: 1\n---\nold body\n", { repair: false });
-    expect(added).toMatchObject({ outcome: "allow", findings: [{ axis: "property", kind: "no-fit", wanted: { field: "extra", value: 1 } }] });
+    expect(added).toMatchObject({ outcome: "allow", findings: [{ axis: "property", kind: "kept", wanted: { field: "extra", value: 1 } }] });
     const fresh = decideWrite(ready("Projects/a.md", undefined), "---\nlegacy: kept\n---\nbody\n", { repair: false });
     expect(fresh.outcome === "allow" ? fresh.findings.map(finding => finding.wanted.field) : null).toEqual(["legacy", "status"]);
   });

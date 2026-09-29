@@ -90,13 +90,13 @@ describe("Issue #58: Verified-target admission", () => {
     try {
       await client.connect(transport);
 
-      // A contract gap keeps the note as a draft outside the vault; it is not an error.
+      // Frontmatter that does not parse keeps the note as a draft outside the vault; it is not an error.
       const drafted = await client.callTool({
         name: "write",
-        arguments: { path: "references/new-note.md", content: "---\nstatus: maybe\n---\n" },
+        arguments: { path: "references/new-note.md", content: "---\nstatus: [maybe\n---\n" },
       });
       expect(drafted.isError).toBeFalsy();
-      expect(textPayload(drafted)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "status", kind: "not-allowed" }] });
+      expect(textPayload(drafted)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "content", kind: "yaml-syntax" }] });
       await expect(readFile(note, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
       // A safety refusal is still an error and writes nothing.
