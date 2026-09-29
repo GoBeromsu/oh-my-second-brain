@@ -80,7 +80,7 @@ export function quorumDecision(count: Tally): QuorumDecision {
 }
 
 /** Which way the candidate moves from the parent; see mutation-direction.ts. */
-export function requestDirection(request: RequestRecord, parent: VaultContract, candidate: VaultContract): Direction {
+export function requestDirection(request: Pick<RequestRecord, "kind" | "mutations">, parent: VaultContract, candidate: VaultContract): Direction {
   if (!isNonLoosening(parent, candidate)) return "loosening";
   if (request.kind === "revert") return canonicalJson(parent) === canonicalJson(candidate) ? "neutral" : "tightening";
   return classifyAll(request.mutations, parent).direction;
