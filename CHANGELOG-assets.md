@@ -4,7 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
-- **The doctor skill covers contract evolution.** It describes `evolve`, `evolve-verdict` and `revert-propose`, keeps the maker from judging its own request, tells a host without independent evaluator subagents to stop and send the owner to `oms setup`, and sends `reclaim-evolution-lock` and `lineage-reanchor` to the owner's terminal.
+- **The doctor skill covers contract evolution.** It describes `evolve`, `evolve-verdict` and `revert-propose`, requires the maker's session on `evolve` and keeps the maker from judging its own request, explains the stage-2 refusal of an overlapping or drifting candidate, says the quorum is host-attested and cannot be verified by OMS, which is why autonomy is off by default, tells a host without independent evaluator subagents to stop and send the owner to `oms setup`, and sends `reclaim-evolution-lock` and `lineage-reanchor` to the owner's terminal.
 - **The setup and interview skills cover folders and properties only.** The setup skill drops the template-interpretation steps (`--interpretations`, `observedHash`, `interpretation-required`, `interpretation-rejected`) and describes `oms setup extract --template <name>` as a scaffold preview; the interview skill drops the `interpretations` parameter. The write, search and doctor skills describe templates as live files in the template folder that scaffold new notes and are never judged.
 - **The setup skill no longer describes a `template-tightened` refusal.** Reseal no longer refuses a template answered more strictly, because the judge never reads a template.
 
