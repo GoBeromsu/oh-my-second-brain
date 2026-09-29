@@ -1,11 +1,11 @@
-import { insideApplyFolder, normalizePath, singleValued } from "./judge.js";
+import { normalizePath, singleValued } from "./judge.js";
 import { patternRefusal } from "./pattern.js";
 import type { FieldType, JsonScalar, PropertyContract, Rule, TemplateContract, VaultContract } from "./types.js";
 
 /**
  * Monotonic reseal check for a contract sealed without a terminal: the next contract
- * may add entries and tighten folder and property rules, never loosen or change a sealed
- * template (not even to make it stricter). Each change names a field path and a kind only,
+ * may add entries and tighten folder and property rules, never loosen them or drop a
+ * sealed template source. Each change names a field path and a kind only,
  * never a value, so it can be shown to an agent.
  */
 
@@ -21,11 +21,7 @@ export type LooseningKind =
   | "pattern-changed"
   | "range-widened"
   | "count-widened"
-  | "heading-dropped"
-  | "apply-folder-changed"
-  | "apply-folder-overlap"
-  | "pattern-unsafe"
-  | "template-tightened";
+  | "pattern-unsafe";
 
 export interface LooseningChange {
   readonly field: string;
@@ -88,80 +84,15 @@ function propertyChanges(name: string, sealed: PropertyContract, next: PropertyC
   return [...changes, ...ruleChanges(field, sealed.rules, next.rules, next.type)];
 }
 
-function typeOf(properties: VaultContract["properties"], name: string): FieldType | null {
-  return properties !== null && Object.hasOwn(properties, name) ? properties[name]!.type : null;
-}
-
 /**
- * The judge enforces a scoped template on an edit only when the previous content passed
- * it, so a stricter template that existing notes fail stops being enforced for them.
- * A sealed template therefore stays exactly as strict: anything it drops is loosening
- * and anything it adds is `template-tightened`. Only a fixed value and an allowed list
- * that accept the same single value stand in for each other.
+ * The judge never reads a template, so only its source matters on a reseal: search
+ * exclusion is built from sealed sources, and a removed template or a moved source
+ * exposes the old file.
  */
-function templateChanges(name: string, sealed: TemplateContract, next: TemplateContract | undefined, sealedProperties: VaultContract["properties"], properties: VaultContract["properties"]): LooseningChange[] {
+function templateChanges(name: string, sealed: TemplateContract, next: TemplateContract | undefined): LooseningChange[] {
   const field = `templates.${name}`;
   if (next === undefined) return [{ field, kind: "removed" }];
-  const changes: LooseningChange[] = [];
-  // Search exclusion is built from sealed sources, so a moved source exposes the old file.
-  if (normalizePath(next.source) !== normalizePath(sealed.source)) changes.push({ field: `${field}.source`, kind: "removed" });
-  for (const property of sealed.requiredProperties) {
-    if (!next.requiredProperties.includes(property)) changes.push({ field: `${field}.requiredProperties.${property}`, kind: "required-dropped" });
-  }
-  for (const property of next.requiredProperties) {
-    if (!sealed.requiredProperties.includes(property)) changes.push({ field: `${field}.requiredProperties.${property}`, kind: "template-tightened" });
-  }
-  const narrowed = [...new Set([...Object.keys(sealed.narrowedRules), ...Object.keys(next.narrowedRules)])];
-  for (const property of narrowed) {
-    const ruleField = `${field}.narrowedRules.${property}`;
-    const type = typeOf(properties, property);
-    const before = Object.hasOwn(sealed.narrowedRules, property) ? sealed.narrowedRules[property]! : undefined;
-    const after = Object.hasOwn(next.narrowedRules, property) ? next.narrowedRules[property]! : undefined;
-    if (before === undefined) {
-      changes.push({ field: ruleField, kind: "template-tightened" });
-      continue;
-    }
-    const dropped = ruleChanges(ruleField, before, after ?? [], type);
-    // An empty rule list still checks the property's type, so dropping it loosens too.
-    changes.push(...dropped.length === 0 && after === undefined ? [{ field: ruleField, kind: "rule-removed" as const }] : dropped);
-    // A rule changed both ways is already reported as loosening.
-    if (after === undefined || dropped.length > 0) continue;
-    // The judge checks a narrowed value's type first, so a newly known type is stricter.
-    const tightened = typeOf(sealedProperties, property) === null && type !== null
-      || after.some(rule => !before.some(known => implies(known, rule, singleValued(type))));
-    if (tightened) changes.push({ field: ruleField, kind: "template-tightened" });
-  }
-  const sealedHeadings = new Set(sealed.requiredHeadings.map(heading => heading.normalize("NFC")));
-  const nextHeadings = new Set(next.requiredHeadings.map(heading => heading.normalize("NFC")));
-  for (const heading of sealed.requiredHeadings) {
-    if (!nextHeadings.has(heading.normalize("NFC"))) changes.push({ field: `${field}.requiredHeadings.${heading}`, kind: "heading-dropped" });
-  }
-  for (const heading of next.requiredHeadings) {
-    if (!sealedHeadings.has(heading.normalize("NFC"))) changes.push({ field: `${field}.requiredHeadings.${heading}`, kind: "template-tightened" });
-  }
-  if (sealed.applyFolder !== undefined && (next.applyFolder === undefined || normalizePath(next.applyFolder) !== normalizePath(sealed.applyFolder))) changes.push({ field: `${field}.applyFolder`, kind: "apply-folder-changed" });
-  return changes;
-}
-
-/** Two apply folders overlap when they are equal or one holds the other (the vault root holds every folder). */
-function foldersOverlap(left: string, right: string): boolean {
-  return insideApplyFolder(`${left}/_`, right) || insideApplyFolder(`${right}/_`, left);
-}
-
-/**
- * A template newly scoped to a folder becomes a candidate on edits there, and the judge
- * passes an edit when any candidate passes, so it may not overlap a sealed scoped template.
- */
-function overlapChanges(sealed: VaultContract, next: VaultContract): LooseningChange[] {
-  const scoped = Object.values(sealed.templates).flatMap(template => template.applyFolder === undefined ? [] : [template.applyFolder]);
-  const changes: LooseningChange[] = [];
-  for (const [name, template] of Object.entries(next.templates)) {
-    if (template.applyFolder === undefined) continue;
-    const before = Object.hasOwn(sealed.templates, name) ? sealed.templates[name] : undefined;
-    if (before?.applyFolder !== undefined) continue;
-    if (scoped.some(folder => foldersOverlap(folder, template.applyFolder!))) changes.push({ field: `templates.${name}.applyFolder`, kind: "apply-folder-overlap" });
-  }
-  return changes;
+  return normalizePath(next.source) === normalizePath(sealed.source) ? [] : [{ field: `${field}.source`, kind: "removed" }];
 }
 
 /**
@@ -170,25 +101,19 @@ function overlapChanges(sealed: VaultContract, next: VaultContract): LooseningCh
  * any replacement is looser, so only the owner at a terminal can replace it.
  */
 export function unsafePatternChanges(contract: VaultContract): LooseningChange[] {
-  const ruleSets: (readonly [string, readonly Rule[]])[] = [
-    ...Object.entries(contract.properties ?? {}).map(([name, property]) => [`properties.${name}`, property.rules] as const),
-    ...Object.entries(contract.templates).flatMap(([name, template]) =>
-      Object.entries(template.narrowedRules).map(([property, rules]) => [`templates.${name}.narrowedRules.${property}`, rules] as const)),
-  ];
-  return ruleSets
+  return Object.entries(contract.properties ?? {})
+    .map(([name, property]) => [`properties.${name}`, property.rules] as const)
     .filter(([, rules]) => rules.some(rule => rule.kind === "pattern" && patternRefusal(rule.regex) !== null))
     .map(([field]) => ({ field, kind: "pattern-unsafe" as const }));
 }
 
 /**
- * Every way `next` accepts a note or exposes a folder that `sealed` did not.
- * Tighter folder and property rules are not changes: the judge checks an edit's changed
- * values against the next rules and skips unchanged ones under either contract. Adding a
- * folder, a property or a template is not a change either, although it widens a closed
- * axis by registering a new entry: that is the "add" in add-or-tighten. A sealed template
- * must stay exactly as strict (see templateChanges). A newly scoped template that overlaps
- * a sealed scoped template's folder is a change, since it could pass an edit the sealed
- * one refuses. A changed property type counts as loosening even when it would be narrower.
+ * Every way `next` accepts a note or exposes a file that `sealed` did not.
+ * Tighter folder and property rules are not changes: a write records only the warnings
+ * the note did not already have, so notes that fail a stricter rule are not blocked.
+ * Adding a folder, a property or a template is not a change either, although it widens a
+ * closed axis by registering a new entry: that is the "add" in add-or-tighten. A changed
+ * property type counts as loosening even when it would be narrower.
  */
 export function looseningChanges(sealed: VaultContract, next: VaultContract): LooseningChange[] {
   const changes: LooseningChange[] = [];
@@ -211,9 +136,9 @@ export function looseningChanges(sealed: VaultContract, next: VaultContract): Lo
     }
   }
   for (const [name, entry] of Object.entries(sealed.templates)) {
-    changes.push(...templateChanges(name, entry, Object.hasOwn(next.templates, name) ? next.templates[name] : undefined, sealed.properties, next.properties));
+    changes.push(...templateChanges(name, entry, Object.hasOwn(next.templates, name) ? next.templates[name] : undefined));
   }
-  return [...changes, ...overlapChanges(sealed, next)];
+  return changes;
 }
 
 export function isNonLoosening(sealed: VaultContract, next: VaultContract): boolean {

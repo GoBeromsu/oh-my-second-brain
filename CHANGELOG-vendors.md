@@ -4,6 +4,7 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- **The Claude guard warns with the whole verdict on an edit.** Since the judge is stateless, `oms hook pre` returns every warning the edited note carries, while the gap ledger still records only the warnings the edit added.
 - **The Claude guard allows a write with warnings instead of denying it.** `oms hook pre` now denies only on a safety refusal (control path, unsafe path, tampered contract, unparseable or truncated input). Any other finding allows the tool call and returns the warnings as `{systemMessage, hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext}}`, without a `permissionDecision`, so the normal permission flow still applies and Claude sees what the note breaks. A broken contract, an unreadable note, or an edit whose result cannot be rebuilt warns instead of denying. Warnings the write adds are recorded as kept gaps; a ledger that cannot be written never denies. `oms-guard.mjs` forwards exactly that warning shape verbatim and still treats any other output as `malformed-output`. After upgrading, run `oms setup host sync` so the installed guard understands warnings; an older guard allows the write but drops the warning and logs `malformed-output`.
 
 ## [0.19.0] - 2026-09-28

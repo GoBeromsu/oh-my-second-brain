@@ -1,7 +1,7 @@
 import { compareCodePoints } from "../conventions/canonical.js";
 import { normalizePath } from "../contract/judge.js";
 import { buildRedactor, hiddenValuesOf, publicTokensOf, REDACTED, redactResponse, type Redactor } from "../contract/redact.js";
-import type { ContractView, FieldType, JsonScalar, Rule, TemplateContract, VaultContract } from "../contract/types.js";
+import type { ContractView, FieldType, JsonScalar, Rule, VaultContract } from "../contract/types.js";
 
 /**
  * The frame an agent writes into: what the target folder and each property mean, the
@@ -69,18 +69,18 @@ function redactValue(value: JsonScalar, redactor: Redactor): JsonScalar {
   return redactor(String(value)) === String(value) ? value : REDACTED;
 }
 
-function frameProperties(contract: VaultContract, template: TemplateContract | undefined, redactor: Redactor): FrameProperty[] {
+/** The judge reads only the property contract, so a template never makes a property required or narrower here. */
+function frameProperties(contract: VaultContract, redactor: Redactor): FrameProperty[] {
   const entries = Object.entries(contract.properties ?? {}).sort(([left], [right]) => compareCodePoints(left, right));
   return entries.map(([name, property]) => {
-    const narrowed = template !== undefined && Object.hasOwn(template.narrowedRules, name) ? template.narrowedRules[name]! : [];
-    const allowed = allowedValues(narrowed) ?? allowedValues(property.rules);
+    const allowed = allowedValues(property.rules);
     return {
       name,
       meaning: property.meaning,
       type: property.type,
-      required: property.required || (template?.requiredProperties.includes(name) ?? false),
+      required: property.required,
       default: property.default,
-      constrained: property.rules.length > 0 || narrowed.length > 0,
+      constrained: property.rules.length > 0,
       allowed: allowed === null ? null : allowed.map(value => redactValue(value, redactor)),
     };
   });
@@ -92,7 +92,7 @@ export function frameFor(view: ContractView, options: FrameOptions = {}): WriteF
   const name = options.template;
   const template = name !== undefined && Object.hasOwn(contract.templates, name) ? contract.templates[name] : undefined;
   const redactor = buildRedactor(hiddenValuesOf(contract), { publicTokens: publicTokensOf(contract) });
-  const properties = frameProperties(contract, template, redactor);
+  const properties = frameProperties(contract, redactor);
   const frame: WriteFrame = {
     contract: "sealed",
     folder: nearestFolder(contract, options.folder),

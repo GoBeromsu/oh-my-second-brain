@@ -537,7 +537,7 @@ describe("runWritePipeline", () => {
     expect(retried).toMatchObject({ kind: "written", receipt: { path: "Projects/a.md" } });
   });
 
-  it("never defaults a date property a template requires, with or without the template", async () => {
+  it("never defaults a date property a template requires, and never judges the template's requirement", async () => {
     const required: VaultContract = {
       ...CONTRACT,
       templates: { project: { ...CONTRACT.templates["project"]!, requiredProperties: ["created"] } },
@@ -547,14 +547,37 @@ describe("runWritePipeline", () => {
     for (const template of ["project", undefined]) {
       const extra = template === undefined ? {} : { template };
       const checked = await runWritePipeline(request(fixture, "Projects/a.md", content, { ...extra, check: true }), { now: () => NOW });
-      expect(checked).toMatchObject({ kind: "checked", check: { conformed: [] } });
-      if (template !== undefined) {
-        expect(checked).toMatchObject({ check: { ok: true, violations: [], warnings: [{ field: "created", kind: "missing" }] } });
-        const outcome = await runWritePipeline(request(fixture, "Projects/a.md", content, extra), { now: () => NOW });
-        expect(outcome).toEqual({ kind: "drafted", draftRef: expect.stringMatching(/^draft-/), warnings: [expect.objectContaining({ field: "created", kind: "missing" })] });
-      }
+      expect(checked).toMatchObject({ kind: "checked", check: { ok: true, violations: [], warnings: [], conformed: [] } });
     }
-    expect(await readdir(fixture.vault)).not.toContain("Projects");
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", content, { template: "project" }), { now: () => NOW, updateIndex: async () => "skipped" });
+    expect(outcome).toMatchObject({ kind: "written", receipt: { warnings: [] } });
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe(content);
+  });
+
+  it("records nothing when an edit keeps a legacy note's unknown key, and exactly one gap for a second unknown key", async () => {
+    const fixture = await sealedVault();
+    await mkdir(path.join(fixture.vault, "Projects"));
+    const target = path.join(fixture.vault, "Projects", "a.md");
+    const legacy = "---\ncreated: 2026-09-01\nlegacy: kept\n---\noriginal\n";
+    await writeFile(target, legacy);
+    const options = { now: () => NOW, updateIndex: async () => "skipped" as const, gapLedger: { now: () => 7, newId: () => "gap-1" } };
+
+    const edited = "---\ncreated: 2026-09-01\nlegacy: kept\n---\nchanged\n";
+    const kept = await runWritePipeline(request(fixture, "Projects/a.md", edited, { ifMatch: sha256(legacy) }), options);
+    expect(kept).toMatchObject({ kind: "written", receipt: { warnings: [{ field: "legacy", kind: "unknown-property" }] } });
+    expect(kept.kind === "written" ? kept.receipt.gaps ?? [] : null).toEqual([]);
+    expect(await readFile(target, "utf8")).toBe(edited);
+    expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
+
+    const added = await runWritePipeline(
+      request(fixture, "Projects/a.md", "---\ncreated: 2026-09-01\nlegacy: kept\nextra: new\n---\nchanged\n", { ifMatch: sha256(edited) }),
+      options,
+    );
+    expect(added).toMatchObject({ kind: "written", receipt: { gaps: [{ id: "gap-1", axis: "property", kind: "no-fit", field: "extra" }] } });
+    expect(await readFile(target, "utf8")).toBe(edited);
+    const events = (await readGapLedger(fixture.root, fixture.vaultId)).events;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "gap", wanted: { field: "extra", value: "new" }, reason: "dropped: unknown-property" });
   });
 
   it("returns changed when another writer creates the note between the judge and the save", async () => {

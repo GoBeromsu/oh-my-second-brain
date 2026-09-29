@@ -1,18 +1,16 @@
 import { compareCodePoints } from "../conventions/canonical.js";
-import { parseNote } from "../conventions/frontmatter.js";
 import { isControlPath, normalizeFolderPath } from "../vault/paths.js";
 import { isObsidianTag } from "./obsidian.js";
 import { PATTERN_SOURCE_LIMIT } from "./pattern.js";
-import { scanContractHeadings } from "./scan.js";
 import type {
-  ContractView, FieldType, JsonScalar, JudgeInput, PropertyContract, Rule,
-  TemplateContract, VaultContract, Verdict, Violation, ViolationKind,
+  ContractView, FieldType, JsonScalar, JudgeInput, Rule,
+  VaultContract, Verdict, Violation, ViolationKind,
 } from "./types.js";
 import { verdictOf } from "./types.js";
 
 /**
  * Pure judgement of a write against a vault's contract view. It never throws, writes,
- * repairs or renders. Each finding is `{field, kind}` only: no value, rule or template name.
+ * repairs or renders. Each finding is `{field, kind}` only: no value or rule.
  */
 
 const STRING_TYPES = new Set<FieldType>(["text", "string", "select", "file"]);
@@ -157,125 +155,39 @@ function registered(path: string, folders: Readonly<Record<string, unknown>>): b
   return false;
 }
 
-interface Note {
-  readonly frontmatter: Readonly<Record<string, unknown>>;
-  readonly body: string;
-}
-
-function headings(body: string): readonly string[] | null {
-  try {
-    return scanContractHeadings(body, true).map(heading => heading.title.normalize("NFC"));
-  } catch {
-    return null;
-  }
-}
-
-/** What a note lacks against one template. Empty means the note passes it. */
-function templateViolations(template: TemplateContract, note: Note, properties: Readonly<Record<string, PropertyContract>> | null): Violation[] {
-  const found = new Collector();
-  for (const name of template.requiredProperties) {
-    if (!Object.hasOwn(note.frontmatter, name) || empty(note.frontmatter[name])) found.add(name, "missing");
-  }
-  for (const [name, rules] of Object.entries(template.narrowedRules)) {
-    if (!Object.hasOwn(note.frontmatter, name)) continue;
-    const type = properties !== null && Object.hasOwn(properties, name) ? properties[name]!.type : null;
-    for (const kind of valueKinds(note.frontmatter[name], type, rules)) found.add(name, kind);
-  }
-  const observed = headings(note.body);
-  for (const heading of template.requiredHeadings) {
-    if (observed === null || !observed.includes(heading.normalize("NFC"))) found.add(heading, "heading-missing");
-  }
-  for (const [name, value] of Object.entries(note.frontmatter)) {
-    if (hasVariable(value)) found.add(name, "unsubstituted-variable");
-  }
-  if (VARIABLE.test(note.body)) found.add("content", "unsubstituted-variable");
-  return found.violations;
-}
-
-/** Least-failing candidate; ties break by template name code point. */
-function leastFailing(candidates: readonly (readonly [string, readonly Violation[]])[]): readonly Violation[] {
-  const sorted = [...candidates].sort(([leftName, left], [rightName, right]) => left.length - right.length || compareCodePoints(leftName, rightName));
-  return sorted[0]?.[1] ?? [];
-}
-
-function parsePrevious(content: string): Note | null {
-  const parsed = parseNote(content);
-  return parsed.diagnostics.length > 0 ? null : { frontmatter: parsed.frontmatter, body: parsed.body };
-}
-
-function templateAxis(input: JudgeInput, contract: VaultContract, selected: TemplateContract | undefined, previous: Note | null, found: Collector): void {
-  const note: Note = { frontmatter: input.frontmatter, body: input.body };
-  const candidates = Object.entries(contract.templates)
-    .filter(([, template]) => template.applyFolder !== undefined && insideApplyFolder(input.path, template.applyFolder))
-    .sort(([left], [right]) => compareCodePoints(left, right));
-  const passedBefore = previous === null ? [] : candidates.filter(([, template]) => templateViolations(template, previous, contract.properties).length === 0);
-  const passedNames = new Set(passedBefore.map(([name]) => name));
-
-  if (input.selectedTemplate === undefined || selected === undefined) {
-    if (passedBefore.length === 0) return;
-    const results = passedBefore.map(([name, template]) => [name, templateViolations(template, note, contract.properties)] as const);
-    if (results.some(([, violations]) => violations.length === 0)) return;
-    for (const violation of leastFailing(results)) found.add(violation.field, violation.kind);
-    return;
-  }
-  if (input.previousContent !== undefined && passedBefore.length > 0 && !passedNames.has(input.selectedTemplate)) {
-    found.add("template", "template-mismatch");
-    return;
-  }
-  for (const violation of templateViolations(selected, note, contract.properties)) found.add(violation.field, violation.kind);
-}
-
-function sameValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 /**
- * A new note is checked in full. An edit is checked only for what it changes: a key it
- * adds, a required key it removes or empties, and a value it changes. A legacy note
- * that already carries an unregistered key or lacks a required one stays editable.
+ * Every call checks the whole note: the verdict depends only on the contract, the path and
+ * the frontmatter. What an edit newly breaks is the caller's delta against the verdict on
+ * the previous note, never the judge's.
  */
 function sealedJudge(input: JudgeInput, contract: VaultContract, found: Collector): string[] {
   if (contract.folders !== null && !registered(input.path, contract.folders)) found.add("path", "unregistered-folder");
 
-  const previous = input.previousContent === undefined ? null : parsePrevious(input.previousContent);
-  const before = previous?.frontmatter ?? null;
-  const edit = input.previousContent !== undefined;
   const missingDefaults: string[] = [];
   const properties = contract.properties;
   if (properties !== null) {
     for (const name of Object.keys(input.frontmatter)) {
-      if (Object.hasOwn(properties, name)) continue;
-      if (!edit || before === null || !Object.hasOwn(before, name)) found.add(name, "unknown-property");
+      if (!Object.hasOwn(properties, name)) found.add(name, "unknown-property");
     }
     for (const [name, property] of Object.entries(properties).sort(([left], [right]) => compareCodePoints(left, right))) {
       const present = Object.hasOwn(input.frontmatter, name);
-      const filledBefore = before !== null && Object.hasOwn(before, name) && !empty(before[name]);
       if (!present || empty(input.frontmatter[name])) {
-        if (property.required && (!edit || before === null || filledBefore)) found.add(name, "missing");
+        if (property.required) found.add(name, "missing");
         else if (!present && property.default) missingDefaults.push(name);
         continue;
       }
-      if (edit && before !== null && Object.hasOwn(before, name) && sameValue(before[name], input.frontmatter[name])) continue;
       for (const kind of valueKinds(input.frontmatter[name], property.type, property.rules)) found.add(name, kind);
     }
   }
-
-  let selected: TemplateContract | undefined;
-  if (input.selectedTemplate !== undefined) {
-    selected = Object.hasOwn(contract.templates, input.selectedTemplate) ? contract.templates[input.selectedTemplate] : undefined;
-    if (selected === undefined) {
-      found.add("template", "template-mismatch");
-      return missingDefaults;
-    }
-    if (selected.applyFolder !== undefined && !insideApplyFolder(input.path, selected.applyFolder)) found.add("path", "folder-mismatch");
+  for (const [name, value] of Object.entries(input.frontmatter)) {
+    if (hasVariable(value)) found.add(name, "unsubstituted-variable");
   }
-  templateAxis(input, contract, selected, previous, found);
   return missingDefaults;
 }
 
 /**
- * Rule order: base path rules → seal view → folder axis → property axis → template axis
- * (an unknown selected template, one used outside its folder, then its own rules). Every finding is collected, then split by severity: only a path rule or a
+ * Rule order: base path rules → seal view → folder axis → property axis (value rules,
+ * then unsubstituted variables). Every finding is collected, then split by severity: only a path rule or a
  * tampered seal refuses. An open or broken seal cannot judge the axes, so it adds one
  * warning and nothing else.
  */

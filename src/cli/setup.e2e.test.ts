@@ -215,7 +215,7 @@ describe("oms setup end to end", () => {
       expect(await storeFiles(home)).toEqual([]);
     });
 
-    it("seals a first contract from answers, reseals a changed template answered as before and refuses a stricter or looser one without its values", async () => {
+    it("seals a first contract from answers, reseals a changed template answered more strictly or more loosely, and refuses a removed one, without its values", async () => {
       const { home, vault, answersFile, interpreting } = await agentVault();
       const first = runCli(home, ["setup", "--answers", await answersFile(FIRST), ...await interpreting(), "--vault", vault]);
       expect(first.status, first.stdout + first.stderr).toBe(0);
@@ -223,8 +223,11 @@ describe("oms setup end to end", () => {
       expect(first.stdout).not.toContain(HIDDEN);
 
       await writeFile(path.join(vault, "Templates", "Meeting.md"), WITH_NOTES);
-      const firstFiles = await storeFiles(home);
-      // A sealed template stays exactly as strict: the judge enforces it only where the previous content passed it.
+      const questions = runCli(home, ["setup", "--questions", ...await interpreting(WITH_NOTES), "--vault", vault]);
+      expect(questions.status).toBe(0);
+      // The default for the literal's allowed values would be the hidden value; it is never printed.
+      expect(questions.stdout).not.toContain(HIDDEN);
+      // The judge never reads a template, so a stricter template answer is not loosening.
       const tighterTemplate = {
         "template:Meeting:interpretation": true,
         "template:Meeting:register": true,
@@ -237,37 +240,11 @@ describe("oms setup end to end", () => {
         seal: true,
       };
       const tightened = runCli(home, ["setup", "--answers", await answersFile(tighterTemplate), ...await interpreting(WITH_NOTES), "--vault", vault]);
-      expect(tightened.status).toBe(1);
-      expect(json(tightened)).toMatchObject({
-        status: "loosening",
-        changes: [
-          { field: "templates.Meeting.narrowedRules.status", kind: "template-tightened" },
-          { field: "templates.Meeting.requiredHeadings.Notes", kind: "template-tightened" },
-        ],
-      });
+      expect(tightened.status, tightened.stdout + tightened.stderr).toBe(0);
+      expect(json(tightened)["status"]).toBe("sealed");
       expect(tightened.stdout).not.toContain(HIDDEN);
-      expect(await storeFiles(home)).toEqual(firstFiles);
 
-      const unchanged = {
-        "template:Meeting:interpretation": true,
-        "template:Meeting:register": true,
-        "template:Meeting:field:status:required": true,
-        "template:Meeting:field:status:literal": "one-of-allowed",
-        "template:Meeting:field:status:allowed": `open, ${HIDDEN}`,
-        "template:Meeting:heading:Agenda": true,
-        "template:Meeting:heading:Notes": false,
-        "template:Meeting:apply-folder": "Projects",
-        seal: true,
-      };
-      const questions = runCli(home, ["setup", "--questions", ...await interpreting(WITH_NOTES), "--vault", vault]);
-      expect(questions.status).toBe(0);
-      // The default for the literal's allowed values would be the hidden value; it is never printed.
-      expect(questions.stdout).not.toContain(HIDDEN);
-      const second = runCli(home, ["setup", "--answers", await answersFile(unchanged), ...await interpreting(WITH_NOTES), "--vault", vault]);
-      expect(second.status, second.stdout + second.stderr).toBe(0);
-      expect(json(second)["status"]).toBe("sealed");
-
-      const sealedFiles = await storeFiles(home);
+      // Nor is a looser one.
       await writeFile(path.join(vault, "Templates", "Meeting.md"), WITH_ACTIONS);
       const looser = {
         "template:Meeting:interpretation": true,
@@ -281,14 +258,19 @@ describe("oms setup end to end", () => {
         "template:Meeting:apply-folder": "Projects",
         seal: true,
       };
-      const third = runCli(home, ["setup", "--answers", await answersFile(looser), ...await interpreting(WITH_ACTIONS), "--vault", vault]);
-      expect(third.status).toBe(1);
+      const second = runCli(home, ["setup", "--answers", await answersFile(looser), ...await interpreting(WITH_ACTIONS), "--vault", vault]);
+      expect(second.status, second.stdout + second.stderr).toBe(0);
+      expect(json(second)["status"]).toBe("sealed");
+      expect(second.stdout).not.toContain(HIDDEN);
+
+      // Removing a sealed template would expose its source to search, so only the owner can.
+      const sealedFiles = await storeFiles(home);
+      await rm(path.join(vault, "Templates", "Meeting.md"));
+      const third = runCli(home, ["setup", "--answers", await answersFile({ "template:Meeting:remove": true, seal: true }), "--vault", vault]);
+      expect(third.status, third.stdout + third.stderr).toBe(1);
       const refused = json(third);
       expect(refused["status"]).toBe("loosening");
-      expect(refused["changes"]).toEqual([
-        { field: "templates.Meeting.narrowedRules.status", kind: "allowed-widened" },
-        { field: "templates.Meeting.requiredHeadings.Agenda", kind: "heading-dropped" },
-      ]);
+      expect(refused["changes"]).toEqual([{ field: "templates.Meeting", kind: "removed" }]);
       expect(refused["remediation"]).toContain("`oms setup` themselves in a terminal");
       expect(third.stdout).not.toContain(HIDDEN);
       expect(third.stdout).not.toMatch(/"(open|done)"/);

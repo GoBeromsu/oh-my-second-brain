@@ -997,14 +997,13 @@ Valid frontmatter remains available to retrieve.
       expect(await readFile(note)).toEqual(before);
 
       // A chosen template's missing heading is conformed (check writes nothing); without the
-      // template nothing is conformed, so the headingless note is kept as a draft.
+      // template nothing is conformed, and the judge never reads headings, so it is clean.
       const headingless = await write({ path: "Projects/b.md", content: "---\nstatus: done\n---\nBody\n", template: "project", check: true });
       expect(textPayload(headingless)).toMatchObject({ status: "checked", ok: true, conformed: [{ field: "Goals", action: "heading" }] });
       expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
-      const dropped = await write({ path: "Projects/a.md", content: "---\nstatus: done\n---\nBody\n", ifMatch: createdReceipt.revision });
-      expect(dropped.isError).toBeFalsy();
-      expect(textPayload(dropped)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "Goals", kind: "heading-missing" }] });
-      expect(await readFile(note)).toEqual(before);
+      const untemplated = await write({ path: "Projects/b.md", content: "---\nstatus: done\n---\nBody\n", check: true });
+      expect(textPayload(untemplated)).toMatchObject({ status: "checked", ok: true, warnings: [] });
+      expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
 
       // An allowed overwrite keeps the note's previous mode and leaves no temporary file.
       // An overwrite without ifMatch is refused before anything is written.

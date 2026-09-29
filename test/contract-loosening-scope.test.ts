@@ -50,11 +50,14 @@ describe("template identity under looseningChanges", () => {
 });
 
 describe("what a submitted interpretation could try to widen", () => {
-  it("omitting a sealed template's field or heading is caught whatever produced the interpretation", () => {
+  it("omitting a sealed template's field or heading is not a change, because the judge never reads a template", () => {
     const stripped = template(MANUAL, { requiredProperties: [], requiredHeadings: [] });
-    expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: stripped }))).toEqual([
-      { field: "templates.meeting.requiredProperties.status", kind: "required-dropped" },
-      { field: "templates.meeting.requiredHeadings.Agenda", kind: "heading-dropped" },
+    expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: stripped }))).toEqual([]);
+  });
+
+  it("moving a sealed template's source is caught, since search exclusion is built from sealed sources", () => {
+    expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: template(AGENT) }))).toEqual([
+      { field: "templates.meeting.source", kind: "removed" },
     ]);
   });
 
@@ -63,15 +66,13 @@ describe("what a submitted interpretation could try to widen", () => {
     expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: rehashed }))).toEqual([]);
   });
 
-  it("a new scoped template overlapping a sealed scoped folder is caught", () => {
+  it("a new scoped template overlapping a sealed scoped folder is not a change, because the judge never selects a template", () => {
     const sealed = template(MANUAL, { applyFolder: "Inbox" });
     const added = template(AGENT, { applyFolder: "Inbox", requiredProperties: [], requiredHeadings: [] });
-    expect(looseningChanges(vault({ meeting: sealed }), vault({ meeting: sealed, agent__meeting: added }))).toEqual([
-      { field: "templates.agent__meeting.applyFolder", kind: "apply-folder-overlap" },
-    ]);
+    expect(looseningChanges(vault({ meeting: sealed }), vault({ meeting: sealed, agent__meeting: added }))).toEqual([]);
   });
 
-  it("a new unscoped permissive template is not a change, because the judge only makes scoped templates candidates", () => {
+  it("a new unscoped permissive template is not a change either", () => {
     const sealed = template(MANUAL, { applyFolder: "Inbox" });
     const added = template(AGENT, { requiredProperties: [], requiredHeadings: [] });
     expect(looseningChanges(vault({ meeting: sealed }), vault({ meeting: sealed, agent__meeting: added }))).toEqual([]);

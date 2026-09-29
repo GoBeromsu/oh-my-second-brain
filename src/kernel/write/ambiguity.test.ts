@@ -32,11 +32,7 @@ const SEALED: ContractView = { state: "sealed", contract: CONTRACT };
 
 function input(path: string, content: string, extra: Partial<AmbiguityInput> = {}): AmbiguityInput {
   const view = extra.view ?? SEALED;
-  const judgeWith = (text: string): Verdict => judgeContent({
-    path, content: text,
-    ...(extra.template === undefined ? {} : { selectedTemplate: extra.template }),
-    ...(extra.previousContent === undefined ? {} : { previousContent: extra.previousContent }),
-  }, view);
+  const judgeWith = (text: string): Verdict => judgeContent({ path, content: text }, view);
   return { view, path, content, verdict: judgeWith(content), rejudge: judgeWith, ...extra };
 }
 
@@ -45,7 +41,6 @@ describe("gapAxisOf", () => {
     expect(gapAxisOf("unregistered-folder")).toBe("folder");
     expect(gapAxisOf("unknown-property")).toBe("property");
     expect(gapAxisOf("count")).toBe("value");
-    expect(gapAxisOf("heading-missing")).toBe("template");
     expect(gapAxisOf("path-unsafe")).toBeNull();
     expect(gapAxisOf("contract-unreadable")).toBeNull();
   });
@@ -118,11 +113,11 @@ describe("③ gaps", () => {
     });
   });
 
-  it("keeps the note as a draft when the key is required by the property or the selected template", () => {
+  it("keeps the note as a draft when the property requires the key, and drops it when only a selected template does", () => {
     const required: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { ...CONTRACT.properties, title: property({ required: true, rules: [{ kind: "pattern", regex: "[A-Z]" }] }) } } };
     expect(resolveTiers(input("Inbox/a.md", "---\ntitle: lower\n---\n", { view: required }))).toMatchObject({ action: "draft", findings: [{ wanted: { field: "title" } }] });
     const byTemplate = input("Meetings/a.md", "---\ntitle: A\nstatus: maybe\n---\n", { template: "Review" });
-    expect(resolveTiers(byTemplate)).toMatchObject({ action: "draft", findings: [{ axis: "value", wanted: { field: "status" } }] });
+    expect(resolveTiers(byTemplate)).toMatchObject({ action: "save", content: "---\ntitle: A\n---\n", findings: [{ axis: "value", wanted: { field: "status" }, reason: "dropped: not-allowed" }] });
   });
 
   it("keeps the note as a draft for a violation dropping a key cannot clear", () => {
