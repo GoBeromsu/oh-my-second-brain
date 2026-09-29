@@ -35,7 +35,7 @@ export interface LineageEvent {
   readonly generation: number | null;
   readonly parentDigest: ContractDigest;
   readonly digest: ContractDigest;
-  /** Always empty until contract mutations are recorded. */
+  /** The mutations an evolution seal applied; empty for a human-cli seal and every anchor. */
   readonly mutations: readonly unknown[];
   /** The manifest's file → digest map of `digest`; empty for "none". */
   readonly manifestDigests: Readonly<Record<string, Digest>>;
@@ -43,6 +43,10 @@ export interface LineageEvent {
   readonly proposer?: string;
   readonly evaluator?: string;
   readonly requestId?: string;
+  /** True for a seal the evolution gate made without the owner; absent or false otherwise. */
+  readonly autonomous?: boolean;
+  /** How the seal was decided: `autonomous`, `human` (an approved request) or `revert`. */
+  readonly mode?: string;
   readonly reason?: RecoveredReason;
   readonly priorTail?: ContractDigest;
   readonly gapFrom?: ContractDigest;
@@ -82,10 +86,10 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-const OPTIONAL_TEXT = ["proposer", "evaluator", "requestId"] as const;
+const OPTIONAL_TEXT = ["proposer", "evaluator", "requestId", "mode"] as const;
 const KNOWN_KEYS: ReadonlySet<string> = new Set([
   "eventSeq", "kind", "generation", "parentDigest", "digest", "mutations", "manifestDigests",
-  "revertOf", "proposer", "evaluator", "requestId", "reason", "priorTail", "gapFrom",
+  "revertOf", "proposer", "evaluator", "requestId", "autonomous", "mode", "reason", "priorTail", "gapFrom",
 ]);
 
 export function parseLineageEvent(line: string): LineageEvent | null {
@@ -105,6 +109,7 @@ export function parseLineageEvent(line: string): LineageEvent | null {
   if (!record(manifest) || !Object.values(manifest).every(isDigest)) return null;
   if (value["revertOf"] !== undefined && !isDigest(value["revertOf"])) return null;
   if (!OPTIONAL_TEXT.every(key => value[key] === undefined || typeof value[key] === "string")) return null;
+  if (value["autonomous"] !== undefined && typeof value["autonomous"] !== "boolean") return null;
   for (const key of ["priorTail", "gapFrom"]) if (value[key] !== undefined && !isContractDigest(value[key])) return null;
   if (value["kind"] === "sealed") {
     if (value["reason"] !== undefined || value["priorTail"] !== undefined || value["gapFrom"] !== undefined) return null;
@@ -339,6 +344,12 @@ export interface LineageAttribution {
   readonly proposer: string;
   readonly evaluator: string;
   readonly requestId?: string;
+  readonly autonomous?: boolean;
+  readonly mode?: string;
+  /** The mutations the seal applied; recorded as given. */
+  readonly mutations?: readonly unknown[];
+  /** The earlier digest a revert seal restores. */
+  readonly revertOf?: Digest;
 }
 
 export const HUMAN_CLI: LineageAttribution = { proposer: "human-cli", evaluator: "none" };
@@ -349,11 +360,14 @@ export function sealedDraft(sealed: SealedGeneration, attribution: LineageAttrib
     generation: sealed.seq,
     parentDigest: sealed.parentDigest,
     digest: sealed.digest,
-    mutations: [],
+    mutations: attribution.mutations ?? [],
     manifestDigests: sealed.manifestDigests,
     proposer: attribution.proposer,
     evaluator: attribution.evaluator,
     ...(attribution.requestId === undefined ? {} : { requestId: attribution.requestId }),
+    ...(attribution.autonomous === undefined ? {} : { autonomous: attribution.autonomous }),
+    ...(attribution.mode === undefined ? {} : { mode: attribution.mode }),
+    ...(attribution.revertOf === undefined ? {} : { revertOf: attribution.revertOf }),
   };
 }
 

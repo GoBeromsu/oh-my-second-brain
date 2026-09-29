@@ -45,7 +45,7 @@ function boundHolds(sealed: number | string | undefined, next: number | string |
  * member of a list allowed but only some member fixed, so a fixed value and an allowed
  * list imply each other only when `single` says the value is never a list.
  */
-function implies(next: Rule, sealed: Rule, single: boolean): boolean {
+export function implies(next: Rule, sealed: Rule, single: boolean): boolean {
   if (sealed.kind === "allowed" && next.kind === "allowed") return next.values.every(value => sealed.values.some(known => sameScalar(known, value)));
   if (sealed.kind === "allowed" && next.kind === "fixed") return single && sealed.values.some(known => sameScalar(known, next.value));
   if (sealed.kind === "fixed" && next.kind === "fixed") return sameScalar(sealed.value, next.value);
