@@ -28,7 +28,8 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
 `.omc/specs/deep-interview-oms-template-contract.md`이다. 구현 계획은
 `.omc/plans/ralplan-oms-vault-contract.md`(v5)이고, 그 §6 수정 목록 (a)–(i)를 이 판에 반영했다.
 이 판은 2026-09-25 초판 "템플릿 계약 — 전역·템플릿 두 층 봉인"을 개명·개정한 것이다.
-아래 조항은 모두 현재 코드가 하는 일을 `file:line`으로 적는다.
+아래 조항 본문은 현재 코드가 하는 일을 `file:line`으로 적는다. 단, "개정 2026-09-29"로 표시한
+문단은 예외다(아래 개정 문단 참고).
 
 **개정 (2026-09-25, setup 스킬).** §3에 "에이전트가 묻는 봉인"(`setup` 스킬, 두 단계
 `--questions`/`--answers`, 단조 규칙)을 추가했다. 이전 판의 "에이전트 스킬로 두지 않는다"와
@@ -38,6 +39,11 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
 `.omc/plans/amend-axis-only-contract.md`(revision 2)이다. 이 개정은 **결정된 방향**이고, 구현은
 슬라이스 bc → d → e → f1 → f2로 나뉘어 들어온다. 각 조항의 `file:line`은 여전히 현재 코드를
 가리킨다. 각 조항 옆의 "개정 2026-09-29" 문단이 바뀔 동작과 그 동작이 들어올 슬라이스를 적는다.
+**작성 규칙(README "코드와 다른 계획은 Proposed")과의 관계:** "개정 2026-09-29" 문단은 사용자가
+**받아들인 결정이지만 구현을 기다리는 조항**이다. 각 슬라이스가 들어오기 전까지 그 문단은 현재
+코드를 서술하지 않고, 같은 조항의 `file:line` 인용이 현재 코드를 서술한다. 슬라이스가 들어오면
+해당 문단을 본문으로 올리고 인용을 새 코드로 바꾼다. 결정 자체는 Accepted이고, 구현 상태는
+문단마다 "구현: 슬라이스 X"로 표시한다.
 구현 슬라이스가 들어오기 전까지 현재 동작은 이전 문장 그대로다.
 
 - **계약은 축만이다.** 봉인된 계약은 폴더 규칙과 키별 frontmatter 값 규칙 두 축뿐이다.
@@ -138,6 +144,7 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
   `folderIntents`다(`src/kernel/engine/mcp/types.ts:166`, `McpSemanticReceipt`).
 - **템플릿 계약**의 `applyFolder`는 "이 템플릿이 어느 폴더의 노트를 만드는가"다.
   폴더에 딸린 템플릿 목록은 여기서 파생하고 `folders.json`에 중복 저장하지 않는다.
+  (개정 2026-09-29, 구현: 슬라이스 f1: 템플릿 계약과 `applyFolder`는 v3 계약에서 빠진다. 템플릿은 생성기다.)
 - 파일 이름은 사람이 읽을 수 있어야 한다. 무작위 seal ID 파일명은 쓰지 않는다.
 - **개정 2026-09-29 (슬라이스 f1, f2).** 새 세대는 manifest `version: 3`이고 `folders.json`,
   `properties.json`(그리고 `declined.json`)만 담는다. `templates/`는 쓰지 않는다. 템플릿은 뼈대를
@@ -179,6 +186,7 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
     거부 문구가 아래 두 단계 경로를 안내한다(`setup`, contract-command.ts:211-215).
   - 현재 디렉터리에서 추론한 볼트에는 봉인하지 않는다(`runContractCommand`, contract-command.ts:295-298).
   - 템플릿 규칙과 속성 사전 규칙이 모순되면 질문지가 알리고 봉인하지 않는다.
+    (개정 2026-09-29, 구현: 슬라이스 f2: 템플릿 규칙이 없으므로 이 모순도 없다. 계약 모순은 봉인을 막지 않고 쓸 때 `contradiction` 경고 + 기록이다.)
 - **재봉인은 변경분만 묻는다 (R24)**
   - 같은 명령을 다시 실행한다. 새 폴더, 새 속성, 원본 해시가 바뀐 템플릿만 묻고 기존 답은
     유지한다(`runInterview`, `src/kernel/contract/interview.ts:526-540`). 세 계약을 새 세대 하나로 봉인한다.
@@ -213,6 +221,8 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
     - "추가"는 허용한다. 새 폴더·속성·템플릿을 등록하는 것은 닫힌 축에 새 항목을 올려 그 축을
       넓히는 일이지만, 이것이 "추가 또는 강화"의 추가다. 새 항목은 봉인된 계약이 거부하던 쓰기를
       받아들일 수 있다(예: 새로 등록한 폴더의 노트). 다만 기존 항목의 판정은 느슨해지지 않는다.
+      (개정 2026-09-29, 구현: 슬라이스 f2: 템플릿은 등록 대상이 아니다. 축이 열려 있으므로 새 항목은
+      거부하던 쓰기를 받아들이는 것이 아니라 경고하던 쓰기를 조용하게 만든다.)
     - 느슨함의 종류(`LooseningKind`, loosening.ts:12-27): 축을 여는 것(`axis-opened`), 폴더·속성·템플릿 제거
       (`removed`), 검색 제외 해제, 속성 타입 변경, 필수 해제, 규칙 제거, allowed 확장,
       fixed 변경, pattern 변경(정규식이 글자 그대로 같아야 한다), range 확장(경계가 같은 타입이고
@@ -230,7 +240,7 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
       `apply-folder-overlap`이다. 판정은 수정에서 후보 템플릿 중 하나만 통과하면 받아들이므로,
       겹치는 새 후보가 봉인된 템플릿이 거부하던 수정을 통과시킬 수 있다(`overlapChanges`, loosening.ts:143-162).
       겹치지 않는 폴더에 처음으로 적용 폴더를 정하는 것은 느슨함이 아니다. 의미 문장과 기본값은
-      비교하지 않는다.
+      비교하지 않는다. (개정 2026-09-29, 구현: 슬라이스 f2: `apply-folder-overlap`과 `overlapChanges`는 삭제된다.)
     - 봉인된 템플릿은 더 엄격하게도 바꿀 수 없다. 판정은 수정에서 이전 내용이 통과하던 후보
       템플릿만 강제한다(`templateAxis`, judge.ts:206-214). 그래서 필수 heading·필수 속성·좁힌 규칙을 더하면
       기존 노트가 새 템플릿을 통과하지 못하고, 그 노트의 수정에서는 템플릿 검사가 통째로
@@ -268,10 +278,17 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
   - 안내 명령은 kind마다 정확히 하나로 고정돼 있다(`GUIDANCE_FOR`, types.ts:117-136). 쓸 수 있는 명령은
     `oms contract doctor`, `oms contract doctor --fix`, `oms status`, `oms host sync`,
     `oms setup` 다섯 개다(`GUIDANCE`, types.ts:107-113).
+  - (개정 2026-09-29, 구현: 슬라이스 bc.) 안내 명령에 `oms interview`가 추가된다(`contract-open`,
+    `contract-unreadable`, 축 경고의 안내). 경고는 거부와 같은 모양의 한 줄이다:
+    `[oms] write allowed with warnings: <[{field,kind}] JSON> Run: <guidance>`. 경고 줄도 값, 패턴,
+    템플릿 이름을 싣지 않는다.
 - **status**는 계약 상태(`none`/`sealed`/`unreadable`), 고정 문구의 findings, 템플릿 이름별
   drift 상태만 돌려준다(`contractStatus`, status.ts:49-62). 규칙 값, vaultId, 저장소 경로는 싣지 않는다.
 - **검색**이 계약에서 가져가는 것은 폴더 경로·의미·검색 제외, 속성 이름·타입·필수 여부,
   템플릿 이름과 참조 속성까지다(`publicProjection`, `src/kernel/engine/retrieval/template-source.ts:67-81`).
+- (개정 2026-09-29, 구현: 슬라이스 f1.) status의 템플릿별 drift 상태와 검색 투영의 템플릿 이름·참조
+  속성은 v3에서 빠진다. 계약 상태에는 `open`(봉인 없음)이 추가되고, 레거시 템플릿 항목은
+  `legacy-template-constraints-ignored`로만 보고한다.
 - **가림(redaction)**은 봉인 인터뷰 출력에만 건다(`buildRedactor`,
   `src/kernel/contract/redact.ts:39`; `sealGuard`, interview.ts:442-458). 도구 응답은 애초에 값을 담지 않는
   구조로 막는다.
@@ -292,6 +309,9 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
     돌려준다.
 - **계약이 없으면 기본 규칙만 적용한다.** 볼트 경계, 경로 안전, YAML 문법, 그리고 `.oms`
   제어 경로(`control-path`, `basePathKind`, judge.ts:135-144)다.
+  (개정 2026-09-29, 구현: 슬라이스 e, Q1.) YAML 문법 오류는 거부하지 않는다. MCP는 초안(D)으로
+  저장하고 기록하며, hook은 입력을 바꿀 수 없으므로 허용 + `yaml-syntax` 경고를 낸다. 기본 규칙
+  중 거부는 볼트 경계, 경로 안전, `control-path`만 남는다.
 - **개정 2026-09-29 (슬라이스 d, e): 열린 세계와 기록.** 아래의 닫힌 세계, 템플릿 축, `missing`
   거부는 바뀐다. 봉인된 계약이 있어도 축 위반은 쓰기를 막지 않는다.
   - `unregistered-folder`: 경로를 옮기지 않고 쓴 그대로 저장, 경고 + `folder/kept` 기록(W).
@@ -355,6 +375,10 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
     `[oms] write allowed with warnings: [{field,kind}] Run: <guidance>`를 싣는다. guard
     `validJudgeOutput`(oms-guard.mjs)도 같은 슬라이스에서 이 모양을 받아들인다. hook은 입력을 바꿀 수
     없으므로 MCP라면 보정했을 내용과 초안을 경고로만 알린다(Q3).
+  - (개정 2026-09-29, 구현: 슬라이스 bc.) Edit·MultiEdit 재구성이 실패하면(`old_string`을 찾지
+    못함 등) 허용 + `unsupported-input` 경고다. 입력이 잘렸거나 파싱할 수 없으면 지금처럼 거부한다.
+    hook도 `decideWrite`의 증분(새로 생긴 `(field, kind)`)을 gap ledger에 기록하며, ledger 위치는
+    주입된 `gapRoot`로 받는다.
 - **전달 실패는 Option A: 허용 + 경고 + 기록** (`TRANSPORT_FAILURE_POLICY = "allow-warn"`,
   oms-guard.mjs:36).
   - spawn 실패, 0이 아닌 종료, 10초 타임아웃, 빈 출력, 잘못된 출력, 내부 오류일 때
@@ -383,19 +407,20 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
 
   | 행 | 조건 | 계약 | doctor 안내 (`ROW_FINDING`, status.ts:34-43) |
   |----|------|------|------------------------------|
-  | never-sealed | S 없음, I 없음 | 없음(기본 규칙) | `oms setup` |
-  | synced-second-machine | S 있음, 이 머신에 저장소 없음 | 없음(기본 규칙) | `oms setup` |
+  | never-sealed | S 없음, I 없음 | 없음(기본 규칙) (개정: 허용 + `contract-open` 경고) | `oms setup` (개정: `oms interview`) |
+  | synced-second-machine | S 있음, 이 머신에 저장소 없음 | 없음(기본 규칙) (개정: 허용 + `contract-open` 경고) | `oms setup` (개정: `oms interview`) |
   | store-without-index | S 저장소 있음, I 없음 | S로 적재 | `oms contract doctor --fix` |
   | vault-moved | 위와 같고 다른 경로가 같은 id를 가리킴 | S로 적재 | `oms contract doctor --fix` |
   | sealed | I = S, 저장소 있음 | 적재 | — |
-  | index-without-store | I 있음, 저장소 없음 | **unreadable** (개정: 허용 + 경고) | `oms setup` |
+  | index-without-store | I 있음, 저장소 없음 | **unreadable** (개정: 허용 + `contract-unreadable` 경고) | `oms setup` (개정: `oms interview`로 재봉인) |
   | vault-id-tampered | I ≠ S | **unreadable** (개정: S가 null이 아닐 때만, `contract-tampered` 거부) | `oms contract doctor` |
   | settings-missing (개정 2026-09-29, 새 행) | S 없음 또는 무효, I가 이 볼트를 가리킴 | 허용 + `contract-unreadable` 경고 | `oms interview` |
   | index-corrupt | index 파싱 실패 | S가 있으면 적재, 없으면 없음 | `oms contract doctor --fix` |
 
   - 적재한 세대의 링크가 끊겼거나, manifest digest가 다르거나, 스키마가 틀리면
     (`link-dangling`, `manifest-mismatch`, `schema-invalid`; `StoreCause`, store.ts:241) 역시 unreadable이다.
-  - 복구는 재봉인(`oms setup`)이다. `oms contract doctor --fix`는 store-without-index,
+    (개정 2026-09-29, 구현: 슬라이스 bc: unreadable은 거부가 아니라 허용 + `contract-unreadable` 경고다.)
+  - 복구는 재봉인(`oms setup`)이다. (개정 2026-09-29: 재봉인 안내는 `oms interview`다.) `oms contract doctor --fix`는 store-without-index,
     vault-moved, index-corrupt에서 index만 다시 쓴다(`doctorFix`, status.ts:133-140).
   - MCP `status`는 unreadable이면 `writeTools: "write-disabled-contract-unreadable"`를 보고한다
     (`oms_graph_status` 분기, server.ts:576-598). **개정 2026-09-29 (슬라이스 bc).** 이 값은
@@ -439,7 +464,8 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
   - `.oms/taxonomy.json`, `.oms/models.json`, `.oms/types.json`, `.oms/templates/`
   - Claude PostToolUse 설치와 `oms-post-guard` bin, 선택 세션 바인딩, `OMS_GUARD` 우회 변수
   - 저장소 루트 override 환경변수
-- 호환 reader, 자동 변환, alias는 두지 않는다.
+- 호환 reader, 자동 변환, alias는 두지 않는다. (개정 2026-09-29, Q7: 이 문장은 폐기한 v5 이전
+  파일에 대한 것이다. 이 ADR의 v1/v2 계약 세대 reader는 v3 이후에도 영구히 유지한다. §2 참고.)
 - 이전 파일은 읽지 않는다. `oms contract doctor`가 `unexpected-control-file`로 목록을 보여 주고,
   사용자가 백업 위치로 옮긴 뒤 `oms setup`으로 다시 봉인한다.
 
@@ -452,7 +478,9 @@ spec의 AC1–AC20과 같다. 요약하면 다음과 같다.
    통과한다. **개정 2026-09-29:** 축을 어긴 노트는 무손실 보정되거나 쓴 그대로 저장되고 그 gap이
    기록된다. 거부는 안전 kind(경계·경로, `control-path`, `contract-tampered`, 데이터 손실)뿐이다.
 3. 숨은 값이 볼트 `.oms/`와 모든 도구·CLI 응답에 나타나지 않는다. sentinel 값으로 검증한다.
-4. 기본 속성이 빠지면 쓰기는 성공한다. 필수 속성이 빠지면 거부된다.
+4. 기본 속성이 빠지면 쓰기는 성공한다. 필수 속성이 빠지면 거부된다. **개정 2026-09-29 (Q4, 구현:
+   슬라이스 e):** 필수 속성이 빠져도 거부하지 않는다. `fixed` 값이나 새 노트의 date 기본값이 있으면
+   무손실 보정(F), 없으면 쓴 그대로 저장하고 `missing` 경고 + 기록(W)이다.
 5. `oms hook pre`와 MCP `write`가 같은 입력에 같은 판정을 낸다. guard 전달 실패는 허용 +
    경고 + 기록이다. **개정 2026-09-29:** 둘은 `decideWrite` 하나로 같은 거부·경고 집합을 낸다.
    MCP만 보정을 적용하고 초안을 만들며, hook은 이를 경고로 알린다(Q3 미룸).
@@ -515,7 +543,8 @@ spec의 AC1–AC20과 같다. 요약하면 다음과 같다.
   - Claude PostToolUse 항목, `oms-post-guard` bin, `OMS_GUARD`를 제거했다.
   - hook 거부 출력 형식이 바뀌었고, 쓰기 matcher에 `MultiEdit`, 읽기 matcher
     `Read|Grep|Glob`이 추가됐다.
-  - 엔진 증거 기반 fail-closed가 생겼다.
+  - 엔진 증거 기반 fail-closed가 생겼다. (개정 2026-09-29, F3: fail-closed는 null이 아닌 vault-id
+    불일치(`contract-tampered`)에만 남고, 손상은 허용 + 경고다.)
 - 사용자는 `oms setup`을 한 번 실행하고 `settings.json`을 정리해야 한다.
 - Option A이므로 봉인 볼트에서 `oms` 실행 파일이 깨지면 네이티브 쓰기가 판정 없이 허용되고
   stderr와 doctor로만 드러난다.
@@ -547,11 +576,15 @@ spec의 AC1–AC20과 같다. 요약하면 다음과 같다.
   그 폴더나 속성을 등록할 수 있다. 추가는 느슨함이 아니므로 단조 검사가 잡지 않는다. 닫힌
   축은 사용자가 직접 답한다는 전제에 기대며, 이를 기술적으로 강제하지 않는다. 스킬은 새 폴더·속성
   등록을 사용자에게 묻고 에이전트가 스스로 답하지 말라고 적지만, 이것도 관례다.
+  (개정 2026-09-29, 구현: 슬라이스 d, e: `unregistered-folder`와 `unknown-property`는 거부가 아니라
+  경고 + 기록이므로 에이전트가 우회할 동기가 줄어든다. 남는 위험은 에이전트가 스스로 등록해 경고를
+  없애는 것이며, 그 기록은 gap ledger에 남는다.)
 - **잔여 위험 (동기화된 두 번째 기기).** 볼트가 동기화됐지만 이 기기에 저장소가 없으면
   `synced-second-machine`이고, `--answers`로 첫 봉인을 할 수 있다. 이 봉인은 다른 기기의
   봉인과 비교하지 않는다. 두 기기의 계약은 따로 봉인된다.
 - **잔여 위험 (템플릿 강화).** 봉인된 템플릿은 더 엄격하게 바꾸는 것도 사용자의 터미널
   `oms setup`으로만 한다(§3). 사용자가 터미널을 쓸 수 없으면 템플릿은 봉인된 그대로 남는다.
+  (개정 2026-09-29, 구현: 슬라이스 d, f2: 템플릿이 봉인되지 않으므로 이 위험은 사라진다.)
 - **잔여 위험 (hook 설정).** guard는 hook이 등록된 Claude 설정 파일(`~/.claude`,
   `$CLAUDE_CONFIG_DIR`, `$OMS_CLAUDE_HOME`, 설정된 볼트의 `.claude/` 아래 `settings.json`,
   `settings.local.json`)에 대한 Write/Edit 계열 쓰기를 거부한다(`hostConfigDirs`…`isHostConfig`, oms-guard.mjs:258-289; `main`, :370). hook
