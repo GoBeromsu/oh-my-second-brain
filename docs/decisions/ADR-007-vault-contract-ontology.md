@@ -70,6 +70,21 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
     템플릿 → 여럿이면 ② 선택 기록. 새 settings 키는 없다.
   - Q6 `not-fixed`: W.
   - Q7 v1/v2 저장소 reader: 영구히 유지한다(투영 reader).
+- **계약 진화의 평가 (PR9, 축 전용).** 진화 후보도 축으로만 평가한다. 템플릿 축은 없다.
+  - 봉인 경로는 `src/kernel/evolution/seal-gate.ts` 하나다. `sealContract`를 부르는 제품 모듈은
+    이것과 `src/kernel/contract/interview.ts`뿐이다(`test/architecture/write-evolution-boundary.test.ts`).
+  - 1단계(`src/kernel/evolution/stage-mechanical.ts`)는 기존 노트를 후보 계약으로 다시 판정한다.
+    새 거부가 1건이라도 있으면 거절한다. 경고 증가분(warning delta)이 점수다. 경고가 늘면
+    사람 승인 대기(awaiting-human)로 넘긴다. 자율 봉인은 경고 증가분이 0 이하일 때만 한다.
+  - 느슨하게 하기(`src/kernel/evolution/mutation-direction.ts`)는 허용 값이나 폴더의 추가, 타입
+    확장, `required` 제거다. 느슨한 후보는 정책과 상관없이 사람 승인을 기다린다.
+  - 2·3단계(의미 유사도, 평가자 3인 합의)는 권고다. 강제 관문은 1단계와 방향 분류기다. 판정은
+    주입한 VerdictProvider에서 오고, 서브에이전트가 없는 호스트는 `EVALUATOR_CONSENSUS_UNAVAILABLE`을
+    받으며 저장소는 바뀌지 않는다.
+  - 자율 정책은 기본으로 꺼져 있고, TTY `oms setup`에서만 켠다. 한도는 낮추기만 한다.
+  - 사람의 결정은 approve 또는 reject이고, 승인 프롬프트는 `src/cli/evolution-approve.ts`에만 있다.
+  - 되돌리기(`src/kernel/evolution/revert.ts`)는 앞으로만 간다. 스냅숏의 계약을 v3 형태로 투영해
+    새 후보로 제안하고, 같은 seal-gate를 지난다.
 
 ## Context
 

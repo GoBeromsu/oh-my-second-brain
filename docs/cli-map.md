@@ -17,7 +17,7 @@ MCP annotations describe a whole tool, not one of its operations. A tool is anno
 | `oms_search` | `true` | Every search operation, including `path` reads and link suggestions, reads the vault and writes nothing. |
 | `oms_write` | `false` | Saves a note after the judge allows it. |
 | `oms_interview` | `false` | `op: questions` reads the vault and returns the open interview questions. `op: answer`, `op: confirm`, and `op: seal` append to the interview log and seal a confirmed proposal on a verified target, so the tool is not advertised as read-only. |
-| `oms_doctor` | `false` | Its repair operations (`sync-embeddings`, `cleanup`, `build-graph`, `lineage-recover`, `lineage-reanchor`) mutate managed state. Its diagnosis operations (`status`, `validate`, `gaps`, `audit`, `link-check`) write nothing, and a `cwd`-inferred target still allows them. |
+| `oms_doctor` | `false` | Its repair operations (`sync-embeddings`, `cleanup`, `build-graph`, `lineage-recover`, `lineage-reanchor`, `evolve`, `evolve-verdict`, `revert-propose`, `reclaim-evolution-lock`) mutate managed state. Its diagnosis operations (`status`, `validate`, `gaps`, `audit`, `link-check`) write nothing, and a `cwd`-inferred target still allows them. |
 
 ## Write
 
@@ -52,7 +52,8 @@ A plain `oms search <text>` is lexical-only. Search is independent of the contra
 | CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
 | `oms interview` | `oms_interview` | absent | The CLI runs the interactive interview, continuing from the interview log (`--restart` starts over); it refuses without a TTY or under `OMS_NON_INTERACTIVE=1`. The MCP tool continues the same log over `op: questions`, `answer`, `confirm`, and `seal`; it seals only the proposal the owner confirmed and never reclaims a stale seal lock. |
-| `oms setup` | none | — | Interview the whole vault and seal its contract. Interactive terminal only. Writes only `.oms/settings.json` inside the vault. |
+| `oms setup` | none | — | Interview the whole vault and seal its contract. Interactive terminal only. Writes only `.oms/settings.json` inside the vault. First, each contract evolution awaiting the owner is shown with its loosening changes marked, and sealed only on an explicit approve (a reject closes it). |
+| `oms setup --autonomy on|off` | none | — | Turn autonomous contract evolution on or off. Off by default; turning it on needs the owner in an interactive terminal, and its limits (1 a day, 3 a week) can only be lowered. |
 | `oms setup extract --template <name>` | none | — | Preview what one live template in `templateFolder` would scaffold: its source, `folder:` selector, property names, and headings. An unknown name returns `status: "missing"` and exits 1. Templates are never sealed or judged. |
 | `oms setup status` | none | — | Report the seal's posture and `legacyTemplates`, the number of templates an older (version 1 or 2) generation sealed, which are reported and never enforced. |
 | `oms setup host install|remove|sync|status` | none | — | Manage host-native assets and registrations. `remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. |
@@ -66,7 +67,7 @@ Sealing has no MCP operation. The sealed contract lives outside the vault under 
 
 | CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
-| `oms doctor status` | `oms_doctor` | `status` | Read-only health: contract posture, engine, and graph. Creates no store. With `--view`, `--index`, or `--collection` it prints the search-index view instead (see `index-status` under Search). |
+| `oms doctor status` | `oms_doctor` | `status` | Read-only health: contract posture, engine, graph, and `evolution` (journal counters including gap-refused, re-anchored and seq-restart, the requests awaiting the owner, the autonomous budget left today and this week, and whether the lineage has a gap now; `null` for an unsealed vault). Creates no store. With `--view`, `--index`, or `--collection` it prints the search-index view instead (see `index-status` under Search). |
 | `oms doctor contract [--fix]` | `oms_doctor` | `validate` | Diagnose the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures. `--fix` only re-indexes a moved or unindexed vault; the MCP op fixes nothing. |
 | `oms doctor gaps` | `oms_doctor` | `gaps` | Report the open gaps a write recorded against the sealed contract (`{id, notePath, axis, kind, field, drafted, stale}`, counted by axis and kind) and the contradictions inside the contract. Never prints a wanted value and creates no store, state directory, or ledger. The CLI exits 1 on a contradiction or an unreadable ledger. |
 | `oms doctor audit` | `oms_doctor` | `audit` | Report `{path, field, kind}` entries for existing notes. Never rewrites a note. |
@@ -75,7 +76,11 @@ Sealing has no MCP operation. The sealed contract lives outside the vault under 
 | `oms doctor cleanup` | `oms_doctor` | `cleanup` | Remove derived index entries for notes that no longer exist. |
 | `oms doctor build-graph` | `oms_doctor` | `build-graph` | Rebuild the vault graph. |
 | `oms doctor lineage-recover` | `oms_doctor` | `lineage-recover` | Under the seal lock, snapshot kept generations the lineage has not recorded and append the events the chain can account for (a missed seal, a seq restart, a pre-lineage store). A gap the chain cannot explain is refused with `CONTRACT_LINEAGE_GAP` and nothing is written. Rerunning is a no-op. |
-| `oms doctor lineage-reanchor` | `oms_doctor` | `lineage-reanchor` | As `lineage-recover`, but a gap is recorded as a gap-anchor event so the lineage continues from the linked generation. |
+| `oms doctor lineage-reanchor` | `oms_doctor` | `lineage-reanchor` | As `lineage-recover`, but a gap is recorded as a gap-anchor event so the lineage continues from the linked generation. Owner only: the CLI asks for confirmation in a terminal; without one, and always over MCP, it is refused with `LINEAGE_REANCHOR_REQUIRES_TTY`. |
+| `oms doctor evolve [--maker-session <id>]` | `oms_doctor` | `evolve` | Turn the open write gaps into one contract evolution request and return its evaluator slots. Nothing is sealed. |
+| `oms doctor evolve-verdict --verdict <file\|->` | `oms_doctor` | `evolve-verdict` | Submit one evaluator verdict (`approve` or `reject`) bound to a request slot, then run the seal gate: no new refusal, the warning delta reported, a loosening or warning-raising candidate waits for the owner, and an autonomous seal needs the policy on, a 2-of-3 quorum and the rate limit. Each verdict must come from a separate evaluator, never the maker. |
+| `oms doctor revert-propose --target <digest>` | `oms_doctor` | `revert-propose` | Propose a kept generation's contract, read from its snapshot, as a new forward candidate that goes through the same seal gate. |
+| `oms doctor reclaim-evolution-lock` | `oms_doctor` | `reclaim-evolution-lock` | Release a stale evolution lock. Owner only: the CLI asks in a terminal; otherwise, and always over MCP, it is refused with `EVOLUTION_RECLAIM_REQUIRES_TTY`. |
 
 Every mutating doctor op requires verified-target admission and returns a receipt with a server-verified postcondition.
 
