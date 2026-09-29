@@ -142,6 +142,11 @@ function recorded(warning: Violation, kind: GapKind, frontmatter: Readonly<Recor
 
 /** A fix can uncover the next one (a filled list meets its count), so passes repeat a few times. */
 const FIX_PASSES = 3;
+/**
+ * A discarded pass does not use up a fix pass, since each one only adds its fields to the
+ * skip set. This caps the attempts anyway, so the loop always ends.
+ */
+const MAX_ATTEMPTS = 12;
 
 /**
  * Decides the tier of a judged write: refuse only on a refusal, draft only malformed
@@ -179,19 +184,22 @@ export function resolveTiers(input: AmbiguityInput): Resolution {
   let remaining = gaps;
   const fixes: Violation[] = [];
   const skip = new Set(contradicted);
-  for (let pass = 0; pass < FIX_PASSES && remaining.length > 0; pass += 1) {
+  let passes = 0;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS && passes < FIX_PASSES && remaining.length > 0; attempt += 1) {
     const coerced = coerceFrontmatter(content, remaining, { contract, isNew: input.isNew === true, now: input.now }, skip);
     if (coerced === null) break;
     const next = input.rejudge(coerced.content);
     if (next.refusals.length > 0) break;
     // A fix counts only when the rejudged note no longer reports it; a pass with a fix
-    // that did not clear is not saved, and that field is kept as written from then on.
+    // that did not clear is not saved, and that field is kept as written from then on. A
+    // discarded pass does not count toward the fix passes.
     const after = new Set(next.warnings.map(findingKey));
     const uncleared = coerced.fixes.filter(fix => after.has(findingKey(fix)));
     if (uncleared.length > 0) {
       for (const fix of uncleared) skip.add(fix.field);
       continue;
     }
+    passes += 1;
     content = coerced.content;
     current = next;
     fixes.push(...coerced.fixes);

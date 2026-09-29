@@ -195,6 +195,18 @@ describe("conform", () => {
     expect(result.content).toBe("---\r\nstatus: active\r\ntags:\r\n  - a\r\n  - b\r\nkind: log\r\n---\r\nBody\r\n");
   });
 
+  it("adds the template's headings with the note's CRLF line endings", () => {
+    const headed = live("Templates/headed.md", "## Goals\n\n## Notes\n");
+    const result = conform("---\r\nstatus: active\r\n---\r\nIntro\r\n", options({ view: { state: "open" }, isNew: true, scaffold: chosen(headed) }));
+    expect(result.content).toBe("---\r\nstatus: active\r\n---\r\nIntro\r\n\r\n## Goals\r\n\r\n## Notes\r\n");
+  });
+
+  it("adds defaults inside an empty frontmatter block", () => {
+    expect(conform("---\n---\nBody\n", options({ isNew: true, scaffold: chosen(BARE) })).content).toBe("---\ncreated: 2026-09-28\nupdated: 2026-09-28T09:05:07\n\"review date\": 2026-09-28\n---\nBody\n");
+    const listed = live("Templates/list.md", "---\nkind: log\n---\n");
+    expect(conform("---\r\n---", options({ view: { state: "open" }, isNew: true, scaffold: chosen(listed) })).content).toBe("---\r\nkind: log\r\n---");
+  });
+
   it("never supplies a required property the writer left out", () => {
     const result = conform("Body\n", options({ isNew: true }));
     expect(result.content).not.toContain("owner:");

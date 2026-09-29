@@ -151,8 +151,10 @@ export async function translatePreToolUse(
     : reconstruct(tool, input, resolved.previousContent);
   if (content === null) return notJudged(resolved.path, resolved.view, resolved.previousContent === null);
 
-  // The live templates only record an open template choice, as MCP write does; the verdict is the same without them.
-  const decision = decideWrite(resolved, content, { repair: false, templates: await loadLiveTemplates(resolved.vaultRoot) });
+  // The live templates only record an open template choice for a new note, as MCP write does; the verdict
+  // is the same without them, so an edit of an existing note does not read the template folder.
+  const templates = resolved.previousContent === undefined ? await loadLiveTemplates(resolved.vaultRoot) : [];
+  const decision = decideWrite(resolved, content, { repair: false, templates });
   if (decision.outcome === "allow" && decision.findings.length > 0) await recordKept(decision.findings, resolved.path, content, resolved.view, read.seal, deps);
   return fromVerdict(decision.verdict);
 }

@@ -273,9 +273,26 @@ async function topLevelFolders(vault: string): Promise<string[]> {
   return folders.sort(compareCodePoints);
 }
 
+const TEMPLATE_VALUE = /^\s*(?:"[^"]*"|'[^']*'|[^:]*?)\s*:[ \t]*(.*)$/;
+const DATE_VALUE = /^(?:\d{4}-\d{2}-\d{2}|\{\{\s*date(?::\s*YYYY-MM-DD\s*)?\s*\}\})$/;
+const DATETIME_VALUE = /^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?|\{\{\s*date:\s*YYYY-MM-DDTHH:mm(?::ss)?\s*\}\})$/;
+
+/** The type a template's `key: value` text clearly has: a list, a date or a datetime; text otherwise. */
+export function templateFieldType(text: string): FieldType {
+  const [first = "", ...rest] = text.split(/\r?\n/);
+  const raw = TEMPLATE_VALUE.exec(first)?.[1]?.trim() ?? "";
+  if (raw === "" && rest.length > 0 && rest.every(line => line.trim().startsWith("-"))) return "list";
+  if (raw.startsWith("[") && raw.endsWith("]")) return "list";
+  const value = /^(["'])(.*)\1$/.exec(raw)?.[2] ?? raw;
+  if (DATE_VALUE.test(value)) return "date";
+  if (DATETIME_VALUE.test(value)) return "datetime";
+  return "text";
+}
+
 /**
  * The folders and properties the seal questions are built from: the Obsidian property types,
- * then the keys the live templates set, as text unless Obsidian already types them.
+ * then the keys the live templates set. Obsidian's type wins; otherwise the type the template
+ * values clearly share (list, date or datetime), and text when they disagree or say nothing.
  */
 async function discover(vault: string, templateFolder: string | undefined): Promise<Discovered | { readonly refused: string[] }> {
   const observedTypes = new Map<string, FieldType>();
@@ -285,9 +302,14 @@ async function discover(vault: string, templateFolder: string | undefined): Prom
     return { refused: ["The Obsidian property types file is unreadable; fix it in Obsidian first."] };
   }
   const templates = templateFolder === undefined ? [] : await readLiveTemplates(vault, templateFolder);
+  const inferred = new Map<string, FieldType>();
   for (const field of templates.flatMap(template => template.fields)) {
-    if (!observedTypes.has(field.name)) observedTypes.set(field.name, "text");
+    if (observedTypes.has(field.name)) continue;
+    const type = templateFieldType(field.text);
+    const seen = inferred.get(field.name);
+    inferred.set(field.name, seen === undefined || seen === type ? type : "text");
   }
+  for (const [name, type] of inferred) observedTypes.set(name, type);
   return { folders: await topLevelFolders(vault), observedTypes };
 }
 

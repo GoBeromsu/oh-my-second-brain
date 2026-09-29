@@ -714,6 +714,24 @@ describe("runWritePipeline tiers (rows 14-23)", () => {
     expect(two.gaps[0]).toMatchObject({ kind: "kept", reason: "kept: not-allowed" });
   });
 
+  it("a check reports the same fixes and warnings the write then applies", async () => {
+    const fixture = await sealedVault(TIERS);
+    const content = "---\nkind: note\nsize: \"12\"\n---\nBody\n";
+    const checked = await runWritePipeline(request(fixture, "Notes/a.md", content, { check: true }), { now: () => NOW });
+    if (checked.kind !== "checked") throw new Error(`expected a check, got ${checked.kind}`);
+    expect(checked.check).toMatchObject({ warnings: [], fixes: [{ field: "size", kind: "type" }] });
+    const written = await runWritePipeline(request(fixture, "Notes/a.md", content), { now: () => NOW, updateIndex: async () => "skipped" });
+    if (written.kind !== "written") throw new Error(`expected a save, got ${written.kind}`);
+    expect(checked.check.fixes).toEqual(written.receipt.fixes);
+    expect(checked.check.warnings).toEqual(written.receipt.warnings);
+  });
+
+  it("row 16: fills a missing required key into an empty frontmatter block", async () => {
+    const { receipt, saved } = await write("---\n---\nBody\n");
+    expect(saved).toBe("---\ncreated: 2026-09-28\nkind: note\n---\nBody\n");
+    expect(receipt).toMatchObject({ warnings: [], fixes: [{ field: "kind", kind: "missing" }] });
+  });
+
   it("row 16: fills a missing required key with its fixed value", async () => {
     const { receipt, saved, gaps } = await write("Body\n");
     expect(saved).toBe("---\ncreated: 2026-09-28\nkind: note\n---\nBody\n");

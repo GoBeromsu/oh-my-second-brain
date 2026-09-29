@@ -46,6 +46,13 @@ describe("parseNote frontmatter diagnostics", () => {
     ]);
   });
 
+  it("reads an empty or comment-only block as empty frontmatter, not a malformed one", () => {
+    expect(parseNote("---\n---\nBody\n")).toEqual({ frontmatter: {}, body: "Body\n", hasFrontmatter: true, diagnostics: [], frontmatterRaw: "", frontmatterRange: { start: 4, end: 4 } });
+    expect(parseNote("\ufeff---\r\n---")).toMatchObject({ frontmatter: {}, body: "", diagnostics: [], frontmatterRange: { start: 6, end: 6 } });
+    expect(parseNote("---\n# a comment\n---\nBody\n")).toEqual({ frontmatter: {}, body: "Body\n", hasFrontmatter: true, diagnostics: [], frontmatterRaw: "# a comment", frontmatterRange: { start: 4, end: 15 } });
+    expect(parseNote("---\n~\n---\nBody\n").diagnostics).toEqual([expect.objectContaining({ code: "frontmatter-not-map" })]);
+  });
+
   it("reports an unclosed frontmatter fence without treating the body as valid YAML", () => {
     const raw = "---\ntitle: Missing close\nBody is not a fence.\n";
 
