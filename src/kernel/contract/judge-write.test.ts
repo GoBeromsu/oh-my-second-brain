@@ -51,20 +51,22 @@ describe("resolveWriteTarget seal state failures", () => {
 });
 
 describe("a version 2 generation with templates", () => {
-  it("loads, and the judge ignores its template constraints without touching the stored bytes", async () => {
+  it("loads, and neither the judge nor decideWrite reads its template constraints", async () => {
     const vault = await tempVault();
     const root = await tempVault();
     const vaultId = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
     await mkdir(join(vault, ".oms"));
     await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId, templateFolder: "Templates" }));
+    const status: PropertyContract = { meaning: "state", type: "text", default: false, required: false, rules: [{ kind: "allowed", values: ["closed", "done"] }] };
     const revision = await sealLegacyGeneration({
       vaultRealPath: vault,
       vaultId,
-      contract: { folders: null, properties: { status: { meaning: "state", type: "text", default: false, required: false, rules: [] } } },
+      contract: { folders: null, properties: { status } },
       templates: {
+        // Its fixed rule contradicts the pool's allowed list, so a leaked read would show as a contradiction.
         Meeting: {
           source: "Templates/Meeting.md", sourceHash: digestBytes("x"), applyFolder: "Projects",
-          requiredProperties: ["status"], narrowedRules: { status: [{ kind: "fixed", value: "open" }] }, requiredHeadings: ["Agenda"],
+          requiredProperties: ["status", "attendees"], narrowedRules: { status: [{ kind: "fixed", value: "open" }] }, requiredHeadings: ["Agenda"],
         },
       },
     }, root);
@@ -77,10 +79,18 @@ describe("a version 2 generation with templates", () => {
     expect(resolved.view.revision).toBe(revision);
     expect(resolved.view.legacy?.templates["Meeting"]?.requiredHeadings).toEqual(["Agenda"]);
     expect(resolved.view.contract).not.toHaveProperty("templates");
-    // The note sits in the template's applyFolder, breaks its fixed `status` and lacks its heading.
-    expect(judgeReadyTarget(resolved, "---\nstatus: closed\n---\nno agenda\n")).toMatchObject({ ok: true, refusals: [], warnings: [], violations: [] });
+
+    // In the template's applyFolder, breaking its fixed `status`, lacking `attendees` and its heading.
+    const obeysPool = "---\nstatus: closed\n---\nno agenda\n";
+    expect(judgeReadyTarget(resolved, obeysPool)).toMatchObject({ ok: true, refusals: [], warnings: [], violations: [] });
+    expect(decideWrite(resolved, obeysPool, { template: "Meeting" })).toMatchObject({ outcome: "allow", findings: [] });
+    expect(decideWrite(resolved, obeysPool, { template: "Meeting" })).not.toHaveProperty("fixedContent");
+
+    // A pool miss is kept as an ordinary warning, not a contradiction the template's rule would imply.
+    const decision = decideWrite(resolved, "---\nstatus: pending\n---\nno agenda\n", { template: "Meeting" });
+    expect(decision).toMatchObject({ outcome: "allow", findings: [{ axis: "value", kind: "kept", reason: "kept: not-allowed" }] });
+
     expect(await readFile(manifest, "utf8")).toBe(before);
-    expect(digestBytes(await readFile(manifest, "utf8"))).toBe(digestBytes(before));
   });
 });
 

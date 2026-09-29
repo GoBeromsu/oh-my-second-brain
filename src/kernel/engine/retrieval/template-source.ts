@@ -53,6 +53,7 @@ function isAbsent(error: unknown): boolean {
 async function readState(vault: string): Promise<ReadState> {
   try {
     const { view, row, settingsInvalid } = await resolveSealState(vault);
+    // slice f2: move to templateFolder
     if (view.state === "sealed") return { state: "sealed", contract: templatedContract(view) };
     if (view.state === "unreadable") return { state: "unreadable", reason: "the sealed contract is unreadable; run oms doctor contract" };
     return { state: "open", finding: settingsInvalid ? SETTINGS_INVALID_FINDING : ROW_FINDING[row] };

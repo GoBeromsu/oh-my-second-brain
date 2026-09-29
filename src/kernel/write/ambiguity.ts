@@ -156,15 +156,18 @@ export function resolveTiers(input: AmbiguityInput): Resolution {
   const { view, verdict } = input;
   if (verdict.refusals.length > 0) return { action: "refuse", reason: "refused" };
   if (view.state !== "sealed") return { action: "save", content: input.content, verdict, findings: [] };
-  const contract = templatedContract(view);
+  // The tier is decided on the sealed axes alone; an older generation's templates never
+  // constrain a write, so neither contradictions nor fixes read them.
+  const contract = view.contract;
   const parsed = parseNote(input.content);
   // A finding records the value as written: `01234` stays `01234`, not the number it parses to.
   const frontmatter = writtenValues(input.content);
-  const choices = parsed.diagnostics.length > 0 ? [] : templateChoices(contract, input.path, input.template, parsed.frontmatter);
+  // slice f2: move to templateFolder
+  const choices = parsed.diagnostics.length > 0 ? [] : templateChoices(templatedContract(view), input.path, input.template, parsed.frontmatter);
   const gaps = newWarnings(verdict, input.baseline);
   if (gaps.length === 0) return { action: "save", content: input.content, verdict, findings: choices };
 
-  const contradicted = new Set(contractContradictions(contract).map(entry => entry.field));
+  const contradicted = new Set(contractContradictions({ ...contract, templates: {} }).map(entry => entry.field));
   const keep = (warnings: readonly Violation[]) => warnings.map(warning =>
     recorded(warning, "kept", frontmatter, contradicted.has(warning.field) ? "contradiction" : "kept"));
   if (gaps.some(warning => warning.kind === "yaml-syntax")) {

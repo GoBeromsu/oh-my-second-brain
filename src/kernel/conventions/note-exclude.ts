@@ -267,6 +267,7 @@ async function readSealed(vault: string): Promise<{
     if (view.state === "unreadable") {
       return { paths: [], globs: [], diagnostics: [diagnostic("SOURCE_CONTRACT_UNREADABLE", FOLDERS_PATH, "the sealed contract is unreadable; run oms doctor contract")], classification: "unreadable" };
     }
+    // slice f2: move to templateFolder
     if (view.state === "sealed") contract = templatedContract(view);
   } catch (error: unknown) {
     const code = nodeCode(error);

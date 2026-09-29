@@ -89,6 +89,7 @@ function frameProperties(contract: VaultContract, redactor: Redactor): FrameProp
 
 export function frameFor(view: ContractView, options: FrameOptions = {}): WriteFrame {
   if (view.state !== "sealed") return emptyFrame(view.state);
+  // slice f2: move to templateFolder
   const contract = templatedContract(view);
   const name = options.template;
   const template = name !== undefined && Object.hasOwn(contract.templates, name) ? contract.templates[name] : undefined;

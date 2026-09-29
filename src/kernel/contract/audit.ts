@@ -36,6 +36,7 @@ function inFolder(notePath: string, folder: string | undefined): boolean {
 export async function auditVault(vault: string, options: { readonly folder?: string } = {}, root: string = storeRoot()): Promise<VaultAudit> {
   const state = await resolveSealState(vault, root);
   const contract = state.view.state;
+  // slice f2: move to templateFolder
   const sources = new Set(Object.values(legacyTemplatesOf(state.view)).map(template => template.source));
   let managed: (notePath: string) => Promise<boolean> = async () => false;
   try {

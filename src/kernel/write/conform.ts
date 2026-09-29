@@ -96,6 +96,7 @@ function substituteVariables(content: string, options: ConformOptions, applied: 
 
 function selectedTemplate(options: ConformOptions): LegacyTemplateContract | undefined {
   if (options.view.state !== "sealed" || options.template === undefined) return undefined;
+  // slice f2: move to templateFolder
   const templates = legacyTemplatesOf(options.view);
   return Object.hasOwn(templates, options.template) ? templates[options.template] : undefined;
 }
@@ -119,6 +120,7 @@ function fixedDefault(property: PropertyContract): string | null {
  */
 function templateRequired(options: ConformOptions, template: LegacyTemplateContract | undefined): ReadonlySet<string> {
   if (template !== undefined) return new Set(template.requiredProperties);
+  // slice f2: move to templateFolder
   return new Set(Object.values(legacyTemplatesOf(options.view)).flatMap(candidate => candidate.requiredProperties));
 }
 

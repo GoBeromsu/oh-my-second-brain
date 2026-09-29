@@ -646,6 +646,7 @@ export async function runInterview(input: {
       return { state: "refused", reasons: ["The vault settings are unreadable; run `oms doctor contract`."] };
     }
     const baseSeq = state.vaultId === null ? "none" : await currentSequence(state.vaultId, root);
+    // slice f2: move to templateFolder
     const sealed = state.view.state === "sealed" ? templatedContract(state.view) : null;
     // A sealed pattern refused by today's seal screen can only be replaced, which is looser.
     const unsafe = input.nonLoosening === true && sealed !== null ? unsafePatternChanges(sealed) : [];
