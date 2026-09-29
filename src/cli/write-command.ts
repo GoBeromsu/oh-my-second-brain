@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { writePayload } from "../kernel/write/payload.js";
+import { writePayload, type WritePayload } from "../kernel/write/payload.js";
 import { runWritePipeline } from "../kernel/write/pipeline.js";
 
 /**
@@ -21,10 +21,12 @@ export function writeUsage(): string {
   return `Usage: oms write <vault-relative path> [--template <template>] [--if-match sha256:<rev>] [--check] [--vault <path>] < note.md
 
 Reads the whole note (frontmatter and body) from stdin, applies mechanical fixes (date and
-title variables, date defaults, template headings) and saves it. Only a safety refusal (vault
-boundary, path safety, a tampered contract) denies the write; anything else the note breaks
-in the sealed vault contract is saved and listed as warnings in the receipt, or the note is
-kept as a draft outside the vault when a new gap cannot be repaired. Overwriting an existing note needs --if-match with its current revision,
+title variables, defaults, template headings) and saves it. Only a safety refusal (vault
+boundary, path safety, a tampered contract) denies the write. A value the contract reads
+the same way in another spelling ("12" for a number) is fixed and listed in fixes; anything
+else the note breaks in the sealed vault contract is saved as written and listed in
+warnings. Frontmatter that does not parse is kept as a draft outside the vault. Warnings
+and fixes are also printed to stderr. Overwriting an existing note needs --if-match with its current revision,
 as a previous receipt or --check reports it. --check judges and prints the frame without
 touching disk. The target vault of a write must be verified: --vault, the vault's own
 .oms/settings.json, a bridge link, or OMS_VAULT. A vault inferred from the current directory
@@ -85,6 +87,14 @@ async function readProcessStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+/** One stderr line each for what a write saved with warnings and what it fixed: `{field, kind}` only. */
+function findingLines(payload: WritePayload): readonly string[] {
+  const lines: string[] = [];
+  if ("warnings" in payload && payload.warnings.length > 0) lines.push(`[oms] warnings: ${JSON.stringify(payload.warnings)}`);
+  if ("fixes" in payload && payload.fixes.length > 0) lines.push(`[oms] fixed: ${JSON.stringify(payload.fixes)}`);
+  return lines;
+}
+
 async function resolveTarget(
   explicit: string | undefined,
   cwd: string,
@@ -116,6 +126,7 @@ export async function runWriteCommand(argv: readonly string[], deps: WriteComman
       check: args.check,
     }));
     console.log(JSON.stringify(payload, null, 2));
+    for (const line of findingLines(payload)) console.error(line);
     if (!payload.ok) process.exitCode = 1;
   } catch (error) {
     process.exitCode = 1;

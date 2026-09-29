@@ -1,29 +1,28 @@
-import { isMap, parseDocument } from "yaml";
 import { compareCodePoints } from "../conventions/canonical.js";
 import { parseNote } from "../conventions/frontmatter.js";
 import { contractContradictions } from "../contract/contradiction.js";
 import type { GapAxis, GapKind, GapWant } from "../contract/gap-ledger.js";
 import { insideApplyFolder } from "../contract/judge.js";
 import type { ContractView, JsonScalar, VaultContract, Verdict, Violation, ViolationKind } from "../contract/types.js";
+import { coerceFrontmatter } from "./coerce.js";
 
 /**
- * What a write does where the note and the sealed contract do not line up exactly. Only a
- * refusal (vault boundary, path safety, a tampered seal) stops a write; everything below
- * is a warning, and only warnings the note did not already have are recorded. There are
- * four kinds:
+ * What a write does where the note and the sealed contract do not line up exactly.
+ * Templates generate; the axes judge. Only a refusal (vault boundary, path safety, a
+ * tampered seal) stops a write; every other finding is a warning, and only warnings the
+ * note did not already have are recorded. There are three tiers:
  *
- * ① mechanical: `conform` fills date and title variables, defaults and the heading
- *    skeleton before the judge runs. Nothing is recorded; the receipt lists the changes.
- * ② choice: the frame leaves a choice open (several templates apply to the folder and
- *    none was selected). The note is saved as written and the choice is recorded.
- * ③ gap: the note wants something the frame has no place for. When dropping only the
- *    unplaceable frontmatter keys gives a form the same judge accepts, that nearest valid
- *    form is saved and each dropped want is recorded. Otherwise nothing is saved in the
- *    vault; the note is kept as a draft beside the ledger and the gaps point at it.
- *    Malformed frontmatter is always drafted.
- * ④ contradiction: the contract itself cannot be satisfied on the field. The note is
- *    saved as written and each warning is recorded with the reason `contradiction`.
+ * F fixed: a lossless fix (`coerce`) turns the written value into the one the rule asks
+ *   for without losing anything, such as `"12"` into `12` for a number. The fixed form
+ *   is saved and each fix is recorded with the value as written. `conform` has already
+ *   filled date and title variables, defaults and the heading skeleton; the receipt lists those.
+ * W kept: anything else outside the rules, such as an unknown key or a value no allowed
+ *   value spells, is saved as written and recorded as `kept`. A warning on a field the
+ *   contract itself contradicts is recorded with the reason `contradiction`.
+ * D drafted: frontmatter that does not parse cannot be saved as a note the judge reads.
+ *   It is kept as a draft beside the ledger and the gap points at it.
  *
+ * A multi-template folder with no template selected records a choice beside any tier.
  * An open or broken contract has no ledger: the note is saved as written with its warning.
  *
  * This module decides and never writes; the pipeline records and saves.
@@ -49,17 +48,21 @@ export interface AmbiguityInput {
   readonly verdict: Verdict;
   /** The verdict on `previousContent`; absent when there is no readable previous note. */
   readonly baseline?: Verdict | undefined;
-  /** False when only the content as written can be saved: nothing is dropped or drafted. */
+  /** False when only the content as written can be saved: nothing is fixed or drafted. */
   readonly repair?: boolean | undefined;
-  /** The same judge the pipeline used, run again on a repaired form. */
+  /** True when the target does not exist; an unreadable previous note is not new. */
+  readonly isNew?: boolean | undefined;
+  /** The time an unconstrained date default takes on a new note; without it no date is filled. */
+  readonly now?: Date | undefined;
+  /** The same judge the pipeline used, run again on a fixed form. */
   readonly rejudge: (content: string) => Verdict;
 }
 
 export type Resolution =
-  /** ①, ②, a repaired ③ or ④: save `content`, judged by `verdict`, and record `findings`. */
+  /** F or W: save `content`, judged by `verdict` (whose `fixes` lists what was fixed), and record `findings`. */
   | { readonly action: "save"; readonly content: string; readonly verdict: Verdict; readonly findings: readonly GapFinding[] }
   /**
-   * ③ with no valid form: keep the note as a draft and record `findings` against it.
+   * D, malformed frontmatter: keep the note as a draft and record `findings` against it.
    * `asWritten` is what to record instead when no draft can be kept and the note is saved as written.
    */
   | { readonly action: "draft"; readonly findings: readonly GapFinding[]; readonly asWritten: readonly GapFinding[] }
@@ -79,11 +82,6 @@ const AXIS_OF: Readonly<Partial<Record<ViolationKind, GapAxis>>> = {
   "unsubstituted-variable": "value",
   "yaml-syntax": "value",
 };
-
-/** Kinds a key can be dropped for: the key or its value has no place in the frame. */
-const DROPPABLE: ReadonlySet<ViolationKind> = new Set([
-  "unknown-property", "type", "not-allowed", "not-fixed", "pattern", "range", "count", "unsubstituted-variable",
-]);
 
 /** The ledger axis a violation belongs to, or null when the violation is not a gap in the frame. */
 export function gapAxisOf(kind: ViolationKind): GapAxis | null {
@@ -130,45 +128,6 @@ export function templateChoices(contract: VaultContract, notePath: string, templ
   }];
 }
 
-function requiredBy(contract: VaultContract, field: string): boolean {
-  return contract.properties !== null && Object.hasOwn(contract.properties, field) && contract.properties[field]!.required;
-}
-
-/**
- * The frontmatter keys whose removal could clear every violation, or null when some
- * violation cannot be cleared that way. A key the note already had before this write is
- * never dropped, so a repair only ever removes what this write added.
- */
-function droppableKeys(violations: readonly Violation[], contract: VaultContract, input: AmbiguityInput, frontmatter: Readonly<Record<string, unknown>>): readonly string[] | null {
-  const before = input.previousContent === undefined ? {} : parseNote(input.previousContent).frontmatter;
-  const keys = new Set<string>();
-  for (const violation of violations) {
-    if (!DROPPABLE.has(violation.kind) || !Object.hasOwn(frontmatter, violation.field)) return null;
-    if (Object.hasOwn(before, violation.field) || requiredBy(contract, violation.field)) return null;
-    keys.add(violation.field);
-  }
-  return keys.size === 0 ? null : [...keys].sort(compareCodePoints);
-}
-
-/** `content` without the frontmatter `keys`; the body and every other key stay as written. */
-export function dropFrontmatterKeys(content: string, keys: readonly string[]): string | null {
-  const parsed = parseNote(content);
-  if (parsed.frontmatterRange === null || parsed.diagnostics.length > 0) return null;
-  const document = parseDocument(parsed.frontmatterRaw, { uniqueKeys: true });
-  if (!isMap(document.contents)) return null;
-  for (const key of keys) document.delete(key);
-  // A fence around nothing does not parse as frontmatter, so an emptied block goes entirely.
-  if (document.contents.items.length === 0) return parsed.body;
-  const yaml = String(document);
-  const head = content.slice(0, parsed.frontmatterRange.start);
-  const tail = content.slice(parsed.frontmatterRange.end);
-  return `${head}${yaml.endsWith("\n") ? yaml : `${yaml}\n`}${tail.replace(/^\r?\n/, "")}`;
-}
-
-function noFit(violation: Violation, axis: GapAxis, frontmatter: Readonly<Record<string, unknown>>, reason: string): GapFinding {
-  return { axis, kind: "no-fit", chosen: null, wanted: want(violation.field, frontmatter), reason };
-}
-
 function findingKey(finding: Violation): string {
   return `${finding.field}\u0000${finding.kind}`;
 }
@@ -179,9 +138,18 @@ function newWarnings(verdict: Verdict, baseline: Verdict | undefined): readonly 
   return verdict.warnings.filter(warning => gapAxisOf(warning.kind) !== null && !before.has(findingKey(warning)));
 }
 
+/** The same reading of a note's frontmatter a finding records, before any fix. */
+function recorded(warning: Violation, kind: GapKind, frontmatter: Readonly<Record<string, unknown>>, reason: string): GapFinding {
+  return { axis: gapAxisOf(warning.kind)!, kind, chosen: null, wanted: want(warning.field, frontmatter), reason: `${reason}: ${warning.kind}` };
+}
+
+/** A fix can uncover the next one (a filled list meets its count), so passes repeat a few times. */
+const FIX_PASSES = 3;
+
 /**
- * Decides the tier of a judged write: refuse only on a refusal, otherwise save, repair or
- * draft. Recorded findings cover only the warnings the note did not already have.
+ * Decides the tier of a judged write: refuse only on a refusal, draft only malformed
+ * frontmatter, otherwise fix what is lossless and keep the rest. Recorded findings cover
+ * only the warnings the note did not already have.
  */
 export function resolveTiers(input: AmbiguityInput): Resolution {
   const { view, verdict } = input;
@@ -194,21 +162,37 @@ export function resolveTiers(input: AmbiguityInput): Resolution {
   const gaps = newWarnings(verdict, input.baseline);
   if (gaps.length === 0) return { action: "save", content: input.content, verdict, findings: choices };
 
-  const recorded = (reason: string) => gaps.map(warning => noFit(warning, gapAxisOf(warning.kind)!, frontmatter, `${reason}: ${warning.kind}`));
   const contradicted = new Set(contractContradictions(contract).map(entry => entry.field));
-  if (gaps.some(warning => contradicted.has(warning.field))) {
-    return { action: "save", content: input.content, verdict, findings: [...choices, ...recorded("contradiction")] };
+  const keep = (warnings: readonly Violation[]) => warnings.map(warning =>
+    recorded(warning, "kept", frontmatter, contradicted.has(warning.field) ? "contradiction" : "kept"));
+  if (gaps.some(warning => warning.kind === "yaml-syntax")) {
+    return {
+      action: "draft",
+      findings: [...choices, ...gaps.map(warning => recorded(warning, "no-fit", frontmatter, "drafted"))],
+      asWritten: [...choices, ...keep(gaps)],
+    };
   }
-  const asWritten = [...choices, ...recorded("kept")];
-  if (input.repair === false) return { action: "save", content: input.content, verdict, findings: asWritten };
+  if (input.repair === false) return { action: "save", content: input.content, verdict, findings: [...choices, ...keep(gaps)] };
 
-  const keys = droppableKeys(gaps, contract, input, frontmatter);
-  const repaired = keys === null ? null : dropFrontmatterKeys(input.content, keys);
-  if (repaired !== null) {
-    const second = input.rejudge(repaired);
-    if (second.refusals.length === 0 && newWarnings(second, input.baseline).length === 0) {
-      return { action: "save", content: repaired, verdict: second, findings: [...choices, ...recorded("dropped")] };
-    }
+  let content = input.content;
+  let current = verdict;
+  let remaining = gaps;
+  const fixes: Violation[] = [];
+  for (let pass = 0; pass < FIX_PASSES && remaining.length > 0; pass += 1) {
+    const coerced = coerceFrontmatter(content, remaining, { contract, isNew: input.isNew === true, now: input.now }, contradicted);
+    if (coerced === null) break;
+    const next = input.rejudge(coerced.content);
+    if (next.refusals.length > 0) break;
+    content = coerced.content;
+    current = next;
+    fixes.push(...coerced.fixes);
+    remaining = newWarnings(next, input.baseline);
   }
-  return { action: "draft", findings: [...choices, ...recorded("drafted")], asWritten };
+  const fixedFindings = fixes.map(fix => recorded(fix, "fixed", frontmatter, "fixed"));
+  return {
+    action: "save",
+    content,
+    verdict: { ...current, fixes },
+    findings: [...choices, ...fixedFindings, ...keep(remaining)],
+  };
 }

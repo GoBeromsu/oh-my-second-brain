@@ -138,6 +138,17 @@ describe("translatePreToolUse gap ledger", () => {
     expect(gaps[0]!.reason.startsWith("kept:")).toBe(true);
   });
 
+  it("keeps a value the write pipeline would fix as a warning and leaves the tool input unchanged", async () => {
+    const fixture = await row("sealed");
+    const gapRoot = join(fixture.base, "gaps");
+    const input = { file_path: join(fixture.vault, "Projects/a.md"), content: "---\nstatus: \" OPEN \"\n---\nbody\n" };
+    const result = await translatePreToolUse(payload("Write", input), fixture.vault, { truncated: false }, { gapRoot: () => gapRoot });
+    expect(result.response).toEqual({ systemMessage: NOT_ALLOWED, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: NOT_ALLOWED } });
+    expect(JSON.stringify(result.response)).not.toContain("updatedInput");
+    const gaps = openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events);
+    expect(gaps.map(gap => [gap.kind, gap.wanted, gap.reason])).toEqual([["kept", { field: "status", value: " OPEN " }, "kept: not-allowed"]]);
+  });
+
   it("warns with the whole verdict but records nothing when an edit adds no finding over the note on disk", async () => {
     const fixture = await row("sealed");
     const gapRoot = join(fixture.base, "gaps");

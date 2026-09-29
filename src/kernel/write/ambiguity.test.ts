@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { judgeContent } from "../contract/judge-write.js";
 import { verdictOf, type ContractView, type PropertyContract, type TemplateContract, type VaultContract, type Verdict } from "../contract/types.js";
-import { dropFrontmatterKeys, gapAxisOf, resolveTiers, templateChoices, type AmbiguityInput } from "./ambiguity.js";
+import { gapAxisOf, resolveTiers, templateChoices, type AmbiguityInput } from "./ambiguity.js";
 
 const HASH = `sha256:${"a".repeat(64)}` as const;
 
@@ -86,15 +86,15 @@ describe("① and ② with an accepting verdict", () => {
   });
 });
 
-describe("③ gaps", () => {
-  it("drops keys this write added that the frame has no place for, saves the repaired form and records each want", () => {
+describe("W kept", () => {
+  it("saves unknown keys and out-of-rule values as written and records each as kept", () => {
     const note = input("Inbox/a.md", "---\ntitle: A\nmood: calm\nstatus: maybe\ntags: [a, b, c]\n---\nbody\n");
     const resolution = resolveTiers(note);
-    expect(resolution).toMatchObject({ action: "save", content: "---\ntitle: A\n---\nbody\n", verdict: { ok: true } });
+    expect(resolution).toMatchObject({ action: "save", content: note.content, verdict: { ok: true, fixes: [] } });
     expect(resolution.action === "save" && resolution.findings).toEqual([
-      { axis: "property", kind: "no-fit", chosen: null, wanted: { field: "mood", value: "calm" }, reason: "dropped: unknown-property" },
-      { axis: "value", kind: "no-fit", chosen: null, wanted: { field: "status", value: "maybe" }, reason: "dropped: not-allowed" },
-      { axis: "value", kind: "no-fit", chosen: null, wanted: { field: "tags", value: ["a", "b", "c"] }, reason: "dropped: count" },
+      { axis: "property", kind: "kept", chosen: null, wanted: { field: "mood", value: "calm" }, reason: "kept: unknown-property" },
+      { axis: "value", kind: "kept", chosen: null, wanted: { field: "status", value: "maybe" }, reason: "kept: not-allowed" },
+      { axis: "value", kind: "kept", chosen: null, wanted: { field: "tags", value: ["a", "b", "c"] }, reason: "kept: count" },
     ]);
   });
 
@@ -104,36 +104,67 @@ describe("③ gaps", () => {
     expect(resolution.action === "save" && resolution.findings.map(finding => finding.wanted)).toEqual([{ field: "mood" }, { field: "owner" }]);
   });
 
-  it("keeps the note as a draft when a key it already had is the problem", () => {
-    const note = input("Inbox/a.md", "---\ntitle: A\nstatus: maybe\n---\n", { previousContent: "---\ntitle: A\nstatus: open\n---\n" });
-    expect(resolveTiers(note)).toEqual({
-      action: "draft",
-      findings: [{ axis: "value", kind: "no-fit", chosen: null, wanted: { field: "status", value: "maybe" }, reason: "drafted: not-allowed" }],
-      asWritten: [{ axis: "value", kind: "no-fit", chosen: null, wanted: { field: "status", value: "maybe" }, reason: "kept: not-allowed" }],
+  it("keeps a missing key, an unregistered folder and a pattern miss as written", () => {
+    expect(resolveTiers(input("Inbox/a.md", "body\n"))).toMatchObject({
+      action: "save", content: "body\n",
+      findings: [{ axis: "property", kind: "kept", chosen: null, wanted: { field: "title" }, reason: "kept: missing" }],
     });
+    expect(resolveTiers(input("Elsewhere/a.md", "---\ntitle: A\n---\n"))).toMatchObject({ action: "save", findings: [{ axis: "folder", kind: "kept", reason: "kept: unregistered-folder" }] });
+    const patterned: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { ...CONTRACT.properties, title: property({ required: true, rules: [{ kind: "pattern", regex: "^[A-Z]" }] }) } } };
+    expect(resolveTiers(input("Inbox/a.md", "---\ntitle: lower\n---\n", { view: patterned }))).toMatchObject({ action: "save", findings: [{ kind: "kept", reason: "kept: pattern" }] });
+  });
+});
+
+describe("F fixed", () => {
+  const typed: ContractView = {
+    state: "sealed",
+    contract: {
+      ...CONTRACT,
+      properties: {
+        ...CONTRACT.properties,
+        count: property({ type: "number" }),
+        tags: property({ type: "list" }),
+        kind: property({ required: true, rules: [{ kind: "fixed", value: "note" }] }),
+      },
+    },
+  };
+
+  it("saves the fixed form, lists each fix on the verdict and records the value as written", () => {
+    const note = input("Inbox/a.md", "---\ntitle: A\nkind: note\ncount: \"12\"\nstatus: Done\n---\nbody\n", { view: typed });
+    const resolution = resolveTiers(note);
+    expect(resolution).toMatchObject({ action: "save", content: "---\ntitle: A\nkind: note\ncount: 12\nstatus: done\n---\nbody\n", verdict: { ok: true, warnings: [] } });
+    expect(resolution.action === "save" && resolution.verdict.fixes).toEqual([{ field: "count", kind: "type" }, { field: "status", kind: "not-allowed" }]);
+    expect(resolution.action === "save" && resolution.findings).toEqual([
+      { axis: "value", kind: "fixed", chosen: null, wanted: { field: "count", value: "12" }, reason: "fixed: type" },
+      { axis: "value", kind: "fixed", chosen: null, wanted: { field: "status", value: "Done" }, reason: "fixed: not-allowed" },
+    ]);
   });
 
-  it("keeps the note as a draft when the property requires the key, and drops it when only a selected template does", () => {
-    const required: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { ...CONTRACT.properties, title: property({ required: true, rules: [{ kind: "pattern", regex: "[A-Z]" }] }) } } };
-    expect(resolveTiers(input("Inbox/a.md", "---\ntitle: lower\n---\n", { view: required }))).toMatchObject({ action: "draft", findings: [{ wanted: { field: "title" } }] });
-    const byTemplate = input("Meetings/a.md", "---\ntitle: A\nstatus: maybe\n---\n", { template: "Review" });
-    expect(resolveTiers(byTemplate)).toMatchObject({ action: "save", content: "---\ntitle: A\n---\n", findings: [{ axis: "value", wanted: { field: "status" }, reason: "dropped: not-allowed" }] });
+  it("fixes what it can and keeps the rest", () => {
+    const note = input("Inbox/a.md", "---\ntitle: A\nkind: note\ncount: \"12a\"\ntags: solo\n---\n", { view: typed });
+    const resolution = resolveTiers(note);
+    expect(resolution).toMatchObject({ action: "save", content: "---\ntitle: A\nkind: note\ncount: \"12a\"\ntags:\n  - solo\n---\n" });
+    expect(resolution.action === "save" && resolution.findings.map(finding => finding.reason)).toEqual(["fixed: type", "kept: type"]);
   });
 
-  it("keeps the note as a draft for a violation dropping a key cannot clear", () => {
-    expect(resolveTiers(input("Inbox/a.md", "body\n"))).toEqual({
-      action: "draft",
-      findings: [{ axis: "property", kind: "no-fit", chosen: null, wanted: { field: "title" }, reason: "drafted: missing" }],
-      asWritten: [{ axis: "property", kind: "no-fit", chosen: null, wanted: { field: "title" }, reason: "kept: missing" }],
+  it("fills a required fixed value and a date default on a new note, but no date without a time or on an existing note", () => {
+    const dated: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { title: property({ required: true }), created: property({ type: "date", default: true, required: true }), kind: property({ required: true, rules: [{ kind: "fixed", value: "note" }] }) } } };
+    const now = new Date(2026, 8, 29, 10, 0, 0);
+    const fresh = resolveTiers(input("Inbox/a.md", "---\ntitle: A\n---\n", { view: dated, isNew: true, now }));
+    expect(fresh).toMatchObject({ action: "save", content: "---\ntitle: A\ncreated: 2026-09-29\nkind: note\n---\n" });
+    expect(fresh.action === "save" && fresh.findings.map(finding => finding.reason)).toEqual(["fixed: missing", "fixed: missing"]);
+    const existing = resolveTiers(input("Inbox/a.md", "---\ntitle: A\n---\n", { view: dated, now }));
+    expect(existing.action === "save" && existing.findings.map(finding => `${finding.wanted.field} ${finding.reason}`).sort()).toEqual(["created kept: missing", "kind fixed: missing"]);
+  });
+
+  it("keeps the note as written when the fixed form is refused", () => {
+    const note = input("Inbox/a.md", "---\ntitle: A\nkind: note\ncount: \"12\"\n---\n", { view: typed });
+    const rejudge = vi.fn((): Verdict => verdictOf([{ field: "path", kind: "path-unsafe" }]));
+    expect(resolveTiers({ ...note, rejudge })).toEqual({
+      action: "save", content: note.content, verdict: { ...note.verdict, fixes: [] },
+      findings: [{ axis: "value", kind: "kept", chosen: null, wanted: { field: "count", value: "12" }, reason: "kept: type" }],
     });
-    expect(resolveTiers(input("Elsewhere/a.md", "---\ntitle: A\n---\n"))).toMatchObject({ action: "draft", findings: [{ axis: "folder", reason: "drafted: unregistered-folder" }] });
-  });
-
-  it("keeps the note as a draft when the judge still refuses the repaired form, and never skips the second judgment", () => {
-    const note = input("Inbox/a.md", "---\ntitle: A\nmood: calm\n---\n");
-    const rejudge = vi.fn((): Verdict => verdictOf([{ field: "title", kind: "missing" }]));
-    expect(resolveTiers({ ...note, rejudge })).toMatchObject({ action: "draft", findings: [{ wanted: { field: "mood" }, reason: "drafted: unknown-property" }] });
-    expect(rejudge).toHaveBeenCalledWith("---\ntitle: A\n---\n");
+    expect(rejudge).toHaveBeenCalledOnce();
   });
 });
 
@@ -155,24 +186,38 @@ describe("refusals and contradictions", () => {
     expect(resolveTiers({ ...broken, verdict: accepted })).toEqual({ action: "save", content: broken.content, verdict: accepted, findings: [] });
   });
 
+  it("④ never fixes a contradicted field: an allowed list that is empty has no value to fix toward", () => {
+    const contradicted: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { ...CONTRACT.properties, count: property({ type: "number", rules: [{ kind: "allowed", values: [] }] }) } } };
+    const note = input("Inbox/a.md", "---\ntitle: A\ncount: \"12\"\n---\n", { view: contradicted });
+    const resolution = resolveTiers(note);
+    expect(resolution).toMatchObject({ action: "save", content: note.content });
+    expect(resolution.action === "save" && resolution.findings.every(finding => finding.reason.startsWith("contradiction: "))).toBe(true);
+  });
+
   it("④ saves a write whose warning lies on a contradicted field as written and records the contradiction", () => {
     const contradicted: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { ...CONTRACT.properties, owner: property({ rules: [{ kind: "allowed", values: [] }] }) } } };
     const note = input("Inbox/a.md", "---\ntitle: A\nowner: me\n---\n", { view: contradicted });
     expect(note.verdict).toMatchObject({ ok: true, warnings: [{ field: "owner", kind: "not-allowed" }] });
     expect(resolveTiers(note)).toEqual({
       action: "save", content: note.content, verdict: note.verdict,
-      findings: [{ axis: "value", kind: "no-fit", chosen: null, wanted: { field: "owner", value: "me" }, reason: "contradiction: not-allowed" }],
+      findings: [{ axis: "value", kind: "kept", chosen: null, wanted: { field: "owner", value: "me" }, reason: "contradiction: not-allowed" }],
     });
   });
 });
 
 describe("repair: false", () => {
+  it("fixes nothing: a would-be fix is saved as written and recorded as kept", () => {
+    const typed: ContractView = { state: "sealed", contract: { ...CONTRACT, properties: { ...CONTRACT.properties, count: property({ type: "number" }) } } };
+    const note = input("Inbox/a.md", "---\ntitle: A\ncount: \"12\"\n---\n", { view: typed, repair: false });
+    expect(resolveTiers(note)).toMatchObject({ action: "save", content: note.content, verdict: note.verdict, findings: [{ kind: "kept", reason: "kept: type" }] });
+  });
+
   it("saves the content as written and records each new warning as kept", () => {
     const note = input("Inbox/a.md", "---\ntitle: A\nmood: calm\n---\n", { repair: false });
     const rejudge = vi.fn(note.rejudge);
     expect(resolveTiers({ ...note, rejudge })).toEqual({
       action: "save", content: note.content, verdict: note.verdict,
-      findings: [{ axis: "property", kind: "no-fit", chosen: null, wanted: { field: "mood", value: "calm" }, reason: "kept: unknown-property" }],
+      findings: [{ axis: "property", kind: "kept", chosen: null, wanted: { field: "mood", value: "calm" }, reason: "kept: unknown-property" }],
     });
     expect(rejudge).not.toHaveBeenCalled();
   });
@@ -191,8 +236,8 @@ describe("the warning delta", () => {
   it("treats every warning as new when there is no readable previous note", () => {
     const note = input("Inbox/a.md", "---\ntitle: A\nstatus: maybe\n---\n", { previousContent: "---\ntitle: A\nstatus: bogus\n---\n" });
     const resolution = resolveTiers(note);
-    expect(resolution.action).toBe("draft");
-    expect(resolution.action === "draft" && resolution.findings.map(finding => finding.wanted.field)).toEqual(["status"]);
+    expect(resolution.action).toBe("save");
+    expect(resolution.action === "save" && resolution.findings.map(finding => finding.wanted.field)).toEqual(["status"]);
   });
 
   it("records only the warnings the baseline lacks", () => {
@@ -200,22 +245,5 @@ describe("the warning delta", () => {
     const baseline = verdictOf([{ field: "mood", kind: "unknown-property" }]);
     const resolution = resolveTiers({ ...note, baseline });
     expect(resolution.action === "save" && resolution.findings.map(finding => finding.reason)).toEqual(["kept: not-allowed"]);
-  });
-});
-
-describe("dropFrontmatterKeys", () => {
-  it("removes only the named keys and keeps the body and the other keys", () => {
-    expect(dropFrontmatterKeys("---\na: 1\nb: 2\n---\nbody\n", ["b"])).toBe("---\na: 1\n---\nbody\n");
-    expect(dropFrontmatterKeys("---\na: 1\n---\nbody\n", ["missing"])).toBe("---\na: 1\n---\nbody\n");
-  });
-
-  it("drops the whole block when no key is left", () => {
-    expect(dropFrontmatterKeys("---\na: 1\n---\nbody\n", ["a"])).toBe("body\n");
-  });
-
-  it("returns null without frontmatter, with unparseable frontmatter, or with a non-map block", () => {
-    expect(dropFrontmatterKeys("body\n", ["a"])).toBeNull();
-    expect(dropFrontmatterKeys("---\na: [\n---\n", ["a"])).toBeNull();
-    expect(dropFrontmatterKeys("---\n- a\n---\n", ["a"])).toBeNull();
   });
 });

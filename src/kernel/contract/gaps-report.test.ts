@@ -50,7 +50,7 @@ describe("gapsReport", () => {
       ledger: "ok",
       open: 2,
       byAxis: { folder: 1, property: 1, value: 0, template: 0 },
-      byKind: { "no-fit": 2, choice: 0 },
+      byKind: { "no-fit": 2, choice: 0, kept: 0, fixed: 0 },
       gaps: [
         { id: "g1", notePath: "Inbox/a.md", axis: "property", kind: "no-fit", field: "mood", drafted: false, stale: false },
         { id: "g2", notePath: "Inbox/a.md", axis: "folder", kind: "no-fit", field: "Elsewhere", drafted: true, stale: true },

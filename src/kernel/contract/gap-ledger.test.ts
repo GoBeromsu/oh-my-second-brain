@@ -113,6 +113,19 @@ describe("gap ledger", () => {
     expect(ledger.corrupt).toEqual(bad.map((_, index) => index + 2));
   });
 
+  it("records and reads back the kept and fixed kinds, and still reads events an earlier version wrote as no-fit", async () => {
+    await recordGaps(root, VAULT_ID, [
+      gap("mood", { kind: "kept", reason: "kept: unknown-property" }),
+      gap("size", { axis: "value", kind: "fixed", wanted: { field: "size", value: "12" }, reason: "fixed: type" }),
+    ], { now: () => 1, newId: ids("g1", "g2") });
+    const legacy = { type: "gap", id: "g0", at: 0, ...gap("old") };
+    await appendFile(ledgerPath(), `${JSON.stringify(legacy)}\n`);
+    const ledger = await readGapLedger(root, VAULT_ID);
+    expect(ledger.corrupt).toEqual([]);
+    expect(ledger.events.map(event => event.type === "gap" ? [event.id, event.kind] : [event.id])).toEqual([["g1", "kept"], ["g2", "fixed"], ["g0", "no-fit"]]);
+    expect(openGaps(ledger.events).find(record => record.id === "g2")?.wanted).toEqual({ field: "size", value: "12" });
+  });
+
   it("accepts a resolved event and a gap with a well-formed draft ref", async () => {
     const draftRef = await writeGapDraft(root, VAULT_ID, "# held\n", { newId: () => "12345678-1234-4234-8234-123456789abc" });
     await recordGaps(root, VAULT_ID, [gap("a", { draftRef })], { newId: ids("g1") });

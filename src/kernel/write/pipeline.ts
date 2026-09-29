@@ -169,14 +169,15 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
   const ledger: LedgerTarget | null = revision !== null && vaultId !== null ? { root: deps.gapRoot(), vaultId } : null;
 
   const frame = frameFor(resolved.view, { folder: folderOf(resolved.path), template });
+  const now = deps.now();
   const conformed = conform(request.content, {
     view: resolved.view,
     template,
     isNew: resolved.previousContent === undefined,
     title: titleOf(resolved.path),
-    now: deps.now(),
+    now,
   });
-  const decision = decideWrite(resolved, conformed.content, { template });
+  const decision = decideWrite(resolved, conformed.content, { template, now });
   const { verdict } = decision;
   const resolution: Resolution = decision.outcome === "deny" ? { action: "refuse", reason: "refused" }
     : decision.outcome === "draft" ? { action: "draft", findings: decision.findings, asWritten: decision.asWritten }
@@ -190,6 +191,8 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
     const action = resolution.action === "draft" && !draftable ? "save" : resolution.action;
     const findings = resolution.action === "refuse" ? [] : resolution.action === "draft" && !draftable ? resolution.asWritten : resolution.findings;
     const wouldDraft = action === "draft" && precondition === undefined;
+    // A check reports what the real write would save: the fixed note's warnings and its fixes.
+    const reported = resolution.action === "save" ? resolution.verdict : verdict;
     return {
       kind: "checked",
       check: {
@@ -198,10 +201,10 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
         revision: typeof resolved.previousContent === "string" ? noteRevision(resolved.previousContent) : null,
         contractRevision: revision,
         refusals: verdict.refusals,
-        warnings: verdict.warnings,
-        fixes: verdict.fixes,
+        warnings: reported.warnings,
+        fixes: reported.fixes,
         violations: verdict.refusals,
-        missingDefaults: verdict.missingDefaults,
+        missingDefaults: reported.missingDefaults,
         conformed: conformed.applied,
         frame,
         resolution: { action, gaps: unrecorded(findings), wouldDraft, ...(precondition === undefined ? {} : { precondition }) },
@@ -268,9 +271,9 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
       keyword,
       conformed: conformed.applied,
       missingDefaults: save.verdict.missingDefaults,
-      // A drop repair saves a different note: its warnings are the saved note's, and what it dropped is a fix.
+      // A fixed note is judged again: its warnings are the saved note's, and each fix is listed.
       warnings: save.verdict.warnings,
-      fixes: verdict.warnings.filter(warning => !save.verdict.warnings.some(kept => kept.field === warning.field && kept.kind === warning.kind)),
+      fixes: save.verdict.fixes,
       gaps,
       ...(gapLedger === undefined ? {} : { gapLedger }),
     }),

@@ -28,7 +28,7 @@ vi.mock("../kernel/contract/judge.js", async (importOriginal) => {
 
 const { createOMSMcpServer } = await import("./server.js");
 const { translatePreToolUse } = await import("../vendors/claude/hook/pre-tool-use.js");
-const { formatDenyReason, formatWarnings } = await import("../kernel/contract/types.js");
+const { formatDenyReason, WARNING_PREFIX } = await import("../kernel/contract/types.js");
 const { runWriteCommand } = await import("../cli/write-command.js");
 
 const CONTRACT: VaultContract = {
@@ -173,6 +173,18 @@ function hookPayload(fixture: TruthTableFixture, row: Row): string {
 }
 
 /** What the hook decided, read back from its response shape. */
+/** `{field, kind}` pairs in a stable order, so two surfaces compare as sets. */
+function sorted(findings: ReadonlyArray<Pick<Violation, "field" | "kind">>): string[] {
+  return findings.map(finding => `${finding.field}/${finding.kind}`).sort();
+}
+
+/** The `{field, kind}` list a hook warning line carries. */
+function warnedIn(message: string): Array<Pick<Violation, "field" | "kind">> {
+  expect(message.startsWith(WARNING_PREFIX)).toBe(true);
+  const list = message.slice(WARNING_PREFIX.length, message.lastIndexOf(" Run: "));
+  return JSON.parse(list) as Array<Pick<Violation, "field" | "kind">>;
+}
+
 function hookDecision(response: unknown): { readonly decision: Decision; readonly message: string | null } {
   const shape = response as { systemMessage?: string; hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
   if (shape.hookSpecificOutput?.permissionDecision === "deny") return { decision: "deny", message: shape.hookSpecificOutput.permissionDecisionReason ?? null };
@@ -195,8 +207,14 @@ describe.each(SEALS)("MCP write, CLI write and the hook translator share one jud
       const ifMatch = ifMatchOf(row);
       const argv = ifMatch === undefined ? [row.path] : [row.path, "--if-match", ifMatch];
       await runWriteCommand([...argv, "--vault", cliFixture.vault], { env: {}, cwd: cliFixture.vault, readStdin: async () => row.content });
-      expect(error).not.toHaveBeenCalled();
-      return { ...(JSON.parse(String(log.mock.calls[0]?.[0])) as Payload), exitCode: process.exitCode };
+      const payload = JSON.parse(String(log.mock.calls[0]?.[0])) as Payload;
+      // stderr carries only the finding lines: the warnings and the fixes, each when present.
+      const findings = [
+        ...(payload.warnings?.length ? [`[oms] warnings: ${JSON.stringify(payload.warnings)}`] : []),
+        ...(payload.fixes?.length ? [`[oms] fixed: ${JSON.stringify(payload.fixes)}`] : []),
+      ];
+      expect(error.mock.calls.map(call => call[0])).toEqual(findings);
+      return { ...payload, exitCode: process.exitCode };
     } finally {
       process.env["HOME"] = path.join(fixture.base, "home");
       process.exitCode = 0;
@@ -283,14 +301,16 @@ describe.each(SEALS)("MCP write, CLI write and the hook translator share one jud
     } else {
       expect(payload.status).not.toBe("denied");
       expect(result.isError).toBeUndefined();
-      // The hook never repairs, so it warns on everything MCP either kept as a warning or dropped as a fix.
+      // The hook never fixes, so it warns on everything MCP either kept as a warning or fixed.
+      // A fix moves a finding from one list to the other, so the two compare as sets.
       const met = [...(payload.warnings ?? []), ...(payload.fixes ?? [])];
       if (decision === "warn") {
-        // Let through: saved with its warnings, or kept as a draft when a new gap cannot be repaired.
+        // Let through: saved with its warnings, or kept as a draft when the frontmatter does not parse.
         expect(payload.ok === true || payload.status === "drafted").toBe(true);
         expect(met.length).toBeGreaterThan(0);
-        const message = formatWarnings(met);
+        const message = fromHook.message!;
         expect(hook.response).toEqual({ systemMessage: message, hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: message } });
+        expect(sorted(warnedIn(message))).toEqual(sorted(met));
       } else {
         expect(payload.ok).toBe(true);
         expect(met).toEqual([]);

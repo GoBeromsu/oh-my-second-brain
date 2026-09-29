@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -75,10 +75,16 @@ describe("contract flow e2e", () => {
       });
       expect(sealed).toEqual({ state: "sealed", vaultIdCreated: true, folders: 1, properties: 1, templates: [] });
 
-      // A sealed contract gap is kept as a draft outside the vault, not refused.
-      const drafted = await write({ path: "Projects/b.md", content: "---\nstatus: nope\n---\nBody\n" });
+      // A value outside the sealed rule is saved as written with a warning, not refused.
+      const kept = await write({ path: "Projects/k.md", content: "---\nstatus: nope\n---\nBody\n" });
+      expect(kept.isError).toBeFalsy();
+      expect(payload(kept)).toMatchObject({ ok: true, path: "Projects/k.md", warnings: [{ field: "status", kind: "not-allowed" }], fixes: [] });
+      expect(await readFile(path.join(vault, "Projects", "k.md"), "utf8")).toBe("---\nstatus: nope\n---\nBody\n");
+
+      // Frontmatter that does not parse is kept as a draft outside the vault, not refused.
+      const drafted = await write({ path: "Projects/b.md", content: "---\nstatus: [nope\n---\nBody\n" });
       expect(drafted.isError).toBeFalsy();
-      expect(payload(drafted)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "status", kind: "not-allowed" }] });
+      expect(payload(drafted)).toMatchObject({ ok: false, status: "drafted", warnings: [{ field: "content", kind: "yaml-syntax" }] });
       expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
 
       // Only a safety refusal denies the write.

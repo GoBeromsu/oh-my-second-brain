@@ -105,6 +105,23 @@ describe("MCP write on the ko-vault", () => {
     }
   }, 120_000);
 
+  it("fixes a decomposed, padded Korean allowed value to its NFC spelling and keeps an unmatched one as written", async () => {
+    const client = await connected();
+    try {
+      const decomposed = `---\nstatus: " ${"진행중".normalize("NFD")} "\n---\n본문\n`;
+      const fixed = payload(await client.callTool({ name: "write", arguments: { path: "Projects/정규화.md", content: decomposed } }) as ToolResult);
+      expect(fixed).toMatchObject({ ok: true, warnings: [], fixes: [{ field: "status", kind: "not-allowed" }] });
+      expect(await readFile(path.join(vault, "Projects", "정규화.md"), "utf8")).toBe("---\nstatus: \"진행중\"\n---\n본문\n");
+
+      const unmatched = "---\nstatus: 엉터리\n---\n본문\n";
+      const kept = payload(await client.callTool({ name: "write", arguments: { path: "Projects/그대로.md", content: unmatched } }) as ToolResult);
+      expect(kept).toMatchObject({ ok: true, warnings: [{ field: "status", kind: "not-allowed" }], fixes: [] });
+      expect(await readFile(path.join(vault, "Projects", "그대로.md"), "utf8")).toBe(unmatched);
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
+
   it("reports the index as skipped and writes the note when no store exists yet", async () => {
     const client = await connected();
     try {
