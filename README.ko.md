@@ -40,7 +40,7 @@ Obsidian은 사령탑으로 남는다. OMS가 꺼져 있어도 노트는 사람�
 </td>
 <td width="50%" valign="top">
 <h3>내 볼트의 언어 그대로</h3>
-폴더, 속성, 템플릿의 의미는 내가 정한다. OMS가 제시하는 체계를 따르는 대신, 내 컨벤션을 기록한다.
+폴더와 속성의 의미는 내가 정한다. OMS가 제시하는 체계를 따르는 대신, 내 컨벤션을 기록한다.
 </td>
 </tr>
 <tr>
@@ -78,7 +78,7 @@ oms --help
 
 ### 2. 볼트 규약 정의
 
-터미널에서 setup을 실행한다. 폴더, 속성, 템플릿을 인터뷰한 뒤 계약을 봉인한다. 기존 노트는 수정하지 않는다.
+터미널에서 setup을 실행한다. 폴더와 속성을 인터뷰한 뒤 계약을 봉인한다. 기존 노트는 수정하지 않는다.
 
 ```bash
 oms setup --vault /path/to/vault
@@ -132,9 +132,9 @@ oms search "프로젝트 결정" --vault /path/to/vault
 <details>
 <summary><strong>볼트 계약 자세히 보기</strong></summary>
 
-- **의미는 사용자 소유다.** 폴더, 속성 pool, 템플릿을 함께 인터뷰한다. 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다.
+- **의미는 사용자 소유다.** 폴더와 속성 pool을 함께 인터뷰한다. 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다.
 - **볼트 안의 제어 파일은 하나다.** `.oms/settings.json`에 `version`, `vaultId`, `templateFolder`, `embedding`, `agentRepair`를 둔다. 다른 `.oms/` 항목은 무시하고 `oms doctor contract`가 예상하지 않은 제어 파일로 보고한다. `.obsidian/types.json`은 읽기 전용 관측값이며 봉인을 덮어쓰지 않는다.
-- **템플릿은 원본으로 남는다.** OMS는 템플릿이 선언하는 것을 기록한다. 템플릿 파일을 다시 쓰거나 복사하지 않으며, Templater·JavaScript·전용 token 언어를 해석하거나 실행하지 않는다. 쓰기는 작성 중인 노트의 기계적인 부분만 채운다. `{{title}}`·`{{date}}`·`{{time}}` 변수, 새 노트의 date·datetime 기본값, 선택한 템플릿에서 빠진 heading이다. 필수 값을 대신 채우지는 않는다.
+- **템플릿은 원본으로 남는다.** 템플릿은 `templateFolder`에 있으며 봉인하거나 판정하지 않는다. 새 노트는 살아 있는 템플릿으로 뼈대를 채운다. 쓰기가 이름을 준 템플릿, 없으면 basename이나 `folder:` 키가 대상 폴더와 맞는 유일한 템플릿이다. 템플릿 파일을 다시 쓰거나 복사하지 않으며, Templater·JavaScript·전용 token 언어를 해석하거나 실행하지 않는다. 쓰기는 작성 중인 노트의 기계적인 부분만 채운다. `{{title}}`·`{{date}}`·`{{time}}` 변수, 새 노트의 date·datetime 기본값, 선택한 템플릿의 frontmatter 기본값과 빠진 heading이다. 노트에 이미 있는 값이 우선한다. 필수 값을 대신 채우지는 않는다.
 - **이전 봉인도 읽힌다.** 새 봉인은 폴더와 속성만 저장한다. 이전 릴리스가 만든 봉인도 그대로 읽히며, `oms setup status`는 그 템플릿 제약을 `legacyTemplates` 개수로 보고할 뿐 강제하지 않는다.
 - **판정자는 하나다.** 거부 시 `{field, kind}` 위반과 안내 명령 하나만 반환한다. 규칙 값, 저장소 경로, 계약 본문은 반환하지 않는다.
 - **봉인 증거가 맞지 않으면 쓰기를 거부한다.** 이 기기의 증거가 볼트와 어긋나면 `contract-unreadable`로 거부하고 소유자가 `oms setup`을 다시 실행해야 한다. 봉인이 아예 없는 기기에서는 판정하지 않는 것과 구별한다.
@@ -144,13 +144,13 @@ oms search "프로젝트 결정" --vault /path/to/vault
 </details>
 
 <details>
-<summary><strong>설정, 템플릿 해석, 복구</strong></summary>
+<summary><strong>설정, 템플릿 뼈대, 복구</strong></summary>
 
 터미널에서 `oms setup`을 실행하면 대화형 인터뷰를 거쳐 계약을 봉인한다. `oms interview`는 같은 터미널 인터뷰를 독립 명령으로 제공하며, 터미널이 필요하고 `OMS_NON_INTERACTIVE=1`이면 실행을 거부한다.
 
-`setup` 스킬은 `oms setup --questions`로 질문을 받아 소유자에게 하나씩 묻고, `oms setup --answers <file|->`로 답을 제출한다. 이 경로는 첫 봉인이나 더 엄격한 계약만 봉인하며, 계약을 느슨하게 하는 재봉인은 소유자의 터미널에서 한다. MCP `interview` 도구는 질문과 봉인 상태만 보여 주며 아무것도 봉인하지 않는다.
+`setup` 스킬은 `oms setup --questions`로 질문을 받아 소유자에게 하나씩 묻고, `oms setup --answers <file|->`로 답을 제출한다. 이 경로는 첫 봉인이나 더 엄격한 계약만 봉인하며, 계약을 느슨하게 하는 재봉인은 소유자의 터미널에서 한다. MCP `interview` 도구는 여러 호출에 걸쳐 인터뷰를 이어 간다. `op: questions`는 읽기 전용이고, `answer`, `confirm`, `seal`은 검증된 대상의 인터뷰 로그에 기록한다. 소유자가 확인한 제안만 봉인하며 오래된 seal lock을 회수하지 않는다.
 
-`oms setup extract --template <path>`는 템플릿 원문과 계산한 hash를 반환한다. 에이전트는 각 템플릿을 읽어 `oms setup --interpretations <file>`로 해석을 제출한다. 소유자가 그 해석을 확인한 다음 인터뷰에 사용한다.
+setup과 인터뷰는 폴더와 속성만 묻는다. `oms setup extract --template <name>`은 `templateFolder`의 템플릿이 채울 뼈대(원본 경로, `folder:` 선택자, 속성 이름, heading)를 미리 보여 준다. 템플릿을 고치면 재봉인 없이 다음 쓰기부터 반영된다.
 
 `oms doctor contract`는 봉인, 오래된 lock, 고아 generation, 예상하지 않은 제어 파일, hook 전송 실패를 진단한다. `--fix`는 이동했거나 색인되지 않은 볼트를 다시 색인할 뿐이다. 다른 봉인 문제는 `oms setup`으로 복구한다.
 
@@ -223,7 +223,7 @@ oms search --path|--context|--link              노트 하나 읽기, 맥락 조
 oms interview                                   터미널에서 볼트 소유자를 인터뷰하고 봉인
 oms write <path>                                계약이 허용하면 stdin의 노트를 저장
 oms setup                                       계약 봉인 (에이전트는 --questions/--answers)
-oms setup extract|status                        템플릿 원문 또는 계약 상태 표시
+oms setup extract|status                        템플릿 뼈대 미리보기 또는 계약 상태 표시
 oms setup host install|remove|sync|status       호스트 asset과 MCP 등록 관리
 oms setup model install|select|waive|status     로컬 모델 선택 관리
 oms setup package check|update                  OMS 패키지 확인 또는 갱신
@@ -240,7 +240,7 @@ oms hook pre                                    Claude 쓰기를 계약으로 �
 
 인식되는 모든 명령은 `--help`와 `-h`를 받으며 exit 0, 부작용 없음으로 끝난다. 알 수 없는 명령과 `--help`를 함께 쓰면 exit 1이다. 0.19에서 제거된 family는 exit 1로 끝나며 대체 명령을 알려 준다.
 
-`oms doctor audit`는 노트를 다시 쓰지 않고 `{path, field, kind}` 항목을 보고한다. 노트는 `oms write <path> < note.md` 또는 MCP `write {path, content, template?, ifMatch?, check?}`로 전체 내용을 쓴다. 둘 다 같은 쓰기 파이프라인을 거친다. 선택 사항인 `template`은 따르는 봉인된 템플릿 이름이다. 기존 노트를 덮어쓰려면 현재 `sha256:` revision을 `ifMatch`(`--if-match`)로 넘겨야 하고, `check`(`--check`)는 디스크를 건드리지 않고 판정만 한다. 허용된 쓰기는 새 revision이 담긴 receipt를 돌려주고, 엔진 저장소가 있으면 같은 호출에서 키워드 인덱스를 갱신하므로 노트를 바로 검색할 수 있다. 완료 호출이나 리뷰어 대화는 없다.
+`oms doctor audit`는 노트를 다시 쓰지 않고 `{path, field, kind}` 항목을 보고한다. 노트는 `oms write <path> < note.md` 또는 MCP `write {path, content, template?, ifMatch?, check?}`로 전체 내용을 쓴다. 둘 다 같은 쓰기 파이프라인을 거친다. 선택 사항인 `template`은 새 노트의 뼈대를 채울 `templateFolder`의 템플릿 이름이다. 기존 노트를 덮어쓰려면 현재 `sha256:` revision을 `ifMatch`(`--if-match`)로 넘겨야 하고, `check`(`--check`)는 디스크를 건드리지 않고 판정만 한다. 허용된 쓰기는 새 revision이 담긴 receipt를 돌려주고, 엔진 저장소가 있으면 같은 호출에서 키워드 인덱스를 갱신하므로 노트를 바로 검색할 수 있다. 완료 호출이나 리뷰어 대화는 없다.
 
 `oms doctor cleanup`은 제거 가능한 파생 상태를 지운다. `oms doctor build-graph`는 노트 그래프를 다시 만든다.
 

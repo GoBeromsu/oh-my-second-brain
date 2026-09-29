@@ -1,10 +1,10 @@
 import { compareCodePoints, hashCanonical, type Digest } from "../../conventions/canonical.js";
 import { readSourceExclusions, type SourceExclusionInventory } from "../../conventions/note-exclude.js";
 import { deriveFolderOntologyAxis } from "../../contract/folders-axis.js";
-import { templatedContract, type TemplatedContract } from "../../contract/legacy.js";
 import type { PropertyContract, VaultContract } from "../../contract/types.js";
 import { ROW_FINDING, SETTINGS_INVALID_FINDING, type DoctorFinding } from "../../contract/status.js";
 import { resolveSealState } from "../../contract/vault-id.js";
+import { loadLiveTemplates, type LiveTemplate } from "../../write/live-templates.js";
 import type { GlobalAxes, GlobalAxis, RetrievalFields, TemplateRetrievalSource } from "./axes.js";
 
 /**
@@ -14,11 +14,14 @@ import type { GlobalAxes, GlobalAxis, RetrievalFields, TemplateRetrievalSource }
  * property name, type and required. No rule or value leaves the store through
  * this reader. It admits no vault, writes nothing and never reads a vault-side
  * control file other than settings.json. `null` metadata means unavailable,
- * never an empty contract.
+ * never an empty contract. Templates are not contract: the template axis names
+ * the live templates in `templateFolder`, each carrying the property fields, and
+ * the exclusion inventory keeps their files out of search. A legacy generation's
+ * sealed templates are never read.
  */
 
 const CONTRACT_PATH = "folders.json";
-const RETRIEVAL_DOMAIN = "oms.search-template-source.v6";
+const RETRIEVAL_DOMAIN = "oms.search-template-source.v8";
 
 export interface RetrievalDiagnostic {
   readonly code: string;
@@ -36,7 +39,7 @@ export interface SearchTemplateSource {
 type ReadState =
   | { readonly state: "open"; readonly finding: DoctorFinding | null }
   | { readonly state: "unreadable"; readonly reason: string }
-  | { readonly state: "sealed"; readonly contract: TemplatedContract };
+  | { readonly state: "sealed"; readonly contract: VaultContract };
 
 /** A fixed reason by code: a raw filesystem message would carry a private store path. */
 function failureReason(error: unknown): string {
@@ -53,8 +56,7 @@ function isAbsent(error: unknown): boolean {
 async function readState(vault: string): Promise<ReadState> {
   try {
     const { view, row, settingsInvalid } = await resolveSealState(vault);
-    // slice f2: move to templateFolder
-    if (view.state === "sealed") return { state: "sealed", contract: templatedContract(view) };
+    if (view.state === "sealed") return { state: "sealed", contract: view.contract };
     if (view.state === "unreadable") return { state: "unreadable", reason: "the sealed contract is unreadable; run oms doctor contract" };
     return { state: "open", finding: settingsInvalid ? SETTINGS_INVALID_FINDING : ROW_FINDING[row] };
   } catch (error: unknown) {
@@ -66,8 +68,8 @@ function sortedEntries<T>(record: Readonly<Record<string, T>>): Array<[string, T
   return Object.entries(record).sort(([left], [right]) => compareCodePoints(left, right));
 }
 
-/** The only contract facts search may carry. Rules and templates' narrowed rules never enter. */
-function publicProjection(contract: TemplatedContract): unknown {
+/** The only contract facts search may carry. Rules never enter. */
+function publicProjection(contract: VaultContract): unknown {
   return {
     folders: contract.folders === null
       ? null
@@ -75,24 +77,16 @@ function publicProjection(contract: TemplatedContract): unknown {
     properties: contract.properties === null
       ? null
       : sortedEntries(contract.properties).map(([name, property]) => ({ name, type: property.type, required: property.required })),
-    templates: sortedEntries(contract.templates).map(([name, template]) => ({
-      name,
-      source: template.source,
-      requiredProperties: [...template.requiredProperties].sort(compareCodePoints),
-    })),
   };
 }
 
-function fields(
-  properties: Readonly<Record<string, PropertyContract>>,
-  forcedRequired: readonly string[],
-): RetrievalFields {
+function fields(properties: Readonly<Record<string, PropertyContract>>): RetrievalFields {
   const out: Record<string, RetrievalFields[string]> = Object.create(null) as Record<string, RetrievalFields[string]>;
   for (const [name, property] of sortedEntries(properties)) {
     out[name] = {
       property: name,
       type: property.type,
-      required: property.required || forcedRequired.includes(name),
+      required: property.required,
       valuePolicy: "free",
     };
   }
@@ -106,6 +100,12 @@ function globalAxes(contract: VaultContract): GlobalAxes {
   return axes;
 }
 
+/** One template per name: live templates arrive sorted by name then source, so the first source wins. */
+function uniqueByName(templates: readonly LiveTemplate[]): readonly LiveTemplate[] {
+  const seen = new Set<string>();
+  return templates.filter(template => !seen.has(template.name) && seen.add(template.name) !== undefined);
+}
+
 /** Same wording and guidance as `oms doctor contract`, so status and doctor agree. A null finding means the vault path is missing. */
 function openContractMessage(finding: DoctorFinding | null): string {
   if (finding === null) return "vault not found; no contract applies";
@@ -114,11 +114,13 @@ function openContractMessage(finding: DoctorFinding | null): string {
 }
 
 export async function readSearchTemplateSource(vault: string): Promise<SearchTemplateSource> {
-  const [state, exclusions] = await Promise.all([readState(vault), readSourceExclusions(vault)]);
+  const [state, exclusions, live] = await Promise.all([readState(vault), readSourceExclusions(vault), loadLiveTemplates(vault)]);
   const diagnostics: RetrievalDiagnostic[] = exclusions.diagnostics.map(item => ({ code: item.code, path: item.path, message: item.message }));
+  const liveTemplates = uniqueByName(live);
   const digest = hashCanonical(RETRIEVAL_DOMAIN, {
     state: state.state,
     contract: state.state === "sealed" ? publicProjection(state.contract) : null,
+    templates: state.state === "sealed" ? liveTemplates.map(template => ({ name: template.name, source: template.source })) : null,
     exclusions: exclusions.digest,
   });
 
@@ -143,17 +145,15 @@ export async function readSearchTemplateSource(vault: string): Promise<SearchTem
 
   const { contract } = state;
   const templates: Record<string, RetrievalFields | null> = Object.create(null) as Record<string, RetrievalFields | null>;
-  for (const [name, template] of sortedEntries(contract.templates)) {
-    templates[name] = contract.properties === null ? null : fields(contract.properties, template.requiredProperties);
-  }
+  for (const template of liveTemplates) templates[template.name] = contract.properties === null ? null : fields(contract.properties);
   return {
     digest,
     source: {
       generationDigest: digest,
-      defaultFields: contract.properties === null ? null : fields(contract.properties, []),
+      defaultFields: contract.properties === null ? null : fields(contract.properties),
       templates,
       globalAxes: globalAxes(contract),
-      sourcePaths: Object.values(contract.templates).map(template => template.source).sort(compareCodePoints),
+      sourcePaths: liveTemplates.map(template => template.source).sort(compareCodePoints),
     },
     exclusions,
     diagnostics,

@@ -1,11 +1,10 @@
-import { compareCodePoints } from "../conventions/canonical.js";
+import path from "node:path";
 import { parseNote } from "../conventions/frontmatter.js";
 import { contractContradictions } from "../contract/contradiction.js";
 import type { GapAxis, GapKind, GapWant } from "../contract/gap-ledger.js";
-import { insideApplyFolder } from "../contract/judge.js";
-import type { TemplatedContract } from "../contract/legacy.js";
 import type { ContractView, JsonScalar, Verdict, Violation, ViolationKind } from "../contract/types.js";
 import { coerceFrontmatter, writtenValues } from "./coerce.js";
+import { templatesForFolder, type LiveTemplate } from "./live-templates.js";
 
 /**
  * What a write does where the note and the sealed contract do not line up exactly.
@@ -23,7 +22,8 @@ import { coerceFrontmatter, writtenValues } from "./coerce.js";
  * D drafted: frontmatter that does not parse cannot be saved as a note the judge reads.
  *   It is kept as a draft beside the ledger and the gap points at it.
  *
- * A multi-template folder with no template selected records a choice beside any tier.
+ * A new note in a folder two or more live templates match, with no template selected,
+ * records a choice beside any tier.
  * An open or broken contract has no ledger: the note is saved as written with its warning.
  *
  * This module decides and never writes; the pipeline records and saves.
@@ -44,6 +44,8 @@ export interface AmbiguityInput {
   /** The content the judge saw, after `conform`. */
   readonly content: string;
   readonly template?: string | undefined;
+  /** The live templates in `templateFolder`; without them no choice is recorded. */
+  readonly templates?: readonly LiveTemplate[] | undefined;
   /** The note on disk before this write; undefined for a new note. */
   readonly previousContent?: string | undefined;
   readonly verdict: Verdict;
@@ -102,30 +104,24 @@ function want(field: string, frontmatter: Readonly<Record<string, unknown>>): Ga
   return { field };
 }
 
-function templatesFor(contract: TemplatedContract, notePath: string): readonly string[] {
-  return Object.entries(contract.templates)
-    .filter(([, template]) => template.applyFolder !== undefined && insideApplyFolder(notePath, template.applyFolder))
-    .map(([name]) => name)
-    .sort(compareCodePoints);
-}
-
 /**
- * ② A note saved into a folder several templates apply to, with no template selected.
- * The recommendation is the first template (code point order) whose required properties
- * the note already carries, or null when none fits yet.
+ * ② A new note saved into a folder two or more live templates match, with no template
+ * selected: nothing is scaffolded. The recommendation is the first template (by name)
+ * whose keys the note already carries, or null when none fits yet.
  */
-export function templateChoices(contract: TemplatedContract, notePath: string, template: string | undefined, frontmatter: Readonly<Record<string, unknown>>): GapFinding[] {
+export function templateChoices(templates: readonly LiveTemplate[], notePath: string, template: string | undefined, frontmatter: Readonly<Record<string, unknown>>): GapFinding[] {
   if (template !== undefined) return [];
-  const candidates = templatesFor(contract, notePath);
-  if (candidates.length < 2) return [];
-  const recommended = candidates.find(name => contract.templates[name]!.requiredProperties.every(property => Object.hasOwn(frontmatter, property))) ?? null;
+  const matches = templatesForFolder(templates, path.posix.dirname(notePath));
+  if (matches.length < 2) return [];
+  const candidates = matches.map(candidate => candidate.name);
+  const recommended = matches.find(candidate => candidate.fields.every(field => Object.hasOwn(frontmatter, field.name)))?.name ?? null;
   return [{
     axis: "template",
     kind: "choice",
     chosen: recommended,
     // The candidates, never note content: they key the choice so a repeat is recorded once.
     wanted: { field: "template", value: candidates },
-    reason: `${candidates.length} templates apply to the folder and none was selected`,
+    reason: `${candidates.length} templates match the folder and none was selected`,
   }];
 }
 
@@ -162,12 +158,11 @@ export function resolveTiers(input: AmbiguityInput): Resolution {
   const parsed = parseNote(input.content);
   // A finding records the value as written: `01234` stays `01234`, not the number it parses to.
   const frontmatter = writtenValues(input.content);
-  // slice f2: move to templateFolder — until then no template offers a choice.
-  const choices = parsed.diagnostics.length > 0 ? [] : templateChoices({ ...contract, templates: {} }, input.path, input.template, parsed.frontmatter);
+  const choices = parsed.diagnostics.length > 0 || input.isNew !== true ? [] : templateChoices(input.templates ?? [], input.path, input.template, parsed.frontmatter);
   const gaps = newWarnings(verdict, input.baseline);
   if (gaps.length === 0) return { action: "save", content: input.content, verdict, findings: choices };
 
-  const contradicted = new Set(contractContradictions({ ...contract, templates: {} }).map(entry => entry.field));
+  const contradicted = new Set(contractContradictions(contract).map(entry => entry.field));
   const keep = (warnings: readonly Violation[]) => warnings.map(warning =>
     recorded(warning, "kept", frontmatter, contradicted.has(warning.field) ? "contradiction" : "kept"));
   if (gaps.some(warning => warning.kind === "yaml-syntax")) {

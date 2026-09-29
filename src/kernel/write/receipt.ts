@@ -8,7 +8,7 @@ export { contractRevision };
 /** One mechanical change `conform` made; never a value, only the field and what was done. */
 export interface ConformChange {
   readonly field: string;
-  readonly action: "variable" | "default" | "heading";
+  readonly action: "variable" | "default" | "heading" | "template-missing";
 }
 
 export type GapLedgerState = "failed" | "unavailable";

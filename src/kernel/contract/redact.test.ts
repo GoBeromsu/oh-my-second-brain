@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildRedactor, hiddenValuesOf, publicTokensOf, redactResponse, REDACTED } from "./redact.js";
-import type { TemplatedContract } from "./legacy.js";
+import type { VaultContract } from "./types.js";
 
 describe("buildRedactor", () => {
   it("replaces raw, quoted, escaped and normalised forms at token boundaries", () => {
@@ -38,19 +38,14 @@ describe("buildRedactor", () => {
 
 describe("hiddenValuesOf and publicTokensOf", () => {
   it("collects every rule value and every public word", () => {
-    const contract: TemplatedContract = {
+    const contract: VaultContract = {
       folders: { Projects: { meaning: "work", searchExclude: false } },
       properties: { s: { meaning: "", type: "text", default: false, required: false, rules: [
         { kind: "allowed", values: ["a", "b"] }, { kind: "fixed", value: "c" }, { kind: "pattern", regex: "d+" }, { kind: "range", min: 1, max: "z" },
       ] } },
-      templates: { Meeting: {
-        source: "T/Meeting.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: ["status"],
-        narrowedRules: { s: [{ kind: "fixed", value: "e" }] }, requiredHeadings: ["Notes"],
-      } },
     };
-    expect(hiddenValuesOf(contract)).toEqual(["a", "b", "c", "d+", 1, "z", "e"]);
-    expect(publicTokensOf(contract)).toEqual(expect.arrayContaining(["Projects", "s", "status", "Meeting", "Notes", "text", "tags"]));
-    expect(publicTokensOf(contract)).not.toContain("T/Meeting.md");
+    expect(hiddenValuesOf(contract)).toEqual(["a", "b", "c", "d+", 1, "z"]);
+    expect(publicTokensOf(contract)).toEqual(expect.arrayContaining(["Projects", "s", "text", "tags"]));
     expect(publicTokensOf(null)).toContain("number");
   });
 });

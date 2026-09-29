@@ -1,7 +1,16 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { omsMcpTools } from "./server.js";
+import { sealContract } from "../kernel/contract/store.js";
+import type { VaultContract } from "../kernel/contract/types.js";
+import { serializeVaultSettings, SETTINGS_PATH } from "../kernel/vault/settings.js";
+import { createOMSMcpServer, omsMcpTools } from "./server.js";
 
 function validate(tool: string, input: Record<string, unknown>): boolean {
   const schema = omsMcpTools.find(candidate => candidate.name === tool)?.inputSchema;
@@ -74,4 +83,90 @@ describe("template-native MCP surface", () => {
     expect(validate("doctor", { op: "sync-embeddings", mode: "sync", repairMode: "drop" })).toBe(false);
     expect(validate("doctor", { op: "sync-embeddings", mode: "embed", dryRun: true })).toBe(false);
   });
+});
+
+describe("template scaffolds, never judges", () => {
+  const CONTRACT: VaultContract = {
+    folders: { Projects: { meaning: "project notes", searchExclude: false } },
+    properties: { status: { meaning: "lifecycle", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["active", "done"] }] } },
+  };
+  const disposable: string[] = [];
+  let vault = "";
+
+  type ToolResult = Awaited<ReturnType<Client["callTool"]>>;
+
+  function payload(result: ToolResult): Record<string, unknown> {
+    const content = (result.content as Array<{ type: string; text?: string }>)[0];
+    if (content?.type !== "text" || content.text === undefined) throw new Error("missing text payload");
+    return JSON.parse(content.text) as Record<string, unknown>;
+  }
+
+  async function write(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const server = createOMSMcpServer({ vault, source: "vault" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "template-native", version: "0.0.0" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      return payload(await client.callTool({ name: "write", arguments: args }) as ToolResult);
+    } finally {
+      await client.close();
+    }
+  }
+
+  beforeEach(async () => {
+    const base = await realpath(await mkdtemp(path.join(tmpdir(), "oms-template-native-")));
+    disposable.push(base);
+    const home = path.join(base, "home");
+    await mkdir(home);
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("OMS_RUNTIME_ROOT", path.join(base, "runtime"));
+    vi.stubEnv("OMS_VAULT", "");
+    vault = path.join(base, "vault");
+    await mkdir(path.join(vault, "Projects"), { recursive: true });
+    await mkdir(path.join(vault, "Templates"));
+    await mkdir(path.join(vault, ".oms"));
+    const vaultId = randomUUID();
+    await writeFile(path.join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId, templateFolder: "Templates" }));
+    await writeFile(path.join(vault, "Templates/Projects.md"), "---\nstatus: active\nowner: me\n---\n## Goals\n");
+    await sealContract({ vaultRealPath: await realpath(vault), vaultId, contract: CONTRACT }, path.join(home, ".oms", "vaults"));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await Promise.all(disposable.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+  });
+
+  it("scaffolds a new note from the live template, and an edited template needs no reseal", async () => {
+    expect(await write({ path: "Projects/a.md", content: "# A\n" })).toMatchObject({ ok: true });
+    expect(await readFile(path.join(vault, "Projects/a.md"), "utf8")).toBe("---\nstatus: active\nowner: me\n---\n# A\n\n## Goals\n");
+
+    await writeFile(path.join(vault, "Templates/Projects.md"), "---\nstatus: done\n---\n## Risks\n");
+    expect(await write({ path: "Projects/b.md", content: "# B\n" })).toMatchObject({ ok: true });
+    expect(await readFile(path.join(vault, "Projects/b.md"), "utf8")).toBe("---\nstatus: done\n---\n# B\n\n## Risks\n");
+  }, 60_000);
+
+  it("keeps the note's own values over the template's and judges only the note, by the property contract", async () => {
+    const kept = await write({ path: "Projects/c.md", content: "---\nstatus: done\n---\n## Other\n", template: "Projects" });
+    // The scaffolded `owner` is not in the property contract, so it is warned like any other unknown key.
+    expect(kept).toMatchObject({
+      ok: true,
+      conformed: [{ field: "owner", action: "default" }, { field: "Goals", action: "heading" }],
+      warnings: [{ field: "owner", kind: "unknown-property" }],
+    });
+    expect(await readFile(path.join(vault, "Projects/c.md"), "utf8")).toBe("---\nstatus: done\nowner: me\n---\n## Other\n\n## Goals\n");
+
+    // The template's own value is outside the allowed set; only the note's value is ever judged.
+    await writeFile(path.join(vault, "Templates/Projects.md"), "---\nstatus: bogus\n---\n## Goals\n");
+    expect(await write({ path: "Projects/e.md", content: "---\nstatus: active\n---\nbody\n" }))
+      .toMatchObject({ ok: true, conformed: [{ field: "Goals", action: "heading" }], warnings: [], fixes: [] });
+    expect(await readFile(path.join(vault, "Projects/e.md"), "utf8")).toBe("---\nstatus: active\n---\nbody\n\n## Goals\n");
+  }, 60_000);
+
+  it("writes a note whose named template is not live, unscaffolded, with a missing-template entry", async () => {
+    expect(await write({ path: "Projects/d.md", content: "---\nstatus: active\n---\nbody\n", template: "Nowhere" }))
+      .toMatchObject({ ok: true, conformed: [{ field: "Nowhere", action: "template-missing" }] });
+    expect(await readFile(path.join(vault, "Projects/d.md"), "utf8")).toBe("---\nstatus: active\n---\nbody\n");
+  }, 60_000);
 });

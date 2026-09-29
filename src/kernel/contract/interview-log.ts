@@ -71,11 +71,7 @@ export function questionDigest(question: Question): string {
   const base = { id: question.id, prompt: question.prompt, kind: question.kind };
   if (question.kind === "choice") return hashCanonical("oms-interview-question-v1", { ...base, options: question.options });
   if (question.kind === "confirm") return hashCanonical("oms-interview-question-v1", question.initial === undefined ? base : { ...base, initial: question.initial });
-  return hashCanonical("oms-interview-question-v1", {
-    ...base,
-    ...(question.initial === undefined ? {} : { initial: question.initial }),
-    ...(question.secret === true ? { secret: true } : {}),
-  });
+  return hashCanonical("oms-interview-question-v1", question.initial === undefined ? base : { ...base, initial: question.initial });
 }
 
 function parseEvent(line: string): InterviewEvent | null {

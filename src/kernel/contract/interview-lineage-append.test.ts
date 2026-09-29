@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
-import { interpretVault } from "./interpretation-fixture.js";
 import { runInterview, type InterviewIO, type Question } from "./interview.js";
 import { lineageHealth } from "./lineage-health.js";
 import { LineageAppendFailed } from "./lineage.js";
@@ -70,9 +69,8 @@ const ANSWERS: Readonly<Record<string, string>> = {
   "folder:Projects:meaning": "project notes",
   "folder:Projects:search-exclude": "n",
   "folder:Templates:register": "n",
+  // Offered because the Meeting template sets it.
   "property:status:register": "n",
-  "template:Meeting:interpretation": "y",
-  "template:Meeting:register": "n",
   "seal": "y",
 };
 
@@ -94,7 +92,7 @@ describe("a first interview seal whose lineage append fails", () => {
   it("still records the chosen template folder, so lineage-recover alone completes the seal", async () => {
     failAppend.on = true;
     const io = scripted();
-    await expect(runInterview({ vault, io, root, interpretations: await interpretVault(vault, "Templates") }))
+    await expect(runInterview({ vault, io, root }))
       .rejects.toMatchObject({ code: "CONTRACT_LINEAGE_APPEND_FAILED", message: expect.stringContaining("oms doctor lineage-recover") });
     expect((await readVaultSettings(vault))?.templateFolder).toBe("Templates");
     expect(io.recorded).not.toContain("sealed");
@@ -110,7 +108,7 @@ describe("a first interview seal whose lineage append fails", () => {
   it("still throws the append failure when recording the template folder also fails", async () => {
     failAppend.on = true;
     failSettings.on = true;
-    const failure = await runInterview({ vault, io: scripted(), root, interpretations: await interpretVault(vault, "Templates") }).then(() => null, (error: unknown) => error);
+    const failure = await runInterview({ vault, io: scripted(), root }).then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(LineageAppendFailed);
     expect(failure).toMatchObject({ code: "CONTRACT_LINEAGE_APPEND_FAILED", cause: expect.objectContaining({ message: "disk full" }) });
     expect((await readVaultSettings(vault))?.templateFolder).toBeUndefined();
@@ -119,7 +117,7 @@ describe("a first interview seal whose lineage append fails", () => {
   it("leaves the settings alone when the seal fails before linking the generation", async () => {
     const symlinkFailed = async (): Promise<void> => { throw Object.assign(new Error("EIO: symlink failed"), { code: "EIO" }); };
     const sealDeps = { fs: { rename, rm, symlink: symlinkFailed } };
-    await expect(runInterview({ vault, io: scripted(), root, sealDeps, interpretations: await interpretVault(vault, "Templates") }))
+    await expect(runInterview({ vault, io: scripted(), root, sealDeps }))
       .rejects.toMatchObject({ code: "EIO" });
     expect((await readVaultSettings(vault))?.templateFolder).toBeUndefined();
   });

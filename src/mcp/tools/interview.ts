@@ -1,6 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { admitWriteTarget } from "../../kernel/capture/safe.js";
-import { parseInterpretations, type TemplateInterpretation } from "../../kernel/contract/interpretation.js";
 import { appendInterviewEvent, questionDigest } from "../../kernel/contract/interview-log.js";
 import { confirmedProposal, interviewLogKey, latestProposal, logRecorder, resumableIO, vaultLog } from "../../kernel/contract/interview-resume.js";
 import { proposalDigest, runInterview, SEAL_QUESTION, usableFolder, type InterviewRecord, type InterviewResult } from "../../kernel/contract/interview.js";
@@ -64,11 +63,6 @@ class ProposalChanged extends Error {
   }
 }
 
-function interpretationsArg(args: Record<string, unknown> | undefined): readonly TemplateInterpretation[] {
-  const value = args?.["interpretations"];
-  return value === undefined ? [] : parseInterpretations(JSON.stringify(value));
-}
-
 function answersArg(args: Record<string, unknown> | undefined): Answers {
   const value = args?.["answers"];
   if (!isRecord(value)) throw new Error("CONTRACT_ANSWERS_INVALID: answers must be one object from question id to answer");
@@ -103,7 +97,6 @@ async function run(vault: string, root: string, args: Record<string, unknown> | 
     io,
     root,
     nonLoosening: true,
-    interpretations: interpretationsArg(args),
     ...(sealDeps === undefined ? {} : { sealDeps }),
     ...(args?.["reask"] === true ? { reask: true } : {}),
   });
@@ -121,13 +114,6 @@ async function report(vault: string, root: string, result: InterviewResult, extr
       }
       return jsonText({ ...base, status: "questions", questions: open.map(publicQuestion), notes: extra.notes, ...drift, next: ANSWER_ROUTE });
     }
-    case "interpretation-required":
-      return jsonText({
-        ...base,
-        status: "interpretation-required",
-        sources: result.sources,
-        next: "Read each template source and pass its interpretation as `interpretations` on every interview call; observedHash must equal the sourceHash listed here.",
-      });
     case "refused":
       return jsonText({ ...base, status: "refused", reasons: result.reasons });
     case "loosening":
@@ -261,20 +247,17 @@ async function seal(vault: string, root: string, now: () => number, args: Record
  * made: an earlier `seal` finished but its log entry was lost. The missing `sealed` event
  * is recorded (a failure is a warning) and no new generation is sealed. Null otherwise.
  * The seal writes the chosen template folder to the settings after the generation, so a
- * run cut short between the two is completed here from the proposal. Declined templates
- * need nothing: they are part of the sealed generation itself.
+ * run cut short between the two is completed here from the proposal.
  */
 async function alreadySealed(vault: string, root: string, events: Parameters<typeof latestProposal>[0], confirmed: string, log: (event: InterviewRecord) => Promise<void>): Promise<InterviewResult | null> {
   const payload = latestProposal(events)?.payload ?? {};
-  const removed = payload["removedTemplates"];
-  if (!Array.isArray(removed) || !removed.every(name => typeof name === "string")) return null;
   // Without settings there is no vault id, so nothing shows the vault was sealed.
   const settings = await readVaultSettings(vault);
   if (settings === null) return null;
   const { vaultId } = settings;
   if (await currentSequence(vaultId, root) === payload["baseSeq"]) return null;
   const store = await readStore(vaultId, root);
-  if (store.state !== "ok" || proposalDigest(store.contract, removed) !== confirmed) return null;
+  if (store.state !== "ok" || proposalDigest(store.contract) !== confirmed) return null;
   const warnings: string[] = [];
   const logged = payload["templateFolder"];
   if (typeof logged === "string" && settings.templateFolder === undefined) {
@@ -301,9 +284,6 @@ async function alreadySealed(vault: string, root: string, events: Parameters<typ
     vaultIdCreated: false,
     folders: Object.keys(contract.folders ?? {}).length,
     properties: Object.keys(contract.properties ?? {}).length,
-    // slice f2: move to templateFolder
-    templates: Object.keys(store.legacy?.templates ?? {}),
-    ...(removed.length === 0 ? {} : { removedTemplates: removed }),
     ...(warnings.length === 0 ? {} : { warnings }),
   };
 }

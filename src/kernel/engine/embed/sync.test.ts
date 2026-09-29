@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { syncEngineStore } from "./sync.js";
@@ -26,7 +26,6 @@ import { makeEmbeddingIdentity } from "./identity.js";
 import type { Chunk, EmbeddingProvider } from "../types.js";
 import { assembleCoreSemanticEngine } from "../assemble.js";
 import { serializeVaultSettings } from "../../vault/settings.js";
-import { sealLegacyGeneration } from "../../contract/legacy-store-fixture.js";
 
 let vault: string;
 let dbDir: string;
@@ -104,19 +103,9 @@ describe("syncEngineStore — embed=false (lex-only)", () => {
     }
   });
 
-  it("excludes an explicit symlink alias of a managed template source", async () => {
+  it("excludes an explicit symlink alias of a file in the template folder", async () => {
     writeDoc("Templates/note.md", "managed template");
-    const vaultId = randomUUID();
-    writeDoc(".oms/settings.json", serializeVaultSettings({ version: 1, vaultId }));
-    await sealLegacyGeneration({
-      vaultRealPath: realpathSync(vault),
-      vaultId,
-      contract: {
-        folders: null,
-        properties: null,
-      },
-      templates: { note: { source: "Templates/note.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] } },
-    });
+    writeDoc(".oms/settings.json", serializeVaultSettings({ version: 1, vaultId: randomUUID(), templateFolder: "Templates" }));
     mkdirSync(path.join(vault, "notes"), { recursive: true });
     symlinkSync(path.join(vault, "Templates", "note.md"), path.join(vault, "notes", "template-alias.md"));
     const result = await syncEngineStore({

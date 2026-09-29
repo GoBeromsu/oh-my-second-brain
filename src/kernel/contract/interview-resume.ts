@@ -101,7 +101,6 @@ export function logRecorder(vault: string, root: string, now: () => number = Dat
           questionDigest: null,
           payload: {
             digest: event.digest,
-            removedTemplates: [...event.removedTemplates],
             baseSeq: event.baseSeq,
             ...(event.templateFolder === undefined ? {} : { templateFolder: event.templateFolder }),
           },

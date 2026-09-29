@@ -1,6 +1,5 @@
 import type { Digest } from "../conventions/canonical.js";
 import { contractContradictions, type Contradiction } from "./contradiction.js";
-import { templatedContract } from "./legacy.js";
 import { GAP_AXES, GAP_KINDS, openGaps, readGapLedger, type GapAxis, type GapKind, type GapLedger } from "./gap-ledger.js";
 import { contractRevision } from "./revision.js";
 import { storeRoot } from "./store.js";
@@ -87,7 +86,6 @@ export async function gapsReport(vault: string, overrides: Partial<GapsReportDep
     byKind: counts(GAP_KINDS, gaps.map(gap => gap.kind)),
     gaps,
     corruptLines: ledger.corrupt,
-    // slice f2: move to templateFolder
-    contradictions: seal.view.state === "sealed" ? contractContradictions(templatedContract(seal.view)) : [],
+    contradictions: seal.view.state === "sealed" ? contractContradictions(seal.view.contract) : [],
   };
 }

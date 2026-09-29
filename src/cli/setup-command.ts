@@ -19,21 +19,22 @@ const RETIRED_SETUP_FLAGS: Readonly<Record<string, string>> = {
   "--embedding-default": "Use `oms setup model install --default`, then `oms setup model select --default`.",
   "--embedding-no-default": "Use `oms setup model waive --yes`.",
   "--embedding-descriptor": "Use `oms setup model install --descriptor <path>`, then `oms setup model select --descriptor <path>`.",
-  "--template-folder": "Templates are found by the setup interview.",
+  "--template-folder": "Set templateFolder in .oms/settings.json (the interview asks for it once); templates there scaffold new notes.",
 };
 
 export function setupUsage(): string {
   return `Usage: oms setup [--reask] [--vault <path>]
        oms setup --questions [--reask] [--vault <path>]
        oms setup --answers <file|-> [--reask] [--vault <path>]
-       oms setup extract --template <path> [--vault <path>]
+       oms setup extract --template <name> [--vault <path>]
        oms setup status [--vault <path>]
        oms setup host <install|remove|sync|status> [options]
        oms setup model <install|select|waive|status> [options]
        oms setup package <check|update> [options]
        oms setup bridge <add|remove|status> [options]
 
-Interview the whole vault (folders, properties, templates) and seal the contract.
+Interview the whole vault (folders and properties) and seal the contract. Templates are
+not sealed: those in the template folder scaffold new notes and are never judged.
 Setup writes only .oms/settings.json inside the vault; the sealed contract lives outside it.
 Run it again at any time to re-seal. In a terminal it is interactive and has full authority,
 including loosening a sealed contract (\`oms interview\` is the same terminal interview).
@@ -43,8 +44,7 @@ same interview from a JSON object of answers by question id (- reads stdin) and 
 This is how an agent asks the owner each question (the setup skill). It seals a first
 contract or a stricter one only; loosening is left to \`oms setup\` in a terminal.
 
-extract shows a template source and its hash; status shows the contract posture and
-template drift. host, model, package and bridge configure what surrounds the vault.`;
+extract previews what a template scaffolds; status shows the contract posture. host, model, package and bridge configure what surrounds the vault.`;
 }
 
 /** Top-level `oms setup`: the seal, plus the leaves that configure what surrounds the vault. */

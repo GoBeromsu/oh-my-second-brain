@@ -1,6 +1,5 @@
 import { compareCodePoints } from "../conventions/canonical.js";
-import type { TemplatedContract } from "./legacy.js";
-import type { JsonScalar, Rule } from "./types.js";
+import type { JsonScalar, Rule, VaultContract } from "./types.js";
 
 /**
  * Contradictions inside a sealed contract: rules no note can ever satisfy. They are the
@@ -17,12 +16,10 @@ export type ContradictionKind =
   /** An `allowed` rule with no values. */
   | "allowed-empty"
   /** A `fixed` value that an `allowed` rule on the same property excludes. */
-  | "fixed-not-allowed"
-  /** A template requires a property the contract does not register. */
-  | "required-unregistered";
+  | "fixed-not-allowed";
 
 export interface Contradiction {
-  /** A property name, or `template:<name>` for a template-level finding. */
+  /** A property name. */
   readonly field: string;
   readonly kind: ContradictionKind;
 }
@@ -51,22 +48,13 @@ function ruleContradictions(field: string, rules: readonly Rule[]): Contradictio
   return found;
 }
 
-/** Every contradiction in `contract`, sorted by field then kind; empty for a consistent contract. */
-export function contractContradictions(contract: TemplatedContract): readonly Contradiction[] {
+/**
+ * Every contradiction in `contract`, sorted by field then kind; empty for a consistent
+ * contract. Only property rules count: templates scaffold notes and add no rule.
+ */
+export function contractContradictions(contract: VaultContract): readonly Contradiction[] {
   const found: Contradiction[] = [];
-  const properties = contract.properties ?? {};
-  for (const [name, property] of Object.entries(properties)) found.push(...ruleContradictions(name, property.rules));
-  for (const [templateName, template] of Object.entries(contract.templates)) {
-    for (const [name, rules] of Object.entries(template.narrowedRules)) {
-      const base = Object.hasOwn(properties, name) ? properties[name]!.rules : [];
-      // A template narrows the property's rules, so both lists hold for the note at once.
-      found.push(...ruleContradictions(name, [...base, ...rules]));
-    }
-    if (contract.properties === null) continue;
-    for (const name of template.requiredProperties) {
-      if (!Object.hasOwn(properties, name)) found.push({ field: `template:${templateName}`, kind: "required-unregistered" });
-    }
-  }
+  for (const [name, property] of Object.entries(contract.properties ?? {})) found.push(...ruleContradictions(name, property.rules));
   const unique = new Map(found.map(entry => [`${entry.field}\u0000${entry.kind}`, entry]));
   return [...unique.values()].sort((left, right) => compareCodePoints(left.field, right.field) || compareCodePoints(left.kind, right.kind));
 }

@@ -1,6 +1,5 @@
 import { FIELD_TYPES } from "./obsidian.js";
-import type { TemplatedContract } from "./legacy.js";
-import type { JsonScalar, Rule } from "./types.js";
+import type { JsonScalar, Rule, VaultContract } from "./types.js";
 
 /**
  * Last line of defence for OMS-generated text: hidden values are replaced at token
@@ -65,27 +64,19 @@ function ruleValues(rule: Rule, values: JsonScalar[]): void {
 }
 
 /** Every value a sealed rule holds: allowed and fixed values, range bounds and patterns. */
-export function hiddenValuesOf(contract: TemplatedContract): JsonScalar[] {
+export function hiddenValuesOf(contract: VaultContract): JsonScalar[] {
   const values: JsonScalar[] = [];
   for (const property of Object.values(contract.properties ?? {})) {
     for (const rule of property.rules) ruleValues(rule, values);
-  }
-  for (const template of Object.values(contract.templates)) {
-    for (const rules of Object.values(template.narrowedRules)) {
-      for (const rule of rules) ruleValues(rule, values);
-    }
   }
   return values;
 }
 
 /** Words the agent may already see; a hidden value equal to one is not worth hiding. */
-export function publicTokensOf(contract: TemplatedContract | null): string[] {
+export function publicTokensOf(contract: VaultContract | null): string[] {
   const tokens: string[] = [...FIELD_TYPES];
   if (contract === null) return tokens;
   tokens.push(...Object.keys(contract.folders ?? {}), ...Object.keys(contract.properties ?? {}));
-  for (const [name, template] of Object.entries(contract.templates)) {
-    tokens.push(name, ...template.requiredProperties, ...template.requiredHeadings);
-  }
   return tokens;
 }
 

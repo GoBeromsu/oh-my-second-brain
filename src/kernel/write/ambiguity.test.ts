@@ -1,20 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { judgeContent } from "../contract/judge-write.js";
-import { verdictOf, type ContractView, type LegacyTemplateContract, type PropertyContract, type Verdict } from "../contract/types.js";
-import type { TemplatedContract } from "../contract/legacy.js";
+import { verdictOf, type ContractView, type PropertyContract, type Verdict, type VaultContract } from "../contract/types.js";
 import { gapAxisOf, resolveTiers, templateChoices, type AmbiguityInput } from "./ambiguity.js";
-
-const HASH = `sha256:${"a".repeat(64)}` as const;
+import { parseLiveTemplate, type LiveTemplate } from "./live-templates.js";
 
 function property(extra: Partial<PropertyContract> = {}): PropertyContract {
   return { meaning: "", type: "text", default: false, required: false, rules: [], ...extra };
 }
 
-function template(extra: Partial<LegacyTemplateContract> = {}): LegacyTemplateContract {
-  return { source: "Templates/T.md", sourceHash: HASH, requiredProperties: [], narrowedRules: {}, requiredHeadings: [], ...extra };
+function live(name: string, frontmatter: string): LiveTemplate {
+  return parseLiveTemplate(`Templates/${name}.md`, `---\n${frontmatter}\n---\n`) as LiveTemplate;
 }
 
-const CONTRACT: TemplatedContract = {
+const CONTRACT: VaultContract = {
   folders: { Inbox: { meaning: "", searchExclude: false }, Meetings: { meaning: "", searchExclude: false } },
   properties: {
     status: property({ rules: [{ kind: "allowed", values: ["open", "done"] }] }),
@@ -22,14 +20,16 @@ const CONTRACT: TemplatedContract = {
     owner: property(),
     tags: property({ type: "list", rules: [{ kind: "count", max: 2 }] }),
   },
-  templates: {
-    Standup: template({ applyFolder: "Meetings", requiredProperties: ["owner"] }),
-    Review: template({ applyFolder: "Meetings", requiredProperties: ["status"] }),
-    Solo: template({ applyFolder: "Inbox" }),
-  },
 };
 
-const SEALED: ContractView = { state: "sealed", contract: { folders: CONTRACT.folders, properties: CONTRACT.properties }, legacy: { templates: CONTRACT.templates } };
+/** Live templates, sorted by name as `loadLiveTemplates` returns them. */
+const TEMPLATES: readonly LiveTemplate[] = [
+  live("Review", "folder: Meetings\nstatus: open"),
+  live("Solo", "folder: Inbox\nowner: me"),
+  live("Standup", "folder: Meetings\nowner: me"),
+];
+
+const SEALED: ContractView = { state: "sealed", contract: CONTRACT };
 
 function input(path: string, content: string, extra: Partial<AmbiguityInput> = {}): AmbiguityInput {
   const view = extra.view ?? SEALED;
@@ -70,19 +70,25 @@ describe("① and ② with an accepting verdict", () => {
     expect(resolveTiers(accepted)).toEqual({ action: "save", content: accepted.content, verdict: accepted.verdict, findings: [] });
   });
 
-  // slice f2: move to templateFolder — the choice returns once templates are read from there.
-  it("records no template choice from an older generation's templates", () => {
-    const note = input("Meetings/a.md", "---\ntitle: A\nstatus: open\n---\n");
-    expect(templateChoices(CONTRACT, note.path, undefined, { title: "A", status: "open" })).toHaveLength(1);
-    expect(resolveTiers(note)).toEqual({ action: "save", content: note.content, verdict: note.verdict, findings: [] });
+  it("records a template choice for a new note in a folder two live templates match", () => {
+    const note = input("Meetings/a.md", "---\ntitle: A\nstatus: open\n---\n", { templates: TEMPLATES, isNew: true });
+    expect(resolveTiers(note)).toEqual({
+      action: "save", content: note.content, verdict: note.verdict,
+      findings: [{ axis: "template", kind: "choice", chosen: "Review", wanted: { field: "template", value: ["Review", "Standup"] }, reason: "2 templates match the folder and none was selected" }],
+    });
+    // An existing note, a selected template or no live templates record no choice.
+    expect(resolveTiers({ ...note, isNew: false })).toMatchObject({ findings: [] });
+    expect(resolveTiers({ ...note, template: "Standup" })).toMatchObject({ findings: [] });
+    expect(resolveTiers({ ...note, templates: undefined })).toMatchObject({ findings: [] });
   });
 
   it("recommends nothing when no candidate fits and records no choice once one is selected or only one applies", () => {
-    expect(templateChoices(CONTRACT, "Meetings/a.md", undefined, { title: "A" })).toMatchObject([{ chosen: null }]);
-    expect(templateChoices(CONTRACT, "Meetings/a.md", undefined, { title: "A", owner: "me", status: "open" })).toMatchObject([{ chosen: "Review" }]);
-    expect(templateChoices(CONTRACT, "Meetings/a.md", "Standup", {})).toEqual([]);
-    expect(templateChoices(CONTRACT, "Inbox/a.md", undefined, {})).toEqual([]);
-    expect(templateChoices({ ...CONTRACT, templates: { Loose: template() } }, "Inbox/a.md", undefined, {})).toEqual([]);
+    expect(templateChoices(TEMPLATES, "Meetings/a.md", undefined, { title: "A" })).toMatchObject([{ chosen: null }]);
+    expect(templateChoices(TEMPLATES, "Meetings/a.md", undefined, { title: "A", owner: "me", status: "open" })).toMatchObject([{ chosen: "Review" }]);
+    expect(templateChoices(TEMPLATES, "Meetings/a.md", undefined, { owner: "me" })).toMatchObject([{ chosen: "Standup" }]);
+    expect(templateChoices(TEMPLATES, "Meetings/a.md", "Standup", {})).toEqual([]);
+    expect(templateChoices(TEMPLATES, "Inbox/a.md", undefined, {})).toEqual([]);
+    expect(templateChoices([live("Loose", "owner: me")], "Inbox/a.md", undefined, {})).toEqual([]);
   });
 });
 

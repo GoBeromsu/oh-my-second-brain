@@ -29,7 +29,7 @@ The vault contract is recorded in ADR-007, which replaces the former ADR-013 thr
 
 ## One judge for every write
 
-The agent writes the whole note. One judge decides every write against the seal, in a fixed order: base path rules (control paths, unsafe paths, paths outside the vault, YAML syntax), then the seal's readability, then folders, then properties, then the selected template's apply folder, then the template axis.
+The agent writes the whole note. One judge decides every write against the seal, in a fixed order: base path rules (control paths, unsafe paths, paths outside the vault, YAML syntax), then the seal's readability, then folders, then properties. Templates are never judged: before the judge, the selected template in `templateFolder` scaffolds a new note, and the scaffolded note is judged like any other.
 
 - MCP `write {path, content, template?, ifMatch?, check?}` judges the note and saves it atomically only when it is allowed. Unknown or missing input keys are refused before any judgement.
 - In Claude Code, native Write, Edit, MultiEdit, and NotebookEdit inside the configured vault reach the same judge through the guard hook, which runs `oms hook pre`. A safety refusal denies the tool call; any other finding allows it and returns the warnings to Claude as `systemMessage` and `additionalContext`. When the judge cannot run, the call is allowed with a warning and the transport failure is recorded for `oms doctor contract`.

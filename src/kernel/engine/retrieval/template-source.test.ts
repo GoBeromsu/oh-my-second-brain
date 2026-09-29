@@ -75,18 +75,32 @@ describe("readSearchTemplateSource", () => {
       tags: { property: "tags", type: "tags", required: false, valuePolicy: "free" },
       title: { property: "title", type: "text", required: true, valuePolicy: "free" },
     });
-    expect(Object.keys(read.source.templates ?? {}).sort()).toEqual(["alpha", "zeta"]);
-    // A template's required properties are required in its own field set only.
-    expect(read.source.templates?.["zeta"]?.["status"]?.required).toBe(true);
-    expect(read.source.templates?.["alpha"]?.["status"]?.required).toBe(false);
+    // Legacy sealed templates never reach search: templates scaffold, they are not contract.
+    expect(read.source.templates).toEqual({});
     expect(read.source.globalAxes?.["folder-ontology"]).toMatchObject({
       kind: "folder",
       members: ["Drafts", "Notes"],
       extensions: { intents: { Drafts: "Unfinished drafts.", Notes: "Working notes." } },
     });
-    expect(read.source.sourcePaths).toEqual(["Sources/a.md", "Sources/z.md"]);
+    expect(read.source.sourcePaths).toEqual([]);
     expect(read.diagnostics).toEqual([]);
     expect(Object.keys(read.source).sort()).toEqual(["defaultFields", "generationDigest", "globalAxes", "sourcePaths", "templates"]);
+  });
+
+  it("names the live templates in templateFolder as the template axis, never the sealed ones", async () => {
+    const vault = await makeVault({ ...SOURCES, "Templates/meeting.md": "---\nfolder: Notes\nstatus: done\n---\n## Agenda\n" });
+    const vaultId = await seal(vault, contract());
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId, templateFolder: "Templates" }));
+    const read = await readSearchTemplateSource(vault);
+    expect(Object.keys(read.source.templates ?? {})).toEqual(["meeting"]);
+    // A template adds no requirement: its fields are the property contract's.
+    expect(read.source.templates?.["meeting"]).toEqual(read.source.defaultFields);
+    expect(read.source.sourcePaths).toEqual(["Templates/meeting.md"]);
+
+    await writeFile(path.join(vault, "Templates", "weekly.md"), "---\ntitle: Week\n---\n");
+    const next = await readSearchTemplateSource(vault);
+    expect(Object.keys(next.source.templates ?? {})).toEqual(["meeting", "weekly"]);
+    expect(next.digest).not.toBe(read.digest);
   });
 
   it("never exposes a rule value or narrowed rule", async () => {
@@ -167,7 +181,7 @@ describe("readSearchTemplateSource", () => {
     await seal(vault, { ...contract(), properties: null });
     const read = await readSearchTemplateSource(vault);
     expect(read.source.defaultFields).toBeNull();
-    expect(read.source.templates).toEqual({ alpha: null, zeta: null });
+    expect(read.source.templates).toEqual({});
     expect(read.source.globalAxes?.["folder-ontology"]).toBeDefined();
   });
 
@@ -175,7 +189,7 @@ describe("readSearchTemplateSource", () => {
     const vault = await makeVault(SOURCES);
     await seal(vault, contract());
     const first = await readSearchTemplateSource(vault);
-    expect(first.exclusions.paths).toEqual(["Sources/a.md", "Sources/z.md"]);
+    expect(first.exclusions).not.toHaveProperty("paths");
     expect(first.exclusions.globs).toEqual(expect.arrayContaining(["Drafts", "Drafts/**"]));
 
     const other = await makeVault(SOURCES);

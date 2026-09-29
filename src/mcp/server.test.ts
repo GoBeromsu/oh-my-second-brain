@@ -15,8 +15,8 @@ import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import { createOMSMcpServer, omsMcpTools, searchPathDefaults } from "./server.js";
 import { searchExactRead } from "./tools/search.js";
 import { writeContractVault } from "../kernel/contract/contract-vault-fixture.js";
-import type { TemplatedContract } from "../kernel/contract/legacy.js";
-import { serializeVaultSettings } from "../kernel/vault/settings.js";
+import type { VaultContract } from "../kernel/contract/types.js";
+import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../kernel/vault/settings.js";
 import { buildTruthTableRow } from "../../test/fixtures/contract-truth-table.js";
 
 const LITERATURE_MARKDOWN = "---\ntemplate: literature\ntitle: Untitled\nsource-url:\n---\n\n# Literature\n";
@@ -74,15 +74,12 @@ async function createMcpMetadataAuthority(vault: string): Promise<{ readonly tem
 }
 
 
-/** A sealed contract for the write-judge rows: one registered folder, one template. */
-const SEALED_WRITE_CONTRACT: TemplatedContract = {
+/** A sealed contract for the write-judge rows: one registered folder, two properties. */
+const SEALED_WRITE_CONTRACT: VaultContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false } },
   properties: {
     status: { meaning: "state", type: "text", default: false, required: true, rules: [{ kind: "allowed", values: ["active", "done"] }] },
     owner: { meaning: "who", type: "text", default: true, required: false, rules: [] },
-  },
-  templates: {
-    project: { source: "Templates/project.md", sourceHash: `sha256:${"0".repeat(64)}`, applyFolder: "Projects", requiredProperties: ["status"], narrowedRules: {}, requiredHeadings: ["Goals"] },
   },
 };
 
@@ -952,6 +949,12 @@ Valid frontmatter remains available to retrieve.
     const fixture = await buildTruthTableRow("sealed", SEALED_WRITE_CONTRACT);
     const vault = fixture.vault;
     await mkdir(path.join(vault, "Projects"), { recursive: true });
+    // The live template in templateFolder scaffolds a new note; it is never sealed or judged.
+    await mkdir(path.join(vault, "Templates"));
+    await writeFile(path.join(vault, "Templates", "project.md"), "---\nstatus: active\n---\n# Goals\n");
+    const settings = await readVaultSettings(vault);
+    if (settings === null) throw new Error("the sealed fixture has no settings");
+    await writeFile(path.join(vault, SETTINGS_PATH), serializeVaultSettings({ ...settings, templateFolder: "Templates" }));
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [distCli, "serve", "mcp", "--vault", vault],
@@ -967,7 +970,7 @@ Valid frontmatter remains available to retrieve.
     try {
       await client.connect(transport);
 
-      // A new note that satisfies the selected template is saved world-readable.
+      // A new note that already has the selected template's scaffold is saved world-readable.
       const created = await write({ path: "Projects/a.md", content: "---\nstatus: active\n---\n# Goals\n", template: "project" });
       const createdReceipt = textPayload(created);
       expect(createdReceipt).toMatchObject({
@@ -1009,6 +1012,10 @@ Valid frontmatter remains available to retrieve.
       expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
       const untemplated = await write({ path: "Projects/b.md", content: "---\nstatus: done\n---\nBody\n", check: true });
       expect(textPayload(untemplated)).toMatchObject({ status: "checked", ok: true, warnings: [] });
+      expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
+      // A named template that is not in templateFolder scaffolds nothing and is reported, not refused.
+      const unknownTemplate = await write({ path: "Projects/b.md", content: "---\nstatus: done\n---\nBody\n", template: "nowhere", check: true });
+      expect(textPayload(unknownTemplate)).toMatchObject({ status: "checked", ok: true, conformed: [{ field: "nowhere", action: "template-missing" }] });
       expect(existsSync(path.join(vault, "Projects", "b.md"))).toBe(false);
 
       // An allowed overwrite keeps the note's previous mode and leaves no temporary file.

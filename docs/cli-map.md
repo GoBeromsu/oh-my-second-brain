@@ -41,7 +41,7 @@ Both run one pipeline: frame the target, conform mechanically (template variable
 | `oms search --context` | `oms_search` | `context` | none |
 | `oms search --path <rel>` | `oms_search` | absent | `path` alone; exclusive with `op` and every other argument, except `limit: 10`, `rerank: false` and `minScore: 0`, the schema defaults some clients echo on every call. Engine-free, normalization-insensitive exact read of one note, refused with `READ_EXACT_TOO_LARGE` above 16 MiB. A `--path` after a `--` terminator is query text, not the flag. |
 | `oms search --link <note>` | `oms_search` | `link` | `notePath` required, `folder` optional. Suggests wikilinks without writing them. Refused when combined with a `--` terminator. |
-| none | `oms_search` | `templates` | List sealed template axes. Reports `unavailable` when no contract is sealed. |
+| none | `oms_search` | `templates` | List the live templates in `templateFolder` as template axes. Reports `unavailable` when no contract is sealed. |
 | none | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window). |
 | `oms doctor status --view status|collections|contexts` | `oms_search` | `index-status` | `view=status|collections|contexts`; the CLI also takes `--index <path>` and `--collection <name>`. Read-only; never creates a store. |
 
@@ -53,7 +53,7 @@ A plain `oms search <text>` is lexical-only. Search is independent of the contra
 |---|---|---|---|
 | `oms interview` | `oms_interview` | absent | The CLI runs the interactive interview, continuing from the interview log (`--restart` starts over); it refuses without a TTY or under `OMS_NON_INTERACTIVE=1`. The MCP tool continues the same log over `op: questions`, `answer`, `confirm`, and `seal`; it seals only the proposal the owner confirmed and never reclaims a stale seal lock. |
 | `oms setup` | none | — | Interview the whole vault and seal its contract. Interactive terminal only. Writes only `.oms/settings.json` inside the vault. |
-| `oms setup extract --template <path>` | none | — | Show one template source and the `sourceHash` OMS computed for it. OMS never parses template text. |
+| `oms setup extract --template <name>` | none | — | Preview what one live template in `templateFolder` would scaffold: its source, `folder:` selector, property names, and headings. An unknown name returns `status: "missing"` and exits 1. Templates are never sealed or judged. |
 | `oms setup status` | none | — | Report the seal's posture and `legacyTemplates`, the number of templates an older (version 1 or 2) generation sealed, which are reported and never enforced. |
 | `oms setup host install|remove|sync|status` | none | — | Manage host-native assets and registrations. `remove` refuses to run without `--yes` or `--dry-run`, unless `OMS_NON_INTERACTIVE=1`. |
 | `oms setup package check|update` | none | — | Check or update the npm package without implicitly syncing hosts. |

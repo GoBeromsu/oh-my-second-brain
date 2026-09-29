@@ -2,28 +2,19 @@ import { lstat, readdir, realpath } from "node:fs/promises";
 import { compareCodePoints, hashCanonical } from "../conventions/canonical.js";
 import { readVaultSettings, type VaultSettings } from "../vault/settings.js";
 import { normalizeFolderPath, verifyVaultPath } from "../vault/paths.js";
-import {
-  enumerateTemplateSources,
-  interpretationLines,
-  resolveInterpretations,
-  scopedTemplateName,
-  type EnumeratedSource,
-  type InterpretedTemplate,
-  type TemplateInterpretation,
-} from "./interpretation.js";
 import { FIELD_TYPES, readObsidianTemplateFolder, readObsidianTypes } from "./obsidian.js";
 import { looseningChanges, unsafePatternChanges, type LooseningChange } from "./loosening.js";
 import { buildRedactor, hiddenValuesOf, publicTokensOf } from "./redact.js";
 import { PATTERN_SOURCE_LIMIT, patternRefusal } from "./pattern.js";
-import { currentSequence, isSafeName, NO_DECLINED, readDeclined, sealContract, storeRoot, type DeclinedSet, type SealDeps, type SequenceObservation } from "./store.js";
-import { templatedContract, type TemplatedContract } from "./legacy.js";
+import { currentSequence, NO_DECLINED, readDeclined, sealContract, storeRoot, type DeclinedSet, type SealDeps, type SequenceObservation } from "./store.js";
+import { legacyTemplatesOf } from "./legacy.js";
+import { readLiveTemplates } from "../write/live-templates.js";
 import { LineageAppendFailed } from "./lineage.js";
 import type {
   FieldType,
   FolderContract,
   JsonScalar,
   PropertyContract,
-  LegacyTemplateContract,
   Rule,
   VaultContract,
 } from "./types.js";
@@ -32,25 +23,18 @@ import { ensureVaultId, resolveSealState, writeVaultSettings } from "./vault-id.
 export { hasNestedQuantifier } from "./pattern.js";
 
 /**
- * Deterministic seal-time questionnaire over a full vault scan: top-level folders,
- * properties (template fields and Obsidian types) and the templates in the template
- * folder. No LLM asks anything and all IO is injected. Only the CLI calls it.
- * With a readable sealed contract, a rerun asks only about new folders, new properties
- * and new or changed templates, and keeps every existing answer (diff-only). Declined
- * folders, properties and templates (with their source hash) are kept beside the contract
- * and not asked again until they change or the caller asks to review them.
+ * Deterministic seal-time questionnaire over the vault's two axes: top-level folders and
+ * properties (the Obsidian property types). Templates are not contract: they scaffold new
+ * notes from the template folder, so the interview records which folder that is and offers
+ * the keys its templates set as properties, but never asks about or seals a template. No LLM asks anything and all IO is injected.
+ * With a readable sealed contract, a rerun asks only about new folders and new properties
+ * and keeps every existing answer (diff-only). Declined folders and properties are kept
+ * beside the contract and not asked again until the caller asks to review them.
  */
 
 export type Question =
   | { readonly id: string; readonly prompt: string; readonly kind: "choice"; readonly options: readonly string[] }
-  | {
-    readonly id: string;
-    readonly prompt: string;
-    readonly kind: "text";
-    readonly initial?: string;
-    /** The initial answer holds template literal values; it is never printed to an agent. */
-    readonly secret?: boolean;
-  }
+  | { readonly id: string; readonly prompt: string; readonly kind: "text"; readonly initial?: string }
   | { readonly id: string; readonly prompt: string; readonly kind: "confirm"; readonly initial?: boolean };
 
 export interface InterviewIO {
@@ -70,18 +54,17 @@ export type InterviewRecord =
   | { readonly type: "asked"; readonly question: Question }
   | { readonly type: "answered"; readonly question: Question; readonly answer: string }
   /**
-   * `digest` covers the contract and the removed templates the seal question is about;
-   * `baseSeq` is the sealed generation the proposal was made against. `templateFolder` is
-   * the folder chosen in this run, which the seal records in the settings; absent when the
-   * settings already name one or none was chosen.
+   * `digest` covers the contract the seal question is about; `baseSeq` is the sealed
+   * generation the proposal was made against. `templateFolder` is the folder chosen in
+   * this run, which the seal records in the settings; absent when the settings already
+   * name one or none was chosen.
    */
   | {
     readonly type: "proposed";
     readonly digest: string;
-    readonly removedTemplates: readonly string[];
     readonly baseSeq: SequenceObservation;
     readonly templateFolder?: string;
-    /** How many templates of an older generation this seal does not carry into version 3. */
+    /** How many templates an older generation sealed that this seal does not carry forward. */
     readonly droppedLegacyTemplates?: number;
   }
   | { readonly type: "sealed"; readonly vaultId: string };
@@ -90,8 +73,8 @@ export type InterviewRecord =
  * The digest of what the seal question proposes, as recorded in `proposed`. It covers the
  * folders and properties a seal stores; a version 3 generation stores no templates.
  */
-export function proposalDigest(contract: VaultContract, removedTemplates: readonly string[]): string {
-  return hashCanonical("oms-interview-proposal-v2", { contract: { folders: contract.folders, properties: contract.properties }, removedTemplates });
+export function proposalDigest(contract: VaultContract): string {
+  return hashCanonical("oms-interview-proposal-v3", { contract: { folders: contract.folders, properties: contract.properties } });
 }
 
 export type InterviewResult =
@@ -100,12 +83,9 @@ export type InterviewResult =
     readonly vaultIdCreated: boolean;
     readonly folders: number;
     readonly properties: number;
-    readonly templates: readonly string[];
-    /** Sealed templates whose source file was gone and that the user removed. */
-    readonly removedTemplates?: readonly string[];
     /**
-     * The contract is sealed, but with something the caller should know: template input this
-     * seal did not store, or a failure after the seal (such as logging it).
+     * The contract is sealed, but with something the caller should know: legacy templates
+     * this seal did not carry forward, or a failure after the seal (such as logging it).
      */
     readonly warnings?: readonly string[];
   }
@@ -114,14 +94,7 @@ export type InterviewResult =
   /** Some questions had no answer; they are listed in the order asked. Nothing was sealed. */
   | { readonly state: "incomplete"; readonly questions: readonly Question[] }
   /** A `nonLoosening` reseal would loosen the sealed contract. Changes name fields and kinds only. */
-  | { readonly state: "loosening"; readonly changes: readonly LooseningChange[] }
-  /**
-   * The template folder holds sources that were not interpreted. Every source OMS
-   * enumerated is listed with the digest OMS computed; interpret each one and run again.
-   */
-  | { readonly state: "interpretation-required"; readonly sources: readonly { readonly source: string; readonly sourceHash: string }[] }
-  /** The owner did not confirm these interpretations. Nothing was sealed; a new interpretation may be submitted. */
-  | { readonly state: "interpretation-rejected"; readonly templates: readonly string[] };
+  | { readonly state: "loosening"; readonly changes: readonly LooseningChange[] };
 
 /** Thrown by an IO (or after repeated invalid answers) to end the interview without sealing. */
 export class InterviewAborted extends Error {
@@ -131,7 +104,6 @@ export class InterviewAborted extends Error {
   }
 }
 
-const LITERAL_CHOICES = ["must-equal", "one-of-allowed", "example-only"] as const;
 const RULE_CHOICES = ["none", "one-of-allowed", "must-equal", "pattern", "range"] as const;
 const MAX_ATTEMPTS = 3;
 export const SEAL_QUESTION = { id: "seal", prompt: "Seal this contract?", kind: "confirm" } as const satisfies Question;
@@ -200,15 +172,9 @@ class Asker {
     initial: string | undefined,
     parse: (answer: string) => T | Invalid,
     placeholder?: T,
-    secret = false,
   ): Promise<T> {
-    const question: Question = { id, prompt, kind: "text", ...(initial === undefined ? {} : { initial }), ...(secret ? { secret } : {}) };
-    return this.loop(question, answer => {
-      if (answer.trim() !== "") return parse(answer.trim());
-      const parsed = parse(initial ?? "");
-      // A secret default holds template literals, so its error must not echo them.
-      return secret && parsed instanceof Invalid ? invalid("The default could not be used; type the value instead.") : parsed;
-    }, () => {
+    const question: Question = { id, prompt, kind: "text", ...(initial === undefined ? {} : { initial }) };
+    return this.loop(question, answer => parse(answer.trim() !== "" ? answer.trim() : initial ?? ""), () => {
       const parsed = parse(initial ?? "");
       return parsed instanceof Invalid ? placeholder as T : parsed;
     });
@@ -291,15 +257,7 @@ async function askRules(asker: Asker, id: string, name: string, type: FieldType)
 
 interface Discovered {
   readonly folders: readonly string[];
-  readonly templates: readonly InterpretedTemplate[];
   readonly observedTypes: ReadonlyMap<string, FieldType>;
-  /** The template sources enumerated for this run, re-checked before the seal commits. */
-  readonly sources: readonly EnumeratedSource[];
-}
-
-/** Sources OMS enumerated that carry no interpretation yet. */
-interface NeedsInterpretation {
-  readonly needed: readonly { readonly source: string; readonly sourceHash: string }[];
 }
 
 async function topLevelFolders(vault: string): Promise<string[]> {
@@ -316,71 +274,21 @@ async function topLevelFolders(vault: string): Promise<string[]> {
 }
 
 /**
- * The folders and the interpreted templates the seal questions are built from.
- *
- * OMS enumerates the template sources and computes each source's digest; it never reads
- * their text. `interpretations` is what the agent submitted for those sources, and
- * `resolveInterpretations` refuses anything that names an unknown source, omits one, or
- * was read from bytes the file no longer holds.
+ * The folders and properties the seal questions are built from: the Obsidian property types,
+ * then the keys the live templates set, as text unless Obsidian already types them.
  */
-async function discover(
-  vault: string,
-  templateFolder: string | undefined,
-  interpretations: readonly TemplateInterpretation[],
-): Promise<Discovered | NeedsInterpretation | { readonly refused: string[] }> {
+async function discover(vault: string, templateFolder: string | undefined): Promise<Discovered | { readonly refused: string[] }> {
   const observedTypes = new Map<string, FieldType>();
   try {
     for (const [name, type] of Object.entries(await readObsidianTypes(vault))) observedTypes.set(name, type);
   } catch {
     return { refused: ["The Obsidian property types file is unreadable; fix it in Obsidian first."] };
   }
-
-  if (templateFolder === undefined) return { folders: await topLevelFolders(vault), templates: [], observedTypes, sources: [] };
-
-  const enumerated = await enumerateTemplateSources(vault, { path: templateFolder, kind: "folder" });
-  if (!enumerated.ok) {
-    return { refused: ["The template folder could not be scanned completely; fix the reported template files first."] };
+  const templates = templateFolder === undefined ? [] : await readLiveTemplates(vault, templateFolder);
+  for (const field of templates.flatMap(template => template.fields)) {
+    if (!observedTypes.has(field.name)) observedTypes.set(field.name, "text");
   }
-  const sources = enumerated.sources;
-  // Nothing to interpret: the interview asks only about folders and Obsidian types.
-  if (sources.length === 0) return { folders: await topLevelFolders(vault), templates: [], observedTypes, sources };
-  if (interpretations.length === 0) {
-    return { needed: sources.map(source => ({ source: source.path, sourceHash: source.digest })) };
-  }
-  const resolved = resolveInterpretations(templateFolder, sources, interpretations);
-  if (!resolved.ok) return { refused: [...resolved.reasons] };
-  const templates = [...resolved.templates].sort((left, right) => compareCodePoints(left.name, right.name));
-  for (const template of templates) {
-    for (const field of template.fields) {
-      if (!observedTypes.has(field.name)) observedTypes.set(field.name, field.inferredType);
-    }
-  }
-  return { folders: await topLevelFolders(vault), templates, observedTypes, sources };
-}
-
-/**
- * Re-enumerates the template sources and compares them with the snapshot the questions
- * were built from. The owner was asked about specific bytes; if a source appeared,
- * disappeared or changed while they answered, the contract about to be sealed is narrower
- * than the vault and drift after the fact is not the same as a refusal. Returns the reason
- * to refuse, or null when the snapshot still holds.
- */
-async function templateSourcesUnchanged(
-  vault: string,
-  templateFolder: string | undefined,
-  snapshot: readonly EnumeratedSource[],
-): Promise<string | null> {
-  if (templateFolder === undefined) return null;
-  const enumerated = await enumerateTemplateSources(vault, { path: templateFolder, kind: "folder" });
-  if (!enumerated.ok) return "the template folder could not be re-read before sealing; run `oms setup` again";
-  const before = new Map(snapshot.map(source => [source.path, source.digest]));
-  const after = new Map(enumerated.sources.map(source => [source.path, source.digest]));
-  const changed = [
-    ...[...after.keys()].filter(path => !before.has(path)),
-    ...[...before.keys()].filter(path => !after.has(path) || after.get(path) !== before.get(path)),
-  ].sort(compareCodePoints);
-  if (changed.length === 0) return null;
-  return `the template sources changed during the interview (${changed.map(path => JSON.stringify(path)).join(", ")}); read them again and run \`oms setup\` again`;
+  return { folders: await topLevelFolders(vault), observedTypes };
 }
 
 /** A vault-relative folder that exists, stays inside the vault and is not hidden; null otherwise. */
@@ -441,54 +349,6 @@ async function askProperties(asker: Asker, observed: ReadonlyMap<string, FieldTy
   return Object.keys(result).length === 0 ? null : result;
 }
 
-async function askTemplate(asker: Asker, template: InterpretedTemplate): Promise<LegacyTemplateContract | null> {
-  const { name, source } = template;
-  const id = `template:${name}`;
-  if (!await asker.confirm(`${id}:register`, `Seal the template "${name}"?`)) return null;
-  const requiredProperties: string[] = [];
-  // No prototype, so a property named `constructor` or `__proto__` is an ordinary key.
-  const narrowedRules: Record<string, Rule[]> = Object.create(null) as Record<string, Rule[]>;
-  for (const field of template.fields) {
-    if (await asker.confirm(`${id}:field:${field.name}:required`, `Must notes from "${name}" keep \`${field.name}\`?`)) requiredProperties.push(field.name);
-    const literal = field.literal;
-    if (field.variable !== null || literal === null || literal === "" || Array.isArray(literal) && literal.length === 0) continue;
-    const members: readonly JsonScalar[] = Array.isArray(literal) ? literal : [literal as JsonScalar];
-    const choice = await asker.choice(
-      `${id}:field:${field.name}:literal`,
-      `"${name}" writes a value for \`${field.name}\`. Must notes use exactly that value, one of several allowed values, or is it just an example?`,
-      LITERAL_CHOICES,
-      "example-only",
-    );
-    if (choice === "must-equal") {
-      narrowedRules[field.name] = members.map(value => ({ kind: "fixed", value }));
-    } else if (choice === "one-of-allowed") {
-      const values = await asker.text(`${id}:field:${field.name}:allowed`, `Allowed values for \`${field.name}\` (comma separated)`, members.map(String).join(", "), raw => parseValues(field.inferredType, raw), [], true);
-      narrowedRules[field.name] = [{ kind: "allowed", values }];
-    }
-  }
-  const requiredHeadings: string[] = [];
-  for (const heading of template.headings) {
-    if (heading.variable || requiredHeadings.includes(heading.title)) continue;
-    if (await asker.confirm(`${id}:heading:${heading.title}`, `Must notes from "${name}" keep the heading "${heading.title}"?`)) requiredHeadings.push(heading.title);
-  }
-  const applyFolder = await asker.text(`${id}:apply-folder`, `Folder "${name}" applies to (empty for any folder)`, "", raw => {
-    if (raw === "" || raw === "-") return null;
-    try {
-      return normalizeFolderPath(raw);
-    } catch {
-      return invalid("Give a vault-relative folder without hidden or `..` segments, or leave it empty.");
-    }
-  });
-  return {
-    source,
-    sourceHash: template.sourceHash,
-    ...(applyFolder === null ? {} : { applyFolder }),
-    requiredProperties,
-    narrowedRules,
-    requiredHeadings,
-  };
-}
-
 function unsafePattern(rule: Rule): boolean {
   return rule.kind === "pattern" && patternRefusal(rule.regex) !== null;
 }
@@ -499,7 +359,6 @@ function unsafePattern(rule: Rule): boolean {
  * Prompts name the field only, never the sealed pattern.
  */
 async function askUnsafePatterns(asker: Asker, properties: Record<string, PropertyContract> | null): Promise<void> {
-  // slice f2: move to templateFolder — a template's narrowed rules are not stored, so none is asked again.
   for (const [name, property] of Object.entries(properties ?? {}).sort(([left], [right]) => compareCodePoints(left, right))) {
     if (!property.rules.some(unsafePattern)) continue;
     asker.say(`The sealed pattern rule for \`${name}\` is no longer accepted; answer its rule again (its other rules are kept).`);
@@ -509,7 +368,7 @@ async function askUnsafePatterns(asker: Asker, properties: Record<string, Proper
 }
 
 /** Refuses a contract whose public text carries a hidden value or that no note could pass. Reasons never name a value. */
-export function sealGuard(contract: TemplatedContract): string[] {
+export function sealGuard(contract: VaultContract): string[] {
   const reasons: string[] = [];
   const redact = buildRedactor(hiddenValuesOf(contract), { publicTokens: publicTokensOf(contract) });
   for (const [folder, entry] of Object.entries(contract.folders ?? {})) {
@@ -518,17 +377,10 @@ export function sealGuard(contract: TemplatedContract): string[] {
   for (const [name, entry] of Object.entries(contract.properties ?? {})) {
     if (redact(entry.meaning) !== entry.meaning) reasons.push(`The meaning of \`${name}\` contains a hidden value; rewrite it without the value.`);
   }
-  if (contract.properties !== null) {
-    for (const [name, template] of Object.entries(contract.templates)) {
-      for (const field of [...template.requiredProperties, ...Object.keys(template.narrowedRules)]) {
-        if (!Object.hasOwn(contract.properties, field)) reasons.push(`Template "${name}" uses \`${field}\`, which is not a registered property.`);
-      }
-    }
-  }
   return [...new Set(reasons)];
 }
 
-function preview(io: InterviewIO, contract: TemplatedContract): void {
+function preview(io: InterviewIO, contract: VaultContract): void {
   io.say("Public part (agents will see this):");
   for (const [folder, entry] of Object.entries(contract.folders ?? {})) io.say(`  folder ${folder}: ${entry.meaning}`);
   if (contract.folders === null) io.say("  folders: any");
@@ -536,9 +388,6 @@ function preview(io: InterviewIO, contract: TemplatedContract): void {
     io.say(`  property ${name} (${entry.type}, ${entry.required ? "required" : "optional"}): ${entry.meaning}`);
   }
   if (contract.properties === null) io.say("  properties: any");
-  for (const [name, template] of Object.entries(contract.templates)) {
-    io.say(`  template ${name}: properties [${template.requiredProperties.join(", ")}], headings [${template.requiredHeadings.join(", ")}]`);
-  }
 }
 
 /** Answers kept from the sealed contract merged with the new ones; null stays null only when both are. */
@@ -546,70 +395,13 @@ function merge<T>(kept: Readonly<Record<string, T>> | null, asked: Readonly<Reco
   return kept === null && asked === null ? null : { ...kept, ...asked };
 }
 
-/**
- * Template identity now carries the source's scope under the template folder, so a
- * contract sealed under bare file names must be rekeyed before it is compared with the
- * next one. Without this, `looseningChanges` reads the sealed `meeting` as `removed` and
- * `goneTemplates` claims its source disappeared, so a sealed vault could not reseal at
- * all. The source path is the identity that survives: a sealed entry keeps its answers
- * and only its key changes. A rekey that would collide keeps the sealed key, and the
- * collision is then reported by the interpretation check like any other.
- */
-export function rekeySealedTemplates<T extends { readonly source: string }>(
-  templates: Readonly<Record<string, T>>,
-  templateFolder: string | undefined,
-): Record<string, T> {
-  if (templateFolder === undefined) return { ...templates };
-  const rekeyed: Record<string, T> = {};
-  for (const [name, template] of Object.entries(templates)) {
-    const scoped = scopedTemplateName(templateFolder, template.source);
-    const key = scoped !== name && !isSafeName(scoped) || Object.hasOwn(rekeyed, scoped) ? name : scoped;
-    rekeyed[key] = template;
-  }
-  return rekeyed;
-}
-
-/**
- * Shows the owner each submitted interpretation and asks them to confirm it before any
- * question is built from it.
- *
- * This is the gate the design needs. The interpretation decides which questions exist at
- * all, so an interpretation that leaves a field out removes that field's question, and a
- * first seal has nothing to compare against: `looseningChanges` only runs on a reseal.
- * Confirming the interpretation itself puts the question set back under the owner, which
- * is what "the owner's answers are the only gate" has to mean once the questions come
- * from a submission. A declined interpretation is not a refusal: the agent may read the
- * template again and submit a new one.
- */
-async function confirmInterpretations(asker: Asker, templates: readonly InterpretedTemplate[]): Promise<string[]> {
-  const declined: string[] = [];
-  for (const template of templates) {
-    for (const line of interpretationLines(template)) asker.say(line);
-    const confirmed = await asker.confirm(
-      `template:${template.name}:interpretation`,
-      `Is that what the template "${template.name}" declares?`,
-      undefined,
-      true,
-    );
-    if (!confirmed) declined.push(template.name);
-  }
-  return declined;
-}
-
 export async function runInterview(input: {
   readonly vault: string;
   readonly io: InterviewIO;
   readonly root?: string;
   readonly sealDeps?: Partial<SealDeps>;
-  /** Ask again about folders, properties and templates declined at an earlier seal. */
+  /** Ask again about folders and properties declined at an earlier seal. */
   readonly reask?: boolean;
-  /**
-   * What the agent read in each template source. OMS enumerates the sources and computes
-   * their digests itself; a submission that names an unknown source, omits one, or was
-   * read from other bytes is refused. Without it, a vault with templates ends
-   * `interpretation-required` and nothing is sealed.
-   */
-  readonly interpretations?: readonly TemplateInterpretation[];
   /**
    * Answers that did not come from the owner at a terminal: only a first seal or a
    * reseal that adds or tightens is allowed. Loosening stays with the terminal interview.
@@ -639,90 +431,52 @@ export async function runInterview(input: {
       return { state: "refused", reasons: ["The vault settings are unreadable; run `oms doctor contract`."] };
     }
     const baseSeq = state.vaultId === null ? "none" : await currentSequence(state.vaultId, root);
-    // slice f2: move to templateFolder
-    const sealed = state.view.state === "sealed" ? templatedContract(state.view) : null;
+    const previous = state.view.state === "sealed" ? state.view.contract : null;
+    // An older generation may carry templates; they are not contract and are not carried forward.
+    const legacyTemplates = Object.keys(legacyTemplatesOf(state.view)).length;
     // A sealed pattern refused by today's seal screen can only be replaced, which is looser.
-    const unsafe = input.nonLoosening === true && sealed !== null ? unsafePatternChanges(sealed) : [];
+    const unsafe = input.nonLoosening === true && previous !== null ? unsafePatternChanges(previous) : [];
     if (unsafe.length > 0) return { state: "loosening", changes: unsafe };
-    const pickFolder = settings?.templateFolder === undefined && (sealed === null || input.reask === true);
+    const pickFolder = settings?.templateFolder === undefined && (previous === null || input.reask === true);
     const chosenFolder = pickFolder ? await askTemplateFolder(asker, vault) : null;
-    // The template folder decides which questions follow, so it is answered first.
-    if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
-    const templateFolder = settings?.templateFolder ?? chosenFolder ?? undefined;
-    // Sealed templates are keyed by bare file name up to 0.18.3; scoped identity needs them rekeyed.
-    const previous: TemplatedContract | null = sealed === null
-      ? null
-      : { ...sealed, templates: rekeySealedTemplates(sealed.templates, templateFolder) };
-    const found = await discover(vault, templateFolder, input.interpretations ?? []);
+    const found = await discover(vault, settings?.templateFolder ?? chosenFolder ?? undefined);
     if ("refused" in found) return { state: "refused", reasons: found.refused };
-    if ("needed" in found) return { state: "interpretation-required", sources: found.needed };
 
     const earlier: DeclinedSet = input.reask === true || state.vaultId === null ? NO_DECLINED : await readDeclined(state.vaultId, root);
     const newFolders = found.folders.filter(folder => !Object.hasOwn(previous?.folders ?? {}, folder));
     const newProperties = new Map([...found.observedTypes].filter(([name]) => !Object.hasOwn(previous?.properties ?? {}, name)));
-    const changedTemplates = found.templates.filter(template => previous?.templates[template.name]?.sourceHash !== template.sourceHash);
     const askFolderList = newFolders.filter(folder => !earlier.folders.includes(folder));
     const askPropertyMap = new Map([...newProperties].filter(([name]) => !earlier.properties.includes(name)));
-    const askTemplateList = changedTemplates;
-    const goneTemplates = Object.keys(previous?.templates ?? {}).filter(name => !found.templates.some(template => template.name === name)).sort(compareCodePoints);
     if (previous !== null) {
-      io.say(askFolderList.length + askPropertyMap.size + askTemplateList.length + goneTemplates.length === 0
+      io.say(askFolderList.length + askPropertyMap.size === 0
         ? "Nothing new since the last seal; existing answers are kept."
-        : "Asking only about what is new or changed since the last seal; existing answers are kept.");
+        : "Asking only about what is new since the last seal; existing answers are kept.");
     }
-    const skipped = newFolders.length - askFolderList.length + newProperties.size - askPropertyMap.size + changedTemplates.length - askTemplateList.length;
+    const skipped = newFolders.length - askFolderList.length + newProperties.size - askPropertyMap.size;
     if (skipped > 0) io.say(`Skipping ${skipped} item(s) declined at an earlier seal; run \`oms setup --reask\` to answer them again.`);
-
-    // The interpretation decides which questions exist, so the owner confirms it first.
-    const rejected = await confirmInterpretations(asker, askTemplateList);
-    if (asker.unanswered.length > 0) return { state: "incomplete", questions: asker.unanswered };
-    if (rejected.length > 0) return { state: "interpretation-rejected", templates: rejected };
 
     const askedFolders = await askFolders(asker, askFolderList);
     const askedProperties = await askProperties(asker, askPropertyMap);
     const folders = merge(previous?.folders ?? null, askedFolders);
     const properties = merge(previous?.properties ?? null, askedProperties);
-    const templates: Record<string, LegacyTemplateContract> = { ...previous?.templates };
-    let answeredTemplates = 0;
-    for (const template of askTemplateList) {
-      const answered = await askTemplate(asker, template);
-      if (answered === null) delete templates[template.name];
-      else {
-        templates[template.name] = answered;
-        answeredTemplates += 1;
-      }
-    }
-    const removedTemplates: string[] = [];
-    for (const name of goneTemplates) {
-      if (!await asker.confirm(`template:${name}:remove`, `The source of the sealed template "${name}" is gone. Remove it from the contract?`, true)) continue;
-      delete templates[name];
-      removedTemplates.push(name);
-    }
     await askUnsafePatterns(asker, properties);
     if (asker.unanswered.length > 0) return { state: "incomplete", questions: [...asker.unanswered, SEAL_QUESTION] };
-    const contract: TemplatedContract = { folders, properties, templates };
-    // slice f2: move to templateFolder — a version 3 seal stores no templates, so neither the
-    // guard nor the loosening check reads them: a template-only issue cannot block this seal.
-    const stored: TemplatedContract = { folders, properties, templates: {} };
-    const reasons = sealGuard(stored);
+    const contract: VaultContract = { folders, properties };
+    const reasons = sealGuard(contract);
     if (reasons.length > 0) return { state: "refused", reasons };
     if (input.nonLoosening === true && previous !== null) {
-      const changes = looseningChanges({ ...previous, templates: {} }, stored);
+      const changes = looseningChanges(previous, contract);
       if (changes.length > 0) return { state: "loosening", changes };
     }
-    const legacyTemplates = Object.keys(sealed?.templates ?? {}).length;
-    const notices = [
-      ...(legacyTemplates === 0 ? [] : [`CONTRACT_LEGACY_TEMPLATES_DROPPED: ${legacyTemplates} legacy templates will not be carried into the v3 contract (slice f2 moves templates to templateFolder)`]),
-      ...(answeredTemplates === 0 ? [] : ["CONTRACT_TEMPLATES_NOT_STORED: template answers are not stored until templates move to templateFolder"]),
-    ];
+    const notices = legacyTemplates === 0
+      ? []
+      : [`CONTRACT_LEGACY_TEMPLATES_DROPPED: ${legacyTemplates} template(s) sealed by an older generation are not carried forward; templates now scaffold new notes from the template folder and are never judged`];
 
     preview(io, contract);
-    if (removedTemplates.length > 0) io.say(`  removed templates: ${removedTemplates.join(", ")}`);
     for (const notice of notices) io.say(notice);
     await io.record?.({
       type: "proposed",
-      digest: proposalDigest(contract, removedTemplates),
-      removedTemplates,
+      digest: proposalDigest(contract),
       baseSeq,
       ...(chosenFolder === null ? {} : { templateFolder: chosenFolder }),
       ...(legacyTemplates === 0 ? {} : { droppedLegacyTemplates: legacyTemplates }),
@@ -758,7 +512,6 @@ export async function runInterview(input: {
         contract,
         baseSeq,
         declined,
-        freshness: () => templateSourcesUnchanged(vault, templateFolder, found.sources),
       }, root, deps);
     } catch (error: unknown) {
       // The generation is linked even though its lineage event is not: settle the settings
@@ -781,17 +534,10 @@ export async function runInterview(input: {
       vaultIdCreated: settings === null,
       folders: Object.keys(folders ?? {}).length,
       properties: Object.keys(properties ?? {}).length,
-      // slice f2: move to templateFolder — no template is sealed until then.
-      templates: [],
-      ...(removedTemplates.length === 0 ? {} : { removedTemplates }),
       ...(warnings.length === 0 ? {} : { warnings }),
     };
   } catch (error: unknown) {
     if (error instanceof InterviewAborted) return { state: "aborted" };
-    // The seal refused because the templates moved under the interview; nothing was written.
-    if (error instanceof Error && error.message.startsWith("CONTRACT_SEAL_STALE: ")) {
-      return { state: "refused", reasons: [error.message.slice("CONTRACT_SEAL_STALE: ".length)] };
-    }
     throw error;
   }
 }

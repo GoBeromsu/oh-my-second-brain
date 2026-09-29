@@ -1,21 +1,22 @@
 import { parseNote } from "../conventions/frontmatter.js";
 import { scanContractHeadings } from "../contract/scan.js";
 import { listTyped } from "./coerce.js";
-import { legacyTemplatesOf } from "../contract/legacy.js";
-import type { ContractView, FieldType, LegacyTemplateContract, PropertyContract } from "../contract/types.js";
+import type { TemplateSelection } from "./live-templates.js";
+import type { ContractView, FieldType, PropertyContract } from "../contract/types.js";
 import type { ConformChange } from "./receipt.js";
 
 /**
- * Mechanical conformance before the judge: date and title variables, date defaults and
- * fixed-rule defaults a new note leaves out, and the chosen template's missing heading skeleton. It never calls the
- * judge, never touches an existing value and never supplies a property the contract or a
- * template requires, so a missing required property is still reported after conform. The
- * heading skeleton is the chosen template's scaffold; the judge never checks headings.
+ * Mechanical conformance before the judge: date and title variables, the live template's
+ * scaffold for a new note (its frontmatter as defaults, its headings as the skeleton), and
+ * date and fixed-rule defaults a new note leaves out. It never calls the judge and never
+ * touches an existing value. The contract never makes it supply a required property, so a
+ * missing required property is still reported after conform; the judge never checks headings.
  */
 
 export interface ConformOptions {
   readonly view: ContractView;
-  readonly template?: string | undefined;
+  /** The live template chosen for the note (`selectTemplate`); only a new note is scaffolded. */
+  readonly scaffold?: TemplateSelection | undefined;
   /** True when the target does not exist yet; defaults are only added to new notes. */
   readonly isNew: boolean;
   /** Substituted for `{{title}}`: the note's file name without `.md`. */
@@ -33,6 +34,8 @@ const VARIABLE = /\{\{\s*(title|date|time)(?::([^}]*))?\s*\}\}/gi;
 const FORMAT_TOKEN = /YYYY|MM|DD|HH|mm|ss/g;
 const PLAIN_TITLE = /^[\p{L}\p{N} _.-]+$/u;
 const PLAIN_KEY = /^[\p{L}\p{N}_-]+$/u;
+/** A template variable conform does not fill: Obsidian's `{{...}}` left over, or any Templater `<%` tag. */
+const UNFILLED = /\{\{|<%/;
 const KEY_LINE = /^\s*(?:"([^"]+)"|'([^']+)'|([^\s:#][^:#]*?))\s*:/;
 
 function pad(value: number): string {
@@ -94,13 +97,6 @@ function substituteVariables(content: string, options: ConformOptions, applied: 
   return frontmatter + conformedBody;
 }
 
-function selectedTemplate(options: ConformOptions): LegacyTemplateContract | undefined {
-  if (options.view.state !== "sealed" || options.template === undefined) return undefined;
-  // slice f2: move to templateFolder
-  const templates = legacyTemplatesOf(options.view);
-  return Object.hasOwn(templates, options.template) ? templates[options.template] : undefined;
-}
-
 function defaultValue(type: FieldType, now: Date): string | null {
   if (type === "date") return formatDate(now, "YYYY-MM-DD");
   if (type === "datetime") return `${formatDate(now, "YYYY-MM-DD")}T${formatDate(now, "HH:mm:ss")}`;
@@ -115,16 +111,6 @@ function fixedDefault(property: PropertyContract): string | null {
 }
 
 /**
- * Names a template requires: the chosen template's, or every template's when none is
- * chosen. The writer is asked for these by the scaffold, so a date is never invented for them.
- */
-function templateRequired(options: ConformOptions, template: LegacyTemplateContract | undefined): ReadonlySet<string> {
-  if (template !== undefined) return new Set(template.requiredProperties);
-  // slice f2: move to templateFolder
-  return new Set(Object.values(legacyTemplatesOf(options.view)).flatMap(candidate => candidate.requiredProperties));
-}
-
-/**
  * New notes only: a missing unrequired default gets `now` when it is an unconstrained date
  * or datetime, or the value its only rule fixes.
  */
@@ -132,13 +118,10 @@ function addDefaults(content: string, options: ConformOptions, applied: ConformC
   if (!options.isNew || options.view.state !== "sealed") return content;
   const parsed = parseNote(content);
   if (parsed.diagnostics.length > 0) return content;
-  const template = selectedTemplate(options);
-  const required = templateRequired(options, template);
   const eol = content.includes("\r\n") ? "\r\n" : "\n";
   const lines: string[] = [];
   for (const [name, property] of Object.entries(options.view.contract.properties ?? {})) {
-    if (!property.default || property.required || required.has(name) || Object.hasOwn(parsed.frontmatter, name)) continue;
-    if (template !== undefined && Object.hasOwn(template.narrowedRules, name)) continue;
+    if (!property.default || property.required || Object.hasOwn(parsed.frontmatter, name)) continue;
     const value = property.rules.length > 0 ? fixedDefault(property) : defaultValue(property.type, options.now);
     if (value === null) continue;
     lines.push(`${PLAIN_KEY.test(name) ? name : JSON.stringify(name)}: ${value}`);
@@ -158,24 +141,57 @@ function observedHeadings(body: string): readonly string[] | null {
   }
 }
 
-/** Appends `## <heading>` for each required heading the chosen template misses. */
-function addHeadings(content: string, options: ConformOptions, applied: ConformChange[]): string {
-  const template = selectedTemplate(options);
-  if (template === undefined || template.requiredHeadings.length === 0) return content;
+/** Inserts `lines` at the end of the frontmatter, opening one when the note has none. */
+function insertFrontmatter(content: string, lines: readonly string[]): string {
+  if (lines.length === 0) return content;
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
+  // A multi-line value keeps the note's line endings, not the template's.
+  const block = lines.map(line => line.replace(/\r?\n/g, eol)).join(eol);
   const parsed = parseNote(content);
-  const observed = observedHeadings(parsed.body);
-  if (observed === null) return content;
-  const missing = template.requiredHeadings.filter(heading => !observed.includes(heading.normalize("NFC")));
-  if (missing.length === 0) return content;
-  for (const heading of missing) applied.push({ field: heading, action: "heading" });
-  const separator = content === "" || content.endsWith("\n\n") ? "" : content.endsWith("\n") ? "\n" : "\n\n";
-  return `${content}${separator}${missing.map(heading => `## ${heading}\n`).join("\n")}`;
+  if (parsed.frontmatterRange === null) return `---${eol}${block}${eol}---${eol}${content}`;
+  const end = parsed.frontmatterRange.end;
+  return `${content.slice(0, end)}${eol}${block}${content.slice(end)}`;
+}
+
+/**
+ * New notes only: the chosen template's keys the note leaves out, with its variables filled,
+ * then each of its headings the note misses. A key or heading that still holds a variable
+ * conform cannot fill (`{{...}}`, or Templater's `<% ... %>`) is left out rather than saved unfilled. A named template that is not in
+ * `templateFolder` scaffolds nothing and is reported as `template-missing`.
+ */
+function addScaffold(content: string, options: ConformOptions, applied: ConformChange[]): string {
+  const selection = options.scaffold;
+  if (selection?.kind === "missing") {
+    applied.push({ field: selection.name, action: "template-missing" });
+    return content;
+  }
+  if (!options.isNew || selection?.kind !== "template") return content;
+  const template = selection.template;
+  const parsed = parseNote(content);
+  if (parsed.diagnostics.length > 0) return content;
+  const lines: string[] = [];
+  for (const field of template.fields) {
+    if (Object.hasOwn(parsed.frontmatter, field.name)) continue;
+    const text = substitute(field.text, options, true);
+    if (UNFILLED.test(text)) continue;
+    lines.push(text);
+    applied.push({ field: field.name, action: "default" });
+  }
+  let next = insertFrontmatter(content, lines);
+  const observed = observedHeadings(parseNote(next).body);
+  if (observed === null) return next;
+  const missing = template.headings.filter(heading => !UNFILLED.test(heading.title) && !observed.includes(heading.title));
+  if (missing.length === 0) return next;
+  for (const heading of missing) applied.push({ field: heading.title, action: "heading" });
+  const separator = next === "" || next.endsWith("\n\n") ? "" : next.endsWith("\n") ? "\n" : "\n\n";
+  next = `${next}${separator}${missing.map(heading => `${"#".repeat(heading.level)} ${heading.title}\n`).join("\n")}`;
+  return next;
 }
 
 export function conform(content: string, options: ConformOptions): ConformResult {
   const applied: ConformChange[] = [];
   let next = substituteVariables(content, options, applied);
+  next = addScaffold(next, options, applied);
   next = addDefaults(next, options, applied);
-  next = addHeadings(next, options, applied);
   return { content: next, applied };
 }

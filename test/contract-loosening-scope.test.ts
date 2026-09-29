@@ -1,20 +1,15 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { enumerateTemplateSources } from "../src/kernel/contract/interpretation.js";
 import { looseningChanges } from "../src/kernel/contract/loosening.js";
 import { isSafeName } from "../src/kernel/contract/store.js";
 import type { TemplatedContract } from "../src/kernel/contract/legacy.js";
 import type { LegacyTemplateContract } from "../src/kernel/contract/types.js";
+import { parseLiveTemplate } from "../src/kernel/write/live-templates.js";
 
 /**
- * Pins the classifications the interpretation-as-input design depends on
- * (docs/research/contract-interpretation-as-input.md). These are not new
- * behaviour: they fix observations that the design argument cites, so a later
- * change to `looseningChanges` or to template identity cannot silently
- * invalidate the argument.
+ * Pins that templates are never contract: a legacy template's identity, content or
+ * scope never counts as a loosening change, so a later change to `looseningChanges`
+ * cannot silently make templates part of the seal again.
  */
 
 const HASH = `sha256:${"a".repeat(64)}` as `sha256:${string}`;
@@ -35,9 +30,8 @@ function vault(templates: TemplatedContract["templates"]): TemplatedContract {
 }
 
 describe("template identity under looseningChanges", () => {
-  it("rekeying a sealed template to a scoped name reads as a removal, so a sealed vault cannot reseal without a terminal", () => {
-    const changes = looseningChanges(vault({ meeting: template(MANUAL) }), vault({ manual__meeting: template(MANUAL) }));
-    expect(changes).toEqual([{ field: "templates.meeting", kind: "removed" }]);
+  it("rekeying a legacy template is not a change: templates are not contract", () => {
+    expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ manual__meeting: template(MANUAL) }))).toEqual([]);
   });
 
   it("a scoped separator must survive the template-name check that the store applies", () => {
@@ -56,10 +50,8 @@ describe("what a submitted interpretation could try to widen", () => {
     expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: stripped }))).toEqual([]);
   });
 
-  it("moving a sealed template's source is caught, since search exclusion is built from sealed sources", () => {
-    expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: template(AGENT) }))).toEqual([
-      { field: "templates.meeting.source", kind: "removed" },
-    ]);
+  it("moving a legacy template's source is not a change, since search exclusion follows templateFolder", () => {
+    expect(looseningChanges(vault({ meeting: template(MANUAL) }), vault({ meeting: template(AGENT) }))).toEqual([]);
   });
 
   it("sourceHash alone is invisible to the loosening check, so it gates freshness and not safety", () => {
@@ -81,19 +73,14 @@ describe("what a submitted interpretation could try to widen", () => {
 });
 
 describe("a template that is entirely a Templater JS block", () => {
-  it("is enumerated as a source like any other, since OMS does not read it", async () => {
-    const root = await mkdtemp(join(tmpdir(), "oms-interpretation-"));
-    await mkdir(join(root, "T"), { recursive: true });
-    await writeFile(join(root, "T/js.template.md"), [
+  it("loads as a live template that scaffolds nothing, since OMS never runs its JS", () => {
+    const template = parseLiveTemplate("T/js.template.md", [
       "<%*",
       'const yaml = ["---", "type: meeting", "---"].join("\\n");',
       "tR += `${yaml}\\n## Thinking\\n`;",
       "%>",
       "",
-    ].join("\n"), "utf8");
-    const result = await enumerateTemplateSources(root, { path: "T", kind: "folder" });
-    // Nothing here is parseable frontmatter, and that is no longer OMS's problem: it
-    // reports the source and its digest, and the agent interprets the JS.
-    expect(result).toMatchObject({ ok: true, sources: [{ path: "T/js.template.md" }] });
+    ].join("\n"));
+    expect(template).toMatchObject({ name: "js.template", source: "T/js.template.md", folder: null, fields: [], headings: [] });
   });
 });

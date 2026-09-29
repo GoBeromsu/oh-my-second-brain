@@ -11,7 +11,7 @@ import { questionDigest } from "./interview-log.js";
 export type AnswerValue = string | number | boolean;
 export type Answers = Readonly<Record<string, AnswerValue>>;
 
-/** The question as printed to an agent. A secret initial answer (template literal values) is left out. */
+/** The question as printed to an agent. */
 export interface PublicQuestion {
   readonly id: string;
   readonly prompt: string;
@@ -24,7 +24,7 @@ export function publicQuestion(question: Question): PublicQuestion {
   const base = { id: question.id, prompt: question.prompt, kind: question.kind };
   if (question.kind === "choice") return { ...base, choices: question.options };
   if (question.kind === "confirm") return question.initial === undefined ? base : { ...base, default: question.initial };
-  return question.initial === undefined || question.secret === true ? base : { ...base, default: question.initial };
+  return question.initial === undefined ? base : { ...base, default: question.initial };
 }
 
 /** Parses an answer file: one JSON object from question id to a string, number or boolean. */

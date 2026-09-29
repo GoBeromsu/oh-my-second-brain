@@ -40,7 +40,7 @@ Search your existing notes with lexical retrieval. Choose vector, HyDE, query ex
 </td>
 <td width="50%" valign="top">
 <h3>Your vault, your vocabulary</h3>
-Define the meaning of folders, properties, and templates. OMS records your conventions instead of shipping a system you have to adopt.
+Define the meaning of folders and properties. OMS records your conventions instead of shipping a system you have to adopt.
 </td>
 </tr>
 <tr>
@@ -78,7 +78,7 @@ oms --help
 
 ### 2. Define your vault's conventions
 
-Run setup in your terminal. The interview covers folders, properties, and templates, then seals the contract. Existing notes are not modified.
+Run setup in your terminal. The interview covers folders and properties, then seals the contract. Existing notes are not modified.
 
 ```bash
 oms setup --vault /path/to/vault
@@ -132,9 +132,9 @@ These are example requests, not captured run results. Available workflows and wr
 <details>
 <summary><strong>The vault contract, in detail</strong></summary>
 
-- **Meaning is user-owned.** The interview covers folders, the property pool, and templates together. OMS hardcodes no property names, folders, or personas and has no Inbox fallback.
+- **Meaning is user-owned.** The interview covers folders and the property pool together. OMS hardcodes no property names, folders, or personas and has no Inbox fallback.
 - **One control file inside the vault.** `.oms/settings.json` holds `version`, `vaultId`, `templateFolder`, `embedding`, and `agentRepair`. Other `.oms/` entries are ignored and reported as unexpected control files by `oms doctor contract`. `.obsidian/types.json` is a read-only observation, not an override of the seal.
-- **Templates stay yours.** OMS records what each template declares. It never rewrites or copies a template file, and does not parse or execute Templater, JavaScript, or a private token language. A write only fills what is mechanical in the note being written: `{{title}}`, `{{date}}` and `{{time}}` variables, date and datetime defaults on a new note, and the chosen template's missing headings. It never supplies a required value.
+- **Templates stay yours.** Templates live in your `templateFolder` and are never sealed or judged. A new note is scaffolded from the live template: the one the write names, or else the one template whose basename or `folder:` key matches the target folder. OMS never rewrites or copies a template file, and does not parse or execute Templater, JavaScript, or a private token language. A write only fills what is mechanical in the note being written: `{{title}}`, `{{date}}` and `{{time}}` variables, date and datetime defaults on a new note, and the chosen template's frontmatter defaults and missing headings. The note's own values win. It never supplies a required value.
 - **Old seals stay readable.** A new seal stores folders and properties only. A seal made by an older release still loads; `oms setup status` counts its template constraints as `legacyTemplates`, and they are reported, never enforced.
 - **One judge, bounded feedback.** Denied writes return `{field, kind}` violations and one guidance command, not rule values, store paths, or the contract body.
 - **Mismatched seal evidence blocks writes.** When this machine's evidence no longer matches the vault, writes fail with `contract-unreadable` until the owner runs `oms setup` again. A machine with no seal is a different case: its vault is not contract-judged.
@@ -144,13 +144,13 @@ See [architecture](./docs/architecture.md), [conventions](./docs/conventions.md)
 </details>
 
 <details>
-<summary><strong>Setup, template interpretation, and recovery</strong></summary>
+<summary><strong>Setup, template scaffolds, and recovery</strong></summary>
 
 `oms setup` in a terminal runs the interactive interview and seals the contract. `oms interview` is the same terminal interview on its own command; it requires a terminal and refuses to run under `OMS_NON_INTERACTIVE=1`.
 
 The `setup` skill asks the owner each question via `oms setup --questions` and submits answers with `oms setup --answers <file|->`. This path can seal a first or stricter contract; a loosening reseal stays with the owner's terminal. The MCP `interview` tool continues the interview across calls: `op: questions` is read-only, and `answer`, `confirm`, and `seal` record to the interview log on a verified target. It seals only the proposal the owner confirmed and never reclaims a stale seal lock.
 
-`oms setup extract --template <path>` returns a template source and its computed hash. The agent reads each template and submits its interpretation with `oms setup --interpretations <file>`. The owner confirms that interpretation before it drives the interview.
+Setup and the interview ask about folders and properties only. `oms setup extract --template <name>` previews what a template in `templateFolder` would scaffold: its source, `folder:` selector, property names, and headings. Editing a template takes effect on the next write without a reseal.
 
 `oms doctor contract` diagnoses seal problems, stale locks, orphaned generations, unexpected control files, and hook transport failures. Its `--fix` only re-indexes a moved or unindexed vault. Other broken seals are recovered through `oms setup`.
 
@@ -223,7 +223,7 @@ oms search --path|--context|--link              Read one note, gather context, o
 oms interview                                   Interview the vault owner in a terminal and seal
 oms write <path>                                Save a note from stdin when the contract allows it
 oms setup                                       Seal the contract (--questions/--answers for agents)
-oms setup extract|status                        Show a template source or the contract posture
+oms setup extract|status                        Preview a template scaffold or the contract posture
 oms setup host install|remove|sync|status       Manage host assets and MCP registrations
 oms setup model install|select|waive|status     Manage local model selection
 oms setup package check|update                  Check or update the OMS package
@@ -240,7 +240,7 @@ oms hook pre                                    Judge a Claude write against the
 
 Every recognized command accepts `--help` and `-h`, exits 0, and has no side effects. An unknown command combined with `--help` exits 1. A family removed in 0.19 exits 1 and names its replacement.
 
-`oms doctor audit` reports `{path, field, kind}` entries without rewriting notes. Notes are written as whole content through `oms write <path> < note.md` or MCP `write {path, content, template?, ifMatch?, check?}`; both take the same write pipeline, and `template` optionally names the sealed template being followed. Overwriting an existing note needs `ifMatch` (`--if-match`) with its current `sha256:` revision; `check` (`--check`) judges without touching disk. An allowed write returns a receipt with the new revision and updates the keyword index of an existing engine store in the same call, so the note is searchable at once. There is no completion call or reviewer conversation.
+`oms doctor audit` reports `{path, field, kind}` entries without rewriting notes. Notes are written as whole content through `oms write <path> < note.md` or MCP `write {path, content, template?, ifMatch?, check?}`; both take the same write pipeline, and `template` optionally names the template in `templateFolder` that scaffolds a new note. Overwriting an existing note needs `ifMatch` (`--if-match`) with its current `sha256:` revision; `check` (`--check`) judges without touching disk. An allowed write returns a receipt with the new revision and updates the keyword index of an existing engine store in the same call, so the note is searchable at once. There is no completion call or reviewer conversation.
 
 `oms doctor cleanup` removes eligible derived state. `oms doctor build-graph` rebuilds the note graph.
 

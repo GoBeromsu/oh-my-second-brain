@@ -299,6 +299,9 @@ describe("MCP interview seal", () => {
 
     const retried = payload(await handleInterview(context(vault), { op: "seal" }, deps));
     expect(retried).toMatchObject({ ok: true, status: "sealed" });
+    // The contract is folders and properties only: no templates are sealed or reported as removed.
+    expect(retried).not.toHaveProperty("templates");
+    expect(retried).not.toHaveProperty("removedTemplates");
     expect(await currentSequence(vaultId, root)).toBe(generation);
     expect((await readInterviewLog(root, vaultId)).events.at(-1)?.type).toBe("sealed");
   });
