@@ -4,6 +4,7 @@ import { deriveFolderOntologyAxis } from "../../contract/folders-axis.js";
 import type { PropertyContract, VaultContract } from "../../contract/types.js";
 import { ROW_FINDING, SETTINGS_INVALID_FINDING, type DoctorFinding } from "../../contract/status.js";
 import { resolveSealState } from "../../contract/vault-id.js";
+import { loadLiveTemplates, type LiveTemplate } from "../../write/live-templates.js";
 import type { GlobalAxes, GlobalAxis, RetrievalFields, TemplateRetrievalSource } from "./axes.js";
 
 /**
@@ -13,12 +14,14 @@ import type { GlobalAxes, GlobalAxis, RetrievalFields, TemplateRetrievalSource }
  * property name, type and required. No rule or value leaves the store through
  * this reader. It admits no vault, writes nothing and never reads a vault-side
  * control file other than settings.json. `null` metadata means unavailable,
- * never an empty contract. Templates are not contract: they live in
- * `templateFolder`, which the exclusion inventory keeps out of search.
+ * never an empty contract. Templates are not contract: the template axis names
+ * the live templates in `templateFolder`, each carrying the property fields, and
+ * the exclusion inventory keeps their files out of search. A legacy generation's
+ * sealed templates are never read.
  */
 
 const CONTRACT_PATH = "folders.json";
-const RETRIEVAL_DOMAIN = "oms.search-template-source.v7";
+const RETRIEVAL_DOMAIN = "oms.search-template-source.v8";
 
 export interface RetrievalDiagnostic {
   readonly code: string;
@@ -97,6 +100,12 @@ function globalAxes(contract: VaultContract): GlobalAxes {
   return axes;
 }
 
+/** One template per name: live templates arrive sorted by name then source, so the first source wins. */
+function uniqueByName(templates: readonly LiveTemplate[]): readonly LiveTemplate[] {
+  const seen = new Set<string>();
+  return templates.filter(template => !seen.has(template.name) && seen.add(template.name) !== undefined);
+}
+
 /** Same wording and guidance as `oms doctor contract`, so status and doctor agree. A null finding means the vault path is missing. */
 function openContractMessage(finding: DoctorFinding | null): string {
   if (finding === null) return "vault not found; no contract applies";
@@ -105,11 +114,13 @@ function openContractMessage(finding: DoctorFinding | null): string {
 }
 
 export async function readSearchTemplateSource(vault: string): Promise<SearchTemplateSource> {
-  const [state, exclusions] = await Promise.all([readState(vault), readSourceExclusions(vault)]);
+  const [state, exclusions, live] = await Promise.all([readState(vault), readSourceExclusions(vault), loadLiveTemplates(vault)]);
   const diagnostics: RetrievalDiagnostic[] = exclusions.diagnostics.map(item => ({ code: item.code, path: item.path, message: item.message }));
+  const liveTemplates = uniqueByName(live);
   const digest = hashCanonical(RETRIEVAL_DOMAIN, {
     state: state.state,
     contract: state.state === "sealed" ? publicProjection(state.contract) : null,
+    templates: state.state === "sealed" ? liveTemplates.map(template => ({ name: template.name, source: template.source })) : null,
     exclusions: exclusions.digest,
   });
 
@@ -133,14 +144,16 @@ export async function readSearchTemplateSource(vault: string): Promise<SearchTem
   }
 
   const { contract } = state;
+  const templates: Record<string, RetrievalFields | null> = Object.create(null) as Record<string, RetrievalFields | null>;
+  for (const template of liveTemplates) templates[template.name] = contract.properties === null ? null : fields(contract.properties);
   return {
     digest,
     source: {
       generationDigest: digest,
       defaultFields: contract.properties === null ? null : fields(contract.properties),
-      templates: Object.create(null) as Record<string, RetrievalFields | null>,
+      templates,
       globalAxes: globalAxes(contract),
-      sourcePaths: [],
+      sourcePaths: liveTemplates.map(template => template.source).sort(compareCodePoints),
     },
     exclusions,
     diagnostics,

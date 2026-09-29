@@ -11,6 +11,7 @@ import { updateKeywordIndex, type KeywordUpdateOptions } from "../engine/index-u
 import type { GapFinding, Resolution } from "./ambiguity.js";
 import { conform } from "./conform.js";
 import { frameFor, type WriteFrame } from "./frame.js";
+import { loadLiveTemplates, selectTemplate, type TemplateSelection } from "./live-templates.js";
 import { atomicWriteNote, type NoteWriteDeps } from "./note-write.js";
 import { buildReceipt, contractRevision, noteRevision, type ConformChange, type GapLedgerState, type KeywordIndexState, type ReceiptGap, type WriteReceipt } from "./receipt.js";
 
@@ -168,16 +169,23 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
   const vaultId = read.seal?.vaultId ?? null;
   const ledger: LedgerTarget | null = revision !== null && vaultId !== null ? { root: deps.gapRoot(), vaultId } : null;
 
-  const frame = frameFor(resolved.view, { folder: folderOf(resolved.path), template });
+  const isNew = resolved.previousContent === undefined;
+  // Templates are read live from `templateFolder` and scaffold only a new note; a named
+  // template that is not there is reported on any write.
+  const templates = await loadLiveTemplates(resolved.vaultRoot);
+  const scaffold: TemplateSelection = isNew || template !== undefined
+    ? selectTemplate(templates, { explicit: template, folder: folderOf(resolved.path) })
+    : { kind: "none" };
+  const frame = frameFor(resolved.view, { folder: folderOf(resolved.path), scaffold: scaffold.kind === "template" && isNew ? scaffold.template : undefined });
   const now = deps.now();
   const conformed = conform(request.content, {
     view: resolved.view,
-    template,
-    isNew: resolved.previousContent === undefined,
+    scaffold,
+    isNew,
     title: titleOf(resolved.path),
     now,
   });
-  const decision = decideWrite(resolved, conformed.content, { template, now });
+  const decision = decideWrite(resolved, conformed.content, { template, templates, now });
   const { verdict } = decision;
   const resolution: Resolution = decision.outcome === "deny" ? { action: "refuse", reason: "refused" }
     : decision.outcome === "draft" ? { action: "draft", findings: decision.findings, asWritten: decision.asWritten }

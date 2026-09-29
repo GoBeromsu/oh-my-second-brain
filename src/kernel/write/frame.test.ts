@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { TemplatedContract } from "../contract/legacy.js";
-import type { ContractView } from "../contract/types.js";
+import type { ContractView, VaultContract } from "../contract/types.js";
 import { frameFor } from "./frame.js";
+import { parseLiveTemplate, type LiveTemplate } from "./live-templates.js";
 
-const CONTRACT: TemplatedContract = {
+const CONTRACT: VaultContract = {
   folders: {
     Projects: { meaning: "project notes", searchExclude: false },
     "Projects/Archive": { meaning: "finished projects", searchExclude: false },
@@ -15,25 +15,16 @@ const CONTRACT: TemplatedContract = {
     owner: { meaning: "who owns it", type: "text", default: true, required: true, rules: [] },
     rating: { meaning: "score", type: "number", default: false, required: false, rules: [{ kind: "range", min: 1 }] },
   },
-  templates: {
-    project: {
-      source: "Templates/project.md",
-      sourceHash: `sha256:${"0".repeat(64)}`,
-      meaning: "one project",
-      requiredProperties: ["rating"],
-      narrowedRules: { created: [{ kind: "fixed", value: "2026-01-01" }] },
-      requiredHeadings: ["Goals"],
-    },
-    bare: { source: "Templates/bare.md", sourceHash: `sha256:${"0".repeat(64)}`, requiredProperties: [], narrowedRules: {}, requiredHeadings: [] },
-  },
 };
-const SEALED: ContractView = { state: "sealed", contract: { folders: CONTRACT.folders, properties: CONTRACT.properties }, legacy: { templates: CONTRACT.templates } };
+const SEALED: ContractView = { state: "sealed", contract: CONTRACT };
+const PROJECT = parseLiveTemplate("Templates/project.md", "---\nfolder: Projects\nrating: 5\ncreated: 2026-01-01\n---\n## Goals\n") as LiveTemplate;
+const BARE = parseLiveTemplate("Templates/bare.md", "") as LiveTemplate;
 
 describe("frameFor", () => {
   it("returns an empty frame for an open or unreadable contract", () => {
     for (const view of [{ state: "open" }, { state: "unreadable", reason: "broken" }] as const) {
       const state = view.state;
-      expect(frameFor(view, { folder: "Projects", template: "project" })).toEqual({
+      expect(frameFor(view, { folder: "Projects", scaffold: PROJECT })).toEqual({
         contract: state, folder: null, properties: [], template: null, defaults: [],
       });
     }
@@ -68,8 +59,8 @@ describe("frameFor", () => {
   });
 
   it("describes the chosen template as a scaffold, while properties come from the property contract only", () => {
-    const frame = frameFor(SEALED, { template: "project" });
-    expect(frame.template).toEqual({ name: "project", meaning: "one project", requiredProperties: ["rating"], requiredHeadings: ["Goals"] });
+    const frame = frameFor(SEALED, { scaffold: PROJECT });
+    expect(frame.template).toEqual({ name: "project", source: "Templates/project.md", properties: ["rating", "created"], headings: ["Goals"] });
     expect(frame.properties).toEqual(frameFor(SEALED, {}).properties);
     const byName = Object.fromEntries(frame.properties.map(property => [property.name, property]));
     expect(byName["rating"]?.required).toBe(false);
@@ -77,10 +68,9 @@ describe("frameFor", () => {
     expect(frame.defaults).toEqual(["created"]);
   });
 
-  it("reports a template without meaning as null and ignores an unknown template", () => {
-    expect(frameFor(SEALED, { template: "bare" }).template).toEqual({ name: "bare", meaning: null, requiredProperties: [], requiredHeadings: [] });
-    expect(frameFor(SEALED, { template: "missing" }).template).toBeNull();
-    expect(frameFor(SEALED, { template: "toString" }).template).toBeNull();
+  it("describes a template with no frontmatter or headings, and no template when none scaffolds", () => {
+    expect(frameFor(SEALED, { scaffold: BARE }).template).toEqual({ name: "bare", source: "Templates/bare.md", properties: [], headings: [] });
+    expect(frameFor(SEALED, {}).template).toBeNull();
   });
 
   it("tolerates a contract without properties", () => {

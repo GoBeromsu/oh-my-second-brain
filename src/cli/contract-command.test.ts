@@ -14,7 +14,7 @@ const { resolveEffectiveVault } = vi.hoisted(() => ({
 }));
 vi.mock("../kernel/link/link.js", () => ({ resolveEffectiveVault }));
 
-import { readVaultSettings, VaultSettingsError } from "../kernel/vault/settings.js";
+import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH, VaultSettingsError } from "../kernel/vault/settings.js";
 import { commandDiagnostic, contractUsage, runContractCommand } from "./contract-command.js";
 
 const SECRET = "SECRET-42";
@@ -109,7 +109,7 @@ describe("oms contract", () => {
 
     await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
     expect(process.exitCode).toBe(0);
-    expect(output()).toEqual({ status: "sealed", vaultIdCreated: true, folders: 1, properties: 0, templates: [] });
+    expect(output()).toEqual({ status: "sealed", vaultIdCreated: true, folders: 1, properties: 0 });
     expect(await readdir(path.join(home, ".oms", "vaults"))).toContain("index.json");
 
     await runContractCommand(["status", "--vault", vault]);
@@ -237,21 +237,22 @@ describe("oms contract", () => {
     await expect(readdir(path.join(home, ".oms"))).rejects.toThrow();
   });
 
-  it("names the source to interpret and the hash, and reads nothing of its content", async () => {
-    await runContractCommand(["extract", "--template", "Templates/Meeting.md", "--vault", vault]);
+  it("previews what a live template scaffolds by key and heading, never by value", async () => {
+    await mkdir(path.join(vault, ".oms"));
+    await writeFile(path.join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c", templateFolder: "Templates" }));
+    await runContractCommand(["extract", "--template", "Meeting", "--vault", vault]);
     expect(process.exitCode).toBe(0);
-    const result = output();
-    expect(result["status"]).toBe("enumerated");
-    expect(result["sources"]).toEqual([{ source: "Templates/Meeting.md", sourceHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) }]);
-    // Not just the secret: no property name either, because the bytes are never parsed.
+    expect(output()).toEqual({ status: "scaffold", name: "Meeting", source: "Templates/Meeting.md", folder: null, properties: ["status", "code"], headings: ["{{title}}"] });
     expect(printed()).not.toContain(SECRET);
-    expect(printed()).not.toContain("code");
   });
 
-  it("refuses a template outside the vault", async () => {
-    await runContractCommand(["extract", "--template", "../outside.md", "--vault", vault]);
-    expect(process.exitCode).toBe(1);
-    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "CONTRACT_ARGS_INVALID" }] });
+  it("reports a template that is not in templateFolder as missing, outside the vault or not", async () => {
+    for (const template of ["../outside.md", "Nowhere"]) {
+      process.exitCode = 0;
+      await runContractCommand(["extract", "--template", template, "--vault", vault]);
+      expect(process.exitCode).toBe(1);
+      expect(output()).toMatchObject({ status: "missing", template });
+    }
   });
 
   it("reports a vault that cannot be resolved by a fixed code without its paths", async () => {

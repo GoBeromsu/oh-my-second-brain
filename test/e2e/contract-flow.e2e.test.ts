@@ -73,7 +73,7 @@ describe("contract flow e2e", () => {
           "seal": "y",
         }),
       });
-      expect(sealed).toEqual({ state: "sealed", vaultIdCreated: true, folders: 1, properties: 1, templates: [] });
+      expect(sealed).toEqual({ state: "sealed", vaultIdCreated: true, folders: 1, properties: 1 });
 
       // A value outside the sealed rule is saved as written with a warning, not refused.
       const kept = await write({ path: "Projects/k.md", content: "---\nstatus: nope\n---\nBody\n" });

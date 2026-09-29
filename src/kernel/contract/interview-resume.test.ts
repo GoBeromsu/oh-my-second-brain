@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
-import { interpretVault } from "./interpretation-fixture.js";
 import { runInterview, type InterviewIO, type Question } from "./interview.js";
 import { appendInterviewEvent, migrateInterviewLog, pendingLogKey, readInterviewLog } from "./interview-log.js";
 import { confirmedProposal, currentRun, latestProposal, pendingAnswers, resumableIO, vaultLog } from "./interview-resume.js";
@@ -31,6 +30,8 @@ async function makeVault(name: string): Promise<{ readonly vault: string; readon
   await mkdir(join(vault, "Projects"), { recursive: true });
   await mkdir(join(vault, "Templates"));
   await mkdir(join(vault, ".oms"));
+  await mkdir(join(vault, ".obsidian"));
+  await writeFile(join(vault, ".obsidian/types.json"), JSON.stringify({ types: { status: "text" } }));
   await writeFile(join(vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: VAULT_ID, templateFolder: "Templates" }));
   await writeFile(join(vault, "Projects/Alpha.md"), "---\nstatus: active\n---\nbody\n");
   await writeFile(join(vault, "Templates/Meeting.md"), "---\nstatus: open\n---\n## Agenda\n");
@@ -38,7 +39,6 @@ async function makeVault(name: string): Promise<{ readonly vault: string; readon
 }
 
 const TERMINAL: Answers = {
-  "template:Meeting:interpretation": true,
   "folder:Projects:register": true,
   "folder:Projects:meaning": "project notes",
   "folder:Projects:search-exclude": false,
@@ -48,12 +48,6 @@ const TERMINAL: Answers = {
   "property:status:required": true,
   "property:status:rule": "none",
   "property:status:meaning": "workflow state",
-  "template:Meeting:register": true,
-  "template:Meeting:field:status:required": true,
-  "template:Meeting:field:status:literal": "one-of-allowed",
-  "template:Meeting:field:status:allowed": "open, done",
-  "template:Meeting:heading:Agenda": true,
-  "template:Meeting:apply-folder": "Projects",
   seal: true,
 };
 
@@ -91,8 +85,7 @@ function terminal(stopAt = Number.POSITIVE_INFINITY): { readonly io: InterviewIO
 
 async function interview(vault: string, root: string, io: InterviewIO) {
   const resumed = await resumableIO({ vault, root, fallback: io, now: () => NOW });
-  const interpretations = await interpretVault(vault);
-  const result = await runInterview({ vault, io: resumed.io, root, interpretations, sealDeps: { now: () => NOW } });
+  const result = await runInterview({ vault, io: resumed.io, root, sealDeps: { now: () => NOW } });
   return { result, resumed };
 }
 
@@ -156,7 +149,6 @@ describe("continuing an interrupted interview", () => {
     expect(first.asked).toContain("property:status:type");
 
     // Obsidian now declares `status` a select, so the type question offers another default.
-    await mkdir(join(vault, ".obsidian"));
     await writeFile(join(vault, ".obsidian/types.json"), JSON.stringify({ types: { status: "select" } }));
     const second = terminal();
     const { result, resumed } = await interview(vault, root, second.io);

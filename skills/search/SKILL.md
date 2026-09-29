@@ -20,7 +20,7 @@ Retrieve vault knowledge without changing the vault. Search does not depend on c
 
 - `query` accepts three shapes. `mode: "query" | "search" | "vsearch"` with a `query` string; a bare `query` string with no `mode`; or typed retrieval with `searches`, `vec`, or `hyde` and no `mode` or `query`. `mode` never combines with `searches`. Lexical retrieval reads no contract and stays available when no embedding provider is configured.
 - `context` retrieves the declared search context.
-- `templates` lists the sealed templates and their declared axes, or shows one template.
+- `templates` lists the templates in the vault's template folder and their declared axes, or shows one template.
 - `index-status` requires `view: "status" | "collections" | "contexts"`.
 - `get-document` requires exactly one of `target`, `targets`, or `notePath` with its window.
 - `link` suggests `[[wikilinks]]` for one note (`notePath`, optional `folder`). Suggestions are anchored to a term note's basename or alias, cover the first occurrence of each target only, and report an ambiguous span instead of resolving it. `oms search --link <path>` is the CLI counterpart.
@@ -31,7 +31,7 @@ Template source files are never returned as notes. Expansion is explicit only fo
 
 Typed queries intersect these axes:
 
-- `axes.template` selects one sealed template.
+- `axes.template` selects one template from the template folder.
 - `axes.field.<key>` filters a field declared by that template; values may be scalars, scalar lists, or supported predicate objects.
 - `axes.folder` scopes physical placement.
 - `axes.link` follows observed wikilinks.

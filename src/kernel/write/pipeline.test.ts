@@ -7,30 +7,23 @@ import { buildTruthTableRow, type TruthTableFixture } from "../../../test/fixtur
 import { openGaps, readGapDraft, readGapLedger } from "../contract/gap-ledger.js";
 import { contractRevision } from "../contract/revision.js";
 import { sealContract } from "../contract/store.js";
-import type { TemplatedContract } from "../contract/legacy.js";
 import { formatWarnings, type VaultContract } from "../contract/types.js";
 import { resolveSealState, type SealRow } from "../contract/vault-id.js";
 import { syncEngineStore } from "../engine/embed/sync.js";
 import { engineStorePath } from "../engine/paths.js";
+import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
 import { runWritePipeline, type WriteRequest } from "./pipeline.js";
 
-const CONTRACT: TemplatedContract = {
+const CONTRACT: VaultContract = {
   folders: { Projects: { meaning: "project notes", searchExclude: false } },
   properties: {
     status: { meaning: "where the project stands", type: "text", default: false, required: false, rules: [{ kind: "allowed", values: ["active", "done"] }] },
     created: { meaning: "creation date", type: "date", default: true, required: false, rules: [] },
   },
-  templates: {
-    project: {
-      source: "Templates/project.md",
-      sourceHash: `sha256:${"0".repeat(64)}`,
-      meaning: "one project",
-      requiredProperties: [],
-      narrowedRules: {},
-      requiredHeadings: ["Goals"],
-    },
-  },
 };
+
+/** The live project template: it scaffolds a new note with a `Goals` heading. */
+const PROJECT_TEMPLATE = "---\nfolder: Projects\n---\n## Goals\n";
 
 const NOW = new Date(2026, 8, 28, 9, 30, 0);
 /** Frontmatter that does not parse: the only note a sealed vault drafts. */
@@ -41,12 +34,12 @@ const fixtures: TruthTableFixture[] = [];
 const scratch: string[] = [];
 let savedEnv: Record<string, string | undefined>;
 
-async function sealedVault(contract: VaultContract | TemplatedContract = CONTRACT): Promise<TruthTableFixture> {
+async function sealedVault(contract: VaultContract = CONTRACT): Promise<TruthTableFixture> {
   return rowVault("sealed", contract);
 }
 
 /** A vault in seal-state `row`, with HOME pointed at its store so the default seal read finds it. */
-async function rowVault(row: SealRow, contract: VaultContract | TemplatedContract = CONTRACT): Promise<TruthTableFixture> {
+async function rowVault(row: SealRow, contract: VaultContract = CONTRACT): Promise<TruthTableFixture> {
   const fixture = await buildTruthTableRow(row, contract);
   fixtures.push(fixture);
   const home = path.join(fixture.base, "home");
@@ -56,6 +49,13 @@ async function rowVault(row: SealRow, contract: VaultContract | TemplatedContrac
   process.env["XDG_CACHE_HOME"] = path.join(fixture.base, "cache");
   process.env["OMS_RUNTIME_ROOT"] = path.join(fixture.base, "runtime");
   return fixture;
+}
+
+/** Points the vault's `templateFolder` at `Templates/` and writes each live template there. */
+async function withTemplates(fixture: TruthTableFixture, templates: Readonly<Record<string, string>>): Promise<void> {
+  await writeFile(path.join(fixture.vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: fixture.vaultId, templateFolder: "Templates" }));
+  await mkdir(path.join(fixture.vault, "Templates"), { recursive: true });
+  for (const [name, text] of Object.entries(templates)) await writeFile(path.join(fixture.vault, "Templates", `${name}.md`), text);
 }
 
 function sha256(content: string | Buffer): string {
@@ -370,20 +370,20 @@ describe("runWritePipeline", () => {
     expect(drafted).toMatchObject({ kind: "checked", check: { resolution: { action: "draft", gaps: [{ axis: "value", kind: "no-fit", field: "content" }], wouldDraft: true } } });
   });
 
-  // slice f2: move to templateFolder — the choice returns once templates are read from there.
-  it("records no template choice from an older generation's templates and saves the note as written", async () => {
-    const template = CONTRACT.templates["project"]!;
-    const fixture = await sealedVault({
-      ...CONTRACT,
-      templates: {
-        project: { ...template, applyFolder: "Projects", requiredHeadings: [] },
-        review: { ...template, source: "Templates/review.md", applyFolder: "Projects", requiredHeadings: [] },
-      },
-    });
+  it("records a template choice for a new note in a folder two live templates match, and scaffolds nothing", async () => {
+    const fixture = await sealedVault();
+    await withTemplates(fixture, { project: "---\nfolder: Projects\nowner: me\n---\n## Goals\n", review: "---\nfolder: Projects\n---\n## Findings\n" });
     const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: active\n---\nBody\n"), { now: () => NOW, updateIndex: async () => "skipped" });
-    expect(outcome).toMatchObject({ kind: "written" });
-    expect(outcome.kind === "written" && outcome.receipt).not.toHaveProperty("gaps");
-    expect(openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events)).toEqual([]);
+    expect(outcome).toMatchObject({ kind: "written", receipt: { gaps: [{ axis: "template", kind: "choice" }] } });
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\nstatus: active\ncreated: 2026-09-28\n---\nBody\n");
+    const [gap] = openGaps((await readGapLedger(fixture.root, fixture.vaultId)).events);
+    expect(gap).toMatchObject({ axis: "template", kind: "choice", chosen: "review", wanted: { field: "template", value: ["project", "review"] } });
+
+    const edited = await runWritePipeline(request(fixture, "Projects/a.md", "---\nstatus: done\n---\nBody\n"), { now: () => NOW, updateIndex: async () => "skipped" });
+    expect(edited.kind === "written" && edited.receipt).not.toHaveProperty("gaps");
+    const chosen = await runWritePipeline(request(fixture, "Projects/b.md", "Body\n", { template: "review" }), { now: () => NOW, updateIndex: async () => "skipped" });
+    expect(chosen.kind === "written" && chosen.receipt).not.toHaveProperty("gaps");
+    expect(await readFile(path.join(fixture.vault, "Projects", "b.md"), "utf8")).toContain("## Findings");
   });
 
   it("saves a write the contract contradicts on the field as written and records the contradiction", async () => {
@@ -467,7 +467,7 @@ describe("runWritePipeline", () => {
   it("names one contract revision in the receipt and every gap when a seal lands mid-write", async () => {
     const fixture = await sealedVault();
     const vaultRealPath = await realpath(fixture.vault);
-    const resealed: TemplatedContract = {
+    const resealed: VaultContract = {
       ...CONTRACT,
       properties: { ...CONTRACT.properties!, created: { ...CONTRACT.properties!["created"]!, meaning: "creation date, resealed" } },
     };
@@ -537,21 +537,21 @@ describe("runWritePipeline", () => {
     expect(retried).toMatchObject({ kind: "written", receipt: { path: "Projects/a.md" } });
   });
 
-  it("never defaults a date property a template requires, and never judges the template's requirement", async () => {
-    const required: TemplatedContract = {
-      ...CONTRACT,
-      templates: { project: { ...CONTRACT.templates["project"]!, requiredProperties: ["created"] } },
-    };
-    const fixture = await sealedVault(required);
-    const content = "---\nstatus: active\n---\n## Goals\n";
-    for (const template of ["project", undefined]) {
-      const extra = template === undefined ? {} : { template };
-      const checked = await runWritePipeline(request(fixture, "Projects/a.md", content, { ...extra, check: true }), { now: () => NOW });
-      expect(checked).toMatchObject({ kind: "checked", check: { ok: true, violations: [], warnings: [], conformed: [] } });
-    }
-    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", content, { template: "project" }), { now: () => NOW, updateIndex: async () => "skipped" });
+  it("never judges a note against its template: a live template scaffolds a new note and nothing more", async () => {
+    const fixture = await sealedVault();
+    await withTemplates(fixture, { project: "---\nfolder: Projects\nrating: 1\n---\n## Goals\n" });
+    await mkdir(path.join(fixture.vault, "Projects"));
+    const existing = "---\nstatus: active\n---\nNo goals here\n";
+    await writeFile(path.join(fixture.vault, "Projects", "a.md"), existing);
+    const checked = await runWritePipeline(request(fixture, "Projects/a.md", existing, { template: "project", check: true }), { now: () => NOW });
+    expect(checked).toMatchObject({ kind: "checked", check: { ok: true, violations: [], warnings: [], conformed: [] } });
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", existing, { template: "project", ifMatch: sha256(existing) }), { now: () => NOW, updateIndex: async () => "skipped" });
     expect(outcome).toMatchObject({ kind: "written", receipt: { warnings: [] } });
-    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe(content);
+    expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe(existing);
+
+    const missing = await runWritePipeline(request(fixture, "Projects/b.md", "Body\n", { template: "gone" }), { now: () => NOW, updateIndex: async () => "skipped" });
+    expect(missing).toMatchObject({ kind: "written" });
+    expect(await readFile(path.join(fixture.vault, "Projects", "b.md"), "utf8")).not.toContain("## Goals");
   });
 
   it("records nothing when an edit keeps a legacy note's unknown key, and exactly one gap for a second unknown key", async () => {
@@ -595,6 +595,7 @@ describe("runWritePipeline", () => {
 
   it("check mode judges and reports the frame without changing the vault, store or queue", async () => {
     const fixture = await sealedVault();
+    await withTemplates(fixture, { project: PROJECT_TEMPLATE });
     await mkdir(path.join(fixture.vault, "Projects"));
     await writeFile(path.join(fixture.vault, "Projects", "a.md"), "---\nstatus: active\n---\nBody\n");
     const synced = await syncEngineStore({ vault: fixture.vault, embed: false });
@@ -620,8 +621,8 @@ describe("runWritePipeline", () => {
       check: {
         ok: true,
         revision: null,
-        conformed: [{ field: "created", action: "default" }, { field: "Goals", action: "heading" }],
-        frame: { contract: "sealed", folder: { path: "Projects", meaning: "project notes" }, template: { name: "project", meaning: "one project", requiredHeadings: ["Goals"] } },
+        conformed: [{ field: "Goals", action: "heading" }, { field: "created", action: "default" }],
+        frame: { contract: "sealed", folder: { path: "Projects", meaning: "project notes" }, template: { name: "project", source: "Templates/project.md", properties: [], headings: ["Goals"] } },
       },
     });
     expect(checks[2]).toMatchObject({

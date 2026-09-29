@@ -543,13 +543,6 @@ export interface SealRequest {
   /** Folders and properties the owner declined; kept so a rerun does not ask again. */
   readonly declined?: DeclinedSet;
   /**
-   * Re-checks under the seal lock that the inputs the contract was built from still hold,
-   * before anything is written. A returned reason aborts the seal with nothing written.
-   * The check belongs inside the lock: outside it, the window between the check and the
-   * swap is a TOCTOU hole.
-   */
-  readonly freshness?: () => Promise<string | null>;
-  /**
    * The manifest digest the caller built on ("none" for no contract). Checked under the
    * lock after `baseSeq`: a different or unreadable linked generation aborts with
    * CONTRACT_SEAL_CHANGED. Unlike `baseSeq` it also catches a same-seq replacement (ABA).
@@ -739,7 +732,7 @@ export async function recoverLineage(root: string, vaultId: string, options: Lin
 /**
  * CLI + evolution seal-gate. Under the `.<id>.lock`: check nothing sealed since `baseSeq`
  * and that the linked generation is `expectedParentDigest`, plan the lineage tail (a gap
- * under `refuse` stops here), check freshness, snapshot the retained generations and
+ * under `refuse` stops here), snapshot the retained generations and
  * record any anchors, drop orphan generations, write `.<id>.<seq>/` (manifest last),
  * then keep this durability order: publish its snapshot and fsync `generations/`, swap
  * the `<id>` link by rename and fsync the root, append the lineage event (`onSealed`),
@@ -765,10 +758,6 @@ export async function sealContract(request: SealRequest, root: string = storeRoo
     if (observed.lineage.truncatedTail) warnings.push("lineage-truncated-tail");
     const plan = planLineageTail(observed.lineage.events, observed.input, request.lineageGapPolicy ?? "reanchor");
     if (plan.action === "refuse") throw new LineageGap(plan.tailDigest, plan.parentDigest);
-    // Under the lock and before the first write, so a source that moved during the
-    // interview cannot be sealed as the bytes the owner was asked about.
-    const stale = request.freshness === undefined ? null : await request.freshness();
-    if (stale !== null) throw new Error(`CONTRACT_SEAL_STALE: ${stale}`);
 
     const boot = await bootstrapUnderLock(root, id, observed);
     if (plan.action === "append") warnings.push(...plan.warnings);

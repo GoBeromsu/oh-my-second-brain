@@ -11,8 +11,8 @@ import { runContractCommand, type ContractCommandDeps } from "./contract-command
 export function interviewUsage(): string {
   return `Usage: oms interview [--reask] [--restart] [--vault <path>]
 
-Ask the vault owner about folders, properties and templates in the terminal, then seal
-the contract. It needs an interactive terminal and refuses OMS_NON_INTERACTIVE=1.
+Ask the vault owner about folders and properties in the terminal, then seal the contract.
+Templates are not sealed; those in the template folder scaffold new notes. It needs an interactive terminal and refuses OMS_NON_INTERACTIVE=1.
 --reask asks again about items declined at an earlier seal.
 An interrupted interview continues from its logged answers; --restart starts over.
 An agent asks the same questions with \`oms setup --questions\` and \`oms setup --answers <file>\`.`;

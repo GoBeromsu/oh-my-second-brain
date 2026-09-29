@@ -87,6 +87,22 @@ describe("readSearchTemplateSource", () => {
     expect(Object.keys(read.source).sort()).toEqual(["defaultFields", "generationDigest", "globalAxes", "sourcePaths", "templates"]);
   });
 
+  it("names the live templates in templateFolder as the template axis, never the sealed ones", async () => {
+    const vault = await makeVault({ ...SOURCES, "Templates/meeting.md": "---\nfolder: Notes\nstatus: done\n---\n## Agenda\n" });
+    const vaultId = await seal(vault, contract());
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId, templateFolder: "Templates" }));
+    const read = await readSearchTemplateSource(vault);
+    expect(Object.keys(read.source.templates ?? {})).toEqual(["meeting"]);
+    // A template adds no requirement: its fields are the property contract's.
+    expect(read.source.templates?.["meeting"]).toEqual(read.source.defaultFields);
+    expect(read.source.sourcePaths).toEqual(["Templates/meeting.md"]);
+
+    await writeFile(path.join(vault, "Templates", "weekly.md"), "---\ntitle: Week\n---\n");
+    const next = await readSearchTemplateSource(vault);
+    expect(Object.keys(next.source.templates ?? {})).toEqual(["meeting", "weekly"]);
+    expect(next.digest).not.toBe(read.digest);
+  });
+
   it("never exposes a rule value or narrowed rule", async () => {
     const vault = await makeVault(SOURCES);
     await seal(vault, contract());

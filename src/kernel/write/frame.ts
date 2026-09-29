@@ -1,12 +1,12 @@
 import { compareCodePoints } from "../conventions/canonical.js";
 import { normalizePath } from "../contract/judge.js";
-import { templatedContract } from "../contract/legacy.js";
 import { buildRedactor, hiddenValuesOf, publicTokensOf, REDACTED, redactResponse, type Redactor } from "../contract/redact.js";
 import type { ContractView, FieldType, JsonScalar, Rule, VaultContract } from "../contract/types.js";
+import type { LiveTemplate } from "./live-templates.js";
 
 /**
  * The frame an agent writes into: what the target folder and each property mean, the
- * chosen template's skeleton, and the allowed values. Every string and every allowed
+ * live template that will scaffold the note, and the allowed values. Every string and every allowed
  * value passes the redactor, so a hidden sealed value never leaves as itself.
  */
 
@@ -22,11 +22,13 @@ export interface FrameProperty {
   readonly allowed: readonly JsonScalar[] | null;
 }
 
+/** A preview of the scaffold: what the template adds, never what the judge requires. */
 export interface FrameTemplate {
   readonly name: string;
-  readonly meaning: string | null;
-  readonly requiredProperties: readonly string[];
-  readonly requiredHeadings: readonly string[];
+  readonly source: string;
+  /** The frontmatter keys the template fills as defaults. */
+  readonly properties: readonly string[];
+  readonly headings: readonly string[];
 }
 
 export interface WriteFrame {
@@ -41,7 +43,8 @@ export interface WriteFrame {
 export interface FrameOptions {
   /** Vault-relative folder the note goes into. */
   readonly folder?: string | undefined;
-  readonly template?: string | undefined;
+  /** The live template that scaffolds the note (`selectTemplate`). */
+  readonly scaffold?: LiveTemplate | undefined;
 }
 
 function emptyFrame(state: ContractView["state"]): WriteFrame {
@@ -70,7 +73,7 @@ function redactValue(value: JsonScalar, redactor: Redactor): JsonScalar {
   return redactor(String(value)) === String(value) ? value : REDACTED;
 }
 
-/** The judge reads only the property contract, so a template never makes a property required or narrower here. */
+/** Only the property contract makes a property required; a template never does. */
 function frameProperties(contract: VaultContract, redactor: Redactor): FrameProperty[] {
   const entries = Object.entries(contract.properties ?? {}).sort(([left], [right]) => compareCodePoints(left, right));
   return entries.map(([name, property]) => {
@@ -89,21 +92,19 @@ function frameProperties(contract: VaultContract, redactor: Redactor): FrameProp
 
 export function frameFor(view: ContractView, options: FrameOptions = {}): WriteFrame {
   if (view.state !== "sealed") return emptyFrame(view.state);
-  // slice f2: move to templateFolder
-  const contract = templatedContract(view);
-  const name = options.template;
-  const template = name !== undefined && Object.hasOwn(contract.templates, name) ? contract.templates[name] : undefined;
+  const contract = view.contract;
+  const template = options.scaffold;
   const redactor = buildRedactor(hiddenValuesOf(contract), { publicTokens: publicTokensOf(contract) });
   const properties = frameProperties(contract, redactor);
   const frame: WriteFrame = {
     contract: "sealed",
     folder: nearestFolder(contract, options.folder),
     properties,
-    template: template === undefined || name === undefined ? null : {
-      name,
-      meaning: template.meaning ?? null,
-      requiredProperties: template.requiredProperties,
-      requiredHeadings: template.requiredHeadings,
+    template: template === undefined ? null : {
+      name: template.name,
+      source: template.source,
+      properties: template.fields.map(field => field.name),
+      headings: template.headings.map(heading => heading.title),
     },
     defaults: properties.filter(property => property.default && !property.required).map(property => property.name),
   };

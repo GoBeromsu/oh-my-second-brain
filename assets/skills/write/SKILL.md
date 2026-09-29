@@ -25,7 +25,7 @@ Document reads stay on `search { op: "get-document" }`.
 write { path, content, template?, ifMatch?, check? }
 ```
 
-`path` is vault-relative. `content` is the whole note. `template` names a sealed template when the note follows one; omit it otherwise. `ifMatch` is the `sha256:` revision of the note you are replacing. `check: true` judges without writing. There are no other fields.
+`path` is vault-relative. `content` is the whole note. `template` names a template in the vault's template folder to scaffold a new note from; omit it to use the one template matching the target folder, if any. A named template that does not exist scaffolds nothing and is reported as `template-missing`. `ifMatch` is the `sha256:` revision of the note you are replacing. `check: true` judges without writing. There are no other fields.
 
 OMS fills only what is mechanical before it judges: template variables such as `{{title}}` and `{{date}}`, date and datetime defaults on a new note, and the chosen template's missing headings. It never supplies a required value or changes one the judge would refuse.
 

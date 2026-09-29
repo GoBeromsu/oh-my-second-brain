@@ -4,6 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The setup and interview skills cover folders and properties only.** The setup skill drops the template-interpretation steps (`--interpretations`, `observedHash`, `interpretation-required`, `interpretation-rejected`) and describes `oms setup extract --template <name>` as a scaffold preview; the interview skill drops the `interpretations` parameter. The write, search and doctor skills describe templates as live files in the template folder that scaffold new notes and are never judged.
 - **The setup skill no longer describes a `template-tightened` refusal.** Reseal no longer refuses a template answered more strictly, because the judge never reads a template.
 
 ## [0.19.0] - 2026-09-28

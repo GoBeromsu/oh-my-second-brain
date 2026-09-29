@@ -5,6 +5,7 @@ import { basePathKind, judge } from "./judge.js";
 import { resolveSealState } from "./vault-id.js";
 import { findingsOf, verdictOf, type ContractView, type Verdict, type Violation, type ViolationKind } from "./types.js";
 import { resolveTiers, type GapFinding, type Resolution } from "../write/ambiguity.js";
+import type { LiveTemplate } from "../write/live-templates.js";
 
 /**
  * The one entry both write surfaces use. MCP `write` and the Claude hook translator
@@ -120,6 +121,8 @@ export interface DecideWriteOptions {
    * It is never judged: the verdict is the same with or without it.
    */
   readonly template?: string | undefined;
+  /** The live templates in `templateFolder`; a new note in a folder two of them match records a choice. */
+  readonly templates?: readonly LiveTemplate[] | undefined;
   /**
    * False when the caller can only allow or deny the content as written (the Claude hook):
    * nothing is fixed or drafted, and the warnings are recorded as kept.
@@ -154,6 +157,7 @@ export function decideWrite(resolved: ReadyTarget, content: string, options: Dec
     path: resolved.path,
     content,
     template,
+    templates: options.templates,
     previousContent: resolved.previousContent ?? undefined,
     isNew: resolved.previousContent === undefined,
     now: options.now,

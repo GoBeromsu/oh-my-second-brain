@@ -2,7 +2,6 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 
-import { enumerateTemplateSources, parseInterpretations, type TemplateInterpretation } from "../kernel/contract/interpretation.js";
 import { resumableIO } from "../kernel/contract/interview-resume.js";
 import { InterviewAborted, runInterview, type InterviewIO, type InterviewResult, type Question } from "../kernel/contract/interview.js";
 import { parseAnswers, publicQuestion, scriptedIO, type Answers } from "../kernel/contract/scripted-interview.js";
@@ -12,26 +11,25 @@ import { gapsReport } from "../kernel/contract/gaps-report.js";
 import { lineageNeedsAttention } from "../kernel/contract/lineage-health.js";
 import { contractDoctor, contractStatus, doctorFix, ROW_FINDING } from "../kernel/contract/status.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
+import { loadLiveTemplates, selectTemplate } from "../kernel/write/live-templates.js";
 import { VaultSettingsError } from "../kernel/vault/settings.js";
 
 export function contractUsage(): string {
   return `Usage: the sealed contract is set up with oms setup and diagnosed with oms doctor.
 
   oms setup [--reask] [--vault <path>]
-            Interview the whole vault (folders, properties, templates) and seal the contract.
+            Interview the whole vault (folders and properties) and seal the contract.
+            Templates are not sealed: those in templateFolder scaffold new notes.
             --reask asks again about items declined at an earlier seal.
   oms setup --questions [--reask] [--vault <path>]
             Print the interview questions as JSON. Seals nothing.
   oms setup --answers <file|-> [--reask] [--vault <path>]
             Run the same interview from a JSON object of answers by question id (- reads stdin)
             and seal. Missing answers are listed; an invalid or unknown answer seals nothing.
-  oms setup --interpretations <file|-> ...
-            What each template source declares, read by the agent. Required when the vault has
-            templates: setup never parses template text. Pass it with --questions or --answers.
-  oms setup extract --template <path> [--vault <path>]
-            Show the template source to interpret and the hash OMS computed for it.
+  oms setup extract --template <name> [--vault <path>]
+            Preview what a template in templateFolder scaffolds: its keys and headings.
   oms setup status [--vault <path>]
-            Show the contract posture and template drift. Hidden values are never printed.
+            Show the contract posture. Hidden values are never printed.
   oms doctor contract [--fix] [--vault <path>]
             Diagnose the seal. --fix only re-indexes a moved or unindexed vault.
 
@@ -52,7 +50,6 @@ interface ContractArgs {
   readonly reask: boolean;
   readonly questions: boolean;
   readonly answers?: string;
-  readonly interpretations?: string;
 }
 
 function parse(argv: readonly string[]): ContractArgs {
@@ -65,7 +62,6 @@ function parse(argv: readonly string[]): ContractArgs {
   let reask = false;
   let questions = false;
   let answers: string | undefined;
-  let interpretations: string | undefined;
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index]!;
     if (token === "--fix" && verb === "doctor") {
@@ -83,13 +79,11 @@ function parse(argv: readonly string[]): ContractArgs {
       questions = true;
       continue;
     }
-    if ((token === "--answers" || token === "--interpretations") && verb === "setup") {
-      const taken = token === "--answers" ? answers : interpretations;
-      if (taken !== undefined) throw new Error(`CONTRACT_ARGS_INVALID: duplicate flag ${token}`);
+    if (token === "--answers" && verb === "setup") {
+      if (answers !== undefined) throw new Error("CONTRACT_ARGS_INVALID: duplicate flag --answers");
       const value = rest[++index];
-      if (value === undefined || value.startsWith("--")) throw new Error(`CONTRACT_ARGS_INVALID: ${token} requires a file or -`);
-      if (token === "--answers") answers = value;
-      else interpretations = value;
+      if (value === undefined || value.startsWith("--")) throw new Error("CONTRACT_ARGS_INVALID: --answers requires a file or -");
+      answers = value;
       continue;
     }
     if (token !== "--vault" && !(token === "--template" && verb === "extract")) {
@@ -105,7 +99,7 @@ function parse(argv: readonly string[]): ContractArgs {
       template = value;
     }
   }
-  if (verb === "extract" && template === undefined) throw new Error("CONTRACT_ARGS_INVALID: extract needs --template <path>");
+  if (verb === "extract" && template === undefined) throw new Error("CONTRACT_ARGS_INVALID: extract needs --template <name>");
   if (questions && answers !== undefined) throw new Error("CONTRACT_ARGS_INVALID: use --questions or --answers, not both");
   return {
     verb: verb as Verb,
@@ -113,7 +107,6 @@ function parse(argv: readonly string[]): ContractArgs {
     reask,
     questions,
     ...(answers === undefined ? {} : { answers }),
-    ...(interpretations === undefined ? {} : { interpretations }),
     ...(vault === undefined ? {} : { vault }),
     ...(template === undefined ? {} : { template }),
   };
@@ -121,14 +114,6 @@ function parse(argv: readonly string[]): ContractArgs {
 
 function print(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
-}
-
-function templatePath(vault: string, template: string): string {
-  const relative = path.isAbsolute(template) ? path.relative(vault, template) : path.normalize(template);
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("CONTRACT_ARGS_INVALID: --template must name a file inside the vault");
-  }
-  return relative.split(path.sep).join("/");
 }
 
 function describe(question: Question): string {
@@ -175,8 +160,6 @@ function printResult(result: InterviewResult, notes: readonly string[] = []): vo
       vaultIdCreated: result.vaultIdCreated,
       folders: result.folders,
       properties: result.properties,
-      templates: result.templates,
-      ...(result.removedTemplates === undefined || result.removedTemplates.length === 0 ? {} : { removedTemplates: result.removedTemplates }),
       ...(result.warnings === undefined || result.warnings.length === 0 ? {} : { warnings: result.warnings }),
     });
   } else if (result.state === "refused") {
@@ -188,18 +171,6 @@ function printResult(result: InterviewResult, notes: readonly string[] = []): vo
       status: "loosening",
       changes: result.changes,
       remediation: "Nothing was sealed. These answers would loosen the sealed contract; only the owner can do that, by running `oms setup` themselves in a terminal.",
-    });
-  } else if (result.state === "interpretation-required") {
-    print({
-      status: "interpretation-required",
-      sources: result.sources,
-      remediation: "Nothing was sealed. Read each source and pass its interpretation to `oms setup --interpretations <file>`; observedHash must equal the sourceHash listed here.",
-    });
-  } else if (result.state === "interpretation-rejected") {
-    print({
-      status: "interpretation-rejected",
-      templates: result.templates,
-      remediation: "Nothing was sealed. The owner did not confirm these interpretations. Read those templates again and submit a corrected interpretation.",
     });
   } else {
     print({ status: "aborted", remediation: "Nothing was sealed." });
@@ -233,18 +204,11 @@ async function readAnswers(vault: string, source: string): Promise<Answers> {
   return parseAnswers(await readOutsideVault(vault, source));
 }
 
-/** Interpretations are agent input, not owner answers, but they stay outside the vault for the same reason. */
-async function readInterpretations(vault: string, source: string | undefined): Promise<readonly TemplateInterpretation[]> {
-  if (source === undefined) return [];
-  return parseInterpretations(await readOutsideVault(vault, source));
-}
-
 /** Setup without a terminal: questions out, answers in. Only a first or non-loosening seal goes through. */
 async function scriptedSetup(vault: string, args: ContractArgs): Promise<void> {
   const answers = args.answers === undefined ? {} : await readAnswers(vault, args.answers);
-  const interpretations = await readInterpretations(vault, args.interpretations);
   const { io, notes } = scriptedIO(answers);
-  const result = await runInterview({ vault, io, nonLoosening: true, interpretations, ...(args.reask ? { reask: true } : {}) });
+  const result = await runInterview({ vault, io, nonLoosening: true, ...(args.reask ? { reask: true } : {}) });
   if (args.questions && result.state === "incomplete") {
     print({ status: "questions", questions: result.questions.map(publicQuestion), notes });
     return;
@@ -259,7 +223,6 @@ async function setup(vault: string, args: ContractArgs, deps: ContractCommandDep
     console.error("[oms] oms setup needs an interactive terminal. Run `oms setup` or `oms interview` yourself in a terminal, or let an agent ask you with `oms setup --questions` and `oms setup --answers <file>`.");
     return;
   }
-  const interpretations = await readInterpretations(vault, args.interpretations);
   const terminal = deps.io === undefined ? terminalIO() : null;
   try {
     const owner = deps.io ?? terminal!.io;
@@ -278,7 +241,6 @@ async function setup(vault: string, args: ContractArgs, deps: ContractCommandDep
     const result = await runInterview({
       vault,
       io: resumed?.io ?? owner,
-      interpretations,
       ...(resume?.root === undefined ? {} : { root: resume.root }),
       ...(resume?.sealDeps === undefined ? {} : { sealDeps: resume.sealDeps }),
       ...(args.reask ? { reask: true } : {}),
@@ -293,23 +255,18 @@ async function setup(vault: string, args: ContractArgs, deps: ContractCommandDep
 }
 
 /**
- * The source an agent must interpret, with the digest OMS computed for it. Nothing about
- * the template's content is read or printed: OMS no longer parses template text, so this
- * leaf reports what to read and the hash the interpretation must match. The whole folder's
- * list comes from `oms setup`, which reports every source it enumerated.
+ * What a template in `templateFolder` scaffolds, read live: its keys and headings. Values
+ * are not printed; the template file itself is the place to read them.
  */
 async function extract(vault: string, template: string): Promise<void> {
-  const result = await enumerateTemplateSources(vault, { path: templatePath(vault, template), kind: "file" });
-  if (!result.ok) {
+  const selection = selectTemplate(await loadLiveTemplates(vault), { explicit: template });
+  if (selection.kind !== "template") {
     process.exitCode = 1;
-    print({ status: "rejected", diagnostics: result.diagnostics.map(item => ({ code: item.code })) });
+    print({ status: "missing", template, remediation: "No template by that name is in templateFolder. Set templateFolder in .oms/settings.json, or check the name." });
     return;
   }
-  print({
-    status: "enumerated",
-    sources: result.sources.map(source => ({ source: source.path, sourceHash: source.digest })),
-    remediation: "Read each source and submit its interpretation with `oms setup --interpretations <file>`; observedHash must equal sourceHash.",
-  });
+  const { name, source, folder, fields, headings } = selection.template;
+  print({ status: "scaffold", name, source, folder, properties: fields.map(field => field.name), headings: headings.map(heading => heading.title) });
 }
 
 /** Open gaps are the ledger doing its job; only a contradiction or an unreadable ledger needs attention, and a truncated one is a warning. */
