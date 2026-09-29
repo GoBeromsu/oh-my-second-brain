@@ -553,11 +553,21 @@ describe("doctor lineage repairs", () => {
 
   it("completes such a seal when the vault also reads as moved", async () => {
     const { vault, id } = await unindexedFirstSeal();
-    const old = path.join(home, "old-vault");
-    await mkdir(old);
-    await writeIndexEntry(await realpath(old), id);
-    expect((await resolveSealState(vault)).row).toBe("vault-moved");
+    // The old path is gone, so this is a move, not a copy.
+    await writeIndexEntry(path.join(await realpath(home), "old-vault"), id);
+    expect(await resolveSealState(vault)).toMatchObject({ row: "vault-moved", shared: false });
     await expectRecoveredSeal(vault, id, await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined }));
+  });
+
+  it("refuses a moved vault whose original path still exists (a copy sharing the id)", async () => {
+    const { vault, id } = await unindexedFirstSeal();
+    const original = path.join(home, "original-vault");
+    await mkdir(original);
+    await writeIndexEntry(await realpath(original), id);
+    expect(await resolveSealState(vault)).toMatchObject({ row: "vault-moved", shared: true });
+    expect(await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined })).toEqual({ kind: "error", message: expect.stringMatching(/^CONTRACT_VAULT_ID_SHARED: /) });
+    const index = JSON.parse(await readFile(path.join(storeRoot(), "index.json"), "utf8")) as { vaults: Record<string, string> };
+    expect(index.vaults[await realpath(vault)]).toBeUndefined();
   });
 
   it("refuses an unindexed vault whose store is missing", async () => {

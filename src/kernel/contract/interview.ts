@@ -751,7 +751,9 @@ export async function runInterview(input: {
     } catch (error: unknown) {
       // The generation is linked even though its lineage event is not: settle the settings
       // the seal was built from, so `oms doctor lineage-recover` alone completes it.
-      if (error instanceof LineageAppendFailed) await recordTemplateFolder();
+      // Swallowed: the append failure (whose `cause` is already the append error) is what the
+      // caller must act on, and lineage-recover completes the seal without the template folder.
+      if (error instanceof LineageAppendFailed) await recordTemplateFolder().catch(() => undefined);
       throw error;
     }
     await recordTemplateFolder();

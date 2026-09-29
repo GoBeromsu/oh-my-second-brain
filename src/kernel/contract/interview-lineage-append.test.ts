@@ -6,6 +6,7 @@ import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../vau
 import { interpretVault } from "./interpretation-fixture.js";
 import { runInterview, type InterviewIO, type Question } from "./interview.js";
 import { lineageHealth } from "./lineage-health.js";
+import { LineageAppendFailed } from "./lineage.js";
 import { recoverLineage } from "./store.js";
 import { resolveSealState } from "./vault-id.js";
 
@@ -21,6 +22,19 @@ vi.mock("./lineage.js", async importOriginal => {
         if (failAppend.on) throw new Error("disk full");
         return append(sealed);
       };
+    },
+  };
+});
+
+// interview.ts records the template folder through this export; fail it while `failSettings` is set.
+const failSettings = vi.hoisted(() => ({ on: false }));
+vi.mock("./vault-id.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("./vault-id.js")>();
+  return {
+    ...actual,
+    writeVaultSettings: async (...args: Parameters<typeof actual.writeVaultSettings>) => {
+      if (failSettings.on) throw new Error("EACCES: settings unwritable");
+      return actual.writeVaultSettings(...args);
     },
   };
 });
@@ -46,6 +60,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   failAppend.on = false;
+  failSettings.on = false;
   await rm(base, { recursive: true, force: true });
 });
 
@@ -90,6 +105,15 @@ describe("a first interview seal whose lineage append fails", () => {
     await recoverLineage(root, VAULT_ID, { policy: "refuse", reindex: await realpath(vault) });
     expect((await resolveSealState(vault, root)).row).toBe("sealed");
     expect((await lineageHealth(VAULT_ID, root)).findings).toEqual([]);
+  });
+
+  it("still throws the append failure when recording the template folder also fails", async () => {
+    failAppend.on = true;
+    failSettings.on = true;
+    const failure = await runInterview({ vault, io: scripted(), root, interpretations: await interpretVault(vault, "Templates") }).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(LineageAppendFailed);
+    expect(failure).toMatchObject({ code: "CONTRACT_LINEAGE_APPEND_FAILED", cause: expect.objectContaining({ message: "disk full" }) });
+    expect((await readVaultSettings(vault))?.templateFolder).toBeUndefined();
   });
 
   it("leaves the settings alone when the seal fails before linking the generation", async () => {
