@@ -228,6 +228,15 @@ describe("translatePreToolUse gap ledger", () => {
     expect(result).toEqual({ decision: "warn", reason: NOT_ALLOWED, warning: null });
   });
 
+  it("still warns when the ledger cannot record malformed frontmatter", async () => {
+    const fixture = await row("sealed");
+    const content = "---\nstatus: [open\n---\nbody\n";
+    const result = await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "Projects/a.md"), content }), {
+      gapLedger: { newId: () => { throw new Error("ledger down"); } },
+    });
+    expect(result.decision).toBe("warn");
+  });
+
   it("warns and records nothing when the seal state cannot be read", async () => {
     const fixture = await row("sealed");
     const gapRoot = join(fixture.base, "gaps");

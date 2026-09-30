@@ -4,7 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
-- **The doctor skill routes an unreadable seal to `oms interview`.** It sent both tampered and unreadable contract stores to `oms doctor contract`, while the `contract-unreadable` write warning names `oms interview`. The skill now matches the warning: an unreadable store is resealed with `oms interview`, and a tampered one is diagnosed with `oms doctor contract` first.
+- **The doctor skill names the reseal command for a broken seal.** It said a tampered or unreadable contract store is diagnosed with `oms doctor contract` and then resealed at a terminal, without naming `oms interview`, while the `contract-unreadable` write warning names `oms interview`. The skill now names both steps: `oms doctor contract` diagnoses, and the user reseals with `oms interview`.
 
 ## [0.20.2] - 2026-09-30
 
