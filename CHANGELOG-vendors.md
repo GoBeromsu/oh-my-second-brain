@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-30
+
 - **The Claude guard reads the live templates only for a new note.** `oms hook pre` loads the template folder only when the target does not exist yet, the only case in which a template choice is recorded, so an edit of an existing note no longer reads every template. New notes get the same decision and template choice gap as MCP `write`.
 - **The Claude guard records an open template choice as MCP `write` does.** `oms hook pre` now reads the live templates, so a new note in a folder that two or more templates match records the same template choice gap. The allow or deny decision and its warnings are unchanged.
 - **The Claude guard warns with the whole verdict on an edit.** Since the judge is stateless, `oms hook pre` returns every warning the edited note carries, while the gap ledger still records only the warnings the edit added.

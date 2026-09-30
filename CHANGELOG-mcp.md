@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-30
+
 - **The `status` write posture is chosen by a plain `if` chain.** `writePosture` in `src/mcp/tools/status.ts` replaces a nested ternary and returns the same four strings.
 - **The MCP server's schema validator no longer pulls a vulnerable `fast-uri`.** The lockfile moves the transitive `fast-uri` (via `@modelcontextprotocol/sdk` → `ajv`) from 4.1.4 to 4.2.1, fixing GHSA-hrr3-gc8f-f4qj and GHSA-jvvf-x445-j334. No behaviour changes.
 - **`doctor` gains `op: "evolve"`, `"evolve-verdict"`, `"revert-propose"` and `"reclaim-evolution-lock"`.** They are repair ops, so each requires a verified target and returns a receipt whose postcondition is read back from the store. `evolve` requires `makerSessionId` in its schema (`EVOLUTION_MAKER_SESSION_REQUIRED` without it) and returns the request id, nonce, digests and evaluator slots; `evolve-verdict` takes `requestId`, `nonce`, `slotToken`, `candidateDigest`, `parentDigest`, `evaluatorSessionId`, `verdict` (`approve` or `reject`), `rubricScores` and `reasons`; `revert-propose` takes `targetDigest`, and a revert always requires owner approval, so `evolve-verdict` on it is refused with `EVOLUTION_REQUEST_CLOSED`. `reclaim-evolution-lock` and `lineage-reanchor` need the owner at a terminal and are refused over MCP with `EVOLUTION_RECLAIM_REQUIRES_TTY` and `LINEAGE_REANCHOR_REQUIRES_TTY`. No tool is added. `status` carries an `evolution` field, `null` for an unsealed vault and `{unavailable}` when it cannot be read.

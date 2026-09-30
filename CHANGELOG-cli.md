@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-30
+
 - **The `oms doctor` evolution usage text is built from one flag table.** Each leaf's flag and its placeholder (`<id>`, `<file|->`, `<digest>`) now live together in `src/cli/lineage-command.ts`, and the printed usage is unchanged.
 - **`oms doctor evolve`, `evolve-verdict`, `revert-propose` and `reclaim-evolution-lock` drive contract evolution.** `evolve --maker-session <id>` opens one evolution request from the open gaps and seals nothing; the maker session is required. `evolve-verdict --verdict <file|->` submits one evaluator verdict as JSON and runs the seal-gate. `revert-propose --target <digest>` proposes a kept generation as a new forward candidate; a revert always requires owner approval, so it is approved or rejected at `oms setup`. `reclaim-evolution-lock` releases a stale evolution lock after the owner confirms at a terminal; `lineage-reanchor` now also asks the owner and is refused without a terminal. `oms doctor status` prints the `evolution` section.
 - **`oms setup` reviews pending contract evolutions, and `oms setup --autonomy on|off` controls autonomous sealing.** Before the interview, each request awaiting the owner is shown with its loosening changes marked and is sealed only on an explicit approve; a reject closes it. Autonomy is off by default and turned on only at a terminal.
