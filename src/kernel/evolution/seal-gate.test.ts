@@ -178,6 +178,14 @@ describe("sealGate autonomous", () => {
     expect((await readRequest(root, ID, request.requestId))?.makerSessionId).toBeUndefined();
   });
 
+  it("moves a makerless loosening evolve to awaiting-human before the maker-session refusal", async () => {
+    await autonomousOn();
+    const { makerSessionId: _maker, ...issued } = await issue(WIDER);
+    const request = await withVerdicts(issued as RequestRecord, ["approve", "approve", "approve"]);
+    expect(await run(request)).toEqual({ outcome: "awaiting-human", reason: "loosening", direction: "loosening" });
+    expect(await stateOf(request)).toBe("awaiting-human");
+  });
+
   it("refuses after three autonomous generations in a row until an owner seals one", async () => {
     await autonomousOn();
     const autonomousSeal = async (): Promise<void> => {

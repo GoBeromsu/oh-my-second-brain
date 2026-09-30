@@ -218,7 +218,7 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
     // An evolve written before the maker session became required has no maker to exclude from its
     // quorum or to name as proposer, so it never seals autonomously; an owner can still approve it.
     if (request.kind === "evolve" && request.makerSessionId === undefined) {
-      throw new SealGateError("EVOLUTION_MAKER_SESSION_REQUIRED", `request ${request.requestId} names no maker session, so its quorum cannot be trusted; nothing was sealed. Evolve again with a maker session`);
+      throw new SealGateError("EVOLUTION_MAKER_SESSION_REQUIRED", `request ${request.requestId} names no maker session, so its quorum cannot be trusted; nothing was sealed. Evolve again with a maker session, or have an owner approve it in a terminal`);
     }
     if (!(await readPolicy(root, vaultId)).policy.autonomous) {
       throw new SealGateError("EVOLUTION_POLICY_OFF", "autonomous sealing is off for this vault; turn it on with `oms setup` in a terminal, or wait for an owner to approve");
