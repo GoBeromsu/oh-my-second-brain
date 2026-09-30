@@ -53,6 +53,11 @@ describe("parseNote frontmatter diagnostics", () => {
     expect(parseNote("---\n~\n---\nBody\n").diagnostics).toEqual([expect.objectContaining({ code: "frontmatter-not-map" })]);
   });
 
+  it("closes an empty block at the first fence, so a later fenced block is body text", () => {
+    // Obsidian reads the same text this way: the first `---` pair is the (empty) frontmatter.
+    expect(parseNote("---\n---\nk: v\n---\nbody")).toEqual({ frontmatter: {}, body: "k: v\n---\nbody", hasFrontmatter: true, diagnostics: [], frontmatterRaw: "", frontmatterRange: { start: 4, end: 4 } });
+  });
+
   it("reports an unclosed frontmatter fence without treating the body as valid YAML", () => {
     const raw = "---\ntitle: Missing close\nBody is not a fence.\n";
 

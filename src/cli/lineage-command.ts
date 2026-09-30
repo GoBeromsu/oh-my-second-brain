@@ -16,18 +16,18 @@ import { doctorHuman, terminalPromptIO } from "./evolution-approve.js";
 
 export type LineageLeaf = "lineage-recover" | "lineage-reanchor" | "evolve" | "evolve-verdict" | "revert-propose" | "reclaim-evolution-lock";
 
-/** Each leaf's own flag, if any, and the op argument it fills. */
-const LEAF_FLAG: Readonly<Partial<Record<LineageLeaf, { readonly flag: string; readonly arg: string; readonly required: boolean }>>> = {
-  evolve: { flag: "--maker-session", arg: "makerSessionId", required: true },
-  "evolve-verdict": { flag: "--verdict", arg: "verdict", required: true },
-  "revert-propose": { flag: "--target", arg: "targetDigest", required: true },
+/** Each leaf's own flag, if any, the op argument it fills, and the value its usage line shows. */
+const LEAF_FLAG: Readonly<Partial<Record<LineageLeaf, { readonly flag: string; readonly arg: string; readonly placeholder: string; readonly required: boolean }>>> = {
+  evolve: { flag: "--maker-session", arg: "makerSessionId", placeholder: "id", required: true },
+  "evolve-verdict": { flag: "--verdict", arg: "verdict", placeholder: "file|-", required: true },
+  "revert-propose": { flag: "--target", arg: "targetDigest", placeholder: "digest", required: true },
 };
 
 const OWNER_ONLY: ReadonlySet<LineageLeaf> = new Set(["lineage-reanchor", "reclaim-evolution-lock"]);
 
 function usage(leaf: LineageLeaf): string {
   const own = LEAF_FLAG[leaf];
-  const flag = own === undefined ? "" : ` ${own.flag} <${own.arg === "verdict" ? "file|-" : own.arg === "makerSessionId" ? "id" : "digest"}>`;
+  const flag = own === undefined ? "" : ` ${own.flag} <${own.placeholder}>`;
   return `Usage: oms doctor ${leaf}${flag} [--vault <path>]`;
 }
 

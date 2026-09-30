@@ -215,6 +215,11 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
       await toAwaitingHuman(input, request, now, "loosening", { direction });
       return { outcome: "awaiting-human", reason: "loosening", direction };
     }
+    // An evolve written before the maker session became required has no maker to exclude from its
+    // quorum or to name as proposer, so it never seals autonomously; an owner can still approve it.
+    if (request.kind === "evolve" && request.makerSessionId === undefined) {
+      throw new SealGateError("EVOLUTION_MAKER_SESSION_REQUIRED", `request ${request.requestId} names no maker session, so its quorum cannot be trusted; nothing was sealed. Evolve again with a maker session, or have an owner approve it in a terminal`);
+    }
     if (!(await readPolicy(root, vaultId)).policy.autonomous) {
       throw new SealGateError("EVOLUTION_POLICY_OFF", "autonomous sealing is off for this vault; turn it on with `oms setup` in a terminal, or wait for an owner to approve");
     }
@@ -272,8 +277,9 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
       expectedParentDigest: request.expectedParentDigest,
       lineageGapPolicy: autonomous ? "refuse" : "reanchor",
       onSealed: lineageAppender({
-        // A revert has no maker: the owner who approved it in a terminal proposed it.
-        proposer: request.makerSessionId ?? (autonomous ? "maker" : "owner"),
+        // A revert has no maker: the owner who approved it in a terminal proposed it. An
+        // autonomous seal always has one, since a makerless evolve is refused above.
+        proposer: request.makerSessionId ?? "owner",
         evaluator,
         requestId: request.requestId,
         autonomous,

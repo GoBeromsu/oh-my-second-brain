@@ -35,14 +35,18 @@ export interface DoctorHuman {
   readonly confirm: (subject: Readonly<Record<string, unknown>>) => Promise<HumanDecision>;
 }
 
-export interface EvolutionOpsDeps extends RequestDeps {
+/** Seams for racing a concurrent writer against a readback postcondition; production never sets them. */
+export interface EvolutionOpsTestHooks {
+  /** Runs after a verdict seals and before the readback postcondition. */
+  readonly afterSeal?: () => Promise<void>;
+  /** Runs after a revert is proposed and before its readback postconditions. */
+  readonly afterPropose?: (requestId: string) => Promise<void>;
+}
+
+export interface EvolutionOpsDeps extends RequestDeps, EvolutionOpsTestHooks {
   readonly judge?: NoteJudge;
   readonly lockDeps?: Partial<LockDeps>;
   readonly sealDeps?: SealGateDeps["sealDeps"];
-  /** Runs after a verdict seals and before the readback postcondition (tests only). */
-  readonly afterSeal?: () => Promise<void>;
-  /** Runs after a revert is proposed and before its readback postconditions (tests only). */
-  readonly afterPropose?: (requestId: string) => Promise<void>;
 }
 
 export type EvolutionOpResult =
@@ -186,6 +190,25 @@ function errorMessage(error: unknown): string | null {
   return null;
 }
 
+async function dispatch(
+  { operation, root, vaultId, vault, args, human, deps }: {
+    readonly operation: EvolutionOperation;
+    readonly root: string;
+    readonly vaultId: string;
+    readonly vault: string;
+    readonly args: Record<string, unknown> | undefined;
+    readonly human: DoctorHuman | undefined;
+    readonly deps: EvolutionOpsDeps;
+  },
+): Promise<Record<string, unknown>> {
+  switch (operation) {
+    case "evolve": return runEvolve(root, vaultId, vault, args, deps);
+    case "evolve-verdict": return runVerdict(root, vaultId, vault, args, deps);
+    case "revert-propose": return runRevert(root, vaultId, vault, args, deps);
+    case "reclaim-evolution-lock": return runReclaim(root, vaultId, human, deps);
+  }
+}
+
 /** Runs one evolution op on an admitted target; `vault` is the verified vault path. */
 export async function runEvolutionOp(
   { operation, vault, root, args, human, deps = DEFAULT_DEPS }: {
@@ -200,11 +223,7 @@ export async function runEvolutionOp(
   try {
     const vaultId = await sealedVaultId(vault, root);
     const vaultRealPath = await realpath(vault);
-    const value = operation === "evolve" ? await runEvolve(root, vaultId, vaultRealPath, args, deps)
-      : operation === "evolve-verdict" ? await runVerdict(root, vaultId, vaultRealPath, args, deps)
-        : operation === "revert-propose" ? await runRevert(root, vaultId, vaultRealPath, args, deps)
-          : await runReclaim(root, vaultId, human, deps);
-    return { kind: "completed", value };
+    return { kind: "completed", value: await dispatch({ operation, root, vaultId, vault: vaultRealPath, args, human, deps }) };
   } catch (error: unknown) {
     const message = errorMessage(error);
     if (message === null) throw error;

@@ -357,6 +357,10 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
   - 현재 디렉터리에서 추론한 볼트에는 쓰지 않는다.
   - 거부되면 파일은 바이트 단위로 그대로다. 통과하면 원자적으로 쓰고 `{ok: true, path}`만
     돌려준다.
+  - **개정 (0.19, 쓰기 파이프라인).** 지금 입력은 `{path, content, template?, ifMatch?, check?}`이고
+    (`WRITE_KEYS`, `src/mcp/tools/write.ts:6`), 기존 노트를 덮어쓰려면 `ifMatch`가 필요하다.
+    통과하면 `src/kernel/write/receipt.ts`의 영수증(`revision`, `contractRevision`, `index` 등)을
+    돌려준다. 현재 입력과 오류 코드는 [cli-map](../cli-map.md)이 기준이다.
 - **계약이 없으면 기본 규칙만 적용한다.** 볼트 경계, 경로 안전, YAML 문법, 그리고 `.oms`
   제어 경로(`control-path`, `basePathKind`, judge.ts:135-144)다.
   (개정 2026-09-29, 구현: 슬라이스 e, Q1.) YAML 문법 오류는 거부하지 않는다. 봉인된 볼트에서는

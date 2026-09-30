@@ -167,6 +167,25 @@ describe("sealGate autonomous", () => {
     expect(await stateOf(request)).toBe("open");
   });
 
+  it("refuses to seal a makerless evolve autonomously even with a quorum, and leaves it open", async () => {
+    await autonomousOn();
+    const { makerSessionId: _maker, ...issued } = await issue(TIGHTER);
+    const request = await withVerdicts(issued as RequestRecord, ["approve", "approve", "approve"]);
+    const store = await readStore(ID, root);
+    await expect(run(request)).rejects.toThrow(/^EVOLUTION_MAKER_SESSION_REQUIRED:/);
+    expect(await readStore(ID, root)).toEqual(store);
+    expect(await stateOf(request)).toBe("open");
+    expect((await readRequest(root, ID, request.requestId))?.makerSessionId).toBeUndefined();
+  });
+
+  it("moves a makerless loosening evolve to awaiting-human before the maker-session refusal", async () => {
+    await autonomousOn();
+    const { makerSessionId: _maker, ...issued } = await issue(WIDER);
+    const request = await withVerdicts(issued as RequestRecord, ["approve", "approve", "approve"]);
+    expect(await run(request)).toEqual({ outcome: "awaiting-human", reason: "loosening", direction: "loosening" });
+    expect(await stateOf(request)).toBe("awaiting-human");
+  });
+
   it("refuses after three autonomous generations in a row until an owner seals one", async () => {
     await autonomousOn();
     const autonomousSeal = async (): Promise<void> => {
@@ -294,6 +313,13 @@ describe("sealGate human", () => {
     expect((await readEvolutionEvents(root, ID)).events.at(-1)).toMatchObject({ kind: "seal.human-approved", detail: { direction: "loosening" } });
     expect((await readEvolutionEvents(root, ID)).events.at(-1)?.detail).not.toHaveProperty("quorum");
     expect(await stateOf(request)).toBe("sealed");
+  });
+
+  it("seals a makerless evolve the owner approves, proposed by the owner", async () => {
+    const { makerSessionId: _maker, ...issued } = await issue(TIGHTER, { state: "awaiting-human" });
+    await writeRequest(root, ID, issued as RequestRecord);
+    expect(await run(issued as RequestRecord, "human")).toMatchObject({ outcome: "sealed" });
+    expect((await readLineage(root, ID, "strict")).events.at(-1)).toMatchObject({ kind: "sealed", mode: "human", proposer: "owner" });
   });
 
   it("rejects for good a candidate that adds a refusal", async () => {
