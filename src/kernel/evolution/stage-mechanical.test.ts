@@ -60,7 +60,7 @@ describe("mechanicalStage", () => {
     expect(result).toMatchObject({ parentWarnings: 1, candidateWarnings: 1, warningDelta: 0, newRefusals: 0 });
   });
 
-  it("counts an unreadable note as refused under both, never as a new refusal", async () => {
+  it.skipIf(process.getuid?.() === 0)("counts an unreadable note as refused under both, never as a new refusal", async () => {
     const vault = await vaultWith({ "Projects/locked.md": "---\nstatus: a\n---\n" });
     await chmod(join(vault, "Projects/locked.md"), 0o000);
     try {

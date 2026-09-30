@@ -142,6 +142,7 @@ describe("proposeRevert", () => {
     await seal(NARROW);
     await unchanged(() => propose(drifted));
     await expect(propose(drifted)).rejects.toThrow(/^EVOLUTION_STAGE2_REFUSED: restoring .+ drifts 0\.50 from the first sealed generation/);
+    await expect(propose(drifted)).rejects.toThrow(/nothing was proposed\. A revert cannot restore it, so reseal that contract with `oms setup`$/);
     expect((await readEvolutionEvents(root, ID)).events.map(event => event.kind)).not.toContain("revert.proposed");
   });
 

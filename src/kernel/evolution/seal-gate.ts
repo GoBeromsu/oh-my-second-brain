@@ -272,8 +272,9 @@ async function gate(input: SealGateInput, deps: SealGateDeps): Promise<SealGateO
       expectedParentDigest: request.expectedParentDigest,
       lineageGapPolicy: autonomous ? "refuse" : "reanchor",
       onSealed: lineageAppender({
-        // A revert has no maker: the owner who approved it in a terminal proposed it.
-        proposer: request.makerSessionId ?? (autonomous ? "maker" : "owner"),
+        // A revert has no maker: the owner who approved it in a terminal proposed it. An
+        // autonomous seal always has one, since stage 3 discards every verdict on a makerless evolve.
+        proposer: request.makerSessionId ?? "owner",
         evaluator,
         requestId: request.requestId,
         autonomous,

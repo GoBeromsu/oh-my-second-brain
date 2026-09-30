@@ -19,7 +19,9 @@ import { semanticStage, type Similarity } from "./stage-semantic.js";
  * says, and nothing is sealed here. Stage 1 runs at propose time (a new refusal proposes
  * nothing: EVOLUTION_REVERT_REFUSED), and so does stage 2 against the first sealed generation
  * (a MECE overlap or drift past 0.3 proposes nothing: EVOLUTION_STAGE2_REFUSED), because an
- * owner approving in a terminal is exempt from every later check but stage 1.
+ * owner approving in a terminal is exempt from every later check but stage 1. A human seal
+ * skips stage 2, so a generation sealed that way may drift past 0.3 and can then never be a
+ * revert target; the refusal sends the owner to `oms setup` to reseal it instead.
  *
  * The target must be named by a `sealed` or `recovered` lineage event — an orphan snapshot is
  * not a generation. A missing or corrupt snapshot fails closed: it is journalled and the
@@ -85,9 +87,9 @@ async function propose(input: RevertInput, deps: RevertDeps): Promise<RevertProp
   const stage2 = semanticStage(anchor ?? parent.contract, parent.contract, snapshot.contract, deps.similarity === undefined ? {} : { similarity: deps.similarity });
   if (!stage2.passed) {
     const found = stage2.reason === "drift"
-      ? `drifts ${stage2.drift.toFixed(2)} from the first sealed generation (limit 0.3)`
-      : `overlaps in meaning: ${stage2.overlaps.map(overlap => `${overlap.axis} ${overlap.keys.join(" ~ ")}`).join(", ")}`;
-    throw new RevertError("EVOLUTION_STAGE2_REFUSED", `restoring ${targetDigest} ${found}; nothing was proposed`);
+      ? `drifts ${stage2.drift.toFixed(2)} from the first sealed generation (limit 0.3); nothing was proposed. A revert cannot restore it, so reseal that contract with \`oms setup\``
+      : `overlaps in meaning: ${stage2.overlaps.map(overlap => `${overlap.axis} ${overlap.keys.join(" ~ ")}`).join(", ")}; nothing was proposed`;
+    throw new RevertError("EVOLUTION_STAGE2_REFUSED", `restoring ${targetDigest} ${found}`);
   }
   const state = "awaiting-human";
   const request = await createRequest(root, vaultId, {

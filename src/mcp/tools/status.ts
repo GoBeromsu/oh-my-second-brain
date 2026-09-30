@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { contractStatus } from "../../kernel/contract/status.js";
+import type { WriteTargetSource } from "../../kernel/conventions/write-protocol.js";
 import { evolutionStatus } from "../../kernel/doctor/evolution-status.js";
 import { readSearchTemplateSource } from "../../kernel/engine/retrieval/template-source.js";
 import { summarizeRuntimeHistory } from "../../kernel/runtime/event-summary.js";
@@ -12,6 +13,13 @@ export function runtimeHistory(vault: string): { readonly history?: ReturnType<t
     const detail = error instanceof Error ? error.message.replace(/^LEDGER_APPEND_FAILED:\s*/, "") : String(error);
     return { runtimeWarnings: [`LEDGER_APPEND_FAILED: ${detail}. Runtime history is unavailable; verify the external OMS runtime ledger.`] };
   }
+}
+
+function writePosture(source: WriteTargetSource, reason: "tampered" | "broken" | undefined): string {
+  if (source === "cwd") return "write-disabled-target-unverified";
+  if (reason === "tampered") return "write-disabled-contract-tampered";
+  if (reason === "broken") return "write-unverified-contract";
+  return "write-gated-by-verified-target-and-contract";
 }
 
 /** MCP `doctor op: status`: read-only health. `readTools` is the read-only tool list, passed in to avoid importing the server. */
@@ -36,10 +44,7 @@ export async function handleStatus(ctx: ToolContext, readTools: readonly string[
     diagnostics: meta.diagnostics,
     ...runtimeHistory(vault),
     engineGraph,
-    writeTools: source === "cwd"
-      ? "write-disabled-target-unverified"
-      : contract.reason === "tampered" ? "write-disabled-contract-tampered"
-        : contract.reason === "broken" ? "write-unverified-contract" : "write-gated-by-verified-target-and-contract",
+    writeTools: writePosture(source, contract.reason),
     readTools,
   });
 }

@@ -301,7 +301,7 @@ describe("oms-guard wrapper write routing", () => {
     expect(run(tool("Write", { file_path: path.join(packageRoot, "README.md"), content: "" }), options).decision).toBe("allow");
   });
 
-  it("denies a target it cannot resolve inside a vault and warns outside one", async () => {
+  it.skipIf(process.getuid?.() === 0)("denies a target it cannot resolve inside a vault and warns outside one", async () => {
     const { vault, home, base } = await row("never-sealed");
     const lockedInVault = path.join(vault, "locked");
     const lockedOutside = path.join(base, "locked");

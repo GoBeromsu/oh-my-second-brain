@@ -43,7 +43,7 @@
   "scripts": {
     "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json",
     "postbuild": "chmod +x dist/cli/oms.js",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.fixtures.json",
     "test": "vitest run --maxWorkers=2 --minWorkers=2",
     "sync:skills": "node scripts/sync-gjc-skills.mjs",
     "check:docs": "node scripts/check-doc-mapping.mjs",
