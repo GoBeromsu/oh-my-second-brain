@@ -350,11 +350,11 @@ describe("host installer/uninstaller", () => {
       const executedCommands = (await readFile(argvLog, "utf-8")).trim().split("\n");
       const marketplaceAdd = executedCommands.find((command) => command.startsWith("claude plugin marketplace add "));
       expect(marketplaceAdd).toBeDefined();
-      expect(executedCommands).toContain("claude plugin install oms@oms");
+      expect(executedCommands).toContain("claude plugin install oms@oh-my-second-brain");
       // Then: the local-path install is not used while the marketplace flow succeeds
       expect(executedCommands.some((command) => /^claude plugin install [^o]/.test(command))).toBe(false);
       // Then: the reported command list matches what was executed
-      expect(result?.commands).toContain("claude plugin install oms@oms");
+      expect(result?.commands).toContain("claude plugin install oms@oh-my-second-brain");
       expect(result?.commands.some((command) => command.startsWith("claude plugin marketplace add "))).toBe(true);
       // Then: auto-update stays the user's decision, surfaced as guidance only
       expect(result?.messages.join(" ")).toContain("autoUpdate");
@@ -409,7 +409,7 @@ describe("host installer/uninstaller", () => {
       // Then: the offline local-path install runs instead, and no throw escapes
       const executedCommands = (await readFile(argvLog, "utf-8")).trim().split("\n");
       expect(executedCommands.some((command) => command.startsWith("claude plugin marketplace add "))).toBe(true);
-      expect(executedCommands).not.toContain("claude plugin install oms@oms");
+      expect(executedCommands).not.toContain("claude plugin install oms@oh-my-second-brain");
       expect(
         executedCommands.some(
           (command) => command.startsWith("claude plugin install ") && command.includes(adapterRoot),

@@ -93,7 +93,7 @@ oms setup status --vault /path/to/vault
 oms setup host install --runtime claude --vault /path/to/vault --yes
 ```
 
-`claude` 대신 `codex` 또는 `hermes`를 쓸 수 있다. 세 호스트를 모두 설치하려면 `all`을 쓴다. CLI만 사용한다면 호스트 설치는 선택 사항이다. Hermes 프로필, 모델 설정, 제거 방법은 [설치 가이드](./docs/install.md)를 참고한다.
+`claude` 대신 `codex` 또는 `hermes`를 쓸 수 있다. 세 호스트를 모두 설치하려면 `all`을 쓴다. Claude Code에서 `--execute`를 붙이면 OMS가 plugin marketplace를 추가하고 `claude plugin install oms@oh-my-second-brain`를 실행해 `/oms:*` 스킬을 설치한다. 붙이지 않으면 직접 실행할 명령을 그대로 보여준다. CLI만 사용한다면 호스트 설치는 선택 사항이다. Hermes 프로필, 모델 설정, 제거 방법은 [설치 가이드](./docs/install.md)를 참고한다.
 
 ### 4. 지식 꺼내 쓰기
 
@@ -184,8 +184,6 @@ setup과 인터뷰는 폴더와 속성만 묻는다. `oms setup extract --templa
 > [!NOTE]
 > Claude hook은 판정된 계약 위반을 거부하지만, hook 자체를 실행할 수 없으면 경고와 함께 쓰기를 허용한다. Codex와 Hermes의 기본 파일 쓰기는 OMS 판정자를 거치지 않는다. 파일시스템 전체를 통제하는 sandbox가 아니다.
 
-Gajae-Code에서는 `gjc plugin install oms@oms`로 marketplace plugin을 설치한다. 패키지 루트 `skills/` 경로에서 스킬 6개를 발견한다. 자세한 내용은 [호스트 asset](./docs/adapters.md)을 참고한다.
-
 <details>
 <summary><strong>호스트 유지보수와 볼트 선택</strong></summary>
 
@@ -261,7 +259,7 @@ oms hook pre                                    Claude 쓰기를 계약으로 �
 
 [기여 가이드](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/CONTRIBUTING.md)를 읽거나, 재현 가능한 문제와 구체적인 제안을 [이슈](https://github.com/GoBeromsu/oh-my-second-brain/issues)로 남길 수 있다.
 
-[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 Ouroboros, Gajae Code의 deep-interview 등 설계에 영향을 준 아이디어를 기록한다. runtime 복제나 연구 결과를 뜻하지 않는다. 별자리 배너는 [beomsukoh.com](https://beomsukoh.com/)의 연결된 노트 풍경에서 착안한 자체 제작 일러스트다. 이미지는 개념을 설명하는 도식이며 제품 화면, host smoke 증거, 제품 gate 통과 결과가 아니다.
+[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros), [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)의 deep-interview 등 설계에 영향을 준 아이디어를 기록한다. runtime 복제나 연구 결과를 뜻하지 않는다. 별자리 배너는 [beomsukoh.com](https://beomsukoh.com/)의 연결된 노트 풍경에서 착안한 자체 제작 일러스트다. 이미지는 개념을 설명하는 도식이며 제품 화면, host smoke 증거, 제품 gate 통과 결과가 아니다.
 
 ---
 

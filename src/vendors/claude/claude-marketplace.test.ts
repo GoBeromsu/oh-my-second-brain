@@ -47,8 +47,8 @@ describe("readMarketplaceName", () => {
     const repoRoot = path.resolve(import.meta.dirname, "../../..");
     // When: the shipped marketplace manifest is read
     const name = await readMarketplaceName(repoRoot);
-    // Then: the name matches the manifest committed at todo 9
-    expect(name).toBe("oms");
+    // Then: the marketplace is named after the repository, so the plugin id is oms@oh-my-second-brain
+    expect(name).toBe("oh-my-second-brain");
   });
 });
 
@@ -73,7 +73,7 @@ describe("resolveClaudeMarketplaceSource", () => {
     expect(source).toEqual({
       kind: "github",
       source: "GoBeromsu/oh-my-second-brain",
-      marketplaceName: "oms",
+      marketplaceName: "oh-my-second-brain",
     });
   });
 });

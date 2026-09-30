@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- **The Claude marketplace is named after the repository.** `.claude-plugin/marketplace.json` is now `oh-my-second-brain`, so the plugin id is `oms@oh-my-second-brain` for Claude Code and Gajae-Code instead of the doubled `oms@oms`; the plugin and its skills stay `oms` and `/oms:*`. Remove the old `oms` marketplace and add the repository again to pick up the new name. The README now credits Gajae Code through the acknowledgements, and the Gajae-Code install command lives in the host asset guide.
+
 ## [0.20.4] - 2026-09-30
 
 ## [0.20.3] - 2026-09-30
