@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-09-30
+
 - **`oms write` prints the next command with its warnings.** The stderr warnings line ends with `Run: <command>` (for an unsealed vault, `Run: oms interview`).
 - **Enabling evolution on a vault with no contract names `oms interview`.** `EVOLUTION_NO_CONTRACT` from the CLI now says to run `oms interview` first.
 

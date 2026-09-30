@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-09-30
+
 ## [0.20.0] - 2026-09-30
 
 - **The Claude guard reads the live templates only for a new note.** `oms hook pre` loads the template folder only when the target does not exist yet, the only case in which a template choice is recorded, so an edit of an existing note no longer reads every template. New notes get the same decision and template choice gap as MCP `write`.

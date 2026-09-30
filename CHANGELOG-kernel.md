@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-09-30
+
 - **A write receipt with warnings names the command that resolves them.** The receipt gains `next`, the guidance for its first warning, so a note saved into a vault with no sealed contract (`contract-open`) now says to run `oms interview` instead of carrying only the warning kind. `next` is absent when there are no warnings, so a clean receipt is unchanged.
 - **A vault with no local contract points to `oms interview`.** The `contract: none` finding and the `vaultId present, no local store` finding (a synced second machine) and the `contract store missing` finding now guide to `oms interview` instead of `oms setup`, so the write warning, the receipt `next` and `doctor status` name the same step for a vault with no contract.
 - **An unreadable contract store points to `oms doctor contract`, not a reseal.** The `contract store unreadable` finding used to suggest `oms setup`, which could reseal over a tampered store; it now names the same diagnosis as the `contract-tampered` write warning. The legacy-template finding and the re-ask hint name `oms interview`.
