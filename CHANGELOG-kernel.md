@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-09-30
+
 ## [0.20.1] - 2026-09-30
 
 - **A write receipt with warnings names the command that resolves them.** The receipt gains `next`, the guidance for its first warning, so a note saved into a vault with no sealed contract (`contract-open`) now says to run `oms interview` instead of carrying only the warning kind. `next` is absent when there are no warnings, so a clean receipt is unchanged.
