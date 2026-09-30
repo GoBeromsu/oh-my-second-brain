@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- **`oms doctor contract` names `oms interview` as the recovery command.** The `recovery` field of a contract diagnosis now reads `oms interview` instead of `oms setup`, so the diagnosis, the write warnings, the interview refusal and the doctor skill all name the same reseal command. Both commands run the same terminal interview, so recovery itself is unchanged; an agent that matched on the literal `oms setup` value should match `oms interview`.
+
 ## [0.20.3] - 2026-09-30
 
 ## [0.20.2] - 2026-09-30

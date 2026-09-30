@@ -190,7 +190,7 @@ describe("oms contract", () => {
     expect(printed()).not.toContain(SECRET);
   });
 
-  it("AC16: doctor names the unreadable cause and guides to oms setup, and lists unexpected control files", async () => {
+  it("AC16: doctor names the unreadable cause and guides to oms interview, and lists unexpected control files", async () => {
     await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
     const root = path.join(home, ".oms", "vaults");
     const generation = (await readdir(root)).find(entry => /^\.[0-9a-f-]+\.\d+$/.test(entry))!;
@@ -202,7 +202,7 @@ describe("oms contract", () => {
     expect(output()).toMatchObject({
       contract: "unreadable",
       cause: "manifest-mismatch",
-      recovery: "oms setup",
+      recovery: "oms interview",
       staleLocks: 0,
       orphans: 0,
       unexpectedControlFiles: [{ path: ".oms/leftover.json", kind: "unexpected-control-file" }],
@@ -211,7 +211,7 @@ describe("oms contract", () => {
     expect(printed()).not.toContain(generation);
   });
 
-  it("doctor names a sealed pattern the seal screen now refuses by field and kind only and guides to oms setup", async () => {
+  it("doctor names a sealed pattern the seal screen now refuses by field and kind only and guides to oms interview", async () => {
     await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
     const root = path.join(home, ".oms", "vaults");
     const generation = path.join(root, (await readdir(root)).find(entry => /^\.[0-9a-f-]+\.\d+$/.test(entry))!);
@@ -227,7 +227,7 @@ describe("oms contract", () => {
     expect(output()).toMatchObject({
       contract: "sealed",
       cause: null,
-      recovery: "oms setup",
+      recovery: "oms interview",
       unsafePatterns: [{ field: "properties.code", kind: "pattern-unsafe" }],
     });
     expect(printed()).not.toContain(SECRET);

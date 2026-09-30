@@ -108,7 +108,7 @@ export interface UnexpectedControlFile {
 export interface ContractDoctor extends ContractStatus {
   readonly cause: UnreadableCause | null;
   /** Recovery is a full reseal; there is no automatic fallback. */
-  readonly recovery: "oms setup" | null;
+  readonly recovery: "oms interview" | null;
   /** Sealed pattern rules today's seal screen refuses, by field and kind only; only a terminal reseal replaces them. */
   readonly unsafePatterns: readonly LooseningChange[];
   readonly staleLocks: number;
@@ -180,7 +180,7 @@ export async function contractDoctor(vault: string, audience: "human" | "agent",
   const transportFailures = await readTransportFailures(root);
   const read = status.contract === "sealed" && state.vaultId !== null ? await readStore(state.vaultId, root) : null;
   const unsafePatterns = read?.state === "ok" ? unsafePatternChanges(read.contract) : [];
-  const recovery = cause === null && unsafePatterns.length === 0 ? null : "oms setup";
+  const recovery = cause === null && unsafePatterns.length === 0 ? null : "oms interview";
   const interviewLog = await interviewLogHealth(vault, state.vaultId, root);
   const lineage = state.vaultId === null ? null : await lineageHealth(state.vaultId, root);
   const report: ContractDoctor = { ...status, cause, recovery, unsafePatterns, ...housekeeping, transportFailures, interviewLog, lineage };

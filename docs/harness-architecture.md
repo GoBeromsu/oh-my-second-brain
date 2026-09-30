@@ -32,7 +32,7 @@ Claude's `oms-guard.mjs` wrapper denies native reads and writes under `~/.oms/**
 
 Lexical, vector, HyDE, and typed-axis retrieval include notes that would not pass the judge. Search does not write or repair. Folder intents for search come from the sealed folder contract as `folderIntents` (`src/kernel/engine/mcp/types.ts:166`, `McpSemanticReceipt`). Vector, HyDE, and rerank fail loudly when their capability pair is missing or unusable, per ADR-005, rather than returning a fake match.
 
-`status` is read-only. `oms setup status` shows the seal posture and the legacy template count without printing values. `oms doctor contract` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures; `--fix` only re-indexes a moved or unindexed vault (`status.ts:172-180`, `doctorFix`). Any other broken seal is recovered by running `oms setup` again. The engine store, graph cache, and node index are outside the vault and rebuildable.
+`status` is read-only. `oms setup status` shows the seal posture and the legacy template count without printing values. `oms doctor contract` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures; `--fix` only re-indexes a moved or unindexed vault (`status.ts:172-180`, `doctorFix`). Any other broken seal is recovered by running `oms interview` again. The engine store, graph cache, and node index are outside the vault and rebuildable.
 
 ## Surfaces
 
