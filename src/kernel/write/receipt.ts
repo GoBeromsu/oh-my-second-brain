@@ -1,6 +1,6 @@
 import type { GapAxis, GapKind } from "../contract/gap-ledger.js";
 import { contractRevision } from "../contract/revision.js";
-import type { ContractView, Violation } from "../contract/types.js";
+import { GUIDANCE_FOR, type ContractView, type Guidance, type Violation } from "../contract/types.js";
 import { digestBytes, type Digest } from "../conventions/canonical.js";
 
 export { contractRevision };
@@ -46,6 +46,8 @@ export interface WriteReceipt {
   readonly warnings: readonly { readonly field: string; readonly kind: string }[];
   /** What OMS changed so the note fits the contract. Fields and kinds only. */
   readonly fixes: readonly { readonly field: string; readonly kind: string }[];
+  /** The one command that resolves the first warning (`oms interview` for an open contract); absent without warnings. */
+  readonly next?: Guidance;
   /** Gaps this write met; absent when there were none. */
   readonly gaps?: readonly ReceiptGap[];
   /**
@@ -81,6 +83,7 @@ function fieldKind(finding: Violation): { readonly field: string; readonly kind:
 
 /** The vector index only has work queued when the keyword update reached the store. */
 export function buildReceipt(input: ReceiptInput): WriteReceipt {
+  const first = input.warnings?.[0];
   return {
     ok: true,
     path: input.path,
@@ -91,6 +94,7 @@ export function buildReceipt(input: ReceiptInput): WriteReceipt {
     missingDefaults: input.missingDefaults.map(field => ({ field })),
     warnings: (input.warnings ?? []).map(fieldKind),
     fixes: (input.fixes ?? []).map(fieldKind),
+    ...(first === undefined ? {} : { next: GUIDANCE_FOR[first.kind] }),
     ...(input.gaps === undefined || input.gaps.length === 0 ? {} : { gaps: input.gaps }),
     ...(input.gapLedger === undefined ? {} : { gapLedger: input.gapLedger }),
   };
