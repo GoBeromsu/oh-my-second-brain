@@ -46,7 +46,7 @@ export interface WriteReceipt {
   readonly warnings: readonly { readonly field: string; readonly kind: string }[];
   /** What OMS changed so the note fits the contract. Fields and kinds only. */
   readonly fixes: readonly { readonly field: string; readonly kind: string }[];
-  /** The one command that resolves the first warning (`oms interview` for an open contract); absent without warnings. */
+  /** The one command to run next for the first warning (`oms interview` for an open contract); absent without warnings. */
   readonly next?: Guidance;
   /** Gaps this write met; absent when there were none. */
   readonly gaps?: readonly ReceiptGap[];

@@ -13,8 +13,8 @@ let savedEnv: Record<string, string | undefined>;
 let log: ReturnType<typeof vi.spyOn>;
 let error: ReturnType<typeof vi.spyOn>;
 
-async function sealedVault(contract: VaultContract = FIXTURE_CONTRACT): Promise<TruthTableFixture> {
-  const fixture = await buildTruthTableRow("sealed", contract);
+async function sealedVault(contract: VaultContract = FIXTURE_CONTRACT, row: "sealed" | "never-sealed" = "sealed"): Promise<TruthTableFixture> {
+  const fixture = await buildTruthTableRow(row, contract);
   fixtures.push(fixture);
   const home = path.join(fixture.base, "home");
   process.env["HOME"] = home;
@@ -111,7 +111,16 @@ describe("oms write", () => {
     expect(process.exitCode).toBe(0);
     expect(receipt()).toMatchObject({ ok: true, path: "Loose/a.md", warnings: [{ field: "path", kind: "unregistered-folder" }], fixes: [] });
     expect(await readFile(path.join(fixture.vault, "Loose", "a.md"), "utf8")).toBe("x\n");
-    expect(error.mock.calls.map(call => String(call[0]))).toEqual(['[oms] warnings: [{"field":"path","kind":"unregistered-folder"}]']);
+    expect(error.mock.calls.map(call => String(call[0]))).toEqual(['[oms] warnings: [{"field":"path","kind":"unregistered-folder"}] Run: oms doctor status']);
+  });
+
+  it("saves a note in a never-sealed vault and names oms interview as the next command", async () => {
+    const fixture = await sealedVault(FIXTURE_CONTRACT, "never-sealed");
+    await runWriteCommand(["Loose/a.md", "--vault", fixture.vault], { env: {}, readStdin: async () => "x\n" });
+    expect(process.exitCode).toBe(0);
+    expect(receipt()).toMatchObject({ ok: true, path: "Loose/a.md", warnings: [{ kind: "contract-open" }], next: "oms interview" });
+    expect(await readFile(path.join(fixture.vault, "Loose", "a.md"), "utf8")).toBe("x\n");
+    expect(stderr()).toContain("Run: oms interview");
   });
 
   it("prints the fixes and the remaining warnings to stderr, one line each", async () => {
@@ -127,7 +136,7 @@ describe("oms write", () => {
     expect(receipt()).toMatchObject({ ok: true, warnings: [{ field: "mood", kind: "not-allowed" }], fixes: [{ field: "size", kind: "type" }] });
     expect(await readFile(path.join(fixture.vault, "Projects", "a.md"), "utf8")).toBe("---\nsize: 12\nmood: tense\n---\nBody\n");
     expect(error.mock.calls.map(call => String(call[0]))).toEqual([
-      '[oms] warnings: [{"field":"mood","kind":"not-allowed"}]',
+      '[oms] warnings: [{"field":"mood","kind":"not-allowed"}] Run: oms doctor status',
       '[oms] fixed: [{"field":"size","kind":"type"}]',
     ]);
   });

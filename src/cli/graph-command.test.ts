@@ -148,7 +148,7 @@ describe("graph command", () => {
       convention: {
         contract: "none",
         row: "never-sealed",
-        findings: [{ message: "contract: none", guidance: "oms setup" }],
+        findings: [{ message: "contract: none", guidance: "oms interview" }],
         legacyTemplates: 0,
       },
       history: {

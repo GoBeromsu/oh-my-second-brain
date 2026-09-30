@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The write skill lists the full receipt and tells the agent to relay `next`.** The receipt is described with `warnings`, `fixes` and `next?`, and the denial with its real `status`, `refusals` and `violations` shape.
+
 ## [0.20.0] - 2026-09-30
 
 - **The doctor skill covers contract evolution.** It describes `evolve`, `evolve-verdict` and `revert-propose`, requires the maker's session on `evolve` and keeps the maker from judging its own request, explains the stage-2 refusal of an overlapping or drifting candidate, says a revert always requires owner approval, says the quorum is host-attested and cannot be verified by OMS, which is why autonomy is off by default, tells a host without independent evaluator subagents to stop and send the owner to `oms setup`, and sends `reclaim-evolution-lock` and `lineage-reanchor` to the owner's terminal.

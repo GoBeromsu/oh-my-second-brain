@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- **`write`'s receipt carries `next`.** It is the command for the receipt's first warning (`oms interview` for an open contract) and is left out when there are no warnings.
+
 ## [0.20.0] - 2026-09-30
 
 - **The `status` write posture is chosen by a plain `if` chain.** `writePosture` in `src/mcp/tools/status.ts` replaces a nested ternary and returns the same four strings.

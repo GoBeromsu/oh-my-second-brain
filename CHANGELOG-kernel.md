@@ -5,6 +5,7 @@ Domain logic changes belong here.
 ## [Unreleased]
 
 - **A write receipt with warnings names the command that resolves them.** The receipt gains `next`, the guidance for its first warning, so a note saved into a vault with no sealed contract (`contract-open`) now says to run `oms interview` instead of carrying only the warning kind. `next` is absent when there are no warnings, so a clean receipt is unchanged.
+- **A never-sealed vault points to `oms interview`.** The `contract: none` status finding now guides to `oms interview` instead of `oms setup`, so the write warning, the receipt `next` and `doctor status` name the same step for a vault with no contract.
 
 ## [0.20.0] - 2026-09-30
 

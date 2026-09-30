@@ -110,7 +110,7 @@ describe("oms contract", () => {
 
   it("seals through setup into the temporary home, then reports status and doctor", async () => {
     await runContractCommand(["status", "--vault", vault]);
-    expect(output()).toEqual({ contract: "none", findings: [{ message: "contract: none", guidance: "oms setup" }], legacyTemplates: 0 });
+    expect(output()).toEqual({ contract: "none", findings: [{ message: "contract: none", guidance: "oms interview" }], legacyTemplates: 0 });
 
     await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
     expect(process.exitCode).toBe(0);
