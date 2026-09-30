@@ -151,7 +151,7 @@ describe("contractDoctor", () => {
       const cause = CAUSE[name] ?? null;
       // With its link gone, the generation left behind is an orphan.
       const orphans = name === "index-without-store" ? 1 : 0;
-      expect(report).toMatchObject({ cause, recovery: cause === null ? null : "oms setup", staleLocks: 0, orphans, unexpectedControlFiles: [] });
+      expect(report).toMatchObject({ cause, recovery: cause === null ? null : "oms interview", staleLocks: 0, orphans, unexpectedControlFiles: [] });
       expect(JSON.stringify(report)).not.toContain(fixture.vaultId);
       expect(JSON.stringify(report)).not.toContain(fixture.root);
     });
@@ -161,12 +161,12 @@ describe("contractDoctor", () => {
     const altered = await row("sealed");
     const generation = (await readdir(altered.root)).find(entry => entry.startsWith(`.${altered.vaultId}.`))!;
     await writeFile(join(altered.root, generation, "folders.json"), "{}");
-    expect(await contractDoctor(altered.vault, "human", altered.root)).toMatchObject({ contract: "unreadable", cause: "manifest-mismatch", recovery: "oms setup" });
+    expect(await contractDoctor(altered.vault, "human", altered.root)).toMatchObject({ contract: "unreadable", cause: "manifest-mismatch", recovery: "oms interview" });
 
     const dangling = await row("sealed");
     await rm(join(dangling.root, dangling.vaultId));
     await symlink(`.${dangling.vaultId}.404`, join(dangling.root, dangling.vaultId));
-    expect(await contractDoctor(dangling.vault, "human", dangling.root)).toMatchObject({ contract: "unreadable", cause: "link-dangling", recovery: "oms setup" });
+    expect(await contractDoctor(dangling.vault, "human", dangling.root)).toMatchObject({ contract: "unreadable", cause: "link-dangling", recovery: "oms interview" });
   });
 
   it("counts stale locks and orphan generations without naming them", async () => {
