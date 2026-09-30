@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+- **The Claude hook records malformed frontmatter as a kept gap.** A write whose frontmatter does not parse is one MCP `write` would draft; the hook never drafts, so it lets the write through with the `yaml-syntax` warning, but it did not record that gap, while MCP `write` records the same gaps when it saves a note as written. The hook now records them too, so `oms doctor` sees the same gaps whichever path wrote the note.
+
 ## [0.20.2] - 2026-09-30
 
 ## [0.20.1] - 2026-09-30

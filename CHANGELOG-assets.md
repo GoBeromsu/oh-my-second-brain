@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The doctor skill routes an unreadable seal to `oms interview`.** It sent both tampered and unreadable contract stores to `oms doctor contract`, while the `contract-unreadable` write warning names `oms interview`. The skill now matches the warning: an unreadable store is resealed with `oms interview`, and a tampered one is diagnosed with `oms doctor contract` first.
+
 ## [0.20.2] - 2026-09-30
 
 - **The doctor skill names `oms interview` for a missing seal.** It still sent every broken or missing seal to `oms setup`, while the `contract-open` write warning and `oms doctor status` name `oms interview` for a missing contract, and `oms doctor status` names `oms doctor contract` for a tampered or unreadable store. A Hermes trial on 0.20.1 read the two routes as conflicting; the skill now matches the receipt.
