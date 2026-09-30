@@ -190,15 +190,16 @@ function errorMessage(error: unknown): string | null {
   return null;
 }
 
-/** Runs one evolution op on an admitted target; `vault` is the verified vault path. */
 async function dispatch(
-  operation: EvolutionOperation,
-  root: string,
-  vaultId: string,
-  vault: string,
-  args: Record<string, unknown> | undefined,
-  human: DoctorHuman | undefined,
-  deps: EvolutionOpsDeps,
+  { operation, root, vaultId, vault, args, human, deps }: {
+    readonly operation: EvolutionOperation;
+    readonly root: string;
+    readonly vaultId: string;
+    readonly vault: string;
+    readonly args: Record<string, unknown> | undefined;
+    readonly human: DoctorHuman | undefined;
+    readonly deps: EvolutionOpsDeps;
+  },
 ): Promise<Record<string, unknown>> {
   switch (operation) {
     case "evolve": return runEvolve(root, vaultId, vault, args, deps);
@@ -208,6 +209,7 @@ async function dispatch(
   }
 }
 
+/** Runs one evolution op on an admitted target; `vault` is the verified vault path. */
 export async function runEvolutionOp(
   { operation, vault, root, args, human, deps = DEFAULT_DEPS }: {
     readonly operation: EvolutionOperation;
@@ -221,7 +223,7 @@ export async function runEvolutionOp(
   try {
     const vaultId = await sealedVaultId(vault, root);
     const vaultRealPath = await realpath(vault);
-    return { kind: "completed", value: await dispatch(operation, root, vaultId, vaultRealPath, args, human, deps) };
+    return { kind: "completed", value: await dispatch({ operation, root, vaultId, vault: vaultRealPath, args, human, deps }) };
   } catch (error: unknown) {
     const message = errorMessage(error);
     if (message === null) throw error;
