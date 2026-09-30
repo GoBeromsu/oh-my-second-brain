@@ -42,7 +42,7 @@ Structural results do not evaluate the note's semantic quality. An allowed write
 
 ## Diagnosis and search
 
-`oms setup status` reports the seal's posture and the number of legacy template constraints it ignores (`legacyTemplates`). `oms doctor contract` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures, and exits 1 when unhealthy. `--fix` only re-indexes a moved or unindexed vault; every other broken seal is recovered by running `oms setup` again. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them.
+`oms setup status` reports the seal's posture and the number of legacy template constraints it ignores (`legacyTemplates`). `oms doctor contract` diagnoses the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures, and exits 1 when unhealthy. `--fix` only re-indexes a moved or unindexed vault; every other broken seal is recovered by running `oms interview` again. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them.
 
 Search is independent of the contract. Lexical, vector, HyDE, and typed-axis queries include notes that would fail it, and a missing or damaged contract does not stop search. Sealed template sources and folders marked for search exclusion stay out of ordinary note results. Vector, HyDE, and rerank requests fail loudly when their provider and model pair is missing or unusable. Those failures are not replaced with an empty success or another backend. That is the ADR-005 boundary. Search does not write notes and does not repair anything.
 

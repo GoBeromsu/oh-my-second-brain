@@ -4,8 +4,6 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
-- **The contract help names `oms interview` for recovery.** Loosening a seal, or resealing one that needs recovery, is described as `oms interview` run by the owner in a terminal, matching the `recovery` field of `oms doctor contract`.
-
 ## [0.20.3] - 2026-09-30
 
 ## [0.20.2] - 2026-09-30

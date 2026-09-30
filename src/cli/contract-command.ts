@@ -43,7 +43,7 @@ export function contractUsage(): string {
 setup in a terminal has full authority, including loosening a sealed contract.
 --questions and --answers let an agent ask the owner each question (the setup skill):
 they seal a first contract or a stricter one, never a looser one. Loosening, and any
-seal that needs recovery first, is left to \`oms interview\` run by the owner in a terminal.`;
+seal that needs recovery first, is left to \`oms setup\` run by the owner in a terminal.`;
 }
 
 const VERBS = ["setup", "extract", "status", "doctor", "gaps"] as const;
