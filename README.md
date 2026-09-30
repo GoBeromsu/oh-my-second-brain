@@ -93,7 +93,7 @@ Install the integration for the host you use:
 oms setup host install --runtime claude --vault /path/to/vault --yes
 ```
 
-Replace `claude` with `codex` or `hermes`; use `all` to install all three. Host integration is optional if you only need the CLI. See the [installation guide](./docs/install.md) for Hermes profiles, model setup, and removal.
+Replace `claude` with `codex` or `hermes`; use `all` to install all three. For Claude Code, add `--execute` to let OMS add the plugin marketplace and run `claude plugin install oms@oh-my-second-brain`, which brings the `/oms:*` skills; without it, OMS prints the exact commands for you to run. Host integration is optional if you only need the CLI. See the [installation guide](./docs/install.md) for Hermes profiles, model setup, and removal.
 
 ### 4. Put your knowledge to work
 
@@ -184,8 +184,6 @@ The six skills are `distill`, `doctor`, `interview`, `search`, `setup`, and `wri
 > [!NOTE]
 > Claude's hook rejects a judged contract violation, but allows the write with a warning if the hook itself cannot run. Native file writes in Codex and Hermes do not pass through the OMS judge. This is not a filesystem-wide sandbox.
 
-For Gajae-Code, install the marketplace plugin with `gjc plugin install oms@oms`; it discovers the six skills at the package-root `skills/` path. See [host assets](./docs/adapters.md) for integration details.
-
 <details>
 <summary><strong>Host maintenance and vault targeting</strong></summary>
 
@@ -261,7 +259,7 @@ Note `create`, `append`, `update`, and `backfill` are retired operations. There 
 
 Contributions are welcome. Start with the [contributing guide](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/CONTRIBUTING.md), or [open an issue](https://github.com/GoBeromsu/oh-my-second-brain/issues) with a reproducible problem or a focused proposal.
 
-[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) records design influences, including Ouroboros and Gajae Code's deep-interview. Those credits describe ideas, not a copied runtime or a research result. The original constellation illustration is inspired by the connected-note landscape at [beomsukoh.com](https://beomsukoh.com/). Illustrations explain concepts; they are not product screenshots, host-smoke evidence, or product-gate results.
+[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) records design influences, including [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros) and [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)'s deep-interview. Those credits describe ideas, not a copied runtime or a research result. The original constellation illustration is inspired by the connected-note landscape at [beomsukoh.com](https://beomsukoh.com/). Illustrations explain concepts; they are not product screenshots, host-smoke evidence, or product-gate results.
 
 ---
 

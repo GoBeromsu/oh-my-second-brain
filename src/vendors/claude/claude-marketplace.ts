@@ -13,7 +13,7 @@ const PUBLISHED_MARKETPLACE_REPO = "GoBeromsu/oh-my-second-brain";
  * when that manifest is not readable locally; a local checkout always wins so
  * a renamed marketplace cannot drift from the commands OMS prints.
  */
-const PUBLISHED_MARKETPLACE_NAME = "oms";
+const PUBLISHED_MARKETPLACE_NAME = "oh-my-second-brain";
 
 const MARKETPLACE_MANIFEST = path.join(".claude-plugin", "marketplace.json");
 

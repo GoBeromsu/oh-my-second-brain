@@ -21,6 +21,8 @@ oms setup host install --runtime all --vault /path/to/vault --yes
 
 Use `claude`, `codex`, or `hermes` instead of `all` to install one runtime.
 
+The Claude skills ship in the `oms@oh-my-second-brain` plugin. Add `--execute` to let OMS add the marketplace from the installed package and run `claude plugin install oms@oh-my-second-brain` through the Claude CLI; if either step fails, it falls back to `claude plugin install <package path>`, which installs the plugin under a local id. Without `--execute` (or with `--dry-run`), OMS prints the exact commands for you to run. If an earlier version installed `oms@oms`, remove it first with `claude plugin uninstall oms@oms` and `claude plugin marketplace remove oms`.
+
 Installation writes host-native guidance and skill assets, then stamps the host MCP registration as:
 
 ```text
