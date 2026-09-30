@@ -93,7 +93,7 @@ oms setup status --vault /path/to/vault
 oms setup host install --runtime claude --vault /path/to/vault --yes
 ```
 
-`claude` 대신 `codex` 또는 `hermes`를 쓸 수 있다. 세 호스트를 모두 설치하려면 `all`을 쓴다. Claude Code에서 `--execute`를 붙이면 OMS가 plugin marketplace를 추가하고 `claude plugin install oms@oh-my-second-brain`를 실행해 `/oms:*` 스킬을 설치한다. 붙이지 않으면 직접 실행할 명령을 그대로 보여준다. CLI만 사용한다면 호스트 설치는 선택 사항이다. Hermes 프로필, 모델 설정, 제거 방법은 [설치 가이드](./docs/install.md)를 참고한다.
+`claude` 대신 `codex` 또는 `hermes`를 쓸 수 있다. 세 호스트를 모두 설치하려면 `all`을 쓴다. Claude Code에서 `--execute`를 붙이면 OMS가 plugin marketplace를 추가하고 `claude plugin install oms@oh-my-second-brain` 명령을 실행해 `/oms:*` 스킬을 설치한다. 붙이지 않으면 직접 실행할 명령을 그대로 보여준다. CLI만 사용한다면 호스트 설치는 선택 사항이다. Hermes 프로필, 모델 설정, 제거 방법은 [설치 가이드](./docs/install.md)를 참고한다.
 
 ### 4. 지식 꺼내 쓰기
 
