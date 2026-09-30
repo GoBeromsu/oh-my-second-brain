@@ -158,7 +158,7 @@ export async function setAutonomy(
 ): Promise<AutonomyResult> {
   const state = await resolveSealState(vault, root);
   if (state.row !== "sealed" || state.vaultId === null) {
-    throw new Error("EVOLUTION_NO_CONTRACT: the vault has no readable sealed contract here; run `oms setup` first");
+    throw new Error("EVOLUTION_NO_CONTRACT: the vault has no readable sealed contract here; run `oms interview` first");
   }
   const vaultId = state.vaultId;
   const current = (await readPolicy(root, vaultId)).policy;

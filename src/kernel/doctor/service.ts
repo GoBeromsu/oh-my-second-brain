@@ -223,7 +223,7 @@ async function repairLineage(operation: "lineage-recover" | "lineage-reanchor", 
   }
   // A copy whose original still exists must not claim the shared id's index entry (interview.ts refuses the same row).
   if (unindexed && state.shared) {
-    return { kind: "error", message: "CONTRACT_VAULT_ID_SHARED: another existing vault uses this vault id (a copied vault); remove .oms/settings.json in the copy, then run `oms setup` again" };
+    return { kind: "error", message: "CONTRACT_VAULT_ID_SHARED: another existing vault uses this vault id (a copied vault); remove .oms/settings.json in the copy, then run `oms interview` again" };
   }
   let recovered;
   let health: Awaited<ReturnType<typeof lineageHealth>> | undefined;

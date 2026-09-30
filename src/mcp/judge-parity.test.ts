@@ -135,6 +135,7 @@ interface Payload {
   readonly refusals?: Violation[];
   readonly warnings?: Array<Pick<Violation, "field" | "kind">>;
   readonly fixes?: Array<Pick<Violation, "field" | "kind">>;
+  readonly next?: string;
   readonly exitCode?: number | string | undefined;
 }
 
@@ -209,9 +210,9 @@ describe.each(SEALS)("MCP write, CLI write and the hook translator share one jud
       const argv = ifMatch === undefined ? [row.path] : [row.path, "--if-match", ifMatch];
       await runWriteCommand([...argv, "--vault", cliFixture.vault], { env: {}, cwd: cliFixture.vault, readStdin: async () => row.content });
       const payload = JSON.parse(String(log.mock.calls[0]?.[0])) as Payload;
-      // stderr carries only the finding lines: the warnings and the fixes, each when present.
+      // stderr carries only the finding lines: the warnings (with the next command) and the fixes, each when present.
       const findings = [
-        ...(payload.warnings?.length ? [`[oms] warnings: ${JSON.stringify(payload.warnings)}`] : []),
+        ...(payload.warnings?.length ? [`[oms] warnings: ${JSON.stringify(payload.warnings)}${payload.next === undefined ? "" : ` Run: ${payload.next}`}`] : []),
         ...(payload.fixes?.length ? [`[oms] fixed: ${JSON.stringify(payload.fixes)}`] : []),
       ];
       expect(error.mock.calls.map(call => call[0])).toEqual(findings);

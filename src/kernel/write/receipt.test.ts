@@ -34,7 +34,18 @@ describe("write receipt", () => {
     });
     expect(receipt.warnings).toEqual([{ field: "status", kind: "not-allowed" }, { field: "mood", kind: "unknown-property" }]);
     expect(receipt.fixes).toEqual([{ field: "title", kind: "missing" }]);
+    expect(receipt.next).toBe("oms doctor status");
     expect(JSON.stringify(receipt)).not.toContain("detail");
+  });
+
+  it("points an open-contract write at the interview", () => {
+    const open: ContractView = { state: "open" };
+    const receipt = buildReceipt({
+      path: "a.md", content: "x", view: open, keyword: "skipped", conformed: [], missingDefaults: [],
+      warnings: [{ field: "contract", kind: "contract-open" }],
+    });
+    expect(receipt.warnings).toEqual([{ field: "contract", kind: "contract-open" }]);
+    expect(receipt.next).toBe("oms interview");
   });
 
   it("names the revision read once by the pipeline instead of recomputing it from the view", () => {

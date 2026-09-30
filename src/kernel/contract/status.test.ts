@@ -10,7 +10,7 @@ import {
   contractDoctor, contractStatus, doctorFix, legacyTemplateFinding, ROW_FINDING, SHARED_FINDING, STORE_UNREADABLE_FINDING, templateFolderUnsetFinding, type DoctorFixResult,
 } from "./status.js";
 import { readVaultSettings, serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
-import type { VaultContract } from "./types.js";
+import { GUIDANCE_FOR, type VaultContract } from "./types.js";
 import { resolveSealState, type SealRow } from "./vault-id.js";
 
 const fixtures: TruthTableFixture[] = [];
@@ -69,6 +69,16 @@ describe("contractStatus", () => {
     });
   }
 
+  it("points every row without a local contract to the command its write warning names", () => {
+    expect(ROW_FINDING["never-sealed"].guidance).toBe(GUIDANCE_FOR["contract-open"]);
+    expect(ROW_FINDING["synced-second-machine"].guidance).toBe(GUIDANCE_FOR["contract-open"]);
+    expect(ROW_FINDING["index-without-store"].guidance).toBe(GUIDANCE_FOR["contract-unreadable"]);
+  });
+
+  it("points an unreadable store to the diagnosis a tampered write warning names, never to a reseal", () => {
+    expect(STORE_UNREADABLE_FINDING.guidance).toBe(GUIDANCE_FOR["contract-tampered"]);
+  });
+
   it("adds the shared finding for a copied vault", async () => {
     const fixture = await row("sealed");
     await addSharedCopy(fixture);
@@ -91,7 +101,7 @@ describe("contractStatus", () => {
     const status = await contractStatus(fixture.vault, fixture.root);
     expect(status).toMatchObject({ contract: "sealed", legacyTemplates: 2 });
     expect(status.findings).toContainEqual(legacyTemplateFinding(2));
-    expect(legacyTemplateFinding(2)).toEqual({ message: "legacy-template-constraints-ignored: 2", guidance: "oms setup" });
+    expect(legacyTemplateFinding(2)).toEqual({ message: "legacy-template-constraints-ignored: 2", guidance: "oms interview" });
   });
 
   it("suggests a template folder for a legacy generation whose settings name none, without writing it", async () => {

@@ -37,12 +37,12 @@ export interface ContractStatus {
 
 /** Fixed doctor wording per truth-table row. */
 export const ROW_FINDING: Readonly<Record<SealRow, DoctorFinding>> = {
-  "never-sealed": { message: "contract: none", guidance: "oms setup" },
-  "synced-second-machine": { message: "vaultId present, no local store", guidance: "oms setup" },
+  "never-sealed": { message: "contract: none", guidance: "oms interview" },
+  "synced-second-machine": { message: "vaultId present, no local store", guidance: "oms interview" },
   "store-without-index": { message: "index entry missing", guidance: "oms doctor contract --fix" },
   "vault-moved": { message: "vault moved", guidance: "oms doctor contract --fix" },
   "sealed": { message: "contract: sealed", guidance: null },
-  "index-without-store": { message: "contract store missing", guidance: "oms setup" },
+  "index-without-store": { message: "contract store missing", guidance: "oms interview" },
   "settings-missing": { message: "vault settings missing", guidance: "oms interview" },
   "vault-id-tampered": { message: "vault id mismatch", guidance: "oms doctor contract" },
   "index-corrupt": { message: "index unreadable", guidance: "oms doctor contract --fix" },
@@ -50,11 +50,11 @@ export const ROW_FINDING: Readonly<Record<SealRow, DoctorFinding>> = {
 
 export const SHARED_FINDING: DoctorFinding = { message: "vault id shared", guidance: "oms doctor contract" };
 export const SETTINGS_INVALID_FINDING: DoctorFinding = { message: "vault settings unreadable", guidance: "oms doctor contract" };
-export const STORE_UNREADABLE_FINDING: DoctorFinding = { message: "contract store unreadable", guidance: "oms setup" };
+export const STORE_UNREADABLE_FINDING: DoctorFinding = { message: "contract store unreadable", guidance: "oms doctor contract" };
 
 /** The sealed generation carries template constraints the judge no longer enforces; the count is the only detail. */
 export function legacyTemplateFinding(count: number): DoctorFinding {
-  return { message: `legacy-template-constraints-ignored: ${count}`, guidance: "oms setup" };
+  return { message: `legacy-template-constraints-ignored: ${count}`, guidance: "oms interview" };
 }
 
 /**

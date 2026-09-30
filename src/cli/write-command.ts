@@ -90,7 +90,7 @@ async function readProcessStdin(): Promise<string> {
 /** One stderr line each for what a write saved with warnings and what it fixed: `{field, kind}` only. */
 function findingLines(payload: WritePayload): readonly string[] {
   const lines: string[] = [];
-  if ("warnings" in payload && payload.warnings.length > 0) lines.push(`[oms] warnings: ${JSON.stringify(payload.warnings)}`);
+  if ("warnings" in payload && payload.warnings.length > 0) lines.push(`[oms] warnings: ${JSON.stringify(payload.warnings)}${"next" in payload && payload.next !== undefined ? ` Run: ${payload.next}` : ""}`);
   if ("fixes" in payload && payload.fixes.length > 0) lines.push(`[oms] fixed: ${JSON.stringify(payload.fixes)}`);
   return lines;
 }

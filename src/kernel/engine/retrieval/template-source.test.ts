@@ -127,7 +127,7 @@ describe("readSearchTemplateSource", () => {
     expect(read.source.globalAxes).toEqual({});
     expect(read.diagnostics.map(item => item.code)).toEqual(["CONTRACT_OPEN"]);
     expect(read.diagnostics[0]?.message).toContain("contract: none");
-    expect(read.diagnostics[0]?.message).toContain("run oms setup");
+    expect(read.diagnostics[0]?.message).toContain("run oms interview");
     expect(existsSync(path.join(vault, ".oms"))).toBe(false);
   });
 

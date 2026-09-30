@@ -4,6 +4,9 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms write` prints the next command with its warnings.** The stderr warnings line ends with `Run: <command>` (for an unsealed vault, `Run: oms interview`).
+- **Enabling evolution on a vault with no contract names `oms interview`.** `EVOLUTION_NO_CONTRACT` from the CLI now says to run `oms interview` first.
+
 ## [0.20.0] - 2026-09-30
 
 - **The `oms doctor` evolution usage text is built from one flag table.** Each leaf's flag and its placeholder (`<id>`, `<file|->`, `<digest>`) now live together in `src/cli/lineage-command.ts`, and the printed usage is unchanged.

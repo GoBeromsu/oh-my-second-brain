@@ -4,6 +4,9 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **Host guidance names `oms interview` for a missing seal.** The Claude, Codex and Hermes guidance used to send the user to `oms setup` for a broken or missing seal. A missing seal is now sealed with `oms interview`, the command the write warning names, and a broken one is checked with `oms doctor contract`.
+- **The write skill lists the full receipt and tells the agent to relay `next`.** The receipt is described with `warnings`, `fixes` and `next?`, and the denial with its real `status`, `refusals` and `violations` shape. It no longer says an unreadable contract denies writes: an unsealed or unreadable contract saves the note with a warning that names `oms interview`, and only a tampered contract is denied, pending `oms doctor contract`.
+
 ## [0.20.0] - 2026-09-30
 
 - **The doctor skill covers contract evolution.** It describes `evolve`, `evolve-verdict` and `revert-propose`, requires the maker's session on `evolve` and keeps the maker from judging its own request, explains the stage-2 refusal of an overlapping or drifting candidate, says a revert always requires owner approval, says the quorum is host-attested and cannot be verified by OMS, which is why autonomy is off by default, tells a host without independent evaluator subagents to stop and send the owner to `oms setup`, and sends `reclaim-evolution-lock` and `lineage-reanchor` to the owner's terminal.
