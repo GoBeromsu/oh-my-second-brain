@@ -144,6 +144,16 @@ describe("translatePreToolUse gap ledger", () => {
     expect(gaps[0]!.reason.startsWith("kept:")).toBe(true);
   });
 
+  it("records malformed frontmatter as a kept gap, as MCP write does when it saves as written", async () => {
+    const fixture = await row("sealed");
+    const gapRoot = join(fixture.base, "gaps");
+    const content = "---\nstatus: [open\n---\nbody\n";
+    const result = await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "Projects/a.md"), content }), { gapRoot: () => gapRoot });
+    expect(result.decision).toBe("warn");
+    const gaps = openGaps((await readGapLedger(gapRoot, fixture.vaultId)).events);
+    expect(gaps.map(gap => [gap.kind, gap.reason])).toEqual([["kept", "kept: yaml-syntax"]]);
+  });
+
   it("keeps a value the write pipeline would fix as a warning and leaves the tool input unchanged", async () => {
     const fixture = await row("sealed");
     const gapRoot = join(fixture.base, "gaps");
@@ -216,6 +226,15 @@ describe("translatePreToolUse gap ledger", () => {
       gapLedger: { newId: () => { throw new Error("ledger down"); } },
     });
     expect(result).toEqual({ decision: "warn", reason: NOT_ALLOWED, warning: null });
+  });
+
+  it("still warns when the ledger cannot record malformed frontmatter", async () => {
+    const fixture = await row("sealed");
+    const content = "---\nstatus: [open\n---\nbody\n";
+    const result = await decide(fixture.vault, payload("Write", { file_path: join(fixture.vault, "Projects/a.md"), content }), {
+      gapLedger: { newId: () => { throw new Error("ledger down"); } },
+    });
+    expect(result.decision).toBe("warn");
   });
 
   it("warns and records nothing when the seal state cannot be read", async () => {

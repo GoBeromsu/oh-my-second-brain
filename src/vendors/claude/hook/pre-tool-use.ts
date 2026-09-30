@@ -155,7 +155,9 @@ export async function translatePreToolUse(
   // is the same without them, so an edit of an existing note does not read the template folder.
   const templates = resolved.previousContent === undefined ? await loadLiveTemplates(resolved.vaultRoot) : [];
   const decision = decideWrite(resolved, content, { repair: false, templates });
-  if (decision.outcome === "allow" && decision.findings.length > 0) await recordKept(decision.findings, resolved.path, content, resolved.view, read.seal, deps);
+  // The hook never drafts: a write MCP would draft is saved as written, so its as-written gaps are kept, as MCP write keeps them.
+  const kept = decision.outcome === "allow" ? decision.findings : decision.outcome === "draft" ? decision.asWritten : [];
+  if (kept.length > 0) await recordKept(kept, resolved.path, content, resolved.view, read.seal, deps);
   return fromVerdict(decision.verdict);
 }
 
