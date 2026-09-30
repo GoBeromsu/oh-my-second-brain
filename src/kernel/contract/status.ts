@@ -42,7 +42,7 @@ export const ROW_FINDING: Readonly<Record<SealRow, DoctorFinding>> = {
   "store-without-index": { message: "index entry missing", guidance: "oms doctor contract --fix" },
   "vault-moved": { message: "vault moved", guidance: "oms doctor contract --fix" },
   "sealed": { message: "contract: sealed", guidance: null },
-  "index-without-store": { message: "contract store missing", guidance: "oms setup" },
+  "index-without-store": { message: "contract store missing", guidance: "oms interview" },
   "settings-missing": { message: "vault settings missing", guidance: "oms interview" },
   "vault-id-tampered": { message: "vault id mismatch", guidance: "oms doctor contract" },
   "index-corrupt": { message: "index unreadable", guidance: "oms doctor contract --fix" },

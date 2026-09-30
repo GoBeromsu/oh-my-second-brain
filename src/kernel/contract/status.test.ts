@@ -69,9 +69,10 @@ describe("contractStatus", () => {
     });
   }
 
-  it("points both rows without a local contract to the command the contract-open write warning names", () => {
+  it("points every row without a local contract to the command its write warning names", () => {
     expect(ROW_FINDING["never-sealed"].guidance).toBe(GUIDANCE_FOR["contract-open"]);
     expect(ROW_FINDING["synced-second-machine"].guidance).toBe(GUIDANCE_FOR["contract-open"]);
+    expect(ROW_FINDING["index-without-store"].guidance).toBe(GUIDANCE_FOR["contract-unreadable"]);
   });
 
   it("adds the shared finding for a copied vault", async () => {

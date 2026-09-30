@@ -4,8 +4,6 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
-- **Host guidance names `oms interview` for a missing seal.** The Claude, Codex and Hermes guidance used to send the user to `oms setup` for a broken or missing seal. A missing seal is now sealed with `oms interview`, the command the write warning names, and a broken one is checked with `oms doctor contract`.
-
 ## [0.20.0] - 2026-09-30
 
 - **The Claude guard reads the live templates only for a new note.** `oms hook pre` loads the template folder only when the target does not exist yet, the only case in which a template choice is recorded, so an edit of an existing note no longer reads every template. New notes get the same decision and template choice gap as MCP `write`.

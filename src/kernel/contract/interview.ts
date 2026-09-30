@@ -439,12 +439,12 @@ export async function runInterview(input: {
       throw new Error("CONTRACT_VAULT_ID_TAMPERED: the vault id in .oms/settings.json does not match the id this vault was sealed with; restore the original .oms/settings.json or run `oms doctor contract`");
     }
     if (state.shared) {
-      throw new Error("CONTRACT_VAULT_ID_SHARED: another existing vault uses this vault id (a copied vault); remove .oms/settings.json in the copy, then run `oms setup` again");
+      throw new Error("CONTRACT_VAULT_ID_SHARED: another existing vault uses this vault id (a copied vault); remove .oms/settings.json in the copy, then run `oms interview` again");
     }
     // A first seal on this machine (no store yet) or a reseal of a readable seal; every recovery row stays with the terminal.
     const firstOrReseal = state.row === "never-sealed" || state.row === "synced-second-machine" || (state.row === "sealed" && state.view.state === "sealed");
     if (input.nonLoosening === true && !firstOrReseal) {
-      return { state: "refused", reasons: ["The seal needs recovery first; run `oms doctor contract`, then run `oms setup` yourself in a terminal."] };
+      return { state: "refused", reasons: ["The seal needs recovery first; run `oms doctor contract`, then run `oms interview` yourself in a terminal."] };
     }
     let settings: VaultSettings | null;
     try {
