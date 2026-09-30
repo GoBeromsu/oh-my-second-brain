@@ -4,7 +4,7 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
-- **The write skill lists the full receipt and tells the agent to relay `next`.** The receipt is described with `warnings`, `fixes` and `next?`, and the denial with its real `status`, `refusals` and `violations` shape.
+- **The write skill lists the full receipt and tells the agent to relay `next`.** The receipt is described with `warnings`, `fixes` and `next?`, and the denial with its real `status`, `refusals` and `violations` shape. It no longer says an unreadable contract denies writes: an unsealed or unreadable contract saves the note with a warning that names `oms interview`, and only a tampered contract is denied, pending `oms doctor contract`.
 
 ## [0.20.0] - 2026-09-30
 

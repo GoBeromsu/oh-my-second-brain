@@ -42,8 +42,8 @@ about or guess the contract's location or values.
 - `/interview` continues the vault interview: it lists open questions, records
   the user's answers, and seals only a proposal the user confirmed.
 - `/doctor` runs explicit, supported index and control repairs. It never
-  backfills notes. A broken or missing seal is fixed by the user running
-  `oms setup`.
+  backfills notes. A missing seal is sealed by the user running `oms interview`;
+  a broken one is checked with `oms doctor contract`.
 
 Six skills share four MCP tools: `write`, `search`, `interview`, `distill`,
 `setup`, and `doctor`. `distill` and `setup` have no tool.

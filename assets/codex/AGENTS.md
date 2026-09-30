@@ -40,8 +40,8 @@ guess the contract's location or values.
   are for diagnosis. They report the seal's posture and template drift without
   printing any value.
 - `$oms-doctor` runs explicit, supported index and control repairs. It never
-  backfills notes. A broken or missing seal is fixed by the user running
-  `oms setup`.
+  backfills notes. A missing seal is sealed by the user running `oms interview`;
+  a broken one is checked with `oms doctor contract`.
 
 Codex installs six shared skills (`write`, `search`, `interview`, `distill`,
 `setup`, `doctor`) backed by the four public MCP tools.

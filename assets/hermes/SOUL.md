@@ -35,8 +35,8 @@ about or guess the contract's location or values.
   `oms doctor contract` are for diagnosis. They report the seal's posture and template drift without
   printing any value.
 - `doctor` runs only explicit, supported repairs. It never rewrites ordinary
-  notes or backfills guessed values. A broken or missing seal is fixed by the
-  user running `oms setup`.
+  notes or backfills guessed values. A missing seal is sealed by the user running `oms interview`;
+  a broken one is checked with `oms doctor contract`.
 
 Hermes uses the six shared skills under an `oms-` prefix (`oms-write`,
 `oms-search`, `oms-interview`, `oms-distill`, `oms-setup`, `oms-doctor`) so

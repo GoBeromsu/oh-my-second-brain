@@ -38,7 +38,7 @@ export interface ContractStatus {
 /** Fixed doctor wording per truth-table row. */
 export const ROW_FINDING: Readonly<Record<SealRow, DoctorFinding>> = {
   "never-sealed": { message: "contract: none", guidance: "oms interview" },
-  "synced-second-machine": { message: "vaultId present, no local store", guidance: "oms setup" },
+  "synced-second-machine": { message: "vaultId present, no local store", guidance: "oms interview" },
   "store-without-index": { message: "index entry missing", guidance: "oms doctor contract --fix" },
   "vault-moved": { message: "vault moved", guidance: "oms doctor contract --fix" },
   "sealed": { message: "contract: sealed", guidance: null },
