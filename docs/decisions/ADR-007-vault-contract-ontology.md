@@ -70,6 +70,46 @@ Accepted (2026-09-25). 도메인 결정의 출처는 deep-interview R1–R24와 
     템플릿 → 여럿이면 ② 선택 기록. 새 settings 키는 없다.
   - Q6 `not-fixed`: W.
   - Q7 v1/v2 저장소 reader: 영구히 유지한다(투영 reader).
+- **계약 진화의 평가 (PR9, 축 전용).** 진화 후보도 축으로만 평가한다. 템플릿 축은 없다.
+  - 봉인 경로는 `src/kernel/evolution/seal-gate.ts` 하나다. `sealContract`를 부르는 제품 모듈은
+    이것과 `src/kernel/contract/interview.ts`뿐이다(`test/architecture/write-evolution-boundary.test.ts`).
+  - 1단계(`src/kernel/evolution/stage-mechanical.ts`)는 기존 노트를 후보 계약으로 다시 판정한다.
+    새 거부가 1건이라도 있으면 거절한다. 경고 증가분(warning delta)이 점수다. 경고가 늘면
+    사람 승인 대기(awaiting-human)로 넘긴다. 자율 봉인은 경고 증가분이 0 이하일 때만 한다.
+    음수도 허용한다. 경고를 줄이는 후보는 자율 봉인할 수 있다.
+  - 느슨하게 하기(`src/kernel/evolution/mutation-direction.ts`)는 허용 값이나 폴더의 추가, 타입
+    확장, `required` 제거다. 느슨한 후보는 정책과 상관없이 사람 승인을 기다린다.
+  - 2단계(`src/kernel/evolution/stage-semantic.ts`, 의미 유사도)도 강제 관문이다. 건드린 항목의 의미가
+    기존 항목과 0.9 이상 겹치거나(MECE 중복), 처음 봉인한 세대에서 0.3을 넘게 멀어지면(drift) 거절한다.
+    drift가 정확히 0.3이면 통과한다. `evolve`는 요청을 내지 않고 `EVOLUTION_STAGE2_REFUSED`를 던진다.
+    라우터(`routeOf`)와 자율 seal-gate도 같은 거절을 강제하며, 거절은 `request.rejected` 이벤트로
+    저널에 남는다.
+  - 3단계는 평가자 3인 중 2인 합의다. 합의의 거절도 효력이 있다: 같은 요청은 다시 돌려도 봉인되지
+    않는다. 판정은 주입한 VerdictProvider에서 오고, 서브에이전트가 없는 호스트는
+    `EVALUATOR_CONSENSUS_UNAVAILABLE`을 받으며 저장소는 바뀌지 않는다.
+  - `evolve`에는 메이커의 세션 id(`makerSessionId`)가 반드시 있어야 한다. 없으면
+    `EVOLUTION_MAKER_SESSION_REQUIRED`로 거절하고 아무 요청도 내지 않는다. 평가자 세션 id는
+    서로 달라야 하고 메이커와도 달라야 한다. 어기는 판정은 버린다(`session-duplicate`,
+    `session-is-maker`, 메이커가 없는 요청은 `maker-unknown`).
+  - 합의는 호스트가 증언한 것(host-attested)이다. OMS는 세 판정이 정말 독립된 서브에이전트에서
+    왔는지 검증할 수 없다. 한 클라이언트가 세 세션 id를 지어낼 수 있다. 그래서 자율 봉인은
+    기본으로 꺼져 있고, 자율 봉인의 `seal.autonomous` 저널 이벤트와 계보 이벤트에
+    `quorum: "host-attested"`를 기록하며, `doctor status`의 evolution 절이 이를 보여 준다.
+  - 진화 op의 사후 조건이 저장소에서 다시 읽은 값과 맞지 않으면 `EVOLUTION_POSTCONDITION_FAILED`를
+    던진다. 봉인이 이미 일어난 뒤라면 `EVOLUTION_POSTCONDITION_FAILED_AFTER_SEAL`을 던지고, 봉인된
+    digest와 세대 번호를 알려 준다.
+  - 자율 정책은 기본으로 꺼져 있고, TTY `oms setup`에서만 켠다. 한도는 낮추기만 한다.
+  - 사람의 결정은 approve 또는 reject이고, 승인 프롬프트는 `src/cli/evolution-approve.ts`에만 있다.
+  - 되돌리기(`src/kernel/evolution/revert.ts`)는 앞으로만 간다. 스냅숏의 계약을 v3 형태로 투영해
+    새 후보로 제안한다. 되돌리기는 항상 소유자 승인이 필요하다. 되돌리기에는 maker가 없으므로 어떤
+    호스트 quorum도 거기에 묶일 수 없다. 조이든, 중립이든, 푸는 방향이든, 자율 정책이 켜져 있든
+    꺼져 있든 모든 되돌리기는 `awaiting-human`으로 가고, 소유자가 `oms setup`에서 승인해 봉인한다.
+    그 요청에 들어온 verdict는 `EVOLUTION_REQUEST_CLOSED`로 거부된다. 제안 시점에 1단계와 2단계를
+    모두 돌린다. 새 거부를 만들면 `EVOLUTION_REVERT_REFUSED`이고, 의미가 겹치거나 첫 봉인 세대에서
+    0.3 넘게 표류하면 `EVOLUTION_STAGE2_REFUSED`이다. 어느 쪽이든 아무것도 제안하지 않는다. 사람이
+    봉인한 되돌리기의 lineage에는 제안자가 `owner`로 기록된다.
+  - maker 세션이 없는 verdict를 `maker-unknown`으로 버리는 규칙은 `kind: "evolve"` 요청에만
+    적용된다. 되돌리기 요청은 verdict를 받기 전에 이미 소유자를 기다린다.
 
 ## Context
 

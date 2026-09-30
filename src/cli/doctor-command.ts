@@ -32,7 +32,17 @@ export function doctorUsage(): string {
             Record seals the contract lineage missed and snapshot kept generations.
             A gap the chain cannot account for is refused.
   lineage-reanchor [--vault <path>]
-            As lineage-recover, and also anchor a gap so the lineage continues.`;
+            As lineage-recover, and also anchor a gap so the lineage continues.
+            Owner only: asks for confirmation in a terminal.
+  evolve --maker-session <id> [--vault <path>]
+            Open a contract evolution request for an evaluator to judge.
+            The maker's session is required so it can never evaluate its own candidate.
+  evolve-verdict --verdict <file|-> [--vault <path>]
+            Submit an evaluator verdict (one JSON object) for an open request.
+  revert-propose --target <digest> [--vault <path>]
+            Propose returning the contract to a kept generation; it goes through the seal gate.
+  reclaim-evolution-lock [--vault <path>]
+            Owner only: release a stale evolution lock after confirming in a terminal.`;
 }
 
 const SYNC_MODES = ["sync", "embed", "repair"] as const;
@@ -129,12 +139,16 @@ export async function runDoctorCommand(argv: readonly string[]): Promise<void> {
       return;
     }
     case "lineage-recover":
-    case "lineage-reanchor": {
+    case "lineage-reanchor":
+    case "evolve":
+    case "evolve-verdict":
+    case "revert-propose":
+    case "reclaim-evolution-lock": {
       const { runLineageCommand } = await import("./lineage-command.js");
       await runLineageCommand(leaf, rest);
       return;
     }
     default:
-      fail(`Unknown doctor leaf: ${leaf}. Leaves: status, contract, gaps, audit, link-check, sync-embeddings, cleanup, build-graph, lineage-recover, lineage-reanchor.`);
+      fail(`Unknown doctor leaf: ${leaf}. Leaves: status, contract, gaps, audit, link-check, sync-embeddings, cleanup, build-graph, lineage-recover, lineage-reanchor, evolve, evolve-verdict, revert-propose, reclaim-evolution-lock.`);
   }
 }

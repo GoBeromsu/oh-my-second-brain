@@ -1,9 +1,12 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stateDir } from "../kernel/contract/state-dir.js";
+import { sealContract, storeRoot } from "../kernel/contract/store.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
+import { serializeVaultSettings } from "../kernel/vault/settings.js";
 import { doctorUsage, runDoctorCommand } from "./doctor-command.js";
 
 const roots: string[] = [];
@@ -70,6 +73,21 @@ describe("oms doctor", () => {
     expect(doctorUsage()).toContain("lineage-reanchor [--vault <path>]");
   });
 
+  it("routes the evolution leaves to the contract repair leaf", async () => {
+    for (const [leaf, usage] of [
+      ["evolve", "Usage: oms doctor evolve --maker-session <id> [--vault <path>]"],
+      ["evolve-verdict", "Usage: oms doctor evolve-verdict --verdict <file|-> [--vault <path>]"],
+      ["revert-propose", "Usage: oms doctor revert-propose --target <digest> [--vault <path>]"],
+      ["reclaim-evolution-lock", "Usage: oms doctor reclaim-evolution-lock [--vault <path>]"],
+    ] as const) {
+      await runDoctorCommand([leaf, "--help"]);
+      expect(stdout()).toContain(usage);
+      expect(doctorUsage()).toContain(`  ${leaf} `);
+    }
+    await runDoctorCommand(["repair"]);
+    expect(stderr()).toContain("reclaim-evolution-lock.");
+  });
+
   it("validates sync-embeddings modes before any index work", async () => {
     for (const [argv, message] of [
       [[], "--mode <sync|embed|repair> is required"],
@@ -134,6 +152,30 @@ describe("oms doctor", () => {
     expect(report).toHaveProperty("convention");
     expect(report).toHaveProperty("graph");
     expect(existsSync(engineStorePath(vault))).toBe(false);
+  });
+
+  it("reports evolution as null for an unsealed vault and creates no store", async () => {
+    const vault = await makeVault();
+    await runDoctorCommand(["status", "--vault", vault]);
+    expect((JSON.parse(stdout()) as Record<string, unknown>)["evolution"]).toBeNull();
+    expect(existsSync(path.join(process.env["HOME"]!, ".oms"))).toBe(false);
+  });
+
+  it("reports the evolution section of a sealed vault, and degrades it alone when unreadable", async () => {
+    const vault = await makeVault();
+    const id = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
+    await mkdir(path.join(vault, ".oms"));
+    await writeFile(path.join(vault, ".oms", "settings.json"), serializeVaultSettings({ version: 1, vaultId: id, templateFolder: "Templates" }));
+    await sealContract({ vaultRealPath: await realpath(vault), vaultId: id, contract: { folders: { notes: { meaning: "notes", searchExclude: false } }, properties: {} } }, storeRoot());
+    await runDoctorCommand(["status", "--vault", vault]);
+    expect(JSON.parse(stdout())).toMatchObject({ evolution: { autonomous: false, awaitingHuman: 0, lineageGap: false, quorum: "host-attested", budget: { remaining: { day: 0, week: 0 } } } });
+    expect(existsSync(path.join(stateDir(storeRoot(), id), "evolution"))).toBe(false);
+    await writeFile(path.join(stateDir(storeRoot(), id), "evolution"), "not a directory");
+    log.mockClear();
+    await runDoctorCommand(["status", "--vault", vault]);
+    const report = JSON.parse(stdout()) as Record<string, unknown>;
+    expect(report["evolution"]).toEqual({ unavailable: "evolution status could not be read; run `oms doctor contract`" });
+    expect(report).toHaveProperty("convention");
   });
 
   it("routes gaps to the read-only gap report and creates no store", async () => {

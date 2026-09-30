@@ -52,6 +52,11 @@ describe("handleStatus writeTools", () => {
     }
   });
 
+  it("reports evolution as unavailable when it cannot be read, without failing status", async () => {
+    const result = await handleStatus(ctx("explicit"), ["search"]);
+    expect(JSON.parse((result.content[0] as { text: string }).text).evolution).toEqual({ unavailable: "evolution status could not be read; run `oms doctor contract`" });
+  });
+
   it("carries the unreadable reason in the contract status", async () => {
     contract.current = unreadable("broken");
     const result = await handleStatus(ctx("explicit"), ["search"]);

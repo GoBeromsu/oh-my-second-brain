@@ -13,6 +13,8 @@ import { contractDoctor, contractStatus, doctorFix, ROW_FINDING } from "../kerne
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { loadLiveTemplates, selectTemplate } from "../kernel/write/live-templates.js";
 import { VaultSettingsError } from "../kernel/vault/settings.js";
+import type { SealGateDeps } from "../kernel/evolution/seal-gate.js";
+import { approvePendingCandidates, setAutonomy, terminalPromptIO, type HumanPromptIO } from "./evolution-approve.js";
 
 export function contractUsage(): string {
   return `Usage: the sealed contract is set up with oms setup and diagnosed with oms doctor.
@@ -21,6 +23,11 @@ export function contractUsage(): string {
             Interview the whole vault (folders and properties) and seal the contract.
             Templates are not sealed: those in templateFolder scaffold new notes.
             --reask asks again about items declined at an earlier seal.
+            First, each contract change awaiting the owner is shown with its loosening
+            items marked, and sealed only on an explicit approve.
+  oms setup --autonomy <on|off> [--vault <path>]
+            Let evaluated contract changes seal on their own (off by default). Turning it on
+            needs the owner in a terminal; limits stay at or below 1 a day and 3 a week.
   oms setup --questions [--reask] [--vault <path>]
             Print the interview questions as JSON. Seals nothing.
   oms setup --answers <file|-> [--reask] [--vault <path>]
@@ -50,6 +57,7 @@ interface ContractArgs {
   readonly reask: boolean;
   readonly questions: boolean;
   readonly answers?: string;
+  readonly autonomy?: "on" | "off";
 }
 
 function parse(argv: readonly string[]): ContractArgs {
@@ -62,6 +70,7 @@ function parse(argv: readonly string[]): ContractArgs {
   let reask = false;
   let questions = false;
   let answers: string | undefined;
+  let autonomy: "on" | "off" | undefined;
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index]!;
     if (token === "--fix" && verb === "doctor") {
@@ -86,6 +95,13 @@ function parse(argv: readonly string[]): ContractArgs {
       answers = value;
       continue;
     }
+    if (token === "--autonomy" && verb === "setup") {
+      if (autonomy !== undefined) throw new Error("CONTRACT_ARGS_INVALID: duplicate flag --autonomy");
+      const value = rest[++index];
+      if (value !== "on" && value !== "off") throw new Error("CONTRACT_ARGS_INVALID: --autonomy takes on or off");
+      autonomy = value;
+      continue;
+    }
     if (token !== "--vault" && !(token === "--template" && verb === "extract")) {
       throw new Error(`CONTRACT_ARGS_INVALID: unknown argument ${token}`);
     }
@@ -101,12 +117,16 @@ function parse(argv: readonly string[]): ContractArgs {
   }
   if (verb === "extract" && template === undefined) throw new Error("CONTRACT_ARGS_INVALID: extract needs --template <name>");
   if (questions && answers !== undefined) throw new Error("CONTRACT_ARGS_INVALID: use --questions or --answers, not both");
+  if (autonomy !== undefined && (questions || answers !== undefined || reask)) {
+    throw new Error("CONTRACT_ARGS_INVALID: --autonomy stands alone; it does not run the interview");
+  }
   return {
     verb: verb as Verb,
     fix,
     reask,
     questions,
     ...(answers === undefined ? {} : { answers }),
+    ...(autonomy === undefined ? {} : { autonomy }),
     ...(vault === undefined ? {} : { vault }),
     ...(template === undefined ? {} : { template }),
   };
@@ -223,6 +243,7 @@ async function setup(vault: string, args: ContractArgs, deps: ContractCommandDep
     console.error("[oms] oms setup needs an interactive terminal. Run `oms setup` or `oms interview` yourself in a terminal, or let an agent ask you with `oms setup --questions` and `oms setup --answers <file>`.");
     return;
   }
+  await approvePending(vault, deps);
   const terminal = deps.io === undefined ? terminalIO() : null;
   try {
     const owner = deps.io ?? terminal!.io;
@@ -252,6 +273,54 @@ async function setup(vault: string, args: ContractArgs, deps: ContractCommandDep
     printResult(result);
   } finally {
     terminal?.close();
+  }
+}
+
+/** The terminal that approves evolution candidates: the test's scripted one, or the process terminal. */
+function evolutionPrompt(deps: ContractCommandDeps): { readonly io: HumanPromptIO; close(): void } {
+  return deps.evolution === undefined ? terminalPromptIO() : { io: deps.evolution.io, close: () => {} };
+}
+
+function evolutionRoot(deps: ContractCommandDeps): string {
+  return deps.evolution?.root ?? deps.resume?.root ?? storeRoot();
+}
+
+/**
+ * Before the interview, the owner answers each contract change awaiting them. A scripted
+ * interview IO without an evolution IO skips this step (it has no one to ask).
+ */
+async function approvePending(vault: string, deps: ContractCommandDeps): Promise<void> {
+  if (deps.io !== undefined && deps.evolution === undefined) return;
+  const prompt = evolutionPrompt(deps);
+  try {
+    const results = await approvePendingCandidates({
+      vault,
+      root: evolutionRoot(deps),
+      io: prompt.io,
+      now: deps.evolution?.now ?? Date.now,
+      ...(deps.evolution?.sealDeps === undefined ? {} : { deps: { sealDeps: deps.evolution.sealDeps } }),
+    });
+    for (const result of results) {
+      if ("error" in result) console.error(`[oms] Contract change ${result.requestId} was not decided: ${result.error}`);
+      else if (result.decision === "approve") console.error(`[oms] Contract change ${result.requestId}: approved (${result.outcome}).`);
+      else console.error(`[oms] Contract change ${result.requestId}: rejected (${result.reason}).`);
+    }
+  } finally {
+    prompt.close();
+  }
+}
+
+/** `oms setup --autonomy on|off`. On asks the owner in a terminal first. */
+async function autonomy(vault: string, enable: boolean, deps: ContractCommandDeps): Promise<void> {
+  const prompt = evolutionPrompt(deps);
+  try {
+    const result = await setAutonomy({ vault, root: evolutionRoot(deps), io: prompt.io, enable });
+    if (result.status === "unchanged") process.exitCode = 1;
+    print(result.status === "updated"
+      ? { status: "updated", autonomous: result.policy.autonomous, limits: result.policy.limits }
+      : { status: "unchanged", reason: result.reason, autonomous: result.policy.autonomous, limits: result.policy.limits });
+  } finally {
+    prompt.close();
   }
 }
 
@@ -319,6 +388,13 @@ export interface ContractCommandDeps {
     readonly now?: () => number;
     readonly sealDeps?: Partial<SealDeps>;
   };
+  /** The owner's approval terminal for evolution candidates and `--autonomy`; tests script it. */
+  readonly evolution?: {
+    readonly io: HumanPromptIO;
+    readonly root?: string;
+    readonly now?: () => number;
+    readonly sealDeps?: SealGateDeps["sealDeps"];
+  };
 }
 
 export async function runContractCommand(argv: readonly string[], deps: ContractCommandDeps = {}): Promise<void> {
@@ -344,7 +420,8 @@ export async function runContractCommand(argv: readonly string[], deps: Contract
       throw new Error(`CONTRACT_ARGS_INVALID: ${args.verb === "setup" ? "setup" : "doctor contract --fix"} writes and requires --vault or an existing verified vault/bridge/env target`);
     }
     const vault = target.vault;
-    if (args.verb === "setup" && (args.questions || args.answers !== undefined)) await scriptedSetup(vault, args);
+    if (args.verb === "setup" && args.autonomy !== undefined) await autonomy(vault, args.autonomy === "on", deps);
+    else if (args.verb === "setup" && (args.questions || args.answers !== undefined)) await scriptedSetup(vault, args);
     else if (args.verb === "setup") await setup(vault, args, deps);
     else if (args.verb === "extract") await extract(vault, args.template!);
     else if (args.verb === "status") {
@@ -378,7 +455,7 @@ export function commandDiagnostic(error: unknown): { readonly code: string; read
     // The path names the store; only the kind is reported.
     return { code: error.code, remediation: `STATE_DIR_UNSAFE: the interview state beside the contract store holds an unsafe entry (${error.kind}); it was left untouched. Inspect ~/.oms/vaults, remove the entry yourself, then retry.` };
   }
-  if (error instanceof Error && /^(CONTRACT_[A-Z_]+|INTERVIEW_[A-Z_]+|TEMPLATE_SOURCE_UNSAFE):/.test(error.message)) {
+  if (error instanceof Error && /^(CONTRACT_[A-Z_]+|INTERVIEW_[A-Z_]+|EVOLUTION_[A-Z_]+|TEMPLATE_SOURCE_UNSAFE):/.test(error.message)) {
     return { code: error.message.split(":", 1)[0]!, remediation: error.message };
   }
   const errno = (error as NodeJS.ErrnoException | null)?.code;

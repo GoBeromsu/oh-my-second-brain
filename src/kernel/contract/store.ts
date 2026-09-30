@@ -265,7 +265,7 @@ async function listFiles(directory: string, prefix = ""): Promise<string[] | nul
 /** Why a store that exists cannot be read. Names no path, directory or id. */
 export type StoreCause = "link-dangling" | "manifest-mismatch" | "schema-invalid";
 
-type GenerationRead =
+export type GenerationRead =
   | { readonly state: "ok"; readonly contract: VaultContract; readonly declined: DeclinedSet; readonly digest: Digest; readonly legacy?: LegacyContract }
   | { readonly state: "unreadable"; readonly cause: StoreCause };
 
@@ -273,8 +273,12 @@ function unreadable(cause: StoreCause): GenerationRead {
   return { state: "unreadable", cause };
 }
 
-/** Throws ENOENT when the generation directory itself is gone, so the caller can re-resolve. */
-async function readGeneration(directory: string): Promise<GenerationRead> {
+/**
+ * Reads a generation-shaped directory with the full store checks (manifest, digests, strict
+ * schema). Throws ENOENT when the directory itself is gone, so the caller can re-resolve.
+ * The evolution loop reads its pinned candidate bytes through this.
+ */
+export async function readContractDirectory(directory: string): Promise<GenerationRead> {
   const info = await lstat(directory);
   if (!info.isDirectory()) return unreadable("link-dangling");
   const manifestRead = await readBounded(join(directory, MANIFEST));
@@ -334,7 +338,7 @@ async function readResolved(vaultId: string, root: string): Promise<{ readonly s
     if (generation === "absent") return { state: "absent" };
     if (generation === null) return unreadable("link-dangling");
     try {
-      return await readGeneration(join(root, generation));
+      return await readContractDirectory(join(root, generation));
     } catch (error: unknown) {
       const code = errorCode(error);
       if (code !== "ENOENT" && code !== "ENOTDIR") return unreadable("manifest-mismatch");
@@ -393,6 +397,15 @@ function contractFiles(contract: VaultContract, declined: DeclinedSet = NO_DECLI
   if (contract.folders !== null) files.set(FOLDERS, stringify({ version: 1, folders: contract.folders }));
   if (contract.properties !== null) files.set(PROPERTIES, stringify({ version: 1, properties: contract.properties }));
   return files;
+}
+
+/** What a seal of `contract` would write, and its manifest digest, without touching disk. */
+export function candidateManifest(contract: VaultContract, declined: DeclinedSet = NO_DECLINED): { readonly files: ReadonlyMap<string, string>; readonly manifestText: string; readonly digest: Digest } {
+  const files = contractFiles(contract, declined);
+  const digests: Record<string, Digest> = {};
+  for (const [path, content] of [...files].sort(([left], [right]) => compareCodePoints(left, right))) digests[path] = digestBytes(content);
+  const manifestText = stringify({ version: MANIFEST_VERSION, files: digests });
+  return { files, manifestText, digest: manifestDigestOf(manifestText) };
 }
 
 function sequenceOf(name: string, vaultId: string): number | null {
@@ -462,7 +475,7 @@ export interface SealDeps {
   readonly fs: SealFs;
 }
 
-function pidAlive(pid: number): boolean {
+export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -480,7 +493,7 @@ function lockPath(root: string, vaultId: string): string {
 }
 
 /** A lock is stale on this host when its pid is gone or it is too old; elsewhere only by age. */
-async function lockIsStale(path: string, deps: SealDeps): Promise<boolean> {
+export async function lockIsStale(path: string, deps: SealDeps): Promise<boolean> {
   let owner: unknown = null;
   let age: number;
   try {

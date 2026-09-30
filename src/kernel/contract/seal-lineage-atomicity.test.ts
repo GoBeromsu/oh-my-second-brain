@@ -13,6 +13,7 @@ import {
   chainViolations,
   LINEAGE_FILE,
   lineageAppender,
+  parseLineageEvent,
   planLineageTail,
   readLineage,
   type LineageDraft,
@@ -20,7 +21,7 @@ import {
   type LineageTailInput,
 } from "./lineage.js";
 import { stateDir } from "./state-dir.js";
-import { bootstrapSnapshots, readIndex, recoverLineage, sealContract, type SealFs } from "./store.js";
+import { bootstrapSnapshots, candidateManifest, readIndex, recoverLineage, sealContract, type SealFs } from "./store.js";
 import type { VaultContract } from "./types.js";
 
 const ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
@@ -221,6 +222,32 @@ describe("digests", () => {
     const second = await seal(2, { expectedParentDigest: first.digest });
     expect(second.parentDigest).toBe(first.digest);
     expect((await events()).at(-1)).toMatchObject({ kind: "sealed", parentDigest: first.digest, digest: second.digest, generation: 2 });
+  });
+
+  it("predicts the seal digest from the contract alone", async () => {
+    const predicted = candidateManifest(contract(1));
+    expect([...predicted.files.keys()].sort()).toEqual(["folders.json", "properties.json"]);
+    const sealed = await seal(1);
+    expect(predicted.digest).toBe(sealed.digest);
+    expect(manifestDigestOf(await readFile(join(root, `.${ID}.1`, "manifest.json")))).toBe(predicted.digest);
+  });
+
+  it("records evolution attribution on the sealed event and round-trips it", async () => {
+    const first = await seal(1);
+    const mutations = [{ op: "MODIFY", axis: "rule", key: "rating", before: { kind: "range", min: 0, max: 1 }, after: { kind: "range", min: 0, max: 2 } }];
+    await seal(2, { onSealed: lineageAppender({ proposer: "maker", evaluator: "gate", requestId: "r-1", autonomous: true, mode: "autonomous", mutations, revertOf: first.digest }) });
+    expect((await events()).at(-1)).toMatchObject({ proposer: "maker", evaluator: "gate", requestId: "r-1", autonomous: true, mode: "autonomous", mutations, revertOf: first.digest });
+    await seal(3);
+    const plain = (await events()).at(-1)!;
+    expect(plain.mutations).toEqual([]);
+    for (const key of ["autonomous", "mode", "revertOf", "requestId"]) expect(Object.hasOwn(plain, key)).toBe(false);
+  });
+
+  it("rejects a lineage line whose autonomous flag or mode has the wrong type", () => {
+    const line = (extra: Record<string, unknown>): string => JSON.stringify({ eventSeq: 1, kind: "sealed", generation: 1, parentDigest: NO_DIGEST, digest: FOREIGN, mutations: [], manifestDigests: {}, ...extra });
+    expect(parseLineageEvent(line({ autonomous: false, mode: "human" }))).toMatchObject({ autonomous: false, mode: "human" });
+    expect(parseLineageEvent(line({ autonomous: "yes" }))).toBeNull();
+    expect(parseLineageEvent(line({ mode: 1 }))).toBeNull();
   });
 
   it("never writes to the evolution state", async () => {

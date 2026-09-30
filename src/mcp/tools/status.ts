@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { contractStatus } from "../../kernel/contract/status.js";
+import { evolutionStatus } from "../../kernel/doctor/evolution-status.js";
 import { readSearchTemplateSource } from "../../kernel/engine/retrieval/template-source.js";
 import { summarizeRuntimeHistory } from "../../kernel/runtime/event-summary.js";
 import { jsonText, type ToolContext } from "./shared.js";
@@ -22,9 +23,12 @@ export async function handleStatus(ctx: ToolContext, readTools: readonly string[
   // disables writes, and a broken one lets them through unjudged.
   const meta = await readSearchTemplateSource(vault);
   const contract = await contractStatus(vault);
+  // Read-only: counters, requests awaiting the owner, autonomous budget, lineage gap.
+  const evolution = await evolutionStatus(vault, Date.now()).catch(() => ({ unavailable: "evolution status could not be read; run `oms doctor contract`" }));
   return jsonText({
     vault,
     contract,
+    evolution,
     counts: meta.source.templates === null
       ? null
       : { templates: Object.keys(meta.source.templates).length },

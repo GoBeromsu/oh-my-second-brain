@@ -32,7 +32,8 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
     name: "doctor",
     line: "  doctor    Diagnose and repair: status, contract, gaps, audit, link-check, sync-embeddings,",
     detailLines: [
-      "              cleanup, build-graph, lineage-recover, lineage-reanchor. `doctor status` is read-only.",
+      "              cleanup, build-graph, lineage-recover, lineage-reanchor, evolve, evolve-verdict,",
+      "              revert-propose, reclaim-evolution-lock. `doctor status` is read-only.",
     ],
   },
   { name: "serve", line: "  serve     Start the MCP stdio server or local HTTP runtime." },
@@ -68,7 +69,7 @@ Usage:
   oh-my-second-brain interview [--reask] [--vault <path>]
   oh-my-second-brain write <path> [--template <template>] [--vault <path>] < note.md
   oh-my-second-brain setup [extract|status|host|model|package|bridge] [options]
-  oh-my-second-brain doctor <status|contract|audit|link-check|sync-embeddings|cleanup|build-graph|lineage-recover|lineage-reanchor> [options]
+  oh-my-second-brain doctor <status|contract|audit|link-check|sync-embeddings|cleanup|build-graph|lineage-recover|lineage-reanchor|evolve|evolve-verdict|revert-propose|reclaim-evolution-lock> [options]
   oh-my-second-brain serve <mcp|http> [options]
   oh-my-second-brain --version | -v
 

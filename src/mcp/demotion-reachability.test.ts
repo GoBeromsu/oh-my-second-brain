@@ -101,7 +101,18 @@ describe("MCP detail-tool demotion", () => {
       const refused = await call("doctor", { op: "lineage-recover" });
       expect(refused.isError).toBe(true);
       expect(refused.content[0]?.type === "text" ? refused.content[0].text : "").toMatch(/^CONTRACT_LINEAGE_GAP: /);
-      expect(payload(await call("doctor", { op: "lineage-reanchor" }))).toMatchObject({ anchors: [{ reason: "gap-anchor", digest: sealed!.digest }], receipt: { operation: "lineage-reanchor" } });
+      // Reanchor and lock reclaim are owner-only: MCP has no terminal, so both refuse and write nothing.
+      const reanchor = await call("doctor", { op: "lineage-reanchor" });
+      expect(reanchor.isError).toBe(true);
+      expect(reanchor.content[0]?.type === "text" ? reanchor.content[0].text : "").toMatch(/^LINEAGE_REANCHOR_REQUIRES_TTY: /);
+      const reclaim = await call("doctor", { op: "reclaim-evolution-lock" });
+      expect(reclaim.content[0]?.type === "text" ? reclaim.content[0].text : "").toMatch(/^EVOLUTION_RECLAIM_REQUIRES_TTY: /);
+      const evolved = await call("doctor", { op: "evolve", makerSessionId: "maker-mcp" });
+      expect(evolved.content[0]?.type === "text" ? evolved.content[0].text : "").toMatch(/^EVOLUTION_NO_MUTATIONS: /);
+      const revert = await call("doctor", { op: "revert-propose", targetDigest: `sha256:${"e".repeat(64)}` });
+      expect(revert.content[0]?.type === "text" ? revert.content[0].text : "").toMatch(/^EVOLUTION_[A-Z_]+: /);
+      const verdict = await call("doctor", { op: "evolve-verdict", requestId: "r", nonce: "n", slotToken: "s", candidateDigest: sealed!.digest, parentDigest: sealed!.digest, evaluatorSessionId: "e", verdict: "approve", rubricScores: {}, reasons: [] });
+      expect(verdict.content[0]?.type === "text" ? verdict.content[0].text : "").toMatch(/^EVOLUTION_[A-Z_]+: /);
       expect(payload(await call("search", { op: "templates" })).templates).toBeInstanceOf(Array);
       // The derived projection repair is retired: the explicit contract is the
       // authority, so it is neither advertised nor reachable, with no alias.

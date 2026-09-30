@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { access, chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assembleCoreSemanticEngine, assembleGraphOnlyEngine } from "../engine/assemble.js";
@@ -19,7 +19,8 @@ import { resolveSealState } from "../contract/vault-id.js";
 import { serializeVaultSettings } from "../vault/settings.js";
 import { syncEngineStore } from "../engine/embed/sync.js";
 import { listDirtyQueue, updateKeywordIndex } from "../engine/index-update.js";
-import { repairDoctor } from "./service.js";
+import { repairDoctor, type DoctorHuman } from "./service.js";
+import { readEvolutionEvents } from "../evolution/events.js";
 
 let roots: string[] = [];
 
@@ -431,6 +432,7 @@ describe("doctor sync-embeddings drains the write queue", () => {
 });
 
 describe("doctor lineage repairs", () => {
+  const OWNER: DoctorHuman = { interactive: true, confirm: async () => "approve" };
   const FOREIGN = `sha256:${"e".repeat(64)}` as const;
   const saved = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
   let home: string;
@@ -459,7 +461,7 @@ describe("doctor lineage repairs", () => {
     const { vault, id } = await sealedVault();
     await rm(path.join(storeRoot(), id));
     for (const operation of ["lineage-recover", "lineage-reanchor"] as const) {
-      expect(await repairDoctor({ operation, vault, source: "vault", args: undefined })).toEqual({ kind: "error", message: expect.stringMatching(/^CONTRACT_NOT_SEALED: /) });
+      expect(await repairDoctor({ operation, vault, source: "vault", args: undefined, human: OWNER })).toEqual({ kind: "error", message: expect.stringMatching(/^CONTRACT_NOT_SEALED: /) });
     }
   });
 
@@ -504,10 +506,85 @@ describe("doctor lineage repairs", () => {
     const before = await readFile(lineage, "utf8");
     expect(await repairDoctor({ operation: "lineage-recover", vault, source: "vault", args: undefined })).toEqual({ kind: "error", message: expect.stringMatching(/^CONTRACT_LINEAGE_GAP: .*oms doctor lineage-reanchor/) });
     expect(await readFile(lineage, "utf8")).toBe(before);
-    expect(await repairDoctor({ operation: "lineage-reanchor", vault, source: "vault", args: undefined })).toMatchObject({
+    const seen: unknown[] = [];
+    const human: DoctorHuman = { interactive: true, confirm: async subject => { seen.push(subject); return "approve"; } };
+    expect(await repairDoctor({ operation: "lineage-reanchor", vault, source: "vault", args: undefined, human })).toMatchObject({
       kind: "completed",
-      value: { anchors: [{ eventSeq: 3, reason: "gap-anchor", digest }], receipt: { operation: "lineage-reanchor", written: { paths: ["lineage/events.jsonl"] }, postcondition: { events: 3 } } },
+      value: {
+        op: "lineage-reanchor", vaultId: id, anchorEventSeq: 3, digest, gapFrom: FOREIGN, reason: "gap-anchor", decision: "approve",
+        anchors: [{ eventSeq: 3, reason: "gap-anchor", digest }], receipt: { operation: "lineage-reanchor", written: { paths: ["lineage/events.jsonl"] }, postcondition: { events: 3 } },
+      },
     });
+    expect(seen).toEqual([{ op: "lineage-reanchor", gapFrom: FOREIGN, digest }]);
+    expect((await readEvolutionEvents(storeRoot(), id)).events).toEqual([{ kind: "lineage.reanchored", at: expect.any(Number), detail: { via: "doctor", anchors: 1 } }]);
+  });
+
+  it("refuses lineage-reanchor without the owner at a terminal and writes nothing", async () => {
+    const { vault, id, digest } = await sealedVault();
+    await appendLineageEvents(storeRoot(), id, [{ kind: "sealed", generation: 99, parentDigest: digest as typeof FOREIGN, digest: FOREIGN, mutations: [], manifestDigests: {} }]);
+    const lineage = path.join(stateDir(storeRoot(), id), "lineage", LINEAGE_FILE);
+    const before = await readFile(lineage, "utf8");
+    for (const human of [undefined, { interactive: false, confirm: async () => "approve" as const }]) {
+      expect(await repairDoctor({ operation: "lineage-reanchor", vault, source: "vault", args: undefined, ...(human === undefined ? {} : { human }) }))
+        .toEqual({ kind: "error", message: expect.stringMatching(/^LINEAGE_REANCHOR_REQUIRES_TTY: /) });
+    }
+    expect(await readFile(lineage, "utf8")).toBe(before);
+  });
+
+  it("writes nothing and asks nothing for a lineage already at the linked generation", async () => {
+    const { vault, id, digest } = await sealedVault();
+    let asked = false;
+    const result = await repairDoctor({ operation: "lineage-reanchor", vault, source: "vault", args: undefined, human: { interactive: true, confirm: async () => { asked = true; return "approve"; } } });
+    expect(result).toEqual({
+      kind: "completed",
+      value: { op: "lineage-reanchor", vaultId: id, anchorEventSeq: 1, digest, gapFrom: digest, reason: "gap-anchor", decision: "approve", anchors: [], resolvedVault: vault, resolutionSource: "vault" },
+    });
+    expect(asked).toBe(false);
+  });
+
+  it("leaves the gap when the owner declines", async () => {
+    const { vault, id, digest } = await sealedVault();
+    await appendLineageEvents(storeRoot(), id, [{ kind: "sealed", generation: 99, parentDigest: digest as typeof FOREIGN, digest: FOREIGN, mutations: [], manifestDigests: {} }]);
+    const lineage = path.join(stateDir(storeRoot(), id), "lineage", LINEAGE_FILE);
+    const before = await readFile(lineage, "utf8");
+    expect(await repairDoctor({ operation: "lineage-reanchor", vault, source: "vault", args: undefined, human: { interactive: true, confirm: async () => "reject" } }))
+      .toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_REANCHOR_DECLINED: /) });
+    expect(await readFile(lineage, "utf8")).toBe(before);
+  });
+
+  it("anchors nothing when the lineage changed while the owner was asked", async () => {
+    const { vault, id, digest } = await sealedVault();
+    await appendLineageEvents(storeRoot(), id, [{ kind: "sealed", generation: 99, parentDigest: digest as typeof FOREIGN, digest: FOREIGN, mutations: [], manifestDigests: {} }]);
+    const lineage = path.join(stateDir(storeRoot(), id), "lineage", LINEAGE_FILE);
+    let changed = "";
+    const confirm = async (): Promise<"approve"> => {
+      await appendLineageEvents(storeRoot(), id, [{ kind: "sealed", generation: 100, parentDigest: FOREIGN, digest: `sha256:${"f".repeat(64)}`, mutations: [], manifestDigests: {} }]);
+      changed = await readFile(lineage, "utf8");
+      return "approve";
+    };
+    expect(await repairDoctor({ operation: "lineage-reanchor", vault, source: "vault", args: undefined, human: { interactive: true, confirm } }))
+      .toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_REANCHOR_CHANGED: /) });
+    expect(await readFile(lineage, "utf8")).toBe(changed);
+  });
+
+  it("maps a busy evolution lock to an error and anchors nothing", async () => {
+    const { vault, id, digest } = await sealedVault();
+    await appendLineageEvents(storeRoot(), id, [{ kind: "sealed", generation: 99, parentDigest: digest as typeof FOREIGN, digest: FOREIGN, mutations: [], manifestDigests: {} }]);
+    await mkdir(path.join(stateDir(storeRoot(), id), "evolution"), { recursive: true, mode: 0o700 });
+    await writeFile(path.join(stateDir(storeRoot(), id), "evolution", "lock"), JSON.stringify({ pid: process.pid, host: hostname(), startedAt: Date.now() }), { mode: 0o600 });
+    expect(await repairDoctor({ operation: "lineage-reanchor", vault, source: "vault", args: undefined, human: OWNER }))
+      .toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_LOCK_BUSY: /) });
+  });
+
+  it("dispatches an evolution op with the verified target on its receipt", async () => {
+    const { vault } = await sealedVault();
+    expect(await repairDoctor({ operation: "reclaim-evolution-lock", vault, source: "vault", args: undefined, human: OWNER })).toEqual({
+      kind: "completed",
+      value: { op: "reclaim-evolution-lock", vaultId: expect.any(String), removedOwner: null, removed: false, decision: "approve", resolvedVault: vault, resolutionSource: "vault" },
+    });
+    expect(await repairDoctor({ operation: "reclaim-evolution-lock", vault, source: "vault", args: undefined }))
+      .toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_RECLAIM_REQUIRES_TTY: /) });
+    expect(await repairDoctor({ operation: "evolve", vault, source: "cwd", args: undefined })).toMatchObject({ kind: "rejected", value: { rejection: { code: "target-unverified" } } });
   });
 
   it("names an unsafe store entry by its kind, never by its path", async () => {

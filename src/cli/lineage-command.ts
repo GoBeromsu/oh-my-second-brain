@@ -1,32 +1,56 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
-import { repairDoctor } from "../kernel/doctor/service.js";
+import { repairDoctor, type DoctorHuman } from "../kernel/doctor/service.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
+import { doctorHuman, terminalPromptIO } from "./evolution-approve.js";
 
 /**
- * `oms doctor lineage-recover` and `lineage-reanchor`: the two contract-lineage repairs.
- * Recover records only what the chain can account for and refuses a gap; reanchor also
- * anchors a gap. Both keep the verified-target gate: a cwd-inferred vault is rejected.
+ * The contract repairs on `oms doctor`: the two lineage repairs (`lineage-recover`,
+ * `lineage-reanchor`) and the evolution ops (`evolve`, `evolve-verdict`, `revert-propose`,
+ * `reclaim-evolution-lock`). Recover refuses a lineage gap; reanchor anchors it. All keep
+ * the verified-target gate: a cwd-inferred vault is rejected. The owner-only leaves
+ * (reanchor, reclaim) ask the owner in this terminal and refuse without one.
  */
 
-export type LineageLeaf = "lineage-recover" | "lineage-reanchor";
+export type LineageLeaf = "lineage-recover" | "lineage-reanchor" | "evolve" | "evolve-verdict" | "revert-propose" | "reclaim-evolution-lock";
+
+/** Each leaf's own flag, if any, and the op argument it fills. */
+const LEAF_FLAG: Readonly<Partial<Record<LineageLeaf, { readonly flag: string; readonly arg: string; readonly required: boolean }>>> = {
+  evolve: { flag: "--maker-session", arg: "makerSessionId", required: true },
+  "evolve-verdict": { flag: "--verdict", arg: "verdict", required: true },
+  "revert-propose": { flag: "--target", arg: "targetDigest", required: true },
+};
+
+const OWNER_ONLY: ReadonlySet<LineageLeaf> = new Set(["lineage-reanchor", "reclaim-evolution-lock"]);
 
 function usage(leaf: LineageLeaf): string {
-  return `Usage: oms doctor ${leaf} [--vault <path>]`;
+  const own = LEAF_FLAG[leaf];
+  const flag = own === undefined ? "" : ` ${own.flag} <${own.arg === "verdict" ? "file|-" : own.arg === "makerSessionId" ? "id" : "digest"}>`;
+  return `Usage: oms doctor ${leaf}${flag} [--vault <path>]`;
 }
 
-function parseVault(leaf: LineageLeaf, argv: readonly string[]): string | undefined {
+interface LeafArgs {
+  readonly vault?: string;
+  readonly value?: string;
+}
+
+function parseArgs(leaf: LineageLeaf, argv: readonly string[]): LeafArgs {
+  const own = LEAF_FLAG[leaf];
   let vault: string | undefined;
+  let value: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]!;
-    if (token !== "--vault") throw new Error(`CONTRACT_ARGS_INVALID: doctor ${leaf} received unknown argument ${token}`);
-    if (vault !== undefined) throw new Error("CONTRACT_ARGS_INVALID: duplicate flag --vault");
-    const value = argv[++index];
-    if (value === undefined || value.startsWith("--")) throw new Error("CONTRACT_ARGS_INVALID: --vault requires a value");
-    vault = value;
+    if (token !== "--vault" && token !== own?.flag) throw new Error(`CONTRACT_ARGS_INVALID: doctor ${leaf} received unknown argument ${token}`);
+    if ((token === "--vault" ? vault : value) !== undefined) throw new Error(`CONTRACT_ARGS_INVALID: duplicate flag ${token}`);
+    const next = argv[++index];
+    if (next === undefined || next.startsWith("--")) throw new Error(`CONTRACT_ARGS_INVALID: ${token} requires a value`);
+    if (token === "--vault") vault = next;
+    else value = next;
   }
-  return vault;
+  if (own?.required === true && value === undefined) throw new Error(`CONTRACT_ARGS_INVALID: doctor ${leaf} needs ${own.flag}`);
+  return { ...(vault === undefined ? {} : { vault }), ...(value === undefined ? {} : { value }) };
 }
 
 async function target(explicit: string | undefined): Promise<{ readonly vault: string; readonly source: WriteTargetSource }> {
@@ -35,19 +59,51 @@ async function target(explicit: string | undefined): Promise<{ readonly vault: s
   return { vault: resolved.vault, source: resolved.source };
 }
 
+async function readStdin(stdin: AsyncIterable<unknown>): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stdin) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** An evaluator's verdict is one JSON object, read from a file or stdin (`-`). */
+async function readVerdict(source: string, stdin: AsyncIterable<unknown>): Promise<Record<string, unknown>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source === "-" ? await readStdin(stdin) : await readFile(path.resolve(source), "utf8"));
+  } catch {
+    throw new Error("EVOLUTION_ARGUMENT_INVALID: the verdict could not be read as JSON");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("EVOLUTION_ARGUMENT_INVALID: the verdict must be a JSON object");
+  return parsed as Record<string, unknown>;
+}
+
 function print(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
-export async function runLineageCommand(leaf: LineageLeaf, argv: readonly string[]): Promise<void> {
+export interface LineageCommandDeps {
+  /** The owner for the owner-only leaves; defaults to this process's terminal. */
+  readonly human?: DoctorHuman;
+  /** Where `--verdict -` reads; defaults to process.stdin. */
+  readonly stdin?: AsyncIterable<unknown>;
+}
+
+export async function runLineageCommand(leaf: LineageLeaf, argv: readonly string[], deps: LineageCommandDeps = {}): Promise<void> {
   process.exitCode = 0;
   if (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h")) {
     console.log(usage(leaf));
     return;
   }
+  const terminal = OWNER_ONLY.has(leaf) && deps.human === undefined ? terminalPromptIO() : null;
   try {
-    const resolved = await target(parseVault(leaf, argv));
-    const result = await repairDoctor({ operation: leaf, vault: resolved.vault, source: resolved.source, args: undefined });
+    const parsed = parseArgs(leaf, argv);
+    const resolved = await target(parsed.vault);
+    const own = LEAF_FLAG[leaf];
+    const args = parsed.value === undefined || own === undefined ? undefined
+      : own.arg === "verdict" ? await readVerdict(parsed.value, deps.stdin ?? process.stdin)
+        : { [own.arg]: parsed.value };
+    const human = deps.human ?? (terminal === null ? undefined : doctorHuman(terminal.io));
+    const result = await repairDoctor({ operation: leaf, vault: resolved.vault, source: resolved.source, args, ...(human === undefined ? {} : { human }) });
     if (result.kind === "error") {
       process.exitCode = 1;
       print({ status: "error", message: result.message });
@@ -58,6 +114,8 @@ export async function runLineageCommand(leaf: LineageLeaf, argv: readonly string
   } catch (error: unknown) {
     process.exitCode = 1;
     print({ status: "rejected", diagnostics: [failure(error)] });
+  } finally {
+    terminal?.close();
   }
 }
 

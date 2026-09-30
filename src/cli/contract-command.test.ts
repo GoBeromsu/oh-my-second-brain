@@ -1,4 +1,5 @@
 import { appendFile, cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { randomBytes, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +8,11 @@ import { digestBytes } from "../kernel/conventions/canonical.js";
 import type { InterviewIO } from "../kernel/contract/interview.js";
 import { appendInterviewEvent, EVENTS_FILE } from "../kernel/contract/interview-log.js";
 import { PATTERN_SOURCE_LIMIT } from "../kernel/contract/pattern.js";
-import { stateDir } from "../kernel/contract/state-dir.js";
+import { existingStateDir, stateDir } from "../kernel/contract/state-dir.js";
+import { readStore } from "../kernel/contract/store.js";
+import type { VaultContract } from "../kernel/contract/types.js";
+import type { HumanLine, HumanPromptIO } from "./evolution-approve.js";
+import { CANDIDATE_DIR, createRequest, lineageTail, PENDING_DIR, readRequest } from "../kernel/evolution/request-state.js";
 
 const { resolveEffectiveVault } = vi.hoisted(() => ({
   resolveEffectiveVault: vi.fn(async () => ({ vault: process.cwd(), source: "cwd", scope: null })),
@@ -347,5 +352,143 @@ describe("oms contract", () => {
     expect(process.exitCode).toBe(0);
     expect(output()).toMatchObject({ status: "sealed" });
     expect(printed()).not.toContain(SECRET);
+  });
+});
+
+describe("oms setup: evolution approval and autonomy", () => {
+  const NOW = 1_700_000_000_000;
+  const storeRootDir = (): string => path.join(home, ".oms", "vaults");
+
+  /** A terminal owner that answers with the next scripted line, then eof. */
+  function owner(answers: readonly string[], isTTY = true): HumanPromptIO & { readonly shown: string[] } {
+    const shown: string[] = [];
+    const queue = [...answers];
+    return {
+      isTTY,
+      env: {},
+      shown,
+      write: text => { shown.push(text); },
+      readLine: async (): Promise<HumanLine> => {
+        const text = queue.shift();
+        return text === undefined ? { kind: "eof" } : { kind: "line", text };
+      },
+      wait: () => new Promise<void>(() => undefined),
+    };
+  }
+
+  async function seal(): Promise<string> {
+    await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
+    expect(output()).toMatchObject({ status: "sealed" });
+    log.mockClear();
+    error.mockClear();
+    return (await readVaultSettings(vault))!.vaultId;
+  }
+
+  /** Opens a request awaiting the owner that adds the Archive folder (a loosening change). */
+  async function pending(vaultId: string): Promise<string> {
+    const store = await readStore(vaultId, storeRootDir());
+    if (store.state !== "ok") throw new Error("not sealed");
+    const folder = { ...store.contract.folders["Projects"]!, meaning: "archived notes" };
+    const contract: VaultContract = { ...store.contract, folders: { ...store.contract.folders, Archive: folder } };
+    const { tail } = await lineageTail(storeRootDir(), vaultId);
+    const request = await createRequest(storeRootDir(), vaultId, {
+      kind: "evolve",
+      contract,
+      mutations: [{ op: "ADD", axis: "folder", key: "Archive", after: folder }],
+      parent: tail,
+      makerSessionId: "maker-1",
+      state: "awaiting-human",
+    }, { now: () => NOW, newId: randomUUID, newToken: () => randomBytes(16).toString("hex") });
+    return request.requestId;
+  }
+
+  it.each([
+    [["setup", "--autonomy", "on", "--autonomy", "off"], "CONTRACT_ARGS_INVALID: duplicate flag --autonomy"],
+    [["setup", "--autonomy", "maybe"], "CONTRACT_ARGS_INVALID: --autonomy takes on or off"],
+    [["setup", "--autonomy"], "CONTRACT_ARGS_INVALID: --autonomy takes on or off"],
+    [["setup", "--autonomy", "on", "--questions"], "CONTRACT_ARGS_INVALID: --autonomy stands alone; it does not run the interview"],
+    [["setup", "--autonomy", "on", "--answers", "-"], "CONTRACT_ARGS_INVALID: --autonomy stands alone; it does not run the interview"],
+    [["setup", "--reask", "--autonomy", "off"], "CONTRACT_ARGS_INVALID: --autonomy stands alone; it does not run the interview"],
+    [["status", "--autonomy", "on"], "CONTRACT_ARGS_INVALID: unknown argument --autonomy"],
+  ])("rejects %j", async (argv, remediation) => {
+    await runContractCommand([...argv, "--vault", vault]);
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "rejected", diagnostics: [{ code: "CONTRACT_ARGS_INVALID", remediation }] });
+  });
+
+  it("turns autonomy on only after the owner approves, and off without asking", async () => {
+    await seal();
+    const rejecting = owner(["no"]);
+    await runContractCommand(["setup", "--autonomy", "on", "--vault", vault], { evolution: { io: rejecting, root: storeRootDir(), now: () => NOW } });
+    expect(process.exitCode).toBe(1);
+    expect(output()).toEqual({ status: "unchanged", reason: "explicit", autonomous: false, limits: { perDay: 1, perWeek: 3 } });
+    expect(rejecting.shown.join("")).toContain("approve");
+
+    await runContractCommand(["setup", "--autonomy", "on", "--vault", vault], { evolution: { io: owner(["yes"]), root: storeRootDir(), now: () => NOW } });
+    expect(process.exitCode).toBe(0);
+    expect(output()).toEqual({ status: "updated", autonomous: true, limits: { perDay: 1, perWeek: 3 } });
+
+    const silent = owner([]);
+    await runContractCommand(["setup", "--autonomy", "off", "--vault", vault], { evolution: { io: silent, root: storeRootDir(), now: () => NOW } });
+    expect(process.exitCode).toBe(0);
+    expect(output()).toEqual({ status: "updated", autonomous: false, limits: { perDay: 1, perWeek: 3 } });
+    expect(silent.shown).toEqual([]);
+  });
+
+  it("refuses to turn autonomy on without a terminal", async () => {
+    await seal();
+    await runContractCommand(["setup", "--autonomy", "on", "--vault", vault], { evolution: { io: owner(["yes"], false), root: storeRootDir() } });
+    expect(process.exitCode).toBe(1);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "EVOLUTION_POLICY_REQUIRES_TTY" }] });
+  });
+
+  it("refuses autonomy for a vault with no sealed contract", async () => {
+    await runContractCommand(["setup", "--autonomy", "off", "--vault", vault], { evolution: { io: owner([]), root: storeRootDir() } });
+    expect(process.exitCode).toBe(1);
+    expect(output()).toMatchObject({ status: "rejected", diagnostics: [{ code: "EVOLUTION_NO_CONTRACT" }] });
+  });
+
+  it("asks the owner about a pending change before the interview and seals an approved one", async () => {
+    const vaultId = await seal();
+    const requestId = await pending(vaultId);
+    const io = owner(["y"]);
+    await runContractCommand(["setup", "--vault", vault], { io: sealingIO(), evolution: { io, root: storeRootDir(), now: () => NOW } });
+    expect(io.shown.join("")).toContain("LOOSENING ADD folder Archive");
+    expect(printed()).toContain(`[oms] Contract change ${requestId}: approved (sealed).`);
+    const store = await readStore(vaultId, storeRootDir());
+    expect(store.state === "ok" && Object.keys(store.contract.folders)).toContain("Archive");
+  });
+
+  it("reports a rejected pending change and leaves the contract as it was", async () => {
+    const vaultId = await seal();
+    const requestId = await pending(vaultId);
+    await runContractCommand(["setup", "--vault", vault], { io: sealingIO(), evolution: { io: owner(["n"]), root: storeRootDir(), now: () => NOW } });
+    expect(printed()).toContain(`[oms] Contract change ${requestId}: rejected (explicit).`);
+    expect((await readRequest(storeRootDir(), vaultId, requestId))?.state).toBe("rejected");
+    const store = await readStore(vaultId, storeRootDir());
+    expect(store.state === "ok" && Object.keys(store.contract.folders)).not.toContain("Archive");
+  });
+
+  it("reports a pending change that could not be decided and still runs the interview", async () => {
+    const vaultId = await seal();
+    const requestId = await pending(vaultId);
+    const candidate = path.join((await existingStateDir(storeRootDir(), vaultId, "evolution"))!, PENDING_DIR, requestId, CANDIDATE_DIR);
+    const file = (await readdir(candidate, { recursive: true, withFileTypes: true })).find(entry => entry.isFile())!;
+    await appendFile(path.join(file.parentPath, file.name), " ");
+    await runContractCommand(["setup", "--vault", vault], { io: sealingIO(), evolution: { io: owner(["y"]), root: storeRootDir(), now: () => NOW } });
+    expect(printed()).toMatch(new RegExp(`\\[oms\\] Contract change ${requestId} was not decided: EVOLUTION_CANDIDATE_MISMATCH:`));
+    expect(output()).toHaveProperty("status");
+  });
+
+  it("skips the pending step for a scripted interview with no owner terminal", async () => {
+    const vaultId = await seal();
+    const requestId = await pending(vaultId);
+    await runContractCommand(["setup", "--vault", vault], { io: sealingIO() });
+    expect(printed()).not.toContain(requestId);
+    expect((await readRequest(storeRootDir(), vaultId, requestId))?.state).toBe("awaiting-human");
+  });
+
+  it("passes evolution refusals through as coded diagnostics", () => {
+    expect(commandDiagnostic(new Error("EVOLUTION_LOCKED: another evolution holds the lock"))).toEqual({ code: "EVOLUTION_LOCKED", remediation: "EVOLUTION_LOCKED: another evolution holds the lock" });
   });
 });
