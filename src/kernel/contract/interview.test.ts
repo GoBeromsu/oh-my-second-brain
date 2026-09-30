@@ -363,7 +363,7 @@ describe("diff-only rerun (R24)", () => {
     const quiet = scripted({ seal: "y" });
     expect((await runInterview({ vault, io: quiet, root })).state).toBe("sealed");
     expect(quiet.asked).toEqual(["seal"]);
-    expect(quiet.said.some(line => line.includes("oms setup --reask"))).toBe(true);
+    expect(quiet.said.some(line => line.includes("oms interview --reask"))).toBe(true);
     expect(await readDeclined(VAULT_ID, root)).toEqual(declined);
 
     const review = scripted({ "folder:Inbox:register": "n", "folder:Templates:register": "n", "property:created:register": "n", seal: "y" });

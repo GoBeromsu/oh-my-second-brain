@@ -475,7 +475,7 @@ export async function runInterview(input: {
         : "Asking only about what is new since the last seal; existing answers are kept.");
     }
     const skipped = newFolders.length - askFolderList.length + newProperties.size - askPropertyMap.size;
-    if (skipped > 0) io.say(`Skipping ${skipped} item(s) declined at an earlier seal; run \`oms setup --reask\` to answer them again.`);
+    if (skipped > 0) io.say(`Skipping ${skipped} item(s) declined at an earlier seal; run \`oms interview --reask\` to answer them again.`);
 
     const askedFolders = await askFolders(asker, askFolderList);
     const askedProperties = await askProperties(asker, askPropertyMap);

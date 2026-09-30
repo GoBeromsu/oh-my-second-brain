@@ -50,11 +50,11 @@ export const ROW_FINDING: Readonly<Record<SealRow, DoctorFinding>> = {
 
 export const SHARED_FINDING: DoctorFinding = { message: "vault id shared", guidance: "oms doctor contract" };
 export const SETTINGS_INVALID_FINDING: DoctorFinding = { message: "vault settings unreadable", guidance: "oms doctor contract" };
-export const STORE_UNREADABLE_FINDING: DoctorFinding = { message: "contract store unreadable", guidance: "oms setup" };
+export const STORE_UNREADABLE_FINDING: DoctorFinding = { message: "contract store unreadable", guidance: "oms doctor contract" };
 
 /** The sealed generation carries template constraints the judge no longer enforces; the count is the only detail. */
 export function legacyTemplateFinding(count: number): DoctorFinding {
-  return { message: `legacy-template-constraints-ignored: ${count}`, guidance: "oms setup" };
+  return { message: `legacy-template-constraints-ignored: ${count}`, guidance: "oms interview" };
 }
 
 /**
