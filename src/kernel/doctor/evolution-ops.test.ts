@@ -7,7 +7,7 @@ import { readLineage } from "../contract/lineage.js";
 import { readStore, sealContract } from "../contract/store.js";
 import type { PropertyContract, VaultContract } from "../contract/types.js";
 import { writePolicy } from "../evolution/policy.js";
-import { createRequest, lineageTail, listRequests, readRequest, type RequestRecord } from "../evolution/request-state.js";
+import { createRequest, lineageTail, listRequests, readRequest, transition, writeRequest, type RequestRecord } from "../evolution/request-state.js";
 import { serializeVaultSettings } from "../vault/settings.js";
 import { evolutionCounters } from "../evolution/events.js";
 import { isEvolutionOperation, runEvolutionOp, type DoctorHuman, type EvolutionOperation, type EvolutionOpsDeps } from "./evolution-ops.js";
@@ -144,6 +144,18 @@ describe("runEvolutionOp revert-propose and evolve-verdict", () => {
     const narrow = await seal(NARROW);
     const result = await run("revert-propose", { targetDigest: wide });
     expect(result).toMatchObject({ kind: "completed", value: { op: "revert-propose", targetDigest: wide, candidateDigest: wide, parentDigest: narrow, direction: "loosening", state: "awaiting-human" } });
+    expect(await readStore(ID, root)).toMatchObject({ digest: narrow });
+  });
+
+  it("fails the revert readback when the stored request is not awaiting the owner", async () => {
+    const wide = await seal(WIDE);
+    const narrow = await seal(NARROW);
+    const afterPropose = async (requestId: string): Promise<void> => {
+      const stored = (await readRequest(root, ID, requestId))!;
+      await writeRequest(root, ID, transition(stored, "rejected", { rejectReason: "test" }));
+    };
+    const result = await run("revert-propose", { targetDigest: wide }, undefined, { afterPropose });
+    expect(result).toEqual({ kind: "error", message: expect.stringMatching(/^EVOLUTION_POSTCONDITION_FAILED: the revert request is not awaiting the owner/) });
     expect(await readStore(ID, root)).toMatchObject({ digest: narrow });
   });
 

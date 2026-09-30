@@ -41,6 +41,8 @@ export interface EvolutionOpsDeps extends RequestDeps {
   readonly sealDeps?: SealGateDeps["sealDeps"];
   /** Runs after a verdict seals and before the readback postcondition (tests only). */
   readonly afterSeal?: () => Promise<void>;
+  /** Runs after a revert is proposed and before its readback postconditions (tests only). */
+  readonly afterPropose?: (requestId: string) => Promise<void>;
 }
 
 export type EvolutionOpResult =
@@ -141,6 +143,7 @@ async function runRevert(root: string, vaultId: string, vault: string, args: Rec
   if (targetDigest === undefined) throw new EvolutionOpError("EVOLUTION_ARGUMENT_INVALID", "revert-propose needs targetDigest");
   const before = await linked(vaultId, root);
   const proposal = await proposeRevert({ root, vaultId, vaultRealPath: vault, targetDigest }, deps);
+  await deps.afterPropose?.(proposal.requestId);
   const stored = await readRequest(root, vaultId, proposal.requestId);
   postcondition(stored !== null && stored.state === "awaiting-human", "the revert request is not awaiting the owner");
   postcondition(proposal.candidateDigest === proposal.targetDigest && (await readPinnedCandidate(root, vaultId, stored!)).digest === proposal.candidateDigest, "the pending candidate is not the target");
