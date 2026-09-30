@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+## [0.20.4] - 2026-09-30
+
 ## [0.20.3] - 2026-09-30
 
 - **The doctor skill names the reseal command for a broken seal.** It said a tampered or unreadable contract store is diagnosed with `oms doctor contract` and then resealed at a terminal, without naming `oms interview`, while the `contract-unreadable` write warning names `oms interview`. The skill now names both steps: `oms doctor contract` diagnoses, and the user reseals with `oms interview`.
