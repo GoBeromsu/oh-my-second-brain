@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **The doctor skill names `oms interview` for a missing seal.** It still sent every broken or missing seal to `oms setup`, while the `contract-open` write warning and `oms doctor status` name `oms interview` for a missing contract, and `oms doctor status` names `oms doctor contract` for a tampered or unreadable store. A Hermes trial on 0.20.1 read the two routes as conflicting; the skill now matches the receipt.
+
 ## [0.20.1] - 2026-09-30
 
 - **Host guidance names `oms interview` for a missing seal.** The Claude, Codex and Hermes guidance used to send the user to `oms setup` for a broken or missing seal. A missing seal is now sealed with `oms interview`, the command the write warning names, and a broken one is checked with `oms doctor contract`.
