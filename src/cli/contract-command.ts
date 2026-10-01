@@ -38,12 +38,14 @@ export function contractUsage(): string {
   oms setup status [--vault <path>]
             Show the contract posture. Hidden values are never printed.
   oms doctor contract [--fix] [--vault <path>]
-            Diagnose the seal. --fix only re-indexes a moved or unindexed vault.
+            Diagnose the seal. --fix only re-indexes a moved or unindexed vault,
+            or rebuilds an unreadable index.
 
 setup in a terminal has full authority, including loosening a sealed contract.
 --questions and --answers let an agent ask the owner each question (the setup skill):
-they seal a first contract or a stricter one, never a looser one. Loosening, and any
-seal that needs recovery first, is left to \`oms setup\` run by the owner in a terminal.`;
+they seal a first contract or a stricter one, never a looser one. Loosening is left to
+\`oms setup\` run by the owner in a terminal, and a broken seal is resealed there with
+\`oms interview\`.`;
 }
 
 const VERBS = ["setup", "extract", "status", "doctor", "gaps"] as const;

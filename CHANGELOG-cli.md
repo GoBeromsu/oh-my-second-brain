@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **`oms doctor contract --fix` usage says what it repairs.** The `doctor` and contract usage text said `--fix` only re-indexes a moved or unindexed vault; it also rebuilds an unreadable index, and the usage now says so. The contract usage also names `oms interview` as the command that reseals a broken seal, matching the diagnosis's `recovery` field.
+
 ## [0.20.5] - 2026-09-30
 
 ## [0.20.4] - 2026-09-30

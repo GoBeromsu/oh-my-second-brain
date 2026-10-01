@@ -13,7 +13,8 @@ export function doctorUsage(): string {
             Read-only search-index view. --view, --index or --collection selects it;
             it never creates a missing store.
   contract [--fix] [--vault <path>]
-            Diagnose the sealed contract. --fix only re-indexes a moved or unindexed vault.
+            Diagnose the sealed contract. --fix only re-indexes a moved or unindexed vault,
+            or rebuilds an unreadable index.
   gaps [--vault <path>]
             Report open gaps between written notes and the sealed contract, and
             contradictions inside the contract. Wanted values are never printed.

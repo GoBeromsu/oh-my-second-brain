@@ -152,7 +152,7 @@ oms search "프로젝트 결정" --vault /path/to/vault
 
 setup과 인터뷰는 폴더와 속성만 묻는다. `oms setup extract --template <name>`은 `templateFolder`의 템플릿이 채울 뼈대(원본 경로, `folder:` 선택자, 속성 이름, heading)를 미리 보여 준다. 템플릿을 고치면 재봉인 없이 다음 쓰기부터 반영된다.
 
-`oms doctor contract`는 봉인, 오래된 lock, 고아 generation, 예상하지 않은 제어 파일, hook 전송 실패를 진단한다. `--fix`는 이동했거나 색인되지 않은 볼트를 다시 색인할 뿐이다. 다른 봉인 문제는 `oms interview`로 다시 봉인한다.
+`oms doctor contract`는 봉인, 오래된 lock, 고아 generation, 예상하지 않은 제어 파일, hook 전송 실패를 진단한다. `--fix`는 이동했거나 색인되지 않은 볼트를 다시 색인하거나, 읽을 수 없는 색인을 다시 만들 뿐이다. 다른 봉인 문제는 `oms interview`로 다시 봉인한다.
 
 모델 수명주기는 별도다: `oms setup model install|select|waive|status`.
 

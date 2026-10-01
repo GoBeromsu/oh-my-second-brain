@@ -26,7 +26,7 @@ An allowed write is a structural result, not a claim that a note is semantically
 
 ## Sealing
 
-`oms setup` requires a verified target and an interactive terminal. It seals the contract under `~/.oms/vaults/<vault-id>/` and writes only `.oms/settings.json` inside the vault; it never modifies notes. A vault with no seal on this machine is not judged. A tampered vault id (a `.oms/settings.json` id that differs from this machine's index) refuses writes as `contract-tampered`. A missing or broken store, or a missing or invalid `.oms/settings.json`, lets writes through with a `contract-unreadable` warning suggesting `oms interview`. An unreadable seal is never replaced with an empty contract. `oms doctor contract` diagnoses the seal, and its `--fix` only re-indexes a moved or unindexed vault.
+`oms setup` requires a verified target and an interactive terminal. It seals the contract under `~/.oms/vaults/<vault-id>/` and writes only `.oms/settings.json` inside the vault; it never modifies notes. A vault with no seal on this machine is not judged. A tampered vault id (a `.oms/settings.json` id that differs from this machine's index) refuses writes as `contract-tampered`. A missing or broken store, or a missing or invalid `.oms/settings.json`, lets writes through with a `contract-unreadable` warning suggesting `oms interview`. An unreadable seal is never replaced with an empty contract. `oms doctor contract` diagnoses the seal, and its `--fix` only re-indexes a moved or unindexed vault, or rebuilds an unreadable index.
 
 ## Read-only and repair operations
 

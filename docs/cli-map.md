@@ -68,7 +68,7 @@ Sealing has no MCP operation. The sealed contract lives outside the vault under 
 | CLI | MCP tool | `op` | Meaning |
 |---|---|---|---|
 | `oms doctor status` | `oms_doctor` | `status` | Read-only health: contract posture, engine, graph, and `evolution` (journal counters including gap-refused, re-anchored and seq-restart, the requests awaiting the owner, the autonomous budget left today and this week, and whether the lineage has a gap now; `null` for an unsealed vault). Creates no store. With `--view`, `--index`, or `--collection` it prints the search-index view instead (see `index-status` under Search). |
-| `oms doctor contract [--fix]` | `oms_doctor` | `validate` | Diagnose the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures. `--fix` only re-indexes a moved or unindexed vault; the MCP op fixes nothing. |
+| `oms doctor contract [--fix]` | `oms_doctor` | `validate` | Diagnose the seal, stale locks, orphaned generations, unexpected control files, and hook transport failures. `--fix` only re-indexes a moved or unindexed vault, or rebuilds an unreadable index; the MCP op fixes nothing. |
 | `oms doctor gaps` | `oms_doctor` | `gaps` | Report the open gaps a write recorded against the sealed contract (`{id, notePath, axis, kind, field, drafted, stale}`, counted by axis and kind) and the contradictions inside the contract. Never prints a wanted value and creates no store, state directory, or ledger. The CLI exits 1 on a contradiction or an unreadable ledger. |
 | `oms doctor audit` | `oms_doctor` | `audit` | Report `{path, field, kind}` entries for existing notes. Never rewrites a note. |
 | `oms doctor link-check [<note>]` | `oms_doctor` | `link-check` | Report broken wikilinks. |

@@ -152,7 +152,7 @@ The `setup` skill asks the owner each question via `oms setup --questions` and s
 
 Setup and the interview ask about folders and properties only. `oms setup extract --template <name>` previews what a template in `templateFolder` would scaffold: its source, `folder:` selector, property names, and headings. Editing a template takes effect on the next write without a reseal.
 
-`oms doctor contract` diagnoses seal problems, stale locks, orphaned generations, unexpected control files, and hook transport failures. Its `--fix` only re-indexes a moved or unindexed vault. Other broken seals are resealed with `oms interview`.
+`oms doctor contract` diagnoses seal problems, stale locks, orphaned generations, unexpected control files, and hook transport failures. Its `--fix` only re-indexes a moved or unindexed vault, or rebuilds an unreadable index. Other broken seals are resealed with `oms interview`.
 
 Model lifecycle is separate: `oms setup model install|select|waive|status`.
 
