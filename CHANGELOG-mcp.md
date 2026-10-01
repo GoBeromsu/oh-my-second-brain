@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+## [0.20.6] - 2026-10-01
+
 - **The server instructions no longer call a stale `ifMatch` a safety refusal.** They listed it beside the vault boundary and a tampered contract as something that denies `write`. A missing or stale `ifMatch` is a revision precondition: it returns `WRITE_IF_MATCH_REQUIRED` or the retryable `WRITE_TARGET_CHANGED` and writes nothing, and the safety list now also names unsupported input.
 
 ## [0.20.5] - 2026-09-30

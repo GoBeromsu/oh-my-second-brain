@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.20.6] - 2026-10-01
+
 ## [0.20.5] - 2026-09-30
 
 ## [0.20.4] - 2026-09-30
