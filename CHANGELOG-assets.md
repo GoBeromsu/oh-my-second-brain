@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **Skills and host guidance now say that contract findings warn instead of deny.** The `write`, `distill`, and `setup` skills, the Claude, Codex, and Hermes host guidance, and the README and docs had kept saying that a note breaking the contract is denied. Since the contract became warn-first, such a note is saved with each finding as a `{field, kind}` warning and one guidance command; only a safety refusal (a path outside the vault, a control or unsafe path, unsupported input, a tampered contract) denies, and in a sealed vault a note written through MCP or `oms write` whose frontmatter does not parse may be kept as a draft. Agents reading the old wording stopped and asked after a write that had already succeeded. The README also no longer says MCP cannot seal: `interview` `op: seal` seals a proposal the owner confirmed. Run `oms setup host sync` to refresh installed host guidance.
+
 ## [0.20.5] - 2026-09-30
 
 ## [0.20.4] - 2026-09-30

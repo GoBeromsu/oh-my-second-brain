@@ -127,17 +127,17 @@ These are example requests, not captured run results. Available workflows and wr
 | **Your agent** | Reads context, composes notes, and uses the appropriate host workflow. You and the agent decide what is worth keeping. |
 
 > [!IMPORTANT]
-> **Set up the contract before relying on write checks.** A vault with no seal on this machine is not contract-judged; general path and input safeguards still apply. A contract violation leaves the file unchanged. An allowed write means structural compliance, not factual accuracy or quality approval.
+> **Set up the contract before relying on write checks.** A vault with no seal on this machine is not contract-judged: its writes carry a `contract-open` warning naming `oms interview`, and general path and input safeguards still apply. A write that breaks the contract is saved with warnings; a safety refusal, a missing or stale `ifMatch`, or an unverified target leaves the file unchanged. An allowed write with no warnings means structural compliance, not factual accuracy or quality approval.
 
 <details>
 <summary><strong>The vault contract, in detail</strong></summary>
 
 - **Meaning is user-owned.** The interview covers folders and the property pool together. OMS hardcodes no property names, folders, or personas and has no Inbox fallback.
 - **One control file inside the vault.** `.oms/settings.json` holds `version`, `vaultId`, `templateFolder`, `embedding`, and `agentRepair`. Other `.oms/` entries are ignored and reported as unexpected control files by `oms doctor contract`. `.obsidian/types.json` is a read-only observation, not an override of the seal.
-- **Templates stay yours.** Templates live in your `templateFolder` and are never sealed or judged. A new note is scaffolded from the live template: the one the write names, or else the one template whose basename or `folder:` key matches the target folder. OMS never rewrites or copies a template file, and does not parse or execute Templater, JavaScript, or a private token language. A write only fills what is mechanical in the note being written: `{{title}}`, `{{date}}` and `{{time}}` variables, date and datetime defaults on a new note, and the chosen template's frontmatter defaults and missing headings. The note's own values win. It never supplies a required value.
+- **Templates stay yours.** Templates live in your `templateFolder` and are never sealed or judged. A new note is scaffolded from the live template: the one the write names, or else the one template whose basename or `folder:` key matches the target folder. OMS never rewrites or copies a template file, and does not parse or execute Templater, JavaScript, or a private token language. A write only fills what is mechanical in the note being written: `{{title}}`, `{{date}}` and `{{time}}` variables, date and datetime defaults on a new note, and the chosen template's frontmatter defaults and missing headings. The note's own values win. It never invents a required value; only a value the contract fixes is filled, as a lossless fix listed in the receipt's `fixes`.
 - **Old seals stay readable.** A new seal stores folders and properties only. A seal made by an older release still loads; `oms setup status` counts its template constraints as `legacyTemplates`, and they are reported, never enforced.
-- **One judge, bounded feedback.** Denied writes return `{field, kind}` violations and one guidance command, not rule values, store paths, or the contract body.
-- **Mismatched seal evidence blocks writes.** When this machine's evidence no longer matches the vault, writes fail with `contract-unreadable` until the owner runs `oms setup` again. A machine with no seal is a different case: its vault is not contract-judged.
+- **One judge, bounded feedback.** A saved write returns its contract findings as `{field, kind}` warnings, and a refused write returns its reason the same way. Each of these comes with one guidance command, never rule values, store paths, or the contract body.
+- **A tampered seal blocks writes.** When the vault id in `.oms/settings.json` no longer matches this machine's seal, writes are refused as `contract-tampered`; `oms doctor contract` explains it. Missing or broken seal evidence is `contract-unreadable`: the write is saved with that warning until the owner reseals with `oms interview`. When `oms doctor contract` finds a moved vault or a missing or unreadable index entry, it names `oms doctor contract --fix`, which reindexes without resealing. A machine with no seal is a different case: its vault is not contract-judged.
 
 See [architecture](./docs/architecture.md), [conventions](./docs/conventions.md), and [ADR-007](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md).
 
@@ -152,7 +152,7 @@ The `setup` skill asks the owner each question via `oms setup --questions` and s
 
 Setup and the interview ask about folders and properties only. `oms setup extract --template <name>` previews what a template in `templateFolder` would scaffold: its source, `folder:` selector, property names, and headings. Editing a template takes effect on the next write without a reseal.
 
-`oms doctor contract` diagnoses seal problems, stale locks, orphaned generations, unexpected control files, and hook transport failures. Its `--fix` only re-indexes a moved or unindexed vault. Other broken seals are recovered through `oms setup`.
+`oms doctor contract` diagnoses seal problems, stale locks, orphaned generations, unexpected control files, and hook transport failures. Its `--fix` only re-indexes a moved or unindexed vault. Other broken seals are resealed with `oms interview`.
 
 Model lifecycle is separate: `oms setup model install|select|waive|status`.
 
@@ -173,7 +173,7 @@ Model lifecycle is separate: `oms setup model install|select|waive|status`.
 
 The six skills are `distill`, `doctor`, `interview`, `search`, `setup`, and `write`.
 
-`distill` and `setup` are tool-less workflows; sealing has no MCP operation. Detail capabilities use `op` values under the four tools. Tool annotations are per tool: only `search` is marked read-only, because `write` and the `doctor` repairs mutate and `interview` is kept conservative.
+`distill` and `setup` are tool-less workflows; MCP seals only through `interview` `op: seal` on a proposal the owner confirmed. Detail capabilities use `op` values under the four tools. Tool annotations are per tool: only `search` is marked read-only, because `write` and the `doctor` repairs mutate and `interview` is kept conservative.
 
 | Host | Integration | Write checks |
 | :--- | :--- | :--- |
@@ -182,7 +182,7 @@ The six skills are `distill`, `doctor`, `interview`, `search`, `setup`, and `wri
 | **Hermes** | Profile-scoped skills, guidance, and MCP | MCP `write`; no native write hook. |
 
 > [!NOTE]
-> Claude's hook rejects a judged contract violation, but allows the write with a warning if the hook itself cannot run. Native file writes in Codex and Hermes do not pass through the OMS judge. This is not a filesystem-wide sandbox.
+> Claude's hook denies a write only on a safety refusal: a control or unsafe path (including access under `~/.oms/`), unsupported input, or a tampered contract. A contract finding allows the write with a warning; a hook that cannot run allows the write and logs a warning. Native file writes in Codex and Hermes do not pass through the OMS judge. This is not a filesystem-wide sandbox.
 
 <details>
 <summary><strong>Host maintenance and vault targeting</strong></summary>
