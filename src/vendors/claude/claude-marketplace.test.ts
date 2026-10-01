@@ -72,7 +72,7 @@ describe("resolveClaudeMarketplaceSource", () => {
     // Then: the published GitHub repo is used with the published marketplace name
     expect(source).toEqual({
       kind: "github",
-      source: "GoBeromsu/oh-my-second-brain",
+      source: "Xia-Ataraxia/oh-my-second-brain",
       marketplaceName: "oh-my-second-brain",
     });
   });

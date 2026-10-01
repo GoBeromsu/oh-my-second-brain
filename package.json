@@ -74,11 +74,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GoBeromsu/oh-my-second-brain.git"
+    "url": "git+https://github.com/Xia-Ataraxia/oh-my-second-brain.git"
   },
-  "homepage": "https://github.com/GoBeromsu/oh-my-second-brain#readme",
+  "homepage": "https://github.com/Xia-Ataraxia/oh-my-second-brain#readme",
   "bugs": {
-    "url": "https://github.com/GoBeromsu/oh-my-second-brain/issues"
+    "url": "https://github.com/Xia-Ataraxia/oh-my-second-brain/issues"
   },
   "keywords": [
     "obsidian",

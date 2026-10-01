@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+- **Repository metadata follows the GitHub ownership transfer.** Package, issue, installer, attribution, measurement, release-check, and release-process links now point directly at `Xia-Ataraxia/oh-my-second-brain` instead of relying on GitHub's redirect from `GoBeromsu`. The repository history, releases, tags, package name, marketplace name, versions, and author attribution are unchanged. npm trusted-publisher rebinding remains a separately approved registry action; no publish or tag is part of this migration.
+
 ## [0.20.6] - 2026-10-01
 
 ## [0.20.5] - 2026-09-30
