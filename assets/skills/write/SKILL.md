@@ -35,7 +35,7 @@ To replace an existing note, pass its current revision as `ifMatch`: a previous 
 
 Placement is explicit: an explicit path, otherwise the folder meaning the user approved, otherwise ask. There is no Inbox fallback.
 
-A vault with no sealed contract accepts any note inside it, with a `contract-open` warning whose `next` is `oms interview`. A contract that cannot be read also accepts the note, with a `contract-unreadable` warning that names `oms interview`. Only a tampered contract denies writes, until the user runs `oms doctor contract` at a terminal; the `setup` skill does not recover a broken seal. Paths outside the vault and the vault's control paths are always denied.
+A vault with no sealed contract accepts any note inside it, with a `contract-open` warning whose `next` is `oms interview`. A contract that cannot be read also accepts the note, with a `contract-unreadable` warning that names `oms interview`. Among contract states, only a tampered contract denies writes, until the user runs `oms doctor contract` at a terminal; the `setup` skill does not recover a broken seal. Paths outside the vault and the vault's control paths are always denied.
 
 ## Host file tools
 

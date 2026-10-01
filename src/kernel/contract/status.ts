@@ -13,7 +13,7 @@ import type { Guidance } from "./types.js";
 
 /**
  * Contract posture for `oms setup status` and `doctor`. Read-only except `doctorFix`,
- * which only re-indexes. Output never carries a vault id, a store path or a rule value.
+ * which only re-indexes or rebuilds an unreadable index. Output never carries a vault id, a store path or a rule value.
  */
 
 export interface DoctorFinding {

@@ -6,6 +6,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 - **Skills and host guidance now say that contract findings warn instead of deny.** The `write`, `distill`, and `setup` skills, the Claude, Codex, and Hermes host guidance, and the README and docs had kept saying that a note breaking the contract is denied. Since the contract became warn-first, such a note is saved with each finding as a `{field, kind}` warning and one guidance command; only a safety refusal (a path outside the vault, a control or unsafe path, unsupported input, a tampered contract) denies, and in a sealed vault a note written through MCP or `oms write` whose frontmatter does not parse may be kept as a draft. Agents reading the old wording stopped and asked after a write that had already succeeded. The README also no longer says MCP cannot seal: `interview` `op: seal` seals a proposal the owner confirmed. Run `oms setup host sync` to refresh installed host guidance.
 
+- **Docs and skills say what `--fix` and `ifMatch` do.** The README, the docs, and the `doctor` skill now say that `oms doctor contract --fix` also rebuilds an unreadable index. The architecture page no longer counts a stale `ifMatch` among the safety refusals; it is a revision precondition that writes nothing. The `write` skill says that among contract states only a tampered contract denies, the 0.19 migration guide notes that a contract finding has warned since 0.20, and the harness architecture page cites the current `status.ts` lines.
+
 ## [0.20.5] - 2026-09-30
 
 ## [0.20.4] - 2026-09-30
