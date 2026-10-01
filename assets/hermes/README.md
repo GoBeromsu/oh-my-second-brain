@@ -20,8 +20,10 @@ skills are listed under `knowledge-management`. Filter with
 `knowledge-management/oms` matches nothing.
 
 Agents write notes with MCP `write {path, content, template?, ifMatch?, check?}`. OMS judges each
-note against the contract the user sealed with `oms setup`. A denial returns
-only `{field, kind}` and a guidance command. There is no completion operation
+note against the contract the user sealed with `oms setup`. A note that
+breaks the contract is saved, and each finding comes back as a `{field, kind}`
+warning in the receipt; only a safety refusal denies a write. A saved note with
+warnings, or a denial, carries one guidance command. There is no completion operation
 and no reviewer protocol, so deciding whether a note is worth keeping and
 repairing it belong to the user and the agent. See the [Hermes role guidance](./SOUL.md).
 

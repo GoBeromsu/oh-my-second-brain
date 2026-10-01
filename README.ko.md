@@ -127,17 +127,17 @@ oms search "프로젝트 결정" --vault /path/to/vault
 | **에이전트** | 맥락을 읽고 노트를 작성하며 호스트에 맞는 워크플로를 쓴다. 보존할 가치는 사용자와 에이전트가 판단한다. |
 
 > [!IMPORTANT]
-> **쓰기 검사를 신뢰하기 전에 계약부터 설정한다.** 이 기기에 봉인이 없는 볼트는 계약 판정을 하지 않는다. 일반적인 경로·입력 보호는 그대로 적용된다. 계약을 위반하는 쓰기는 파일을 바꾸지 않는다. 쓰기 허용은 구조 준수를 뜻하며, 사실의 정확성이나 품질 승인이 아니다.
+> **쓰기 검사를 신뢰하기 전에 계약부터 설정한다.** 이 기기에 봉인이 없는 볼트는 계약 판정을 하지 않는다. 그 쓰기에는 `oms interview`를 안내하는 `contract-open` 경고가 붙고, 일반적인 경로·입력 보호는 그대로 적용된다. 계약을 어긴 쓰기는 경고와 함께 저장되고, 안전 거부, 없거나 오래된 `ifMatch`, 검증되지 않은 대상은 파일을 바꾸지 않는다. 경고 없이 허용된 쓰기는 구조 준수를 뜻하며, 사실의 정확성이나 품질 승인이 아니다.
 
 <details>
 <summary><strong>볼트 계약 자세히 보기</strong></summary>
 
 - **의미는 사용자 소유다.** 폴더와 속성 pool을 함께 인터뷰한다. 속성 이름·폴더·페르소나를 하드코딩하지 않고 Inbox fallback도 없다.
 - **볼트 안의 제어 파일은 하나다.** `.oms/settings.json`에 `version`, `vaultId`, `templateFolder`, `embedding`, `agentRepair`를 둔다. 다른 `.oms/` 항목은 무시하고 `oms doctor contract`가 예상하지 않은 제어 파일로 보고한다. `.obsidian/types.json`은 읽기 전용 관측값이며 봉인을 덮어쓰지 않는다.
-- **템플릿은 원본으로 남는다.** 템플릿은 `templateFolder`에 있으며 봉인하거나 판정하지 않는다. 새 노트는 살아 있는 템플릿으로 뼈대를 채운다. 쓰기가 이름을 준 템플릿, 없으면 basename이나 `folder:` 키가 대상 폴더와 맞는 유일한 템플릿이다. 템플릿 파일을 다시 쓰거나 복사하지 않으며, Templater·JavaScript·전용 token 언어를 해석하거나 실행하지 않는다. 쓰기는 작성 중인 노트의 기계적인 부분만 채운다. `{{title}}`·`{{date}}`·`{{time}}` 변수, 새 노트의 date·datetime 기본값, 선택한 템플릿의 frontmatter 기본값과 빠진 heading이다. 노트에 이미 있는 값이 우선한다. 필수 값을 대신 채우지는 않는다.
+- **템플릿은 원본으로 남는다.** 템플릿은 `templateFolder`에 있으며 봉인하거나 판정하지 않는다. 새 노트는 살아 있는 템플릿으로 뼈대를 채운다. 쓰기가 이름을 준 템플릿, 없으면 basename이나 `folder:` 키가 대상 폴더와 맞는 유일한 템플릿이다. 템플릿 파일을 다시 쓰거나 복사하지 않으며, Templater·JavaScript·전용 token 언어를 해석하거나 실행하지 않는다. 쓰기는 작성 중인 노트의 기계적인 부분만 채운다. `{{title}}`·`{{date}}`·`{{time}}` 변수, 새 노트의 date·datetime 기본값, 선택한 템플릿의 frontmatter 기본값과 빠진 heading이다. 노트에 이미 있는 값이 우선한다. 필수 값을 지어내지 않으며, 계약이 값을 하나로 정한 경우에만 무손실 수정으로 채우고 영수증의 `fixes`에 남긴다.
 - **이전 봉인도 읽힌다.** 새 봉인은 폴더와 속성만 저장한다. 이전 릴리스가 만든 봉인도 그대로 읽히며, `oms setup status`는 그 템플릿 제약을 `legacyTemplates` 개수로 보고할 뿐 강제하지 않는다.
-- **판정자는 하나다.** 거부 시 `{field, kind}` 위반과 안내 명령 하나만 반환한다. 규칙 값, 저장소 경로, 계약 본문은 반환하지 않는다.
-- **봉인 증거가 맞지 않으면 쓰기를 거부한다.** 이 기기의 증거가 볼트와 어긋나면 `contract-unreadable`로 거부하고 소유자가 `oms setup`을 다시 실행해야 한다. 봉인이 아예 없는 기기에서는 판정하지 않는 것과 구별한다.
+- **판정자는 하나다.** 저장된 쓰기는 계약 위반을 `{field, kind}` 경고로, 거부된 쓰기는 그 이유를 같은 형태로 반환하며, 각각 안내 명령 하나가 붙는다. 규칙 값, 저장소 경로, 계약 본문은 반환하지 않는다.
+- **변조된 봉인은 쓰기를 거부한다.** `.oms/settings.json`의 vault id가 이 기기의 봉인과 어긋나면 `contract-tampered`로 거부하고, `oms doctor contract`가 원인을 알려준다. 봉인 증거가 없거나 깨졌으면 `contract-unreadable` 경고와 함께 저장하며, 소유자가 `oms interview`로 다시 봉인할 때까지 이어진다. `oms doctor contract`가 볼트 이동이나 색인 항목의 누락·손상을 찾으면, 다시 봉인하지 않고 색인만 고치는 `oms doctor contract --fix`를 안내한다. 봉인이 아예 없는 기기에서는 판정하지 않는 것과 구별한다.
 
 [아키텍처](./docs/architecture.md), [컨벤션](./docs/conventions.md), [ADR-007](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md)을 참고한다.
 
@@ -152,7 +152,7 @@ oms search "프로젝트 결정" --vault /path/to/vault
 
 setup과 인터뷰는 폴더와 속성만 묻는다. `oms setup extract --template <name>`은 `templateFolder`의 템플릿이 채울 뼈대(원본 경로, `folder:` 선택자, 속성 이름, heading)를 미리 보여 준다. 템플릿을 고치면 재봉인 없이 다음 쓰기부터 반영된다.
 
-`oms doctor contract`는 봉인, 오래된 lock, 고아 generation, 예상하지 않은 제어 파일, hook 전송 실패를 진단한다. `--fix`는 이동했거나 색인되지 않은 볼트를 다시 색인할 뿐이다. 다른 봉인 문제는 `oms setup`으로 복구한다.
+`oms doctor contract`는 봉인, 오래된 lock, 고아 generation, 예상하지 않은 제어 파일, hook 전송 실패를 진단한다. `--fix`는 이동했거나 색인되지 않은 볼트를 다시 색인할 뿐이다. 다른 봉인 문제는 `oms interview`로 다시 봉인한다.
 
 모델 수명주기는 별도다: `oms setup model install|select|waive|status`.
 
@@ -168,12 +168,12 @@ setup과 인터뷰는 폴더와 속성만 묻는다. `oms setup extract --templa
 | :--- | :--- |
 | `write` | 노트 전체를 봉인된 계약으로 판정하고 허용된 쓰기를 저장한다. |
 | `search` | 볼트를 바꾸지 않고 노트, 구조화된 맥락, wikilink 제안을 찾는다. |
-| `interview` | 볼트 인터뷰 질문과 봉인 상태를 보여 준다. 아무것도 봉인하지 않는다. |
+| `interview` | 볼트 인터뷰를 이어 간다. 열린 질문을 보여 주고 답을 기록하며, 소유자가 확인한 제안만 봉인한다. |
 | `doctor` | 읽기 전용 `status`, 계약 진단, 노트 감사, 링크 검사, 명시적인 색인 유지보수를 수행한다. |
 
 6개 스킬은 `distill`, `doctor`, `interview`, `search`, `setup`, `write`다.
 
-`distill`과 `setup`은 대응 MCP 도구가 없는 워크플로다. 봉인에는 MCP 작업이 없고, 세부 기능은 네 도구 아래의 `op` 값으로 제공한다. 도구 annotation은 도구별로 정한다. `write`와 `doctor` 복구는 변경을 일으키고 `interview`는 보수적으로 두므로 읽기 전용으로 표시한 도구는 `search`뿐이다.
+`distill`과 `setup`은 대응 MCP 도구가 없는 워크플로다. MCP는 소유자가 확인한 제안만 `interview` `op: seal`로 봉인하고, 세부 기능은 네 도구 아래의 `op` 값으로 제공한다. 도구 annotation은 도구별로 정한다. `write`와 `doctor` 복구는 변경을 일으키고 `interview`는 보수적으로 두므로 읽기 전용으로 표시한 도구는 `search`뿐이다.
 
 | 호스트 | 통합 방식 | 쓰기 검사 |
 | :--- | :--- | :--- |
@@ -182,7 +182,7 @@ setup과 인터뷰는 폴더와 속성만 묻는다. `oms setup extract --templa
 | **Hermes** | 프로필별 스킬, 가이드, MCP | MCP `write`만 검사. 기본 쓰기 hook은 없다. |
 
 > [!NOTE]
-> Claude hook은 판정된 계약 위반을 거부하지만, hook 자체를 실행할 수 없으면 경고와 함께 쓰기를 허용한다. Codex와 Hermes의 기본 파일 쓰기는 OMS 판정자를 거치지 않는다. 파일시스템 전체를 통제하는 sandbox가 아니다.
+> Claude hook은 안전 거부(제어 경로나 안전하지 않은 경로, `~/.oms/` 접근, 지원하지 않는 입력, 변조된 계약)만 막는다. 계약 위반은 경고와 함께 쓰기를 허용하고, hook 자체를 실행할 수 없으면 쓰기를 허용하고 경고를 기록한다. Codex와 Hermes의 기본 파일 쓰기는 OMS 판정자를 거치지 않는다. 파일시스템 전체를 통제하는 sandbox가 아니다.
 
 <details>
 <summary><strong>호스트 유지보수와 볼트 선택</strong></summary>

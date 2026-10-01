@@ -18,11 +18,11 @@ A template stays the user's own Markdown file in `templateFolder`. OMS never rew
 
 - **Seal.** `oms setup` interviews the person at a terminal and seals folders, properties, and templates together. It refuses to run without an interactive terminal or under `OMS_NON_INTERACTIVE=1`, so an agent never runs it (`src/cli/contract-command.ts:210-216`, `setup`).
 - **Judge.** One judge decides every write (`src/kernel/contract/judge.ts:194-211`, `judge`). MCP `write {path, content, template?, ifMatch?, check?}` conforms, judges the whole note and saves it only when it is allowed (`src/mcp/tools/write.ts:20-40`, `writeNote`, over `src/kernel/write/pipeline.ts`, `runWritePipeline`). Claude's native Write, Edit, MultiEdit, and NotebookEdit reach the same judge through `oms hook pre`, which rebuilds the resulting note before judging (`src/vendors/claude/hook/pre-tool-use.ts:115-156`, `translatePreToolUse`).
-- **Deny.** Only a safety refusal denies; other findings are warnings on the allowed write. A denied write leaves the file unchanged and returns only `{field, kind}` refusals and one guidance command. It never returns a rule value, a store path, or the contract body (`src/kernel/contract/types.ts:169-210`, `GUIDANCE` through `formatDenyReason`).
+- **Deny.** Only a safety refusal denies; other findings are warnings on the allowed write. A denied write leaves the file unchanged and returns only `{field, kind}` refusals and one guidance command. It never returns a rule value, a store path, or the contract body (`src/kernel/contract/types.ts:169-210`, `GUIDANCE_FOR` through `formatDenyReason`).
 
 A vault with no seal on this machine is not judged; writes pass with a `contract-open` warning suggesting `oms interview`. When the `.oms/settings.json` vault id differs from this machine's index, writes are refused as `contract-tampered`. When the store is missing or its manifest or schema is broken, or `.oms/settings.json` is missing or invalid, writes pass with a `contract-unreadable` warning suggesting `oms interview`.
 
-OMS has no completion call or reviewer protocol. An allowed write means the note matches the sealed structure, not that it is worth keeping; the agent and user decide that.
+OMS has no completion call or reviewer protocol. An allowed write with no warnings means the note matches the sealed structure, not that it is worth keeping; the agent and user decide that.
 
 ## Hook transport
 

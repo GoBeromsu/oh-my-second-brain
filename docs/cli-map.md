@@ -89,7 +89,7 @@ Every mutating doctor op requires verified-target admission and returns a receip
 | CLI | Purpose |
 |---|---|
 | `oms serve mcp|http` | Start MCP or HTTP without creating a vault engine store at startup. |
-| `oms hook pre` | Judge a Claude write against the vault contract before it is saved. The Claude guard denies on a contract violation and allows with a warning when the judge cannot run. Codex and Hermes have no write hook. |
+| `oms hook pre` | Judge a Claude write against the vault contract before it is saved. The Claude guard denies only a safety refusal; a write with contract findings is allowed with a warning, and a write the judge cannot run on is allowed and the failure logged. Codex and Hermes have no write hook. |
 
 OMS has no host launcher and no `--runtime gjc` command path.
 

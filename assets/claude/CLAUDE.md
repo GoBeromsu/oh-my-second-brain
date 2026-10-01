@@ -10,23 +10,31 @@ outside the vault, and it is not yours to read.
 ## Writing
 
 Write vault notes with MCP `write {path, content, template?, ifMatch?, check?}` (the `/write`
-skill). A denial gives only `{field, kind}` and a guidance command. Never ask
-about or guess the contract's location or values.
+skill). A note that breaks the contract is saved, with each finding as a
+`{field, kind}` warning; only a safety refusal denies a write. A saved note
+with warnings, or a denial, comes with one guidance command. Never ask about or
+guess the contract's location or values.
 
 - `template` is optional. Pass it only when the user names the template a note
   follows.
-- An allowed note is saved whole. A denied write leaves the file unchanged. Read
-  each `{field, kind}`, fix the content from what the user gave you, and write
-  again. When you cannot fix it, ask the user. Never invent a value.
+- A note is saved whole, even with warnings. A safety refusal (a path outside
+  the vault, a control or unsafe path, unsupported input, a tampered contract),
+  a missing or stale `ifMatch`, or an unverified target leaves the file
+  unchanged. In a sealed vault, frontmatter that does not parse may be kept as
+  a draft (through MCP or `oms write`) instead of saved; otherwise it is saved
+  with a `yaml-syntax` warning. Read each `{field, kind}`, fix the content from
+  what the user gave you, and write again. When you cannot fix it, ask the
+  user. Never invent a value.
 - Native Write, Edit, MultiEdit, and NotebookEdit inside the vault reach the
-  same judge through the Claude write hook. The hook denies a write that breaks
-  the contract. When the hook itself cannot run, it allows the write and prints
-  a warning.
+  same judge through the Claude write hook. The hook denies only a safety
+  refusal; it allows a write with contract findings and returns them as a
+  warning. When the hook itself cannot run, it allows the write and prints a
+  warning.
 - `~/.oms` is off-limits. The hook denies reads, searches, and writes there as
   `control-path`. Inside the vault, `.oms/settings.json` is the only OMS file.
-- OMS is not the author or repair engine. An allowed write means the note fits
-  the sealed structure, not that it is worth keeping. That judgement is yours
-  and the user's.
+- OMS is not the author or repair engine. An allowed write with no warnings
+  means the note fits the sealed structure, not that it is worth keeping. That
+  judgement is yours and the user's.
 
 ## Retrieval and health
 

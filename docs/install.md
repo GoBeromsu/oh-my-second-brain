@@ -87,7 +87,7 @@ oms doctor sync-embeddings|cleanup|build-graph
 oms serve mcp|http
 ```
 
-The agent writes notes, through MCP `write {path, content, template?, ifMatch?, check?}`, `oms write <path>` with the note on stdin, or, in Claude Code, through native tools judged by the guard hook. A write that violates the sealed contract is refused and the file stays unchanged. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them. There is no completion command or reviewer handshake; the agent and user decide whether a note is worth keeping. The command table is [the CLI map](./cli-map.md), and the 0.18 spellings are mapped in [the migration guide](./migration-0.19.md).
+The agent writes notes, through MCP `write {path, content, template?, ifMatch?, check?}`, `oms write <path>` with the note on stdin, or, in Claude Code, through native tools judged by the guard hook. A write that breaks the sealed contract is saved with warnings; a safety refusal, a missing or stale `ifMatch`, or an unverified target leaves the file unchanged. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them. There is no completion command or reviewer handshake; the agent and user decide whether a note is worth keeping. The command table is [the CLI map](./cli-map.md), and the 0.18 spellings are mapped in [the migration guide](./migration-0.19.md).
 
 A plain `oms search <text>` is lexical-only. Every non-lexical channel is explicit: `--vec`, `--hyde`, G004 `--expand`, and `--rerank`. G004 expansion is available only when selected; no replacement, parity, or outperformance claim is made. Search still returns notes that would fail the contract, and a missing or damaged contract does not stop it.
 
@@ -99,7 +99,7 @@ A plain `oms search <text>` is lexical-only. Every non-lexical channel is explic
 
 ## Host, package, and model lifecycle
 
-Use `oms setup host install|remove|sync|status` for host integrations. `oms setup package check|update` manages the npm package only; package update never performs host sync implicitly. Use `oms setup model install|select|waive|status` for model lifecycle. The hook entrypoint is `oms hook pre`; there is no post-tool-use hook. Claude's write hook denies a write when the contract judge finds a violation and allows it with a warning when the hook itself cannot run. Codex and Hermes declare no write hook.
+Use `oms setup host install|remove|sync|status` for host integrations. `oms setup package check|update` manages the npm package only; package update never performs host sync implicitly. Use `oms setup model install|select|waive|status` for model lifecycle. The hook entrypoint is `oms hook pre`; there is no post-tool-use hook. Claude's write hook denies a write only on a safety refusal; a contract finding, or a hook that cannot run, allows the write with a warning. Codex and Hermes declare no write hook.
 
 ## Skills and MCP tools
 

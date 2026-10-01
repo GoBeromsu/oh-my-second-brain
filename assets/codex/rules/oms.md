@@ -17,11 +17,13 @@ sealed contract is not yours to read.
 
 ## Boundaries
 
-- Write vault notes with MCP `write {path, content, template?, ifMatch?, check?}`. A denial gives
-  only `{field, kind}` and a guidance command. Never ask about or guess the
+- Write vault notes with MCP `write {path, content, template?, ifMatch?, check?}`. A note that
+  breaks the contract is saved, with each finding as a `{field, kind}` warning;
+  only a safety refusal denies a write. Never ask about or guess the
   contract's location or values.
-- A denied write leaves the file unchanged. Fix the content from what the user
-  gave you and write again, or ask the user. Never invent a missing value.
+- A denied write, a missing or stale `ifMatch`, or an unverified target leaves
+  the file unchanged. For a warning or a denial, fix the content from what the
+  user gave you and write again, or ask the user. Never invent a missing value.
 - Codex has no write hook. Notes written with host file tools are not judged.
 - `~/.oms` is off-limits. Inside the vault, `.oms/settings.json` is the only
   OMS file.
