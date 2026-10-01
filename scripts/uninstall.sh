@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Oh My Second Brain uninstaller — removes host adapter registrations and optionally the package.
-# Usage: curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/uninstall.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Xia-Ataraxia/oh-my-second-brain/main/scripts/uninstall.sh | bash
 set -euo pipefail
 
 RUNTIME="${OMS_UNINSTALL_RUNTIME:-all}"

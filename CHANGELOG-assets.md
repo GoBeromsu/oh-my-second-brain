@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **Refresh the English and Korean README presentation.** Both READMEs now share a repository-specific 3D hero and a more compact overview while preserving setup, contract, host, safety, documentation, and credit guidance. Canonical repository links now point directly to `Xia-Ataraxia/oh-my-second-brain` after the ownership transfer.
+
 ## [0.20.6] - 2026-10-01
 
 - **Skills and host guidance now say that contract findings warn instead of deny.** The `write`, `distill`, and `setup` skills, the Claude, Codex, and Hermes host guidance, and the README and docs had kept saying that a note breaking the contract is denied. Since the contract became warn-first, such a note is saved with each finding as a `{field, kind}` warning and one guidance command; only a safety refusal (a path outside the vault, a control or unsafe path, unsupported input, a tampered contract) denies, and in a sealed vault a note written through MCP or `oms write` whose frontmatter does not parse may be kept as a draft. Agents reading the old wording stopped and asked after a write that had already succeeded. The README also no longer says MCP cannot seal: `interview` `op: seal` seals a proposal the owner confirmed. Run `oms setup host sync` to refresh installed host guidance.

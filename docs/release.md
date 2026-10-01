@@ -53,6 +53,20 @@ bundled note-type defaults.
 
 Codex and Hermes host assets are packaged as host-native skill/rule bundles plus MCP registrations; release notes must describe the exact installed paths and avoid claiming behavior beyond the shipped skills and MCP tools.
 
+## Repository transfer hold
+
+The repository was transferred from `GoBeromsu/oh-my-second-brain` to
+`Xia-Ataraxia/oh-my-second-brain` on 2026-10-01 without changing its GitHub
+repository identity, history, tags, releases, or package name. GitHub redirects
+the old repository URL, but release metadata and installed marketplace fallback
+URLs use the new owner directly.
+
+npm trusted publishing is a separate registry-side binding to the repository
+owner/name and `.github/workflows/release.yml`. The GitHub transfer does not
+authorize changing that binding. Do not push a release tag or attempt an npm
+publish until the package owner explicitly approves and completes the npm-side
+trusted-publisher update.
+
 ## Operator flow
 
 ```bash

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Oh My Second Brain installer — installs the package and registers host adapters.
-# Usage: curl -fsSL https://raw.githubusercontent.com/GoBeromsu/oh-my-second-brain/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Xia-Ataraxia/oh-my-second-brain/main/scripts/install.sh | bash
 set -euo pipefail
 
 PACKAGE_SPEC="${OMS_PACKAGE_SPEC:-oh-my-second-brain@0.1.9}"

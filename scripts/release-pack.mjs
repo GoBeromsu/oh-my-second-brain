@@ -70,8 +70,9 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf-8"));
 if (packageJson.name !== "oh-my-second-brain") {
   fail(`package name must be oh-my-second-brain, got ${packageJson.name}`);
 }
-if (packageJson.repository?.url !== "git+https://github.com/GoBeromsu/oh-my-second-brain.git") {
-  fail(`repository URL must point at GoBeromsu/oh-my-second-brain, got ${packageJson.repository?.url}`);
+const expectedRepositoryUrl = "git+https://github.com/Xia-Ataraxia/oh-my-second-brain.git";
+if (packageJson.repository?.url !== expectedRepositoryUrl) {
+  fail(`repository URL must point at Xia-Ataraxia/oh-my-second-brain, got ${packageJson.repository?.url}`);
 }
 if (packageJson.bin?.["oh-my-second-brain"] !== "dist/cli/oms.js") {
   fail("package bin must expose canonical oh-my-second-brain command");

@@ -1,69 +1,33 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" alt="Oh My Second Brain. 흩어진 생각이 연결되는 별자리." width="100%" />
+  <img src="./assets/readme-hero.webp" alt="서로 연결된 노트를 표현한 추상적인 3D 아트워크." width="100%" />
 </p>
 
 <h1 align="center">Oh My Second Brain</h1>
 
 <p align="center">
   <strong>흩어진 지식이, 다시 하나의 별자리로.</strong><br />
-  Obsidian, Markdown, AI 에이전트를 잇는 사용자 소유의 지식·컨벤션 레이어.
+  Obsidian · Markdown · AI 에이전트를 잇는 사용자 소유의 지식·컨벤션 레이어.
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/oh-my-second-brain"><img src="https://img.shields.io/npm/v/oh-my-second-brain?style=flat-square&amp;color=8b9daa&amp;label=npm" alt="npm 버전" /></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%E2%89%A520-80b89b?style=flat-square" alt="Node.js 20 이상" /></a>
-  <a href="#mcp-도구와-에이전트-연결"><img src="https://img.shields.io/badge/MCP-4_tools-97a8b1?style=flat-square" alt="MCP 도구 4개" /></a>
-  <a href="https://github.com/GoBeromsu/oh-my-second-brain/blob/main/package.json"><img src="https://img.shields.io/badge/license-MIT-d7c7a8?style=flat-square" alt="패키지 라이선스 MIT" /></a>
-</p>
-
-<p align="center">
-  <a href="#빠른-시작"><strong>빠른 시작</strong></a> ·
+  <a href="#빠른-시작">빠른 시작</a> ·
   <a href="#동작-방식">동작 방식</a> ·
   <a href="#문서">문서</a> ·
-  <a href="https://github.com/GoBeromsu/oh-my-second-brain/releases">릴리스</a> ·
+  <a href="https://github.com/Xia-Ataraxia/oh-my-second-brain/releases">릴리스</a> ·
   <a href="./README.md">English</a>
 </p>
 
----
+<p align="center"><sub>Node.js ≥ 20 · MCP 도구 4개 · 공통 스킬 6개 · 패키지 라이선스 MIT</sub></p>
 
-볼트에는 이미 아이디어, 결정, 배운 것들이 쌓여 있다. **OMS는 에이전트가 그 지식을 되찾고, 내가 정한 규칙 안에서 노트를 쓰도록 돕는다.** 새 노트 형식도, 정해진 폴더 체계도, 특정 호스트로의 지식 이전도 필요 없다.
-
-Obsidian은 사령탑으로 남는다. OMS가 꺼져 있어도 노트는 사람이 읽고 고칠 수 있는 Markdown 파일이다. Claude Code, Codex, Hermes를 각 호스트의 통합 기능으로 같은 볼트에 연결할 수 있다.
+볼트에는 이미 아이디어, 결정, 배운 것들이 쌓여 있다. **OMS는 에이전트가 그 지식을 되찾고, 내가 정한 규약에 맞춰 노트를 쓰도록 돕는다.** Obsidian은 사령탑으로 남고, 노트는 OMS가 꺼져 있어도 읽고 고칠 수 있는 Markdown 파일로 남는다.
 
 ## 왜 OMS인가?
 
-<table>
-<tr>
-<td width="50%" valign="top">
-<h3>이미 아는 것을 다시 찾기</h3>
-기존 노트를 lexical 검색으로 찾는다. 필요할 때 vector, HyDE, 질의 확장, reranking을 명시적으로 선택한다.
-</td>
-<td width="50%" valign="top">
-<h3>내 볼트의 언어 그대로</h3>
-폴더와 속성의 의미는 내가 정한다. OMS가 제시하는 체계를 따르는 대신, 내 컨벤션을 기록한다.
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-<h3>에이전트가 공유하는 계약</h3>
-setup으로 볼트 규약을 봉인한다. 지원되는 쓰기 경로는 저장 전에 노트 전체가 그 계약에 맞는지 확인한다.
-</td>
-<td width="50%" valign="top">
-<h3>파일의 소유권은 그대로</h3>
-기존 Markdown 노트와 템플릿을 계속 쓴다. setup은 이 파일들을 다시 쓰지 않으며, 봉인된 계약은 볼트 밖에 둔다.
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-<h3>호스트를 넘어 연결하기</h3>
-Claude Code, Codex, Hermes의 네이티브 통합을 사용한다. MCP 도구 4개와 공통 워크플로 스킬 6개를 제공한다.
-</td>
-<td width="50%" valign="top">
-<h3>추측 대신 상태 확인</h3>
-계약 상태, 노트 규약 준수, 색인, wikilink 제안을 확인한다. 검색과 상태 조회는 읽기 전용이다.
-</td>
-</tr>
-</table>
+| 다시 찾기 | 내 규약으로 쓰기 | 계속 소유하기 |
+| :--- | :--- | :--- |
+| Lexical 검색부터 시작하고, 필요할 때 vector·HyDE·질의 확장·reranking을 선택한다. | 폴더와 속성의 의미를 직접 정한다. 지원되는 쓰기 경로에서 계약을 검사하고 결과를 알려준다. | 기존 노트와 템플릿을 유지하며 Claude Code, Codex, Hermes를 같은 볼트에 연결한다. |
+
+검색과 `oms doctor status`는 읽기 전용이다. 색인 유지보수는 명시적으로 실행한다.
 
 ## 빠른 시작
 
@@ -139,7 +103,7 @@ oms search "프로젝트 결정" --vault /path/to/vault
 - **판정자는 하나다.** 저장된 쓰기는 계약 위반을 `{field, kind}` 경고로, 거부된 쓰기는 그 이유를 같은 형태로 반환하며, 각각 안내 명령 하나가 붙는다. 규칙 값, 저장소 경로, 계약 본문은 반환하지 않는다.
 - **변조된 봉인은 쓰기를 거부한다.** `.oms/settings.json`의 vault id가 이 기기의 봉인과 어긋나면 `contract-tampered`로 거부하고, `oms doctor contract`가 원인을 알려준다. 봉인 증거가 없거나 깨졌으면 `contract-unreadable` 경고와 함께 저장하며, 소유자가 `oms interview`로 다시 봉인할 때까지 이어진다. `oms doctor contract`가 볼트 이동이나 색인 항목의 누락·손상을 찾으면, 다시 봉인하지 않고 색인만 고치는 `oms doctor contract --fix`를 안내한다. 봉인이 아예 없는 기기에서는 판정하지 않는 것과 구별한다.
 
-[아키텍처](./docs/architecture.md), [컨벤션](./docs/conventions.md), [ADR-007](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md)을 참고한다.
+[아키텍처](./docs/architecture.md), [컨벤션](./docs/conventions.md), [ADR-007](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md)을 참고한다.
 
 </details>
 
@@ -253,13 +217,13 @@ oms hook pre                                    Claude 쓰기를 계약으로 �
 | [설치](./docs/install.md): 설치, setup, 모델, 제거 | [아키텍처](./docs/architecture.md): 권위와 도메인 경계 |
 | [볼트 컨벤션](./docs/conventions.md): 설정과 봉인된 계약 | [CLI 맵](./docs/cli-map.md): 명령과 MCP 작업 매핑 |
 | [호스트 통합](./docs/adapters.md): Claude Code, Codex, Hermes | [검증된 target](./docs/verified-target.md): 안전한 볼트 선택 |
-| [릴리스](https://github.com/GoBeromsu/oh-my-second-brain/releases): 배포 버전 | [변경 이력](./CHANGELOG.md): 무엇이 왜 달라졌는가 |
+| [릴리스](https://github.com/Xia-Ataraxia/oh-my-second-brain/releases): 배포 버전 | [변경 이력](./CHANGELOG.md): 무엇이 왜 달라졌는가 |
 
 ## 기여와 크레딧
 
-[기여 가이드](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/CONTRIBUTING.md)를 읽거나, 재현 가능한 문제와 구체적인 제안을 [이슈](https://github.com/GoBeromsu/oh-my-second-brain/issues)로 남길 수 있다.
+[기여 가이드](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/CONTRIBUTING.md)를 읽거나, 재현 가능한 문제와 구체적인 제안을 [이슈](https://github.com/Xia-Ataraxia/oh-my-second-brain/issues)로 남길 수 있다.
 
-[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros), [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)의 deep-interview 등 설계에 영향을 준 아이디어를 기록한다. runtime 복제나 연구 결과를 뜻하지 않는다. 별자리 배너는 [beomsukoh.com](https://beomsukoh.com/)의 연결된 노트 풍경에서 착안한 자체 제작 일러스트다. 이미지는 개념을 설명하는 도식이며 제품 화면, host smoke 증거, 제품 gate 통과 결과가 아니다.
+[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros), [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)의 deep-interview 등 설계에 영향을 준 아이디어를 기록한다. runtime 복제나 연구 결과를 뜻하지 않는다. 상단의 3D 아트워크는 연결된 노트를 표현한 개념 이미지다. 제품 화면, host smoke 증거, 제품 gate 통과 결과가 아니다.
 
 ---
 

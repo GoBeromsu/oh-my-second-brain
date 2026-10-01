@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" alt="Oh My Second Brain. A quiet constellation of connected thoughts." width="100%" />
+  <img src="./assets/readme-hero.webp" alt="Abstract 3D artwork of connected notes." width="100%" />
 </p>
 
 <h1 align="center">Oh My Second Brain</h1>
@@ -10,60 +10,24 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/oh-my-second-brain"><img src="https://img.shields.io/npm/v/oh-my-second-brain?style=flat-square&amp;color=8b9daa&amp;label=npm" alt="npm version" /></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%E2%89%A520-80b89b?style=flat-square" alt="Node.js 20 or later" /></a>
-  <a href="#mcp-tools--integrations"><img src="https://img.shields.io/badge/MCP-4_tools-97a8b1?style=flat-square" alt="4 MCP tools" /></a>
-  <a href="https://github.com/GoBeromsu/oh-my-second-brain/blob/main/package.json"><img src="https://img.shields.io/badge/license-MIT-d7c7a8?style=flat-square" alt="Package license: MIT" /></a>
-</p>
-
-<p align="center">
-  <a href="#quick-start"><strong>Quick start</strong></a> ·
+  <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#documentation">Documentation</a> ·
-  <a href="https://github.com/GoBeromsu/oh-my-second-brain/releases">Releases</a> ·
-  <a href="https://github.com/GoBeromsu/oh-my-second-brain/blob/main/README.ko.md">한국어</a>
+  <a href="https://github.com/Xia-Ataraxia/oh-my-second-brain/releases">Releases</a> ·
+  <a href="https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/README.ko.md">한국어</a>
 </p>
 
----
+<p align="center"><sub>Node.js ≥ 20 · 4 MCP tools · 6 shared skills · Package licensed MIT</sub></p>
 
-Your vault already holds ideas, decisions, and things you learned. **OMS helps your agents find that knowledge and write within the conventions you defined.** No new note format. No prescribed folder system. No handover of your knowledge to a single host.
-
-Obsidian stays the command center. Your notes stay plain Markdown, readable and editable even when OMS is not running. Connect Claude Code, Codex, or Hermes to the same vault through their host integrations.
+Your vault already holds ideas, decisions, and things you learned. **OMS helps your agents find that knowledge and write within the conventions you defined.** Obsidian stays the command center. Your notes stay plain Markdown, readable and editable even when OMS is not running.
 
 ## Why OMS?
 
-<table>
-<tr>
-<td width="50%" valign="top">
-<h3>Recall what you already know</h3>
-Search your existing notes with lexical retrieval. Choose vector, HyDE, query expansion, or reranking explicitly when you need them.
-</td>
-<td width="50%" valign="top">
-<h3>Your vault, your vocabulary</h3>
-Define the meaning of folders and properties. OMS records your conventions instead of shipping a system you have to adopt.
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-<h3>Give agents a shared contract</h3>
-Seal your vault conventions through setup. Supported write paths check the whole note against that contract before saving it.
-</td>
-<td width="50%" valign="top">
-<h3>Keep the files you own</h3>
-Keep using your Markdown notes and templates. Setup does not rewrite them, and the sealed contract lives outside the vault.
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-<h3>Connect across hosts</h3>
-Use native integrations for Claude Code, Codex, and Hermes, with four MCP tools and six shared workflow skills.
-</td>
-<td width="50%" valign="top">
-<h3>Inspect, don't guess</h3>
-Check contract state, audit notes, inspect indexes, and review wikilink suggestions. Search and `doctor status` stay read-only.
-</td>
-</tr>
-</table>
+| Recall | Write with context | Keep ownership |
+| :--- | :--- | :--- |
+| Start with lexical retrieval. Choose vector, HyDE, query expansion, or reranking when you need them. | Define what your folders and properties mean. Supported write paths check the contract and report their findings. | Keep your existing notes and templates. Connect Claude Code, Codex, and Hermes to the same vault. |
+
+Search and `oms doctor status` stay read-only. Index maintenance is explicit.
 
 ## Quick start
 
@@ -139,7 +103,7 @@ These are example requests, not captured run results. Available workflows and wr
 - **One judge, bounded feedback.** A saved write returns its contract findings as `{field, kind}` warnings, and a refused write returns its reason the same way. Each of these comes with one guidance command, never rule values, store paths, or the contract body.
 - **A tampered seal blocks writes.** When the vault id in `.oms/settings.json` no longer matches this machine's seal, writes are refused as `contract-tampered`; `oms doctor contract` explains it. Missing or broken seal evidence is `contract-unreadable`: the write is saved with that warning until the owner reseals with `oms interview`. When `oms doctor contract` finds a moved vault or a missing or unreadable index entry, it names `oms doctor contract --fix`, which reindexes without resealing. A machine with no seal is a different case: its vault is not contract-judged.
 
-See [architecture](./docs/architecture.md), [conventions](./docs/conventions.md), and [ADR-007](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md).
+See [architecture](./docs/architecture.md), [conventions](./docs/conventions.md), and [ADR-007](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md).
 
 </details>
 
@@ -253,13 +217,13 @@ Note `create`, `append`, `update`, and `backfill` are retired operations. There 
 | [Installation](./docs/install.md): install, setup, models, removal | [Architecture](./docs/architecture.md): authority and domain boundaries |
 | [Vault conventions](./docs/conventions.md): settings and sealed contracts | [CLI map](./docs/cli-map.md): command and MCP operation mapping |
 | [Host integrations](./docs/adapters.md): Claude Code, Codex, Hermes | [Verified targets](./docs/verified-target.md): safe vault resolution |
-| [Releases](https://github.com/GoBeromsu/oh-my-second-brain/releases): published versions | [Changelog](./CHANGELOG.md): what changed and why |
+| [Releases](https://github.com/Xia-Ataraxia/oh-my-second-brain/releases): published versions | [Changelog](./CHANGELOG.md): what changed and why |
 
 ## Contributing & credits
 
-Contributions are welcome. Start with the [contributing guide](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/CONTRIBUTING.md), or [open an issue](https://github.com/GoBeromsu/oh-my-second-brain/issues) with a reproducible problem or a focused proposal.
+Contributions are welcome. Start with the [contributing guide](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/CONTRIBUTING.md), or [open an issue](https://github.com/Xia-Ataraxia/oh-my-second-brain/issues) with a reproducible problem or a focused proposal.
 
-[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) records design influences, including [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros) and [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)'s deep-interview. Those credits describe ideas, not a copied runtime or a research result. The original constellation illustration is inspired by the connected-note landscape at [beomsukoh.com](https://beomsukoh.com/). Illustrations explain concepts; they are not product screenshots, host-smoke evidence, or product-gate results.
+[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) records design influences, including [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros) and [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)'s deep-interview. Those credits describe ideas, not a copied runtime or a research result. The hero artwork is a conceptual 3D illustration of connected notes. It is not a product screenshot, host-smoke evidence, or a product-gate result.
 
 ---
 

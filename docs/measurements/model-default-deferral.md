@@ -145,7 +145,7 @@ removal is not obstructed. The gate holds the disclosure, not the measurement.
 
 > **Decision: accept the unmeasured state on the record and keep shipping the
 > installable default.** Recorded 2026-08-30 by the vault owner, resolving
-> [#78](https://github.com/GoBeromsu/oh-my-second-brain/issues/78). The two
+> [#78](https://github.com/Xia-Ataraxia/oh-my-second-brain/issues/78). The two
 > alternatives were declined: committing to produce the measurement, and
 > withdrawing `--embedding-default` until one exists.
 

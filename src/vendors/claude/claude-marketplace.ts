@@ -6,7 +6,7 @@ import { isRecord, runExternal, type ExternalCommandResult } from "../../kernel/
  * Published marketplace source used when the running install has no repo
  * checkout on disk.
  */
-const PUBLISHED_MARKETPLACE_REPO = "GoBeromsu/oh-my-second-brain";
+const PUBLISHED_MARKETPLACE_REPO = "Xia-Ataraxia/oh-my-second-brain";
 
 /**
  * Marketplace name published in `.claude-plugin/marketplace.json`. Only used
