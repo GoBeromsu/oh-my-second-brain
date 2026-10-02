@@ -38,6 +38,7 @@ import {
 } from "./embed/store.js";
 import { makeEmbeddingIdentity } from "./embed/identity.js";
 import { syncEngineStore } from "./embed/sync.js";
+import { LiveLexicalSession } from "./embed/live-lexical.js";
 import { verifyIndexSources } from "./embed/freshness.js";
 import { McpEngineAdapter } from "./mcp/facade.js";
 import type { McpSemanticModelCapabilityStatus } from "./mcp/types.js";
@@ -821,6 +822,38 @@ export function assembleEphemeralCoreSemanticEngine(config: AssembleConfig): Ass
       };
     },
     dispose: disposal(owned, provider, () => store, ownedGenerator),
+  };
+}
+
+/**
+ * A read-only search adapter over a server-owned detached native lexical session.
+ * Omitted sessions are invocation-owned and closed with the assembled engine.
+ */
+export function assembleLiveLexicalEngine(config: AssembleConfig, session?: LiveLexicalSession): AssembledEngine {
+  const ownedSession = session === undefined;
+  const lexical = session ?? new LiveLexicalSession({ vault: config.vault, dbPath: resolveAssembleDbPath(config) });
+  const provider = makeDeferredProvider();
+  const owned = ownedReranker(config);
+  const store = lexical.store;
+  const deps: DispatcherDeps = {
+    store, embed: provider,
+    ...(config.rrfK === undefined ? {} : { rrfK: config.rrfK }),
+    ...(config.policy === undefined ? {} : { policy: config.policy }),
+  };
+  const adapter = new McpEngineAdapter(deps, config.vault, {
+    modelCapabilityStatus: modelCapabilityStatus(config),
+    prepareLexical: (vault, queries, k, collection) => lexical.prepare(vault, queries, k, collection),
+  }, config.reranker ?? owned, false);
+  const release = disposal(owned, provider, () => store);
+  return {
+    adapter, deps, store, provider, implicitLexicalSync: false,
+    async syncVault(): Promise<SyncVaultResult> {
+      throw new Error("AssembledEngine: syncVault is unavailable for a detached read-only search session.");
+    },
+    async dispose(): Promise<void> {
+      await release();
+      if (ownedSession) await lexical.dispose();
+    },
   };
 }
 

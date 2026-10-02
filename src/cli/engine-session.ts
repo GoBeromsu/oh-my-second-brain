@@ -1,6 +1,7 @@
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import {
   assembleCoreSemanticEngineReadOnly,
+  assembleLiveLexicalEngine,
   assembleEngineReadOnly,
   assembleEphemeralCoreSemanticEngine,
   type AssembledEngine,
@@ -13,8 +14,12 @@ import {
 import { readVaultEmbeddingModelSync } from "../kernel/engine/embed/config.js";
 import { readInstalledModelsReceiptSync } from "../kernel/engine/embed/model.js";
 
+import type { LiveLexicalSession } from "../kernel/engine/embed/live-lexical.js";
+
 export interface EngineSessionOptions {
   readonly write: boolean;
+  /** A pure lexical search; pass a server-owned session to retain its detached core. */
+  readonly liveLexical?: true | LiveLexicalSession;
   readonly embed?: boolean;
   readonly modelCacheDir?: string;
   readonly modelEnv?: Readonly<Record<string, string | undefined>>;
@@ -59,6 +64,10 @@ export function createEngineSession(vault: string, options: EngineSessionOptions
     ...(options.modelCacheDir === undefined ? {} : { embeddingCacheDir: options.modelCacheDir }),
     ...(options.modelEnv === undefined ? {} : { modelEnv: options.modelEnv }),
   };
+  if (options.liveLexical !== undefined) {
+    const engine = assembleLiveLexicalEngine(modelInputs, options.liveLexical === true ? undefined : options.liveLexical);
+    return { adapter: engine.adapter, dispose: () => engine.dispose() };
+  }
   const readOnly: AssembledEngine | null = embeddingConfigPresent(vault, options.modelCacheDir, options.modelEnv)
     ? assembleEngineReadOnly({
       ...modelInputs,

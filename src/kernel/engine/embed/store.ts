@@ -7,7 +7,7 @@
  * - A core-only open path must exist for lex-only operation without embedding config.
  */
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -394,6 +394,11 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     db.close();
     throw error;
   }
+  return bindCoreStore(db);
+}
+
+/** Bind already initialized core tables; ownership of the connection transfers. */
+function bindCoreStore(db: Database.Database, strictLexical = false): EngineStore {
   // Optional: load sqlite-vec so lex-only sync can delete stale vectors for
   // modified chunks (prevents silent cross-model reuse on later vec queries).
   let stmtDeleteVec: ReturnType<Database.Database["prepare"]> | null = null;
@@ -430,16 +435,16 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     "INSERT INTO engine_chunk_fts(rowid, doc_path, ordinal, text) VALUES (?, ?, ?, ?)",
   );
 
-  const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; rank: number }>(
-    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+  const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
      JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
      WHERE engine_chunk_fts MATCH ?
      ORDER BY rank
      LIMIT ?`,
   );
-  const stmtQueryLexInCollection = db.prepare<[string, string, string, number], { doc_path: string; ordinal: number; rank: number }>(
-    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+  const stmtQueryLexInCollection = db.prepare<[string, string, string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
      JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
      WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ? ESCAPE '!')
@@ -522,18 +527,20 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     queryLex(text: string, k: number, collection?: string): ScoredHit[] {
       const ftsQ = makeFtsQuery(text);
       if (!ftsQ) return [];
-      let rows: Array<{ doc_path: string; ordinal: number; rank: number }>;
+      let rows: Array<{ doc_path: string; ordinal: number; text: string; rank: number }>;
       try {
         rows = collection === undefined
           ? stmtQueryLex.all(ftsQ, k)
           : stmtQueryLexInCollection.all(ftsQ, collection, collectionDescendantLikePattern(collection), k);
-      } catch {
+      } catch (error) {
+        if (strictLexical) throw new Error(`Engine store lexical query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
         return [];
       }
       return rows.map((r, index): ScoredHit => ({
         docPath: r.doc_path,
         chunkOrdinal: r.ordinal,
         score: 1 / (1 + index),
+        text: r.text,
       }));
     },
 
@@ -1116,6 +1123,68 @@ function openReadOnlyStore(
       `Engine store at "${dbPath}" is corrupt or unreadable: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
+  }
+}
+
+/** A detached mutable core, private to the live lexical session. */
+export interface DetachedLexicalStore {
+  readonly store: EngineStore;
+  allocatedBytes(): number;
+  /** Copy this detached core to another detached database; never the source. */
+  copyTo(dbPath: string): DetachedLexicalStore;
+  close(): void;
+}
+
+function detachedHandle(db: Database.Database): DetachedLexicalStore {
+  const store = bindCoreStore(db, true);
+  return {
+    store,
+    allocatedBytes: () => Number(db.pragma("page_count", { simple: true })) * Number(db.pragma("page_size", { simple: true })),
+    copyTo(dbPath): DetachedLexicalStore {
+      db.prepare("VACUUM INTO ?").run(dbPath);
+      const copied = openDatabase(dbPath, { fileMustExist: true });
+      try { return detachedHandle(copied); }
+      catch (error) { copied.close(); throw error; }
+    },
+    close: () => store.close(),
+  };
+}
+
+/**
+ * Seed one native lexical corpus without ever opening the persistent source.
+ * Vectors are deliberately not copied; source evidence and rowids are preserved.
+ * The caller owns the detached handle and any non-memory destination directory.
+ */
+export function openDetachedLexicalStore(sourcePath: string, destination = ":memory:"): DetachedLexicalStore {
+  if (destination !== ":memory:" && existsSync(destination)) throw new Error("Detached lexical destination must be a new disposable database.");
+  const opened = openExistingCoreStore(sourcePath);
+  let db: Database.Database | undefined;
+  try {
+    db = openDatabase(destination);
+    ensureCoreSchema(db);
+    if (opened !== null) {
+      db.prepare("ATTACH DATABASE ? AS seed").run(opened.db.name);
+      db.transaction(() => {
+        db!.exec(`
+          INSERT INTO engine_chunk_meta SELECT * FROM seed.engine_chunk_meta;
+          INSERT INTO engine_chunk_fts(rowid, doc_path, ordinal, text)
+            SELECT rowid, doc_path, ordinal, text FROM seed.engine_chunk_meta;
+        `);
+        if (opened.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engine_document_source'").get() !== undefined) {
+          db!.exec("INSERT INTO engine_document_source SELECT * FROM seed.engine_document_source");
+        }
+      })();
+      db.exec("DETACH DATABASE seed");
+    }
+    return detachedHandle(db);
+  } catch (error) {
+    db?.close();
+    throw error;
+  } finally {
+    if (opened !== null) {
+      try { opened.db.close(); }
+      finally { opened.dispose(); }
+    }
   }
 }
 

@@ -105,10 +105,7 @@ export async function handleSearch(ctx: ToolContext, publicName: string, name: s
   const {
     vault,
     engine,
-    getReadOnlySemanticEngine,
-    getReadOnlyCoreSemanticEngine,
     getSemanticEngine,
-    hasEmbeddingModel,
     resolveDocumentAdapter,
     resolveReadOnlyIndexAdapter,
     resolveReadOnlyLexicalAdapter,
@@ -224,38 +221,8 @@ export async function handleSearch(ctx: ToolContext, publicName: string, name: s
       const vec = stringArg(args, "vec");
       const hyde = stringArg(args, "hyde");
       const queryOptions = semanticQueryOptionsFromArgs(vault, args);
-      const noPersistentReadOnlyIndex = hasEmbeddingModel()
-        ? getReadOnlySemanticEngine() === null
-        : getReadOnlyCoreSemanticEngine() === null;
-      const hasExplicitLexicalIntent =
-        query !== undefined ||
-        stringArg(args, "lex") !== undefined ||
-        (queryOptions.searches ?? []).some((search) => search.type === "lex");
-      const isOverviewRequest =
-        query === undefined &&
-        (queryOptions.searches ?? []).length === 0 &&
-        queryOptions.lex === undefined &&
-        queryOptions.vec === undefined &&
-        queryOptions.hyde === undefined &&
-        queryOptions.axes === undefined;
-      if (!hasExplicitEmbeddingIntent(args) && noPersistentReadOnlyIndex && (hasExplicitLexicalIntent || isOverviewRequest)) {
-        // Reuse the SearchBackend seam for model-free fallback as well. This
-        // keeps overview, cursor, axes, and collection aggregation semantics
-        // identical to the indexed path; its normalized default is lexical,
-        // so no vector intent is fabricated when the model is absent.
-        const fallbackBackend = new EngineSearchBackend(
-          await resolveReadOnlyLexicalAdapter(),
-          vault,
-        );
-        const result = await fallbackBackend.search({
-          ...queryOptions,
-          // `lex` is an explicit lexical representation. Do not send it
-          // alongside `query`, which would make the two equivalent forms
-          // look contradictory to the SearchBackend normalizer.
-          query: queryOptions.lex === undefined ? query ?? "" : undefined,
-        });
-        return jsonText(result);
-      }
+      // Pure lexical requests always use one live detached native corpus. Do not
+      // open a persistent snapshot just to test existence before resolving again.
       const requestOptions = {
         ...queryOptions,
         collections: queryOptions.collections,

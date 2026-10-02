@@ -292,6 +292,24 @@ describe("serve HTTP transport", () => {
     expect(await vaultSnapshot(tmpVault)).toEqual(afterSync);
   });
 
+  it("searches sequential live edits without synchronizing or changing the persistent index", async () => {
+    tmpVault = await writeVault();
+    modelCacheDir = await mkdtemp(path.join(tmpdir(), "oms-http-model-cache-"));
+    await syncEngineStore({ vault: tmpVault, embed: false });
+    const persisted = await readFile(engineStorePath(tmpVault));
+    httpServer = await runServeHttp({ vault: tmpVault, port: 0, modelCacheDir, modelEnv: {} });
+    expect((await jsonFetch(`${httpServer.url}/search`, { query: "retrieval" })).available).toBe(true);
+    const editedPath = path.join(tmpVault, "references", "Agent Retrieval.md");
+    for (const word of ["typingalpha", "typingbeta", "typinggamma"]) {
+      await writeFile(editedPath, `# ${word}\n${word} is now present.\n`);
+      const result = await jsonFetch(`${httpServer.url}/search`, { query: word });
+      expect(result).toMatchObject({ available: true, totalCount: 1, receipt: { indexDrift: false } });
+      expect(result.hits).toEqual([expect.objectContaining({ title: word, snippet: expect.stringContaining(word) })]);
+    }
+    expect((await jsonFetch(`${httpServer.url}/search`, { query: "retrieval" })).hits).toEqual([]);
+    expect(await readFile(engineStorePath(tmpVault))).toEqual(persisted);
+  });
+
   it("never disposes a caller-owned injected adapter", async () => {
     tmpVault = await writeVault();
     modelCacheDir = await mkdtemp(path.join(tmpdir(), "oms-http-model-cache-"));

@@ -21,6 +21,7 @@
  */
 
 import path from "node:path";
+import { readLiveDocumentId } from "./live-docid.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -45,6 +46,7 @@ import {
 import { openEngineStore } from "../embed/store.js";
 import { assertExternalDatabasePath, engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../paths.js";
 import type { EngineStore } from "../embed/store.js";
+import type { PreparedLexicalRead } from "../embed/live-lexical.js";
 import { indexSourcesUnchanged, type IndexSourceVerification, type IndexSourceSnapshot } from "../embed/freshness.js";
 import type { EmbeddingModelDescriptor } from "../embed/model.js";
 import { capabilityGuidance } from "../embed/config.js";
@@ -485,6 +487,7 @@ export class McpEngineAdapter {
       readonly dbPath?: string;
       readonly onStoreRebind?: (store: EngineStore) => void;
       /** Required by production persisted read-only assemblies; injected stores own their source policy. */
+      readonly prepareLexical?: (vault: string, queries: readonly string[], k: number, collection?: string) => Promise<PreparedLexicalRead>;
       readonly verifyIndexSources?: (vault: string, collection?: string) => Promise<IndexSourceVerification>;
     },
     private readonly reranker?: Reranker,
@@ -731,6 +734,7 @@ export class McpEngineAdapter {
     let rerankRequested = false;
     const facetWarnings: string[] = [];
     let sourceSnapshot: IndexSourceSnapshot | undefined;
+    let liveLexicalRead: PreparedLexicalRead | undefined;
     let sourceRevalidationStarted = false;
     try {
       // A core engine has a real lexical store but deliberately no embedding
@@ -770,6 +774,15 @@ export class McpEngineAdapter {
       // the first 50 results. A caller-supplied candidateLimit remains an
       // intentional cap (not an implementation truncation).
       const k = opts.candidateLimit ?? UNBOUNDED_CANDIDATE_LIMIT;
+      let retrievalDeps = this.deps;
+      if (this.config?.prepareLexical !== undefined && isLexOnlySubQueries(effectiveSubQueries)) {
+        const prepared = await this.config.prepareLexical(
+          opts.vault ?? this.vaultPath, effectiveSubQueries.map(search => search.query), k, opts.collectionPath,
+        );
+        sourceSnapshot = prepared.snapshot;
+        liveLexicalRead = prepared;
+        retrievalDeps = { ...this.deps, store: prepared.store };
+      }
       const shouldRerank = opts.rerank === true && opts.noRerank !== true;
       rerankRequested = shouldRerank;
       if (shouldRerank && this.reranker === undefined) {
@@ -794,7 +807,7 @@ export class McpEngineAdapter {
         : naturalQuery || undefined;
       const results = await retrieve({
         subQueries: [...effectiveSubQueries],
-        deps: this.deps,
+        deps: retrievalDeps,
         k,
         collection: opts.collectionPath,
         query: modelQuery,
@@ -810,7 +823,9 @@ export class McpEngineAdapter {
       try {
         const facetMeta = await readSearchTemplateSource(vault);
         if (!declaredMetadataAvailable(facetMeta)) facetWarnings.push(`Template metadata unavailable: ${metadataReason(facetMeta)}`);
-        const facetNodes = await this.loadOrBuildNodes(vault, facetMeta);
+        const facetNodes = liveLexicalRead === undefined
+          ? await this.loadOrBuildNodes(vault, facetMeta)
+          : await liveLexicalRead.nodeProjection(facetMeta);
         const scoped = opts.collectionPath === undefined
           ? facetNodes
           : facetNodes.filter(node => node.path === opts.collectionPath || node.path.startsWith(`${opts.collectionPath}/`));
@@ -842,13 +857,18 @@ export class McpEngineAdapter {
       sourceRevalidationStarted = sourceSnapshot !== undefined;
       const enriched = enrichQueryHits(mapped, opts.vault ?? this.vaultPath, sourceSnapshot?.contentSha256);
       if (sourceSnapshot !== undefined && !(await indexSourcesUnchanged(sourceSnapshot))) {
-        return queryResultUnavailable("INDEX_SOURCE_DRIFT: notes changed while searching. Retry after edits settle, or run oms doctor sync-embeddings --mode sync for the selected vault.", {
+        return queryResultUnavailable(this.config?.prepareLexical === undefined
+          ? "INDEX_SOURCE_DRIFT: notes changed while searching. Retry after edits settle, or run oms doctor sync-embeddings --mode sync for the selected vault."
+          : "INDEX_SOURCE_DRIFT: notes changed while capturing this live search. Retry the search; no index synchronization is needed.", {
           indexDrift: true, requestedStrategy, generatedSearches,
         });
       }
       return enriched;
     } catch (err) {
-      return queryResultUnavailable(err instanceof Error ? err.message : String(err), {
+      const detail = err instanceof Error ? err.message : String(err);
+      const reason = this.config?.prepareLexical !== undefined && sourceRevalidationStarted
+        ? `${detail} Retry the search; no index synchronization is needed.` : detail;
+      return queryResultUnavailable(reason, {
         requestedStrategy,
         generatedSearches,
         indexDrift: sourceRevalidationStarted,
@@ -1234,20 +1254,21 @@ export class McpEngineAdapter {
   /**
    * Hydrate one document from disk by real vault-relative path (ADR-001).
    * Supports "file.md", "file.md:N" (single line), "file.md:N-M" (range),
-   * and "#docid" (resolved via store.listDocPaths). No embedding model needed.
+   * and "#docid" (a currently admitted vault-relative path). No embedding model needed.
    */
   async getDocument(opts: McpSemanticGetOptions): Promise<McpSemanticDocumentResult> {
     const vault = opts.vault ?? this.vaultPath;
     const parsed = parseDocTarget(opts.target);
 
     let resolvedPath = parsed.filePath;
+    let capturedRaw: string | undefined;
     if (parsed.isDocid) {
-      const store = this.deps.store as EngineStore;
-      const matched = store.listDocPaths().find((p) => p === parsed.filePath);
-      if (!matched) {
+      const matched = await readLiveDocumentId(vault, parsed.filePath);
+      if (matched === null) {
         return { available: false, reason: `No OMS document matched "${opts.target}".`, documents: [] };
       }
-      resolvedPath = matched;
+      resolvedPath = matched.path;
+      capturedRaw = matched.content;
     } else if (parsed.isGlob) {
       const [matched] = await globVaultDocs(vault, parsed.filePath);
       if (!matched) {
@@ -1262,7 +1283,7 @@ export class McpEngineAdapter {
 
     let raw: string;
     try {
-      raw = readFileSync(path.join(vault, resolvedPath), "utf-8");
+      raw = capturedRaw ?? readFileSync(path.join(vault, resolvedPath), "utf-8");
     } catch {
       return { available: false, reason: `No OMS document matched "${opts.target}".`, documents: [] };
     }
@@ -1303,10 +1324,12 @@ export class McpEngineAdapter {
       const parsed = parseDocTarget(rawTarget);
 
       let resolvedPaths: string[];
+      let capturedRaw: string | undefined;
       if (parsed.isDocid) {
-        const store = this.deps.store as EngineStore;
-        const matched = store.listDocPaths().find((p) => p === parsed.filePath);
-        resolvedPaths = matched ? [matched] : [];
+        if (seen.has(parsed.filePath)) continue;
+        const matched = await readLiveDocumentId(vault, parsed.filePath);
+        resolvedPaths = matched === null ? [] : [matched.path];
+        capturedRaw = matched?.content;
       } else if (parsed.isGlob) {
         resolvedPaths = await globVaultDocs(vault, parsed.filePath);
       } else {
@@ -1322,7 +1345,7 @@ export class McpEngineAdapter {
 
         let raw: string;
         try {
-          raw = readFileSync(path.join(vault, resolvedPath), "utf-8");
+          raw = capturedRaw ?? readFileSync(path.join(vault, resolvedPath), "utf-8");
         } catch {
           continue;
         }
