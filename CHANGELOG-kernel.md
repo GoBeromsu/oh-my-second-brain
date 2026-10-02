@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Short index writers serialize stale-lock recovery with immutable per-attempt owner records, closing a race that could temporarily move a live successor and admit another writer. All concurrent writers must use the upgraded protocol; the legacy lock remains visible but cannot fence an already-running old reclaimer. Unreadable or malformed legacy owner records now fail closed instead of being reclaimed or retried indefinitely.
+
 - Warm live lexical sessions keep their complete private corpus across persistent index writes, vector syncs, rebuilds, and index removal or replacement. Each query still refreshes current Markdown and validates returned sources; incomplete captures and changed or unknown vault identities retain conservative bootstrap checks. Private freshness never certifies persistent/vector synchronization, and searches still leave those stores untouched.
 
 - Observed value facets include a directly reusable, JSON-safe exact typed selection. Selecting a date, date-looking string, numeric timestamp, boolean or string now reproduces its distinct-note count within an unchanged discovery scope, without changing declared-axis or legacy comparison behavior. Exact date selectors require canonical ISO strings rather than permissive date coercion.
