@@ -214,7 +214,7 @@ describe("live detached native lexical sessions", () => {
     const before = vi.mocked(source.readDocumentSource).mock.calls.length;
     const second = await selected.prepare(vault, ["oldkeyword"], 10);
     expect(await second.nodeProjection(await readSearchTemplateSource(vault))).toHaveLength(1);
-    expect(vi.mocked(source.readDocumentSource).mock.calls.length).toBeGreaterThan(before);
+    expect(vi.mocked(source.readDocumentSource).mock.calls.length).toBe(before);
   });
 
   it("releases an oversized memory corpus after spill failure and actually spills on retry", async () => {
