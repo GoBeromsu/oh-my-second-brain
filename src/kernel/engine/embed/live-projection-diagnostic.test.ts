@@ -88,11 +88,12 @@ it("measures dense warm/one-edit stages without rereading overflow bodies", asyn
     finally { reconcileMs += performance.now() - start; }
   });
   const measured = new WeakSet<EngineStore>();
-  const internal = selected as unknown as { refreshSources(): Promise<unknown>; current: { store: EngineStore } };
+  const internal = selected as unknown as { refreshSources(lexical?: boolean): Promise<unknown>; current?: { store: EngineStore } };
   const refreshSources = internal.refreshSources.bind(selected);
-  vi.spyOn(internal, "refreshSources").mockImplementation(async () => {
-    const captured = await refreshSources();
-    const store = internal.current.store;
+  vi.spyOn(internal, "refreshSources").mockImplementation(async lexical => {
+    const captured = await refreshSources(lexical);
+    const store = internal.current?.store;
+    if (store === undefined) return captured;
     if (measured.has(store)) return captured;
     measured.add(store);
     const query = store.queryLexCandidates!.bind(store);

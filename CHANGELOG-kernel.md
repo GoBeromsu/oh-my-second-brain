@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Observed-only frontmatter filters and discovery capture current metadata without seeding detached lexical storage or chunking Markdown. Warm requests reuse the existing parsed projection cache and private EAV backing. A later lexical or mixed query reconciles the complete canonical chunk corpus, while concurrent upgrades wait for joined metadata selectors to finish; source witnesses, cursor validation, memory budgets and read-only persistence behavior are preserved.
+
 - Detached lexical reconciliation skips clearing a document whose stored chunk set is already empty. Empty FTS deletes flush pending terms even without matching rows; avoiding them lets fresh notes share the intended bounded native batch while preserving existing-note cleanup and rollback.
 
 - Live lexical capture groups disk-backed document updates into bounded synchronous transactions. The queue owns serialized chunks and source evidence, including title/heading metadata, and flushes residual records before retrieval. Dedicated reconciliation reuses its outer rollback boundary without redundant FTS savepoints; ordinary store methods retain independent atomicity. In-memory capture still commits and checks the spill budget one document at a time.

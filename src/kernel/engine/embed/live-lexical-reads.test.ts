@@ -45,6 +45,24 @@ afterEach(async () => { vi.unstubAllEnvs(); await rm(directory, { recursive: tru
 
 /** Also counts opened-handle reads, not just fs.readFile wrappers. */
 describe("end-to-end live lexical body reads without a persisted node cache", () => {
+  it("reads current metadata once, then skips unchanged bodies for zero-hit observed discovery", async () => {
+    for (const name of ["alpha", "beta", "gamma"]) await writeFile(path.join(vault, `${name}.md`), "---\nsubject: science\n---\nbody");
+    const engine = assembleLiveLexicalEngine({ vault, dbPath, modelEnv: {}, installedModelsReceipt: { version: 1, models: [] } });
+    const discover = () => engine.adapter.semanticQuery({ limit: 0, observed: { discover: { key: "subject" } } });
+    try {
+      observed.paths.length = 0;
+      expect(await discover()).toMatchObject({ available: true, hits: [], totalCount: 3, observed: { discovery: { values: [{ value: "science", count: 3 }] } } });
+      expect(observed.paths.sort()).toEqual(["alpha", "beta", "gamma"].map(name => path.join(vault, `${name}.md`)));
+      observed.paths.length = 0;
+      expect(await discover()).toMatchObject({ available: true, totalCount: 3 });
+      expect(observed.paths).toEqual([]);
+      await writeFile(path.join(vault, "alpha.md"), "---\nsubject: math\n---\nbody");
+      observed.paths.length = 0;
+      expect(await discover()).toMatchObject({ available: true, totalCount: 3, observed: { discovery: { values: [{ value: "math", count: 1 }, { value: "science", count: 2 }] } } });
+      expect(observed.paths).toEqual([path.join(vault, "alpha.md")]);
+    } finally { await engine.dispose(); }
+  });
+
   it("keeps MCP cold→warm→edited requests complete while reading only the changed or displayed note", async () => {
     vi.stubEnv("XDG_CACHE_HOME", path.join(directory, "cache"));
     await syncEngineStore({ vault, embed: false });
