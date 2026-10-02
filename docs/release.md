@@ -160,16 +160,18 @@ npm run release -- watch
 
 ## CI flow
 
-Pushing an `oms-v*` tag triggers `.github/workflows/release.yml`; release verification does not run per pull request. Steps, in order:
+Pushing an `oms-v*` tag or manually dispatching `.github/workflows/release.yml` runs the shared `verify` job; release verification does not run per pull request. The workflow and this job have only `contents: read`, with no OIDC permission. Checkout uses the triggering commit (`github.sha`) without persisting git credentials. Verification steps, in order:
 
-1. **Guard tag matches every version carrier** (tag runs only). Reads `package.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `assets/hermes-manifest.json` and compares them against `$GITHUB_REF_NAME`. Any drift fails the job and prints each value, so you see exactly which carrier is out of lockstep.
+1. **Guard tag matches every version carrier** (tag refs only, including tag-ref dispatch). Reads `package.json`, both root plugin manifests, both marketplace version fields, and `assets/hermes-manifest.json` and compares them against `$GITHUB_REF_NAME`. Any drift fails the job and prints each value, so you see exactly which carrier is out of lockstep.
 2. `npm ci`.
 3. **Install Claude CLI for plugin validation**. Installs `@anthropic-ai/claude-code` globally and runs `claude --version`. Success means the later gate performs real plugin validation. Failure is an environment failure and stops the job with remediation text, unless an attestation input was supplied on a dispatch run.
-4. `npm run release:check`. Same gate you ran locally, this time with `OMS_REQUIRE_PLUGIN_VALIDATION=1` set, so `release:plugin` cannot silently skip validation. When the shipped ranking default changes from `boost-additive`, the job's `boost-c040` measurement environment points at `docs/measurements/boost-c040.json`, supplies the external qrels hash and trusted key, and requires attestation and paired raw evidence. A baseline release uses the gate receipt and needs no manifest.
-5. **Publish to npm with provenance** (tag runs only). Calls `node scripts/npm-version-exists.mjs <version>` first: exit 1 (absent) leads to `npm publish --provenance --access public`; exit 0 (already published) logs an idempotent-re-run skip; any other exit means the registry check itself failed, and the job refuses to publish on an inconclusive result. The step passes no credentials: npm exchanges the job's OIDC identity for a short-lived publish grant.
-6. **Create GitHub Release** (tag runs only). `node scripts/extract-release-notes.mjs <version>` reads `CHANGELOG.md` and writes that version's section body to `/tmp/notes.md`, then `gh release view "$GITHUB_REF_NAME" || gh release create ... --notes-file /tmp/notes.md --verify-tag`. An existing release is left untouched. An empty or missing changelog section fails the step rather than shipping blank notes.
+4. `npm run check:measurement`, then `npm run release:check`. The full release gate includes packing, extracted-artifact smoke tests, and plugin validation. `OMS_REQUIRE_PLUGIN_VALIDATION=1` prevents `release:plugin` from silently skipping validation. When the shipped ranking default changes from `boost-additive`, the job's `boost-c040` measurement environment points at `docs/measurements/boost-c040.json`, supplies the external qrels hash and trusted key, and requires attestation and paired raw evidence. A baseline release uses the gate receipt and needs no manifest.
 
-The job carries `contents: write` for the GitHub Release and `id-token: write` for both npm provenance and trusted-publishing authentication.
+Only a successful verification of a **push event to an `oms-v*` tag** enables the separate `publish` job. A failed, cancelled, or skipped verification cannot publish. This job alone carries `contents: write` for the GitHub Release and `id-token: write` for npm provenance and trusted-publishing authentication. Its steps are:
+
+1. Check out the same triggering commit (`github.sha`) without persisting git credentials, then run `npm ci` and `npm run build` to rebuild that verified source.
+2. **Publish to npm with provenance**. Calls `node scripts/npm-version-exists.mjs <version>` first: exit 1 (absent) leads to `npm publish --provenance --access public`; exit 0 (already published) logs an idempotent-re-run skip; any other exit means the registry check itself failed, and the job refuses to publish on an inconclusive result. npm exchanges this job's OIDC identity for a short-lived publish grant.
+3. **Create GitHub Release**. `node scripts/extract-release-notes.mjs <version>` reads the aggregate and five layer changelogs and writes that version's notes to `/tmp/notes.md`, then `gh release view "$GITHUB_REF_NAME" || gh release create ... --notes-file /tmp/notes.md --verify-tag`. An existing release is left untouched. An entirely missing or empty release fails the step rather than shipping blank notes.
 
 The trusted publisher is bound to the repository **and** the workflow filename `release.yml`. Renaming or moving that file, or publishing from a different repository, breaks authentication until the binding is updated at [the package's access settings](https://www.npmjs.com/package/oh-my-second-brain/access) — npm reports the rejection as a `404` or `403` on `PUT`, which reads like a missing package rather than a misconfigured publisher. Update the trusted publisher first, then release a newer version; the tag remains immutable either way.
 
@@ -179,13 +181,15 @@ Re-running a failed tag run is safe. The registry check keeps the publish step f
 
 ## Rehearsal
 
-The whole pipeline, including headless Claude CLI validation, is provable without publishing anything:
+The complete verification pipeline, including headless Claude CLI validation, runs without publication authority:
 
 ```bash
 gh workflow run release.yml --ref <branch> -f rehearsal=true
 ```
 
-A `workflow_dispatch` run has no tag ref, so the guard, publish, and GitHub Release steps are skipped by their `if:` conditions. What still runs: `npm ci`, the Claude CLI install and version check, the full `release:check` (real `claude plugin validate`), and the **Dry-run publish (rehearsal)** step, `npm publish --dry-run --access public`. No token, no registry write, no release page. The dry-run step always runs against the current (normally already-published) version; `npm publish --dry-run` performs the server-side precondition check and rejects publishing over previously published versions. The rehearsal treats this specific rejection for the current version as the expected outcome, confirming the package is valid; any other error (packing, manifest, or already-published for a different version) still fails the step.
+Every `workflow_dispatch` run is verification-only, whether the ref is a branch or an existing tag and whether `rehearsal` is `true`, `false`, or omitted. The input remains for compatibility with existing invocations; it cannot enable publication. A tag-ref dispatch also checks version-carrier lockstep. Manual runs cannot enter the `publish` job, request an OIDC token, create tags or GitHub Releases, or publish to npm.
+
+The shared verification job runs `npm ci`, the Claude CLI install and version check, the measurement gate, and the full `release:check`, including `release:pack`, `release:artifact-smoke`, and `release:plugin`. Packing and artifact verification replace the old publish dry run. The workflow never invokes `npm publish --dry-run`: npm can perform trusted-publisher OIDC authentication before honoring dry-run mode. Rehearsal still reads the registry for dependencies and the published-predecessor artifact test; it does not prove the npm trusted-publisher binding or a real publish. The repository transfer hold above still applies.
 
 Run a rehearsal on any branch that changes the release pipeline itself.
 
@@ -268,7 +272,7 @@ gh workflow run release.yml --ref main \
   -f plugin_validation_attestation="$(cat plugin-validation.json)"
 ```
 
-A dispatch run never publishes for real: the publish and GitHub Release steps are gated on `github.ref_type == 'tag'`. An emergency real release still goes out the normal way, by pushing a tag through `npm run release -- <X.Y.Z>`.
+A dispatch run never publishes, including when `--ref` names a tag or `rehearsal=false` is supplied. Only a push-event `oms-v*` tag run with successful verification can enter the publishing job. An emergency real release still goes out the normal way, by pushing a tag through `npm run release -- <X.Y.Z>`, after the repository transfer hold has been resolved.
 
 ## Version and package-name preflight
 
