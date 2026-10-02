@@ -23,6 +23,7 @@ Retrieve vault knowledge without changing the vault. Search does not depend on c
 - `templates` lists the templates in the vault's template folder and their declared axes, or shows one template.
 - `index-status` requires `view: "status" | "collections" | "contexts"`.
 - `get-document` requires exactly one of `target`, `targets`, or `notePath` with its window.
+- Before editing, call `search {path: "<vault-relative note>"}` without `op`. It returns the whole note and its byte revision in `documents[0].content` and `documents[0].revision`; use that revision as `write.ifMatch`. The separate `get-document` operation supports slices and batches and does not return this edit revision. Do not derive an overwrite revision from a preview or slice.
 - `link` suggests `[[wikilinks]]` for one note (`notePath`, optional `folder`). Suggestions are anchored to a term note's basename or alias, cover the first occurrence of each target only, and report an ambiguous span instead of resolving it. `oms search --link <path>` is the CLI counterpart.
 
 A link suggestion is not consent, and search has no apply operation. Show the candidates and insert only the links the user accepts, with the host's file tools at the reported span; if the note changed since, suggest again. Save the note through MCP `write` so the contract judges it, then check it with `doctor { op: "link-check", notePath }`.
