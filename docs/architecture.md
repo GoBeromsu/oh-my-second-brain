@@ -56,6 +56,8 @@ The node cache (version 5) retains the authoritative byte-based source signature
 
 `status` reports observation. `doctor` diagnoses the contract and indexes. Its index repairs are explicit managed-state repairs after verified-target admission. Note backfill is not a repair. Target precedence and admission are in [verified targets](./verified-target.md).
 
+Read-only SQLite access captures the main database and WAL twice and requires matching byte digests and file identity before opening the disposable copy. The first pass streams into private temporary files; the second pass hashes through the same 1 MiB buffer. Source SQLite handles are never opened, source bytes and sidecars are not changed, and a failed capture closes all descriptors and removes the temporary copy. This bounds JavaScript capture buffers independently of index size; it does not claim a bound on SQLite caches or the rest of the process.
+
 ## Public surfaces
 
 The CLI does not require a host. The three public sets stay independent:
