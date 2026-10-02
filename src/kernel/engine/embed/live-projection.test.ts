@@ -30,7 +30,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 function internals() {
-  return selected as unknown as { observations: AxisObservationStore | undefined; observedDiskPath: string | undefined; temporaryDirectory: string | undefined };
+  return selected as unknown as { observations: AxisObservationStore | undefined; observedDiskPath: string | undefined; temporaryDirectory: { path: string } | undefined };
 }
 async function prepare(selector?: LexicalSnapshotSelector) { return selected.prepare(vault, ["needle"], 1000, undefined, selector); }
 
@@ -205,7 +205,7 @@ describe("live projection overflow reuse", () => {
     release();
     expect(await failed).toMatchObject({ message: expect.stringContaining("no partial results") });
     expect(selected.retainedStorage()).toMatchObject({ projectionBytes: 0, projectionDocuments: 0, observedBytes: 0 });
-    expect(internals().temporaryDirectory === undefined ? [] : await readdir(internals().temporaryDirectory!)).toEqual([]);
+    expect(internals().temporaryDirectory === undefined ? [] : await readdir(internals().temporaryDirectory!.path)).toEqual([]);
     expect((await prepare()).store.queryLex("needle", 1000)).toHaveLength(2);
     expect(selected.retainedStorage()).toMatchObject({ projectionBytes: 0, observedMemory: false });
   });

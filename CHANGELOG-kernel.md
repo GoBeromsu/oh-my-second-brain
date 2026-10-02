@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Temporary lexical spills and read-only snapshots retain the canonical directory's device/inode identity and recheck ownership before reuse, copying, and cleanup. Missing, replaced, symlinked, or unverifiable directories are left untouched with a bounded residue diagnostic; cleanup failures preserve the original operation error. These observations detect replacement but do not provide an atomic boundary against ongoing same-user tampering.
+
 - Observed-only frontmatter filters and discovery capture current metadata without seeding detached lexical storage or chunking Markdown. Warm requests reuse the existing parsed projection cache and private EAV backing. A later lexical or mixed query reconciles the complete canonical chunk corpus, while concurrent upgrades wait for joined metadata selectors to finish; source witnesses, cursor validation, memory budgets and read-only persistence behavior are preserved.
 
 - Detached lexical reconciliation skips clearing a document whose stored chunk set is already empty. Empty FTS deletes flush pending terms even without matching rows; avoiding them lets fresh notes share the intended bounded native batch while preserving existing-note cleanup and rollback.

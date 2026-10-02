@@ -1,7 +1,7 @@
 import { AxisObservationStore } from "../axes/store.js";
 import type { ObservedDiscoveryResult } from "../axes/observed-discovery.js";
 import { createHash } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mapWithConcurrency } from "../../conventions/vault-walk.js";
@@ -20,6 +20,7 @@ import { chunkDocument } from "./chunker.js";
 import { readDocumentSource, type DocumentSource } from "./source.js";
 import { openDetachedLexicalStore, type DetachedLexicalStore, type EngineStore } from "./store.js";
 import { LexicalDocumentBatch } from "./lexical-batch.js";
+import { createOwnedTemporaryDirectory, type OwnedTemporaryDirectory } from "./owned-temporary-directory.js";
 
 /** Retained SQLite pages, not a claim about peak RSS while reading a large file. */
 export const LIVE_LEXICAL_MEMORY_BYTES = 128 * 1024 * 1024;
@@ -115,7 +116,7 @@ export class LiveLexicalSession {
   private current: DetachedLexicalStore | undefined;
   private sourceGeneration: string | undefined;
   private completeVaultIdentity: string | undefined;
-  private temporaryDirectory: string | undefined;
+  private temporaryDirectory: OwnedTemporaryDirectory | undefined;
   private onDisk = false;
   private currentDiskPath: string | undefined;
   private refreshing: Promise<RefreshedLexicalSource> | undefined;
@@ -150,15 +151,17 @@ export class LiveLexicalSession {
     if (this.temporaryDirectory === undefined) {
       // Validate before mkdtemp: even temporary derived state must stay outside
       // the vault, including when TMPDIR points through a symbolic link.
-      assertExternalDatabasePath(this.vault, path.join(tmpdir(), "oms-live-lexical", "core.sqlite"));
-      this.temporaryDirectory = mkdtempSync(path.join(tmpdir(), "oms-live-lexical-"));
+      const temporaryRoot = realpathSync(tmpdir());
+      assertExternalDatabasePath(this.vault, path.join(temporaryRoot, "oms-live-lexical", "core.sqlite"));
+      this.temporaryDirectory = createOwnedTemporaryDirectory(temporaryRoot, "oms-live-lexical-");
     }
-    return path.join(this.temporaryDirectory, `${Date.now()}-${Math.random().toString(16).slice(2)}.sqlite`);
+    this.temporaryDirectory.assertOwned();
+    return path.join(this.temporaryDirectory.path, `${Date.now()}-${Math.random().toString(16).slice(2)}.sqlite`);
   }
 
   private removeTemporaryDatabase(filename: string | undefined): void {
     if (filename === undefined) return;
-    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${filename}${suffix}`, { force: true });
+    for (const suffix of ["", "-wal", "-shm"]) this.temporaryDirectory?.removeFile(`${filename}${suffix}`);
   }
 
   private replace(next: DetachedLexicalStore, token: string, diskPath?: string): void {
@@ -289,6 +292,7 @@ export class LiveLexicalSession {
   }
 
   private async refreshSources(lexical = true): Promise<RefreshedLexicalSource> {
+    this.temporaryDirectory?.assertOwned();
     // Observed-only bootstrap needs current Markdown, never a persistent FTS
     // seed. Keep the same confinement and root-identity checks on both paths.
     assertExternalDatabasePath(this.vault, this.dbPath);
@@ -297,6 +301,7 @@ export class LiveLexicalSession {
     const sources = lexical ? this.current!.store.readDocumentSources() ?? new Map<string, DocumentSource>() : this.sourceInventory;
     const forceBytePaths = new Set([...sources].filter(([, source]) => source.fingerprint === null).map(([docPath]) => docPath));
     const snapshot = await scanIndexSources(this.vault, undefined, forceBytePaths);
+    this.temporaryDirectory?.assertOwned();
     // listDocPaths omits zero-chunk documents, so source evidence participates too.
     const storedPaths = new Set([...(lexical ? this.current!.store.listDocPaths() : []), ...sources.keys()]);
     for (const docPath of storedPaths) {
@@ -318,6 +323,7 @@ export class LiveLexicalSession {
       nextInventory.set(docPath, source);
     };
     const batch = lexical ? new LexicalDocumentBatch(documents => {
+      this.temporaryDirectory?.assertOwned();
       this.current!.reconcileDocuments(documents);
       for (const { docPath, source } of documents) publish(docPath, source);
     }) : undefined;
@@ -347,6 +353,7 @@ export class LiveLexicalSession {
           }
         }
         const current = await readDocumentSource(snapshot.vault, docPath);
+        this.temporaryDirectory?.assertOwned();
         const parsed = parseNote(current.content);
         const document = parseNodeProjectionDocument(docPath, current.content, false, parsed);
         this.rememberProjection(docPath, current.source.contentSha256, document);
@@ -407,6 +414,7 @@ export class LiveLexicalSession {
         this.refreshing = this.refresh(lexical);
       }
       const { snapshot, documents } = await this.refreshing;
+      this.temporaryDirectory?.assertOwned();
       let selection: LexicalCandidateSelection | undefined;
       if (selector !== undefined) {
         this.observations ??= new AxisObservationStore(":memory:");
@@ -482,7 +490,7 @@ export class LiveLexicalSession {
         this.projections.clear();
         this.projectionBytes = 0;
         this.sourceInventory.clear();
-        if (this.temporaryDirectory !== undefined) rmSync(this.temporaryDirectory, { recursive: true, force: true });
+        this.temporaryDirectory?.dispose();
       }
     })();
     return this.disposal;
