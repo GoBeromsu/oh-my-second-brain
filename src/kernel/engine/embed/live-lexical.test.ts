@@ -51,8 +51,16 @@ async function hits(selected: LiveLexicalSession, query: string, k = Number.MAX_
   return prepared.store.queryLex(query, k, collection);
 }
 async function persistentImage() {
-  const files = (await readdir(root)).filter(name => name.startsWith("engine.sqlite"));
-  return Promise.all(files.sort().map(async name => [name, (await readFile(path.join(root, name))).toString("base64")]));
+  const names = (await readdir(root)).filter(name => name.startsWith("engine.sqlite"));
+  const image: Array<[string, string]> = [];
+  async function visit(name: string): Promise<void> {
+    if ((await stat(path.join(root, name))).isDirectory()) {
+      image.push([`${name}/`, ""]);
+      for (const child of (await readdir(path.join(root, name))).sort()) await visit(path.join(name, child));
+    } else image.push([name, (await readFile(path.join(root, name))).toString("base64")]);
+  }
+  for (const name of names.sort()) await visit(name);
+  return image;
 }
 
 describe("live detached native lexical sessions", () => {
@@ -188,7 +196,7 @@ describe("live detached native lexical sessions", () => {
     expect(await hits(selected, "commonterm", 10, "a")).toEqual([]);
   });
 
-  it("invalidates the detached seed after external WAL sync and atomic generation replacement", async () => {
+  it("refreshes current sources across external WAL sync and atomic generation replacement", async () => {
     const selected = session();
     await hits(selected, "oldkeyword");
     await writeFile(path.join(vault, "alpha.md"), NEW);

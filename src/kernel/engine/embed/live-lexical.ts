@@ -76,8 +76,17 @@ function stamp(filename: string): string {
 /** Metadata is change evidence; no source SQLite handle or source sidecars are opened. */
 function generation(vault: string, dbPath: string): string {
   return createHash("sha256").update(JSON.stringify([
-    realpathSync(vault), assertExternalDatabasePath(vault, dbPath), stamp(dbPath), stamp(`${dbPath}-wal`), CHUNKER,
+    realpathSync(vault), vaultIdentity(vault), assertExternalDatabasePath(vault, dbPath), stamp(dbPath), stamp(`${dbPath}-wal`), CHUNKER,
   ])).digest("hex");
+}
+
+/** Directory timestamps change on ordinary edits; only its stable identity matters. */
+function vaultIdentity(vault: string): string | undefined {
+  const canonical = realpathSync(vault);
+  const info = statSync(canonical, { bigint: true });
+  if (!info.isDirectory() || typeof info.dev !== "bigint" || info.dev <= 0n
+    || typeof info.ino !== "bigint" || info.ino <= 0n) return undefined;
+  return JSON.stringify([canonical, info.dev.toString(), info.ino.toString(), CHUNKER]);
 }
 
 function lexicalKey(query: string, k: number, collection?: string): string {
@@ -101,6 +110,7 @@ export class LiveLexicalSession {
   private projectionBytes = 0;
   private current: DetachedLexicalStore | undefined;
   private sourceGeneration: string | undefined;
+  private completeVaultIdentity: string | undefined;
   private temporaryDirectory: string | undefined;
   private onDisk = false;
   private currentDiskPath: string | undefined;
@@ -195,9 +205,17 @@ export class LiveLexicalSession {
     }
   }
 
-  private seed(): void {
+  private seed(): string | undefined {
+    // Once every eligible source has been captured, this private corpus owns
+    // its evidence. Persistent lexical/vector maintenance cannot make it stale;
+    // the complete source scan below still reconciles each request's Markdown.
+    // Keep confinement checks even when the persistent database is not read.
+    assertExternalDatabasePath(this.vault, this.dbPath);
+    const identity = vaultIdentity(this.vault);
+    if (this.current !== undefined && identity !== undefined && this.completeVaultIdentity === identity) return identity;
+    this.completeVaultIdentity = undefined;
     const token = generation(this.vault, this.dbPath);
-    if (this.current !== undefined && this.sourceGeneration === token) return;
+    if (this.current !== undefined && this.sourceGeneration === token) return identity;
     // Conservatively avoid loading a large source (including vectors) into RAM.
     let large = false;
     let sourceExists = false;
@@ -219,6 +237,7 @@ export class LiveLexicalSession {
     }
     this.replace(next, token, destination);
     this.enforceBudget();
+    return identity;
   }
 
   private dropProjection(docPath: string): void {
@@ -246,6 +265,8 @@ export class LiveLexicalSession {
   private async refresh(): Promise<RefreshedLexicalSource> {
     try { return await this.refreshSources(); }
     catch (error) {
+      // A partial refresh never graduates from generation-checked bootstrap.
+      this.completeVaultIdentity = undefined;
       // All source workers have drained before this cleanup. Other workers may
       // have repopulated backing storage after the first failed spill.
       this.releaseObserved();
@@ -262,7 +283,7 @@ export class LiveLexicalSession {
   }
 
   private async refreshSources(): Promise<RefreshedLexicalSource> {
-    this.seed();
+    const identity = this.seed();
     this.enforceBudget();
     const sources = this.current!.store.readDocumentSources() ?? new Map<string, DocumentSource>();
     const forceBytePaths = new Set([...sources].filter(([, source]) => source.fingerprint === null).map(([docPath]) => docPath));
@@ -330,6 +351,12 @@ export class LiveLexicalSession {
       documents.push(result.document);
     }
     this.enforceBudget();
+    if (identity !== vaultIdentity(this.vault) || snapshot.vault !== realpathSync(this.vault)) {
+      throw new Error("LIVE_LEXICAL_SOURCE_CHANGED: the vault identity changed while capturing it; retry the search.");
+    }
+    // This marks complete capture, not freshness of a returned result or of
+    // the persistent/vector index. Callers still perform final source checks.
+    this.completeVaultIdentity = identity;
     const byteVerifiedPaths = new Set([...files].filter(([, token]) => token.startsWith("bytes:")).map(([docPath]) => docPath));
     return { snapshot: { vault: snapshot.vault, files, contentSha256, byteVerifiedPaths }, documents };
   }
