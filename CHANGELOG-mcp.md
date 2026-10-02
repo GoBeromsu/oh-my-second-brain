@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- Default read-only MCP servers now close their resources on stdin EOF and termination signals, including disposable lexical disk files after a completed query. Previously that shutdown handler was installed only for opt-in maintenance servers, so ordinary client closure could leave scratch behind. Forced process termination may still leave an orphan directory.
+
 - Tool guidance identifies `search {path}` as the existing revision-bearing exact read for a subsequent `write.ifMatch`. A read/edit regression covers successful use and stale-revision refusal without changing response contracts.
 
 - An explicitly enabled server exposes maintenance status in doctor status, signals successful writes to its bounded update queue, and drains/cancels maintenance on shutdown. The four-tool surface and read-only search annotation stay unchanged.
