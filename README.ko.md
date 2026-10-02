@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/readme-hero.webp" alt="서로 연결된 노트를 표현한 추상적인 3D 아트워크." width="100%" />
+  <img src="./assets/readme-hero.webp" alt="oh my secondbrain — 거대한 서가와 떠다니는 낱장, 서로 이어지는 지식의 별자리." width="100%" />
 </p>
 
 <h1 align="center">Oh My Second Brain</h1>
@@ -223,7 +223,7 @@ oms hook pre                                    Claude 쓰기를 계약으로 �
 
 [기여 가이드](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/CONTRIBUTING.md)를 읽거나, 재현 가능한 문제와 구체적인 제안을 [이슈](https://github.com/Xia-Ataraxia/oh-my-second-brain/issues)로 남길 수 있다.
 
-[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros), [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)의 deep-interview 등 설계에 영향을 준 아이디어를 기록한다. runtime 복제나 연구 결과를 뜻하지 않는다. 상단의 3D 아트워크는 연결된 노트를 표현한 개념 이미지다. 제품 화면, host smoke 증거, 제품 gate 통과 결과가 아니다.
+[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros), [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)의 deep-interview 등 설계에 영향을 준 아이디어를 기록한다. runtime 복제나 연구 결과를 뜻하지 않는다. 상단 이미지는 서가와 떠다니는 낱장, 지식의 별자리를 표현한 자체 제작 Blender 장면이다. 네이티브 렌더링, CC0 목재 텍스처, 타이포그래피 출처는 [아트워크 크레딧](./assets/readme/ARTWORK.md)에 기록했다. 개념 이미지이며 제품 화면, host smoke 증거, 제품 gate 통과 결과가 아니다.
 
 ---
 

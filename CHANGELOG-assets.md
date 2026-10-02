@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- **Use the selected dark library README artwork.** The English and Korean READMEs now share the finished native Blender scene with floating pages and knowledge-stars, with readable poster typography and material credits. Setup commands, safety guidance, links, and runtime behavior are unchanged.
+
 - **Refresh the English and Korean README presentation.** Both READMEs now share a repository-specific 3D hero and a more compact overview while preserving setup, contract, host, safety, documentation, and credit guidance. Canonical repository links now point directly to `Xia-Ataraxia/oh-my-second-brain` after the ownership transfer.
 
 ## [0.20.6] - 2026-10-01

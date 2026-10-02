@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/readme-hero.webp" alt="Abstract 3D artwork of connected notes." width="100%" />
+  <img src="./assets/readme-hero.webp" alt="oh my secondbrain — a towering library with floating pages and connected stars." width="100%" />
 </p>
 
 <h1 align="center">Oh My Second Brain</h1>
@@ -223,7 +223,7 @@ Note `create`, `append`, `update`, and `backfill` are retired operations. There 
 
 Contributions are welcome. Start with the [contributing guide](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/CONTRIBUTING.md), or [open an issue](https://github.com/Xia-Ataraxia/oh-my-second-brain/issues) with a reproducible problem or a focused proposal.
 
-[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) records design influences, including [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros) and [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)'s deep-interview. Those credits describe ideas, not a copied runtime or a research result. The hero artwork is a conceptual 3D illustration of connected notes. It is not a product screenshot, host-smoke evidence, or a product-gate result.
+[ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) records design influences, including [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros) and [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)'s deep-interview. Those credits describe ideas, not a copied runtime or a research result. The hero is an original Blender library scene with floating paper and knowledge-stars. [Artwork and material credits](./assets/readme/ARTWORK.md) describe its native rendering, CC0 wood texture, and typography. It is conceptual artwork, not a product screenshot, host-smoke evidence, or a product-gate result.
 
 ---
 
