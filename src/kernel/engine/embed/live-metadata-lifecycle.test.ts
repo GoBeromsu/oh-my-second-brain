@@ -150,7 +150,7 @@ describe("metadata generation lifecycle", () => {
   it("keeps the last complete source inventory after a partial capture and recovers failed backing", async () => {
     const selected = session({ maxProjectionBytes: 0, maxObservedBytes: 1 });
     await metadata(selected);
-    const state = selected as unknown as { sourceInventory: Map<string, source.DocumentSource>; temporaryDirectory: string };
+    const state = selected as unknown as { sourceInventory: Map<string, source.DocumentSource>; temporaryDirectory: { path: string } };
     const before = state.sourceInventory;
     await writeFile(path.join(vault, "a.md"), "---\nsubject: new\n---\nreplacement");
     await writeFile(path.join(vault, "b.md"), "---\nsubject: new\n---\nreplacement");
@@ -159,7 +159,7 @@ describe("metadata generation lifecycle", () => {
     await expect(metadata(selected)).rejects.toThrow("partial capture");
     expect(state.sourceInventory).toBe(before);
     expect(selected.retainedStorage().observedBytes).toBe(0);
-    expect(await readdir(state.temporaryDirectory)).toEqual([]);
+    expect(await readdir(state.temporaryDirectory.path)).toEqual([]);
     expect((await metadata(selected)).candidatePaths).toEqual([]);
     expect(state.sourceInventory).not.toBe(before);
     expect(state.sourceInventory.size).toBe(2);

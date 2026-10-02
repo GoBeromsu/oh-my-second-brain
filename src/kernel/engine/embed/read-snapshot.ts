@@ -4,7 +4,6 @@ import {
   constants,
   existsSync,
   fstatSync,
-  mkdtempSync,
   openSync,
   readSync,
   realpathSync,
@@ -17,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { ENGINE_STORE_FILENAME } from "../paths.js";
 import { fileMetadataWitness } from "../../conventions/file-snapshot.js";
+import { createOwnedTemporaryDirectory, type OwnedTemporaryDirectory } from "./owned-temporary-directory.js";
 
 export interface EngineStoreReadSnapshot {
   readonly dbPath: string;
@@ -71,7 +71,7 @@ function writeChunk(fd: number, buffer: Buffer, length: number): void {
   }
 }
 
-function captureFile(filename: string, buffer: Buffer, destination: string | undefined, afterRead?: (filename: string) => void): CaptureResult {
+function captureFile(filename: string, buffer: Buffer, destination: { readonly filename: string; readonly directory: OwnedTemporaryDirectory } | undefined, afterRead?: (filename: string) => void): CaptureResult {
   let before: BigIntStats;
   try { before = statSync(filename, { bigint: true }); }
   catch (error) { if (isMissingFileError(error)) return { status: "missing" }; throw error; }
@@ -84,7 +84,10 @@ function captureFile(filename: string, buffer: Buffer, destination: string | und
     input = openSync(filename, constants.O_RDONLY | constants.O_NONBLOCK);
     const opened = fstatSync(input, { bigint: true });
     if (!sameMetadata(before, opened)) return { status: "unstable" };
-    if (destination !== undefined) output = openSync(destination, "w", 0o600);
+    if (destination !== undefined) {
+      destination.directory.assertOwned();
+      output = openSync(destination.filename, "w", 0o600);
+    }
     const hash = createHash("sha256");
     const length = Number(opened.size);
     let offset = 0;
@@ -162,24 +165,26 @@ export function createEngineStoreReadSnapshot(
     );
   }
 
-  const directory = mkdtempSync(path.join(temporaryRoot, "oms-engine-read-"));
-  const dbPath = path.join(directory, "snapshot.sqlite");
+  const directory = createOwnedTemporaryDirectory(temporaryRoot, "oms-engine-read-");
+  const dbPath = path.join(directory.path, "snapshot.sqlite");
   const buffer = Buffer.allocUnsafe(SNAPSHOT_BUFFER_BYTES);
   try {
     for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS; attempt += 1) {
       // Remove a prior attempt's WAL, including when the next capture sees it
       // absent. No SQLite handle sees these files until both passes agree.
+      directory.assertOwned();
       rmSync(`${dbPath}-wal`, { force: true });
-      const firstMain = captureFile(source, buffer, dbPath, options.afterRead);
-      const firstWal = captureFile(`${source}-wal`, buffer, `${dbPath}-wal`, options.afterRead);
+      const firstMain = captureFile(source, buffer, { filename: dbPath, directory }, options.afterRead);
+      const firstWal = captureFile(`${source}-wal`, buffer, { filename: `${dbPath}-wal`, directory }, options.afterRead);
       const secondMain = captureFile(source, buffer, undefined, options.afterRead);
       const secondWal = captureFile(`${source}-wal`, buffer, undefined, options.afterRead);
       if (firstMain.status === "captured" &&
         sameCapture(firstMain, secondMain) &&
         sameCapture(firstWal, secondWal)) {
+        directory.assertOwned();
         return {
           dbPath,
-          dispose: () => rmSync(directory, { recursive: true, force: true }),
+          dispose: () => directory.dispose(),
         };
       }
     }
@@ -187,7 +192,7 @@ export function createEngineStoreReadSnapshot(
       `Engine store changed while capturing a read-only snapshot at "${source}". Retry when the current write completes.`,
     );
   } catch (error) {
-    rmSync(directory, { recursive: true, force: true });
+    directory.dispose();
     throw error;
   }
 }

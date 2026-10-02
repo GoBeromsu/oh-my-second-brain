@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import * as source from "./source.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -262,6 +262,34 @@ describe("live detached native lexical sessions", () => {
     await selected.dispose();
     await selected.dispose();
     expect(selected.retainedStorage().bytes).toBe(0);
+  });
+
+  it("creates and disposes normal spill storage through a canonical TMPDIR alias", async () => {
+    const temporary = path.join(root, "temporary");
+    const alias = path.join(root, "temporary-alias");
+    await mkdir(temporary); await symlink(temporary, alias, "dir");
+    vi.stubEnv("TMPDIR", alias);
+    const selected = new LiveLexicalSession({ vault, dbPath: path.join(root, "absent.sqlite"), maxMemoryBytes: 1 });
+    sessions.push(selected);
+    expect(await hits(selected, "oldkeyword")).toHaveLength(1);
+    const owned = (selected as unknown as { temporaryDirectory: { path: string } }).temporaryDirectory;
+    expect(path.dirname(owned.path)).toBe(await realpath(temporary));
+    expect(await readdir(temporary)).toHaveLength(1);
+    await selected.dispose();
+    expect(await readdir(temporary)).toEqual([]);
+  });
+
+  it("keeps ownership observations bounded across unchanged warm note reuse", async () => {
+    for (let index = 0; index < 12; index++) await writeFile(path.join(vault, `warm-${index}.md`), "# Warm\noldkeyword\n");
+    const selected = session(1);
+    expect(await hits(selected, "oldkeyword")).toHaveLength(13);
+    const owned = (selected as unknown as { temporaryDirectory: { assertOwned(): void } }).temporaryDirectory;
+    const check = vi.spyOn(owned, "assertOwned");
+    vi.mocked(source.readDocumentSource).mockClear();
+    expect(await hits(selected, "oldkeyword")).toHaveLength(13);
+    expect(source.readDocumentSource).not.toHaveBeenCalled();
+    expect(check.mock.calls.length).toBeGreaterThan(0);
+    expect(check.mock.calls.length).toBeLessThanOrEqual(4);
   });
 
   it("builds an absent index in memory and rejects cross-vault or uncaptured queries", async () => {

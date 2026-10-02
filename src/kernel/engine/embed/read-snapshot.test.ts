@@ -7,7 +7,7 @@ import { createEngineStoreReadSnapshot, hashReadSnapshotFile } from "./read-snap
 
 vi.mock("node:fs", async importOriginal => {
   const original = await importOriginal<typeof import("node:fs")>();
-  return { ...original, openSync: vi.fn(original.openSync), closeSync: vi.fn(original.closeSync), readSync: vi.fn(original.readSync), writeSync: vi.fn(original.writeSync), readFileSync: vi.fn(original.readFileSync) };
+  return { ...original, openSync: vi.fn(original.openSync), closeSync: vi.fn(original.closeSync), readSync: vi.fn(original.readSync), writeSync: vi.fn(original.writeSync), readFileSync: vi.fn(original.readFileSync), rmSync: vi.fn(original.rmSync) };
 });
 
 let root: string;
@@ -18,9 +18,9 @@ beforeEach(async () => {
   root = original.mkdtempSync(path.join(tmpdir(), "oms-stream-snapshot-"));
   original.mkdirSync(path.join(root, "source"));
   source = path.join(root, "source", "index.sqlite");
-  for (const key of ["openSync", "closeSync", "readSync", "writeSync", "readFileSync"] as const) vi.mocked(fs[key]).mockImplementation(original[key]);
+  for (const key of ["openSync", "closeSync", "readSync", "writeSync", "readFileSync", "rmSync"] as const) vi.mocked(fs[key]).mockImplementation(original[key]);
 });
-afterEach(() => { original.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); original.rmSync(root, { recursive: true, force: true }); });
 
 describe("bounded read-only database snapshots", () => {
   it("copies exact main/WAL bytes with bounded reads and no whole-image allocation", () => {
@@ -49,6 +49,32 @@ describe("bounded read-only database snapshots", () => {
     const failure = new Error("injected after-read failure");
     expect(() => createEngineStoreReadSnapshot(source, { afterRead: () => { throw failure; } })).toThrow(failure);
     expect(open.size).toBe(0);
+  });
+
+  it("preserves a capture error if temporary cleanup fails and reports the residue", () => {
+    const temporary = path.join(root, "temporary");
+    original.mkdirSync(temporary); vi.stubEnv("TMPDIR", temporary);
+    original.writeFileSync(source, "synthetic database bytes");
+    const diagnostic = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.mocked(fs.rmSync).mockImplementation((filename, options) => {
+      if (options?.recursive) throw new Error("injected cleanup failure");
+      return original.rmSync(filename, options);
+    });
+    const failure = new Error("original capture failure");
+    expect(() => createEngineStoreReadSnapshot(source, { afterRead: () => { throw failure; } })).toThrow(failure);
+    expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining("OMS_TEMP_CLEANUP_SKIPPED"));
+  });
+
+  it("preserves an initial WAL reset error without attempting a capture", () => {
+    original.writeFileSync(source, "synthetic database bytes");
+    const failure = new Error("WAL reset failed");
+    vi.mocked(fs.rmSync).mockImplementation((filename, options) => {
+      if (!options?.recursive) throw failure;
+      return original.rmSync(filename, options);
+    });
+    const afterRead = vi.fn();
+    expect(() => createEngineStoreReadSnapshot(source, { afterRead })).toThrow(failure);
+    expect(afterRead).not.toHaveBeenCalled();
   });
 
   it("handles short reads and writes without truncating the copy", () => {
