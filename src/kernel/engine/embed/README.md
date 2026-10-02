@@ -4,3 +4,5 @@ Responsible for splitting vault documents into overlapping text chunks and produ
 
 **Absorbed sources (idea-only, no verbatim code):**
 - `nashsu/llm_wiki` (GPL-3.0) — sliding-window overlap heuristic and heading-aware split boundary detection.
+
+Short database writers use a separate immutable-record owner directory before entering the legacy `.lock` protocol. This prevents concurrent upgraded stale reclaimers from moving a live successor and admitting a third writer through the temporary pathname gap. The legacy lock remains visible as a compatibility courtesy; old processes do not observe the new owner directory, so mixed-version concurrent writers are not covered by this guarantee. Stop old writers before using the upgraded writer protocol. Unreadable or malformed legacy owner records block acquisition without moving or deleting them; only a valid, provably dead PID admits stale recovery.

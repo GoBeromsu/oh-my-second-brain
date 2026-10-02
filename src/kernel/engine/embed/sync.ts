@@ -27,6 +27,7 @@ import { capabilityGuidance } from "./config.js";
 import { requireRealEmbeddingProvider } from "./provider.js";
 import { openEngineStore, openEngineStoreCore } from "./store.js";
 import { makeEmbeddingIdentity } from "./identity.js";
+import { acquireProcessOwner } from "../maintenance-owner.js";
 import { assertExternalDatabasePath, engineStorePath } from "../paths.js";
 import type { EmbeddingProvider } from "../types.js";
 import type { ChunkerOptions, Chunk } from "../types.js";
@@ -238,13 +239,37 @@ function identityEquivalent(a: EmbeddingIdentity, b: EmbeddingIdentity): boolean
 /**
  * Acquire the writer lock without a dependency on a native locking package.
  *
- * A complete owner payload is published through a temporary O_EXCL inode and
- * atomically claimed with a hard link. The file records the owner PID so a
- * process killed between claim and release does not strand every future sync.
- * A live owner is always rejected (rather than silently waiting), which keeps
- * concurrent writers loud and bounded.
+ * An immutable per-attempt owner record serializes upgraded writers before
+ * they inspect or reclaim the legacy fixed-name lock. Thus a stale observer
+ * cannot rename a successor while a third upgraded writer enters the gap.
+ * Dead-process records can be reclaimed; live or unknown owners fail loudly.
  */
 export function acquireEngineStoreWriterLock(dbPath: string): () => void {
+  let owner;
+  try { owner = acquireProcessOwner(`${dbPath}.writer.owners`); }
+  catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const prefix = reason.startsWith("MAINTENANCE_OWNER_BUSY:") ? "Embedding sync is already in progress (writer lock)" : "Embedding sync writer lock unavailable";
+    throw new Error(`${prefix}: ${reason}`, { cause: error });
+  }
+  try {
+    const releaseLegacy = acquireLegacyEngineStoreWriterLock(dbPath);
+    return () => {
+      try { releaseLegacy(); }
+      finally { owner.release(); }
+    };
+  } catch (error) {
+    owner.release();
+    throw error;
+  }
+}
+
+/**
+ * Keep the legacy visible lock for older clients, but serialize all upgraded
+ * stale reclaimers with the immutable owner protocol above. Old reclaimers do
+ * not observe that protocol: concurrent mixed-version writers are unsupported.
+ */
+function acquireLegacyEngineStoreWriterLock(dbPath: string): () => void {
   const lockPath = `${dbPath}.lock`;
   const lockDir = path.dirname(lockPath);
   mkdirSync(lockDir, { recursive: true });
@@ -292,16 +317,18 @@ export function acquireEngineStoreWriterLock(dbPath: string): () => void {
         observedLockText = readFileSync(lockPath, "utf8");
         const ownerText = observedLockText.trim().split(/\r?\n/, 1)[0] ?? "";
         if (/^\d+$/.test(ownerText)) ownerPid = Number.parseInt(ownerText, 10);
-      } catch {
-        // An unreadable lock is treated as stale.
+      } catch (readError) {
+        if ((readError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw new Error(`Embedding sync writer lock owner is unreadable; no stale recovery performed (lock: ${lockPath}).`, { cause: readError });
       }
-      if (ownerPid !== undefined && Number.isInteger(ownerPid) && ownerPid > 0) {
-        try {
-          process.kill(ownerPid, 0);
-          throw new Error(`Embedding sync is already in progress (lock: ${lockPath}).`);
-        } catch (probeErr) {
-          if ((probeErr as NodeJS.ErrnoException).code !== "ESRCH") throw probeErr;
-        }
+      if (ownerPid === undefined || !Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
+        throw new Error(`Embedding sync writer lock has an invalid owner PID; inspect stopped processes before recovery (lock: ${lockPath}).`);
+      }
+      try {
+        process.kill(ownerPid, 0);
+        throw new Error(`Embedding sync is already in progress (lock: ${lockPath}).`);
+      } catch (probeErr) {
+        if ((probeErr as NodeJS.ErrnoException).code !== "ESRCH") throw probeErr;
       }
 
       // Remove exactly the stale inode that was inspected. Renaming it away
