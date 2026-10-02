@@ -25,6 +25,8 @@ import {
   embeddingConfigPresent,
 } from "../kernel/semantic/semantic-engine.js";
 import { LiveLexicalSession } from "../kernel/engine/embed/live-lexical.js";
+import { startIndexMaintenance, type IndexMaintenance } from "../kernel/engine/index-maintenance.js";
+import type { MaintenanceMode } from "../kernel/engine/maintenance-controller.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
@@ -279,7 +281,7 @@ export interface OMSMcpServerOptions {
   source: WriteTargetSource;
 }
 
-export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
+export function createOMSMcpServer(opts: OMSMcpServerOptions, maintenance?: IndexMaintenance): Server {
   const vault = path.resolve(opts.vault);
   const source = opts.source;
 
@@ -429,9 +431,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     },
   );
 
+  let closingResources: Promise<void> | undefined;
+  const disposeResources = (): Promise<void> => closingResources ??= Promise.all([maintenance?.stop(), engine.dispose(), liveLexicalSession?.dispose()]).then(() => undefined);
   server.onclose = () => {
-    void Promise.all([engine.dispose(), liveLexicalSession?.dispose()]).catch(() => undefined);
+    void disposeResources().catch(error => { if (maintenance !== undefined) process.stderr.write(`[oms] ${error instanceof Error ? error.message : String(error)}\n`); });
   };
+  const closeServer = server.close.bind(server);
+  server.close = async () => { try { await closeServer(); } finally { await disposeResources(); } };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: omsMcpTools,
@@ -455,7 +461,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         result = await (async () => {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
-    if (publicName === "write") return await writeNote(vault, source, args ?? {});
+    if (publicName === "write") return await writeNote(vault, source, args ?? {}, relativePath => maintenance?.notify(relativePath));
     if (publicName === "interview") return await handleInterview(ctx, args);
     if (publicName === "search") {
       const exact = await searchExactRead(vault, args, searchPathDefaults);
@@ -471,7 +477,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       args = prepared.args;
     }
     if (name === "oms_graph_status") {
-      return await handleStatus(ctx, readTools());
+      return await handleStatus(ctx, readTools(), maintenance?.status());
     }
 
     try {
@@ -511,12 +517,31 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   return server;
 }
 
-export async function runMcpServer(opts: OMSMcpServerOptions): Promise<void> {
-  const server = createOMSMcpServer(opts);
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+export async function runMcpServer(opts: OMSMcpServerOptions & { readonly maintenance?: MaintenanceMode }): Promise<void> {
+  const maintenance = await startIndexMaintenance({ vault: opts.vault, source: opts.source, mode: opts.maintenance });
+  let server: Server | undefined;
+  try {
+    server = createOMSMcpServer(opts, maintenance);
+    await server.connect(new StdioServerTransport());
+  } catch (error) { try { await server?.close(); } finally { await maintenance?.stop(); } throw error; }
+  if (maintenance !== undefined) {
+    // The SDK stdio transport does not close itself on stdin EOF. A watcher
+    // otherwise keeps this process alive until the client force-kills it.
+    let shuttingDown: Promise<void> | undefined;
+    const shutdown = (exitCode?: number): void => {
+      shuttingDown ??= server!.close();
+      void shuttingDown.catch(error => { process.stderr.write(`[oms] ${error instanceof Error ? error.message : String(error)}\n`); }).finally(() => {
+        process.stdin.off("end", onEnd); process.off("SIGINT", onInterrupt); process.off("SIGTERM", onTerminate);
+        if (exitCode !== undefined) process.exit(exitCode);
+      });
+    };
+    const onEnd = (): void => shutdown();
+    const onInterrupt = (): void => shutdown(130);
+    const onTerminate = (): void => shutdown(143);
+    process.stdin.once("end", onEnd); process.once("SIGINT", onInterrupt); process.once("SIGTERM", onTerminate);
+    if (process.stdin.readableEnded) shutdown();
+  }
   // Detached and unawaited: a slow or offline registry must not delay serving.
   // Returns null while the cache is fresh, so most boots start nothing at all.
   void scheduleUpdateNoticeRefresh({ installedVersion: SERVER_VERSION });
 }
-

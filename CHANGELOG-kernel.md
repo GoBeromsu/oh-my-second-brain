@@ -4,15 +4,20 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Automatic maintenance ignores excluded editor housekeeping watch hints while retaining known exclusion settings and their directory replacements. Uppercase Markdown hints remain incremental, and unsafe or uncertain paths still request complete reconciliation.
+
+- Automatic full maintenance only loads an already installed native embedding backend; missing binaries fail with setup guidance instead of downloading or building llama.cpp in the background. Explicit provider callers retain their existing policy.
+
+- Explicit automatic maintenance reuses the existing index and revisioned queue with bounded scheduling, complete-scan recovery and separate conservative process ownership. Watch hints never authorize mass deletion; cancelled or superseded embedding jobs cannot commit. The feature stays off unless a server invocation enables it, and existing source/target/model checks remain authoritative.
+
+- Warm live lexical sessions keep their complete private corpus across persistent index writes, vector syncs, rebuilds, and index removal or replacement. Each query still refreshes current Markdown and validates returned sources; incomplete captures and changed or unknown vault identities retain conservative bootstrap checks. Private freshness never certifies persistent/vector synchronization, and searches still leave those stores untouched.
 - Late embedding jobs validate their captured revision and model before initializing an existing store. Preflight, schema initialization, and publication share one connection and transaction, so replaced stores and cancelled legacy migrations remain unchanged when a job is rejected.
 
 - Background embedding maintenance completes already-embedded queue entries only after checking real vector coverage, and repairs verified clean chunks whose vectors are missing. Legacy revision-less entries can be upgraded safely, preventing repeated stale retries after interrupted queue housekeeping. Pending-only paths remain visible to complete scans so excluded or deleted notes cannot strand orphaned work.
 
-- Per-note write maintenance publishes lexical chunks, source evidence, and a revisioned embedding queue in one SQLite transaction. Background embedding results can commit only against the same source, chunks, model, and active owner; edits, deletions, or cancellation leave newer work intact. Explicit embedding sync also repairs missing vectors left by interrupted legacy lexical updates and retains pending work through lexical-only passes.
-
 - Short index writers serialize stale-lock recovery with immutable per-attempt owner records, closing a race that could temporarily move a live successor and admit another writer. All concurrent writers must use the upgraded protocol; the legacy lock remains visible but cannot fence an already-running old reclaimer. Unreadable or malformed legacy owner records now fail closed instead of being reclaimed or retried indefinitely.
 
-- Warm live lexical sessions keep their complete private corpus across persistent index writes, vector syncs, rebuilds, and index removal or replacement. Each query still refreshes current Markdown and validates returned sources; incomplete captures and changed or unknown vault identities retain conservative bootstrap checks. Private freshness never certifies persistent/vector synchronization, and searches still leave those stores untouched.
+- Per-note write maintenance publishes lexical chunks, source evidence, and a revisioned embedding queue in one SQLite transaction. Background embedding results can commit only against the same source, chunks, model, and active owner; edits, deletions, or cancellation leave newer work intact. Explicit embedding sync also repairs missing vectors left by interrupted legacy lexical updates and retains pending work through lexical-only passes.
 
 - Observed value facets include a directly reusable, JSON-safe exact typed selection. Selecting a date, date-looking string, numeric timestamp, boolean or string now reproduces its distinct-note count within an unchanged discovery scope, without changing declared-axis or legacy comparison behavior. Exact date selectors require canonical ISO strings rather than permissive date coercion.
 - Ordinary live refresh prunes obsolete projection backing without invalidating unchanged observed-field rows. The next explicit observed query removes deleted/excluded canonical metadata and adds renamed notes through the existing authoritative snapshot reconciliation, avoiding a whole-corpus EAV rewrite while retaining cursor invalidation and current-source checks.

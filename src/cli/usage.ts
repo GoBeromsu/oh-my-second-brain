@@ -36,7 +36,7 @@ const MAIN_USAGE_COMMANDS: readonly MainUsageCommand[] = [
       "              revert-propose, reclaim-evolution-lock. `doctor status` is read-only.",
     ],
   },
-  { name: "serve", line: "  serve     Start the MCP stdio server or local HTTP runtime." },
+  { name: "serve", line: "  serve     Start the MCP stdio server or local HTTP runtime.", detailLines: ["              Optional --maintenance <lexical|full> maintains an existing index; off by default."] },
   { name: "hook", line: "  hook      Run the Claude Code vault guard hook." },
 ];
 

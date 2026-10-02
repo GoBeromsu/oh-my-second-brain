@@ -10,6 +10,9 @@ import type {
 } from "../kernel/search/semantic-contract.js";
 import type { McpSemanticExpandStrategy } from "../kernel/engine/mcp/types.js";
 import { LiveLexicalSession } from "../kernel/engine/embed/live-lexical.js";
+import { startIndexMaintenance, type IndexMaintenance } from "../kernel/engine/index-maintenance.js";
+import type { MaintenanceMode } from "../kernel/engine/maintenance-controller.js";
+import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
 import { requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
 import { createEngineSession } from "./engine-session.js";
 
@@ -20,6 +23,8 @@ export interface ServeHttpServer {
 
 export interface ServeHttpOptions {
   readonly vault: string;
+  readonly source?: WriteTargetSource;
+  readonly maintenance?: MaintenanceMode;
   readonly index?: string;
   readonly host?: string;
   readonly port?: number;
@@ -33,6 +38,7 @@ export interface ServeHttpOptions {
 
 interface RouteContext {
   readonly vault: string;
+  readonly maintenance?: IndexMaintenance;
   readonly lexicalSession?: LiveLexicalSession;
   readonly index?: string;
   readonly adapter?: McpEngineAdapter;
@@ -252,6 +258,7 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
         ok: status.available,
         storage: status.available ? status.storage : "oms-native-json",
         status,
+        ...(ctx.maintenance === undefined ? {} : { maintenance: ctx.maintenance.status() }),
       });
       return;
     }
@@ -315,6 +322,7 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
 export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpServer> {
   const host = safeHost(opts.host);
   const port = opts.port ?? 8765;
+  if (opts.maintenance !== undefined && (opts.adapter !== undefined || opts.index !== undefined)) throw new Error("Automatic maintenance requires the canonical vault index and a server-owned adapter.");
   // Verify the normal engine path before listening, then release its immutable
   // snapshot. Vector/status requests retain request-owned persistent snapshots;
   // lexical queries use the generation-aware detached session created below.
@@ -327,8 +335,12 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
     await readiness.dispose();
   }
   const lexicalSession = opts.adapter === undefined ? new LiveLexicalSession({ vault: opts.vault }) : undefined;
+  let maintenance: IndexMaintenance | undefined;
+  try { maintenance = await startIndexMaintenance({ vault: opts.vault, source: opts.source, mode: opts.maintenance, modelCacheDir: opts.modelCacheDir, modelEnv: opts.modelEnv }); }
+  catch (error) { await lexicalSession?.dispose(); throw error; }
   const ctx: RouteContext = {
     vault: opts.vault,
+    maintenance,
     lexicalSession,
     index: opts.index,
     adapter: opts.adapter,
@@ -347,22 +359,34 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
       });
     });
   } catch (error) {
-    await lexicalSession?.dispose();
+    await Promise.all([maintenance?.stop(), lexicalSession?.dispose()]);
     throw error;
   }
   const address = server.address();
   const actualPort = typeof address === "object" && address ? (address as AddressInfo).port : port;
   const urlHost = host === "::1" ? "[::1]" : host;
+  let closing: Promise<void> | undefined;
   return {
     url: `http://${urlHost}:${actualPort}`,
-    close: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
+    close: () => closing ??= (async () => {
+      // Cancel writers immediately. An unfinished HTTP body must not defer the
+      // maintenance cancellation deadline or allow new commits during shutdown.
+      const stopped = maintenance?.stop();
+      let forceClose: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const drained = new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) reject(error);
+            else resolve();
+          });
         });
-      });
-      await lexicalSession?.dispose();
-    },
+        if (maintenance !== undefined) forceClose = setTimeout(() => server.closeAllConnections(), 5000);
+        await Promise.all([drained, stopped]);
+      } finally {
+        if (forceClose !== undefined) clearTimeout(forceClose);
+        if (maintenance !== undefined) server.closeAllConnections();
+        await lexicalSession?.dispose();
+      }
+    })(),
   };
 }
