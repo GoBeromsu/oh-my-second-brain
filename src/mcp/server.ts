@@ -234,14 +234,14 @@ export const omsMcpTools: Tool[] = [
   {
     name: "write",
     title: "Oh My Second Brain write",
-    description: "Write one note: {path, content, template?, ifMatch?, check?}. Mechanical fixes (date/title variables, date defaults, template headings) are applied, then the vault contract judges the note. Only a safety refusal denies the write, leaving the file unchanged and returning only {field, kind} refusals; anything else the note breaks is saved and listed as {field, kind} warnings in the receipt, or the note is kept as a draft (status drafted, with a draftRef) when a new gap cannot be repaired. Overwriting an existing note needs ifMatch (sha256:<rev>) from a receipt or a check; check judges and returns the frame without touching disk. A saved note returns a receipt with its revision and index state.",
+    description: "Write one note: {path, content, template?, ifMatch?, check?}. Mechanical fixes (date/title variables, date defaults, template headings) are applied, then the vault contract judges the note. Only a safety refusal denies the write, leaving the file unchanged and returning only {field, kind} refusals; anything else the note breaks is saved and listed as {field, kind} warnings in the receipt, or the note is kept as a draft (status drafted, with a draftRef) when a new gap cannot be repaired. Overwriting an existing note needs ifMatch (sha256:<rev>) from search {path} documents[0].revision, a receipt, or a check; check judges and returns the frame without touching disk. A saved note returns a receipt with its revision and index state.",
     inputSchema: operationSchema("write"),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "search",
     title: "Oh My Second Brain search",
-    description: "Retrieve vault context, template metadata, semantic search, selected documents, and wikilink suggestions (`op: link`). `op` selects the operation. `{path}` alone reads one note by its vault-relative path, normalization-insensitively, without the index or a model.",
+    description: "Retrieve vault context, template metadata, semantic search, selected documents, and wikilink suggestions (`op: link`). `op` selects the operation. `{path}` alone reads one note by its vault-relative path, normalization-insensitively, without the index or a model, returning complete content and a byte revision in documents[0] for write.ifMatch. get-document supports slices and batches but does not return an overwrite revision.",
     inputSchema: operationSchema("search"),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },

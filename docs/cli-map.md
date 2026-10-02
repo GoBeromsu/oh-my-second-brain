@@ -46,6 +46,8 @@ Both run one pipeline: frame the target, conform mechanically (template variable
 | none | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window). |
 | `oms doctor status --view status|collections|contexts` | `oms_search` | `index-status` | `view=status|collections|contexts`; the CLI also takes `--index <path>` and `--collection <name>`. Read-only; never creates a store. |
 
+For read-before-edit, use MCP `search {path: "note.md"}` without `op`, or CLI `oms search --path note.md`. Both return the complete source in `documents[0].content` and its current `sha256:` byte revision in `documents[0].revision`. Supply that revision as `write.ifMatch` (CLI `--if-match`). The separate MCP `get-document` operation is for document retrieval, including slices and batches, and does not return an overwrite revision. On `WRITE_TARGET_CHANGED`, reread the complete note and reconcile the requested edit before retrying.
+
 A plain `oms search <text>` is lexical-only. Search is independent of the contract: lexical, vector, HyDE, and typed-axis queries still include notes that would fail it, and a missing or damaged contract does not stop search. Search does not write notes and does not create an engine store.
 
 ## Interview and setup
