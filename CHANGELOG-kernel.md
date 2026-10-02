@@ -4,6 +4,12 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Late embedding jobs validate their captured revision and model before initializing an existing store. Preflight, schema initialization, and publication share one connection and transaction, so replaced stores and cancelled legacy migrations remain unchanged when a job is rejected.
+
+- Background embedding maintenance completes already-embedded queue entries only after checking real vector coverage, and repairs verified clean chunks whose vectors are missing. Legacy revision-less entries can be upgraded safely, preventing repeated stale retries after interrupted queue housekeeping. Pending-only paths remain visible to complete scans so excluded or deleted notes cannot strand orphaned work.
+
+- Per-note write maintenance publishes lexical chunks, source evidence, and a revisioned embedding queue in one SQLite transaction. Background embedding results can commit only against the same source, chunks, model, and active owner; edits, deletions, or cancellation leave newer work intact. Explicit embedding sync also repairs missing vectors left by interrupted legacy lexical updates and retains pending work through lexical-only passes.
+
 - Short index writers serialize stale-lock recovery with immutable per-attempt owner records, closing a race that could temporarily move a live successor and admit another writer. All concurrent writers must use the upgraded protocol; the legacy lock remains visible but cannot fence an already-running old reclaimer. Unreadable or malformed legacy owner records now fail closed instead of being reclaimed or retried indefinitely.
 
 - Warm live lexical sessions keep their complete private corpus across persistent index writes, vector syncs, rebuilds, and index removal or replacement. Each query still refreshes current Markdown and validates returned sources; incomplete captures and changed or unknown vault identities retain conservative bootstrap checks. Private freshness never certifies persistent/vector synchronization, and searches still leave those stores untouched.

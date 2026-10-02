@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileMetadataWitness, readFileSnapshot } from "../../conventions/file-snapshot.js";
@@ -31,9 +32,17 @@ interface SourceRow {
 }
 const DIGEST = /^[a-f0-9]{64}$/u;
 
+function decodeSource(row: SourceRow): DocumentSource {
+  if (row.version !== 1 || (row.fingerprint !== null && !DIGEST.test(row.fingerprint)) || !DIGEST.test(row.content_sha256) || typeof row.chunker !== "string" || row.chunker.length === 0) {
+    throw new Error("Engine document source evidence is invalid or unsupported. Run an explicit index synchronization.");
+  }
+  return { fingerprint: row.fingerprint, contentSha256: row.content_sha256, chunker: row.chunker };
+}
+
 export function createDocumentSourceAccess(db: Database.Database, readonly = false) {
   const present = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'engine_document_source'").get() !== undefined;
   const read = present ? db.prepare<[], SourceRow>("SELECT doc_path, version, fingerprint, content_sha256, chunker FROM engine_document_source") : null;
+  const readOne = present ? db.prepare<[string], SourceRow>("SELECT doc_path, version, fingerprint, content_sha256, chunker FROM engine_document_source WHERE doc_path = ?") : null;
   const remove = !readonly && present ? db.prepare<[string]>("DELETE FROM engine_document_source WHERE doc_path = ?") : null;
   const insert = !readonly && present ? db.prepare<[string, string | null, string, string]>(
     "INSERT OR REPLACE INTO engine_document_source (doc_path, version, fingerprint, content_sha256, chunker) VALUES (?, 1, ?, ?, ?)",
@@ -53,12 +62,11 @@ export function createDocumentSourceAccess(db: Database.Database, readonly = fal
     invalidate(docPath: string): void { remove?.run(docPath); },
     readDocumentSources(): Map<string, DocumentSource> | null {
       if (read === null) return null;
-      return new Map(read.all().map(row => {
-        if (row.version !== 1 || (row.fingerprint !== null && !DIGEST.test(row.fingerprint)) || !DIGEST.test(row.content_sha256) || typeof row.chunker !== "string" || row.chunker.length === 0) {
-          throw new Error("Engine document source evidence is invalid or unsupported. Run an explicit index synchronization.");
-        }
-        return [row.doc_path, { fingerprint: row.fingerprint, contentSha256: row.content_sha256, chunker: row.chunker }];
-      }));
+      return new Map(read.all().map(row => [row.doc_path, decodeSource(row)]));
+    },
+    readDocumentSource(docPath: string): DocumentSource | null {
+      const row = readOne?.get(docPath);
+      return row === undefined ? null : decodeSource(row);
     },
     recordDocumentSource(docPath: string, source: DocumentSource, expected: ReadonlyArray<Pick<Chunk, "ordinal" | "sha">>): void {
       record(docPath, source, expected);
@@ -111,4 +119,57 @@ export async function readDocumentSource(vault: string, docPath: string, options
       chunker: JSON.stringify({ version: 1, maxTokens: options?.maxTokens ?? 900, overlapRatio: options?.overlapRatio ?? 0.15 }),
     },
   };
+}
+
+/** Synchronous commit-time witness. Markdown and SQLite are not one transaction. */
+export function documentSourceMatches(vault: string, docPath: string, source: DocumentSource): boolean {
+  const root = realpathSync(vault);
+  try {
+    let cursor = path.resolve(vault);
+    for (const segment of docPath.split(/[\\/]/u)) {
+      cursor = path.resolve(cursor, segment);
+      if (lstatSync(cursor).isSymbolicLink()) return false;
+    }
+    const filename = path.resolve(vault, docPath);
+    const target = realpathSync(filename);
+    const relative = path.relative(root, target);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+    const info = statSync(filename, { bigint: true });
+    if (!info.isFile()) return false;
+    const witness = fileMetadataWitness(info);
+    if (source.fingerprint !== null && witness !== null) return source.fingerprint === sourceFingerprint(root, docPath, target, witness);
+    // Weak witnesses use exact bytes bound to a regular open handle. NONBLOCK
+    // prevents a substituted FIFO from hanging the short writer transaction.
+    const handle = openSync(filename, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const before = fstatSync(handle, { bigint: true });
+      if (!before.isFile()) return false;
+      const bytes = readFileSync(handle);
+      const after = fstatSync(handle, { bigint: true });
+      const latest = statSync(filename, { bigint: true });
+      const fields = ["dev", "ino", "size", "mtimeNs", "ctimeNs"] as const;
+      if ([before, after, latest].some(info => !info.isFile() || fields.some(field => info[field] !== before[field])) ||
+        fields.some(field => info[field] !== before[field]) || BigInt(bytes.length) !== before.size || realpathSync(filename) !== target) return false;
+      return source.contentSha256 === createHash("sha256").update(bytes).digest("hex");
+    } finally { closeSync(handle); }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** A missing vault, access error, or symlink is not evidence of a deleted note. */
+export function documentSourceMissing(vault: string, docPath: string): boolean {
+  realpathSync(vault);
+  let cursor = path.resolve(vault);
+  for (const segment of docPath.split(/[\\/]/u)) {
+    cursor = path.resolve(cursor, segment);
+    try {
+      if (lstatSync(cursor).isSymbolicLink()) throw new Error("Indexed document sources must not traverse symbolic links.");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      throw error;
+    }
+  }
+  return false;
 }

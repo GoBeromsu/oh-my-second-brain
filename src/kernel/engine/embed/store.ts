@@ -19,6 +19,7 @@ import {
 } from "./identity.js";
 import { createEngineStoreReadSnapshot } from "./read-snapshot.js";
 import { createDocumentSourceAccess, DOCUMENT_SOURCE_SCHEMA, type DocumentSource } from "./source.js";
+import { createDocumentRevisionAccess, ensureDocumentRevisionSchema, type DocumentRevisionAccess } from "./revision.js";
 
 export { ENGINE_EMBED_META_VERSION } from "./identity.js";
 
@@ -120,6 +121,10 @@ export interface EmbeddingIdentity {
  * EngineStore satisfies VectorStore everywhere (structural subtype).
  */
 export interface EngineStore extends VectorStore {
+  /** Native writable stores only; absent on read-only/composite handles. */
+  readonly documentRevisions?: DocumentRevisionAccess;
+  /** Actual vector coverage, so an interrupted legacy lexical update cannot hide missing embeddings. */
+  vectorOrdinals?(docPath: string): Set<number>;
   /** Capability snapshot for this store handle. */
   capabilities(): EngineStoreCapabilities;
 
@@ -145,6 +150,9 @@ export interface EngineStore extends VectorStore {
 
   /** Delete all chunks (meta + vec + FTS) for `docPath`. */
   clearDocument(docPath: string): void;
+
+  /** A single source row, for maintenance work bounded independently of vault size. */
+  readDocumentSource?(docPath: string): DocumentSource | null;
 
   /** Per-document source evidence; null for a legacy store without this table. */
   readDocumentSources(): Map<string, DocumentSource> | null;
@@ -288,8 +296,15 @@ function decodeEmbeddingIdentity(row: EmbeddingIdentityRow | undefined): Embeddi
   return identity;
 }
 
-function ensureCoreSchema(db: Database.Database): void {
-  db.pragma("journal_mode = WAL");
+/** Read validated identity through an existing connection without creating schema. */
+export function readEngineStoreIdentity(db: Database.Database): EmbeddingIdentity | null {
+  return decodeEmbeddingIdentity(db.prepare<[], EmbeddingIdentityRow>(
+    "SELECT embedding_provider, embedding_model, embedding_revision, embedding_sha256, embedding_dimensions, embedding_context_length, embedding_mrl_dim, embedding_normalization, embedding_prefix_scheme, embedding_fingerprint, embedding_schema_version FROM engine_meta WHERE id = 1",
+  ).get());
+}
+
+function ensureCoreSchema(db: Database.Database, setJournalMode = true): void {
+  if (setJournalMode) db.pragma("journal_mode = WAL");
 
   // (1) engine_meta — single-row embedding identity metadata
   // updated_at is initialised at schema creation and updated again only when
@@ -360,6 +375,7 @@ function ensureCoreSchema(db: Database.Database): void {
     );
   `);
   db.exec(DOCUMENT_SOURCE_SCHEMA);
+  ensureDocumentRevisionSchema(db);
 }
 
 function vecTableExists(db: Database.Database): boolean {
@@ -367,6 +383,12 @@ function vecTableExists(db: Database.Database): boolean {
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='engine_chunk_vec'")
     .get() as { name: string } | undefined;
   return row !== undefined;
+}
+
+function readVectorOrdinals(db: Database.Database, docPath: string, available: boolean): Set<number> {
+  if (!available) return new Set();
+  const rows = db.prepare<[string], { ordinal: number }>("SELECT m.ordinal FROM engine_chunk_meta m JOIN engine_chunk_vec v ON v.rowid = m.rowid WHERE m.doc_path = ?").all(docPath);
+  return new Set(rows.map(row => row.ordinal));
 }
 
 function createVecTable(db: Database.Database, dimensions: number): void {
@@ -388,11 +410,11 @@ function createVecTable(db: Database.Database, dimensions: number): void {
  * - queryVec() throws
  * - upsert() throws
  */
-export function openEngineStoreCore(dbPath: string): EngineStore {
+export function openEngineStoreCore(dbPath: string, options: { readonly fileMustExist?: boolean } = {}): EngineStore {
   if (dbPath !== ":memory:") {
     mkdirSync(path.dirname(dbPath), { recursive: true });
   }
-  const db = openDatabase(dbPath);
+  const db = openDatabase(dbPath, { fileMustExist: options.fileMustExist === true });
   try {
     ensureCoreSchema(db);
   } catch (error) {
@@ -421,6 +443,7 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
   }
 
   const sources = createDocumentSourceAccess(db);
+  const documentRevisions = createDocumentRevisionAccess(db);
 
   // Prepared statements — core only
   const stmtGetMeta = db.prepare<[string, number], { rowid: number; doc_path: string; ordinal: number; text: string; sha: string }>(
@@ -496,6 +519,7 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
   const doUpsertLex = db.transaction((rows: ReadonlyArray<Chunk>) => {
     for (const row of rows) {
       sources.invalidate(row.docPath);
+      documentRevisions.invalidate(row.docPath);
       const existing = stmtGetMeta.get(row.docPath, row.ordinal);
       if (existing) {
         const id = BigInt(existing.rowid);
@@ -513,16 +537,22 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
 
   const doClearDocument = db.transaction((docPath: string) => {
     sources.invalidate(docPath);
+    documentRevisions.invalidate(docPath);
     stmtClearDocVec?.run(docPath);
     stmtClearDocFts.run(docPath);
     stmtClearDocMeta.run(docPath);
   });
 
   return {
+    documentRevisions,
+    readDocumentSource: sources.readDocumentSource,
     readDocumentSources: sources.readDocumentSources,
     recordDocumentSource: sources.recordDocumentSource,
     capabilities(): EngineStoreCapabilities {
       return { vecAvailable: false };
+    },
+    vectorOrdinals(docPath: string): Set<number> {
+      return readVectorOrdinals(db, docPath, stmtDeleteVec !== null);
     },
 
     upsertLex(rows: ReadonlyArray<Chunk>): void {
@@ -624,6 +654,37 @@ export function openInMemoryEngineStoreCore(): EngineStore {
 }
 
 /**
+ * Explicit maintenance only: preflight, schema initialization, and publication
+ * use one existing database connection and transaction. A rejected preflight
+ * cannot initialize a replacement store; a later throw also rolls back DDL.
+ * The caller owns the cooperative writer lock and must not close the bound store.
+ */
+export function withExistingEngineStoreTransaction<T>(
+  dbPath: string,
+  dimensions: number | undefined,
+  preflight: (db: Database.Database) => void,
+  action: (store: EngineStore) => T,
+): T {
+  const db = openDatabase(dbPath, { fileMustExist: true });
+  let result: T;
+  try {
+    result = db.transaction(() => {
+      preflight(db);
+      // Existing maintenance stores retain their journal mode. Changing it here
+      // would require a write outside the guarded transaction.
+      ensureCoreSchema(db, false);
+      const store = dimensions === undefined ? bindCoreStore(db) : bindVectorStore(db, dimensions);
+      return action(store);
+    }).immediate();
+  } catch (error) {
+    try { db.close(); } catch { /* Preserve the preflight/publication failure. */ }
+    throw error;
+  }
+  db.close();
+  return result;
+}
+
+/**
  * Open (or create) an engine store at `dbPath` with vector capability.
  *
  * Vector-capable mode still guarantees core schema exists even when sqlite-vec
@@ -633,10 +694,10 @@ export function openInMemoryEngineStoreCore(): EngineStore {
 export function openEngineStore(
   dbPath: string,
   dimensions: number,
-  opts: { readonly sqliteVecLoader?: SqliteVecLoader } = {},
+  opts: { readonly sqliteVecLoader?: SqliteVecLoader; readonly fileMustExist?: boolean } = {},
 ): EngineStore {
   mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = openDatabase(dbPath);
+  const db = openDatabase(dbPath, { fileMustExist: opts.fileMustExist === true });
   try {
     ensureCoreSchema(db);
   } catch (error) {
@@ -644,7 +705,11 @@ export function openEngineStore(
     throw error;
   }
 
-  const sqliteVecLoader = opts.sqliteVecLoader ?? DEFAULT_SQLITE_VEC_LOADER;
+  return bindVectorStore(db, dimensions, opts.sqliteVecLoader);
+}
+
+/** Bind initialized core tables, optionally creating vectors in the caller's transaction. */
+function bindVectorStore(db: Database.Database, dimensions: number, sqliteVecLoader = DEFAULT_SQLITE_VEC_LOADER): EngineStore {
   let vecLoaded = false;
   try {
     sqliteVecLoader(db);
@@ -754,9 +819,11 @@ export function openEngineStore(
     : null;
 
   const sources = createDocumentSourceAccess(db);
+  const documentRevisions = createDocumentRevisionAccess(db);
 
   const doClearDocument = db.transaction((docPath: string) => {
     sources.invalidate(docPath);
+    documentRevisions.invalidate(docPath);
     stmtClearDocVec?.run(docPath);
     stmtClearDocFts.run(docPath);
     stmtClearDocMeta.run(docPath);
@@ -765,6 +832,7 @@ export function openEngineStore(
   const doUpsertLex = db.transaction((rows: ReadonlyArray<Chunk>) => {
     for (const row of rows) {
       sources.invalidate(row.docPath);
+      documentRevisions.invalidate(row.docPath);
       const existing = stmtGetMeta.get(row.docPath, row.ordinal);
       if (existing) {
         const id = BigInt(existing.rowid);
@@ -789,6 +857,7 @@ export function openEngineStore(
     }
     for (const row of rows) {
       sources.invalidate(row.docPath);
+      documentRevisions.invalidate(row.docPath);
       const existing = stmtGetMeta.get(row.docPath, row.ordinal);
       if (existing) {
         const id = BigInt(existing.rowid);
@@ -807,10 +876,15 @@ export function openEngineStore(
   });
 
   return {
+    documentRevisions,
+    readDocumentSource: sources.readDocumentSource,
     readDocumentSources: sources.readDocumentSources,
     recordDocumentSource: sources.recordDocumentSource,
     capabilities(): EngineStoreCapabilities {
       return { vecAvailable };
+    },
+    vectorOrdinals(docPath: string): Set<number> {
+      return readVectorOrdinals(db, docPath, vecAvailable);
     },
 
     upsertLex(rows: ReadonlyArray<Chunk>): void {
@@ -1072,6 +1146,7 @@ function openReadOnlyStore(
   }
 
   return {
+    readDocumentSource: sources.readDocumentSource,
     readDocumentSources: sources.readDocumentSources,
     recordDocumentSource: sources.recordDocumentSource,
     capabilities(): EngineStoreCapabilities {
