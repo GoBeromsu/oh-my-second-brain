@@ -123,6 +123,11 @@ export interface EngineStore extends VectorStore {
   /** Capability snapshot for this store handle. */
   capabilities(): EngineStoreCapabilities;
 
+  /** Native pre-limit lexical intersection used by detached observed-metadata reads. */
+  queryLexCandidates?(text: string, k: number, candidatePaths: readonly string[], collection?: string): ScoredHit[];
+  /** Complete lexical matching note paths without retaining chunk text or applying a hit limit. */
+  queryLexPaths?(text: string, candidatePaths: readonly string[], collection?: string): string[];
+
   /** Upsert chunks into meta+FTS only (no vectors). */
   upsertLex(rows: ReadonlyArray<Chunk>): void;
 
@@ -452,6 +457,19 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
      LIMIT ?`,
   );
 
+  const scopedCandidates = `engine_chunk_fts MATCH ?
+    AND m.doc_path IN (SELECT value FROM json_each(?))
+    AND (? IS NULL OR m.doc_path = ? OR m.doc_path LIKE ? ESCAPE '!')`;
+  const stmtQueryLexCandidates = db.prepare<[string, string, string | null, string, string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
+     FROM engine_chunk_fts JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
+     WHERE ${scopedCandidates} ORDER BY rank LIMIT ?`,
+  );
+  const stmtQueryLexPaths = db.prepare<[string, string, string | null, string, string], { doc_path: string }>(
+    `SELECT DISTINCT m.doc_path FROM engine_chunk_fts JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
+     WHERE ${scopedCandidates} ORDER BY m.doc_path`,
+  );
+
   const stmtGetShas = db.prepare<[string], { ordinal: number; sha: string }>(
     "SELECT ordinal, sha FROM engine_chunk_meta WHERE doc_path = ?",
   );
@@ -542,6 +560,19 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
         score: 1 / (1 + index),
         text: r.text,
       }));
+    },
+
+    queryLexCandidates(text: string, k: number, candidatePaths: readonly string[], collection?: string): ScoredHit[] {
+      const query = makeFtsQuery(text);
+      if (!query || candidatePaths.length === 0) return [];
+      return stmtQueryLexCandidates.all(query, JSON.stringify(candidatePaths), collection ?? null, collection ?? "", collectionDescendantLikePattern(collection ?? ""), k)
+        .map((row, index) => ({ docPath: row.doc_path, chunkOrdinal: row.ordinal, text: row.text, score: 1 / (1 + index) }));
+    },
+    queryLexPaths(text: string, candidatePaths: readonly string[], collection?: string): string[] {
+      const query = makeFtsQuery(text);
+      if (!query || candidatePaths.length === 0) return [];
+      return stmtQueryLexPaths.all(query, JSON.stringify(candidatePaths), collection ?? null, collection ?? "", collectionDescendantLikePattern(collection ?? ""))
+        .map(row => row.doc_path);
     },
 
     close(): void {

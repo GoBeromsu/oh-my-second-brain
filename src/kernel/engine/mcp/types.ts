@@ -6,6 +6,10 @@
  * Update these when the live MCP contract changes.
  */
 
+import type { ObservedQueryOptions } from "../axes/observed-options.js";
+import type { ObservedDiscoveryResult } from "../axes/observed-discovery.js";
+export type { ObservedQueryOptions as McpSemanticObservedOptions } from "../axes/observed-options.js";
+
 // ---------------------------------------------------------------------------
 // Storage / mode / format discriminants
 // ---------------------------------------------------------------------------
@@ -116,6 +120,8 @@ export interface McpSemanticQueryOptions extends McpStatusOptions {
   readonly noRerank?: boolean;
   /** Optional axis-first narrowing over folder, frontmatter fields, and links. */
   readonly axes?: McpSemanticQueryAxes;
+  /** Explicit current-note metadata; never changes declared axes.field semantics. */
+  readonly observed?: ObservedQueryOptions;
   /** Opaque offset cursor returned by a previous query. */
   readonly cursor?: string;
   /** Request explicit total-count metadata (responses include it regardless). */
@@ -181,6 +187,7 @@ export interface McpSemanticReceipt {
 export type McpSemanticQueryResult =
   | {
       readonly available: true;
+      readonly observed?: { readonly discovery: ObservedDiscoveryResult };
       readonly hits: readonly McpSemanticSearchHit[];
       readonly totalCount: number;
       readonly facets: readonly McpSemanticFacet[];

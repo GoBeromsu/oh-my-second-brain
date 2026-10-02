@@ -46,7 +46,7 @@ import {
 import { openEngineStore } from "../embed/store.js";
 import { assertExternalDatabasePath, engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../paths.js";
 import type { EngineStore } from "../embed/store.js";
-import type { PreparedLexicalRead } from "../embed/live-lexical.js";
+import type { PreparedLexicalRead, LexicalSnapshotSelector } from "../embed/live-lexical.js";
 import { indexSourcesUnchanged, type IndexSourceVerification, type IndexSourceSnapshot } from "../embed/freshness.js";
 import type { EmbeddingModelDescriptor } from "../embed/model.js";
 import { capabilityGuidance } from "../embed/config.js";
@@ -55,6 +55,7 @@ import {
   saveCachedGraph,
   loadCachedGraphMeta,
   buildNodeIndex,
+  projectNodeIndex,
   saveNodeIndex,
   loadNodeIndexForVault,
 } from "../graph/builder.js";
@@ -487,7 +488,7 @@ export class McpEngineAdapter {
       readonly dbPath?: string;
       readonly onStoreRebind?: (store: EngineStore) => void;
       /** Required by production persisted read-only assemblies; injected stores own their source policy. */
-      readonly prepareLexical?: (vault: string, queries: readonly string[], k: number, collection?: string) => Promise<PreparedLexicalRead>;
+      readonly prepareLexical?: (vault: string, queries: readonly string[], k: number, collection?: string, selector?: LexicalSnapshotSelector) => Promise<PreparedLexicalRead>;
       readonly verifyIndexSources?: (vault: string, collection?: string) => Promise<IndexSourceVerification>;
     },
     private readonly reranker?: Reranker,
@@ -713,7 +714,7 @@ export class McpEngineAdapter {
       );
     }
     const hasAxes = opts.axes !== undefined && Object.keys(opts.axes).length > 0;
-    if (hasAxes) {
+    if (hasAxes && opts.observed === undefined) {
       try { return await this.queryNodeAxes(opts, subQueries); }
       catch (err) { return queryResultUnavailable(err instanceof Error ? err.message : String(err)); }
     }
@@ -731,6 +732,7 @@ export class McpEngineAdapter {
         return enrichQueryHits(result, vault);
       }
     }
+    if (opts.observed !== undefined && this.config?.prepareLexical === undefined) return queryResultUnavailable("Observed metadata requires a live current-source lexical session.");
     let rerankRequested = false;
     const facetWarnings: string[] = [];
     let sourceSnapshot: IndexSourceSnapshot | undefined;
@@ -775,9 +777,33 @@ export class McpEngineAdapter {
       // intentional cap (not an implementation truncation).
       const k = opts.candidateLimit ?? UNBOUNDED_CANDIDATE_LIMIT;
       let retrievalDeps = this.deps;
-      if (this.config?.prepareLexical !== undefined && isLexOnlySubQueries(effectiveSubQueries)) {
+      if (this.config?.prepareLexical !== undefined && (isLexOnlySubQueries(effectiveSubQueries) || (opts.observed !== undefined && effectiveSubQueries.length === 0))) {
+        let selector: LexicalSnapshotSelector | undefined;
+        if (opts.observed !== undefined) {
+          const observed = opts.observed;
+          const meta = await readSearchTemplateSource(opts.vault ?? this.vaultPath);
+          if (!declaredMetadataAvailable(meta) && requestsDeclaredAxes(opts.axes as QueryAxes | undefined)) throw new Error(`TEMPLATE_SNAPSHOT_UNAVAILABLE: a declared template or field axis requires the template snapshot: ${metadataReason(meta)}`);
+          if (declaredMetadataAvailable(meta)) validateKnownFieldAxes(opts.axes as QueryAxes | undefined, templateFieldKeys(meta.source));
+          selector = (snapshot, documents, observations) => {
+            const signature = createHash("sha256").update(snapshot.vault);
+            for (const [docPath, sha] of [...snapshot.contentSha256!].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) signature.update(JSON.stringify([docPath, sha]));
+            const diagnostics = observations.reconcileObservedSnapshot(documents.map(document => {
+              const contentSha256 = snapshot.contentSha256?.get(document.docPath);
+              if (contentSha256 === undefined) throw new Error("Observed metadata source lacks captured byte evidence.");
+              return { ...document, contentSha256 };
+            }), signature.digest("hex"));
+            if (diagnostics.malformedNotes > 0 || diagnostics.unsupportedFields > 0) facetWarnings.push(`Observed metadata omitted malformed frontmatter in ${diagnostics.malformedNotes} notes and unsupported members in ${diagnostics.unsupportedFields} fields; lexical notes remain eligible without those field predicates.`);
+            const nodes = opts.axes === undefined ? undefined : filterNodesByQueryAxes(projectNodeIndex(documents, meta), opts.axes as QueryAxes);
+            const scope = (nodes?.map(node => node.path) ?? documents.map(document => document.docPath))
+              .filter(docPath => opts.collectionPath === undefined || docPath === opts.collectionPath || docPath.startsWith(`${opts.collectionPath}/`));
+            return {
+              paths: observations.matchObservedFields(observed.field ?? {}, scope),
+              ...(observed.discover === undefined ? {} : { discover: (matchingPaths: readonly string[]) => observations.discoverObservedFields({ ...observed.discover, fields: observed.field, candidatePaths: matchingPaths }) }),
+            };
+          };
+        }
         const prepared = await this.config.prepareLexical(
-          opts.vault ?? this.vaultPath, effectiveSubQueries.map(search => search.query), k, opts.collectionPath,
+          opts.vault ?? this.vaultPath, effectiveSubQueries.map(search => search.query), k, opts.collectionPath, selector,
         );
         sourceSnapshot = prepared.snapshot;
         liveLexicalRead = prepared;
@@ -805,7 +831,9 @@ export class McpEngineAdapter {
       const modelQuery = shouldRerank && folderProjection?.promptContext !== undefined
         ? `${naturalQuery}\n\nVault folder intents:\n${folderProjection.promptContext}`
         : naturalQuery || undefined;
-      const results = await retrieve({
+      const results = effectiveSubQueries.length === 0 && liveLexicalRead?.candidatePaths !== undefined
+        ? [...liveLexicalRead.candidatePaths].sort((left, right) => left.localeCompare(right)).slice(0, k).map(docPath => ({ docPath, score: 0 }))
+        : await retrieve({
         subQueries: [...effectiveSubQueries],
         deps: retrievalDeps,
         k,
@@ -820,7 +848,11 @@ export class McpEngineAdapter {
       // here, so an absent or invalid contract narrows the facet set. A failed
       // vault read is reported as a warning rather than silently dropped, and it
       // does not turn store-backed retrieval into an unavailable result.
-      try {
+      if (opts.observed?.discover !== undefined && opts.limit === 0) {
+        // Discovery-only responses omit redundant legacy facets, whose old
+        // values have no byte bound. Ordinary envelopes stay unchanged.
+        facetValues = [];
+      } else try {
         const facetMeta = await readSearchTemplateSource(vault);
         if (!declaredMetadataAvailable(facetMeta)) facetWarnings.push(`Template metadata unavailable: ${metadataReason(facetMeta)}`);
         const facetNodes = liveLexicalRead === undefined
@@ -863,7 +895,9 @@ export class McpEngineAdapter {
           indexDrift: true, requestedStrategy, generatedSearches,
         });
       }
-      return enriched;
+      return enriched.available && liveLexicalRead?.discovery !== undefined
+        ? { ...enriched, observed: { discovery: liveLexicalRead.discovery } }
+        : enriched;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       const reason = this.config?.prepareLexical !== undefined && sourceRevalidationStarted

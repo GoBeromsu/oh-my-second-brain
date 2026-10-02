@@ -83,6 +83,7 @@ export class EngineSearchBackend implements SearchBackend {
       rerank: normalized.rerank,
       cursor: normalized.collections.length === 0 ? normalized.cursor : undefined,
       axes: normalized.axes,
+      ...(normalized.observed === undefined ? {} : { observed: normalized.observed }),
     });
 
     if (normalized.collections.length === 0) {

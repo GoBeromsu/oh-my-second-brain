@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+- The shipped search skill teaches optional-template observed discovery, exact typed facet selection, metadata-only zero-hit responses and the lexical-only/single-collection boundary. It distinguishes detached current-note validation from synchronization of persistent/vector indexes and warm-session speed from cold CLI calls.
+
 - **Refresh the English and Korean README presentation.** Both READMEs now share a repository-specific 3D hero and a more compact overview while preserving setup, contract, host, safety, documentation, and credit guidance. Canonical repository links now point directly to `Xia-Ataraxia/oh-my-second-brain` after the ownership transfer.
 
 ## [0.20.6] - 2026-10-01

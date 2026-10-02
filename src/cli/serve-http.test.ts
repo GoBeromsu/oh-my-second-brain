@@ -416,3 +416,41 @@ describe("serve HTTP transport", () => {
     });
   });
 });
+
+it("transports observed-only discovery and its cursor without changing vault bytes", async () => {
+  tmpVault = await writeVault();
+  await writeFile(path.join(tmpVault, "references", "Agent Retrieval.md"), "---\nsubject: [science, research]\n---\nneedle\n");
+  modelCacheDir = await mkdtemp(path.join(tmpdir(), "oms-http-model-cache-"));
+  const before = await vaultSnapshot(tmpVault);
+  httpServer = await runServeHttp({ vault: tmpVault, port: 0, modelCacheDir, modelEnv: {} });
+  const first = await jsonFetch(`${httpServer.url}/search`, { limit: 0, observed: { discover: { key: "subject", limit: 1 } } });
+  expect(first).toMatchObject({ available: true, hits: [], observed: { discovery: { values: [{ value: "research", count: 1 }] } } });
+  const cursor = (first["observed"] as { discovery: { cursor: string } }).discovery.cursor;
+  const second = await jsonFetch(`${httpServer.url}/search`, { query: "needle", limit: 0, observed: { discover: { key: "subject", limit: 1, cursor } } });
+  expect(second).toMatchObject({ available: true, observed: { discovery: { values: [{ value: "science", count: 1 }], cursor: null } } });
+  await expectBadRequest(`${httpServer.url}/search`, { observed: { discover: { limit: 101 } } }, /observed.*limit/i);
+  await expectBadRequest(`${httpServer.url}/search`, { vec: "needle", observed: { discover: {} } }, /lexical queries only/i);
+  expect(await vaultSnapshot(tmpVault)).toEqual(before);
+});
+
+it("round-trips exact facet selections over HTTP without date/string/number or boolean/string coercion", async () => {
+  tmpVault = await writeVault();
+  modelCacheDir = await mkdtemp(path.join(tmpdir(), "oms-http-model-cache-"));
+  const cases = [
+    ["string", '"2026-01-01T00:00:00.000Z"'],
+    ["number", "1767225600000"], ["boolean", "false"], ["boolean-string", '"false"'],
+  ] as const;
+  for (const [name, value] of cases) await writeFile(path.join(tmpVault, "references", `${name}.md`), `---\nwhen: ${value}\n---\nneedle\n`);
+  await writeFile(path.join(tmpVault, "references", "mixed.md"), '---\nwhen: ["2026-01-01T00:00:00.000Z", 1767225600000, false, "false"]\n---\nneedle\n');
+  httpServer = await runServeHttp({ vault: tmpVault, port: 0, modelCacheDir, modelEnv: {} });
+  const found = await jsonFetch(`${httpServer.url}/search`, { limit: 0, observed: { discover: { key: "when" } } });
+  const facets = (found["observed"] as { discovery: { values: { valueType: string; value: string | number | boolean; selection: unknown; count: number }[] } }).discovery.values;
+  expect(facets).toHaveLength(4);
+  for (const facet of facets) {
+    const selected = await jsonFetch(`${httpServer.url}/search`, { observed: { field: { when: facet.selection } } });
+    const leaf = facet.valueType === "string" ? facet.value === "false" ? "boolean-string" : "string" : facet.valueType;
+    expect((selected["hits"] as { path: string }[]).map(hit => hit.path).sort()).toEqual([`references/${leaf}.md`, "references/mixed.md"].sort());
+    expect(selected["totalCount"]).toBe(facet.count);
+  }
+  await expectBadRequest(`${httpServer.url}/search`, { observed: { field: { when: { exact: { valueType: "date", value: "2026-02-31T00:00:00.000Z" } } } } }, /canonical ISO/i);
+});

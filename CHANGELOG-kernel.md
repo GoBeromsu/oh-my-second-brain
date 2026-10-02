@@ -4,6 +4,12 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Observed value facets include a directly reusable, JSON-safe exact typed selection. Selecting a date, date-looking string, numeric timestamp, boolean or string now reproduces its distinct-note count within an unchanged discovery scope, without changing declared-axis or legacy comparison behavior. Exact date selectors require canonical ISO strings rather than permissive date coercion.
+
+- Explicit observed frontmatter queries now filter the same current-byte native FTS snapshot before candidate limits. Scalar/list predicates, bounded key/value discovery, cross-session cursors, and source-race rejection work without a sealed field declaration; existing declared axes retain their semantics. Dense observations spill the existing EAV repository to disposable session-private storage, never a new persistent index.
+
+- The existing axis-observation repository gains an in-memory observed-field query foundation: shared scalar/list and range operators, parameterized pre-limit candidate intersection, current-source reconciliation, and bounded key/value discovery with distinct-note counts and snapshot-bound cursors. Declared typed axes keep their existing behavior, and cyclic YAML lists no longer recurse forever in the EAV importer.
+
 - Hash-prefixed native document IDs resolve currently admitted Markdown paths, so new or renamed live-search hits can be opened before an explicit index sync. The reader checks current exclusions and captures confined, non-symlink source bytes without changing model/backend selection.
 
 - Live lexical sessions pin candidate capture across concurrent generation changes, drain bounded readers before failed cleanup, and release oversized cores when spill fails. Compact facet projections own their retained string storage so previews, YAML scalars, and link targets cannot pin entire raw notes behind the cache budget.

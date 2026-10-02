@@ -8,6 +8,7 @@
  * R18: NO import from src/search.
  */
 
+import { observedQueryOptions } from "../axes/observed-options.js";
 import type { TypedSubQuery, RetrievalResult } from "../types.js";
 import type {
   McpSemanticQueryOptions,
@@ -67,19 +68,21 @@ export function normalizeQueryOptions(opts: McpSemanticQueryOptions): Normalized
   if (opts.minScore !== undefined && !Number.isFinite(opts.minScore)) {
     throw new Error('Query "minScore" must be finite.');
   }
+  const observed = observedQueryOptions(opts.observed);
   const subQueries = queryOptionsToSubQueries(opts);
+  if (observed !== undefined && (opts.mode === "vsearch" || opts.vec !== undefined || opts.hyde !== undefined || subQueries.some(query => query.type !== "lex"))) throw new Error("Observed metadata filtering and discovery currently support lexical queries only.");
   const lexical = subQueries.find((subQuery) => subQuery.type === "lex")?.query;
   const lexicalQuery = lexical ?? (subQueries.length === 0 ? opts.query ?? "" : "");
   const hasQuery = typeof opts.query === "string" && opts.query.trim().length > 0;
   const hasAxes = opts.axes !== undefined;
-  const overview = !hasQuery && subQueries.length === 0 && !hasAxes;
+  const overview = !hasQuery && subQueries.length === 0 && !hasAxes && observed === undefined;
   const limit = opts.limit ?? DEFAULT_QUERY_LIMIT;
   return {
     // Keep every caller-provided property (including collection, axes, mode,
     // and cursor) while making the effective default explicit to downstream
     // adapters. No branch may reconstruct a partial options object and drop
     // an input field.
-    options: { ...opts, limit },
+    options: { ...opts, limit, ...(observed === undefined ? {} : { observed }) },
     subQueries,
     overview,
     limit,
@@ -146,7 +149,7 @@ export function queryOptionsToSubQueries(opts: McpSemanticQueryOptions): TypedSu
     if (opts.mode !== undefined && opts.mode !== "query") {
       throw new Error(`Expand strategy does not support mode "${opts.mode}".`);
     }
-    if (opts.axes !== undefined) {
+    if (opts.axes !== undefined || opts.observed !== undefined) {
       throw new Error("Expand strategy does not support axis queries.");
     }
     // Expansion is asynchronous and model-owned, so the facade replaces this empty

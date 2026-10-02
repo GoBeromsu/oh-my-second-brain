@@ -1,3 +1,4 @@
+import { observedQueryOptions } from "../kernel/engine/axes/observed-options.js";
 import type { SemanticQueryOptions, SemanticSearchMode } from "../kernel/search/semantic-contract.js";
 import type { McpSemanticAxisValue, McpSemanticQueryAxes } from "../kernel/engine/mcp/types.js";
 
@@ -47,6 +48,10 @@ export function parseSearchArgs(argv: readonly string[]): ParsedSearchArgs {
       || arg === "--link"
     ) {
       appendStringOption(options, camelOption(arg), argv[i + 1] ?? "");
+      i++;
+    } else if (arg === "--observed") {
+      if (options["observed"] !== undefined) throw new Error("CLI --observed accepts one JSON object.");
+      options["observed"] = argv[i + 1] ?? "";
       i++;
     } else if (arg === "--intent" || arg === "--lex" || arg === "--vec" || arg === "--hyde") {
       options[arg.slice(2)] = argv[i + 1] ?? "";
@@ -127,15 +132,25 @@ export function searchQueryOptions(
     throw new Error(`CLI mode "${requestedMode}" contradicts the "${mode}" query command.`);
   }
   const axes = queryAxesFromCli(args);
+  const observedRaw = args.options["observed"];
+  let observed;
+  if (observedRaw !== undefined) {
+    if (typeof observedRaw !== "string") throw new Error("CLI --observed must be a valid JSON object.");
+    let value: unknown;
+    try { value = JSON.parse(observedRaw) as unknown; }
+    catch { throw new Error("CLI --observed must be a valid JSON object."); }
+    observed = observedQueryOptions(value);
+  }
   const vec = stringOption(args, "vec");
   const hyde = stringOption(args, "hyde");
+  if (observed !== undefined && (mode === "vsearch" || args.options["vec"] !== undefined || args.options["hyde"] !== undefined)) throw new Error("Observed metadata supports lexical queries only.");
   const expand = booleanOption(args, "expand") === true;
   const maxQueries = strictMaxQueries(args);
   if (expand && mode !== "query") {
     throw new Error('CLI "--expand" is supported only by the "search" command.');
   }
   if (!expand && maxQueries !== undefined) throw new Error('CLI "--max-queries" requires "--expand".');
-  if (expand && (vec !== undefined || hyde !== undefined || stringOption(args, "lex") !== undefined || axes !== undefined)) {
+  if (expand && (vec !== undefined || hyde !== undefined || stringOption(args, "lex") !== undefined || axes !== undefined || observed !== undefined)) {
     throw new Error('CLI "--expand" conflicts with --lex, --vec, --hyde, and axis filters.');
   }
   // The canonical mapper owns lexical-only defaults. Only a caller-authored
@@ -167,6 +182,7 @@ export function searchQueryOptions(
     cursor: stringOption(args, "cursor"),
     collectionPath: stringOption(args, "collectionPath"),
     ...(axes === undefined ? {} : { axes }),
+    ...(observed === undefined ? {} : { observed }),
     all: booleanOption(args, "all"),
     full: booleanOption(args, "full"),
     fullPath: booleanOption(args, "fullPath"),

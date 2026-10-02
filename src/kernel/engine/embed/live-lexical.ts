@@ -1,3 +1,5 @@
+import { AxisObservationStore } from "../axes/store.js";
+import type { ObservedDiscoveryResult } from "../axes/observed-discovery.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,11 +22,22 @@ import { openDetachedLexicalStore, type DetachedLexicalStore, type EngineStore }
 /** Retained SQLite pages, not a claim about peak RSS while reading a large file. */
 export const LIVE_LEXICAL_MEMORY_BYTES = 128 * 1024 * 1024;
 export const LIVE_LEXICAL_PROJECTION_BYTES = 64 * 1024 * 1024;
+export const LIVE_OBSERVED_MEMORY_BYTES = 64 * 1024 * 1024;
 const CHUNKER = JSON.stringify({ version: 1, maxTokens: 900, overlapRatio: 0.15 });
+
+export interface LexicalCandidateSelection {
+  readonly paths: readonly string[];
+  /** Captured synchronously while the same source generation remains pinned. */
+  readonly discover?: (matchingPaths: readonly string[]) => ObservedDiscoveryResult;
+}
+
+export type LexicalSnapshotSelector = (snapshot: IndexSourceSnapshot, documents: readonly NodeProjectionDocument[], observations: AxisObservationStore) => LexicalCandidateSelection;
 
 export interface PreparedLexicalRead {
   readonly store: VectorStore;
   readonly snapshot: IndexSourceSnapshot;
+  readonly candidatePaths?: readonly string[];
+  readonly discovery?: ObservedDiscoveryResult;
   /** The ordinary graph/node projection over this request's captured sources. */
   nodeProjection(meta: SearchTemplateSource): Promise<EngineGraphNode[]>;
 }
@@ -41,6 +54,8 @@ export interface LiveLexicalOptions {
   readonly maxMemoryBytes?: number;
   /** Compact parsed fields/links only; excess entries are rebuilt on demand. */
   readonly maxProjectionBytes?: number;
+  /** Explicit observed queries alone allocate this EAV snapshot; excess pages spill privately. */
+  readonly maxObservedBytes?: number;
 }
 
 function stamp(filename: string): string {
@@ -79,6 +94,9 @@ export class LiveLexicalSession {
   private readonly dbPath: string;
   private readonly maxMemoryBytes: number;
   private readonly maxProjectionBytes: number;
+  private readonly maxObservedBytes: number;
+  private observations: AxisObservationStore | undefined;
+  private observedDiskPath: string | undefined;
   private readonly projections = new Map<string, { readonly sha: string; readonly document: NodeProjectionDocument }>();
   private projectionBytes = 0;
   private current: DetachedLexicalStore | undefined;
@@ -97,6 +115,8 @@ export class LiveLexicalSession {
     this.dbPath = options.dbPath ?? engineStorePath(this.vault);
     this.maxMemoryBytes = options.maxMemoryBytes ?? LIVE_LEXICAL_MEMORY_BYTES;
     this.maxProjectionBytes = options.maxProjectionBytes ?? LIVE_LEXICAL_PROJECTION_BYTES;
+    this.maxObservedBytes = options.maxObservedBytes ?? LIVE_OBSERVED_MEMORY_BYTES;
+    if (!Number.isSafeInteger(this.maxObservedBytes) || this.maxObservedBytes < 1) throw new Error("Observed metadata memory budget must be a positive safe integer.");
     if (!Number.isSafeInteger(this.maxProjectionBytes) || this.maxProjectionBytes < 0) throw new Error("Live projection budget must be a non-negative safe integer.");
     if (!Number.isSafeInteger(this.maxMemoryBytes) || this.maxMemoryBytes < 1) {
       throw new Error("Live lexical memory budget must be a positive safe integer.");
@@ -146,6 +166,32 @@ export class LiveLexicalSession {
     } catch (error) {
       this.removeTemporaryDatabase(destination);
       throw error;
+    }
+  }
+
+  private releaseObserved(): void {
+    const observations = this.observations;
+    const filename = this.observedDiskPath;
+    this.observations = undefined;
+    this.observedDiskPath = undefined;
+    try { observations?.close(); }
+    finally { this.removeTemporaryDatabase(filename); }
+  }
+
+  private enforceObservedBudget(): void {
+    if (this.observations === undefined || this.observedDiskPath !== undefined || this.observations.allocatedBytes() <= this.maxObservedBytes) return;
+    const previous = this.observations;
+    let destination: string | undefined;
+    try {
+      destination = this.tempPath();
+      this.observations = previous.copyToEphemeral(destination);
+      this.observedDiskPath = destination;
+      previous.close();
+    } catch (error) {
+      previous.close();
+      this.observations = undefined;
+      this.removeTemporaryDatabase(destination);
+      throw new Error("Observed metadata spill failed; no partial results were returned.", { cause: error });
     }
   }
 
@@ -268,7 +314,7 @@ export class LiveLexicalSession {
     return { snapshot: { vault: snapshot.vault, files, contentSha256, byteVerifiedPaths }, documents };
   }
 
-  async prepare(vault: string, queries: readonly string[], k: number, collection?: string): Promise<PreparedLexicalRead> {
+  async prepare(vault: string, queries: readonly string[], k: number, collection?: string, selector?: LexicalSnapshotSelector): Promise<PreparedLexicalRead> {
     if (this.closed) throw new Error("Live lexical session is closed.");
     if (path.resolve(vault) !== this.vault) throw new Error("Live lexical session cannot serve another vault.");
     if (collection !== undefined) {
@@ -281,14 +327,27 @@ export class LiveLexicalSession {
         this.refreshing = this.refresh();
       }
       const { snapshot, documents } = await this.refreshing;
+      let selection: LexicalCandidateSelection | undefined;
+      if (selector !== undefined) {
+        this.observations ??= new AxisObservationStore(":memory:");
+        selection = selector(snapshot, documents, this.observations);
+      }
       const results = new Map<string, ScoredHit[]>();
       for (const query of queries) {
         const key = lexicalKey(query, k, collection);
-        if (!results.has(key)) results.set(key, this.current!.store.queryLex(query, k, collection));
+        if (!results.has(key)) results.set(key, selection === undefined
+          ? this.current!.store.queryLex(query, k, collection)
+          : this.current!.store.queryLexCandidates!(query, k, selection.paths, collection));
       }
+      const matchingPaths = selection?.discover === undefined ? undefined : queries.length === 0 ? selection.paths
+        : [...new Set(queries.flatMap(query => this.current!.store.queryLexPaths!(query, selection.paths, collection)))].sort();
+      const discovery = matchingPaths === undefined ? undefined : selection?.discover?.(matchingPaths);
+      if (selector !== undefined) this.enforceObservedBudget();
       const unavailable = (): never => { throw new Error("A prepared lexical read cannot perform writes or vector retrieval."); };
       return {
         snapshot,
+        ...(selection === undefined ? {} : { candidatePaths: [...selection.paths] }),
+        ...(discovery === undefined ? {} : { discovery }),
         async nodeProjection(meta) {
           const excluded = await managedSourceExclusionMatcher(snapshot.vault, meta.source.sourcePaths ?? []);
           const admitted: NodeProjectionDocument[] = [];
@@ -306,6 +365,11 @@ export class LiveLexicalSession {
           close: () => undefined,
         },
       };
+    } catch (error) {
+      // Failed selectors, native capture, discovery/cursor decoding and spills
+      // must not retain an over-budget EAV cache or poison an ordinary query.
+      if (selector !== undefined) this.releaseObserved();
+      throw error;
     } finally {
       if (--this.active === 0) {
         // Keep this generation pinned until every joined prepare has captured
@@ -318,8 +382,8 @@ export class LiveLexicalSession {
   }
 
   /** Useful for bounded-cache verification; never exposes the mutable store. */
-  retainedStorage(): { readonly bytes: number; readonly memory: boolean; readonly projectionBytes: number; readonly projectionDocuments: number } {
-    return { bytes: this.current?.allocatedBytes() ?? 0, memory: !this.onDisk, projectionBytes: this.projectionBytes, projectionDocuments: this.projections.size };
+  retainedStorage(): { readonly bytes: number; readonly memory: boolean; readonly projectionBytes: number; readonly projectionDocuments: number; readonly observedBytes: number; readonly observedMemory: boolean } {
+    return { bytes: this.current?.allocatedBytes() ?? 0, memory: !this.onDisk, projectionBytes: this.projectionBytes, projectionDocuments: this.projections.size, observedBytes: this.observations?.allocatedBytes() ?? 0, observedMemory: this.observedDiskPath === undefined };
   }
 
   dispose(): Promise<void> {
@@ -330,6 +394,9 @@ export class LiveLexicalSession {
       try { this.current?.close(); }
       finally {
         this.current = undefined;
+        this.observations?.close();
+        this.observations = undefined;
+        this.observedDiskPath = undefined;
         this.projections.clear();
         this.projectionBytes = 0;
         if (this.temporaryDirectory !== undefined) rmSync(this.temporaryDirectory, { recursive: true, force: true });
