@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+- Release instructions use the canonical `oms setup host` and `oms setup package` commands and describe the six skills and four MCP tools verified by the artifact rehearsal, so operators can follow the documented upgrade steps with the current package.
+
 - Packaging and documentation checks accept npm 12's package-name-keyed `pack --json` output alongside npm 10/11 arrays. A shared strict parser rejects errors, unexpected packages, multi-package reports, and malformed file manifests instead of silently skipping checks.
 
 - **Repository metadata follows the GitHub ownership transfer.** Package, issue, installer, attribution, measurement, release-check, and release-process links now point directly at `Xia-Ataraxia/oh-my-second-brain` instead of relying on GitHub's redirect from `GoBeromsu`. The repository history, releases, tags, package name, marketplace name, versions, and author attribution are unchanged. npm trusted-publisher rebinding remains a separately approved registry action; no publish or tag is part of this migration.

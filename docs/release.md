@@ -121,7 +121,7 @@ With that flag the version heading is inserted below an intact empty `## [Unrele
 8. `npm run release:artifact-smoke`
 9. `npm run release:plugin`
 
-`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and exercises the removed-setup-flag and non-terminal setup refusals, the retired template and note guide/check leaves, `oms setup status` against a sealed contract, `host install|sync|remove`, `package check|update`, `serve http|mcp`, canonical note/search/index commands, and the five-tool MCP surface from the extracted package root. All child processes use an isolated home. A metadata-only guard (not a byte-content digest) verifies that the operator's real `~/.oms` tree and exact OMS-managed Hermes config/skill/adapter paths did not change; symlinks are recorded but never traversed.
+`release:pack` inspects `npm pack --dry-run --json` and fails if required runtime assets are missing. `release:artifact-smoke` creates a real tarball, unpacks it into a temp directory, installs production dependencies there, and exercises the removed-setup-flag and non-terminal setup refusals, the retired template and note guide/check leaves, `oms setup status` against a sealed contract, `oms setup host install|sync|remove`, `oms setup package check|update`, `oms serve http|mcp`, canonical `oms search` and `oms doctor` commands, and the four-tool MCP surface from the extracted package root. All child processes use an isolated home. A metadata-only guard (not a byte-content digest) verifies that the operator's real `~/.oms` tree and exact OMS-managed Hermes config/skill/adapter paths did not change; symlinks are recorded but never traversed.
 
 When the release ships the `boost-additive` baseline, `check:measurement`
 passes the `boost-c040` gate with a receipt and does not require
@@ -200,7 +200,7 @@ not a public compatibility promise in v0.14.
 old updater. It installs the published predecessor version globally into a disposable prefix,
 uses that old binary's `install --runtime hermes` to create legitimate prior
 OMS ownership, externally installs the candidate tarball globally into the same
-prefix, then invokes the new binary's canonical `host sync`:
+prefix, then invokes the new binary's canonical `oms setup host sync`:
 
 ```bash
 export npm_config_prefix="$(mktemp -d)"
@@ -212,13 +212,13 @@ export OMS_HERMES_HOME="$HOME/hermes"
 npm install -g oh-my-second-brain@<published-predecessor>
 "$npm_config_prefix/bin/oms" install --runtime hermes --vault "$HOME/vault" --yes
 npm install -g ./oh-my-second-brain-<next-version>.tgz
-"$npm_config_prefix/bin/oms" host sync --runtime hermes --vault "$HOME/vault"
+"$npm_config_prefix/bin/oms" setup host sync --runtime hermes --vault "$HOME/vault"
 ```
 
 The automated rehearsal additionally isolates npm cache/config, XDG data,
 runtime journal, and Hermes home; preserves an unrelated custom Hermes setting;
-checks the installed manifest version, eight skill files, canonical
-`serve mcp` registration, and five-tool discovery through the actual new global
+checks the installed manifest version, six skills, canonical
+`oms serve mcp` registration, and four-tool discovery through the actual new global
 binary. It does not scan active Hermes logs, databases, unrelated profiles, or
 profile home links, which may change concurrently. It never accesses a private
 vault or upgrades a real host application.
@@ -229,7 +229,7 @@ still reports the current version. The gate therefore labels this
 becomes a true predecessor-to-successor rehearsal automatically after
 `npm run release -- <next-version>`. No version carrier is edited by hand.
 
-A successful test proves package-to-package replacement and the new `host sync`
+A successful test proves package-to-package replacement and the new `oms setup host sync`
 surface; it does not justify keeping retired reconciliation or top-level update
 aliases.
 
