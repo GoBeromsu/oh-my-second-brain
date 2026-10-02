@@ -330,16 +330,7 @@ export class LiveLexicalSession {
         const document = parseNodeProjectionDocument(docPath, current.content, false, parsed);
         this.rememberProjection(docPath, current.source.contentSha256, document);
         const chunks = chunkDocument(docPath, current.content, undefined, parsed);
-        const store = this.current!.store;
-        const expected = store.getShas(docPath);
-        if (expected.size !== chunks.length) {
-          store.clearDocument(docPath);
-          store.upsertLex(chunks);
-        } else {
-          const changed = chunks.filter(chunk => expected.get(chunk.ordinal) !== chunk.sha);
-          if (changed.length > 0) store.upsertLex(changed);
-        }
-        store.recordDocumentSource(docPath, current.source, chunks);
+        this.current!.reconcileDocument(docPath, current.source, chunks);
         files.set(docPath, current.source.fingerprint === null
           ? `bytes:${current.source.contentSha256}` : `metadata:${current.source.fingerprint}`);
         contentSha256.set(docPath, current.source.contentSha256);

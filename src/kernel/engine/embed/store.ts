@@ -1235,6 +1235,8 @@ function openReadOnlyStore(
 /** A detached mutable core, private to the live lexical session. */
 export interface DetachedLexicalStore {
   readonly store: EngineStore;
+  /** One synchronous private transaction; callers capture source bytes first. */
+  reconcileDocument(docPath: string, source: DocumentSource, chunks: readonly Chunk[]): void;
   allocatedBytes(): number;
   /** Copy this detached core to another detached database; never the source. */
   copyTo(dbPath: string): DetachedLexicalStore;
@@ -1243,8 +1245,22 @@ export interface DetachedLexicalStore {
 
 function detachedHandle(db: Database.Database): DetachedLexicalStore {
   const store = bindCoreStore(db, true);
+  const reconcileDocument = db.transaction((docPath: string, source: DocumentSource, chunks: readonly Chunk[]) => {
+    const expected = store.getShas(docPath);
+    if (expected.size !== chunks.length) {
+      store.clearDocument(docPath);
+      store.upsertLex(chunks);
+    } else {
+      const changed = chunks.filter(chunk => expected.get(chunk.ordinal) !== chunk.sha);
+      if (changed.length > 0) store.upsertLex(changed);
+    }
+    // Chunk changes and their verified source evidence share one outer commit.
+    // Existing store transactions become savepoints; source reads stay outside.
+    store.recordDocumentSource(docPath, source, chunks);
+  });
   return {
     store,
+    reconcileDocument,
     allocatedBytes: () => Number(db.pragma("page_count", { simple: true })) * Number(db.pragma("page_size", { simple: true })),
     copyTo(dbPath): DetachedLexicalStore {
       db.prepare("VACUUM INTO ?").run(dbPath);
