@@ -80,6 +80,22 @@ vault 검색 인덱스를 어디에 두고 어떤 스키마로 채우는지, lex
 - sub-query 실행은 2회 시도, 50ms backoff로 재시도한다 (`dispatcher.ts:86-100`).
 - 리랭킹은 융합 뒤 선택 단계다 (→ ADR-004).
 
+### 8. 명시적으로 켠 자동 유지보수 — Proposed amendment (2026-10-02)
+
+이 절은 후속 구현의 승인된 범위이며, 아래 검증이 끝나기 전에는 배포된 동작을 뜻하지 않는다.
+
+- Markdown이 원본이다. SQLite commit은 파일 저장과 원자적이지 않다. 파일 변경 후 process가 종료되면 다음 startup reconciliation이 복구한다.
+- 기존 MCP/HTTP process에서 명시적으로 maintenance를 켠 경우에만 writer를 시작한다. 기본 server 시작, query, status는 DB 생성·migration·owner 획득을 하지 않는다. 첫 단계는 이미 존재하는 engine store와 검증된 vault target을 요구한다.
+- `engine-store.sqlite`, `AxisObservationStore`, 기존 sync/dirty queue를 재사용한다. 별도 DB, daemon, 변경 journal은 먼저 추가하지 않는다. machine별 cache는 vault 및 파일 동기화 범위 밖에 둔다.
+- 짧은 SQLite writer lock과 장수명 maintenance owner는 별도다. owner는 동일 host의 process별 token을 사용하고, 살아 있거나 생존 여부가 불명확한 PID의 소유권을 빼앗지 않는다. timeout/heartbeat 만료로 takeover하지 않는다. 일시 정지한 owner는 가용성을 막을 수 있다. 수동 lock 삭제는 안전한 failover가 아니다.
+- shutdown/owner 상실은 새 작업을 멈추고 cancel한 뒤 실행 중인 작업이 끝나야 소유권을 반환한다. commit 직전 owner token과 작업 revision을 확인한다. 이전 owner는 후속 owner의 lock을 삭제할 수 없다. 이는 협조하는 OMS process의 규약이며 외부 lock 조작을 막는 강한 fencing을 주장하지 않는다.
+- 문서별 lexical chunks, source evidence, revision별 vector dirty 작업을 같은 DB transaction에 반영한다. 늦게 끝난 revision A의 embedding은 revision B나 삭제 후 재생성된 문서를 덮어쓰거나 새 queue를 지우지 못한다. model/chunker/input identity도 commit 조건이다.
+- 현 embedding 입력은 frontmatter를 포함한 raw chunk다. metadata만 바뀌었다는 이유로 embedding을 생략하지 않는다. metadata projection revision과 vector 입력 revision은 별도로 구분하며 입력 정책 변경은 별도 결정이다.
+- watcher는 초기 scan 전에 시작하고 중간 hint를 보관한다. hint는 원본이 아니다. startup·주기적 reconciliation·watch 오류/overflow·긴 실행 중단 뒤 전체 대조가 필요하다. 실패한 부분 scan으로 누락 경로를 삭제하지 않는다. 경로 queue, batch, backoff와 shutdown은 유한해야 한다.
+- 완전하게 구성하고 검증한 private native FTS가 persistent vector-only 변경 후에도 유지될 수 있는지 먼저 증명한다. source refresh, ranking, preview revision, request snapshot 검증은 유지한다. 증명이 안 되는 bootstrap/identity/config 상태는 보수적인 경로로 돌아간다. private freshness가 persistent/vector sync 성공을 뜻하지 않는다.
+
+검증 범위: burst save, delete/rename/recreate, 같은 길이와 복원된 mtime, startup 중 변경, watch 유실, 두 process, busy writer, 파일 저장 후 DB commit 전 crash, 늦은 embedding, paused owner의 takeover 거부 및 종료 후 복구, 읽기 전용 cold start. 실제 SQLite 버전을 기록하고 합성 20k/제한된 대량 편집의 시간·메모리·I/O를 공개한다. host 실제 사용 검증과 cloud fixture 검증을 구별한다.
+
 ### 미결
 
 - `SKIP_DIRS`의 정확한 목록과 managed 제외 범위가 vault 규약 문서와 일치하는지는 확인하지 않았다.
