@@ -524,9 +524,9 @@ export async function runMcpServer(opts: OMSMcpServerOptions & { readonly mainte
     server = createOMSMcpServer(opts, maintenance);
     await server.connect(new StdioServerTransport());
   } catch (error) { try { await server?.close(); } finally { await maintenance?.stop(); } throw error; }
-  if (maintenance !== undefined) {
-    // The SDK stdio transport does not close itself on stdin EOF. A watcher
-    // otherwise keeps this process alive until the client force-kills it.
+  {
+    // The SDK transport does not close itself on stdin EOF. Default read-only
+    // servers also own disposable lexical disk state that must be released.
     let shuttingDown: Promise<void> | undefined;
     const shutdown = (exitCode?: number): void => {
       shuttingDown ??= server!.close();
