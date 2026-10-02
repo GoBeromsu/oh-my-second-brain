@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Warm live lexical sessions keep their complete private corpus across persistent index writes, vector syncs, rebuilds, and index removal or replacement. Each query still refreshes current Markdown and validates returned sources; incomplete captures and changed or unknown vault identities retain conservative bootstrap checks. Private freshness never certifies persistent/vector synchronization, and searches still leave those stores untouched.
+
 - Observed value facets include a directly reusable, JSON-safe exact typed selection. Selecting a date, date-looking string, numeric timestamp, boolean or string now reproduces its distinct-note count within an unchanged discovery scope, without changing declared-axis or legacy comparison behavior. Exact date selectors require canonical ISO strings rather than permissive date coercion.
 - Ordinary live refresh prunes obsolete projection backing without invalidating unchanged observed-field rows. The next explicit observed query removes deleted/excluded canonical metadata and adds renamed notes through the existing authoritative snapshot reconciliation, avoiding a whole-corpus EAV rewrite while retaining cursor invalidation and current-source checks.
 
