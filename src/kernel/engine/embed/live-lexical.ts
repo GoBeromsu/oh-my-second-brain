@@ -110,6 +110,8 @@ export class LiveLexicalSession {
   private observedDiskPath: string | undefined;
   private readonly projections = new Map<string, { readonly sha: string; readonly document: NodeProjectionDocument }>();
   private projectionBytes = 0;
+  /** Complete metadata captures only; never evidence that lexical chunks exist. */
+  private sourceInventory = new Map<string, DocumentSource>();
   private current: DetachedLexicalStore | undefined;
   private sourceGeneration: string | undefined;
   private completeVaultIdentity: string | undefined;
@@ -117,9 +119,11 @@ export class LiveLexicalSession {
   private onDisk = false;
   private currentDiskPath: string | undefined;
   private refreshing: Promise<RefreshedLexicalSource> | undefined;
+  private refreshingLexical = false;
   private closed = false;
   private active = 0;
-  private drained: (() => void) | undefined;
+  private drained: Promise<void> | undefined;
+  private resolveDrained: (() => void) | undefined;
   private disposal: Promise<void> | undefined;
 
   constructor(options: LiveLexicalOptions) {
@@ -264,8 +268,8 @@ export class LiveLexicalSession {
     this.projectionBytes += document.retainedBytes;
   }
 
-  private async refresh(): Promise<RefreshedLexicalSource> {
-    try { return await this.refreshSources(); }
+  private async refresh(lexical = true): Promise<RefreshedLexicalSource> {
+    try { return await this.refreshSources(lexical); }
     catch (error) {
       // A partial refresh never graduates from generation-checked bootstrap.
       this.completeVaultIdentity = undefined;
@@ -284,17 +288,20 @@ export class LiveLexicalSession {
     }
   }
 
-  private async refreshSources(): Promise<RefreshedLexicalSource> {
-    const identity = this.seed();
-    this.enforceBudget();
-    const sources = this.current!.store.readDocumentSources() ?? new Map<string, DocumentSource>();
+  private async refreshSources(lexical = true): Promise<RefreshedLexicalSource> {
+    // Observed-only bootstrap needs current Markdown, never a persistent FTS
+    // seed. Keep the same confinement and root-identity checks on both paths.
+    assertExternalDatabasePath(this.vault, this.dbPath);
+    const identity = lexical ? this.seed() : vaultIdentity(this.vault);
+    if (lexical) this.enforceBudget();
+    const sources = lexical ? this.current!.store.readDocumentSources() ?? new Map<string, DocumentSource>() : this.sourceInventory;
     const forceBytePaths = new Set([...sources].filter(([, source]) => source.fingerprint === null).map(([docPath]) => docPath));
     const snapshot = await scanIndexSources(this.vault, undefined, forceBytePaths);
     // listDocPaths omits zero-chunk documents, so source evidence participates too.
-    const storedPaths = new Set([...this.current!.store.listDocPaths(), ...sources.keys()]);
+    const storedPaths = new Set([...(lexical ? this.current!.store.listDocPaths() : []), ...sources.keys()]);
     for (const docPath of storedPaths) {
       if (!snapshot.files.has(docPath)) {
-        this.current!.store.clearDocument(docPath);
+        if (lexical) this.current!.store.clearDocument(docPath);
         // Ordinary refresh prunes backing only. The next observed selector
         // authoritatively reconciles EAV without invalidating unchanged rows.
         this.observations?.deleteLiveProjection(docPath);
@@ -304,14 +311,16 @@ export class LiveLexicalSession {
     this.observations?.pruneLiveProjections(snapshot.files);
     const files = new Map(snapshot.files);
     const contentSha256 = new Map<string, string>();
+    const nextInventory = new Map<string, DocumentSource>();
     const publish = (docPath: string, source: DocumentSource) => {
       files.set(docPath, source.fingerprint === null ? `bytes:${source.contentSha256}` : `metadata:${source.fingerprint}`);
       contentSha256.set(docPath, source.contentSha256);
+      nextInventory.set(docPath, source);
     };
-    const batch = new LexicalDocumentBatch(documents => {
+    const batch = lexical ? new LexicalDocumentBatch(documents => {
       this.current!.reconcileDocuments(documents);
       for (const { docPath, source } of documents) publish(docPath, source);
-    });
+    }) : undefined;
     const captured = await mapWithConcurrency([...snapshot.files], 32, async ([docPath, fingerprint]): Promise<
       { readonly document: NodeProjectionDocument } | { readonly error: unknown }
     > => {
@@ -330,7 +339,10 @@ export class LiveLexicalSession {
           const document = projection?.sha === source.contentSha256 ? projection.document
             : this.observations?.readLiveProjection(docPath, source.contentSha256);
           if (document !== undefined) {
+            // Keep byte-mode inventory evidence even if this older source had
+            // a strong witness: the current filesystem may expose weaker data.
             contentSha256.set(docPath, source.contentSha256);
+            nextInventory.set(docPath, source);
             return { document };
           }
         }
@@ -338,31 +350,37 @@ export class LiveLexicalSession {
         const parsed = parseNote(current.content);
         const document = parseNodeProjectionDocument(docPath, current.content, false, parsed);
         this.rememberProjection(docPath, current.source.contentSha256, document);
-        const chunks = chunkDocument(docPath, current.content, undefined, parsed);
-        if (this.onDisk) batch.add({ docPath, source: current.source, chunks });
+        if (!lexical) publish(docPath, current.source);
         else {
-          // Pending FTS pages are not fully counted before commit. Preserve one
-          // complete document per in-memory budget check; batch only after spill.
-          this.current!.reconcileDocument(docPath, current.source, chunks);
-          publish(docPath, current.source);
-          this.enforceBudget();
+          const chunks = chunkDocument(docPath, current.content, undefined, parsed);
+          if (this.onDisk) batch!.add({ docPath, source: current.source, chunks });
+          else {
+            // Pending FTS pages are not fully counted before commit. Preserve one
+            // complete document per in-memory budget check; batch only after spill.
+            this.current!.reconcileDocument(docPath, current.source, chunks);
+            publish(docPath, current.source);
+            this.enforceBudget();
+          }
         }
         return { document };
       } catch (error) { return { error }; }
     });
     const documents: NodeProjectionDocument[] = [];
     for (const result of captured) {
-      if ("error" in result) { batch.discard(); throw result.error; }
+      if ("error" in result) { batch?.discard(); throw result.error; }
       documents.push(result.document);
     }
-    batch.flush();
-    this.enforceBudget();
+    batch?.flush();
+    if (lexical) this.enforceBudget();
     if (identity !== vaultIdentity(this.vault) || snapshot.vault !== realpathSync(this.vault)) {
       throw new Error("LIVE_LEXICAL_SOURCE_CHANGED: the vault identity changed while capturing it; retry the search.");
     }
     // This marks complete capture, not freshness of a returned result or of
     // the persistent/vector index. Callers still perform final source checks.
-    this.completeVaultIdentity = identity;
+    if (lexical) this.completeVaultIdentity = identity;
+    // Publish only complete captures after workers and native batches drain.
+    // Metadata edits leave lexical source evidence untouched for its own refresh.
+    this.sourceInventory = nextInventory;
     const byteVerifiedPaths = new Set([...files].filter(([, token]) => token.startsWith("bytes:")).map(([docPath]) => docPath));
     return { snapshot: { vault: snapshot.vault, files, contentSha256, byteVerifiedPaths }, documents };
   }
@@ -374,10 +392,19 @@ export class LiveLexicalSession {
       const relative = path.relative(this.vault, path.resolve(this.vault, collection));
       if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("Index source collection must stay inside the vault.");
     }
+    const lexical = queries.length > 0 || selector === undefined;
+    // A lexical request cannot join a metadata generation. Wait outside active:
+    // counting a queued upgrade would prevent the generation from ever draining.
+    while (lexical && this.refreshing !== undefined && !this.refreshingLexical) {
+      await this.drained;
+      if (this.closed) throw new Error("Live lexical session is closed.");
+    }
     this.active++;
     try {
       if (this.refreshing === undefined) {
-        this.refreshing = this.refresh();
+        this.drained = new Promise<void>(resolve => { this.resolveDrained = resolve; });
+        this.refreshingLexical = lexical;
+        this.refreshing = this.refresh(lexical);
       }
       const { snapshot, documents } = await this.refreshing;
       let selection: LexicalCandidateSelection | undefined;
@@ -429,7 +456,9 @@ export class LiveLexicalSession {
         // its synchronous candidate lists. Clearing in refresh().finally() would
         // let another microtask seed/mutate the store before those continuations.
         this.refreshing = undefined;
-        this.drained?.();
+        this.resolveDrained?.();
+        this.resolveDrained = undefined;
+        this.drained = undefined;
       }
     }
   }
@@ -443,7 +472,7 @@ export class LiveLexicalSession {
     if (this.disposal !== undefined) return this.disposal;
     this.closed = true;
     this.disposal = (async () => {
-      if (this.active > 0) await new Promise<void>(resolve => { this.drained = resolve; });
+      if (this.active > 0) await this.drained;
       try { this.current?.close(); }
       finally {
         this.current = undefined;
@@ -452,6 +481,7 @@ export class LiveLexicalSession {
         this.observedDiskPath = undefined;
         this.projections.clear();
         this.projectionBytes = 0;
+        this.sourceInventory.clear();
         if (this.temporaryDirectory !== undefined) rmSync(this.temporaryDirectory, { recursive: true, force: true });
       }
     })();
