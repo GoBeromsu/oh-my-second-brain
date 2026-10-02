@@ -85,6 +85,23 @@ it("rolls back a real mid-batch SQLite constraint failure with native integrity 
   } finally { inspect.close(); store.close(); }
 });
 
+it("keeps new-document FTS terms in one native batch without empty deletes flushing them", () => {
+  const filename = path.join(root, "scratch.sqlite");
+  const store = openDetachedLexicalStore(path.join(root, "absent.sqlite"), filename);
+  const inspect = new Database(filename);
+  try {
+    const records = [captured(0), captured(1), captured(2), captured(3)];
+    store.reconcileDocuments(records);
+    expect(store.store.queryLex("oldmarker", 100)).toHaveLength(4);
+    expect(store.store.readDocumentSources()!.size).toBe(4);
+    // A DELETE against an FTS virtual table can flush its pending terms even
+    // when the WHERE clause matches no rows. One complete fresh batch should
+    // commit one segment rather than forcing a segment for every new note.
+    expect(inspect.prepare("SELECT count(DISTINCT segid) AS count FROM engine_chunk_fts_idx").get()).toEqual({ count: 1 });
+    inspect.exec("INSERT INTO engine_chunk_fts(engine_chunk_fts) VALUES ('integrity-check')");
+  } finally { inspect.close(); store.close(); }
+});
+
 it("flushes a residual batch and spills before continuing without omitting empty notes", async () => {
   for (let index = 0; index < 45; index++) await writeFile(path.join(vault, `note-${index}.md`), index === 44 ? "" : `# Note\nmarker ${index}\n${"word ".repeat(1500)}`);
   const session = selected(100_000);
