@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Detached live lexical captures update each note's chunks and verified source evidence in one synchronous private transaction, reducing separate commits during cold corpus construction. A failed source publication rolls back that note's lexical changes. Persistent stores, SQLite durability settings, native ranking, memory budgets and final source validation keep their existing behavior.
+
 - Live lexical capture shares one canonical frontmatter parse between its compact metadata projection and chunk title extraction. Malformed metadata diagnostics, title fallback, raw embedding text and copied projection values keep their existing semantics; unchanged warm notes still skip parsing.
 
 - Chunking counts each line's script-aware token weight once and carries the exact weight through overlap, avoiding repeated scans of growing buffers on short-line notes. Canonical chunk text, title, heading paths, ordinals and digests remain unchanged; cold live search still captures the full corpus and performs its existing freshness checks.
