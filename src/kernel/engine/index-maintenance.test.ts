@@ -1,14 +1,21 @@
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import * as fs from "node:fs";
+import { EventEmitter } from "node:events";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startIndexMaintenance, sqliteMaintenanceSupported, maintenanceMode, maintenanceWatchHint, type IndexMaintenance, type IndexMaintenanceOptions } from "./index-maintenance.js";
+import { startIndexMaintenance, sqliteMaintenanceSupported, maintenanceMode, maintenanceWatchHint, type IndexMaintenance, type IndexMaintenanceDeps, type IndexMaintenanceOptions } from "./index-maintenance.js";
 import { syncEngineStore, acquireEngineStoreWriterLock } from "./embed/sync.js";
 import { readMaintenanceState } from "./embed/maintenance.js";
 import { openEngineStoreCoreReadOnly } from "./embed/store.js";
 import { makeEmbeddingIdentity } from "./embed/identity.js";
 import type { MaintenanceEmbedding } from "./maintenance-model.js";
+
+vi.mock("node:fs", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, watch: vi.fn(actual.watch) };
+});
 
 let root: string; let vault: string; let dbPath: string;
 const running: IndexMaintenance[] = [];
@@ -20,7 +27,7 @@ function embedding(): MaintenanceEmbedding {
 }
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-  root = await mkdtemp(path.join(tmpdir(), "oms-index-maintenance-")); vault = path.join(root, "vault"); dbPath = path.join(root, "cache", "index.sqlite");
+  root = await realpath(await mkdtemp(path.join(tmpdir(), "oms-index-maintenance-"))); vault = path.join(root, "vault"); dbPath = path.join(root, "cache", "index.sqlite");
   await mkdir(vault); await writeFile(path.join(vault, "a.md"), "---\nsubject: science\n---\noldmarker\n");
 });
 afterEach(async () => { await Promise.allSettled(running.splice(0).map(item => item.stop())); vi.useRealTimers(); vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
@@ -31,12 +38,23 @@ async function sync(vector?: MaintenanceEmbedding) {
       embeddingMrlDim: 0, embeddingNormalization: "l2", embeddingPrefixScheme: "embeddinggemma-v1" }) });
   expect(result.available).toBe(true);
 }
-async function start(options: Partial<IndexMaintenanceOptions> = {}, vector?: MaintenanceEmbedding) {
+async function start(options: Partial<IndexMaintenanceOptions> = {}, vector?: MaintenanceEmbedding, deps: IndexMaintenanceDeps = {}) {
   const result = await startIndexMaintenance({ vault, dbPath, source: "explicit", mode: "lexical", ...options }, {
     watch: watched,
+    ...deps,
     ...(vector === undefined ? {} : { createEmbedding: () => vector }),
   });
   expect(result).toBeDefined(); running.push(result!); return result!;
+}
+function controlledWatcher() {
+  const watcher = new EventEmitter() as fs.FSWatcher;
+  watcher.close = vi.fn(() => { watcher.emit("close"); });
+  vi.mocked(fs.watch).mockClear().mockImplementationOnce((...args: Parameters<typeof fs.watch>) => {
+    const listener = args.find(arg => typeof arg === "function") as fs.WatchListener<string>;
+    watcher.on("change", listener);
+    return watcher;
+  });
+  return watcher;
 }
 function hits(query: string): string[] { const db = openEngineStoreCoreReadOnly(dbPath)!; try { return db.queryLex(query, 100).map(hit => hit.docPath); } finally { db.close(); } }
 
@@ -64,6 +82,56 @@ describe("production automatic maintenance binding", () => {
     expect(readMaintenanceState(dbPath).pending).toHaveLength(1);
     expect(await readFile(path.join(vault, "a.md"))).toEqual(before);
     expect(owner.status()).toMatchObject({ phase: "idle", updated: 1, pendingVectors: 1, sqliteVersion: expect.any(String) });
+  });
+  it("applies a delivered watch hint after debounce without waiting for reconciliation", async () => {
+    await sync();
+    const watcher = controlledWatcher();
+    // Undefined selects the production fs.watch adapter, with controlled delivery below.
+    const owner = await start({}, undefined, { watch: undefined });
+    await owner.controller.flush();
+    expect(owner.status()).toMatchObject({ phase: "idle", watching: true, scans: 1 });
+    const flush = owner.controller.flush.bind(owner.controller);
+    let cycle: Promise<void> | undefined;
+    const scheduled = vi.spyOn(owner.controller, "flush").mockImplementation(() => { cycle = flush(); return cycle; });
+
+    await writeFile(path.join(vault, "a.md"), "watchmarker\n");
+    expect(fs.watch).toHaveBeenCalledWith(vault, { recursive: true }, expect.any(Function));
+    watcher.emit("change", "change", "a.md");
+    await vi.advanceTimersByTimeAsync(149);
+    expect(scheduled).not.toHaveBeenCalled();
+    expect(hits("watchmarker")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(scheduled).toHaveBeenCalledOnce();
+    await cycle;
+    expect(hits("watchmarker")).toEqual(["a.md"]);
+    expect(hits("oldmarker")).toEqual([]);
+    expect(owner.status()).toMatchObject({ phase: "idle", scans: 1, updated: 1 });
+    await owner.stop();
+    expect(watcher.close).toHaveBeenCalledOnce();
+  });
+  it("reconciles a silent registered watcher at the default periodic deadline", async () => {
+    await sync();
+    controlledWatcher(); // Native registration succeeds but no change event fires.
+    const owner = await start({}, undefined, { watch: undefined });
+    await owner.controller.flush();
+    expect(fs.watch).toHaveBeenCalledOnce();
+    expect(owner.status()).toMatchObject({ phase: "idle", watching: true, scans: 1 });
+    const flush = owner.controller.flush.bind(owner.controller);
+    let cycle: Promise<void> | undefined;
+    const scheduled = vi.spyOn(owner.controller, "flush").mockImplementation(() => { cycle = flush(); return cycle; });
+
+    await writeFile(path.join(vault, "a.md"), "missedmarker\n");
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(scheduled).not.toHaveBeenCalled();
+    expect(hits("missedmarker")).toEqual([]);
+    // The interval schedules a zero-delay task; fake timers run that on the next tick.
+    await vi.advanceTimersByTimeAsync(2);
+    expect(scheduled).toHaveBeenCalledOnce();
+    await cycle; // Await the timer-started scan, never manually flush or notify.
+    expect(hits("missedmarker")).toEqual(["a.md"]);
+    expect(hits("oldmarker")).toEqual([]);
+    expect(owner.status()).toMatchObject({ phase: "idle", watching: true, scans: 2, updated: 1 });
+    expect(fs.watch).toHaveBeenCalledOnce();
   });
   it("coalesces edits and repairs missed rename/delete/recreate events", async () => {
     await sync(); const owner = await start(); await owner.controller.flush();

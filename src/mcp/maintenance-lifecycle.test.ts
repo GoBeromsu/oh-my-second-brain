@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,7 @@ let root: string; let vault: string; let cache: string;
 const clients: Client[] = [];
 const transports: StdioClientTransport[] = [];
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "oms-maintenance-mcp-")); vault = path.join(root, "vault"); cache = path.join(root, "cache");
+  root = await realpath(await mkdtemp(path.join(tmpdir(), "oms-maintenance-mcp-"))); vault = path.join(root, "vault"); cache = path.join(root, "cache");
   await mkdir(vault); await mkdir(path.join(root, "home")); await mkdir(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
   await writeFile(path.join(vault, "note.md"), "# Note\noldmarker\n");
@@ -74,12 +74,12 @@ describe("real MCP maintenance process lifecycle", () => {
       expect(third.stderr()).toContain("OWNER_BUSY");
     } finally { process.kill(pid, "SIGCONT"); }
     await idle(first.client);
-    await writeFile(path.join(vault, "note.md"), "# Note\nexternalmarker\n");
-    await eventually(async () => indexed("externalmarker").length === 1);
-    expect(await call(first.client, "search", { op: "query", query: "externalmarker" })).toMatchObject({ available: true, totalCount: 1 });
+    // This process test covers ownership and crash recovery. Delivered and lost
+    // OS watch hints are covered with controlled delivery and clocks in the binding suite.
     const write = await call(first.client, "write", { path: "created.md", content: "---\nsubject: observed\n---\nmanagedmarker\n" });
     expect(write.ok).toBe(true);
     await eventually(async () => indexed("managedmarker").length === 1);
+    expect(await call(first.client, "search", { op: "query", query: "managedmarker" })).toMatchObject({ available: true, totalCount: 1 });
     process.kill(pid, "SIGKILL");
     await eventually(async () => { try { process.kill(pid, 0); return false; } catch { return true; } });
     await writeFile(path.join(vault, "note.md"), "# Note\ncrashrecoverymarker\n");
