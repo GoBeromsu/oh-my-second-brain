@@ -4,6 +4,10 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- Enabled HTTP maintenance cancels immediately when shutdown is requested, even when a client leaves a request body unfinished. Connections have a bounded drain period and repeated close calls reuse one shutdown.
+
+- `oms serve mcp|http --maintenance lexical|full` explicitly enables automatic maintenance of an existing canonical index. Default startup stays unchanged; unverified targets, missing indexes and incompatible full-mode models are rejected before serving.
+
 - `oms search --observed '<JSON>'` and HTTP `/search` accept explicit current-note frontmatter filters and bounded key/value discovery. Metadata-only requests need no query text, and `-n 0`/`limit: 0` suppresses note hits while retaining discovery.
 
 - **CLI and HTTP lexical search see unsynced note edits without repairing the persistent index.** HTTP reuses a server-owned detached native FTS corpus; each CLI invocation closes its own transient corpus. Requests that race an edit return a retry instead of stale matches with new previews.

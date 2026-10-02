@@ -18,7 +18,7 @@ function toolResult(payload: WritePayload): CallToolResult {
  * lists the warnings. Legacy and unknown keys are refused rather than ignored; a denied
  * write leaves the target byte-for-byte unchanged, and an overwrite must carry the note's `ifMatch`.
  */
-export async function writeNote(vault: string, source: WriteTargetSource, args: Record<string, unknown>): Promise<CallToolResult> {
+export async function writeNote(vault: string, source: WriteTargetSource, args: Record<string, unknown>, onWritten?: (relativePath: string) => void): Promise<CallToolResult> {
   const extra = Object.keys(args).filter(key => !WRITE_KEYS.includes(key)).sort();
   if (extra.length > 0) return toolResult(deniedWritePayload(extra.map(field => ({ field, kind: "unsupported-input" }))));
   const missing = ["path", "content"].filter(key => typeof args[key] !== "string" || (key === "path" && args[key] === ""));
@@ -37,5 +37,6 @@ export async function writeNote(vault: string, source: WriteTargetSource, args: 
     ifMatch: args["ifMatch"] as string | undefined,
     check: args["check"] as boolean | undefined,
   });
+  if (outcome.kind === "written") onWritten?.(outcome.receipt.path);
   return toolResult(writePayload(outcome));
 }

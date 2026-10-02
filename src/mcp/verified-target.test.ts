@@ -47,7 +47,8 @@ describe("Issue #58: Verified-target admission", () => {
       command: process.execPath,
       args: [distCli, "serve", "mcp"],
       cwd: tmpDocuments,
-      env: { HOME: tmpHome, PATH: process.env.PATH ?? "" },
+      // This suite exercises target admission, not registry refresh or its sockets.
+      env: { HOME: tmpHome, PATH: process.env.PATH ?? "", OMS_UPDATE_NOTICE: "0" },
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -81,7 +82,7 @@ describe("Issue #58: Verified-target admission", () => {
       command: process.execPath,
       args: [distCli, "serve", "mcp"],
       cwd: tmpDocuments,
-      env: { HOME: path.join(fixture.base, "home"), OMS_VAULT: fixture.vault, PATH: process.env.PATH ?? "" },
+      env: { HOME: path.join(fixture.base, "home"), OMS_VAULT: fixture.vault, PATH: process.env.PATH ?? "", OMS_UPDATE_NOTICE: "0" },
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });
@@ -125,7 +126,7 @@ describe("Issue #58: Verified-target admission", () => {
       command: process.execPath,
       args: [distCli, "serve", "mcp", "--vault", fixture.vault],
       cwd: repoRoot,
-      env: { HOME: path.join(fixture.base, "home"), PATH: process.env.PATH ?? "" },
+      env: { HOME: path.join(fixture.base, "home"), PATH: process.env.PATH ?? "", OMS_UPDATE_NOTICE: "0" },
       stderr: "pipe",
     });
     const client = new Client({ name: "oms-test-client", version: "0.0.0" });

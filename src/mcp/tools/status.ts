@@ -5,6 +5,7 @@ import { evolutionStatus } from "../../kernel/doctor/evolution-status.js";
 import { readSearchTemplateSource } from "../../kernel/engine/retrieval/template-source.js";
 import { summarizeRuntimeHistory } from "../../kernel/runtime/event-summary.js";
 import { jsonText, type ToolContext } from "./shared.js";
+import type { MaintenanceStatus } from "../../kernel/engine/maintenance-controller.js";
 
 export function runtimeHistory(vault: string): { readonly history?: ReturnType<typeof summarizeRuntimeHistory>; readonly runtimeWarnings?: readonly string[] } {
   try {
@@ -23,7 +24,7 @@ function writePosture(source: WriteTargetSource, reason: "tampered" | "broken" |
 }
 
 /** MCP `doctor op: status`: read-only health. `readTools` is the read-only tool list, passed in to avoid importing the server. */
-export async function handleStatus(ctx: ToolContext, readTools: readonly string[]): Promise<CallToolResult> {
+export async function handleStatus(ctx: ToolContext, readTools: readonly string[], maintenance?: MaintenanceStatus & { readonly sqliteVersion: string }): Promise<CallToolResult> {
   const { vault, source, engine } = ctx;
   const engineGraph = await engine.adapter.graphStatus(vault).catch(() => null);
   // Posture follows the sealed contract the write surface judges against.
@@ -46,5 +47,6 @@ export async function handleStatus(ctx: ToolContext, readTools: readonly string[
     engineGraph,
     writeTools: writePosture(source, contract.reason),
     readTools,
+    ...(maintenance === undefined ? {} : { maintenance }),
   });
 }

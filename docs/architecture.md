@@ -88,3 +88,13 @@ The MCP server id is `oms`. Local tool names are `write`, `search`, `interview`,
 Directly under `src`, the five top-level entries are still assets, cli, kernel, mcp, and vendors. There is no sixth MCP tool. The skill, tool, and command names above are the approved public surface. Retired note, link, and template operations have no compatibility path.
 
 See [conventions](./conventions.md) for vault data and [installation](./install.md) for host setup.
+
+## Explicit maintenance lifecycle
+
+The maintenance controller is an optional owner inside the existing MCP/HTTP process. It is off by default and starts only from an explicit server flag after verified-target, existing-store, runtime and model checks. It reuses the engine SQLite store and revisioned dirty queue. No extra database, daemon, persistent change journal, or automatic host configuration is introduced. Private observed metadata still uses the existing session-owned AxisObservationStore.
+
+Per-document maintenance publishes lexical rows, source evidence and a unique pending embedding revision in one SQLite transaction. Inference holds no writer handle; its eventual commit checks the captured bytes, chunker/model identity, queued revision and current owner. A source edit, deletion/recreation, owner loss or cancellation makes late work stale. This transaction is not atomic with Markdown saves; startup and periodic reconciliation provide convergence, while retrieval retains its source-freshness checks.
+
+Maintenance ownership and the short database writer gate are separate. Each upgraded contender publishes a unique immutable process record before listing competitors. Any other live or unknown process blocks acquisition; concurrent arrivals may both refuse and retry. Dead records have never-reused names, so recovery does not rename a live successor's path. PID reuse conservatively blocks. These are cooperative guarantees within one host and PID namespace, not strong fencing against manual lock tampering or old-version recovery code. A complete private lexical corpus can remain warm across persistent index changes because it independently reconciles admitted Markdown.
+
+A strict full scan is required before pruning absent or excluded indexed paths. Watcher hints are registered before scanning, coalesced during it and bounded by overflow-to-rescan. Watch failures remain visible and trigger complete reconciliation. The owner stops scheduling on scope loss, cancels jobs and retains ownership until active work drains. See [optional maintenance operation](./install.md#optional-automatic-index-maintenance) for prerequisites and limits.

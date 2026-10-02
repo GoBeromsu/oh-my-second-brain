@@ -101,6 +101,30 @@ A plain `oms search <text>` is lexical-only. Every non-lexical channel is explic
 
 `oms serve mcp` and `oms serve http` start their respective servers without creating a vault engine store at startup. There is no OMS host launcher.
 
+### Optional automatic index maintenance
+
+Maintenance is off unless that server invocation explicitly includes `--maintenance lexical` or `--maintenance full`. It requires a verified vault target and an existing, healthy canonical engine store. This flag does not change installed host registrations, settings, templates, or notes.
+
+```sh
+oms doctor sync-embeddings --mode sync --vault /path/to/vault
+oms serve mcp --vault /path/to/vault --maintenance lexical
+# Alternatively, use the existing local HTTP server:
+oms serve http --vault /path/to/vault --maintenance lexical
+```
+
+`lexical` updates the persistent native keyword index and records pending vector work. `full` additionally drains that work with the already installed local embedding model. Before selecting `full`, configure the model and run `oms doctor sync-embeddings --mode embed --vault /path/to/vault` so its identity matches the existing vector index. Missing or mismatched capabilities fail explicitly; maintenance never downloads a model or silently switches providers. Its native backend loader also disables automatic downloads and source builds; a missing compatible backend remains an explicit setup error. The raw embedding input still includes frontmatter.
+
+One process on one host and in one PID namespace owns maintenance for a vault. Do not share these ownership files between containers with different PID namespaces. Other agents can query that existing server, or run read-only processes; a second maintenance owner is refused. Use the same upgraded OMS build for concurrent writers. Mixed old/new writer-recovery implementations are not a supported concurrency guarantee. Keep the engine database, WAL, and ownership files in the machine-local external cache, outside synchronized vault folders.
+
+The owner watches before its initial inventory, coalesces saved-file hints, and performs complete reconciliation periodically and after missing events or watcher errors. Excluded editor housekeeping does not trigger a scan; changes to known exclusion settings and their parent directories still do. It reads Markdown as the source of truth; an interrupted file-save-to-index update is repaired on the next successful reconciliation. Watch events and quiet time are not proof of completed editor writes. A failed partial scan never becomes a mass-deletion instruction. Unsaved editor buffers are unavailable.
+
+`doctor` with `op: "status"` on the owning MCP server and HTTP `/health` expose maintenance phase, queue counts, diagnostics, and SQLite version. Query-only operations never start the owner, migrate a database, or enqueue work. Background maintenance, once explicitly enabled, can independently update the index while read-only queries run. Private lexical/observed caches remain session-owned and validate current notes on requests; they do not certify vector completeness.
+
+The default hint set is bounded to 2,048 paths; overflow requests reconciliation. Embedding batches contain at most 16 documents, with lexical changes taking priority. Complete inventories retain one metadata entry per admitted note, so these limits are not whole-process memory caps. A live or unprobeable owner is never stolen, even when suspended; recovery waits for its process to exit. Do not delete ownership files to force takeover. Shutdown cancels new work immediately and drains active work before releasing ownership. Enabled HTTP servers allow at most five seconds for unfinished requests before closing their connections. If an embedding provider ignores cancellation beyond the shutdown deadline, shutdown reports the timeout and retains ownership until that work drains; late results cannot commit.
+
+Automatic maintenance requires a runtime with a recognized SQLite WAL-reset fix: upstream 3.51.3 or later, or the 3.44.6/3.50.7 backport branches. The code checks its actual SQLite version; unknown vendor backports need separate verification. This is a startup prerequisite, not a claim that a particular user's host was affected. See the [SQLite advisory](https://www.sqlite.org/wal.html#the_wal_reset_bug).
+
+
 ## Host, package, and model lifecycle
 
 Use `oms setup host install|remove|sync|status` for host integrations. `oms setup package check|update` manages the npm package only; package update never performs host sync implicitly. Use `oms setup model install|select|waive|status` for model lifecycle. The hook entrypoint is `oms hook pre`; there is no post-tool-use hook. Claude's write hook denies a write only on a safety refusal; a contract finding, or a hook that cannot run, allows the write with a warning. Codex and Hermes declare no write hook.

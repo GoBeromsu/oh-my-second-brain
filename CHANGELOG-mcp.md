@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- An explicitly enabled server exposes maintenance status in doctor status, signals successful writes to its bounded update queue, and drains/cancels maintenance on shutdown. The four-tool surface and read-only search annotation stay unchanged.
+
 - Observed predicates accept `exact: {valueType, value}` and value facets return `selection` for direct reuse. Type/value mismatches are refused; exact date values are canonical ISO strings. Selection objects remain included in the existing serialized discovery-page budget.
 
 - `search` `op: query` accepts the distinct `observed: {field?, discover?}` namespace and returns bounded `observed.discovery` only on request. Metadata-only calls can use `limit: 0`; declared `axes.field` and ordinary response payloads are unchanged.

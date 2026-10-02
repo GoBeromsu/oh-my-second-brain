@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WriteTarget } from "../kernel/capture/safe.js";
+import type { MaintenanceMode } from "../kernel/engine/maintenance-controller.js";
 import { parseCliArgs } from "./args.js";
 import { maybePrintUpdateNotice, readCurrentPackageVersion } from "./update-notice.js";
 import { removedFamilyMessage } from "./removed-families.js";
@@ -69,15 +70,25 @@ async function runServeCommand(argv: readonly string[]): Promise<void> {
   ) {
     console.log(
       leaf === "mcp"
-        ? "Usage: oms serve mcp [--vault <path>]"
-        : "Usage: oms serve http [--vault <path>] [--index <path>] [--host <host>] [--port <port>]",
+        ? "Usage: oms serve mcp [--vault <path>] [--maintenance <lexical|full>]"
+        : "Usage: oms serve http [--vault <path>] [--index <path>] [--host <host>] [--port <port>] [--maintenance <lexical|full>]",
     );
     return;
   }
   if (leaf === "mcp") {
-    const target = await effectiveTarget(parseVaultFlag(leafArgs));
+    let maintenance: MaintenanceMode | undefined;
+    const targetArgs: string[] = [];
+    for (let index = 0; index < leafArgs.length; index++) {
+      const token = leafArgs[index]!;
+      if (token !== "--maintenance") { targetArgs.push(token); continue; }
+      if (maintenance !== undefined) throw new Error("Duplicate option: --maintenance");
+      const value = leafArgs[++index];
+      if (value !== "lexical" && value !== "full") throw new Error("--maintenance requires lexical or full.");
+      maintenance = value;
+    }
+    const target = await effectiveTarget(parseVaultFlag(targetArgs));
     const { runMcpServer } = await import("../mcp/server.js");
-    await runMcpServer(target);
+    await runMcpServer({ ...target, maintenance });
     return;
   }
   if (leaf === "http") {
@@ -85,11 +96,12 @@ async function runServeCommand(argv: readonly string[]): Promise<void> {
     let indexPath: string | undefined;
     let host: string | undefined;
     let port: number | undefined;
+    let maintenance: MaintenanceMode | undefined;
     const seen = new Set<string>();
     for (let index = 0; index < leafArgs.length; index += 1) {
       const token = leafArgs[index];
       const value = leafArgs[index + 1];
-      if (!["--vault", "--index", "--host", "--port"].includes(token ?? "")) {
+      if (!["--vault", "--index", "--host", "--port", "--maintenance"].includes(token ?? "")) {
         throw new Error(`Unknown serve http option: ${token}`);
       }
       if (seen.has(token!)) throw new Error(`Duplicate serve http option: ${token}`);
@@ -99,6 +111,10 @@ async function runServeCommand(argv: readonly string[]): Promise<void> {
       if (token === "--vault") explicitVault = path.resolve(value);
       else if (token === "--index") indexPath = path.resolve(value);
       else if (token === "--host") host = value;
+      else if (token === "--maintenance") {
+        if (value !== "lexical" && value !== "full") throw new Error("--maintenance requires lexical or full.");
+        maintenance = value;
+      }
       else {
         const parsedPort = Number.parseInt(value, 10);
         if (`${parsedPort}` !== value || parsedPort < 0 || parsedPort > 65_535) {
@@ -109,7 +125,15 @@ async function runServeCommand(argv: readonly string[]): Promise<void> {
     }
     const target = await effectiveTarget(explicitVault);
     const { runServeHttp } = await import("./serve-http.js");
-    const server = await runServeHttp({ vault: target.vault, index: indexPath, host, port });
+    const server = await runServeHttp({ vault: target.vault, source: target.source, index: indexPath, host, port, maintenance });
+    if (maintenance !== undefined) {
+      let stopping: Promise<void> | undefined;
+      const stop = (exitCode: number): void => {
+        stopping ??= server.close();
+        void stopping.catch(error => console.error(`[oms] ${error instanceof Error ? error.message : String(error)}`)).finally(() => process.exit(exitCode));
+      };
+      process.once("SIGINT", () => stop(130)); process.once("SIGTERM", () => stop(143));
+    }
     console.log(JSON.stringify({ status: "listening", url: server.url, vault: target.vault, source: target.source }));
     return;
   }
@@ -150,6 +174,7 @@ async function main(): Promise<void> {
     else if (command === "search") console.log((await import("./search-usage.js")).searchUsage());
     else if (command === "write") console.log((await import("./write-command.js")).writeUsage());
     else if (command === "interview") console.log((await import("./interview-command.js")).interviewUsage());
+    else if (command === "serve") await runServeCommand(argv[1] === "mcp" || argv[1] === "http" ? [argv[1], "--help"] : ["--help"]);
     else printUsage();
     process.exitCode = 0;
     return;
