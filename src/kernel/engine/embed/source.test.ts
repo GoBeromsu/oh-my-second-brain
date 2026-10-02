@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import { openEngineStoreCore, openEngineStoreCoreReadOnly } from "./store.js";
 import { syncEngineStore } from "./sync.js";
 import { chunkDocument } from "./chunker.js";
-import { readDocumentSource } from "./source.js";
+import { documentSourceMatches, documentSourceMissing, readDocumentSource } from "./source.js";
 import { indexSourcesUnchanged, verifyIndexSources } from "./freshness.js";
 
 vi.mock("node:fs/promises", async importOriginal => {
@@ -80,6 +80,7 @@ describe("indexed source evidence", () => {
     const store = openEngineStoreCoreReadOnly(dbPath)!;
     try {
       expect(store.readDocumentSources()).toBeNull();
+      expect(store.readDocumentSource!("alpha.md")).toBeNull();
       expect(() => store.recordDocumentSource("alpha.md", { fingerprint: "a".repeat(64), contentSha256: "b".repeat(64), chunker: "default" }, []))
         .toThrow(/reading only/u);
     } finally { store.close(); }
@@ -162,6 +163,25 @@ describe("indexed source evidence", () => {
     const store = openEngineStoreCoreReadOnly(dbPath)!;
     try { expect(() => store.readDocumentSources()).toThrow(/invalid or unsupported/u); }
     finally { store.close(); }
+  });
+
+  it("validates commit witnesses with weak-byte fallback and refuses missing, escaped or non-file sources", async () => {
+    const filename = path.join(vault, "alpha.md");
+    await writeFile(filename, "originalkeyword");
+    const { source } = await readDocumentSource(vault, "alpha.md");
+    expect(documentSourceMatches(vault, "alpha.md", source)).toBe(true);
+    expect(documentSourceMatches(vault, "alpha.md", { ...source, fingerprint: null })).toBe(true);
+    await writeFile(filename, "modifiedkeyword");
+    expect(documentSourceMatches(vault, "alpha.md", source)).toBe(false);
+    expect(documentSourceMatches(vault, "alpha.md", { ...source, fingerprint: null })).toBe(false);
+    await symlink(filename, path.join(vault, "alias.md"));
+    expect(documentSourceMatches(vault, "alias.md", source)).toBe(false);
+    expect(documentSourceMatches(vault, path.relative(vault, directory), source)).toBe(false);
+    await mkdir(path.join(vault, "folder.md"));
+    expect(documentSourceMatches(vault, "folder.md", source)).toBe(false);
+    await rm(filename);
+    expect(documentSourceMatches(vault, "alpha.md", source)).toBe(false);
+    expect(documentSourceMissing(vault, "alpha.md")).toBe(true);
   });
 
   it("keeps handle-weak/path-strong sources usable through byte verification", async () => {

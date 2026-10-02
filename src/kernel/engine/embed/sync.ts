@@ -22,7 +22,7 @@ import {
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { chunkDocument } from "./chunker.js";
-import { readDocumentSource } from "./source.js";
+import { documentSourceMatches, readDocumentSource } from "./source.js";
 import { capabilityGuidance } from "./config.js";
 import { requireRealEmbeddingProvider } from "./provider.js";
 import { openEngineStore, openEngineStoreCore } from "./store.js";
@@ -55,6 +55,10 @@ export interface EngineSyncOptions {
   dbPath?: string;
   /** When false, updates lexical index only (no vectors). Default: true. */
   embed?: boolean;
+  /** Per-note write maintenance: atomically queue vectors with lexical/source rows. */
+  queueDirtyAt?: string;
+  /** Ordinary note writes may maintain an existing store but never recreate it. */
+  existingOnly?: boolean;
   /** Allow destructive rebuild when embedding identity mismatches. Default: false. */
   force?: boolean;
   /** Explicit embedding provider id (OMS_EMBEDDING_PROVIDER). */
@@ -513,6 +517,7 @@ interface SyncDocumentOptions {
   chunkerOpts: Partial<ChunkerOptions> | undefined;
   counters: SyncCounters;
   rebuildAllVectors: boolean;
+  queueDirtyAt?: string;
 }
 
 /** Reconcile only a complete scan's scope; explicit file slices never prune peers. */
@@ -525,73 +530,46 @@ function reconcileIndexedDocuments(store: EngineStore, selected: ReadonlySet<str
 
 async function syncDocument(opts: SyncDocumentOptions): Promise<void> {
   const { content, source } = await readDocumentSource(opts.vault, opts.relPath, opts.chunkerOpts);
-  opts.counters.scanned++;
   const chunks = chunkDocument(opts.relPath, content, opts.chunkerOpts);
-  await syncDocumentChunks(opts, chunks);
-  opts.store.recordDocumentSource(opts.relPath, source, chunks);
-}
-
-async function syncDocumentChunks(opts: SyncDocumentOptions, chunks: Chunk[]): Promise<void> {
   const storedShas = opts.store.getShas(opts.relPath);
-
-  const chunkCountChanged = storedShas.size !== chunks.length;
-  const fullRewrite = opts.rebuildAllVectors || chunkCountChanged;
-
-  if (!opts.shouldEmbed) {
-    // Lex-only: update meta+FTS only.
-    // When the chunk-count changes we clear and reinsert to avoid orphaned extra chunks.
-    if (fullRewrite) {
-      opts.store.clearDocument(opts.relPath);
-      opts.store.upsertLex(chunks);
-      opts.counters.added += chunks.length;
-      return;
-    }
-
-    const toUpsert: Chunk[] = [];
-    for (const chunk of chunks) {
-      const storedSha = storedShas.get(chunk.ordinal);
-      if (storedSha === chunk.sha) {
-        opts.counters.skipped++;
-        continue;
-      }
-      toUpsert.push(chunk);
-      if (storedSha === undefined) opts.counters.added++;
-      else opts.counters.updated++;
-    }
-    if (toUpsert.length > 0) opts.store.upsertLex(toUpsert);
-    return;
+  const revisions = opts.store.documentRevisions;
+  if (!revisions) throw new Error("Engine store does not support atomic document writes.");
+  const queued = revisions.read(opts.relPath);
+  const storedIdentity = opts.store.readEmbeddingIdentity()?.fingerprint;
+  const fullRewrite = opts.rebuildAllVectors || storedShas.size !== chunks.length;
+  const vectorOrdinals = opts.shouldEmbed ? opts.store.vectorOrdinals?.(opts.relPath) : undefined;
+  const changed = fullRewrite ? chunks : chunks.filter(chunk => storedShas.get(chunk.ordinal) !== chunk.sha ||
+    (opts.shouldEmbed && !vectorOrdinals?.has(chunk.ordinal)));
+  const vectors: Array<Chunk & { vector: Float32Array }> = [];
+  if (opts.shouldEmbed) {
+    if (!opts.provider) throw new Error("Internal error: shouldEmbed=true but provider is null.");
+    // Never clear existing chunks before an asynchronous provider succeeds.
+    for (const chunk of changed) vectors.push({ ...chunk, vector: await opts.provider.embed(chunk.text, chunk.title) });
   }
-
-  if (!opts.provider) {
-    throw new Error("Internal error: shouldEmbed=true but provider is null.");
-  }
-
-  // Vector path
-  if (fullRewrite) {
-    opts.store.clearDocument(opts.relPath);
-    const toUpsert: Array<Chunk & { vector: Float32Array }> = [];
-    for (const chunk of chunks) {
-      const vector = await opts.provider.embed(chunk.text, chunk.title);
-      toUpsert.push({ ...chunk, vector });
-      opts.counters.added++;
+  revisions.transaction(() => {
+    const currentShas = opts.store.getShas(opts.relPath);
+    if (!documentSourceMatches(opts.vault, opts.relPath, source) ||
+      revisions.read(opts.relPath) !== queued ||
+      opts.store.readEmbeddingIdentity()?.fingerprint !== storedIdentity ||
+      currentShas.size !== storedShas.size || [...storedShas].some(([ordinal, sha]) => currentShas.get(ordinal) !== sha)) {
+      throw new Error("Document changed before index synchronization could commit. Retry synchronization.");
     }
-    if (toUpsert.length > 0) opts.store.upsert(toUpsert);
-    return;
-  }
-
-  const toUpsert: Array<Chunk & { vector: Float32Array }> = [];
-  for (const chunk of chunks) {
-    const storedSha = storedShas.get(chunk.ordinal);
-    if (storedSha === chunk.sha) {
-      opts.counters.skipped++;
-      continue;
+    if (fullRewrite) opts.store.clearDocument(opts.relPath);
+    if (opts.shouldEmbed) {
+      if (vectors.length > 0) opts.store.upsert(vectors);
+    } else if (changed.length > 0) opts.store.upsertLex(changed);
+    opts.store.recordDocumentSource(opts.relPath, source, chunks);
+    // A lexical-only pass must not make already-pending vectors look current.
+    if (!opts.shouldEmbed && (opts.queueDirtyAt !== undefined || queued !== undefined)) {
+      revisions.queue(opts.relPath, opts.queueDirtyAt ?? new Date().toISOString());
     }
-    const vector = await opts.provider.embed(chunk.text, chunk.title);
-    toUpsert.push({ ...chunk, vector });
-    if (storedSha === undefined) opts.counters.added++;
+  });
+  opts.counters.scanned++;
+  opts.counters.skipped += chunks.length - changed.length;
+  for (const chunk of changed) {
+    if (fullRewrite || !storedShas.has(chunk.ordinal)) opts.counters.added++;
     else opts.counters.updated++;
   }
-  if (toUpsert.length > 0) opts.store.upsert(toUpsert);
 }
 
 /**
@@ -838,7 +816,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
     if (!shouldEmbed) {
       // Lex-only path: no embedding provider required.
       if (persist) releaseLock = acquireEngineStoreWriterLock(dbPath);
-      store ??= openEngineStoreCore(dbPath);
+      store ??= openEngineStoreCore(dbPath, { fileMustExist: opts.existingOnly });
       warnings.push("embed=false: lexical index updated; no vectors generated");
 
       const counters: SyncCounters = { scanned: 0, added: 0, updated: 0, skipped: 0 };
@@ -860,6 +838,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
           chunkerOpts: opts.chunkerOpts,
           counters,
           rebuildAllVectors: false,
+          ...(opts.queueDirtyAt === undefined ? {} : { queueDirtyAt: opts.queueDirtyAt }),
         });
       }
 

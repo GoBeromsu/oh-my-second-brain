@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import Database from "better-sqlite3";
-import { openEngineStore, openEngineStoreCore, SQLITE_VEC_MAX_K } from "./store.js";
+import { openEngineStore, openEngineStoreCore, SQLITE_VEC_MAX_K, withExistingEngineStoreTransaction } from "./store.js";
 import type { EngineStore } from "./store.js";
 import { createHashProjectionProvider } from "./hash-stub.test-helper.js";
 import { makeEmbeddingIdentity } from "./identity.js";
@@ -65,6 +65,22 @@ async function storeModuleWithDatabaseOpenFailure(error: unknown): Promise<typeo
 }
 
 describe("better-sqlite3 native addon opening", () => {
+  it("preserves a guarded transaction failure when closing its connection also fails", () => {
+    const failure = new Error("preflight refused");
+    let connection: Database.Database | undefined;
+    let closeSpy: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      expect(() => withExistingEngineStoreTransaction(path.join(dir, "test.db"), undefined, db => {
+        connection = db;
+        closeSpy = vi.spyOn(db, "close").mockImplementationOnce(() => { throw new Error("close failed"); });
+        throw failure;
+      }, () => undefined)).toThrow(failure);
+    } finally {
+      closeSpy?.mockRestore();
+      connection?.close();
+    }
+  });
+
   it("reports runtime/addon ABI context and preserves the loader cause", async () => {
     const loaderError = new Error(
       "The module '/opt/oms/node_modules/better-sqlite3/build/Release/better_sqlite3.node' was compiled against a different Node.js version using NODE_MODULE_VERSION 137. This version of Node.js requires NODE_MODULE_VERSION 127. Please try re-compiling or re-installing the module (for instance, using `npm rebuild` or `npm install`).",
