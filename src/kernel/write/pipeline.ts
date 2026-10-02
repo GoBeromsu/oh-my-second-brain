@@ -11,7 +11,7 @@ import { updateKeywordIndex, type KeywordUpdateOptions } from "../engine/index-u
 import type { GapFinding, Resolution } from "./ambiguity.js";
 import { conform } from "./conform.js";
 import { frameFor, type WriteFrame } from "./frame.js";
-import { loadLiveTemplates, selectTemplate, type TemplateSelection } from "./live-templates.js";
+import { loadLiveTemplateSnapshot, selectTemplate, type TemplateSelection } from "./live-templates.js";
 import { atomicWriteNote, type NoteWriteDeps } from "./note-write.js";
 import { buildReceipt, contractRevision, noteRevision, type ConformChange, type GapLedgerState, type KeywordIndexState, type ReceiptGap, type WriteReceipt } from "./receipt.js";
 
@@ -80,7 +80,7 @@ export type WriteOutcome =
   /** Nothing was saved in the vault; `draftRef` names the draft kept beside the gap ledger. */
   | { readonly kind: "drafted"; readonly draftRef: string; readonly warnings: readonly Violation[] }
   | { readonly kind: "if-match-required" }
-  | { readonly kind: "retry"; readonly state: "changed" | "vanished" | "absent" }
+  | { readonly kind: "retry"; readonly state: "changed" | "vanished" | "absent" | "source-changed" }
   | { readonly kind: "checked"; readonly check: WriteCheck }
   | { readonly kind: "written"; readonly receipt: WriteReceipt };
 
@@ -172,7 +172,12 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
   const isNew = resolved.previousContent === undefined;
   // Templates are read live from `templateFolder` and scaffold only a new note; a named
   // template that is not there is reported on any write.
-  const templates = await loadLiveTemplates(resolved.vaultRoot);
+  const snapshot = await loadLiveTemplateSnapshot(resolved.vaultRoot);
+  const { templates } = snapshot;
+  // Existing notes without an explicit template do not depend on template selection.
+  const validateSource = isNew || template !== undefined
+    ? async () => (await loadLiveTemplateSnapshot(resolved.vaultRoot)).witness === snapshot.witness
+    : undefined;
   const scaffold: TemplateSelection = isNew || template !== undefined
     ? selectTemplate(templates, { explicit: template, folder: folderOf(resolved.path) })
     : { kind: "none" };
@@ -230,6 +235,7 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
     // No ledger, or a state dir that cannot be written: the note is saved as written with its warnings.
     save = { action: "save", content: conformed.content, verdict, findings: resolution.asWritten };
     if (draftable) {
+      if (validateSource !== undefined && !await validateSource()) return { kind: "retry", state: "source-changed" };
       let draftRef: string | undefined;
       try {
         draftRef = await writeGapDraft(ledger.root, ledger.vaultId, conformed.content, deps.gapLedger);
@@ -249,7 +255,7 @@ export async function runWritePipeline(request: WriteRequest, overrides: Partial
     save = resolution;
   }
 
-  const written = await atomicWriteNote(resolved.absolutePath, save.content, resolved.previousContent, deps.noteWrite);
+  const written = await atomicWriteNote(resolved.absolutePath, save.content, resolved.previousContent, deps.noteWrite, validateSource);
   if (written !== "written") return { kind: "retry", state: written };
   let gaps: readonly ReceiptGap[] = [];
   let gapLedger: GapLedgerState | undefined;
