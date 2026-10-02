@@ -62,6 +62,15 @@ describe("writePayload", () => {
     expect(writePayload({ kind: "retry", state: "absent" })).toMatchObject({ ok: false, code: "WRITE_TARGET_ABSENT", retryable: true, reason: expect.stringContaining("without ifMatch") });
   });
 
+  it("reports template-source drift separately from a changed note", () => {
+    expect(writePayload({ kind: "retry", state: "source-changed" })).toEqual({
+      ok: false,
+      code: "WRITE_TEMPLATE_SOURCE_CHANGED",
+      retryable: true,
+      reason: "The live template sources changed after they were read; no note was published. Retry the write to use the current templates.",
+    });
+  });
+
   it("flattens a check result", () => {
     const check: WriteCheck = {
       ok: true,

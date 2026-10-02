@@ -21,11 +21,16 @@ import { syncDirectory } from "../contract/fs-private.js";
  * compare-and-swap for a path, so a change landing between the check and the rename is
  * replaced. Both windows are the few syscalls between the check and the publish.
  *
+ * An optional source validator runs after staging, before the final target drift check,
+ * and again on a hard-link fallback. A failed validator leaves the target untouched.
+ * This is optimistic revalidation, not a cross-file transaction: a source can still
+ * change after it is observed and before the target is published.
+ *
  * A new note is first written to `<note>.<pid>.<uuid>.tmp` beside it. A crash between
  * link() and the removal of that temporary leaves it behind as a second hard link to the
  * published note; nothing sweeps it, so it stays until removed by hand.
  */
-export type NoteWriteResult = "written" | "changed" | "vanished";
+export type NoteWriteResult = "written" | "changed" | "vanished" | "source-changed";
 
 function digest(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
@@ -39,7 +44,7 @@ const NO_HARD_LINK = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "EXDEV", "ENOSYS
 
 export interface NoteWriteDeps {
   readonly link: (existing: string, created: string) => Promise<void>;
-  /** Runs after the last drift check, just before publishing; tests use it to race the write. */
+  /** Runs after staging and the first drift check; tests use it to race the publish checks. */
   readonly beforePublish: () => Promise<void>;
 }
 
@@ -48,7 +53,7 @@ function noteWriteDeps(overrides: Partial<NoteWriteDeps>): NoteWriteDeps {
 }
 
 /** Publishes a new note without replacing one that appeared meanwhile; null once published. */
-async function publishNew(temporary: string, target: string, deps: NoteWriteDeps): Promise<NoteWriteResult | null> {
+async function publishNew(temporary: string, target: string, deps: NoteWriteDeps, validateSource?: () => Promise<boolean>): Promise<NoteWriteResult | null> {
   try {
     await deps.link(temporary, target);
     return null;
@@ -57,6 +62,8 @@ async function publishNew(temporary: string, target: string, deps: NoteWriteDeps
     if (code === "EEXIST") return "changed";
     if (code === undefined || !NO_HARD_LINK.has(code)) throw error;
   }
+  // The failed link was an asynchronous boundary; revalidate before the rename fallback.
+  if (validateSource !== undefined && !await validateSource()) return "source-changed";
   const moved = await drift(target, undefined);
   if (moved !== null) return moved;
   await rename(temporary, target);
@@ -86,7 +93,7 @@ async function drift(target: string, expected: string | undefined | null): Promi
   }
 }
 
-export async function atomicWriteNote(target: string, content: string, expected: string | undefined | null, overrides: Partial<NoteWriteDeps> = {}): Promise<NoteWriteResult> {
+export async function atomicWriteNote(target: string, content: string, expected: string | undefined | null, overrides: Partial<NoteWriteDeps> = {}, validateSource?: () => Promise<boolean>): Promise<NoteWriteResult> {
   const deps = noteWriteDeps(overrides);
   let mode = 0o644;
   if (expected !== undefined) {
@@ -112,8 +119,15 @@ export async function atomicWriteNote(target: string, content: string, expected:
     const moved = await drift(target, expected);
     if (moved !== null) return moved;
     await deps.beforePublish();
+    if (validateSource !== undefined) {
+      if (!await validateSource()) return "source-changed";
+      // Source validation may await a whole inventory scan: do not widen the target's
+      // existing check-to-publish window or overwrite a user edit made during that scan.
+      const latest = await drift(target, expected);
+      if (latest !== null) return latest;
+    }
     if (expected === undefined) {
-      const raced = await publishNew(temporary, target, deps);
+      const raced = await publishNew(temporary, target, deps, validateSource);
       if (raced !== null) return raced;
     } else await rename(temporary, target);
   } finally {

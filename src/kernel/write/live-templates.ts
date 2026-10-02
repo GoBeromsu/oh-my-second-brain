@@ -1,7 +1,7 @@
 import path from "node:path";
-import { compareCodePoints } from "../conventions/canonical.js";
+import { compareCodePoints, digestBytes, type Digest } from "../conventions/canonical.js";
 import { parseNote } from "../conventions/frontmatter.js";
-import { scanContractHeadings, scanTemplateSources } from "../contract/scan.js";
+import { scanContractHeadings, scanTemplateSources, type TemplateSourceInventory } from "../contract/scan.js";
 import { readVaultSettings } from "../vault/settings.js";
 
 /**
@@ -83,32 +83,59 @@ export function parseLiveTemplate(source: string, text: string): LiveTemplate | 
   };
 }
 
-/**
- * Every readable Markdown template under `templateFolder`, by name. Best effort: a vault
- * without a template folder, or one that cannot be read, has no templates, and a write never
- * fails because of it.
- */
-export async function loadLiveTemplates(vault: string): Promise<readonly LiveTemplate[]> {
+/** The raw source observation that produced the parsed templates; not a filesystem transaction. */
+export interface LiveTemplateSnapshot {
+  readonly templates: readonly LiveTemplate[];
+  readonly witness: Digest;
+}
+
+function parsedTemplates(inventory: TemplateSourceInventory): readonly LiveTemplate[] {
+  return inventory.sources
+    .filter(source => /\.md$/i.test(source.path) && source.text !== null)
+    .map(source => parseLiveTemplate(source.path, source.text!))
+    .filter((template): template is LiveTemplate => template !== null)
+    .sort((left, right) => compareCodePoints(left.name, right.name) || compareCodePoints(left.source, right.source));
+}
+
+async function readTemplateSnapshot(vault: string, folder: string): Promise<LiveTemplateSnapshot> {
+  try {
+    const inventory = await scanTemplateSources(vault, [{ path: folder, kind: "folder" }]);
+    // Include all discovered raw sources, even malformed ones: adding/fixing a candidate
+    // can change the selection. Hash exact paths/bytes without Unicode normalization.
+    const witness = digestBytes(JSON.stringify({
+      folder,
+      sources: inventory.sources.map(source => [source.path, source.rawDigest]),
+      diagnostics: inventory.diagnostics.map(item => [item.code, item.path ?? null]),
+    }));
+    return { templates: parsedTemplates(inventory), witness };
+  } catch {
+    return { templates: [], witness: digestBytes(JSON.stringify({ folder, unavailable: true })) };
+  }
+}
+
+/** Best-effort live templates plus a witness of the settings selector and source inventory. */
+export async function loadLiveTemplateSnapshot(vault: string): Promise<LiveTemplateSnapshot> {
   try {
     const folder = (await readVaultSettings(vault))?.templateFolder;
-    return folder === undefined ? [] : await readLiveTemplates(vault, folder);
+    return folder === undefined
+      ? { templates: [], witness: digestBytes("no-template-folder") }
+      : await readTemplateSnapshot(vault, folder);
   } catch {
-    return [];
+    return { templates: [], witness: digestBytes("unreadable-template-settings") };
   }
+}
+
+/**
+ * Every readable Markdown template under `templateFolder`, by name. Best effort: a vault
+ * without a template folder, or one that cannot be read, has no templates.
+ */
+export async function loadLiveTemplates(vault: string): Promise<readonly LiveTemplate[]> {
+  return (await loadLiveTemplateSnapshot(vault)).templates;
 }
 
 /** Every readable Markdown template under `folder`, by name; best effort like `loadLiveTemplates`. */
 export async function readLiveTemplates(vault: string, folder: string): Promise<readonly LiveTemplate[]> {
-  try {
-    const inventory = await scanTemplateSources(vault, [{ path: folder, kind: "folder" }]);
-    const templates = inventory.sources
-      .filter(source => /\.md$/i.test(source.path) && source.text !== null)
-      .map(source => parseLiveTemplate(source.path, source.text!))
-      .filter((template): template is LiveTemplate => template !== null);
-    return templates.sort((left, right) => compareCodePoints(left.name, right.name) || compareCodePoints(left.source, right.source));
-  } catch {
-    return [];
-  }
+  return (await readTemplateSnapshot(vault, folder)).templates;
 }
 
 /** Templates whose file name is the folder's last segment, or whose `folder:` is the folder. */

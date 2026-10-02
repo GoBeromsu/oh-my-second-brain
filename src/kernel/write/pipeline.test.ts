@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -552,6 +553,85 @@ describe("runWritePipeline", () => {
     const missing = await runWritePipeline(request(fixture, "Projects/b.md", "Body\n", { template: "gone" }), { now: () => NOW, updateIndex: async () => "skipped" });
     expect(missing).toMatchObject({ kind: "written" });
     expect(await readFile(path.join(fixture.vault, "Projects", "b.md"), "utf8")).not.toContain("## Goals");
+  });
+
+  it("retries when a live template changes after loading, before conforming", async () => {
+    const fixture = await sealedVault();
+    await withTemplates(fixture, { project: "---\nfolder: Projects\nstatus: active\n---\n## Old heading\n" });
+    const template = path.join(fixture.vault, "Templates/project.md");
+    const updated = "---\nfolder: Projects\nstatus: done\n---\n## New heading\n";
+    const updateIndex = vi.fn(async () => "updated" as const);
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "# Probe\n"), {
+      now: () => { writeFileSync(template, updated); return NOW; },
+      updateIndex,
+    });
+    expect(outcome).toEqual({ kind: "retry", state: "source-changed" });
+    expect(await readFile(template, "utf8")).toBe(updated);
+    await expect(readFile(path.join(fixture.vault, "Projects/a.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
+    expect(updateIndex).not.toHaveBeenCalled();
+
+    const retried = await runWritePipeline(request(fixture, "Projects/a.md", "# Probe\n"), { now: () => NOW, updateIndex });
+    expect(retried.kind).toBe("written");
+    const note = await readFile(path.join(fixture.vault, "Projects/a.md"), "utf8");
+    expect(note).toContain("status: done");
+    expect(note).toContain("## New heading");
+    expect(note).not.toContain("Old heading");
+  });
+
+  it.each(["edit", "delete", "rename", "replace", "add", "settings"] as const)("retries a %s of live template sources at the publication boundary", async change => {
+    const fixture = await sealedVault();
+    await withTemplates(fixture, { project: PROJECT_TEMPLATE });
+    const template = path.join(fixture.vault, "Templates/project.md");
+    const updateIndex = vi.fn(async () => "updated" as const);
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "Body\n"), {
+      now: () => NOW,
+      updateIndex,
+      noteWrite: { beforePublish: async () => {
+        if (change === "edit") await writeFile(template, "---\nfolder: Projects\n---\n## New heading\n");
+        if (change === "delete") await rm(template);
+        if (change === "rename") await rename(template, path.join(fixture.vault, "Templates/renamed.md"));
+        if (change === "replace") {
+          const replacement = path.join(fixture.vault, "replacement.md");
+          await writeFile(replacement, "---\nfolder: Projects\n---\n## Replacement\n");
+          await rename(replacement, template);
+        }
+        if (change === "add") await writeFile(path.join(fixture.vault, "Templates/another.md"), PROJECT_TEMPLATE);
+        if (change === "settings") await writeFile(path.join(fixture.vault, SETTINGS_PATH), serializeVaultSettings({ version: 1, vaultId: fixture.vaultId, templateFolder: "Other" }));
+      } },
+    });
+    expect(outcome).toEqual({ kind: "retry", state: "source-changed" });
+    expect(await readdir(path.join(fixture.vault, "Projects"))).toEqual([]);
+    expect((await readGapLedger(fixture.root, fixture.vaultId)).events).toEqual([]);
+    expect(updateIndex).not.toHaveBeenCalled();
+  });
+
+  it("checks source drift before keeping a malformed note as a draft", async () => {
+    const fixture = await sealedVault();
+    await withTemplates(fixture, { project: PROJECT_TEMPLATE });
+    const updateIndex = vi.fn(async () => "updated" as const);
+    const storeBefore = await snapshot(fixture.root);
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", BROKEN), {
+      now: () => { writeFileSync(path.join(fixture.vault, "Templates/project.md"), "## Changed\n"); return NOW; },
+      updateIndex,
+    });
+    expect(outcome).toEqual({ kind: "retry", state: "source-changed" });
+    expect(await snapshot(fixture.root)).toEqual(storeBefore);
+    expect(updateIndex).not.toHaveBeenCalled();
+  });
+
+  it("does not block an existing note without a template on unrelated template edits", async () => {
+    const fixture = await sealedVault();
+    await withTemplates(fixture, { project: PROJECT_TEMPLATE });
+    const target = path.join(fixture.vault, "Projects/a.md");
+    await mkdir(path.dirname(target));
+    await writeFile(target, "Old body\n");
+    const outcome = await runWritePipeline(request(fixture, "Projects/a.md", "New body\n", { ifMatch: sha256("Old body\n") }), {
+      updateIndex: async () => "skipped",
+      noteWrite: { beforePublish: async () => writeFile(path.join(fixture.vault, "Templates/project.md"), "## Changed\n") },
+    });
+    expect(outcome.kind).toBe("written");
+    expect(await readFile(target, "utf8")).toBe("New body\n");
   });
 
   it("records nothing when an edit keeps a legacy note's unknown key, and exactly one gap for a second unknown key", async () => {

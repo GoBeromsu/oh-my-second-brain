@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { serializeVaultSettings, SETTINGS_PATH } from "../vault/settings.js";
-import { loadLiveTemplates, parseLiveTemplate, selectTemplate, templateFields, templatesForFolder, type LiveTemplate } from "./live-templates.js";
+import { loadLiveTemplates, loadLiveTemplateSnapshot, readLiveTemplates, parseLiveTemplate, selectTemplate, templateFields, templatesForFolder, type LiveTemplate } from "./live-templates.js";
 
 const VAULT_ID = "3f2a9c1e-7b4d-4e8a-9c2b-1d5e6f7a8b9c";
 
@@ -114,4 +114,38 @@ describe("loadLiveTemplates", () => {
     await settings("Nowhere");
     expect(await loadLiveTemplates(vault)).toEqual([]);
   });
+  it("witnesses exact source bytes even when only ignored body text changes", async () => {
+    await settings("Templates");
+    const file = join(vault, "Templates/Meeting.md");
+    await writeFile(file, "## Agenda\nBody one\n");
+    const before = await loadLiveTemplateSnapshot(vault);
+    expect(await loadLiveTemplateSnapshot(vault)).toEqual(before);
+    await writeFile(file, "## Agenda\nBody two\n");
+    const after = await loadLiveTemplateSnapshot(vault);
+    expect(after.templates).toEqual(before.templates);
+    expect(after.witness).not.toBe(before.witness);
+  });
+
+  it("witnesses malformed sources that scaffold nothing", async () => {
+    await settings("Templates");
+    const file = join(vault, "Templates/Broken.md");
+    await writeFile(file, "---\nstatus: [open\n---\n");
+    const before = await loadLiveTemplateSnapshot(vault);
+    await writeFile(file, "---\nstatus: [done\n---\n");
+    const after = await loadLiveTemplateSnapshot(vault);
+    expect(before.templates).toEqual([]);
+    expect(after.templates).toEqual([]);
+    expect(after.witness).not.toBe(before.witness);
+  });
+
+  it("distinguishes unreadable settings from no template folder and keeps best-effort reads", async () => {
+    const missing = await loadLiveTemplateSnapshot(vault);
+    await writeFile(join(vault, SETTINGS_PATH), "{broken");
+    const unreadable = await loadLiveTemplateSnapshot(vault);
+    expect(unreadable.templates).toEqual([]);
+    expect(unreadable.witness).not.toBe(missing.witness);
+    expect(await loadLiveTemplates(vault)).toEqual([]);
+    expect(await readLiveTemplates(join(vault, "absent-vault"), "Templates")).toEqual([]);
+  });
+
 });
